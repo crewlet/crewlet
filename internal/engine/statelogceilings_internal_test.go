@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -232,6 +233,8 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 	t.Parallel()
 	derived := func(bytes int64) domainCeiling { return domainCeiling{Bytes: bytes} }
 	explicit := func(bytes int64) domainCeiling { return domainCeiling{Bytes: bytes, Explicit: true} }
+	// A log that declares where its scaling stops, as the assistant's does.
+	scales := func(bytes, to int64) domainCeiling { return domainCeiling{Bytes: bytes, ScalesTo: to} }
 	for name, tc := range map[string]struct {
 		asked map[string]domainCeiling
 		held  map[string]int64
@@ -241,6 +244,16 @@ func TestTheCeilingsFitThePool(t *testing.T) {
 		// its fit on an empty broker, with that fit.
 		short map[string]int64
 	}{
+		"a log that declares its own scaling floor gives way with the rest": {
+			asked: map[string]domainCeiling{"a": derived(7 * 512 << 20), "b": scales(512<<20, 64<<20)},
+			pool:  2 * gib,
+			want:  map[string]int64{"a": 7 * 256 << 20, "b": 256 << 20},
+		},
+		"and is held at that floor, not at a gibibyte, when its share is smaller": {
+			asked: map[string]domainCeiling{"a": derived(7 * 512 << 20), "b": scales(512<<20, 64<<20)},
+			pool:  gib,
+			want:  map[string]int64{"a": gib, "b": 64 << 20},
+		},
 		"everything fits as asked": {
 			asked: map[string]domainCeiling{"a": derived(4 * gib), "b": derived(2 * gib)},
 			pool:  8 * gib,
@@ -711,14 +724,23 @@ func TestAnInterruptedFirstBootLeavesLogsARestartReportsAsMade(t *testing.T) {
 // brokerWithHeadroom is an embedded file-store broker with exactly headroom
 // bytes left to reserve.
 //
-// The broker's own cap is three quarters of this machine's free disk, which a
-// test cannot choose; what it can choose is how much of that is already
-// reserved, and a reservation is all the cap counts. A machine whose disk
-// cannot hold the scenario at all is skipped, loudly, rather than failed for
-// a reason that is not the code's.
+// ITS CAP IS DECLARED, at [brokertest.StoreMaxBytes], never left to the broker:
+// an undeclared one is three quarters of this machine's free disk, which made
+// every scenario here a fact about the runner and skipped it on a disk too
+// small to hold it. A declared cap is accounting, which nats-server never
+// checks against the disk, so the same arithmetic runs on every machine.
+//
+// AND THE REST OF IT RESERVED, rather than the cap declared at the headroom
+// itself: a cap with nothing reserved beside the logs is the same number as
+// what is left of it, and a sizing that divided the cap instead of what is
+// left would pass every case here. A scenario that asks for more headroom
+// than the fixed cap leaves room to spend around is a fault in the case, so
+// it fails naming both figures rather than reserving a negative remainder.
 func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 	t.Helper()
-	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	q, err := jetstream.Open(t.Context(), jetstream.Config{
+		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes,
+	})
 	if err != nil {
 		t.Fatalf("open the broker: %v", err)
 	}
@@ -728,9 +750,10 @@ func brokerWithHeadroom(t *testing.T, headroom int64) *jetstream.Queue {
 		t.Fatalf("StreamBudget: %v", err)
 	}
 	if budget.Available() < headroom+gib {
-		t.Skipf("this machine's broker can reserve %d bytes, and the scenario "+
-			"needs %d of headroom plus a gibibyte to spend around it",
-			budget.Available(), headroom)
+		t.Fatalf("the test broker's %d-byte cap leaves %d bytes to reserve, and "+
+			"the scenario needs %d of headroom plus a gibibyte to spend around "+
+			"it: shrink the scenario, or raise brokertest.StoreMaxBytes",
+			brokertest.StoreMaxBytes, budget.Available(), headroom)
 	}
 	if err := q.EnsureDomainStream(t.Context(), jetstream.DomainStream{
 		Name:       "CREWLET_TEST_ELSEWHERE",
@@ -769,15 +792,15 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // their floors.
 //
 // THE HOST IS THE SMALLEST THE LOGS' FLOORS FIT, which is the figure the
-// deployment guide states: seven logs hold 6.5 GiB at their smallest, so the
+// deployment guide states: eight logs hold 6.56 GiB at their smallest, so the
 // 7.6 GiB host that was measured no longer boots by its logs alone (it is
-// refused naming the log it could not reserve), and 8.7 GiB, whose broker
+// refused naming the log it could not reserve), and 8.75 GiB, whose broker
 // grants three quarters of it, is where the same single budget has to fit
 // them. A log added later moves this figure, and the guide's, with it.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
-	// 8.7 GiB, in tenths so the arithmetic stays in integers.
-	free := 87 * gib / 10
+	// 8.75 GiB, in hundredths so the arithmetic stays in integers.
+	free := 875 * gib / 100
 	brokerCap := free / 4 * 3
 	q := brokerWithHeadroom(t, brokerCap)
 	if err := sizeAndProvision(t, q, config.Stream{}, free); err != nil {

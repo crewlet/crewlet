@@ -184,7 +184,7 @@ type LaunchRequest struct {
 	//
 	// The job continues the asking job's own CLI session where it runs in
 	// that job's box — the session lives there — with Continue.Brief, the
-	// answer, as its next prompt ([RunRequest.ResumeSession]). Where it
+	// answer, as its next prompt ([RunRequest.Resume]). Where it
 	// does not — the box was reclaimed while the question waited, or this
 	// launch runs another CLI or cell — it starts fresh with Brief, which
 	// then carries the question, the answer and the pushed branch; the
@@ -194,21 +194,28 @@ type LaunchRequest struct {
 	// too ([PendingRun.Continues]).
 	Continue *Continuation
 
-	// Node is this node's id and BridgeNonce the bridge session the launch
-	// opened for the job, both written onto the row so the node can serve
-	// the job's box again after a restart — see [PendingRun.BridgeNonce].
-	Node        string
-	BridgeNonce string
+	// Node is this node's id, written onto the row as the node whose host a
+	// local box is on — see [PendingRun.LaunchNode].
+	Node string
 
 	// Opened is told the job's name the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
 	// name the job before its box can act: the run's bridge session, which
 	// records every call the box makes under its own job
-	// ([BridgeAppend.Launch]). Learned any later — from the row, say, on the
-	// session's first append — the name would be whichever job the row held
-	// by then, which for a call that outlived its job is the next one. Nil
-	// tells nobody.
-	Opened func(launchID string)
+	// ([BridgeAppend.Launch]), and whose endpoint names the job it serves.
+	// Learned any later — from the row, say, on the session's first append
+	// — the name would be whichever job the row held by then, which for a
+	// call that outlived its job is the next one.
+	//
+	// It answers the MCP servers the job's box is given BESIDE MCPServers:
+	// the ones whose address can only be minted once the job has a name.
+	// The run's tool bridge is one — its token names the job, so a node that
+	// takes the run over can serve the job's session again under the token
+	// the box already holds, and a relaunch's box cannot reach its
+	// predecessor's. A name it answers that MCPServers also has replaces it.
+	// An error abandons the launch, before any box exists. Nil tells nobody
+	// and adds nothing.
+	Opened func(launchID string) (map[string]MCPServer, error)
 
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
@@ -333,9 +340,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Requester: req.Turn.Requester,
 		// The turn's cap, for the poll — see [PendingRun.Deadline].
 		Deadline: req.Turn.Deadline,
-		// Who serves the job's box its tools, and under which session —
-		// see [PendingRun.BridgeNonce].
-		LaunchNode: req.Node, BridgeNonce: req.BridgeNonce,
+		// Whose host a local box is on — see [PendingRun.LaunchNode].
+		LaunchNode: req.Node,
 		// The round carried on, whose earlier calls the row keeps — see
 		// [PendingRun.Continues].
 		Continues: req.Continue != nil,
@@ -352,9 +358,22 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// gives it back through [Coordinator.abandon].
 	c.countRun(req.Turn.AgentHandle, StatusLaunching)
 	// THE JOB IS NAMED BEFORE ITS BOX EXISTS, so nothing the box does can be
-	// filed under a job that is not its own — see [LaunchRequest.Opened].
+	// filed under a job that is not its own — see [LaunchRequest.Opened] —
+	// and what it answers joins the box's servers, on the request every step
+	// below reads: the job's own runner and the standing instructions that
+	// list the servers a box has.
 	if req.Opened != nil {
-		req.Opened(opened.LaunchID)
+		named, openErr := req.Opened(opened.LaunchID)
+		if openErr != nil {
+			c.abandon(ctx, m, req, fence, "")
+			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
+		}
+		if len(named) > 0 {
+			servers := make(map[string]MCPServer, len(req.MCPServers)+len(named))
+			maps.Copy(servers, req.MCPServers)
+			maps.Copy(servers, named)
+			req.MCPServers = servers
+		}
 	}
 
 	box, runner, reused, err := c.acquire(ctx, m, req, opened.Prior)
@@ -386,10 +405,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		brief, session = continued.Brief, continued.SessionID
 	}
 	handle, err := runner.Start(ctx, box, RunRequest{
-		System:        buildSystem(req),
-		Brief:         brief,
-		ResumeSession: session,
-		Env:           withTelemetry(m, req),
+		System: buildSystem(req),
+		Brief:  brief,
+		Resume: session,
+		Env:    withTelemetry(m, req),
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -684,10 +703,12 @@ func buildSystem(req LaunchRequest) string {
 // opens with "You are Claude Code, Anthropic's official CLI for Claude", and
 // no flag removes it. A seat prompt that only implies who it is loses to that,
 // so this says outright which of the two prompts is the role. The engine's own
-// text calls open with the same note (internal/providers/llm/cliagent
-// harnessNote), less the sentence about Crewlet's JSON envelope: here the run's tools are its own and the seat's,
-// called the way its CLI calls any tool. Constant, so it stays part of the
-// prefix a vendor caches.
+// runs on this host open with the same note (internal/providers/llm/cliagent
+// harnessNote), less the sentence it adds on a call that offers tools — act
+// through the `crewlet` server's tools, never the CLI's own: here the run's
+// shell and editor are what the box is for, and the seat's tools are called
+// the way its CLI calls any tool. Constant, so it stays part of the prefix a
+// vendor caches.
 const agentRunNote = "You are running inside a command-line coding tool as one seat of a " +
 	"Crewlet company, and Crewlet — not a person at a terminal — reads what you " +
 	"report. The tool's own instructions describe the program you run in, not your " +

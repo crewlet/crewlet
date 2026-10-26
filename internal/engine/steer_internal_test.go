@@ -204,7 +204,7 @@ func TestANoteThatMissedTheTurnIsReportedExpired(t *testing.T) {
 	company := e.Company()
 	seat := company.Org.AgentSeatByHandle("swe")
 	r, err := company.RunnerFor("swe", nil, RunnerInput{
-		Reply: turn.NoReply(), Launcher: launcherStub{}, Publisher: p,
+		Reply: turn.NoReply(), Launcher: launcherStub{}, Sessions: e.sessions, Publisher: p,
 		Turn: runner.Turn{RunID: "run-1", WorkKey: "wk-1",
 			Context: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org}},
 	})

@@ -7,10 +7,11 @@
  * The first row is the kit's top bar — the drawer toggle below the shell
  * breakpoint, the breadcrumb, an object page's lenses beside it (`PageLenses`),
  * and what this page can do: who is working right now (Home's bar only), the
- * star and the link, and LAST the screen's own controls (portalled in through
- * `PageActions`) — because a screen's primary action ("New task") belongs at
- * the bar's end, where the approved designs put it and where the eye finishes
- * the row; the frame's quiet controls come before it. The second row is the
+ * star and the link, the screen's own controls (portalled in through
+ * `PageActions`), and LAST the Ask button that opens the assistant, which
+ * stands above the panel it opens (decision D1): a screen's primary action
+ * ("New task") is the last of the screen's own, and the frame's quiet
+ * controls come before them. The second row is the
  * workspace's SECTIONS, drawn
  * as tabs, on a section's own page only: on an object page the crumbs are the
  * way back out, and a strip of tabs over a task page would say the task is a
@@ -85,6 +86,7 @@ import {
 import { preload } from "../lazyScreen.ts";
 import type { SectionFigure } from "../sidebar/settingsFigures.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT, lensLabel } from "../frame/PageActions.tsx";
+import { AssistantTrigger } from "../assistant/AssistantTrigger.tsx";
 import { ScopeSwitcher, useScopeFigures } from "./ProjectSwitcher.tsx";
 import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
@@ -193,6 +195,10 @@ export function PageHeader({
             star={framesStar}
           />
           <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
+          {/* THE ASK BUTTON ENDS THE BAR, above the panel it opens (D1): the
+              one frame control that stays inline at a phone's width, since it
+              is how a reader reaches help on a screen they do not follow. */}
+          <AssistantTrigger />
         </div>
       </AppShell.Topbar>
       {row && row.renderer === "tabs" && (

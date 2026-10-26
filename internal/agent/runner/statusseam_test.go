@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // THE PHASE SEAM AND THE PHASE EVENT ARE ONE ANNOUNCEMENT.
@@ -27,7 +28,7 @@ func TestThePhaseSeamNamesThePhaseTheEventNames(t *testing.T) {
 	// One seam across the launching segment and the collecting one, as a
 	// chat thread has one indicator for the whole turn.
 	round := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}}}, buildOpts{
 		pub:     pub,
 		onPhase: func(ph phase.Phase) { seen = append(seen, ph) },

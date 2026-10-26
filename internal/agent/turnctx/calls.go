@@ -1,7 +1,6 @@
 package turnctx
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -82,9 +81,10 @@ type callEntry struct {
 // NewCallLog is an empty log, for a run that has called nothing yet.
 func NewCallLog() *CallLog { return &CallLog{} }
 
-// Record notes one call this run made, once it has returned — for a call that
-// was made outside the frame that reserves ([CallLog.Reserve]), which is the
-// seeding of a resumed run and a test standing in for an earlier call.
+// Record notes one call this run made, once it has returned.
+//
+// AFTER THE CALL, because a count is about EARLIER calls: the call being made
+// reads its own count before it is recorded.
 func (l *CallLog) Record(tool string, args map[string]any) {
 	if l == nil {
 		return
@@ -93,51 +93,6 @@ func (l *CallLog) Record(tool string, args map[string]any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
-}
-
-// Reserve records a call AS IT IS MADE and returns the context it is made
-// under, which carries the call's place in the log: every count the call reads
-// ([CallLog.Ordinal]) is of the calls before that place, and never of a call
-// that reserved after it.
-//
-// ONE STEP FOR THE COUNT AND THE RECORD, because a run's calls are concurrent.
-// An executor's calls arrive over the bridge, each on its own goroutine, and a
-// call that read its count and was recorded only once it returned left a
-// window in which another call to the same tool read the same log: of a run's
-// X, Y, X to one tool, the second X read 0 while Y was still in flight — its
-// first copy's operation id — and was answered as that call's retry, its write
-// skipped with a success. Reserved first, the calls take places in one order,
-// and each counts exactly the calls that took places before it: the second X
-// counts Y if Y took its place first, and is the first X repeated with nothing
-// in between if it did not, which is the same operation by the rule above.
-//
-// A call that then fails, or is never answered, keeps its place: it may have
-// written part of what it asked for, and a place nothing wrote under only
-// raises a later count, which is a fresh operation — the safe direction.
-func (l *CallLog) Reserve(ctx context.Context, tool string, args map[string]any) context.Context {
-	if l == nil {
-		return ctx
-	}
-	digest := ArgsDigest(args)
-	l.mu.Lock()
-	place := len(l.entries)
-	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
-	l.mu.Unlock()
-	return context.WithValue(ctx, callPlaceKey{}, callPlace{log: l, index: place})
-}
-
-// callPlaceKey carries the reserving call's place ([CallLog.Reserve]).
-type callPlaceKey struct{}
-
-// callPlace is one call's place: the log it reserved in, and its index there.
-//
-// THE LOG AS WELL AS THE INDEX, because a context outlives the log it was
-// reserved in: a delegated worker runs under its parent call's context, on a
-// fork of the parent's log ([CallLog.Fork]), and an index read against the
-// fork would be a place in another log.
-type callPlace struct {
-	log   *CallLog
-	index int
 }
 
 // SeededCall is one call a run made before this log held it.
@@ -156,25 +111,15 @@ func (l *CallLog) Seed(calls ...SeededCall) {
 
 // Ordinal is how many calls to tool earlier in this run asked for something
 // other than args — the count a derived operation id carries. See [CallLog].
-//
-// EARLIER THAN THE CALL ctx IS MADE UNDER, where it reserved its place in this
-// log ([CallLog.Reserve]): the calls before that place, and none reserved
-// after it, however many have since. A context with no place here — a tool
-// exercised directly, a call that never went through a surface — counts the
-// whole log, which is every call before one not yet recorded.
-func (l *CallLog) Ordinal(ctx context.Context, tool string, args map[string]any) int {
+func (l *CallLog) Ordinal(tool string, args map[string]any) int {
 	if l == nil {
 		return 0
 	}
 	digest := ArgsDigest(args)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	entries := l.entries
-	if place, ok := ctx.Value(callPlaceKey{}).(callPlace); ok && place.log == l {
-		entries = entries[:min(place.index, len(entries))]
-	}
 	n := 0
-	for _, entry := range entries {
+	for _, entry := range l.entries {
 		if entry.tool == tool && entry.digest != digest {
 			n++
 		}
@@ -192,6 +137,36 @@ func (l *CallLog) Fork() *CallLog {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return &CallLog{entries: append([]callEntry(nil), l.entries...), base: len(l.entries)}
+}
+
+// Admit records one call the moment it is ADMITTED and returns the log that
+// call counts from: this run's calls before it, as a fork ([CallLog.Fork]).
+//
+// FOR CALLS THAT RUN SIDE BY SIDE. [CallLog.Record] after each call returns is
+// the rule for calls made one after another, where the order they return in is
+// the order they were made in. A coding CLI makes a response's calls at once
+// and they return in whatever order their tools finish, so a count read
+// against a log their returns are recorded into would depend on which sibling
+// finished first — and a re-run, making the same calls, would not reproduce
+// it. Recorded at admission instead, in the order the calls arrived, every
+// count is a function of that order alone.
+//
+// ONE LOCK FOR BOTH HALVES, so two admissions cannot each take a fork before
+// the other's record and both count as the run's first of their kind.
+//
+// The fork is the call's own: whatever the call records on it is handed back
+// with [CallLog.Absorb] once the call has returned. A nil log admits nothing
+// and returns nil, which counts every call as the first of its kind.
+func (l *CallLog) Admit(tool string, args map[string]any) *CallLog {
+	if l == nil {
+		return nil
+	}
+	digest := ArgsDigest(args)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	fork := &CallLog{entries: append([]callEntry(nil), l.entries...), base: len(l.entries)}
+	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
+	return fork
 }
 
 // Absorb records the calls made on a fork, once the worker that made them is

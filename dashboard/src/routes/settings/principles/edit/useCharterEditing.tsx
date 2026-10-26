@@ -55,6 +55,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import { isAbort } from "~/protocol/rest.ts";
 import type { OrgProjection } from "~/protocol/types.ts";
 import { mayWriteCharter } from "./access.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { charterDraft } from "./assistantAction.ts";
 import { EDIT_PARAM, editValue, partsIn } from "./address.ts";
 import {
   CHARTER_PARTS,
@@ -247,6 +249,21 @@ export function useCharterEditing(org: OrgProjection): {
   const change = useCallback((part: CharterPart, draft: PartValue) => {
     dispatch({ type: "change", part, draft });
   }, []);
+
+  // --- assistant page actions (WP12) ---
+  // THE OPEN PARTS, declared once (`useAssistantDraft`): every part's value
+  // reaches the assistant, and a new value for an open part is set through
+  // the editor's own `change`, as typing writes it; Save stays theirs.
+  useAssistantDraft(
+    charterDraft({
+      state,
+      charter,
+      change,
+      blocked: () =>
+        !mayEdit ? "Writing the principles takes Admin." : access.can ? null : access.reason,
+    }),
+  );
+  // --- end assistant page actions (WP12) ---
 
   const close = useCallback(
     (part: CharterPart) => {

@@ -344,19 +344,21 @@ export interface FeedRow {
 export const FEED_ROWS = 5;
 
 /**
- * The calls the turn's phase in flight has made, newest last, with the one
+ * The calls the turn's phase in flight has made, newest last, with the ones
  * running now at the foot — every time and duration the engine's own
- * (`started_at`, `duration_ms`, `running_call.started_at`), never a gap
- * between two pushes measured here. At most `limit` rows, the running one
- * counted: it is the row the card exists for, so it is never the one cut.
+ * (`started_at`, `duration_ms`, `running_calls[].started_at`), never a gap
+ * between two pushes measured here. At most `limit` rows, the running ones
+ * counted: they are the rows the card exists for, so an answered call is cut
+ * before any of them — and where more run side by side than the card holds,
+ * the newest of them are the ones it shows, as everywhere else in a feed.
  */
 export function feedRows(row: AgentRow, limit = FEED_ROWS): FeedRow[] {
   const call = row.live_call;
   if (!call) return [];
-  const running = call.running_call;
-  const room = Math.max(0, limit - (running ? 1 : 0));
+  const running = (call.running_calls ?? []).slice(-limit);
+  const room = Math.max(0, limit - running.length);
   const done: FeedRow[] = (call.tool_executions ?? []).map((ex, i) => ({
-    key: `done-${ex.round}-${i}`,
+    key: ex.call_id ? `call-${ex.call_id}` : `done-${ex.round}-${i}`,
     at: ex.started_at ?? "",
     name: ex.name,
     words: callWords(ex.arguments),
@@ -367,16 +369,18 @@ export function feedRows(row: AgentRow, limit = FEED_ROWS): FeedRow[] {
     running: false,
   }));
   const shown = room > 0 ? done.slice(-room) : [];
-  if (running) {
+  running.forEach((c, i) => {
     shown.push({
-      key: `running-${running.round}-${running.name}`,
-      at: running.started_at,
-      name: running.name,
-      words: callWords(running.arguments),
+      // THE CALL'S OWN ID where it has one, which its answered row keys by
+      // too — one row for the call's whole life.
+      key: c.id ? `call-${c.id}` : `running-${c.round}-${c.name}-${i}`,
+      at: c.started_at,
+      name: c.name,
+      words: callWords(c.arguments),
       failed: false,
       running: true,
     });
-  }
+  });
   return shown;
 }
 

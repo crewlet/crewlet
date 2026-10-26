@@ -344,6 +344,36 @@ func TestTheEventsScopeDoesNotSearchStderr(t *testing.T) {
 	}
 }
 
+// A FAILED RUN WITH TOOLS IS CLASSIFIED BY ITS OWN FAILURE EVENTS. Its answer
+// is its record's last prose, which a failed run never wrote, and a CLI whose
+// stderr says only that it failed says why in a failure event alone (Muse
+// Code's run.terminal.failed reason, beside "run ended with Failed"): read
+// beside stderr, by the profile's fields, a spent plan there sits the entry
+// out. Only a failed run's — a run that went on past a failure event did not
+// fail of it.
+//
+// Mutation: leave the failure events out of the default scope, and the spent
+// plan is a server failure; read them on a run that did not fail, and its
+// recovered retry benches the entry.
+func TestAFailedRunWithToolsIsClassifiedByItsOwnFailureEvents(t *testing.T) {
+	t.Parallel()
+	p, err := cliprofile.Load("claude-code", map[string]any{
+		"limit_markers": []any{map[string]any{"sentinel": "rate_limit_error"}},
+		"auth_markers":  []any{map[string]any{"sentinel": "authentication_error"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := "payload.reason=API error 429: slow down (rate_limit_error) (after 4 provider attempts)"
+	hit, fired := classifyMarkers(p, cliOutput{stderr: "run ended with Failed\n", failed: true, events: events})
+	if !fired || hit.Kind != llm.KindRateLimit || hit.Source != sourceEvent || hit.Said != events {
+		t.Errorf("classified %+v (fired %v), want the spent plan the failure event names", hit, fired)
+	}
+	if hit, fired := classifyMarkers(p, cliOutput{said: "done", events: events}); fired {
+		t.Errorf("a run that did not fail was classified %v by a failure event it went on past", hit.Kind)
+	}
+}
+
 // THE PRODUCTION CALL SITE CLASSIFIES A STREAM FAILURE, AND ONLY A STREAM
 // FAILURE. Every case above asks classifyMarkers directly; this asks the frame
 // that turns a finished OpenCode call into an answer or an error, so a call
@@ -369,7 +399,7 @@ func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := prov.completion(t.Context(), "prompt", true,
+			_, err := prov.completion(t.Context(), "prompt",
 				&rawResult{stdout: answer + "\n" + tc.event + "\n"}, "")
 			var classified *llm.Error
 			if !errors.As(err, &classified) || classified.Kind != tc.want {
@@ -379,7 +409,7 @@ func TestACompletionClassifiesOpenCodesFailureEvents(t *testing.T) {
 		})
 	}
 	// And a forged call is an ANSWER, not a benched credential.
-	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: openCodeForgedStream}, "")
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: openCodeForgedStream}, "")
 	if err != nil {
 		t.Fatalf("a healthy call whose model wrote every class into a tool's arguments "+
 			"failed: %v", err)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -21,80 +22,211 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// scriptedProvider replays completions PER PHASE, choosing the script from the
-// tools the request offers: the phases the engine drives with its own loop,
-// which the executor is not — its run is played by a [playLauncher].
+// scriptedProvider is the model behind every phase's CLI runs that the engine
+// drives — which the executor is not: its run is played by a [playLauncher] —
+// scripted PER PHASE: each phase reads its own stream of responses, one per
+// model request, and a run is told which phase it is by the tools its CLI was
+// offered.
 //
 // Not a flat sequence: each phase runs its own loop and a phase that calls a
 // tool takes another round, so a shared index drifts as soon as any phase
 // makes one more call than the fixture author counted. Dispatching on the
 // surface is both robust and closer to the truth — the offered tools ARE what
 // distinguishes the phases.
+//
+// A STREAM OF RESPONSES, NOT A LIST OF RUNS, because the runs are not the
+// model's to choose: its CLI asks it again after every call it makes, and the
+// engine ends a run when the phase finishes, parks or is corrected. So a run
+// plays the phase's next responses until one calls nothing — the model's
+// answer — or the engine ends it, and the next run of the phase picks the
+// stream up where that one left it. Past the end, the last response repeats: a
+// model that keeps answering the same way.
+//
+// THROUGH THE REAL SESSION: every response reaches the phase's dispatcher as a
+// CLI's record does, and every call reaches the phase's tools over MCP
+// (llmtest.Conn).
 type scriptedProvider struct {
-	review, onboarding []llm.Completion
-	seen               []llm.Request
-	n                  map[string]int
+	review, onboarding []llmtest.Response
+
+	mu   sync.Mutex
+	runs []*scriptedRun
+	n    map[string]int
+}
+
+// scriptedRun is one CLI run the provider played.
+type scriptedRun struct {
+	which string
+	req   llm.Request
+	conn  *llmtest.Conn
+
+	// offered is the tool list the CLI read before each response it played
+	// — one per model request, an activation's effect included.
+	offered [][]llm.ToolDef
 }
 
 func (p *scriptedProvider) Model() string { return "scripted" }
 
-func (p *scriptedProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
-	p.seen = append(p.seen, req)
-	which, script := p.scriptFor(req)
-	if p.n == nil {
-		p.n = map[string]int{}
-	}
-	if len(script) == 0 {
+func (p *scriptedProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if req.Tools == nil {
 		return &llm.Completion{Content: "(no script)"}, nil
 	}
-	i := min(p.n[which], len(script)-1)
-	p.n[which]++
-	c := script[i]
-	return &c, nil
+	var run *scriptedRun
+	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(c *llmtest.Conn) (llmtest.Response, error) {
+		offered, err := c.Relist(ctx)
+		if err != nil {
+			return llmtest.Response{}, err
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if run == nil {
+			run = &scriptedRun{which: phaseOffering(toolNames(offered)), req: req, conn: c}
+			p.runs = append(p.runs, run)
+		}
+		run.offered = append(run.offered, offered)
+		script := p.scriptOf(run.which)
+		if len(script) == 0 {
+			return llmtest.Response{Text: "(no script)"}, nil
+		}
+		if p.n == nil {
+			p.n = map[string]int{}
+		}
+		i := min(p.n[run.which], len(script)-1)
+		p.n[run.which]++
+		return script[i], nil
+	})
 }
 
-func (p *scriptedProvider) scriptFor(req llm.Request) (string, []llm.Completion) {
-	offered := toolNames(req.Tools)
+// phaseOffering names the phase a run is from the tools its CLI was offered.
+func phaseOffering(offered []string) string {
 	switch {
 	case slices.Contains(offered, runner.SubmitReviewTool):
-		return "review", p.review
+		return "review"
 	case slices.Contains(offered, runner.MarkOnboardedTool):
-		return "onboarding", p.onboarding
+		return "onboarding"
 	default:
-		// Nothing else calls a model through the engine's loop: the
-		// executor is its CLI's own run. A request landing here is a phase
-		// this fixture does not know, and it is answered with nothing a
-		// phase could mistake for a decision.
-		return "other", nil
+		// Nothing else runs a CLI through the engine's loop on a seat's
+		// turn: the executor is its CLI's own run. A run landing here is a
+		// phase this fixture does not know, and it is answered with nothing
+		// a phase could mistake for a decision.
+		return "other"
 	}
 }
 
-// requestsFor returns the requests one phase received, in order.
-func (p *scriptedProvider) requestsFor(which string) []llm.Request {
-	var out []llm.Request
-	for _, req := range p.seen {
-		if got, _ := p.scriptFor(req); got == which {
-			out = append(out, req)
+func (p *scriptedProvider) scriptOf(which string) []llmtest.Response {
+	switch which {
+	case "review":
+		return p.review
+	case "onboarding":
+		return p.onboarding
+	default:
+		return nil
+	}
+}
+
+// runsFor is every CLI run one phase made, in order.
+func (p *scriptedProvider) runsFor(which string) []*scriptedRun {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []*scriptedRun
+	for _, run := range p.runs {
+		if run.which == which {
+			out = append(out, run)
 		}
 	}
 	return out
 }
 
-// submitCall builds a completion whose only content is a call to a submission
-// tool with the given JSON arguments.
-func submitCall(t *testing.T, name, argsJSON string) llm.Completion {
+// allRuns is every CLI run, of every phase, in order.
+func (p *scriptedProvider) allRuns() []*scriptedRun {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.runs)
+}
+
+// requestsFor returns the request each of one phase's CLI runs was handed, in
+// order: the conversation a run opens on.
+func (p *scriptedProvider) requestsFor(which string) []llm.Request {
+	var out []llm.Request
+	for _, run := range p.runsFor(which) {
+		out = append(out, run.req)
+	}
+	return out
+}
+
+// roundsOf is how many model requests — responses — one phase was asked for.
+func (p *scriptedProvider) roundsOf(which string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.n[which]
+}
+
+// offeredFor is what the model was offered at each of one phase's requests,
+// across its runs, by name.
+func (p *scriptedProvider) offeredFor(which string) [][]string {
+	var out [][]string
+	for _, run := range p.runsFor(which) {
+		p.mu.Lock()
+		lists := slices.Clone(run.offered)
+		p.mu.Unlock()
+		for _, defs := range lists {
+			out = append(out, toolNames(defs))
+		}
+	}
+	return out
+}
+
+// answered is what every call one phase's CLI made was answered, in order:
+// what the model read back from its tools.
+func (p *scriptedProvider) answered(which string) []llmtest.Result {
+	var out []llmtest.Result
+	for _, run := range p.runsFor(which) {
+		out = append(out, run.conn.Results()...)
+	}
+	return out
+}
+
+// answerTo is what the model read back from its first call of name, or "".
+func (p *scriptedProvider) answerTo(which, name string) string {
+	for _, r := range p.answered(which) {
+		if r.Name == name {
+			return r.Output
+		}
+	}
+	return ""
+}
+
+// callOf is one call a response makes, its arguments encoded as the model
+// writes them.
+func callOf(t *testing.T, name string, args map[string]any) llmtest.Call {
 	t.Helper()
-	var args map[string]any
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		t.Fatalf("fixture is not JSON: %v", err)
+	if args == nil {
+		return llmtest.Call{Name: name}
 	}
-	return llm.Completion{
-		ToolCalls: []llm.ToolCall{{ID: "c1", Name: name, Arguments: args}},
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("fixture arguments are not JSON: %v", err)
 	}
+	return llmtest.Call{Name: name, Args: string(raw)}
+}
+
+// calling is a response whose only content is calls.
+func calling(calls ...llmtest.Call) llmtest.Response {
+	return llmtest.Response{Calls: calls}
+}
+
+// submitCall builds a response whose only content is a call to a tool with the
+// given JSON arguments.
+func submitCall(t *testing.T, name, argsJSON string) llmtest.Response {
+	t.Helper()
+	if !json.Valid([]byte(argsJSON)) {
+		t.Fatalf("fixture is not JSON: %s", argsJSON)
+	}
+	return calling(llmtest.Call{Name: name, Args: argsJSON})
 }
 
 // submitWork is the ordinary ending for a run that delivered nothing: the
@@ -114,9 +246,9 @@ func activate(name string) llm.ToolCall {
 	return llm.ToolCall{ID: "act", Name: "activate_tool", Arguments: map[string]any{"name": name}}
 }
 
-// activating is [activate] as a round of an engine-driven phase.
-func activating(name string) llm.Completion {
-	return llm.Completion{ToolCalls: []llm.ToolCall{activate(name)}}
+// activating is [activate] as a response of an engine-driven phase.
+func activating(name string) llmtest.Response {
+	return calling(llmtest.Call{Name: runner.ActivateTool, Args: `{"name":"` + name + `"}`})
 }
 
 // deliver is the ordinary delivery a run makes: discover, call, report.
@@ -130,7 +262,7 @@ func deliver(t *testing.T, summary string) run {
 	}, text: summary}
 }
 
-func text(s string) llm.Completion { return llm.Completion{Content: s} }
+func text(s string) llmtest.Response { return llmtest.Response{Text: s} }
 
 // workFor is a plain delivered submission, for tests that drive Review
 // directly and do not care what the executor did.
@@ -297,6 +429,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Turn:         runTurn,
 		Budget:       opts.budget,
 		Compact:      opts.compact,
+		Sessions:     sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -486,7 +619,7 @@ func TestReviewJudgesAgainstTheToolLogVerbatim(t *testing.T) {
 	// the budgets belong to the cross-round ledger, not here.
 	body := strings.Repeat("x", 3000)
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	w := turn.Work{
 		Outcome: turn.OutcomeDelivered, Summary: "post it", Text: "posted",
@@ -509,7 +642,7 @@ func TestReviewJudgesAgainstTheToolLogVerbatim(t *testing.T) {
 func TestAnEmptyToolLogStillLeavesATrace(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {
 		t.Fatalf("Review: %v", err)
@@ -524,7 +657,7 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 	// Defaulting to done here is the difference between "the work was
 	// judged good" and "nothing judged it", and those look identical
 	// downstream.
-	r, _, _ := fixture(t, &scriptedProvider{review: []llm.Completion{text("looks fine to me")}})
+	r, _, _ := fixture(t, &scriptedProvider{review: []llmtest.Response{text("looks fine to me")}})
 	got, err := r.Review(context.Background(), 1, turn.Work{}, nil)
 	if err != nil {
 		t.Fatalf("Review: %v", err)
@@ -546,7 +679,7 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 // in prose.
 func TestTheReviewerAsksOnAutoAndIsReAskedForItsSubmission(t *testing.T) {
 	t.Parallel()
-	r, prov, _ := fixture(t, &scriptedProvider{review: []llm.Completion{
+	r, prov, _ := fixture(t, &scriptedProvider{review: []llmtest.Response{
 		text("Looks done to me."),
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
 	}})
@@ -572,7 +705,7 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 	// shared registry would leave one phase's answer visible to the next —
 	// or to the next turn, still holding the last one's decision.
 	prov := &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}
 	// The launching segment's registry and the collecting one's: the run
 	// is launched in one process and collected and reviewed in another.
@@ -601,7 +734,7 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 		t.Errorf("the executor was offered the reviewer's tool: %v", execOffered)
 	}
 	// And the reviewer is offered its own, not the executor's.
-	reviewOffered := toolNames(prov.requestsFor("review")[0].Tools)
+	reviewOffered := prov.offeredFor("review")[0]
 	if !slices.Contains(reviewOffered, runner.SubmitReviewTool) {
 		t.Errorf("the reviewer was not offered its submission tool: %v", reviewOffered)
 	}
@@ -617,36 +750,53 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 func TestTheReviewerRunsOnItsOwnBudgetNotTheExecutors(t *testing.T) {
 	t.Parallel()
 	// A reviewer that never submits burns its whole budget and then
-	// rescues, so the round count is observable.
+	// rescues, so the round count is observable. Its submission is the one
+	// tool it holds, so it keeps CALLING it — a self_iterate with no
+	// correction, which the decoder refuses — and every refused call is a
+	// round the budget counts.
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "x", Name: "lookup_colleague"}}},
+		review: []llmtest.Response{
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate"}`),
 		},
 	})
-	if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {
+	got, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil)
+	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
-	// The executor's cap in this fixture is 6; the reviewer's is its own
-	// unexported constant, and must be neither that nor unbounded.
-	if got := len(prov.requestsFor("review")); got == 0 || got > 5 {
-		t.Errorf("the reviewer ran %d rounds, want its own small budget", got)
+	if got.Decision != phase.SelfIterate || !strings.Contains(got.Notes, "produced no decision") {
+		t.Fatalf("review = %+v, want the rescue a reviewer that never decided gets", got)
+	}
+	// The reviewer's budget is its own unexported constant, and must be
+	// neither unbounded nor borrowed from any other phase's.
+	if rounds := prov.roundsOf("review"); rounds == 0 || rounds > 5 {
+		t.Errorf("the reviewer ran %d rounds, want its own small budget", rounds)
 	}
 }
 
-// A RUNNER NEEDS ITS REGISTRIES AND ITS LAUNCHER, and refuses at assembly
-// without one: every executor is a launched run, so a runner with no launcher
-// cannot run the one phase every turn has, and finding that out at the first
-// Execute fails a turn on a mistake made where the runner was built.
+// A RUNNER NEEDS ITS REGISTRIES, ITS SESSION HOST AND ITS LAUNCHER, and
+// refuses at assembly without one: every phase the engine drives reaches its
+// CLI's tools through the host, and every executor is a launched run — so a
+// runner missing either cannot run a phase every turn has, and finding that
+// out at the first one fails a turn on a mistake made where the runner was
+// built.
 func TestARunnerNeedsItsRegistriesAndItsLauncher(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
-	if _, err := runner.New(runner.Config{Models: &phase.Registry{}, Launcher: launcher}); err == nil {
+	if _, err := runner.New(runner.Config{Models: &phase.Registry{}, Launcher: launcher,
+		Sessions: sessions}); err == nil {
 		t.Error("a runner built with no tool registry")
 	}
-	if _, err := runner.New(runner.Config{Registry: tools.NewRegistry(), Launcher: launcher}); err == nil {
+	if _, err := runner.New(runner.Config{Registry: tools.NewRegistry(), Launcher: launcher,
+		Sessions: sessions}); err == nil {
 		t.Error("a runner built with no provider registry")
 	}
-	_, err := runner.New(runner.Config{Registry: tools.NewRegistry(), Models: &phase.Registry{}})
+	_, err := runner.New(runner.Config{Registry: tools.NewRegistry(), Models: &phase.Registry{},
+		Launcher: launcher})
+	if err == nil || !strings.Contains(err.Error(), "Config.Sessions") {
+		t.Errorf("a runner built with no session host = %v, want a refusal naming the field", err)
+	}
+	_, err = runner.New(runner.Config{Registry: tools.NewRegistry(), Models: &phase.Registry{},
+		Sessions: sessions})
 	if err == nil || !strings.Contains(err.Error(), "Launcher") {
 		t.Errorf("a runner built with no launcher = %v, want a refusal naming the field", err)
 	}
@@ -663,8 +813,8 @@ func TestACollectionHandedASecondContextIsRefused(t *testing.T) {
 		"prefetched blocks": {Context: prefetch.Blocks{PersonalMemory: "- fetched again"}},
 		"conversation":      {Conversation: "### Turn 1\nfetched again"},
 	} {
-		cfg.Registry, cfg.Models, cfg.Launcher, cfg.Resume =
-			tools.NewRegistry(), &phase.Registry{}, &playLauncher{}, resume
+		cfg.Registry, cfg.Models, cfg.Launcher, cfg.Resume, cfg.Sessions =
+			tools.NewRegistry(), &phase.Registry{}, &playLauncher{}, resume, sessions
 		if _, err := runner.New(cfg); err == nil || !strings.Contains(err.Error(), "Config.Resume") {
 			t.Errorf("%s: a resume handed its own context = %v, want a refusal naming the fields", name, err)
 		}

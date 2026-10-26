@@ -654,6 +654,38 @@ func (s *Service) entityPrecondition(w http.ResponseWriter, r *http.Request, act
 	return true, true
 }
 
+// howToAdd is how a member of kind is added, the one sentence both a plain PUT
+// to a missing id and a create of an uncreatable one end on: the create-only
+// write where the collection creates by address, and where it does not (a
+// seat, a unit), the write that shows the place the path cannot name.
+//
+// ONE SENTENCE FOR BOTH, because the first used to tell every caller to send
+// `If-None-Match: *`, which a seat and a unit then refuse `not_creatable`: a
+// caller following the hint for a seat met a second refusal before it was
+// told where a seat is added.
+//
+// [EntityAbsent] declares the same fact on the route itself.
+func howToAdd(kind string) string {
+	if entityKinds[kind].create != nil {
+		return "to add one, send the same request with If-None-Match: *"
+	}
+	return "a member of " + kind + " has a place in the company the path cannot " +
+		"name, so it is added by replacing the unit it sits in (PUT /config/units/{id}), " +
+		"or through PUT /config, where the place is visible"
+}
+
+// EntityAbsent is what a PUT to kind's address does where it holds nothing,
+// as the route is mounted with it ([authz.Absent]): a create where the kind
+// creates by address, and otherwise refused with [howToAdd]'s sentence, which
+// is what the handler answers such a create. One table decides both.
+func EntityAbsent(kind string) *authz.Absent {
+	if entityKinds[kind].create != nil {
+		return authz.CreatesWhenAbsent()
+	}
+	// As the refusal's envelope spells it, so the two read alike.
+	return authz.AddedElsewhere(httpjson.Sentence(howToAdd(kind)))
+}
+
 // refuseEntity answers an entity write's own refusals, and every other one as
 // [Service.refuseApply] does.
 func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error) {
@@ -669,7 +701,7 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
 			map[string]string{
 				"hint": "no " + kind + " called " + id + " in the active revision; " +
-					"to add one, send the same request with If-None-Match: *",
+					howToAdd(kind),
 			})
 	case errors.Is(err, ErrEntityExists):
 		// A CREATE THAT FOUND ONE. 412 because it is the precondition the
@@ -682,11 +714,7 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 			})
 	case errors.Is(err, ErrNotCreatable):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeNotCreatable,
-			map[string]string{
-				"hint": "a member of " + kind + " has a place in the company the " +
-					"path cannot name; add it through PUT /config, or by " +
-					"replacing the unit it sits in, where the place is visible",
-			})
+			map[string]string{"hint": howToAdd(kind)})
 	case errors.Is(err, ErrIdentityMismatch):
 		// A RENAME, REFUSED. Not coerced back to the path's id either:
 		// silently keeping the old identity would land every other edit in

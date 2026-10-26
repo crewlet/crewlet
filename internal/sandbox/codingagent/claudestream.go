@@ -41,8 +41,26 @@ type claudeEvent struct {
 		// tool result's user message, and a plain string on a user
 		// message that is a prompt (a subagent's first message).
 		Content json.RawMessage `json:"content"`
+		// ID and Usage are an assistant message's, which the stream repeats
+		// on every line of the one message (a line per content block), so
+		// a message's usage is counted once, by its id.
+		ID    string      `json:"id"`
+		Usage claudeUsage `json:"usage"`
 	} `json:"message"`
 }
+
+// claudeUsage is one API call's tokens as the stream reports them: the
+// uncached prompt, the cache's reads and writes, and the reply.
+type claudeUsage struct {
+	Input       int `json:"input_tokens"`
+	Output      int `json:"output_tokens"`
+	CacheRead   int `json:"cache_read_input_tokens"`
+	CacheCreate int `json:"cache_creation_input_tokens"`
+}
+
+// total is every token of the call, the whole prompt and the reply: the
+// convention every engine meter charges (llm.Completion.TotalTokens).
+func (u claudeUsage) total() int { return u.Input + u.Output + u.CacheRead + u.CacheCreate }
 
 // claudeBlock is one content block of a message.
 type claudeBlock struct {
@@ -87,6 +105,30 @@ type claudeEvents struct {
 	// a followed stream. A call is forgotten once its result arrives, so the
 	// map holds only the calls still in flight.
 	tools map[string]string
+
+	// spent is each assistant message's tokens by its id, the LARGEST the
+	// stream reported for it (a message's lines carry its usage as it
+	// grew), and spentTotal their sum: what [claudeEvents.Spent] answers.
+	spent      map[string]int
+	spentTotal int
+}
+
+// Spent is every token the run's model calls have reported so far: what a
+// live reading checks a run's token cap against while it works.
+func (d *claudeEvents) Spent() int { return d.spentTotal }
+
+// count records one assistant message's usage.
+func (d *claudeEvents) count(id string, u claudeUsage) {
+	if id == "" || u.total() == 0 {
+		return
+	}
+	if d.spent == nil {
+		d.spent = map[string]int{}
+	}
+	if seen := d.spent[id]; u.total() > seen {
+		d.spentTotal += u.total() - seen
+		d.spent[id] = u.total()
+	}
 }
 
 func (d *claudeEvents) Line(line []byte) {
@@ -111,6 +153,7 @@ func (d *claudeEvents) Line(line []byte) {
 	}
 	switch ev.Type {
 	case "assistant":
+		d.count(ev.Message.ID, ev.Message.Usage)
 		for _, block := range claudeBlocks(ev.Message.Content) {
 			switch block.Type {
 			case "text":

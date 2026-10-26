@@ -35,14 +35,17 @@ var callFamily = map[string]class{
 	"model": status, "input_tokens": status, "output_tokens": status,
 	"total_tokens": status, "round_num": status, "rounds_used": status,
 	"rounds": status, "max_rounds": status, "round_ceiling": status,
-	"round_started_at": status, "steers": status, "cache_read_tokens": status,
+	"round_started_at": status, "run_started_at": status, "steers": status, "cache_read_tokens": status,
 	"cache_write_tokens": status, "node": status, "in_progress": status,
 	"failed": status, "error": status, "updated_at": status, "started_at": status,
 	"versions": status, "body_withheld": status,
-	// THE RUNNING CALL IS STATUS WITHOUT ITS ARGUMENTS: which tool is
-	// running and since when is what the seat is doing; what it was asked
+	// A CLI RUN IS STATUS: when it ran, on whose entry, how it ended and
+	// what it spent are what the seat is doing, like a round's timing.
+	"invocations": status,
+	// THE RUNNING CALLS ARE STATUS WITHOUT THEIR ARGUMENTS: which tools are
+	// running and since when is what the seat is doing; what each was asked
 	// is the body, and [MaskCall] drops that one key from a fresh map.
-	"running_call": status,
+	"running_calls": status,
 
 	"trigger": body, "prompt": body, "prompt_messages": body, "response": body,
 	"tool_executions": body, "round_narration": body, "partial_round": body,
@@ -86,7 +89,8 @@ var nested = map[reflect.Type]map[string]class{
 	reflect.TypeFor[ErrorInfo](): {"kind": status, "message": status,
 		"phase": status, "turn_id": status, "at": status, "event_id": status},
 	reflect.TypeFor[CallVersions](): {"prompt": status, "response": status,
-		"narration": status, "executions": status, "rounds": status},
+		"narration": status, "executions": status, "rounds": status,
+		"invocations": status},
 	reflect.TypeFor[BudgetMeter](): {"windows": status},
 	reflect.TypeFor[WindowMeter](): {"period": status, "window": status,
 		"starts_at": status, "resets_at": status, "used": status, "limit": status,
@@ -321,11 +325,20 @@ func fullCall() *LiveCall {
 		RoundNarration: []any{map[string]any{"round": 1}},
 		PartialRound:   map[string]any{"round": 2},
 		Rounds:         []any{map[string]any{"round": 1}},
-		RunningCall: map[string]any{"round": 2, "name": "read_file",
-			"arguments": `{"path":"x"}`, "started_at": "now"},
+		Invocations: []any{map[string]any{"first_round": 1, "last_round": 1,
+			"outcome": "stopped"}},
+		// Two calls of one response running side by side, as a CLI runs
+		// them.
+		RunningCalls: []any{
+			map[string]any{"id": "call-1", "round": 2, "name": "read_file",
+				"arguments": `{"path":"x"}`, "started_at": "now"},
+			map[string]any{"id": "call-2", "round": 2, "name": "read_file",
+				"arguments": `{"path":"y"}`, "started_at": "now"},
+		},
 		WorkItem:   &types.WorkItem{Backend: "native", ID: "t-1", Key: "ENG-1", Project: "ENG"},
 		InProgress: true,
-		Versions:   CallVersions{Prompt: 1, Response: 2, Narration: 3, Executions: 4, Rounds: 5},
+		Versions: CallVersions{Prompt: 1, Response: 2, Narration: 3, Executions: 4, Rounds: 5,
+			Invocations: 6},
 	}
 }
 
@@ -354,12 +367,17 @@ func noBody(t *testing.T, who string, got map[string]any) {
 			t.Errorf("%s carries the body field %q", who, field)
 		}
 	}
-	if running, _ := got["running_call"].(map[string]any); running != nil {
-		if _, ok := running[runningArguments]; ok {
-			t.Errorf("%s carries the running call's arguments", who)
+	running, _ := got["running_calls"].([]any)
+	if len(running) != 2 {
+		t.Errorf("%s lists %d calls in flight, want both: %v", who, len(running), got["running_calls"])
+	}
+	for i, entry := range running {
+		call, _ := entry.(map[string]any)
+		if _, ok := call[runningArguments]; ok {
+			t.Errorf("%s carries running call %d's arguments", who, i)
 		}
-		if running["name"] != "read_file" {
-			t.Errorf("%s lost which tool is running: %v", who, running)
+		if call["name"] != "read_file" || call["id"] == nil {
+			t.Errorf("%s lost which call is running: %v", who, call)
 		}
 	}
 	versions, _ := got["versions"].(map[string]any)
@@ -381,11 +399,11 @@ func noBody(t *testing.T, who string, got map[string]any) {
 // does not, and neither does any version of it: the dashboard asks for a call
 // whole when a push names a newer version than it holds, so a version that
 // moved would send the reader round for a body it will never be sent. The
-// rounds' version stays: the rounds are status. And the work item goes with
-// the tracker.
+// rounds' and the runs' versions stay: both are status. And the work item goes
+// with the tracker.
 //
-// Mutation: keep a body field, the running call's arguments or a body
-// version, and this fails.
+// Mutation: keep a body field, a running call's arguments or a body version,
+// or drop the runs, and this fails.
 func TestAMaskedCallCarriesNoBodyAndZeroBodyVersions(t *testing.T) {
 	t.Parallel()
 	got := wire(t, MaskCall(fullCall(), Reach{Tracker: true}))
@@ -393,11 +411,13 @@ func TestAMaskedCallCarriesNoBodyAndZeroBodyVersions(t *testing.T) {
 	if _, ok := got["work_item"]; !ok {
 		t.Error("a tracker holder's call lost its work item")
 	}
-	if _, ok := got["rounds"]; !ok {
-		t.Error("the masked call lost its rounds, which are status")
-	}
-	if n, _ := got["versions"].(map[string]any)["rounds"].(float64); n != 5 {
-		t.Errorf("the rounds' version is %v, want 5: they are status", n)
+	for detail, want := range map[string]float64{"rounds": 5, "invocations": 6} {
+		if _, ok := got[detail]; !ok {
+			t.Errorf("the masked call lost its %s, which are status", detail)
+		}
+		if n, _ := got["versions"].(map[string]any)[detail].(float64); n != want {
+			t.Errorf("the %s' version is %v, want %v: they are status", detail, n, want)
+		}
 	}
 	if _, ok := wire(t, MaskCall(fullCall(), Reach{}))["work_item"]; ok {
 		t.Error("a reader without Worklet was sent the work item")
@@ -423,12 +443,13 @@ func TestMaskRowHandlesEveryShape(t *testing.T) {
 	call := fullCall()
 	held := call.Versions
 	held.Rounds--
+	held.Invocations--
 	for _, tc := range []struct {
 		name string
 		call any
 	}{
 		{"the projection's own call", call},
-		{"a lean call carrying its rounds", call.Without(held)},
+		{"a lean call carrying its rounds and runs", call.Without(held)},
 		{"a lean call holding everything", call.Without(call.Versions)},
 	} {
 		row := map[string]any{"agent_id": "agent-1", "live_call": tc.call,
@@ -453,11 +474,13 @@ func TestMaskRowHandlesEveryShape(t *testing.T) {
 				"carried it:\n got %v\nwant %v", tc.name, whole["live_call"], wire(t, tc.call))
 		}
 	}
-	if _, rounds := wire(t, MaskCall(call.Without(call.Versions), Reach{}))["rounds"]; rounds {
-		t.Error("a lean call that held its rounds was sent them masked")
-	}
-	if _, rounds := wire(t, MaskCall(call.Without(held), Reach{}))["rounds"]; !rounds {
-		t.Error("a lean call that carried its rounds lost them masked")
+	for _, detail := range []string{"rounds", "invocations"} {
+		if _, ok := wire(t, MaskCall(call.Without(call.Versions), Reach{}))[detail]; ok {
+			t.Errorf("a lean call that held its %s was sent them masked", detail)
+		}
+		if _, ok := wire(t, MaskCall(call.Without(held), Reach{}))[detail]; !ok {
+			t.Errorf("a lean call that carried its %s lost them masked", detail)
+		}
 	}
 	for name, none := range map[string]any{"nil": nil, "a typed nil": (*LiveCall)(nil)} {
 		row := MaskRow(map[string]any{"agent_id": "agent-1", "live_call": none}, Reach{})

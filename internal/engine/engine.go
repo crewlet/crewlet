@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // Company is one immutable configuration epoch.
@@ -272,6 +273,9 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 			Withheld: in.Turn.Context.WithholdsContacts},
 		Registry: reg,
 		Models:   c.Models,
+		// THE PROCESS'S, threaded per turn like the publisher: the epoch is
+		// configuration and the session directory is not.
+		Sessions: in.Sessions,
 		// The onboarding pass's extension policy: the executor's rounds
 		// are its CLI's own, capped by the run's max_turns, and the
 		// reviewer's budget is a structural one — so the pass is the only
@@ -398,6 +402,13 @@ type RunnerInput struct {
 	// rather than epoch configuration.
 	Publisher queue.Publisher
 	Turn      runner.Turn
+
+	// Sessions is where the turn's phases serve their tools to the CLI that
+	// runs them: the engine's one [toolsession.Host] ([Engine.sessions]).
+	// Both RunnerFor call sites pass it, because a phase that offers tools
+	// reaches its CLI through nothing else — a runner built without it is
+	// refused where it is built ([runner.New]).
+	Sessions *toolsession.Host
 
 	// OnPhase moves the working indicator's wording as the turn changes
 	// phase. Nil is a turn nobody is watching a composer for — see

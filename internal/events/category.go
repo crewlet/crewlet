@@ -180,6 +180,12 @@ var categories = map[string]placement{
 	"config_revision_applied":   {"lifecycle", RateAuthenticated},
 	"operator_acted":            {"lifecycle", RateAuthenticated},
 	"backup_requested":          {"lifecycle", RateAuthenticated},
+	// An administrator's compliance read of a person's assistant
+	// conversation (D06), with the reason they gave.
+	"assistant_conversation_read": {"lifecycle", RateAuthenticated},
+	// A person's Dashboard Assistant turn: the runtime audit of the reads
+	// it made as them, one row per segment, never its content.
+	"assistant_turn_completed": {"lifecycle", RateAuthenticated},
 	// A person pausing and resuming a seat — the change itself, published
 	// once by the writer whose compare-and-set won. Beside the runtime
 	// audit rather than folded into it: operator_acted records that a call

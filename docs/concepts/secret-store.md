@@ -171,10 +171,13 @@ estate's sealed values per key the same way (`identity_values`), and the rekey
 moves those too (see
 [Rotating the keyring](#rotating-the-keyring-with-nothing-in-flight-lost)); the
 store reached directly, with the engine stopped, holds no identity estate, so
-neither is counted or moved there, and the rekey says so. A dry run counts
-whatever it reached still under an old key, so an operator is never told
-"nothing to move" while the address index's key or every person's name is
-still sealed under the key they are about to retire.
+neither is counted or moved there, and the rekey says so. Through a running
+node it counts the Dashboard Assistant's sealed conversations per key as well
+(`assistant_values`, each file a conversation keeps counted by the key its
+content is sealed under in the object store), which no rekey moves. A dry run counts whatever it
+reached still under an old key, so an operator is never told "nothing to move"
+while the address index's key, every person's name or somebody's conversation
+is still sealed under the key they are about to retire.
 
 The blind-index key is never minted over one that was deleted — it comes back
 with the coordination store it lived in, from the backup that holds it
@@ -259,7 +262,13 @@ That makes the rotation a runbook with no window in it:
      keys — but not the identity estate, which only the engine holding it can
      re-seal; it says so, and the rekey is run again through a running node
      for those values. Its dry run counts no person's values and no
-     invitation either, for the same reason.
+     invitation either, for the same reason. The **Dashboard Assistant's
+     conversations** are counted, through a running node, and left too: each
+     value leaves with its conversation, once it is untouched for
+     `assistant.retention_days` or its owner clears it, so the rekey says how
+     many are still under an old key. A conversation still in use keeps what
+     it sealed before step 3, so this count can stay above zero for as long
+     as somebody keeps using a conversation started before the flip.
    - **The company document** — `POST /config/reload` to a node that is up
      stores the active document again, sealed under that node's active key, and
      activates it. On a stopped node, [`crewlet config rekey`](../reference/cli.md#crewlet-config-rekey)
@@ -272,7 +281,10 @@ That makes the rotation a runbook with no window in it:
    under it, the absolute session lifetime (`api.auth.session.absolute`) has
    elapsed since step 3, *and* `crewlet secrets rekey -dry-run`, through a
    running node, reports no outstanding invitation under it — each is redeemed
-   or lapses within a week of being issued.
+   or lapses within a week of being issued. It must also report no Dashboard
+   Assistant value under it: dropped while a conversation is still sealed under
+   it, that conversation no longer opens for its owner for the rest of its
+   retention.
    From that moment a token, a record or a cookie signed under it is refused,
    which is the point. Dropping it while a log still holds such records leaves
    those records unappliable on a node replaying from the floor, which reports
@@ -578,7 +590,7 @@ outranks](../reference/cli.md#a-sink-the-store-outranks)).
 
 ## Operational notes
 
-- **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. A tool server and a coding run are held to theirs: a tool server, or a `run_sandbox` coding run, whose reference resolves to nothing is not started — and says which variable, by name — unless the key holding it is listed under `optional_keys` ([Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value), [Code sandbox](code-sandbox.md#credentials-and-the-run-environment)); an agent-mode executor starts without it and logs `sandbox_env_unresolved` (names only); and the sandbox credential check refuses to launch a coding agent on an empty credential. A `providers.llm` entry's `env` is not held: it is resolved when the company's providers are built, where a refusal would take the whole company down rather than one entry, so an unset reference there reaches the CLI empty, with a `cli_agent_env_unresolved` warning naming it.
+- **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. A tool server and a coding run are held to theirs: a tool server, or a `run_sandbox` coding run, whose reference resolves to nothing is not started — and says which variable, by name — unless the key holding it is listed under `optional_keys` ([Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value), [Code sandbox](code-sandbox.md#credentials-and-the-run-environment)); an executor run starts without it and logs `sandbox_env_unresolved` (names only); and the sandbox credential check refuses to launch a coding agent on an empty credential. A `providers.llm` entry's `env` is not held: it is resolved when the company's providers are built, where a refusal would take the whole company down rather than one entry, so an unset reference there reaches the CLI empty, with a `cli_agent_env_unresolved` warning naming it.
 - **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a backup opens everything it held when it was taken — the bucket's values, and the identity estate's sealed names and addresses in its rows and its log, those of every person removed since included. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before the identity log's trim passed their records is gone ([what a removal reaches](identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows)).
 - **Key rotation.** Follow [the rotation runbook](#rotating-the-keyring-with-nothing-in-flight-lost): add the new key on every node and restart, flip `active_key_id` and restart again, re-seal both halves (`crewlet secrets rekey`, and the company document with `POST /config/reload` or, on a stopped node, `crewlet config rekey`), and only then drop the old key. Flipping `active_key_id` in the same restart that adds the key is safe on a single node and not on a fleet: a node that flips first signs records, cookies and requests under a key its peers do not hold yet. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. Run with this node's engine stopped it reaches the store itself and re-seals every row there, under the keyring in the Tier A it was given. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a credential an operator deleted in particular stays deleted rather than being written back as the value the pass read before. Through a running node the same command moves every person's sealed values in the identity estate, one record per person, and a run that cannot confirm one says so and is run again; a run made directly cannot reach them, says so, and is run again through a running node.
 - **The `_secrets` bucket is created on demand** by the first process to open the fleet's store — a node at its first boot, or a command that reached a solo node's store, or an external broker, before any engine had, through the same constructor, so the engine adopts it — and it is durable: on the embedded topology it lives under `stream.store_dir` like every other bucket, so a restart does not lose it. Back that directory up alongside the keyring.

@@ -154,13 +154,7 @@ func TestTheRunFlagsAreFoldedInBeforeTheAdvisoriesAreJudged(t *testing.T) {
 		omits string
 	}{
 		{"a fleet node that left its roles out", fleet, nil, nil, []string{"node.roles"}, ""},
-		// A seats node binds a listener or is advised about it at api.port:
-		// its executors' tool bridge is served there and nowhere else. So
-		// the roles fold is judged beside the port's, and each is seen.
-		{"-roles names them", fleet, nil,
-			[]string{"-roles", "data,seats,workers", "-api-port", "8000"}, nil, ""},
-		{"-roles names seats with no port to serve their bridge", fleet, nil,
-			[]string{"-roles", "data,seats,workers"}, []string{"api.port"}, ""},
+		{"-roles names them", fleet, nil, []string{"-roles", "data,seats,workers"}, nil, ""},
 		{"a verbose broker nothing records", verboseBroker, nil, nil, []string{"stream.debug"}, ""},
 		{"-debug records it", verboseBroker, []string{"-debug"}, nil, nil, ""},
 		{"-log-level debug records it", verboseBroker, []string{"-log-level", "debug"}, nil, nil, ""},
@@ -294,8 +288,7 @@ func TestRunLogsTheAdvisoriesOfTheDocumentItApplies(t *testing.T) {
 	dir := t.TempDir()
 	boot := writeFile(t, dir, "crewlet.yaml", "store:\n  path: "+
 		filepath.Join(dir, "crewlet.db")+"\n"+
-		"stream:\n  store_dir: "+filepath.Join(dir, "stream")+"\n  debug: true\n"+
-		fixtureKeyring)
+		fixtureStream(dir)+"  debug: true\n"+fixtureKeyring)
 	logFile := filepath.Join(dir, "node.log")
 
 	err := runEngine([]string{"-config", boot,
@@ -344,8 +337,7 @@ func TestRunLogsNoAdvisoryBesideARefusalItsFlagsDraw(t *testing.T) {
 	dir := t.TempDir()
 	boot := writeFile(t, dir, "crewlet.yaml", "store:\n  path: "+
 		filepath.Join(dir, "crewlet.db")+"\n"+
-		"stream:\n  store_dir: "+filepath.Join(dir, "stream")+"\n"+
-		fixtureKeyring)
+		fixtureStream(dir)+fixtureKeyring)
 	logFile := filepath.Join(dir, "node.log")
 
 	err := runEngine([]string{"-config", boot,

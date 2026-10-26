@@ -61,7 +61,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildHash, href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
-import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
@@ -102,6 +102,9 @@ import {
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useOpenNewTask } from "~/app/newTask.ts";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { urlAction } from "~/app/assistant/urlAction.ts";
+import { lockGate, withoutLocked, workClearKeys, workKeys } from "./assistantActions.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -127,7 +130,9 @@ import {
   finishedLanes,
   gridRange,
   hiddenLanes,
+  clearFiltersPatch,
   hideParam,
+  isShape,
   listParam,
   loadedOf,
   manualOrder,
@@ -137,7 +142,6 @@ import {
   shownRows,
   totalHint,
   unfinished,
-  URL_HOMES,
   viewParams,
   viewQuery,
   type ItemsLock,
@@ -638,6 +642,37 @@ export function ItemsView({
     [nav],
   );
 
+  // --- assistant page actions (WP12) ---
+  // THE ASSISTANT WRITES THE SAME KEYS THE CHIPS, CLEAR AND THE ARRANGEMENT
+  // DO, and nothing else ([workKeys]); a host's lock refuses a patch that
+  // names the key the page is ([lockGate]), and Clear never touches it
+  // ([withoutLocked]), so `#/me` is never widened.
+  const gate = lockGate(host?.lock);
+  useAssistantContext({
+    resources: project ? [{ kind: "project", id: project }] : [],
+    actions: {
+      ...urlAction("work.filter.apply", {
+        scope: "Worklet list filters (not saved to a view)",
+        keys: workKeys("chip", labels),
+        nav,
+        blocked: gate,
+      }),
+      ...urlAction("work.filters.clear", {
+        scope: "Worklet list filters (not saved to a view)",
+        keys: workClearKeys(labels),
+        preset: () => withoutLocked(clearFiltersPatch(Object.keys(fields)), host?.lock),
+        nav,
+        blocked: gate,
+      }),
+      ...urlAction("work.arrange.set", {
+        scope: "How the work list is drawn (not saved to a view)",
+        keys: workKeys("arrangement", labels),
+        nav,
+      }),
+    },
+  });
+  // --- end assistant page actions (WP12) ---
+
   /** Writes one filter key by name, which is what a chip and the menu both do. */
   const setFilter = (param: string, value: string) => {
     // THE TRASH'S WIDER SCOPE IS THE SCOPE'S OWN DEFAULT (see `scopeKey`),
@@ -647,32 +682,7 @@ export function ItemsView({
     setFilters({ [param]: value || null });
   };
 
-  const clearFilters = () => {
-    // EVERY KEY THE GRAMMAR CALLS A CHIP, from [URL_HOMES] rather than from a
-    // list written out here. Written out, this one was missing `unit` — a key
-    // no control on this screen writes, which is exactly why nobody noticed —
-    // so a list reached from an item's own "Filed into" line could not be
-    // widened again by the control that offers to do it, and the chip it left
-    // standing was the only trace of a narrowing Clear had just claimed to
-    // remove.
-    const patch: Record<string, string | null> = {};
-    for (const [key, home] of Object.entries(URL_HOMES)) {
-      // A FAMILY IS NOT A KEY: the company's own fields are one key per
-      // declared field, and the set is the company's — so what is cleared is
-      // whichever of them the address actually holds, below.
-      if (home === "chip" && !key.endsWith(".")) patch[key] = null;
-    }
-    for (const key of Object.keys(fields)) patch[key] = null;
-    // AND THE SEGMENT, which is the one key Clear touches that is not a chip.
-    // It is not a narrowing somebody added, but it decides which half of the
-    // company is on screen, so a "nothing matched" that could not widen it
-    // would be offering to undo less than it says. TO THE VIEW'S, not to
-    // "open": clearing a narrowing returns the screen to what the view asked
-    // for, and writing the fallback drops the key so the view keeps supplying
-    // it.
-    patch.scope = null;
-    setFilters(patch);
-  };
+  const clearFilters = () => setFilters(clearFiltersPatch(Object.keys(fields)));
 
   // A TASK OPENED FROM HERE CARRIES THIS LIST'S QUESTION, so its own page can
   // ask where it sits in it (`around=`) and step to the next one.
@@ -1087,17 +1097,6 @@ export function ItemsView({
         </div>
       </div>
     </>
-  );
-}
-
-/** Whether a `shape=` off the address is one this product draws. */
-function isShape(value: string): value is Shape {
-  return (
-    value === "list" ||
-    value === "board" ||
-    value === "table" ||
-    value === "calendar" ||
-    value === "timeline"
   );
 }
 

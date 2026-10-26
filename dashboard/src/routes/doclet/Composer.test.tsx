@@ -18,6 +18,12 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider, parseMarkdown } from "@crewlethq/ui";
 
 import { Composer, TEMPLATES } from "./Composer.tsx";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 import { Router } from "~/app/router.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -93,6 +99,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -303,5 +310,55 @@ test("Discard asks first when something is written, and leaves for where it came
     within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard" }),
   );
   await waitFor(() => expect(location.hash).toBe(`#/doclet/pages/${PARENT}`));
+  expect(posted).toEqual([]);
+});
+
+test("the page being written is the assistant's to read, and a change it proposes is written into the composer", async () => {
+  setFramePage({
+    screen: "doclet-new",
+    title: "Doclet › New page",
+    path: ["doclet", "new"],
+    params: {},
+    query: {},
+  });
+  mount();
+  await settle();
+  fireEvent.change(title(), { target: { value: "Postmortem" } });
+  await settle();
+  const open = () => pageSnapshot()!.context;
+  const field = (path: string) => open().draft?.fields.find((f) => f.path === path);
+  // WHAT IS OPEN: unsaved, filed in its space under its page, as typed.
+  expect(open().draft).toMatchObject({ kind: "client", step: "write" });
+  expect(open().accepts).toContain("draft.set");
+  expect(field("space")).toMatchObject({ value: "ENG", editable: true });
+  expect(field("parent")).toEqual({
+    path: "parent",
+    label: "Goes under",
+    value: "Runbooks",
+    kind: "text",
+  });
+  expect(field("title")).toMatchObject({ value: "Postmortem", editable: true });
+  // A TITLE PAST ITS BYTES IS REFUSED in the composer's own words.
+  expect(
+    applyPageAction({
+      correlation_id: "c0",
+      action: "draft.set",
+      payload: { values: { title: "x".repeat(4000) } },
+      source_revision: open().source_revision,
+    }),
+  ).toMatchObject({ outcome: "invalid", reason: expect.stringMatching(/holds at most/) });
+  let result: ReturnType<typeof applyPageAction> | undefined;
+  act(() => {
+    result = applyPageAction({
+      correlation_id: "c1",
+      action: "draft.set",
+      payload: { values: { title: "Incident review", labels: ["ops"] } },
+      source_revision: open().source_revision,
+    });
+  });
+  expect(result).toMatchObject({ outcome: "applied" });
+  await waitFor(() => expect((title() as HTMLInputElement).value).toBe("Incident review"));
+  expect(field("labels")).toMatchObject({ value: "ops", kind: "list" });
+  // NOTHING IS SENT: saving stays the person's.
   expect(posted).toEqual([]);
 });

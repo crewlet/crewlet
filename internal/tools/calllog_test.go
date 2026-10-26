@@ -30,7 +30,7 @@ func (o *ordinalTool) Call(context.Context, map[string]any) (tools.Result, error
 
 func (o *ordinalTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	v, _ := args["status"].(string)
-	n := turn.CallLog().Ordinal(ctx, o.Name(), args)
+	n := turn.CallLog().Ordinal(o.Name(), args)
 	o.mu.Lock()
 	o.counts[v] = n
 	o.mu.Unlock()
@@ -42,13 +42,16 @@ func (o *ordinalTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 }
 
 // A CALL MADE WHILE ANOTHER IS STILL IN FLIGHT COUNTS IT. An executor's calls
-// arrive over the bridge, each on its own goroutine, so a run's X, Y, X to one
-// tool can have the second X made while Y has not returned. A count read
-// before an in-flight call was recorded gave the second X its first copy's
-// operation id — answered as that call's retry, its write skipped with a
-// success. Each call takes its place in the run's log as it is made, so the
-// second X counts the Y that came before it, finished or not — and Y, made
+// arrive over the bridge side by side, so a run's X, Y, X to one tool can have
+// the second X made while Y has not returned. A count read before an in-flight
+// call was recorded gave the second X its first copy's operation id — answered
+// as that call's retry, its write skipped with a success. Each call takes its
+// place in the run's log as it is admitted ([tools.Surface.Admit]), so the
+// second X counts the Y that came before it, finished or not — and Y, admitted
 // before the second X, does not count it.
+//
+// Mutation: record an admitted call when it returns rather than when it is
+// admitted, and the second X counts 0.
 func TestACallCountsTheCallsStillInFlightBeforeIt(t *testing.T) {
 	t.Parallel()
 	tool := &ordinalTool{counts: map[string]int{},
@@ -61,19 +64,26 @@ func TestACallCountsTheCallsStillInFlightBeforeIt(t *testing.T) {
 		return llm.ToolCall{ID: "c", Name: "update", Arguments: args}
 	}
 
-	if _, err := s.Execute(t.Context(), call(map[string]any{"status": "in_progress"})); err != nil {
+	run := func(args map[string]any) error {
+		_, err := s.Admit("update", args)(t.Context(), call(args))
+		return err
+	}
+
+	if err := run(map[string]any{"status": "in_progress"}); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
+	held := map[string]any{"status": "done", "hold": true}
+	heldCall := s.Admit("update", held)
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		if _, err := s.Execute(t.Context(), call(map[string]any{"status": "done", "hold": true})); err != nil {
+		if _, err := heldCall(t.Context(), call(held)); err != nil {
 			t.Errorf("the held call: %v", err)
 		}
 	})
 	<-tool.entered
 	// The held call has read its count and not returned: the second X is made
 	// beside it.
-	if _, err := s.Execute(t.Context(), call(map[string]any{"status": "in_progress"})); err != nil {
+	if err := run(map[string]any{"status": "in_progress"}); err != nil {
 		t.Fatalf("the call made again: %v", err)
 	}
 	close(tool.release)

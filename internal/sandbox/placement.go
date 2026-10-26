@@ -35,7 +35,9 @@ const (
 	// THIS ISOLATES STATE, NOT THE HOST. The agent runs as the engine user
 	// with its own tools enabled, so it can read anything that user can read
 	// and reach anything its credentials reach. The right cell for a
-	// workstation or a dedicated VM, the wrong one for a shared host.
+	// workstation or a dedicated VM, the wrong one for a shared host. A
+	// CONFINED backend of this cell (confine.go) is the exception, built
+	// for the Dashboard Assistant's deep work alone (ADR-0054).
 	Direct Placement = "direct"
 
 	// Container runs a long-lived Docker or Podman container per box, with

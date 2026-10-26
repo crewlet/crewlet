@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // The CLI runs on the ENGINE host. A provider whose binary is missing there
@@ -42,7 +43,7 @@ func TestDoctorReportsAMissingBinary(t *testing.T) {
 	if !strings.Contains(joined, "ENGINE host") {
 		t.Errorf("the problem does not say where the CLI must be installed:\n%s", joined)
 	}
-	if d.Smoke != "skipped — no binary to run" {
+	if d.Smoke != "skipped: no binary to run" {
 		t.Errorf("Smoke = %q, want a skip rather than a second failure", d.Smoke)
 	}
 }
@@ -332,132 +333,36 @@ func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
 	}
 }
 
-// The one failure nothing else catches: the CLI answers, and answers with
-// PROSE. Every phase a seat runs on such a provider spends corrective rounds
-// asking again — and ends without its submission when the model never manages
-// one — while the config looks perfect.
-func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	t.Cleanup(func() { forgetWorkspace(dir) })
-	p, err := New(Config{
-		Key: "sub", Agent: "custom", StateDir: dir, Timeout: 20 * time.Second, MaxConcurrent: 1,
-		Overrides: map[string]any{
-			"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
-			"model_args": []any{}, "output": "text",
-		},
-		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": "I would read the file."}),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.Smoke, "failed") {
-		t.Fatalf("Smoke = %q, want a failure", d.Smoke)
-	}
-	if !strings.Contains(d.Smoke, "corrective round") {
-		t.Errorf("the smoke failure does not say what it costs: %q", d.Smoke)
-	}
-	if d.Healthy() {
-		t.Error("a provider that cannot produce a tool call was reported healthy")
-	}
-}
-
-// The other failure the smoke test is now the ONLY thing that catches: the CLI
-// exits 0, bills output tokens and answers with nothing at all.
-//
-// It used to be an error out of Complete, so the doctor merely relayed it.
-// Complete returns an empty completion for it now — an empty answer is a model
-// outcome and the tool loop corrects it — which makes this probe the one place
-// an operator is told the difference between a CLI that produced prose and one
-// that produced silence. Reporting silence as `It said: ""` sends them to the
-// envelope contract for a problem only a bigger model fixes.
-func TestTheSmokeTestNamesAnEmptyAnswerRatherThanQuotingIt(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	t.Cleanup(func() { forgetWorkspace(dir) })
-	p, err := New(Config{
-		Key: "sub", Agent: "custom", StateDir: dir, Timeout: 20 * time.Second, MaxConcurrent: 1,
-		Overrides: map[string]any{
-			"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
-			"model_args": []any{}, "output": "json",
-			"text_paths": []any{[]any{"result"}},
-			"usage":      map[string]any{"output": []any{[]any{"usage", "output_tokens"}}},
-		},
-		Env: fakeChildEnv(map[string]string{
-			"FAKE_STDOUT": `{"result":"","usage":{"output_tokens":627}}`,
-		}),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.Smoke, "failed") {
-		t.Fatalf("Smoke = %q, want a failure", d.Smoke)
-	}
-	if !strings.Contains(d.Smoke, "nothing at all") {
-		t.Errorf("the smoke failure does not name the silence: %q", d.Smoke)
-	}
-	// The token count is the EVIDENCE that the model worked and said
-	// nothing, which is what tells an operator the fix is the model rather
-	// than the prompt.
-	if !strings.Contains(d.Smoke, "627") {
-		t.Errorf("the smoke failure does not report what the silence cost: %q", d.Smoke)
-	}
-	if strings.Contains(d.Smoke, `It said: ""`) {
-		t.Errorf("silence was reported as an empty quotation: %q", d.Smoke)
-	}
-}
-
-// And it passes on one that can, or the check is a permanent red light.
-func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	t.Cleanup(func() { forgetWorkspace(dir) })
-	reply := "```json\n{\"message\":\"\",\"tool_calls\":" +
-		"[{\"name\":\"crewlet_smoke\",\"arguments\":{\"ok\":true}}]}\n```"
-	p, err := New(Config{
-		Key: "sub", Agent: "custom", StateDir: dir, Timeout: 20 * time.Second, MaxConcurrent: 1,
-		Overrides: map[string]any{
-			"binary": os.Args[0], "complete_args": []any{"-test.run=TestCLIAgentFakeCLI"},
-			"model_args": []any{}, "output": "text",
-			"usage": map[string]any{"input": []any{[]any{"in"}}},
-		},
-		Env: fakeChildEnv(map[string]string{"FAKE_STDOUT": reply}),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.Smoke, "ok") {
-		t.Fatalf("Smoke = %q", d.Smoke)
-	}
-}
-
 // THE SMOKE TEST ASKS THE WAY A PHASE ASKS. It certifies that a call arrives
 // when the conversation names the tool and nothing forces it — the shape every
-// phase, and the tool loop's finishing corrective, relies on. It used to force
-// the call, which rendered the envelope's "MUST" contract no phase receives,
-// so a CLI that called a tool only when told it must passed here.
+// phase, and the tool loop's finishing corrective, relies on — with the tool
+// served as a seat's are, on a host of its own, offering it and nothing else.
 func TestTheSmokeTestAsksTheWayAPhaseAsks(t *testing.T) {
 	t.Parallel()
-	req := smokeRequest()
+	sessions, err := toolsession.NewHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sessions.Close() })
+	host := newSmokeHost(sessions)
+	req := smokeRequest(host)
+	if !req.Agent {
+		t.Error("the smoke test is not asked as a seat's call")
+	}
 	prompt, err := RenderPrompt(req)
 	if err != nil {
 		t.Fatalf("RenderPrompt: %v", err)
-	}
-	if !strings.Contains(prompt, RenderContract()) {
-		t.Errorf("the smoke prompt does not carry the contract a phase gets:\n%s", prompt)
 	}
 	if strings.Contains(prompt, "MUST") {
 		t.Errorf("the smoke prompt demands a call no phase demands:\n%s", prompt)
 	}
 	last := req.Messages[len(req.Messages)-1]
-	if last.Role != llm.RoleUser || !strings.Contains(last.Content, "crewlet_smoke") {
+	if last.Role != llm.RoleUser || !strings.Contains(last.Content, smokeTool) {
 		t.Errorf("the instruction does not name the tool: %+v", last)
 	}
-	if len(req.Tools) != 1 || req.Tools[0].Name != "crewlet_smoke" {
-		t.Errorf("tools = %+v, want crewlet_smoke offered", req.Tools)
+	offered := host.Offered()
+	if len(offered) != 1 || offered[0].Def.Name != smokeTool {
+		t.Errorf("tools = %+v, want %s offered alone", offered, smokeTool)
 	}
 }
 
@@ -471,7 +376,7 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
 		Credentials: "present", TokenEnv: "set", SignIn: "credential files in /var/lib",
 		TokenUsage: "reported by CLI",
-		Smoke:      "ok — 812 in / 34 out",
+		Smoke:      "ok: 812 in / 34 out",
 	}
 	var out strings.Builder
 	d.Render(&out)
@@ -520,11 +425,15 @@ func TestDoctorNamesTheLogoutThatKeepsABundleOut(t *testing.T) {
 }
 
 // THE DOCTOR'S PROBES ASK AS A SEAT ASKS. They prove what a seat runs under —
-// that its CLI produces a tool call, that the shell is denied, that the web is
-// reached — so each is sent as a seat's call is: an agent call with a system
-// prompt, which takes the channel a seat's prompt takes. Sent with none, most
-// profiles passed no channel at all, the vendor's default prompt ran, and the
-// report described a configuration no seat ever had.
+// that its CLI answers, that the shell is denied, that the web is reached — so
+// each is sent as a seat's call is: an agent call with a system prompt, which
+// takes the channel a seat's prompt takes. Sent with none, most profiles
+// passed no channel at all, the vendor's default prompt ran, and the report
+// described a configuration no seat ever had.
+//
+// A profile with no tool route, so the smoke test's own call is the plain
+// one it makes to learn whether the CLI answers — a completion like the two
+// probes (smoke_test.go covers the route).
 //
 // Mutation: drop Agent from probeRequest, or its system message, and the
 // probes leave the appending channel and this is red.
@@ -532,7 +441,7 @@ func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
 	t.Parallel()
 	rec := t.TempDir()
 	p := fakeProvider(t, map[string]string{
-		"FAKE_STDOUT":             `{"message":"","tool_calls":[{"name":"crewlet_smoke","arguments":{"ok":true}}]}`,
+		"FAKE_STDOUT":             "ok",
 		"FAKE_SHELL_PROBE_STDOUT": noLocalToolsReply,
 		"FAKE_WEB_PROBE_STDOUT":   "ts=" + nowEpoch(),
 		"FAKE_RECORD_ARGV":        rec,
@@ -543,8 +452,9 @@ func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
 		"append_system_prompt": map[string]any{"args": []any{"--append-system-prompt", "{system}"}},
 	})
 	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
-	if !strings.HasPrefix(d.Smoke, "ok") || !strings.HasPrefix(d.Web, "ok") {
-		t.Fatalf("smoke = %q, web = %q — the fake did not answer the probes it was asked", d.Smoke, d.Web)
+	// The web line leads with the entry's stance, then the probe's verdict.
+	if !strings.HasPrefix(d.Web, "allowed; ok") {
+		t.Fatalf("web = %q — the fake did not answer the probe it was asked", d.Web)
 	}
 	var probes [][]string
 	for _, argv := range recordedArgv(t, rec) {
@@ -553,9 +463,9 @@ func TestTheDoctorsProbesAskAsASeatAsks(t *testing.T) {
 			probes = append(probes, argv)
 		}
 	}
-	if len(probes) != 3 {
-		t.Fatalf("recorded %d completions, want the smoke test and the two isolation "+
-			"probes: %q", len(probes), probes)
+	if len(probes) != 4 {
+		t.Fatalf("recorded %d completions, want the smoke test and the three isolation "+
+			"probes (shell, file read, web): %q", len(probes), probes)
 	}
 	for _, argv := range probes {
 		system, ok := valueAfter(argv, "--append-system-prompt")

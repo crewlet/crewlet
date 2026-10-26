@@ -57,8 +57,10 @@
  * Four subsystems keep a record of the CHANGE a write made. None keeps one of
  * the CALL: a tool call that was refused, one whose answer never came back, and
  * a verb that changes no tracker or wiki record at all — a backup — left
- * nothing anywhere. The runtime audit is that record (`operator_acted` and
- * `backup_requested`, each with the envelope source `operator`), and it is read
+ * nothing anywhere. The runtime audit is that record (`operator_acted`,
+ * `backup_requested`, and the Dashboard Assistant's `assistant_turn_completed`
+ * and `assistant_conversation_read`, each with the envelope source
+ * `operator`), and it is read
  * here as `Runtime`: every call, whatever became of it, under the author and
  * kind the engine recorded (`actor`, and the `actor_kind` and `operator_id`
  * tags) and the node that served it. The arguments are never in it — they are
@@ -114,6 +116,7 @@ import {
   TableEntityCell,
   TableTextCell,
   toCsv,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 
@@ -124,7 +127,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { plainText } from "~/lib/markdown.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -241,6 +244,21 @@ const RUNTIME_ROW: Record<
     subject: row.tags?.dir ?? "",
     path: ["settings", "backups"],
     noSubject: "No directory recorded",
+  }),
+  // A COMPLIANCE READ NAMES THE CONVERSATION IT OPENED: the reader is the
+  // row's actor and the reason is its summary, and what was read stays sealed.
+  assistant_conversation_read: (row) => ({
+    kind: "conversation read",
+    subject: row.tags?.conversation_id ?? "",
+    noSubject: "No conversation recorded",
+  }),
+  // AN ASSISTANT TURN NAMES THE CONVERSATION IT BELONGS TO AND NOTHING IT
+  // READ: the steps' arguments and answers are the company's content and the
+  // question is the person's own, so neither is in the audit.
+  assistant_turn_completed: (row) => ({
+    kind: "assistant turn",
+    subject: row.tags?.conversation_id ?? "",
+    noSubject: "No conversation recorded",
   }),
 };
 
@@ -1033,7 +1051,7 @@ export function Audit() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
         {/* THROUGH THE ONE DOWNLOAD PATH. This had its own, which revoked the
             file's URL in the same task as the click that queued it — racing
             the read the download is about to make — and said nothing either

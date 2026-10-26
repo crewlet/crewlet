@@ -71,6 +71,10 @@ type Company struct {
 	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
 	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
 
+	// Assistant is whether the Dashboard Assistant runs for this company,
+	// on which models, and the bounds of one turn. See [Assistant].
+	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
+
 	// SkillVariables is an operator-defined name -> value map substituted
 	// into tool-skill text wherever a skill writes ${name}.
 	//
@@ -273,7 +277,8 @@ func (c *Company) ValidateRunnable() error {
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
 // seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key.
+// handle nor a key. And the `assistant:` block ([Company.validateAssistant]),
+// whose chain is held to its rules again wherever it is handed out.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -285,7 +290,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateFileRules())
+		c.validateRunOptionalKeys(), c.validateFileRules(), c.validateAssistant())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -571,12 +576,12 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			// tools silently vanish from every prompt.
 			p.add(at(path, "name"), ErrConflict, "duplicate MCP server name %q", name)
 		}
-		if name == BridgeServerName {
+		if name == ToolServerName {
 			// The same collision one layer out: the engine writes the
 			// seat's tool bridge into every executor box under this name,
 			// and a company server called the same is overwritten there —
 			// its tools gone from the run with nothing saying why. See
-			// [BridgeServerName].
+			// [ToolServerName].
 			p.add(at(path, "name"), ErrConflict,
 				"%q is reserved for the seat's own tool bridge, which every "+
 					"executor box sees under that name; a server called the "+
@@ -1243,6 +1248,14 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 			continue
 		}
 		reached[box.Cell] = at(entryPath(box.Executor), "run_in").String()
+	}
+	// DEEP WORK'S CELL, where the catalogue serves it: the engine host is
+	// the engine's own confined cell (internal/engine), never the
+	// catalogue's unconfined direct one.
+	if cell, ok := c.DeepWorkPlacement(); ok && cell != PlacementDirect {
+		if _, seen := reached[cell]; !seen {
+			reached[cell] = "assistant.deep_work.llm"
+		}
 	}
 	return reached
 }

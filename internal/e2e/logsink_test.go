@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/solo"
 )
 
@@ -28,12 +29,20 @@ import (
 // embedding its own NATS server, in this one process. See
 // `go doc ./internal/solo`.
 //
-// And it is where this binary becomes the scripted model's CLI, or the
-// executor's coding CLI, when it was re-executed as one ([scriptedCLIEnv],
-// [codingCLIEnv]) — FIRST, before the sink or the framework, so the child's
-// stdout is exactly what it prints, and as a dispatch here rather than a test
-// function, which every ordinary run would otherwise report as a skip.
+// And it is where this binary becomes one of the three processes a model call
+// re-executes it as — FIRST, before the sink or the framework, so the child's
+// stdout is exactly the stream it speaks, and as a dispatch here rather than a
+// test function, which every ordinary run would otherwise report as a skip:
+//
+//   - the relay to a seat's tools, `<binary> mcp-relay <socket>`, which the
+//     engine names its own executable as ([mcprelay.DispatchIfRelay]) — this
+//     binary, under `go test`. Dispatched on ARGV, and BEFORE the scripted
+//     CLI's variable: the scripted CLI starts the relay, and hands it its own
+//     environment, that variable included.
+//   - the scripted model's CLI ([scriptedCLIEnv]).
+//   - the executor's coding CLI in its box ([codingCLIEnv]).
 func TestMain(m *testing.M) {
+	mcprelay.DispatchIfRelay()
 	if endpoint := os.Getenv(scriptedCLIEnv); endpoint != "" {
 		os.Exit(runScriptedCLI(endpoint))
 	}
@@ -47,6 +56,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	scriptedCLIBinary = binary
+	if scriptedShape, err = claudeCodeRun(binary); err != nil {
+		fmt.Fprintf(os.Stderr, "e2e: every company here runs its model's CLI as Claude Code "+
+			"runs: %v\n", err)
+		os.Exit(1)
+	}
 	logging.Configure(slog.LevelDebug, logging.FormatJSON, logs)
 	os.Exit(solo.Run(m))
 }

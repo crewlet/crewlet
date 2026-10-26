@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // doctorEntry builds an entry driving the named CLI over the `custom`
@@ -12,16 +14,23 @@ func doctorEntry(t *testing.T, agent string) *Provider {
 	t.Helper()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
+	overrides := map[string]any{
+		"binary": "crewlet-no-such-cli-binary", "complete_args": []any{"-p"},
+		// A text stream has no events to tell apart, so a profile that
+		// picks its answer out of one by event type drops the filter too.
+		"output": "text", "event_type_path": []any{}, "text_events": []any{},
+		"model_args": []any{},
+	}
+	// And everything else that reads such a stream: its requests, its
+	// failure events, the cap's signature in it.
+	if builtin, _ := cliprofile.Builtin(agent); builtin.MCP != nil {
+		overrides["requests"] = nil
+		overrides["cap"] = nil
+		overrides["mcp"] = map[string]any{"failure_events": []any{}}
+	}
 	p, err := New(Config{
 		Key: "sub", Agent: agent, StateDir: dir,
-		Timeout: time.Second, MaxConcurrent: 1,
-		Overrides: map[string]any{
-			"binary": "crewlet-no-such-cli-binary", "complete_args": []any{"-p"},
-			// A text stream has no events to tell apart, so a profile that
-			// picks its answer out of one by event type drops the filter too.
-			"output": "text", "event_type_path": []any{}, "text_events": []any{},
-			"model_args": []any{},
-		},
+		Timeout: time.Second, MaxConcurrent: 1, Overrides: overrides,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -85,7 +94,7 @@ func TestDoctorPassesADirectEntryWithNoBridgeVariable(t *testing.T) {
 //
 // The company refuses an agent seat whose chain holds no runner at all, so a
 // CLI without one sits beside one that has it: every launch skips it, and it
-// still serves the seat's text calls. A doctor that went red on it would be
+// still serves the seat's phases on this host. A doctor that went red on it would be
 // red on a configuration the engine runs. The line says which CLIs do have
 // runners, so the operator knows where the executor actually lands.
 //
@@ -140,7 +149,7 @@ func TestDoctorPassesACompleteExecutorEntry(t *testing.T) {
 
 // AN ENTRY NO EXECUTOR CHAIN HOLDS REPORTS NOTHING ABOUT AN EXECUTOR.
 //
-// It serves text calls as a subprocess of this engine and needs neither a
+// It serves the phases on this host, as a subprocess of this engine, and needs neither a
 // runner nor a bridge; faulting it for their absence would make `doctor` red
 // on an entry kept for a seat's reviewer or side passes.
 func TestDoctorSaysNothingAboutAnExecutorOnAnEntryNoSeatLaunchesOn(t *testing.T) {

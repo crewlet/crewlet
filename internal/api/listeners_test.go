@@ -268,32 +268,6 @@ func TestEachListenerSendsHSTSByItsOwnAddress(t *testing.T) {
 	}
 }
 
-// AND THE BRIDGE-ONLY LISTENER IS THE PUBLIC ONE. A seats node without the
-// ingress role binds it on api.public, so it answers by the public listener's
-// address — never api.port's, which is another socket under another scheme.
-func TestTheBridgeOnlyListenerSendsHSTSByThePublicAddress(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		admin, public string
-		want          string
-	}{
-		{"http://127.0.0.1:8080", "https://hooks.example.com", pagepolicy.HSTS},
-		{"https://crewlet.example.com", "http://10.0.0.5:8443", ""},
-	} {
-		b := closedPosture()
-		b.API.ExternalURL = tc.admin
-		b.API.Public = config.APIPublic{Port: 8443, ExternalURL: tc.public}
-		h := api.BridgeOnly(&b, bridgeFor(t, mcpbridge.Options{
-			Material: runtoken.OneKey("k", "k"), BaseURL: "http://x",
-		}))
-		got := sendTo(t, h, http.MethodGet, "/nope").Header().Get("Strict-Transport-Security")
-		if got != tc.want {
-			t.Errorf("published at %s beside an admin side at %s: "+
-				"Strict-Transport-Security = %q, want %q", tc.public, tc.admin, got, tc.want)
-		}
-	}
-}
-
 // THE PUBLIC LISTENER NEVER LOOKS AT AN OPERATOR TOKEN. A guarded route there
 // is absent before any credential is compared, so the socket a deployment
 // publishes cannot tell a valid token from an invalid one: a missing token, a

@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -31,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -758,6 +758,23 @@ func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organ
 	}
 }
 
+// parkedRunContext is the context a parked run's turn runs under on this node:
+// the resume that collects it, and a run taken over while it works
+// ([Engine.reopenAgentRun]).
+//
+// ITS TRACE, continued from the ids on the run's row — the suspended span
+// reconstructed as a remote parent, since no span survives a suspend — and
+// ITS SEAT, bound for every model call the turn makes ([llm.WithSeat]) exactly
+// as the dispatch path binds it for a fresh turn. A coding CLI keeps a home of
+// its own per seat — its transcripts, its sign-in — and a call that names no
+// seat runs in the one home every unbound call shares: a resumed turn's
+// executor, its reviewer and a worker a box delegated to all did, beside each
+// other's transcripts and on whichever login that home last held.
+func parkedRunContext(ctx context.Context, run sandbox.PendingRun) context.Context {
+	ctx = tracing.WithRemote(ctx, events.TraceContext{TraceID: run.TraceID, SpanID: run.SpanID})
+	return llm.WithSeat(ctx, run.AgentHandle)
+}
+
 // guardResume runs one resume, abandoning it if it panics.
 //
 // It publishes the unhandled-exception guard itself because the frame that
@@ -867,10 +884,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// span beneath it. That is the honest shape: two spans in one trace,
 	// with the wait between them visible as the gap it actually is. Every
 	// run carries ids: the launch takes them from the active span, minting
-	// a fresh trace when there is none.
-	ctx = tracing.WithRemote(ctx, events.TraceContext{
-		TraceID: in.Run.TraceID, SpanID: in.Run.SpanID,
-	})
+	// a fresh trace when there is none. And the seat is bound, as the
+	// dispatch path binds it — see [parkedRunContext].
+	ctx = parkedRunContext(ctx, in.Run)
 	ctx, span := tracing.Start(ctx, "engine", "agent.turn.resume",
 		attribute.String("crewlet.seat", in.Turn.Handle()),
 		attribute.String("crewlet.turn_id", in.Run.TurnID),
@@ -953,16 +969,60 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// vendor's spent plan sits its entry out here, on the node whose launch
 	// the turn's next run is — see [Engine.noteRunEnded].
 	e.noteRunEnded(ctx, company, in.Run, in.Ended)
-	parked, err := e.parkedRunner(ctx, company, in,
-		// The working indicator's phase updates, on the same terms as
-		// the dispatch path: the resumed segment opens its phases like
-		// any other, and a reader watching the thread should see them
-		// move when the box's answer lands.
-		func(ph phase.Phase) { status.Phase(ph.String()) })
+	input, tel, err := e.parkedTurnRunner(ctx, company, in)
+	if err != nil {
+		// A RETRY, like every early return here: nothing ran, and the
+		// coordinator hands its claim back so the next attempt judges the
+		// rebase again against its own clock.
+		return err
+	}
+	resumedReply := input.Reply
+	// The note box the turn files — see [turnSteerBox]. A RESUMED SEGMENT IS
+	// STEERABLE LIKE ANY OTHER: it is the same turn running again, and a note
+	// sent while it parked was answered `closed` — the box that segment had
+	// is gone.
+	box := turnSteerBox()
+	input.Steer = box
+	// The working indicator's phase updates, on the same terms as the
+	// dispatch path: the resumed segment opens its phases like any other, and
+	// a reader watching the thread should see them move when the box's answer
+	// lands.
+	input.OnPhase = func(ph phase.Phase) { status.Phase(ph.String()) }
+	// NO onboarding on a resume. The pass is a seat's FIRST turn, and this
+	// turn already ran its first phase — running it here would spend the
+	// resumed turn's opening on orientation for a seat that is mid-task.
+	input.Resume = &runner.Resume{
+		State: in.State, Answer: in.Answer,
+		// WHICH BOX DID THE WORK. Off the run's own row, because this
+		// process may not be the one that launched it — and it is the only
+		// thing that can say a phase ran in a sandbox rather than in this
+		// process's own tool loop.
+		Run: runner.RunRecord{
+			CodingAgent: in.Run.CodingAgent,
+			SandboxID:   in.Run.SandboxID,
+			// AND WHICH ENTRY RAN IT, as the launch recorded the member it
+			// picked: the executor's record and its spend are charged to
+			// that entry and model, which a fallback makes other than the
+			// chain's head — and which the chain resolved now could name
+			// differently again.
+			ProviderKey:   in.Run.Launch.ProviderKey,
+			Model:         in.Run.Launch.Model,
+			LaunchID:      in.Run.LaunchID,
+			DeliveredRefs: in.DeliveredRefs,
+			RefsElided:    in.RefsElided,
+		},
+		// THE RUN'S OWN TOOL CALLS, off its durable row. The executor called
+		// them over the bridge, possibly in another process, so this list is
+		// the only record of what the phase did — its submission included.
+		Bridged: bridgedCalls(in.Run.BridgeCalls),
+		// AND A PERSON'S ANSWER, which carries the run on rather than
+		// reporting it — see [runner.Asked].
+		Asked: runnerAsked(in.Asked),
+	}
+	r, err := company.RunnerFor(in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
 	}
-	r, tel, box, resumedReply := parked.runner, parked.tel, parked.box, parked.reply
 	// THE SEGMENT IS NOW CERTAIN TO RUN, and the coordinator records that
 	// before any of it does — for a person's recorded answer, that THIS TURN
 	// TOOK IT, and that the delivery which carried it is worked
@@ -1094,41 +1154,32 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	return nil
 }
 
-// parked is a parked turn's runner, rebuilt to re-enter it: the runner, the
-// telemetry it was built from, its note box and the reply contract it holds
-// its submission to.
-type parked struct {
-	runner *runner.Runner
-	tel    turnTelemetry
-	box    *steer.Box
-	reply  turn.Reply
-}
-
-// parkedRunner builds the runner a parked turn re-enters as, off its row and
-// its park, in company — the epoch the caller admitted the turn's seat in.
+// parkedTurnRunner is the runner a parked run's turn is rebuilt with on this
+// node, and the telemetry it was built from: the resume that collects the run
+// ([Engine.resumeTurn]) adds what re-entering the turn takes, and a run taken
+// over while it works ([Engine.reopenAgentRun]) uses it as it is.
 //
-// ONE CONSTRUCTION for the two callers that rebuild a parked turn: the resume
-// that collects its run ([Engine.resumeTurn]) and the bridge session its run's
-// box calls, rebuilt on the node that lost it ([Engine.reopenBridgeSession]).
-// The two have to agree — a surface the box calls after a restart that differs
-// from the one it was launched on, or from the one the collection judges, is a
-// turn that changes shape by being interrupted — and agreeing by copy is how
-// the call sites drifted before (the skill registry one of them omitted).
+// ONE CONSTRUCTION for both, because a call a box makes over its bridge after
+// a recovery and a call the resumed turn makes are calls of the same turn, and
+// the two must agree on everything a call reads: the turn's identity and unit
+// of work, the rebase its operation ids are minted under, the counter its
+// spend is held to, the seat's registry, skills and fence, and the reply it
+// owes — agreeing by copy is how the call sites drifted before (the skill
+// registry one of them omitted).
 //
-// Every error is a RETRY: nothing has run.
-func (e *Engine) parkedRunner(ctx context.Context, company *Company, in resumeInput,
-	onPhase func(phase.Phase),
-) (parked, error) {
+// The results are named so a failure answers their zero values without
+// building a RunnerInput: every literal of one is held to carrying the seat's
+// fence (internal/seat's TestEveryConfigThatCanCarryTheSeatFenceDoes). Every
+// error is a RETRY: nothing has run.
+func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput,
+) (input RunnerInput, tel turnTelemetry, err error) {
 	resumedReply, err := resumeReply(in.Run)
 	if err != nil {
-		return parked{}, err
+		return input, tel, err
 	}
-	tel, err := e.describeResume(ctx, company, in)
+	tel, err = e.describeResume(ctx, company, in)
 	if err != nil {
-		// A RETRY, like every early return here: nothing ran, and the
-		// coordinator hands its claim back so the next attempt judges the
-		// rebase again against its own clock.
-		return parked{}, err
+		return input, tel, err
 	}
 	// THE COUNTER AS THE RUN LEFT IT, read once before anything is sent:
 	// the run was post-charged a moment ago, and a window it took past its
@@ -1138,92 +1189,45 @@ func (e *Engine) parkedRunner(ctx context.Context, company *Company, in resumeIn
 	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
-	// The launcher, and the note box the turn files — see [turnSteerBox].
-	launcher := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
-	box := turnSteerBox()
-	r, err := company.RunnerFor(in.Turn.Handle(),
-		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
-			Task:    resumeTask(in),
-			Compact: e.compactorFor(company),
-			// THE RUNNER NEEDS IT TOO, not just the loop. This field
-			// reaches runner.Config.Reply, which is what submit_work's own
-			// citation check reads — so a resumed turn with this unset
-			// accepted `no_action` on a turn somebody was waiting on, and
-			// accepted a citation naming any surface at all, before the
-			// loop's later checks ever ran.
-			Reply:     resumedReply,
-			Publisher: e.backends.Queue,
-			Turn:      turnIdentity,
-			// THE LAUNCHER, for the turn's LATER iterations rather than this
-			// one: this segment collects the run the turn parked on, and a
-			// turn its reviewer sends back launches its next run from here
-			// — on whichever member of the pinned chain can take it then.
-			Launcher: launcher,
-			// A RESUMED SEGMENT IS STEERABLE LIKE ANY OTHER: it is the same
-			// turn running again, and a note sent while it parked was
-			// answered `closed` — the box that segment had is gone.
-			Steer:  box,
-			Budget: tel.budget.budget(),
-			// NO ROUND-CAP JUDGE: the only engine loop a resumed segment
-			// runs is the reviewer's, whose budget is one submission and its
-			// correctives rather than a cap to extend, and the onboarding
-			// pass — the one phase with a cap — never runs on a resume.
-			Remaining: e.remainingFor(company, in.Turn.Handle()),
-			// THE SAME FENCE THE DISPATCH PATH GETS, and a resume needs it
-			// more than a fresh turn does: this loop was parked across a
-			// coding run that may have taken an hour, and the node that
-			// resumes it is not always the node that suspended it. The grant
-			// it closes on is the one THIS node holds now — which is the
-			// correct anchor, since the resume is what this node is admitted
-			// for.
-			Fence:   e.seatFence(in.Turn.Handle()),
-			OnPhase: onPhase,
-			// THE SKILL REGISTRY, which a call site once omitted. With nil
-			// Skills the runner's guardFor returns nil, so the
-			// load-before-use gate was disarmed for every resumed turn: a
-			// seat could call a tool whose required skill it had never
-			// loaded, on the one path where nobody would notice — and the
-			// RunnerFor sites must agree or a turn changes shape by being
-			// resumed.
-			Skills: e.skills,
-			// NO onboarding on a resume. The pass is a seat's FIRST turn, and
-			// this turn already ran its first phase — running it here would
-			// spend the resumed turn's opening on orientation for a seat that
-			// is mid-task.
-			Resume: &runner.Resume{
-				State: in.State, Answer: in.Answer,
-				// WHICH BOX DID THE WORK. Off the run's own row, because
-				// this process may not be the one that launched it — and it
-				// is the only thing that can say a phase ran in a sandbox
-				// rather than in this process's own tool loop.
-				Run: runner.RunRecord{
-					CodingAgent: in.Run.CodingAgent,
-					SandboxID:   in.Run.SandboxID,
-					// AND WHICH ENTRY RAN IT, as the launch recorded the
-					// member it picked: the executor's record and its spend
-					// are charged to that entry and model, which a fallback
-					// makes other than the chain's head — and which the
-					// chain resolved now could name differently again.
-					ProviderKey:   in.Run.Launch.ProviderKey,
-					Model:         in.Run.Launch.Model,
-					LaunchID:      in.Run.LaunchID,
-					DeliveredRefs: in.DeliveredRefs,
-					RefsElided:    in.RefsElided,
-				},
-				// THE RUN'S OWN TOOL CALLS, off its durable row. The
-				// executor called them over the bridge, possibly in another
-				// process, so this list is the only record of what the
-				// phase did — its submission included.
-				Bridged: bridgedCalls(in.Run.BridgeCalls),
-				// AND A PERSON'S ANSWER, which carries the run on rather
-				// than reporting it — see [runner.Asked].
-				Asked: runnerAsked(in.Asked),
-			},
-		})
-	if err != nil {
-		return parked{}, err
-	}
-	return parked{runner: r, tel: tel, box: box, reply: resumedReply}, nil
+	return RunnerInput{
+		Task:    resumeTask(in),
+		Compact: e.compactorFor(company),
+		// THE RUNNER NEEDS IT TOO, not just the loop. This field reaches
+		// runner.Config.Reply, which is what submit_work's own citation
+		// check reads — so a resumed turn with this unset accepted
+		// `no_action` on a turn somebody was waiting on, and accepted a
+		// citation naming any surface at all, before the loop's later
+		// checks ever ran.
+		Reply:     resumedReply,
+		Publisher: e.backends.Queue,
+		Turn:      turnIdentity,
+		Sessions:  e.sessions,
+		// THE LAUNCHER, for the turn's LATER iterations rather than this
+		// one: this segment collects the run the turn parked on, and a turn
+		// its reviewer sends back launches its next run from here — on
+		// whichever member of the pinned chain can take it then.
+		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
+		Budget:   tel.budget.budget(),
+		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
+		// the reviewer's, whose budget is one submission and its correctives
+		// rather than a cap to extend, and the onboarding pass — the one
+		// phase with a cap — never runs on a resume.
+		Remaining: e.remainingFor(company, in.Turn.Handle()),
+		// THE SAME FENCE THE DISPATCH PATH GETS, and a parked run needs it
+		// more than a fresh turn does: its turn was parked across a coding
+		// run that may have taken an hour, and the node that picks it up is
+		// not always the node that parked it. The grant it closes on is the
+		// one THIS node holds now — which is the correct anchor, since that
+		// is what this node is admitted for.
+		Fence: e.seatFence(in.Turn.Handle()),
+		// THE SKILL REGISTRY, which the resume's call site once omitted.
+		// With nil Skills the runner's guardFor returns nil, so the
+		// load-before-use gate was disarmed for every resumed turn: a seat
+		// could call a tool whose required skill it had never loaded, on the
+		// one path where nobody would notice — and the RunnerFor sites must
+		// agree or a turn changes shape by being resumed.
+		Skills: e.skills,
+	}, tel, nil
 }
 
 // heldByBudget is a resumed segment's error as the hold it is, where the seat's
@@ -1261,12 +1265,13 @@ func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
 // from.
 //
 // HERE, BECAUSE NOTHING ELSE SEES IT. The run is its CLI's own, in a box, and
-// never goes through the entry's text calls — the one path that benched an
-// entry. Unread, a reviewer's send-back relaunched the turn into the very plan
-// the run had just spent, and so did every other seat's next launch on the
-// entry, while a text call on it would have moved the chain on at once. A run
-// that ended otherwise, an entry this epoch does not have — renamed or removed
-// since the launch — and one that is not a coding CLI's bench nothing.
+// never goes through the entry's runs on this host — the one path that benched
+// an entry. Unread, a reviewer's send-back relaunched the turn into the very
+// plan the run had just spent, and so did every other seat's next launch on
+// the entry, while a reviewer's run on it would have moved the chain on at
+// once. A run that ended otherwise, an entry this epoch does not have —
+// renamed or removed since the launch — and one that is not a coding CLI's
+// bench nothing.
 func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) {
 	if c == nil || c.Models == nil || run.Launch.ProviderKey == "" ||
 		(ended.Text == "" && ended.Error == "") {
@@ -1820,8 +1825,9 @@ func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
 // boot or never, so a node started unconfigured (the quickstart's own route)
 // or on a company with no providers.sandbox served every later revision's
 // seats with no executor and no way to finish a run a peer had left on one of
-// its seats, until the process restarted. Once up, a revision only swaps the manager ([Engine.Apply]'s
-// `sandbox` stage), because the busy set and the poll loop are this process's.
+// its seats, until the process restarted. Once up, a revision only swaps the
+// manager ([Engine.Apply]'s `sandbox` stage), because the busy set and the
+// poll loop are this process's.
 //
 // A NIL MANAGER IS NOT A START: the company reaches no cell, and the runtime
 // waits for one that does.
@@ -1898,6 +1904,10 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// from every settle path, so a run that failed before it ever
 		// had a box closes its session too.
 		Ended: e.bridge.Close,
+		// AND IS SERVED AGAIN wherever the run is taken over while its box
+		// works: this node after a restart, or the seat's next holder —
+		// see [sandbox.CoordinatorOptions.Recovered].
+		Recovered: e.reopenAgentRun,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
@@ -2437,7 +2447,15 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// ATTACHED FROM HERE, whatever recovery says: a release has to detach
 	// what this call attached, and a refused seat is released.
 	e.markSandboxSeat(handle, true)
-	return rt.coordinator.RecoverSeat(ctx, handle, owner, epoch)
+	if err := rt.coordinator.RecoverSeat(ctx, handle, owner, epoch); err != nil {
+		return err
+	}
+	// EVERY RUNNING JOB'S SESSION IS OPEN AGAIN HERE NOW ([Engine.reopenAgentRun]),
+	// so the bridge may say a job it holds no session for is over — and not
+	// before, or a box calling in the moment between the seat's lease and
+	// its recovery would be told its live run had ended.
+	e.bridge.SeatReady(seat.ID)
+	return nil
 }
 
 // sandboxSeatAttached reports whether this node attached the seat's sandbox
@@ -2590,6 +2608,11 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// released the inbox already dropped the hold; the alarm would only
 	// fire into a seat a peer now serves.
 	e.forgetBudgetPark(seat.ID)
+	// AND THE TOOL SESSIONS OF ITS EXECUTOR RUNS, which the seat's next
+	// holder serves from now on: left open here they would pin the seat's
+	// surface in a process that no longer speaks for it, and every box
+	// would go on talking to it — see [mcpbridge.Bridge.ReleaseSeat].
+	e.bridge.ReleaseSeat(seat.ID)
 
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
 	// exists: a seat that went away with no signal leaves its last state
@@ -2683,8 +2706,8 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 // THREE things travel, and they travel differently on purpose:
 //
 //   - The MODEL, so the agent addresses the model the seat runs on rather
-//     than its catalogue's default — the entry's model exactly as its text
-//     calls name it, for its own CLI only.
+//     than its catalogue's default — the entry's model exactly as its runs
+//     on this host name it, for its own CLI only.
 //   - A TOKEN OR A KEY, in the run environment, which reaches any box
 //     including a remote one: it is one scoped, revocable variable — a
 //     subscription's headless token, an api-key entry's key, or a key the
@@ -2704,17 +2727,21 @@ type codingRun struct {
 // member the launch picked ([agentLauncher.member]) — over seatEnv, the
 // environment the seat's own config assembled ([Engine.runEnvironment]).
 //
+// ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's
+// deep work on its own entry ([assistantDeep.Run]), which brings no seat
+// environment: a box signs in the same way whoever launched it.
+//
 // THE PICKED MEMBER, never a second resolution of the chain: the runner the box
 // runs IS that member's CLI, so its model, written in that CLI's own grammar,
 // and its sign-in, which that CLI reads, are always ones the runner can use —
 // and a launch that fell back past the head runs on the member it fell back
 // to, with that member's login rather than the head's.
 func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun {
-	// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS WRITTEN
-	// FOR. An entry's model is in that CLI's own grammar — OpenCode reads
-	// `<provider>/<model>`, Claude Code an alias — so the run is handed the
-	// exact string every text call on the entry gives the CLI, resolved and
-	// rendered as they render it.
+	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE CLI IT IS
+	// WRITTEN FOR. An entry's model is in that CLI's own grammar — OpenCode
+	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
+	// the exact string every other phase's run on the entry gives the CLI,
+	// resolved and rendered as they render it.
 	//
 	// No base URL: an entry has none of its own — the CLI talks to its
 	// vendor, and declaring a custom provider for it would point a coding
@@ -2818,8 +2845,18 @@ func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sa
 		// one back, so files alone are a complete answer there.
 		return nil
 	}
-	if signsIn(env, agent.CredentialEnvNames()) {
+	if entrySignsIn(agent, env) {
 		return nil
+	}
+	return credentialRefusal(agent, key, seat, placement)
+}
+
+// entrySignsIn reports whether env signs agent's CLI in, in a box that is not on
+// the engine host: the rule a seat's remote run and the assistant's deep work
+// are both held to before a box is started.
+func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
+	if signsIn(env, agent.CredentialEnvNames()) {
+		return true
 	}
 	// CLAUDE CODE'S OTHER SIGN-INS COUNT TOO — a bearer token, a Bedrock,
 	// Vertex AI or Foundry toggle — because a seat that brought one is handed
@@ -2827,7 +2864,7 @@ func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sa
 	// alone, that seat's remote run was refused as signed in to nothing when
 	// it was signed in to its own cloud.
 	if agent.Agent() == codingagent.ClaudeCodeName && signsIn(env, codingagent.ClaudeCodeCredentialEnv) {
-		return nil
+		return true
 	}
 	// A CLI THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
 	// variable to ask about: which one it reads depends on the provider the
@@ -2840,8 +2877,8 @@ func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sa
 	// authenticated" it exists to pre-empt.
 	//
 	// IT JUDGES THE RIGHT CLI, and the key it lets through is one the run can
-	// read: the box is handed the entry's model exactly as its text calls
-	// name it, so its provider is the one the operator keyed for those calls,
+	// read: the box is handed the entry's model exactly as its runs on this
+	// host name it, so its provider is the one the operator keyed for those,
 	// and the runner is that entry's own CLI ([newCodingRun]).
 	// Narrowing it to the variable the model's provider segment "should" use
 	// would need a table of that CLI's providers the engine does not ship and
@@ -2850,11 +2887,11 @@ func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sa
 	if agent.SignsInThroughEnv() {
 		for name, value := range env {
 			if cliprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
-				return nil
+				return true
 			}
 		}
 	}
-	return credentialRefusal(agent, key, seat, placement)
+	return false
 }
 
 // credentialRefusal is the [SandboxCredentialError] for a remote run nothing

@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -91,6 +92,13 @@ type Config struct {
 	// per-round charge, which is the embedded single-node case where no
 	// counter is shared with anyone.
 	Budget toolloop.BudgetMeter
+
+	// Sessions is where every phase the engine drives serves its tools to
+	// its CLI — this process's one [toolsession.Host], whose directory is
+	// what admits a CLI's relay. Required: a phase that offers tools reaches
+	// its CLI through nothing else. The executor's run is the one exception,
+	// reaching the seat's tools over the tool bridge from its box.
+	Sessions *toolsession.Host
 
 	// Fence stops a turn whose seat this node no longer holds, or one a
 	// person stopped: checked before the executor's run is launched, and at
@@ -228,14 +236,15 @@ type Resume struct {
 	Answer string
 
 	// Bridged is what the run called over the MCP bridge, read from the
-	// run's own durable row: each call with the bridge's measurement of it —
-	// when it started, how long it took and who answered — and no round,
-	// which is this package's to state ([runRound]).
+	// run's own durable row, in the order the row holds them — each carries
+	// its place in the order the bridge admitted them ([BridgedCall.Seq]),
+	// which is the order the resume records them in — and no round, which
+	// is this package's to state ([runRound]).
 	//
 	// It is the whole record of the phase, and it has to come from the row
 	// rather than from memory: the process resuming may not be the one that
 	// launched, so its surface is fresh and has executed nothing.
-	Bridged []toolloop.Execution
+	Bridged []BridgedCall
 
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord
@@ -245,6 +254,48 @@ type Resume struct {
 	// with the answer rather than collecting it — see [Asked]. Answer is
 	// then empty, and Bridged holds the calls the run made before it asked.
 	Asked *Asked
+}
+
+// BridgedCall is one call an executor run made over the MCP bridge, as the
+// run's durable row recorded it: the call the turn's record reads, and when it
+// ran, for how long and who answered — what the phase record's execution for
+// it states.
+//
+// ITS OWN TYPE rather than a [ledger.Call], which is the delivery check's and
+// the ledger's view of a call and has nowhere to put a call's place or its
+// timing: carried as one, a resumed run's phase record stated every call the
+// run made as untimed, unattributed and in the order the calls happened to
+// finish.
+type BridgedCall struct {
+	ledger.Call
+
+	// Seq is the call's place in the order the bridge admitted the run's
+	// calls, from 1 — the order the CLI made them in, which is not the order
+	// they finished in when it made several at once.
+	Seq int
+
+	// StartedAt is when the call was handed to the seat's surface, and
+	// Duration how long the surface took to answer — measured at the bridge,
+	// since the call ran inside the CLI's own loop. Both zero on a call
+	// answered without running — arguments that did not parse — and zero
+	// means "not measured", never "instant".
+	StartedAt time.Time
+	Duration  time.Duration
+
+	// Origin and Server are who answered the call — a builtin, or an MCP
+	// tool and the server it came from — and empty where no tool did.
+	Origin string
+	Server string
+}
+
+// bridgedLedger is an executor run's calls as the turn's record reads them:
+// what each call did, without the measurement the bridge took of it.
+func bridgedLedger(bridged []BridgedCall) []ledger.Call {
+	out := make([]ledger.Call, 0, len(bridged))
+	for _, call := range bridged {
+		out = append(out, call.Call)
+	}
+	return out
 }
 
 // RunRecord is what a phase event says about the run an executor was, and the
@@ -339,12 +390,21 @@ type Runner struct {
 var _ turn.Phases = (*Runner)(nil)
 
 // New builds a runner.
+//
+// A runner with no session host is refused here rather than at its first
+// phase: every turn runs a phase that offers tools — the reviewer, at the
+// least — and a phase reaches its CLI through nothing else, so the turn would
+// fail after its run was launched and its prefetch spent, naming a toolloop
+// field instead of this one.
 func New(cfg Config) (*Runner, error) {
 	switch {
 	case cfg.Registry == nil:
 		return nil, fmt.Errorf("runner: no tool registry")
 	case cfg.Models == nil:
 		return nil, fmt.Errorf("runner: no provider registry")
+	case cfg.Sessions == nil:
+		return nil, fmt.Errorf("runner: no tool session host (Config.Sessions) — " +
+			"every phase serves its tools to its CLI on this process's one host")
 	case cfg.Launcher == nil:
 		// AN ASSEMBLY MISTAKE, named where it is made. Every executor is
 		// a launched run, so a runner without a launcher cannot run the
@@ -880,8 +940,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// record and may be minutes away.
 	//
 	// THE SURFACE TRAVELS WITH THE TEXT because the prompt is both: every
-	// round carries the tool-definition array, which the CLI backend writes
-	// into the prompt literally and the vendor bills as input.
+	// request carries the tool definitions, which the CLI lists from the
+	// phase's session and hands its model, and the vendor bills as input.
 	emit.started(ctx, ph, iteration, system, user, surface,
 		capsOf(policy, out.Rounds+in.rounds))
 
@@ -931,6 +991,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		}
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
+			Host: r.cfg.Sessions, ServerTitle: sessionTitle(r.cfg.Seat, ph),
 			// The chain's head, standing in until a completion names the
 			// member that actually served — see toolloop.Config.
 			ProviderKey: members[0].Key,
@@ -1063,13 +1124,26 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		steers[i] = m
 	}
 	res.Steers = steers
-	// The call in flight is on the same scale, or a live row names a call
-	// in round 1 of a phase that is twenty rounds in.
-	if res.Running != nil {
-		running := *res.Running
-		running.Round += prior
-		res.Running = &running
+	// A CLI run's rounds too, or an extension's first run names the phase's
+	// round 1 as its own: a run that made no request names none (zero),
+	// which stays zero.
+	invocations := make([]toolloop.Invocation, len(res.Invocations))
+	for i, inv := range res.Invocations {
+		if inv.FirstRound > 0 {
+			inv.FirstRound += prior
+			inv.LastRound += prior
+		}
+		invocations[i] = inv
 	}
+	res.Invocations = invocations
+	// The calls in flight are on the same scale, or a live row names a call
+	// in round 1 of a phase that is twenty rounds in.
+	running := make([]toolloop.RunningCall, len(res.Running))
+	for i, c := range res.Running {
+		c.Round += prior
+		running[i] = c
+	}
+	res.Running = running
 	// The round IN FLIGHT is on the same scale as the rounds behind it, or it
 	// COLLIDES with one of them. A consumer keys the ledger on the round
 	// number — the dashboard's `rounds()` builds one block per number and the
@@ -1233,6 +1307,9 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 		append([]toolloop.Round(nil), done.Result.Rounds...), res.Rounds...)
 	res.Steers = append(
 		append([]toolloop.SteerMark(nil), done.Result.Steers...), res.Steers...)
+	// Every CLI run of the phase, the extension's after the original's.
+	res.Invocations = append(
+		append([]toolloop.Invocation(nil), done.Result.Invocations...), res.Invocations...)
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
 	// The cap the PHASE is under: every round already behind it plus what
 	// this invocation was granted — which is exactly how an extension
@@ -1369,7 +1446,7 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	// what the catalogue showed cannot disagree: both match the skills
 	// against the surface's universe (catalogueSurface), and the catalogue's
 	// "required" marker is the promise this keeps.
-	guard := r.guardFor(ph, surface, loaded)
+	guard := r.guardFor(ph, round, surface, loaded)
 	// RECORDED ONLY HERE, which is what keeps it the TURN's guard: this is
 	// the funnel every phase of the turn goes through, and a sub-agent's
 	// child surface is built elsewhere. Recording inside guardFor would let
@@ -1425,7 +1502,7 @@ func (a armedGuard) tools() tools.Guard    { return a.wrap }
 // run being collected, and a guard rebuilt empty for its collection's surface
 // would refuse the calls that session had already unlocked. Empty for every
 // other phase.
-func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []string) armedGuard {
+func (r *Runner) guardFor(ph phase.Phase, iteration int, surface *tools.Surface, loaded []string) armedGuard {
 	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers are
 	// matched over: a guard is armed only where the session can satisfy it,
 	// and a loader the phase never activated is one its model may not reach.
@@ -1439,7 +1516,7 @@ func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []strin
 	guard.Restore(loaded)
 	return armedGuard{
 		guard: guard,
-		wrap:  &reportingGuard{guard: guard, emit: r.emitter(), phase: ph},
+		wrap:  &reportingGuard{guard: guard, emit: r.emitter(), phase: ph, iteration: iteration},
 	}
 }
 
@@ -1615,6 +1692,19 @@ func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
 		out = append(out, toolloop.SteerNote{ID: n.ID, Message: msg})
 	}
 	return out
+}
+
+// Waiting reports a note waiting, without taking it: the loop ends a run that
+// has one once its calls in flight are answered, so the next run reads it.
+func (s phaseSteer) Waiting() bool { return s.r.cfg.Steer.Waiting() }
+
+// sessionTitle is how a phase's tool session names itself to its CLI: the
+// seat and the phase, for the CLI's own logs and a person reading them.
+func sessionTitle(seat prompts.Seat, ph phase.Phase) string {
+	if seat.Role == nil {
+		return string(ph)
+	}
+	return seat.Role.Handle() + " " + string(ph)
 }
 
 // carrySteer records a note the turn has read, for its later phases.

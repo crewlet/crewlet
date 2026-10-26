@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // discoveryEntries is the provider set a discovery case runs on: the executor
@@ -33,7 +34,7 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 	}
 	listed := play(t, req, run{calls: []llm.ToolCall{{ID: "a", Name: "list_mcp_server_tools",
 		Arguments: map[string]any{"server": "slack"}}}})
-	listing := listed[0].Output
+	listing := listed[0].Result
 	if !strings.Contains(listing, "slack_post") || !strings.Contains(listing, "slack_history") {
 		t.Errorf("the listing did not name the server's tools:\n%s", listing)
 	}
@@ -99,7 +100,7 @@ func TestAnUnknownServerListsTheOnesThatExist(t *testing.T) {
 	// a recoverable call.
 	_, req := launch(t, discoveryEntries(), buildOpts{}, 1, "", nil)
 	reply := play(t, req, run{calls: []llm.ToolCall{{ID: "a", Name: "list_mcp_server_tools",
-		Arguments: map[string]any{"server": "slacck"}}}})[0].Output
+		Arguments: map[string]any{"server": "slacck"}}}})[0].Result
 	if !strings.Contains(reply, "slack") {
 		t.Errorf("the failure does not name the servers that exist:\n%s", reply)
 	}
@@ -112,7 +113,7 @@ func TestActivatingAGuessedNameSaysHowToFindTheRealOne(t *testing.T) {
 	// recoverable call and a run that keeps guessing.
 	_, req := launch(t, discoveryEntries(), buildOpts{}, 1, "", nil)
 	reply := play(t, req, run{calls: []llm.ToolCall{{ID: "a", Name: "activate_tool",
-		Arguments: map[string]any{"name": "slack_send_msg"}}}})[0].Output
+		Arguments: map[string]any{"name": "slack_send_msg"}}}})[0].Result
 	if !strings.Contains(reply, "list_mcp_server_tools") {
 		t.Errorf("the failure does not say how to find the real name:\n%s", reply)
 	}
@@ -190,7 +191,7 @@ func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 		{ID: "a", Name: "list_mcp_server_tools", Arguments: map[string]any{"server": "  "}},
 		{ID: "b", Name: "activate_tool", Arguments: map[string]any{}},
 	}}) {
-		replies[c.Name] = c.Output
+		replies[c.Name] = c.Result
 	}
 	if got := replies["list_mcp_server_tools"]; !strings.Contains(got, "Name a server") {
 		t.Errorf("an empty server name reported %q", got)
@@ -215,21 +216,26 @@ func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 func TestTheReviewerIsOfferedOnlyItsSubmission(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: runner.ActivateTool,
-				Arguments: map[string]any{"name": "slack_post"}}}},
+		review: []llmtest.Response{
+			calling(callOf(t, runner.ActivateTool, map[string]any{"name": "slack_post"})),
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
 		},
 	})
 	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
-	reqs := prov.requestsFor("review")
-	if len(reqs) < 2 {
-		t.Fatalf("the reviewer made %d model calls, want the refused activation and its answer", len(reqs))
+	offered := prov.offeredFor("review")
+	if len(offered) < 2 {
+		t.Fatalf("the reviewer made %d model requests, want the refused activation and its answer",
+			len(offered))
 	}
-	for i, req := range reqs {
-		if got := toolNames(req.Tools); !slices.Equal(got, []string{runner.SubmitReviewTool}) {
+	// Refused BY ITS CLI: a name the reviewer was never offered never reaches
+	// its tools at all.
+	if got := prov.answerTo("review", runner.ActivateTool); !strings.Contains(got, "No such tool") {
+		t.Errorf("the reviewer's activation was answered %q, want its CLI's refusal", got)
+	}
+	for i, got := range offered {
+		if !slices.Equal(got, []string{runner.SubmitReviewTool}) {
 			t.Errorf("review call %d offered %v, want only %s: the discovery pair "+
 				"puts every tool in the registry within the reviewer's reach",
 				i+1, got, runner.SubmitReviewTool)

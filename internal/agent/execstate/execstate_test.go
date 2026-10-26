@@ -233,14 +233,14 @@ func TestAnEmptyBlobIsNotAnError(t *testing.T) {
 // every round before the park had called nothing — so it would re-fire
 // whatever they delivered.
 //
-// The retired numbers are among them, and 2 matters most: it named a parked
-// engine CONVERSATION, a shape whose shared fields would decode here and be
-// resumed as a run that never existed.
+// The retired numbers are among them, and 2 and 3 matter most: they named a
+// parked engine CONVERSATION, a shape whose shared fields would decode here and
+// be resumed as a run that never existed.
 //
-// Mutation: accept version 2 in Decode, and this goes red.
+// Mutation: accept version 3 in Decode, and this goes red.
 func TestAVersionThisBuildDoesNotKnowIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int{execstate.Version + 1, 2, 1} {
+	for _, version := range []int{execstate.Version + 1, 3, 2, 1} {
 		blob, err := execstate.Encode(parked())
 		if err != nil {
 			t.Fatalf("Encode: %v", err)

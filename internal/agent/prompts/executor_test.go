@@ -52,10 +52,9 @@ func TestExecutorPromptCarriesTheToolsToDiscoverAndIdentity(t *testing.T) {
 	}).Text
 	contains(t, p, "## Your turn", "\n## Tools to discover\n- MCP server `github`",
 		"Engineer", "Acme")
-	// NOT "Available tools": that is the heading a text call's prompt gives the
-	// JSON definitions of the tools the seat DOES hold, in the same
-	// conversation, and two sections under one heading saying different
-	// things is a model reading whichever it saw last.
+	// NOT "Available tools": the tools the seat holds reach its CLI as its
+	// MCP server's, and a section headed as though it listed them tells the
+	// model it may call what it first has to discover.
 	excludes(t, p, "## Available tools")
 	// Nothing to discover is no section at all, not a heading over nothing.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{Discoverable: " \n"}).Text,

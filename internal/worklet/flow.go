@@ -510,7 +510,7 @@ func readFlowNow(ctx context.Context, tx *sql.Tx, project string, now time.Time,
 	out.NotStarted, out.Active = current[0], current[1]
 	// THE DAY BOUNDARY every board's overdue mark is cut on — see
 	// [readWorkload].
-	anchor, err := ResolveDate("today", now, loc)
+	anchor, err := period.Resolve("today", now, loc)
 	if err != nil {
 		return err
 	}

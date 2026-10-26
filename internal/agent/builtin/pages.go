@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -132,7 +133,7 @@ type PageDeps struct {
 //     held to the operation grammar and scoped to the principal that sent
 //     it by internal/api/opkey;
 //   - or none, and the store mints a fresh id for each write.
-func pageOpKey(ctx context.Context, turn *turnctx.Turn, tool string, args map[string]any,
+func pageOpKey(turn *turnctx.Turn, tool string, args map[string]any,
 	actor doclet.Actor) string {
 
 	seed := turnKey(turn)
@@ -140,7 +141,7 @@ func pageOpKey(ctx context.Context, turn *turnctx.Turn, tool string, args map[st
 		return actor.OpKey
 	}
 	identity := []string{pageCallNamespace, seed, tool}
-	if n := turn.CallLog().Ordinal(ctx, tool, args); n > 0 {
+	if n := turn.CallLog().Ordinal(tool, args); n > 0 {
 		identity = append(identity, "repeat:"+strconv.Itoa(n))
 	}
 	return statelog.DeriveOpID(turnSince(turn), "", identity...)
@@ -553,7 +554,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if t.deps.Writer == nil {
 		return unconfiguredKB(WritePageTool), nil
 	}
-	actor.OpKey = pageOpKey(ctx, turn, t.Name(), args, actor)
+	actor.OpKey = pageOpKey(turn, t.Name(), args, actor)
 	status, refusal := createStatus(args)
 	if refusal != "" {
 		return failed(refusal), nil
@@ -579,8 +580,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 			in.Container = t.deps.DefaultContainer(actor.Handle)
 		}
 		if in.Container == "" {
-			return failed("write_page needs a `container`: your team owns none, " +
-				"so there is no default. Ask where this belongs rather than guessing."), nil
+			return failed(org.NoHomeSpace(WritePageTool)), nil
 		}
 	}
 	// A NEW TOOL SKILL IS CONFIGURATION, and the container is known only
@@ -719,7 +719,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	}
 	// ONE KEY FOR THE SAVE AND THE RENAME AFTER IT: the store derives each
 	// record's id from its own verb, so the two stay two operations.
-	actor.OpKey = pageOpKey(ctx, turn, t.Name(), args, actor)
+	actor.OpKey = pageOpKey(turn, t.Name(), args, actor)
 	ref := strings.TrimSpace(argString(args, "page"))
 	if ref == "" {
 		return failed("save_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
@@ -934,7 +934,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// THE CALL'S KEY, repeat count included — see [pageOpKey] for what a
 	// remark made again after another one cost without it. One key for an
 	// edit and for a new remark: the store derives each from its own verb.
-	actor.OpKey = pageOpKey(ctx, turn, t.Name(), args, actor)
+	actor.OpKey = pageOpKey(turn, t.Name(), args, actor)
 	ref := strings.TrimSpace(argString(args, "page"))
 	body := strings.TrimSpace(argString(args, "body"))
 	switch {

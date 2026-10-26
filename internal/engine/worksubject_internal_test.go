@@ -510,7 +510,7 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	seat := company.Org.AgentSeatByHandle("swe")
 	turnContext := &turnctx.Turn{RunID: "run-code", Seat: seat, Org: company.Org}
 	r, err := company.RunnerFor("swe", nil, RunnerInput{
-		Reply: turn.NoReply(), Launcher: launcherStub{},
+		Reply: turn.NoReply(), Launcher: launcherStub{}, Sessions: e.sessions,
 		Turn: runner.Turn{RunID: "run-code", Context: turnContext},
 	})
 	if err != nil {
@@ -625,10 +625,10 @@ func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 func TestASettledTurnCarriesTheInteractionsItParkedWith(t *testing.T) {
 	t.Parallel()
 	// A MODEL THAT REVIEWS, so the collected run's review settles the turn.
-	e, _ := indicatingWith(t, notify.StatusAlways, billingModel{})
+	e, _ := indicatingWith(t, notify.StatusAlways, billingModel())
 	// UNDER THE FIXTURE'S DEPTH CAP, so the turn reaches its launch.
 	e.Company().Config.TurnEngine.DelegationDepthLimit = 3
-	rig := rigRuns(t, e, modelPlayer(t, billingModel{}))
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
 	trigger := chatTrigger("D0ANA")
 	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-chat", RunID: "run-chat", WorkSince: time.Now().UTC(),

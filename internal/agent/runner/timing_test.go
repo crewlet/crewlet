@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -30,14 +31,14 @@ import (
 // pass, the one engine-driven phase an extension reaches.
 
 // cached is a round that also reports a prompt-cache share.
-func cached(c llm.Completion, read, write int) llm.Completion {
-	c.CacheRead, c.CacheWrite = read, write
-	return c
+func cached(r llmtest.Response, read, write int) llmtest.Response {
+	r.Usage.CacheRead, r.Usage.CacheWrite = read, write
+	return r
 }
 
 func TestAPhaseRecordCarriesItsRoundsCallsAndCache(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		cached(persist(t, "a", "start"), 50, 10),
 		cached(persist(t, "b", "again"), 55, 0),
 		cached(markDone(t, "enough"), 58, 0),
@@ -97,7 +98,7 @@ func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 	// A two-round cap, extended by the step (4) under a ceiling of 8: the
 	// record states the cap the phase ENDED under, not the one it began
 	// with, and the ceiling it could have reached.
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "a", "one"),
 		persist(t, "b", "two"),
 		markDone(t, "three"),
@@ -127,7 +128,7 @@ func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 
 func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "a", "one"),
 		persist(t, "b", "two"),
 		markDone(t, "three"),
@@ -141,44 +142,56 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	if open := openingFrame(t, pub, "onboarding"); open.MaxRounds != 2 || open.RoundCeiling != 8 {
 		t.Errorf("the opening frame states max %d / ceiling %d, want 2 / 8", open.MaxRounds, open.RoundCeiling)
 	}
+	frames := progressFrames(t, pub, "onboarding")
 	var running []string
-	for _, frame := range progressFrames(t, pub, "onboarding") {
+	announced := map[string]bool{}
+	cap := 0
+	for _, frame := range frames {
 		round := frame.RoundNum + 1
-		want := 2
-		if round > 2 {
-			want = 6 // the extension moved it
+		// THE CAP IN FORCE WHEN THE FRAME WAS PUBLISHED: the budget's 2
+		// until the judge grants more, the 6 the extension moved it to
+		// after — never back, and never 2 on a round past the budget.
+		if frame.MaxRounds < cap {
+			t.Errorf("a round-%d frame states max %d after one stated %d", round, frame.MaxRounds, cap)
 		}
-		if frame.MaxRounds != want || frame.RoundCeiling != 8 {
-			t.Errorf("a round-%d frame states max %d / ceiling %d, want %d / 8",
-				round, frame.MaxRounds, frame.RoundCeiling, want)
+		cap = frame.MaxRounds
+		if (frame.MaxRounds != 2 && frame.MaxRounds != 6) || frame.RoundCeiling != 8 ||
+			(round > 2 && frame.MaxRounds != 6) {
+			t.Errorf("a round-%d frame states max %d / ceiling %d", round, frame.MaxRounds, frame.RoundCeiling)
 		}
 		if frame.RoundStartedAt.IsZero() {
-			t.Errorf("a round-%d frame names no round start", round)
+			t.Errorf("a round-%d frame names no start", round)
 		}
-		// A round's OPENING frame is published as its provider call is
-		// made, so it carries the rounds before it and a start later than
-		// every one of them; every later frame of the round carries it too.
-		switch len(frame.Rounds) {
-		case round:
-		case round - 1:
-			if frame.RunningCall != nil {
-				t.Errorf("round %d's opening frame names a running call", round)
-			}
-			if n := len(frame.Rounds); n > 0 && !frame.RoundStartedAt.After(frame.Rounds[n-1].StartedAt) {
-				t.Errorf("round %d's opening frame carries the previous round's start %v", round, frame.RoundStartedAt)
-			}
-		default:
-			t.Errorf("a round-%d frame carries %d timed rounds", round, len(frame.Rounds))
+		// A frame carries every round the phase has finished, on the
+		// phase's scale: every one before the round it is on, and that
+		// round too once its response has been read — while its request
+		// is still out, the frame names it and has no timing for it yet.
+		if n := len(frame.Rounds); n != round && n != round-1 {
+			t.Errorf("a round-%d frame carries %d timed rounds", round, n)
 		}
-		if call := frame.RunningCall; call != nil {
+		for _, r := range frame.Rounds {
+			if r.Round > round {
+				t.Errorf("a round-%d frame carries round %d, which has not begun", round, r.Round)
+			}
+		}
+		for _, call := range frame.RunningCalls {
 			if call.Round != round {
 				t.Errorf("the call running in round %d is numbered %d", round, call.Round)
 			}
-			running = append(running, call.Name)
+			if call.ID == "" {
+				t.Errorf("the call running in round %d carries no id", round)
+			}
+			if !announced[call.ID] {
+				announced[call.ID] = true
+				running = append(running, call.Name)
+			}
 		}
 	}
-	// One announcement per call, each BEFORE it ran — the three calls this
-	// phase made, in order.
+	if last := frames[len(frames)-1]; last.MaxRounds != 6 {
+		t.Errorf("the phase's last frame states max %d, want the extended 6", last.MaxRounds)
+	}
+	// Every call announced WHILE it ran — the three calls this phase made,
+	// in order.
 	want := []string{runner.ReflectAndPersistTool, runner.ReflectAndPersistTool, runner.MarkOnboardedTool}
 	if !slices.Equal(running, want) {
 		t.Errorf("running calls announced = %v, want %v", running, want)
@@ -357,6 +370,7 @@ func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
 		Subagent:  &runner.SubagentConfig{Limits: shipped()},
 		Turn: runner.Turn{RunID: "t-fan", AgentID: "agent-1",
 			Context: &turnctx.Turn{WorkItem: item}},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -404,14 +418,19 @@ type workerProvider struct{}
 
 func (workerProvider) Model() string { return "scripted" }
 
-func (workerProvider) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
-	if !slices.Contains(toolNames(req.Tools), subagent.SubmitTool) {
-		return nil, errors.New("workerProvider: asked by something that is not a worker")
+func (workerProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if req.Tools == nil {
+		return nil, errors.New("workerProvider: asked with no tools, so not by a worker")
 	}
-	return &llm.Completion{
-		ToolCalls:   []llm.ToolCall{{ID: "w1", Name: subagent.SubmitTool, Arguments: map[string]any{"result": "found it"}}},
-		InputTokens: 30, OutputTokens: 5, CacheRead: 7,
-	}, nil
+	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(c *llmtest.Conn) (llmtest.Response, error) {
+		if !slices.Contains(c.OfferedNames(), subagent.SubmitTool) {
+			return llmtest.Response{}, errors.New("workerProvider: asked by something that is not a worker")
+		}
+		return llmtest.Response{
+			Calls: []llmtest.Call{{Name: subagent.SubmitTool, Args: `{"result":"found it"}`}},
+			Usage: llm.Usage{Input: 30, Output: 5, CacheRead: 7},
+		}, nil
+	})
 }
 
 // batched is the one delegate call's summary.

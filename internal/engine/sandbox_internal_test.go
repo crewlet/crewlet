@@ -691,7 +691,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	if suspended, err := store.MarkSuspended(ctx, "t1", sandbox.Suspension{State: json.RawMessage(
-		`{"version":3,"iteration":1}`)}); err != nil || !suspended {
+		`{"version":4,"iteration":1}`)}); err != nil || !suspended {
 		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
 	}
 	runner.Finish(sandbox.Result{Success: true, Text: "done", InputTokens: tokens})

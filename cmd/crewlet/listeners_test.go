@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -201,7 +202,7 @@ func TestTheArtifactListenerIsBoundBeforeTheBoot(t *testing.T) {
 			asked = append(asked, a)
 			return bindReserved(ctx, a)
 		}
-		listeners, err := bindListeners(t.Context(), boot, "node-0", false, bind, log)
+		listeners, err := bindListeners(t.Context(), boot, "node-0", bind, log)
 		if err != nil {
 			t.Fatalf("%s: bindListeners: %v", tc.name, err)
 		}
@@ -279,12 +280,11 @@ func TestAListenerStoppedBeforeItIsServedIsClosed(t *testing.T) {
 	}
 }
 
-// THE BRIDGE IS A PUBLIC ROUTE ON EVERY NODE. A seats node without ingress
-// serves its probes on api.port and its tool bridge beside them, so with
-// api.public set it binds that address for the bridge alone and api.port
-// carries the probes alone — one file for every role, and one bridge address
-// rule across the fleet.
-func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
+// A SEATS NODE SERVES ITS PROBES AND NOTHING ELSE, even with a bridge and a
+// public listener in the shared file: a box reaches its seats' sessions
+// through the nodes that serve the API, which relay its call here over the
+// broker, so this node binds no public listener and mounts no bridge route.
+func TestASeatsNodeServesNoBridgeRoute(t *testing.T) {
 	t.Parallel()
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -304,37 +304,29 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 		t.Fatalf("serveAPI: %v", err)
 	}
 	if surface == nil {
-		t.Fatalf("a seats node with a bridge bound nothing:\n%s", logged.String())
+		t.Fatalf("a seats node bound nothing:\n%s", logged.String())
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
 
-	public := "http://127.0.0.1:" + strconv.Itoa(publicPort)
-	if status, _ := answer(t, http.MethodPost, public+mcpbridge.PathPrefix+"not-a-token"); status != http.StatusUnauthorized {
-		t.Errorf("POST %snot-a-token on the public listener = %d, want the bridge's own 401",
-			mcpbridge.PathPrefix, status)
-	}
-	if status, _ := answer(t, http.MethodGet, public+"/health"); status == http.StatusOK {
-		t.Error("GET /health answered on the public listener; the probes stay on api.port")
+	if surface.public != nil {
+		t.Error("a seats node bound a public listener; only an ingress node serves the bridge's route")
 	}
 	private := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
 	if status, _ := answer(t, http.MethodGet, private+"/health"); status != http.StatusOK {
 		t.Errorf("GET /health on api.port = %d, want the liveness probe's 200", status)
 	}
 	// The guard exempts the bridge's prefix wholesale, so a 404 here is the
-	// router finding no bridge on api.port, where a mounted one answers 401.
+	// router finding no bridge, where a mounted one answers 401.
 	if status, _ := answer(t, http.MethodPost, private+mcpbridge.PathPrefix+"not-a-token"); status != http.StatusNotFound {
-		t.Errorf("POST %snot-a-token on api.port = %d, want 404: the bridge is "+
-			"served on the public listener only", mcpbridge.PathPrefix, status)
-	}
-	if !strings.Contains(logged.String(), "public_addr=127.0.0.1:"+strconv.Itoa(publicPort)) {
-		t.Errorf("the node did not name the bridge's public listener:\n%s", logged.String())
+		t.Errorf("POST %snot-a-token on api.port = %d, want 404: a seats node "+
+			"mounts no bridge route", mcpbridge.PathPrefix, status)
 	}
 }
 
 // api.port 0 IS STILL THE HARD OFF SWITCH on a node without ingress, whatever
 // the shared file says about api.public: the satellite the deployment guide
-// starts with `-api-port 0` binds no tool bridge on the public port either, so
-// a second process on the host keeps that port for the ingress node.
+// starts with `-api-port 0` binds nothing, so a second process on the host
+// keeps every port for the ingress node.
 func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	t.Parallel()
 	publicPort := reservePort(t)
@@ -350,13 +342,13 @@ func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	// NOTHING BOUND AT ALL, asked of the one path every listener is opened
 	// through rather than of the public port after the fact — which this
 	// case holds itself, so nothing else can be listening there either.
-	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), true, bindNothing(t),
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), bindNothing(t),
 		logging.Get("test"))
 	if err != nil || listeners != nil {
 		listeners.close(context.Background(), logging.Get("test"))
 		t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, engine.DeepHost{}, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -437,17 +429,20 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 	}
 }
 
-// A DIRECT BOX DIALS THE LISTENER ITS NODE BOUND, ON LOOPBACK. The `direct`
-// cell's run is a process of this host, so the node's own socket is an
-// address it can always reach, and that is what lets the quickstart's company
-// — one direct cell, no CREWLET_MCP_BRIDGE_URL — run its first turn. The
-// listener is the one the bridge is served on: api.public where the node binds
-// one, api.port otherwise ([api.PublicListener]); and a node that runs no seat
-// opens no session, so it derives none.
+// A DIRECT BOX DIALS THE LISTENER ITS NODE BOUND, ON LOOPBACK, WHERE THE NODE
+// SERVES THE BRIDGE. The `direct` cell's run is a process of this host, so the
+// node's own socket is an address it can always reach, and that is what lets
+// the quickstart's company — one node, one direct cell, no
+// CREWLET_MCP_BRIDGE_URL — run its first turn. The listener is the one the
+// bridge route is served on: api.public where the node binds one, api.port
+// otherwise. Only a node that serves the API serves that route, and only one
+// running seats launches a box, so a seats node without the ingress role —
+// whose boxes reach their tools through an ingress node's relay — and an
+// ingress node with no seat derive none.
 //
-// Mutation: derive from api.port whatever the public listener, and the
-// public row dials the probes' port, where the bridge answers 404; derive on a
-// node without seats and the satellite row names an address nothing serves.
+// Mutation: derive from api.port whatever the public listener, and the public
+// row dials a port the bridge is not served on; derive on a node without
+// ingress, and the satellite row names a route nothing on it serves.
 func TestADirectBoxDialsTheListenerItsNodeBound(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -456,9 +451,10 @@ func TestADirectBoxDialsTheListenerItsNodeBound(t *testing.T) {
 		public bool
 		want   string // "api", "public" or ""
 	}{
-		{"a seats node on api.port", []string{"data", "seats", "workers"}, false, "api"},
-		{"a seats node with a public listener", []string{"data", "seats", "workers"}, true, "public"},
-		{"a node that runs no seat", []string{"data", "workers"}, false, ""},
+		{"an ingress seats node on api.port", []string{"data", "ingress", "seats", "workers"}, false, "api"},
+		{"an ingress seats node with a public listener", []string{"data", "ingress", "seats", "workers"}, true, "public"},
+		{"a seats node without ingress", []string{"data", "seats", "workers"}, false, ""},
+		{"an ingress node that runs no seat", []string{"data", "ingress", "workers"}, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -467,7 +463,7 @@ func TestADirectBoxDialsTheListenerItsNodeBound(t *testing.T) {
 			if tc.public {
 				boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: reservePort(t)}
 			}
-			listeners, err := bindListeners(t.Context(), boot, "node-0", true, bindReserved,
+			listeners, err := bindListeners(t.Context(), boot, "node-0", bindReserved,
 				logging.Get("test"))
 			if err != nil {
 				t.Fatalf("bindListeners: %v", err)

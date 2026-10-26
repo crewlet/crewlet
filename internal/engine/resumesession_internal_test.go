@@ -344,6 +344,11 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	admitted.Tools = tools.NewRegistry()
 	e, _ := resumingEngine(t)
 	e.backends = &Backends{Queue: memory.New()}
+	// A SESSION HOST, as every engine `crewlet run` builds has one: the
+	// runner refuses to be built without the host its phases serve their
+	// tools on, and that refusal would stop the resume before the round
+	// this case is about.
+	e = withSessions(t, e)
 	e.epoch.current.Store(&Company{
 		Config: admitted.Config, Models: admitted.Models, Tools: admitted.Tools,
 		Org: &org.Organization{Name: admitted.Org.Name},

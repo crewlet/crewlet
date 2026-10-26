@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -90,7 +91,7 @@ func TestStoppingANodePublishesTheFailuresItStillHolds(t *testing.T) {
 	t.Parallel()
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		}),
 		Company: parsedCompany(t, companyDoc),
 	})

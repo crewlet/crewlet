@@ -152,7 +152,7 @@ describe("the state pill", () => {
 });
 
 describe("the current turn's calls", () => {
-  const row = (executions: number, running: boolean): AgentRow =>
+  const row = (executions: number, running: boolean | number): AgentRow =>
     ({
       role: "SWE",
       live_call: {
@@ -167,15 +167,21 @@ describe("the current turn's calls", () => {
           success: true,
           started_at: "2026-09-21T09:48:02Z",
           duration_ms: 300,
+          call_id: `done-${i}`,
         })),
-        running_call: running
-          ? { round: 9, name: "sandbox.run", arguments: "{}", started_at: "2026-09-21T09:51:31Z" }
-          : null,
+        running_calls: Array.from({ length: Number(running) }, (_, i) => ({
+          id: `run-${i}`,
+          round: 9,
+          name: i === 0 ? "sandbox.run" : `read.${i}`,
+          arguments: "{}",
+          started_at: "2026-09-21T09:51:31Z",
+        })),
       },
     }) as unknown as AgentRow;
 
-  // THE RUNNING CALL IS THE ROW THE CARD EXISTS FOR, so it is never the one cut.
-  test("keeps the running call and the newest calls before it, within the limit", () => {
+  // THE RUNNING CALLS ARE THE ROWS THE CARD EXISTS FOR, so an answered call is
+  // cut before any of them.
+  test("keeps the running calls and the newest calls before them, within the limit", () => {
     const rows = feedRows(row(8, true), 5);
     expect(rows).toHaveLength(5);
     expect(rows.map((r) => r.name)).toEqual([
@@ -187,6 +193,31 @@ describe("the current turn's calls", () => {
     ]);
     expect(rows.at(-1)?.running).toBe(true);
     expect(feedRows(row(8, false), 5).map((r) => r.name)[0]).toBe("tool.3");
+    // Three side by side: every one of them, and two answered calls.
+    const three = feedRows(row(8, 3), 5);
+    expect(three.map((r) => [r.name, r.running])).toEqual([
+      ["tool.6", false],
+      ["tool.7", false],
+      ["sandbox.run", true],
+      ["read.1", true],
+      ["read.2", true],
+    ]);
+    // More side by side than the card holds: the newest of them, and nothing
+    // answered.
+    expect(feedRows(row(8, 7), 5).map((r) => r.name)).toEqual([
+      "read.2",
+      "read.3",
+      "read.4",
+      "read.5",
+      "read.6",
+    ]);
+  });
+
+  // A CALL IS ONE ROW FOR ITS WHOLE LIFE: keyed by its own id running and
+  // answered alike, so the row a reader is watching is not replaced by another
+  // when its result lands.
+  test("keys a call by its own id, running and answered alike", () => {
+    expect(feedRows(row(1, 1)).map((r) => r.key)).toEqual(["call-done-0", "call-run-0"]);
   });
 
   test("reads each call's time and duration off the engine's own record", () => {

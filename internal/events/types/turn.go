@@ -148,18 +148,16 @@ type PromptSize struct {
 	// the same thing whichever CLI served the phase, and so a seat whose
 	// fallback chain moved it between CLIs is comparable with itself.
 	//
-	// SO IT IS A FLOOR, and the backend never sends exactly it: the
-	// `cli-agent` text backend renders those same definitions INDENTED,
-	// inside a fenced catalogue and followed by a response contract, and an
-	// executor's run reads them over the MCP bridge in its own vendor's
-	// wrapping. The
-	// same property ApproximateTokens' ratio has, for the same reason: a
-	// figure that changed shape with the CLI could not be compared across a
-	// chain or across builds, and comparison is what this row exists for.
+	// SO IT IS A FLOOR, and the backend never sends exactly it: every CLI
+	// lists those definitions over MCP — a phase on this host from its tool
+	// session, the executor's run in its box from the bridge — and hands
+	// them to its model in its own vendor's wrapping. The same property
+	// ApproximateTokens' ratio has, for the same reason: a figure that
+	// changed shape with the CLI could not be compared across a chain or
+	// across builds, and comparison is what this row exists for.
 	//
-	// ROUND ONE'S ARRAY. The tool loop re-reads the surface at the top of
-	// every round precisely so a mid-phase activate_tool is offered on the
-	// next call, so a phase that promotes three MCP tools sends more than
+	// THE OPENING ARRAY. A mid-phase activate_tool adds a tool the CLI lists
+	// from then on, so a phase that promotes three MCP tools sends more than
 	// this says.
 	ToolBytes int `json:"tool_bytes"`
 

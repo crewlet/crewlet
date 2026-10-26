@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -55,8 +57,8 @@ func TestTheExecutorLaunchesItsRunAndParks(t *testing.T) {
 	if launcher.launched() != 1 {
 		t.Fatalf("launched %d runs, want exactly 1", launcher.launched())
 	}
-	if len(prov.seen) != 0 {
-		t.Errorf("the launch made %d model calls of its own, want none", len(prov.seen))
+	if n := len(prov.allRuns()); n != 0 {
+		t.Errorf("the launch made %d model calls of its own, want none", n)
 	}
 	req := launcher.last(t)
 	if req.Surface == nil {
@@ -420,13 +422,13 @@ func TestAResumedAgentRunReportsWhatTheRunSubmitted(t *testing.T) {
 	r := agentFixture(t, &playLauncher{}, &runner.Resume{
 		State:  execstate.State{Version: execstate.Version, Round: 1},
 		Answer: "cloned the repo, fixed the failing test, opened the merge request",
-		Bridged: []toolloop.Execution{
-			{Name: "slack_post", Output: "posted"},
-			{Name: runner.SubmitWorkTool, Args: map[string]any{
+		Bridged: []runner.BridgedCall{
+			{Call: ledger.Call{Name: "slack_post", Result: "posted"}},
+			{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{
 				"outcome":    "delivered",
 				"summary":    "fixed the failing test and opened the MR",
 				"deliveries": []any{"slack_post"},
-			}},
+			}}},
 		},
 	})
 
@@ -461,7 +463,7 @@ func TestAnAgentRunThatNeverSubmittedIsRescued(t *testing.T) {
 	r := agentFixture(t, &playLauncher{}, &runner.Resume{
 		State:   execstate.State{Version: execstate.Version, Round: 1},
 		Answer:  "I had a look around and then ran out of turns",
-		Bridged: []toolloop.Execution{{Name: "slack_history", Output: "read"}},
+		Bridged: []runner.BridgedCall{{Call: ledger.Call{Name: "slack_history", Result: "read"}}},
 	})
 
 	w, _, err := r.Resume(context.Background(), nil)
@@ -490,15 +492,15 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 	r := agentFixture(t, &playLauncher{}, &runner.Resume{
 		State:  execstate.State{Version: execstate.Version, Round: 1},
 		Answer: "done",
-		Bridged: []toolloop.Execution{
-			{Name: "slack_post", Output: "posted"},
-			{Name: runner.SubmitWorkTool, Args: map[string]any{
+		Bridged: []runner.BridgedCall{
+			{Call: ledger.Call{Name: "slack_post", Result: "posted"}},
+			{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{
 				"outcome": "blocked", "summary": "could not reach the repo",
-			}},
-			{Name: runner.SubmitWorkTool, Args: map[string]any{
+			}}},
+			{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{
 				"outcome": "delivered", "summary": "posted after all",
 				"deliveries": []any{"slack_post"},
-			}},
+			}}},
 		},
 	})
 
@@ -511,6 +513,75 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 	}
 }
 
+// THE CORRECTION IS THE CALL MADE LAST, NOT THE ONE THAT FINISHED LAST. The
+// row holds a run's calls in the order they finished — each is appended once
+// it returns — and a CLI that makes calls at once finishes them in whatever
+// order their tools take. So the collection reads them in the order the bridge
+// admitted them, and states each with when it ran, for how long and who
+// answered, as the phase record of any other phase does.
+//
+// Mutation: replay and record the row's own order, and the draft the model
+// replaced is the turn's answer; drop the timing from the executions, and the
+// phase card cannot place the run's calls on a timeline.
+func TestARunIsRecordedInTheOrderItMadeItsCalls(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	started := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	draft := map[string]any{"outcome": "delivered", "summary": "posted the first draft",
+		"deliveries": []any{"slack_post"}}
+	correction := map[string]any{"outcome": "delivered", "summary": "posted after all",
+		"deliveries": []any{"slack_post"}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{
+		pub: pub,
+		resume: &runner.Resume{
+			State:  execstate.State{Version: execstate.Version, Round: 1},
+			Answer: "done",
+			// AS THE ROW HOLDS THEM: the correction returned first.
+			Bridged: []runner.BridgedCall{
+				{Call: ledger.Call{Name: "slack_post", Result: "posted"}, Seq: 1,
+					StartedAt: started, Duration: 1500 * time.Millisecond,
+					Origin: tools.OriginMCPPrefix + "slack", Server: "slack"},
+				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: correction, Result: "submitted"},
+					Seq: 3, StartedAt: started.Add(3 * time.Second), Duration: 10 * time.Millisecond,
+					Origin: tools.OriginBuiltin},
+				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: draft, Result: "submitted"},
+					Seq: 2, StartedAt: started.Add(2 * time.Second), Duration: 2 * time.Second,
+					Origin: tools.OriginBuiltin},
+			},
+		},
+	})
+
+	w, _, err := r.Resume(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if w.Outcome != turn.OutcomeDelivered || w.Summary != "posted after all" {
+		t.Errorf("outcome = %q, summary = %q: the draft made before the correction won "+
+			"because it finished after it", w.Outcome, w.Summary)
+	}
+	if len(w.Calls) != 3 || w.Calls[2].Args["summary"] != "posted after all" {
+		t.Errorf("calls = %+v, want the run's calls in the order it made them", w.Calls)
+	}
+
+	done := completedPhase(t, pub, "execute")
+	if len(done.ToolExecutions) != 3 {
+		t.Fatalf("tool_executions = %+v, want the run's three calls", done.ToolExecutions)
+	}
+	post, draftRow := done.ToolExecutions[0], done.ToolExecutions[1]
+	if post["name"] != "slack_post" || post["server"] != "slack" ||
+		post["origin"] != tools.OriginMCPPrefix+"slack" {
+		t.Errorf("the first execution is %v, want slack_post answered by the slack server", post)
+	}
+	if post["started_at"] != started.Format(time.RFC3339Nano) || post["duration_ms"] != 1500 {
+		t.Errorf("the first execution is timed %v for %v, want %s for 1500ms",
+			post["started_at"], post["duration_ms"], started.Format(time.RFC3339Nano))
+	}
+	if !strings.Contains(fmt.Sprint(draftRow["arguments"]), "first draft") ||
+		draftRow["duration_ms"] != 2000 {
+		t.Errorf("the second execution is %v, want the draft the run made second", draftRow)
+	}
+}
+
 // A MALFORMED SUBMISSION IS THE "SAID NOTHING" CASE, not a failed resume.
 //
 // The run happened and its other calls happened; losing the whole turn over a
@@ -520,9 +591,9 @@ func TestAMalformedSubmissionRescuesRatherThanFailing(t *testing.T) {
 	r := agentFixture(t, &playLauncher{}, &runner.Resume{
 		State:  execstate.State{Version: execstate.Version, Round: 1},
 		Answer: "did some things",
-		Bridged: []toolloop.Execution{
-			{Name: "slack_post", Output: "posted"},
-			{Name: runner.SubmitWorkTool, Args: map[string]any{"outcome": "teleported"}},
+		Bridged: []runner.BridgedCall{
+			{Call: ledger.Call{Name: "slack_post", Result: "posted"}},
+			{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{"outcome": "teleported"}}},
 		},
 	})
 
@@ -624,13 +695,13 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 		resume: &runner.Resume{
 			State:  execstate.State{Version: execstate.Version, Round: 1},
 			Answer: "cloned the repo, fixed the failing test, opened the merge request",
-			Bridged: []toolloop.Execution{
-				{Name: "slack_post", Output: "posted"},
-				{Name: runner.SubmitWorkTool, Args: map[string]any{
+			Bridged: []runner.BridgedCall{
+				{Call: ledger.Call{Name: "slack_post", Result: "posted"}},
+				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{
 					"outcome":    "delivered",
 					"summary":    "fixed the failing test and opened the MR",
 					"deliveries": []any{"slack_post"},
-				}},
+				}}},
 			},
 			Run: runner.RunRecord{
 				CodingAgent: "claude-code", SandboxID: "box-7",
@@ -696,7 +767,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{review: []llm.Completion{
+	prov := &scriptedProvider{review: []llmtest.Response{
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
 	}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})

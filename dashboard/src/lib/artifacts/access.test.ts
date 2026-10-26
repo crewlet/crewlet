@@ -23,6 +23,8 @@ const PERSON: ViewerState = {
   asking: false,
   configWriter: false,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
 };
 
 describe("a change to an artifact", () => {

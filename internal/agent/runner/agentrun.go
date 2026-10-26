@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -240,7 +242,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 // not. The launch decides which, once it knows which box it has.
 //
 // THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the asking run's —
-// the tools it had active, the skills the turn had loaded — and its calls so
+// the tools its launch had active, the skills the turn had loaded, and what
+// its bridged calls did to it since: every tool it activated and every skill
+// it loaded, which a run continuing its own session goes on calling ([Runner.
+// ReopenAgentRun] rebuilds a running run's the same way) — and its calls so
 // far are on the turn's call log already ([Runner.Resume] seeded it), so the
 // relaunched run's writes go on counting from them; the round's launch time
 // keeps accumulating from the instant the round first launched. No new phase
@@ -253,17 +258,25 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	began := time.Now()
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	var surface *tools.Surface
+	// A SUBMISSION CITES THE ASKING RUN'S CALLS TOO: the relaunched run is
+	// the same round, and the collection judges its submission against
+	// every call the round made ([Runner.resumeAgentRun]) — so the check it
+	// gets as it submits reads them as well, or a delivery made before the
+	// question would be refused here and accepted there.
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return turn.Record(history, calls(surface)) },
+			func() []ledger.Call {
+				return turn.Record(history, append(slices.Clone(logged), calls(surface)...))
+			},
 			func() turn.Surface { return describe(surface) }))
 	bridged := NewBridgedSpend()
 	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, state.Round, snapshot,
-		submit, state.ActiveTools, state.LoadedSkills...)
+		submit, replayedActive(state, logged), state.LoadedSkills...)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
+	r.observeLoads(logged)
 
 	system, user := r.executorPrompt(ctx, "", history, snapshot, built)
 	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
@@ -341,6 +354,88 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 	r.suspension = &Suspension{State: state}
 }
 
+// ReopenAgentRun rebuilds the tool surface an executor run's box is still
+// calling, for a node that has taken the run over while it works — this
+// process after a restart, or the seat's next holder — so the run's bridge
+// session can be opened again (internal/api/mcpbridge). It returns the
+// surface, and the meter the session's calls are counted on.
+//
+// FROM THE RUN'S OWN STATE, as [Runner.Resume] rebuilds a parked executor:
+// the surface its launch recorded — its active tools and the skills it had
+// loaded — and then what the run did to it since, read off the calls it made
+// over the bridge, every tool it activated and every skill it loaded. Rebuilt
+// from the launch's record alone, the box would find tools it had activated
+// gone and the tools a loaded skill unlocked refused again.
+//
+// AND ITS PLACE IN THE RUN. The turn's call log is seeded with its closed
+// rounds and every call the run has made over the bridge, so a call made from
+// here counts its repeats from the whole run and derives the operation id the
+// run's own process would have; a submission cites those calls as well as the
+// ones made from here; and the meter starts from what the row says the run's
+// bridged calls have cost so far ([NewBridgedSpendFrom]). spent is that total
+// and bridged the row's calls, in any order.
+//
+// It launches nothing and parks nothing: the run is going already, and its
+// collection resumes the turn as it would have. THE SUBMISSION IT CAPTURES IS
+// NEVER READ, exactly as the launch's is not when the run is collected in
+// another process: the collection replays submit_work from the run's durable
+// log ([Runner.resumeAgentRun]).
+func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
+	bridged []BridgedCall, spent Bridged,
+) (*tools.Surface, *BridgedSpend, error) {
+	history := state.Iterations
+	called := bridgedLedger(inAdmissionOrder(bridged))
+	seedCalls(r.cfg.Turn.Context.CallLog(), history, called)
+
+	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
+	var surface *tools.Surface
+	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
+		decodeWork(r.cfg.Reply,
+			func() []ledger.Call {
+				return turn.Record(history, append(slices.Clone(called), calls(surface)...))
+			},
+			func() turn.Surface { return describe(surface) }))
+
+	meter := NewBridgedSpendFrom(spent)
+	built, err := r.surfaceWith(ctx, r.meterFor(meter), phase.Execute, state.Round, snapshot, submit,
+		replayedActive(state, called), state.LoadedSkills...)
+	if err != nil {
+		return nil, nil, err
+	}
+	surface = built
+	r.observeLoads(called)
+	return surface, meter, nil
+}
+
+// replayedActive is the tools a run's surface holds once its bridged calls
+// are replayed onto the one its launch recorded: those, and every tool a
+// successful activation named.
+func replayedActive(state execstate.State, called []ledger.Call) []string {
+	active := slices.Clone(state.ActiveTools)
+	for _, call := range called {
+		if call.Name == ActivateTool && !call.Failed {
+			active = append(active, activationTarget(call.Args))
+		}
+	}
+	return active
+}
+
+// observeLoads tells the guard the surface was just armed with every skill a
+// run's bridged calls loaded, by the guard's own reading of a call — the one
+// rule for which call unlocks what. Called once the surface is built, because
+// whether a guard is armed at all depends on the loader being active, which an
+// activation over the bridge may be what made it.
+func (r *Runner) observeLoads(called []ledger.Call) {
+	r.mu.Lock()
+	guard := r.guard
+	r.mu.Unlock()
+	for _, call := range called {
+		if !call.Failed {
+			guard.Observe(call.Name, call.Args)
+		}
+	}
+}
+
 // frozen is the turn-start context a runner builds every launch's prompt from,
 // as a park carries it: the blocks' rendered text and the prior-turns block —
 // what [Runner.executorPrompt] reads of them, and nothing else.
@@ -383,9 +478,10 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
 // a delivery inferred from the prose the CLI happened to end with.
 //
 // `history` is the turn's closed rounds, which its submission's citations read
-// beside the run's own calls — see [turn.Record].
+// beside the run's own calls — see [turn.Record] — and `bridged` the run's
+// calls in the order the bridge admitted them ([inAdmissionOrder]).
 func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
-	state execstate.State, answer string, bridged []toolloop.Execution,
+	state execstate.State, answer string, bridged []BridgedCall,
 ) (turn.Work, turn.Surface, error) {
 	// THIS SEGMENT'S START, which the collection's record states as its
 	// started_at: a start read off neither segment would put the record at
@@ -395,7 +491,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// record of the box it ran in. See types.AgentPhaseCompleted.
 	began := time.Now()
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
-	logged := ledgerCalls(bridged)
+	logged := bridgedLedger(bridged)
 
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
@@ -458,10 +554,15 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // the run spent is the run's own fact, on the `sandbox` record its collection
 // publishes, and repeating it here would charge every rollup twice.
 //
+// EACH CALL WITH ITS TIMING AND WHO ANSWERED IT, as the bridge recorded them,
+// in the order the run made them: the bridge is where a run's calls are
+// measured, since they ran inside the CLI's own loop and not one of the
+// engine's.
+//
 // THE MEMBER THAT RAN IT is the record's entry and model: the launch picked it
 // from the seat's executor chain, so the chain's head is not an answer, and a
 // record naming nobody files the run's spend under no provider.
-func agentRunResult(answer string, bridged []toolloop.Execution, run RunRecord,
+func agentRunResult(answer string, bridged []BridgedCall, run RunRecord,
 	launchedAt, answered time.Time,
 ) phaseResult {
 	res := toolloop.Result{
@@ -476,8 +577,12 @@ func agentRunResult(answer string, bridged []toolloop.Execution, run RunRecord,
 		}}
 	}
 	for _, call := range bridged {
-		call.Round = runRound
-		res.Executions = append(res.Executions, call)
+		res.Executions = append(res.Executions, toolloop.Execution{
+			Round: runRound, Name: call.Name, Args: call.Args,
+			Output: call.Result, Failed: call.Failed,
+			StartedAt: call.StartedAt, Duration: call.Duration,
+			Origin: call.Origin, Server: call.Server,
+		})
 	}
 	if strings.TrimSpace(answer) != "" {
 		// The run's own last word, on the round its calls are on, so the
@@ -496,12 +601,25 @@ func agentRunResult(answer string, bridged []toolloop.Execution, run RunRecord,
 // under the call that spawned them.
 const runRound = 1
 
+// inAdmissionOrder is a run's bridged calls in the order the bridge admitted
+// them — the order the CLI made them in — where the row holds them in the
+// order they FINISHED: each is appended once it returns, and a CLI that makes
+// several calls at once finishes them in whatever order their tools take. The
+// record states the order the run acted in, and the replay below reads a
+// submission made after another as the correction, whichever returned first.
+// Stable, so calls the row carries no place for keep the row's order.
+func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
+	out := slices.Clone(bridged)
+	slices.SortStableFunc(out, func(a, b BridgedCall) int { return cmp.Compare(a.Seq, b.Seq) })
+	return out
+}
+
 // replaySubmission feeds the run's own submit_work call back through a fresh
 // submission tool, so the outcome the CLI declared is the one the turn reports.
 //
 // LAST WRITE WINS, which is the submission contract everywhere else: a second
-// call is a correction, and replaying in order is what makes that true here
-// too. A call the decoder rejects is skipped rather than failing the resume —
+// call is a correction, and replaying in the order the run made its calls is
+// what makes that true here too. A call the decoder rejects is skipped rather than failing the resume —
 // the run happened, its other calls happened, and a malformed submission is
 // exactly the "said nothing" case the rescue path exists for.
 func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []ledger.Call) {

@@ -68,15 +68,31 @@ type bridgeGap struct {
 }
 
 // bridgeGaps is every cell the company's executors launch in whose boxes this
-// node's tool bridge does not reach: all of them where the node binds no
-// listener, and otherwise each cell [mcpbridge.Bridge.Reaches] has no address
-// for — a `direct` box dials the node's own listener on loopback, and a box in
-// any other cell needs [mcpbridge.BaseURLVar].
+// node's tool bridge does not reach.
+//
+// THE FLEET'S REACH RULE ([mcpbridge.Bridge.Join]): a box dials a node that
+// serves the bridge's route, and that node relays the call to whichever node
+// holds the run's seat. So:
+//
+//   - offline is a node that serves the API with no listener (an ingress node
+//     on api.port 0): it serves no route and joins no relay, so nothing
+//     reaches a session it opens, in any cell, whatever else is set;
+//   - with no bridge at all, nothing gives a box an address — not the fleet's
+//     ([mcpbridge.BaseURLVar]), and not this node's own listener, which only
+//     a node serving the API has;
+//   - otherwise a cell is reached where [mcpbridge.Bridge.Reaches] has an
+//     address for it: a `direct` box dials the node's own listener on
+//     loopback where it serves the route, and every cell dials the fleet's
+//     address where the variable gives one.
+//
+// A node WITHOUT the ingress role on api.port 0 is no gap: it binds nothing
+// and needs nothing bound, because its boxes reach it through an ingress
+// node's relay.
 //
 // THE CELLS THE SEATS' BOXES ARE PLACED IN ([config.Company.SeatBoxes]), and
 // not the catalogue's default alone: a fallback member's `run_in` is a cell a
 // launch reaches too, and the one an operator forgets.
-func bridgeGaps(cfg *config.Company, listens bool, bridge *mcpbridge.Bridge) []bridgeGap {
+func bridgeGaps(cfg *config.Company, offline bool, bridge *mcpbridge.Bridge) []bridgeGap {
 	var gaps []bridgeGap
 	at := map[config.Placement]int{}
 	for box := range cfg.SeatBoxes() {
@@ -90,19 +106,20 @@ func bridgeGaps(cfg *config.Company, listens bool, bridge *mcpbridge.Bridge) []b
 		}
 		var fix string
 		switch {
-		case !listens:
-			fix = "this node binds no HTTP listener (api.port is 0), so it serves no " +
-				"tool bridge at all: set api.port on this node"
+		case offline:
+			fix = "this node serves the API with api.port 0, so it binds no listener for " +
+				"the bridge's route and nothing relays a box's call to it: set api.port on " +
+				"this node"
+		case bridge == nil:
+			fix = "this node has no tool bridge a box can dial: set " + mcpbridge.BaseURLVar +
+				" to the fleet's address a box reaches (any node that serves the API, or a " +
+				"load balancer in front of them)"
 		case bridge.Reaches(box.Cell == config.PlacementDirect) != "":
 			continue
-		case box.Cell == config.PlacementDirect:
-			fix = "a direct box dials this node's own listener on loopback, and this " +
-				"engine was given none to dial: set " + mcpbridge.BaseURLVar +
-				" to a URL this host reaches the node at"
 		default:
 			fix = "a box in this cell is not on this node's host, so it cannot dial the " +
-				"node's loopback: set " + mcpbridge.BaseURLVar + " to a URL that box " +
-				"reaches this node at"
+				"node's loopback: set " + mcpbridge.BaseURLVar + " to the fleet's address " +
+				"that box reaches"
 		}
 		at[box.Cell] = len(gaps)
 		gaps = append(gaps, bridgeGap{cell: box.Cell, seat: box.Seat.Handle, seats: 1, fix: fix})
@@ -123,16 +140,17 @@ func bridgeGaps(cfg *config.Company, listens bool, bridge *mcpbridge.Bridge) []b
 // come.
 //
 // ONLY ON A NODE THAT RUNS SEATS, because a launch happens only there: a node
-// without the role opens no session and serves no bridge, and a line telling
-// it to would be about its peers' setting, read on the wrong node.
+// without the role launches no run and opens no session of its own — at most
+// it relays a box's call to the seat's holder — and a line telling it to set
+// what a launch needs would be about its peers' runs, read on the wrong node.
 func (e *Engine) reportBridgeGaps(ctx context.Context, logger *slog.Logger,
 	target coord.Activation, cfg *config.Company,
 ) {
 	if !e.profile.RunsSeats() {
 		return
 	}
-	listens := e.boot == nil || e.boot.API.Port != 0
-	for _, gap := range bridgeGaps(cfg, listens, e.bridge) {
+	offline := e.boot != nil && e.boot.API.Port == 0 && e.profile.RunsIngress()
+	for _, gap := range bridgeGaps(cfg, offline, e.bridge) {
 		logger.LogAttrs(ctx, slog.LevelWarn, "executor_bridge_unreachable",
 			slog.String("revision", target.RevisionID),
 			slog.Int64("epoch", target.Epoch),

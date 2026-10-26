@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"sync"
@@ -12,7 +13,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -67,27 +67,32 @@ type run struct {
 // call is one bridged call, for a [run]'s script.
 func call(t *testing.T, name, argsJSON string) llm.ToolCall {
 	t.Helper()
-	return submitCall(t, name, argsJSON).ToolCalls[0]
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		t.Fatalf("fixture is not JSON: %v", err)
+	}
+	return llm.ToolCall{Name: name, Arguments: args}
 }
 
-// play performs r against the surface a launch was handed, call by call
-// through [tools.Surface.Execute] — the frame the bridge dispatches every
-// bridged call through — and returns what the bridge's durable log holds for
-// it: each call's name, arguments, answer and whether it failed, and the
-// bridge's measurement of it — when it started, how long it took and who
-// answered.
-func play(t *testing.T, req runner.AgentRunRequest, r run) []toolloop.Execution {
+// play performs r against the surface a launch was handed, call by call as
+// the bridge dispatches every bridged call — admitted to its place in the
+// run's call log ([tools.Surface.Admit]), then run — and returns what the
+// bridge's durable log holds for it: each call's name, arguments, answer and
+// whether it failed, its place in the order the bridge admitted the run's
+// calls, and the bridge's measurement of it — when it started, how long it
+// took and who answered.
+func play(t *testing.T, req runner.AgentRunRequest, r run) []runner.BridgedCall {
 	t.Helper()
-	out := make([]toolloop.Execution, 0, len(r.calls))
-	for _, c := range r.calls {
+	out := make([]runner.BridgedCall, 0, len(r.calls))
+	for i, c := range r.calls {
 		began := time.Now()
-		res, err := req.Surface.Execute(context.Background(), c)
+		res, err := req.Surface.Admit(c.Name, c.Arguments)(context.Background(), c)
 		if err != nil {
 			t.Fatalf("bridged %s: %v", c.Name, err)
 		}
-		out = append(out, toolloop.Execution{
-			Name: c.Name, Args: c.Arguments, Output: res.Output, Failed: res.Failed,
-			StartedAt: began.UTC(), Duration: time.Since(began),
+		out = append(out, runner.BridgedCall{
+			Call: ledger.Call{Name: c.Name, Args: c.Arguments, Result: res.Output, Failed: res.Failed},
+			Seq:  i + 1, StartedAt: began.UTC(), Duration: time.Since(began),
 			Origin: res.Origin, Server: res.Server,
 		})
 	}
@@ -129,7 +134,7 @@ func launch(t *testing.T, entries []phase.Entry, opts buildOpts, round int, note
 // bridge's log of what the run called, the run's closing text, and record as
 // the run's own account of where it ran.
 func collect(t *testing.T, entries []phase.Entry, opts buildOpts, launched *runner.Runner,
-	history []ledger.Iteration, bridged []toolloop.Execution, text string, record runner.RunRecord,
+	history []ledger.Iteration, bridged []runner.BridgedCall, text string, record runner.RunRecord,
 ) (*runner.Runner, turn.Work, turn.Surface) {
 	t.Helper()
 	parked, ok := launched.Suspended()
@@ -165,54 +170,6 @@ func executeRound(t *testing.T, entries []phase.Entry, opts buildOpts, round int
 	opts.launcher = nil
 	collector, work, surface := collect(t, entries, opts, launching, history, bridged, r.text, record)
 	return collected{work: work, surface: surface, launch: req, collector: collector}
-}
-
-// A REBUILT BRIDGE SURFACE COUNTS THE RUN'S CALLS BEFORE IT, AND OFFERS WHAT
-// THE RUN HAD ACTIVE. A node that lost a running job's bridge session rebuilds
-// it from the park, and the box's next write derives its operation id from how
-// many calls to that tool came before — so a count restarted at the rebuild
-// would hand a new write an earlier one's id, answered as a retry of work
-// already done. And a tool the run activated before the restart is one it
-// goes on calling.
-//
-// Mutation: drop the seeding and the post after the rebuild counts none
-// before it; rebuild on the executor's plan rather than the park's active set
-// and the activated tool is gone.
-func TestARebuiltBridgeSurfaceCarriesOnFromTheRunsCalls(t *testing.T) {
-	t.Parallel()
-	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
-	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
-	bridged := play(t, req, run{calls: []llm.ToolCall{
-		activate("slack_post"),
-		call(t, "slack_post", `{"text":"first"}`),
-	}})
-	parked, ok := launched.Suspended()
-	if !ok {
-		t.Fatal("the launch recorded no state")
-	}
-	// The park as a restart reads it: off the row, after the activation.
-	parked.State.ActiveTools = req.Surface.Active()
-
-	// A FRESH LOG, as the engine hands every turn it rebuilds one: what it
-	// holds is what the rebuild seeds.
-	rebuilder, _ := buildWith(t, entries, buildOpts{
-		calls:  turnctx.NewCallLog(),
-		resume: &runner.Resume{State: parked.State, Bridged: bridged},
-	})
-	surface, meter, err := rebuilder.BridgeSurface(context.Background())
-	if err != nil || surface == nil || meter == nil {
-		t.Fatalf("BridgeSurface = %v, %v, %v", surface, meter, err)
-	}
-	if !slices.Contains(surface.Active(), "slack_post") {
-		t.Errorf("the rebuilt surface offers %v, want the tool the run had activated", surface.Active())
-	}
-	if !slices.Contains(surface.Active(), runner.SubmitWorkTool) {
-		t.Errorf("the rebuilt surface offers %v, want the submission", surface.Active())
-	}
-	if got := surface.Turn().CallLog().Ordinal(context.Background(), "slack_post",
-		map[string]any{"text": "second"}); got != 1 {
-		t.Errorf("a post after the rebuild counts %d earlier posts, want the run's one", got)
-	}
 }
 
 // A PERSON'S ANSWER CARRIES THE RUN ON; IT IS NEVER THE RUN'S REPORT. A run
@@ -271,9 +228,58 @@ func TestAnAnswerCarriesTheRunOnRatherThanReportingIt(t *testing.T) {
 	if !slices.Contains(again.Surface.Active(), "slack_post") {
 		t.Errorf("the carried-on run is offered %v, want the tool it had active", again.Surface.Active())
 	}
-	if got := again.Surface.Turn().CallLog().Ordinal(context.Background(), "slack_post",
+	if got := again.Surface.Turn().CallLog().Ordinal("slack_post",
 		map[string]any{"text": "the fix is on main"}); got != 1 {
 		t.Errorf("a post after the answer counts %d earlier posts, want the one before the question", got)
+	}
+}
+
+// A CARRIED-ON RUN IS SERVED THE SURFACE THE ASKING RUN LEFT, and may cite
+// what it delivered. The run that asked activated tools and made deliveries
+// over the bridge after its launch recorded the park, and the run carrying it
+// on — the same round, often the same CLI session — goes on calling those
+// tools and reports those deliveries. Rebuilt from the launch's record alone,
+// a tool it activated was refused as inactive; judged against the relaunch's
+// own calls alone, its submission citing a delivery made before the question
+// was refused as it was made, though the collection accepts it.
+//
+// Mutation: rebuild the relaunch's surface from the park's active list alone,
+// or leave the asking run's calls out of the submission's record, and this
+// goes red.
+func TestACarriedOnRunKeepsWhatTheAskingRunDid(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	before := play(t, req, run{calls: []llm.ToolCall{activate("slack_post"),
+		call(t, "slack_post", `{"text":"posted the summary"}`)}})
+	// THE PARK AS THE LAUNCH WROTE IT: before the run activated anything.
+	parked, ok := launched.Suspended()
+	if !ok {
+		t.Fatal("the launch recorded no state")
+	}
+	if slices.Contains(parked.State.ActiveTools, "slack_post") {
+		t.Fatal("the park already holds the activation, so this case proves nothing")
+	}
+
+	relauncher := &playLauncher{}
+	collector, _ := buildWith(t, entries, buildOpts{
+		calls: turnctx.NewCallLog(), launcher: relauncher,
+		resume: &runner.Resume{State: parked.State, Bridged: before,
+			Asked: &runner.Asked{Question: "which channel?", Answer: "#eng", BoxKept: true,
+				SessionID: "sess-ask"}},
+	})
+	if _, _, err := collector.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	again := relauncher.last(t)
+	if !slices.Contains(again.Surface.Active(), "slack_post") {
+		t.Errorf("the carried-on run is offered %v, want the tool the asking run activated",
+			again.Surface.Active())
+	}
+	cited := play(t, again, run{calls: []llm.ToolCall{call(t, runner.SubmitWorkTool,
+		`{"outcome":"delivered","summary":"posted to #eng","deliveries":["slack_post"]}`)}})
+	if cited[0].Failed {
+		t.Errorf("a submission citing the asking run's delivery was refused: %s", cited[0].Result)
 	}
 }
 

@@ -592,26 +592,33 @@ type RunRequest struct {
 	// Brief is the task: the prompt the CLI runs, and nothing standing.
 	Brief string
 
-	// ResumeSession is the CLI's own conversation the run CONTINUES, with
-	// Brief as its next prompt — Claude Code's `--resume <id>`, OpenCode's
-	// `--session <id>` — where the job before it in this box parked on a
-	// person's question and the answer has come. Empty starts a new one.
+	// Resume is the CLI's own session the run CONTINUES, as an earlier run in
+	// the same box reported it ([Result.SessionID]): the conversation, its
+	// tool results and its working files are where that run left them, and
+	// Brief is its next message — Claude Code's `--resume <id>`, OpenCode's
+	// `--session <id>`. A seat's job sets it where the job before it in this
+	// box parked on a person's question and the answer has come; the
+	// assistant's deep work, where its run parked on a proposal and the
+	// approval has come. Empty starts a new session.
 	//
 	// THE CLI'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
 	// knew what it had read, tried and decided, and a fresh conversation
 	// told only the question and the answer starts that work again. It holds
-	// only in the box the session lives in, which is why the launch sets it
-	// only where the job continues in the asking job's box
-	// ([LaunchRequest.Continue]).
-	ResumeSession string
+	// only in the box the session lives in, which is why a seat's launch
+	// sets it only where the job continues in the asking job's box
+	// ([LaunchRequest.Continue]). A runner whose CLI cannot continue a
+	// session refuses a run that asks it to, rather than start a new
+	// conversation its caller believes is the old one.
+	Resume string
 
 	Env    map[string]string
 	Limits Limits
 
 	// Model is the model the run works under, written in the grammar of the
 	// CLI the runner drives: the seat's providers.llm entry's model exactly
-	// as its text calls hand it to that same CLI, which is the only CLI the
-	// engine lets reach this runner. Empty leaves the agent's own choice.
+	// as its runs on the engine host hand it to that same CLI, which is the
+	// only CLI the engine lets reach this runner. Empty leaves the agent's
+	// own choice.
 	//
 	// NO ENDPOINT AND NO KEY: an entry talks to its CLI's own vendor, and its
 	// sign-in rides the run env, so nothing secret is written into a file

@@ -127,7 +127,7 @@ func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 	if !strings.Contains(system, "how do I rotate the signing key?") {
 		t.Fatalf("a source's question is not in the instructions:\n%s", system)
 	}
-	if len(m.asked[0].Tools) != 0 {
+	if m.asked[0].Tools != nil {
 		t.Fatal("a rewrite offers no tools")
 	}
 	// WHAT THE NOTE PROMISES, THE MODEL IS TOLD. Every rewrite is announced

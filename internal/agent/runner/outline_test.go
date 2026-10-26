@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // chatTask is a chat trigger's body as internal/notify renders it, with the
@@ -61,7 +62,7 @@ func TestThePromptsAPhaseSendsCarryTheirOutlines(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	prov := &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","final_artifact":"a"}`)},
 	}
 	entries := []phase.Entry{{Key: "default", Provider: prov}}

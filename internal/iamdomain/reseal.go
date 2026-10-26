@@ -57,23 +57,12 @@ type SealedCount struct {
 
 // Outside is how many of the people's values are sealed under a key other
 // than active — what a rekey would move.
-func (c SealedCount) Outside(active string) int { return outside(c.People, active) }
+func (c SealedCount) Outside(active string) int { return secrets.KeyCounts(c.People).Outside(active) }
 
 // InvitationsOutside is how many live invitations' addresses are sealed under
 // a key other than active — what a rotation waits out rather than moves.
 func (c SealedCount) InvitationsOutside(active string) int {
-	return outside(c.Invitations, active)
-}
-
-// outside sums a per-key count over every key but active.
-func outside(byKey map[string]int, active string) int {
-	n := 0
-	for key, count := range byKey {
-		if key != active {
-			n += count
-		}
-	}
-	return n
+	return secrets.KeyCounts(c.Invitations).Outside(active)
 }
 
 // SealedKeys counts the sealed values this node's rows hold that anything
@@ -109,34 +98,13 @@ func (r *Reader) SealedKeys(ctx context.Context, now time.Time) (SealedCount, er
 			if q.what == "invitations" {
 				args = append(args, millis(now))
 			}
-			if err := countKeys(ctx, tx, q.sql, q.into, args...); err != nil {
+			if err := secrets.CountKeys(ctx, tx, q.sql, q.into, args...); err != nil {
 				return fmt.Errorf("iamdomain: count the sealed %s: %w", q.what, err)
 			}
 		}
 		return nil
 	})
 	return out, err
-}
-
-// countKeys adds every envelope one query answers to a count by key id.
-func countKeys(ctx context.Context, tx *sql.Tx, query string, into map[string]int,
-	args ...any) error {
-
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var sealed []byte
-		if err := rows.Scan(&sealed); err != nil {
-			return err
-		}
-		if key, ok := secrets.EnvelopeKeyID(string(sealed)); ok {
-			into[key]++
-		}
-	}
-	return rows.Err()
 }
 
 // ResealReport is what one pass over the estate moved.

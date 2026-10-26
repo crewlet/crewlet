@@ -44,12 +44,14 @@
 //     objstore.RecordWithin, which is shorter than the grace by more than
 //     any two nodes' clocks disagree — so a key past the grace is one no
 //     write can name any more, however late a record arrives.
-//   - No declared table names it in an estate that is CURRENT — the pass
-//     first waits for everything each domain's log had committed when it
-//     started ([Source.Barrier]) — and COMPLETE: a record this node could not
-//     decode might be the one naming the object, so a pass that meets one
-//     stops judging. What it deleted before is reported beside why it
-//     stopped.
+//   - No declared table names it in an estate that is CURRENT and COMPLETE.
+//     Current: before it judges its first object, the pass waits for
+//     everything each domain's log had committed by then, and so by the
+//     moment it started ([Source.Barrier]). A pass with nothing past the
+//     grace takes no barrier and writes nothing to any log. Complete: a
+//     record this node could not decode might be the one naming the
+//     object, so a pass that meets one stops judging. What it deleted
+//     before is reported beside why it stopped.
 //
 // THE GRACE IS AN UPLOAD'S, NEVER A REPLACED VERSION'S. Both instants date
 // the object's upload, and nothing records when a row stopped naming it: an
@@ -397,21 +399,41 @@ func (c *Collector) Collect(ctx context.Context) (CollectionReport, error) {
 	return r, err
 }
 
+// errPin stops a pass whose estate could not be brought current: it judges
+// nothing, and reports why beside what it had deleted before.
+type errPin struct{ err error }
+
+func (e errPin) Error() string { return e.err.Error() }
+func (e errPin) Unwrap() error { return e.err }
+
 // errIncomplete stops a pass that met an estate it cannot call complete.
 var errIncomplete = errors.New("a record this node could not apply may refer to objects in the store")
 
 func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff time.Time) error {
-	v, err := c.opts.References.pin(ctx)
-	if err != nil {
-		r.Skipped = err.Error()
-		return err
-	}
-	var batch []objstore.Key
+	// THE ESTATE IS PINNED AT THE FIRST JUDGEMENT, not before the listing:
+	// a pass that finds nothing past the grace decides nothing, and a
+	// barrier it took anyway would be a record on every domain's log each
+	// hour, and on every log a node boots with, written for no reader. A
+	// pin taken after the listing began is still at least as new as the
+	// moment the pass began, which is all the rule asks: every name a key
+	// past the grace will ever have was written before then.
+	var (
+		v      view
+		pinned bool
+		batch  []objstore.Key
+	)
 	judge := func() error {
 		if len(batch) == 0 {
 			return nil
 		}
 		defer func() { batch = batch[:0] }()
+		if !pinned {
+			at, perr := c.opts.References.pin(ctx)
+			if perr != nil {
+				return errPin{perr}
+			}
+			v, pinned = at, true
+		}
 		refs, complete, rerr := c.opts.References.referenced(ctx, batch, v)
 		if rerr != nil {
 			return rerr
@@ -432,7 +454,7 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		return nil
 	}
 	backend := c.opts.Store.Backend()
-	err = backend.List(ctx, func(info objstore.Info) error {
+	err := backend.List(ctx, func(info objstore.Info) error {
 		// THE GRAMMAR IS READ HERE, not by the backend: see the package
 		// doc for the two kinds of name.
 		k, ours := keyNamed(info.Name)
@@ -460,6 +482,10 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		if jerr := judge(); jerr != nil {
 			err = errors.Join(err, jerr)
 		}
+	}
+	if pe := (errPin{}); errors.As(err, &pe) {
+		r.Skipped = pe.err.Error()
+		return pe.err
 	}
 	if errors.Is(err, errIncomplete) {
 		r.Skipped = err.Error()

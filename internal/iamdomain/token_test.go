@@ -212,8 +212,9 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 // Now the id comes from the principal the writer was derived for. Mutations:
 // decide the person arm on anything but the party's id and the Tier A party
 // mints; drop the person arm and the administrator mints; drop the
-// machine-token refusal and jane's own token mints another; drop the machine
-// arm and a party without admin mints for a pipeline.
+// machine-token refusal and jane's own token mints another; read the token's
+// name rather than its class and a malformed one does; drop the machine arm
+// and a party without admin mints for a pipeline.
 func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -267,6 +268,15 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 		t.Errorf("jane's own machine token minting another answered %v, want "+
 			"a refusal", err)
 	}
+	// AND NOT THROUGH AN ID OF THE TOKEN'S CLASS this build cannot parse:
+	// the class decides, never the spelling, or the person arm mints as jane.
+	malformed := *rig.writer.As(throughToken)
+	malformed.OperatorID = iam.MachineTokenPrefix + "x"
+	if _, _, err := mintFor(t, rig, &malformed,
+		iamdomain.TokenMint{PersonID: owner}); !errors.Is(err, iamdomain.ErrRefused) {
+		t.Errorf("an operator id of the token's class minting another answered "+
+			"%v, want a refusal", err)
+	}
 
 	// A SERVICE ACCOUNT: the administrator mints for it, and a party
 	// without admin may not.
@@ -293,6 +303,56 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 		Grants:   []iam.Grant{iam.GrantWorklet}}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("a party without %s minting for a service account answered "+
 			"%v, want a refusal", iam.GrantAdmin, err)
+	}
+}
+
+// A TOKEN IS NEVER MINTED THROUGH THE ASSISTANT.
+//
+// A person's token is theirs alone to mint, decided on the party's own id, and
+// the Dashboard Assistant is composed as its person: without a lock of its
+// own, a turn could mint a credential acting as them that a model is one step
+// from holding. So a mint whose operator is an assistant grant, composed
+// through [iamdomain.Writer.As] as the request path composes one, is refused
+// [iamdomain.ErrAssistRefused] (wrapping [iamdomain.ErrRefused]) and so is one
+// whose operator merely names the assistant's class; nothing is minted. The
+// CONTROL is jane at her own keyboard, whose mint lands. Mutation: drop the
+// assistant's lock from mayMintFor and the person arm mints for it.
+func TestATokenIsNeverMintedThroughTheAssistant(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	owner := tokenOwner(t, rig, "jane.doe")
+	keyboard := iam.Principal{
+		ID: uuid.MustParse(owner), Kind: iam.KindPerson, Login: "jane.doe",
+		Stage: iam.StageActive, Grants: iam.AllGrants,
+	}
+	composed := keyboard
+	composed.Via = iam.AssistName(uuid.Must(uuid.NewV7()))
+	composed.AssistScope = iam.AssistScopeExec
+	malformed := *rig.writer.As(keyboard)
+	malformed.OperatorID = iam.AssistPrefix + "x"
+	for through, w := range map[string]*iamdomain.Writer{
+		"an assistant grant":             rig.writer.As(composed),
+		"an id of the assistant's class": &malformed,
+	} {
+		if _, _, err := mintFor(t, rig, w, iamdomain.TokenMint{
+			PersonID: owner}); !errors.Is(err, iamdomain.ErrAssistRefused) ||
+			!errors.Is(err, iamdomain.ErrRefused) {
+			t.Errorf("a mint through %s answered %v, want %v wrapping %v", through,
+				err, iamdomain.ErrAssistRefused, iamdomain.ErrRefused)
+		}
+	}
+	held, err := rig.reader(t).Credentials(t.Context(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens := slices.DeleteFunc(held, func(c iamdomain.CredentialRow) bool {
+		return c.Method != iamdomain.MethodToken
+	}); len(tokens) != 0 {
+		t.Errorf("the refused mints left %d tokens on jane's account", len(tokens))
+	}
+	if _, _, err := mintFor(t, rig, rig.writer.As(keyboard), iamdomain.TokenMint{
+		PersonID: owner}); err != nil {
+		t.Errorf("jane at her own keyboard could not mint her token: %v", err)
 	}
 }
 

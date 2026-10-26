@@ -45,7 +45,7 @@ func starting(t *testing.T, models *phase.Registry) (*Engine, *pub) {
 	// carries no start — these cases' literal run ids carry none — rebases
 	// there (rebase.go), and an engine with nowhere to record that refuses
 	// the turn rather than guess.
-	e := &Engine{backends: &Backends{Queue: p, Fleet: coordmem.NewFleet()}}
+	e := withSessions(t, &Engine{backends: &Backends{Queue: p, Fleet: coordmem.NewFleet()}})
 	e.epoch.current.Store(&Company{
 		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
 		Models: models,

@@ -172,8 +172,8 @@ func TestTheJudgeIsShownTheEvidence(t *testing.T) {
 	}
 	// No tools: a tool on the surface invites a model to call it and
 	// answer nothing, and there is none this pass could use.
-	if len(model.seen.Tools) != 0 {
-		t.Errorf("the judge was offered %d tools", len(model.seen.Tools))
+	if model.seen.Tools != nil {
+		t.Error("the judge was offered tools")
 	}
 }
 

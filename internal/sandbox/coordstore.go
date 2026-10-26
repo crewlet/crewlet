@@ -186,9 +186,8 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The turn's cap is the turn's, the same on every launch of it —
 		// written anyway, so the row says what this launch was told.
 		existing.Deadline = run.Deadline
-		// THIS job's bridge session, which replaced the previous job's:
-		// the box that job ran in dials a session nothing serves any more.
-		existing.LaunchNode, existing.BridgeNonce = run.LaunchNode, run.BridgeNonce
+		// THIS job's node, which may not be the previous job's.
+		existing.LaunchNode = run.LaunchNode
 		// A hold was on the previous job's resume, which is over.
 		existing.HeldFor, existing.HeldUntil = "", time.Time{}
 		if fence.Fenced() {

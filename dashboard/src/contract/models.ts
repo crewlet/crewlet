@@ -42,7 +42,7 @@ export const EXECUTOR_CLI_AGENTS = ["claude-code", "opencode"] as const;
 /** An entry's `auth.mode` when it names none. */
 export const DEFAULT_CLI_AUTH_MODE: CLIAuthMode = "subscription";
 
-/** The wall-clock cap on one CLI invocation when `timeout_seconds` is unset. */
+/** The wall-clock cap on one stretch of a CLI's own work — no tool call in flight — when `timeout_seconds` is unset. */
 export const DEFAULT_CLI_TIMEOUT_SECONDS = 600;
 
 /** How many CLI processes an entry runs at once when `max_concurrent` is unset. */

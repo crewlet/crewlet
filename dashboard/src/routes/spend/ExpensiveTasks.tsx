@@ -27,12 +27,20 @@
  */
 
 import { SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
-import { Card, EmptyState, Skeleton, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyState,
+  Skeleton,
+  TableKeyCell,
+  TableNumberCell,
+  peekRowActivation,
+  TimeRangePicker,
+} from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
-import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -42,7 +50,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, accessNames } from "~/lib/access.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { WorkSummary } from "~/protocol/types.ts";
 import { useMemo } from "react";
 import {
@@ -201,7 +209,7 @@ export function ExpensiveTasks() {
     return (
       <>
         <PageActions>
-          <TimeRangePicker range={range} ariaLabel="Window" />
+          <TimeRangePicker {...rangePickerProps(range, "Window")} />
         </PageActions>
         <QueryState
           error={refused}
@@ -215,7 +223,7 @@ export function ExpensiveTasks() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
       </PageActions>
       <Card className="spend-card spend-tasks" padding="none">
         <Card.Header
@@ -245,7 +253,7 @@ export function ExpensiveTasks() {
             phoneRows="compact"
             flush
             rowHref={(r) => peekHref(itemRef(r))}
-            onRowActivate={peekRow<WorkSummary>((r) => open(itemRef(r)))}
+            onRowActivate={peekRowActivation<WorkSummary>((r) => open(itemRef(r)))}
             empty={{
               title: "No task last changed in this window has spent tokens",
               hint: "Tasks appear once agents spend tokens on them.",

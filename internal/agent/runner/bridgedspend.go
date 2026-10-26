@@ -55,6 +55,23 @@ type BridgedSpend struct {
 // NewBridgedSpend is an empty meter.
 func NewBridgedSpend() *BridgedSpend { return &BridgedSpend{aux: auxspend.NewTally()} }
 
+// NewBridgedSpendFrom is a meter that starts from what a run's bridged calls
+// have already cost: the meter of an executor run a node takes over while it
+// works ([Runner.ReopenAgentRun]).
+//
+// FROM THE TOTAL, NEVER FROM ZERO, because the run's row keeps the NEWEST total
+// a session reports — the larger, figure by figure — and not a sum: a meter
+// that started again from zero would report totals the row already holds
+// larger ones of, and every call it served would go uncharged until it had
+// cost as much again as the run cost before the recovery.
+func NewBridgedSpendFrom(so Bridged) *BridgedSpend {
+	b := NewBridgedSpend()
+	b.aux.Add(so.Aux)
+	b.spend.Workers, b.spend.WorkerInput, b.spend.WorkerOutput =
+		so.Workers, so.WorkerInput, so.WorkerOutput
+	return b
+}
+
 // Bridged is a [BridgedSpend]'s running total.
 type Bridged struct {
 	Aux auxspend.Spent

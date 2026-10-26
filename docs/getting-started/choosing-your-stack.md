@@ -39,10 +39,10 @@ and how you pay for them:
 
 | Models | Config | Pay with | Notes |
 |---|---|---|---|
-| **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `agent` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | The one CLI that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs the executor itself in [agent mode](../concepts/llm-backends.md#agent-mode), and is a sandbox coding agent. |
-| **OpenAI's** (GPT) | `agent: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | A text model behind the engine's tool loop; a seat on it that writes code takes its sandbox work to a Claude Code or OpenCode entry. |
-| **Open models** — OpenRouter, a hosted provider, your own server | `agent: opencode`, `model: <provider>/<model>` | the provider's key in `env`, or a login of OpenCode's own; nothing at all for a server that takes no key | OpenCode 2. Fully self-hostable: a vLLM, llama.cpp or Ollama server is a provider declared in OpenCode's own configuration ([how](../concepts/llm-backends.md#open-models-openrouter-and-local-servers-opencode)). Agent mode and a sandbox coding agent, like Claude Code. |
-| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `agent:` the profile's name | the vendor's login or key | Text models. [Supported CLIs](../concepts/llm-backends.md#supported-clis) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
+| **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `agent` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | The one CLI that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs a seat's executor as [its own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box). |
+| **OpenAI's** (GPT) | `agent: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | No executor: its own loop on this host, the seat's tools as its only working tools, for a seat's reviewer, workers and side passes; the seat's `llm` points at a Claude Code or OpenCode entry for its executor. |
+| **Open models** — OpenRouter, a hosted provider, your own server | `agent: opencode`, `model: <provider>/<model>` | the provider's key in `env`, or a login of OpenCode's own; nothing at all for a server that takes no key | OpenCode 2. Fully self-hostable: a vLLM, llama.cpp or Ollama server is a provider declared in OpenCode's own configuration ([how](../concepts/llm-backends.md#open-models-openrouter-and-local-servers-opencode)). Runs a seat's executor, like Claude Code. |
+| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `agent:` the profile's name | the vendor's login or key | No executor: a seat's reviewer, workers and side passes. [Supported CLIs](../concepts/llm-backends.md#supported-clis) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
 
 Whichever you pick, the CLI's binary has to be installed on the engine host —
 the container image ships none, see [Installation](installation.md#a-coding-cli)
@@ -75,10 +75,12 @@ seat's tools reaching it over an MCP bridge, as a detached run that outlives
 the turn. It needs more than a sign-in: a CLI with a coding-agent runner
 (`claude-code` or `opencode`) in the seat's chain, a `providers.sandbox`
 catalogue to place the run in, and a bridge its box can dial — a `direct` box
-dials the node's own listener on loopback, while a `container` or `e2b` box
-needs `CREWLET_MCP_BRIDGE_URL`. `crewlet llm doctor` checks all three. The
-engine's own tool loop runs the reviewer, delegated workers and the side
-passes. See [LLM Backends § The tool bridge](../concepts/llm-backends.md#the-tool-bridge).
+dials the node's own listener on loopback, while a `container` or `e2b` box,
+or any box in a fleet whose node serves no API, needs `CREWLET_MCP_BRIDGE_URL`,
+the fleet's address. `crewlet llm doctor` checks all three. Every other phase —
+the reviewer, delegated workers and the side passes — runs the same CLI on this
+host, its shell and editor denied, calling the seat's tools over MCP. See
+[LLM Backends § Where the CLI runs](../concepts/llm-backends.md#where-the-cli-runs).
 
 **Embeddings** (`providers.embeddings`) power the semantic half of a Doclet
 or Worklet search (the company's own pages and work items, embedded once for
@@ -380,8 +382,8 @@ see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 `e2b:` and `local:` together and give each seat its own `run_in` — the seat
 that needs the host's plan login runs `direct`, the seat whose
 generated code must never touch that host runs `e2b`. Where a seat that names
-none goes is `default_run_in`, which is required whenever some seat (or
-agent-mode entry) would fall to it on a catalogue offering more than one cell
+none goes is `default_run_in`, which is required whenever some seat's
+executor entry would fall to it on a catalogue offering more than one cell
 (and `local:` alone offers two); a company whose every seat names its own
 needs none — as long as *something* names a cell, since a backend is only
 built for a cell that is reached.
@@ -422,10 +424,9 @@ is the **short path**: every pick that costs nothing extra to stand up — chat
 on **Mattermost**, the model **Claude Code on your own Claude plan**, the
 tracker and knowledge base the **engine's own**, and the code sandbox on the
 **engine host** (`run_in: direct`), which reuses that same plan login
-rather than needing an account of its own. Its three
-engineering seats run that CLI in
-[agent mode](../concepts/llm-backends.md#agent-mode), so their
-executor *is* the CLI's own agentic loop with a real shell. The rows that need
+rather than needing an account of its own. Every seat runs that CLI's
+[own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) as
+its executor, so the executor *is* the CLI's own agentic loop with a real shell. The rows that need
 somebody else's service are deliberately empty, which is what lets the whole
 thing run from one compose profile and one `crewlet llm login`:
 

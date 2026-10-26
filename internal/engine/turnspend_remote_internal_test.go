@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -39,7 +40,7 @@ import (
 func TestAStatelessNodesTurnChargesItsTaskOnADataNode(t *testing.T) {
 	t.Parallel()
 	e, served := spendingEngine(t)
-	rig := rigRuns(t, e, modelPlayer(t, billingModel{}))
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
 	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
 		WorkSince: time.Now().UTC(),
@@ -83,7 +84,7 @@ func TestAStatelessNodesUnattributedTurnChargesNothing(t *testing.T) {
 		NotificationSource: "slack", SourceEventType: "message",
 		Sender: "ana", Subject: "a message", Body: "can you look at this",
 	}, events.TraceContext{})
-	rig := rigRuns(t, e, modelPlayer(t, billingModel{}))
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
 	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-2", RunID: "run-2", Events: []*events.Event{chat},
 		WorkSince: time.Now().UTC(),
@@ -99,26 +100,25 @@ const (
 	billedCached = 800
 )
 
-// billingModel answers each phase with its own submission and bills it.
-type billingModel struct{}
+// billingModel answers each phase with its own submission and bills it: a
+// coding CLI on the real session whose one request calls the phase's
+// terminator — submit_review where the phase offers it, submit_work otherwise.
+func billingModel() phasedCLI {
+	return phasedCLI{model: "billing", pick: billingRun}
+}
 
-func (billingModel) Model() string { return "billing" }
-
-func (billingModel) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+// billingRun is billingModel's run for a phase offering offered.
+func billingRun(offered []string) llmtest.Run {
 	name, args := runner.SubmitWorkTool, map[string]any{
 		"outcome": "blocked", "summary": "nothing to do here",
 		"evidence": "this seat holds no write tool",
 	}
-	for _, tool := range req.Tools {
-		if tool.Name == runner.SubmitReviewTool {
-			name, args = runner.SubmitReviewTool, map[string]any{"decision": "done"}
-		}
+	if offers(offered, runner.SubmitReviewTool) {
+		name, args = runner.SubmitReviewTool, map[string]any{"decision": "done"}
 	}
-	return &llm.Completion{
-		Model:       "billing",
-		ToolCalls:   []llm.ToolCall{{ID: "c1", Name: name, Arguments: args}},
-		InputTokens: billedInput, OutputTokens: billedOutput, CacheRead: billedCached,
-	}, nil
+	return calling(name, args, llm.Usage{
+		Input: billedInput, Output: billedOutput, CacheRead: billedCached,
+	})
 }
 
 // servedWriter is a data node's tracker, recording every turn it was handed.
@@ -196,8 +196,8 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}
-	models := runnable(t, []phase.Entry{{Key: "only", Provider: billingModel{}}}, seat)
-	e := &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, router: router}
+	models := runnable(t, []phase.Entry{{Key: "only", Provider: billingModel()}}, seat)
+	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, router: router})
 	e.remote.Store(&remoteNative{tracker: true})
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),

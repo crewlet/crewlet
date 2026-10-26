@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -162,7 +163,7 @@ func TestARestartOnOneActivationWritesNothing(t *testing.T) {
 	boot := func() *config.Bootstrap {
 		b := bootstrap(t, func(b *config.Bootstrap) {
 			b.Store.Path = filepath.Join(dir, "crewlet.db")
-			b.Stream.StoreDir = filepath.Join(dir, "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 		})
 		// Seeded for the first boot; the second finds its own file.
 		engine.SeedStore(t, b)

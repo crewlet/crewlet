@@ -17,7 +17,9 @@
 
 import { useServicesAsk } from "~/lib/services.ts";
 import { createContext, useContext, useMemo } from "react";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { ownName, useViewer } from "~/lib/viewer.ts";
@@ -29,7 +31,15 @@ import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
 import { seatConditionsOf } from "~/lib/decisions.ts";
 import { useLeadScope } from "~/lib/leadScope.ts";
 import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
-import { DEFAULT_RANGE, crewOf, flowPoints, rangeOf, statusSentence, waitingOf } from "./model.ts";
+import {
+  DEFAULT_RANGE,
+  HOME_RANGES,
+  crewOf,
+  flowPoints,
+  rangeOf,
+  statusSentence,
+  waitingOf,
+} from "./model.ts";
 
 /** How often the decisions are asked again: a person answers one and another
  *  lands, and the push carries neither. */
@@ -56,6 +66,17 @@ export function useHomeData() {
   const attention = useAttention();
   const [rangeValue, setRange] = useParam("range", DEFAULT_RANGE);
   const range = rangeOf(rangeValue);
+  // --- assistant page actions (WP12) ---
+  // THE PAGE'S ONE RANGE, which every widget with a time axis reads.
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("home.range.set", {
+      scope: "Home's window (view only)",
+      keys: { range: choiceKey("Window", HOME_RANGES, "filter", DEFAULT_RANGE) },
+      nav,
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
 
   const decisions = useQuery("decisions", undefined, {
     enabled: viewer.owner !== "",

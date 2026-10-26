@@ -144,6 +144,13 @@ func (f *Fleet) Allow(_ context.Context, bucket string, limit int, window time.D
 		// reading of it that is not an invitation to divide by zero.
 		return false, nil
 	}
+	if window > coord.MaxRateWindow {
+		// The KV backend's bucket keeps no wider window, so the twin
+		// refuses one too: a caller that passed here and failed there
+		// would be found in production.
+		return false, fmt.Errorf("coord/memory: rate window %v is wider than "+
+			"coord.MaxRateWindow (%v)", window, coord.MaxRateWindow)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 

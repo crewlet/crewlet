@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // A PHASE CARRIES ITS OWN WALL CLOCK, on the record that reports it.
@@ -34,8 +36,8 @@ import (
 // are over the PUBLISHED events rather than any return value, because the wire
 // is the only place the defect lived.
 
-// slowProvider answers after a fixed delay, so the elapsed time a phase
-// reports is bounded below by something the test chose.
+// slowProvider is a model that takes a fixed delay over every response, so the
+// elapsed time a phase reports is bounded below by something the test chose.
 //
 // A SLEEP rather than an injected clock: `time.Since` is monotonic, so a
 // sleep can only overshoot and the assertion is a floor. A fake clock would
@@ -43,24 +45,30 @@ import (
 // arithmetic step each of them does not own.
 type slowProvider struct {
 	delay time.Duration
-	next  []llm.Completion
-	n     int
+	next  []llmtest.Response
+
+	mu sync.Mutex
+	n  int
 }
 
 func (p *slowProvider) Model() string { return "slow" }
 
-func (p *slowProvider) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-time.After(p.delay):
-	}
-	if len(p.next) == 0 {
-		return &llm.Completion{Content: "(no script)"}, nil
-	}
-	c := p.next[min(p.n, len(p.next)-1)]
-	p.n++
-	return &c, nil
+func (p *slowProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(*llmtest.Conn) (llmtest.Response, error) {
+		select {
+		case <-ctx.Done():
+			return llmtest.Response{}, ctx.Err()
+		case <-time.After(p.delay):
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if len(p.next) == 0 {
+			return llmtest.Response{Text: "(no script)"}, nil
+		}
+		r := p.next[min(p.n, len(p.next)-1)]
+		p.n++
+		return r, nil
+	})
 }
 
 // The delay each scripted round waits. Comfortably above the millisecond the
@@ -70,7 +78,7 @@ const roundDelay = 8 * time.Millisecond
 func TestACompletedPhaseReportsHowLongItTook(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &slowProvider{delay: roundDelay, next: []llm.Completion{
+	prov := &slowProvider{delay: roundDelay, next: []llmtest.Response{
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
 	}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
@@ -119,7 +127,7 @@ func TestAnExtendedPhaseReportsTheWholeStretch(t *testing.T) {
 	pub := newCapture()
 	// Three rounds against a two-round cap: the phase exhausts its budget,
 	// the judge grants more, and it re-enters the loop.
-	prov := &slowProvider{delay: roundDelay, next: []llm.Completion{
+	prov := &slowProvider{delay: roundDelay, next: []llmtest.Response{
 		persist(t, "a", "one"),
 		persist(t, "b", "two"),
 		markDone(t, "read both"),
@@ -147,7 +155,7 @@ func TestAnExtendedPhaseReportsTheWholeStretch(t *testing.T) {
 func TestTheRoundCapJudgeReportsWhatItsJudgementCost(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &slowProvider{next: []llm.Completion{
+	prov := &slowProvider{next: []llmtest.Response{
 		persist(t, "a", "one"),
 		persist(t, "b", "two"),
 		markDone(t, "read both"),
@@ -181,7 +189,8 @@ func (j slowJudge) Decide(ctx context.Context, _ extension.Request) (extension.D
 }
 
 // refusingProvider fails every call, after taking its time — the failure path
-// that used to publish a record with no measurement on it.
+// that used to publish a record with no measurement on it. A CLI that never
+// reached its tools: it fails before it connects.
 type refusingProvider struct{ delay time.Duration }
 
 func (p *refusingProvider) Model() string { return "refusing" }

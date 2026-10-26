@@ -76,14 +76,16 @@ const NOTHING_HELD: Record<string, unknown> = {
   round_narration: null,
   tool_executions: null,
   rounds: null,
+  invocations: null,
 };
 
 /**
- * The one heavy field that is STATUS — each round's timing and tokens — which
- * a call whose body is withheld from this reader still carries and versions.
- * Every other detail is the seat's BODY (`LiveCall.body_withheld`).
+ * The heavy fields that are STATUS — each round's timing and tokens, and each
+ * CLI run's — which a call whose body is withheld from this reader still
+ * carries and versions. Every other detail is the seat's BODY
+ * (`LiveCall.body_withheld`).
  */
-const STATUS_DETAIL: ReadonlySet<keyof CallVersions> = new Set(["rounds"]);
+const STATUS_DETAIL: ReadonlySet<keyof CallVersions> = new Set(["rounds", "invocations"]);
 
 /**
  * One seat's live call as a push states it, merged onto the copy a tab holds —

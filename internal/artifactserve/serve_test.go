@@ -37,7 +37,13 @@ func TestATicketIsRefusedWithoutSayingWhy(t *testing.T) {
 		t.Errorf("a browser sending no Fetch Metadata was refused: %d", res.StatusCode)
 	}
 
-	forged := strings.Replace(u, "/t/v2.", "/t/v2.x", 1)
+	// A ticket naming a key tag no keyring holds. Asserted to differ, so a
+	// version this does not spell forges nothing and fails here rather than
+	// sending the valid ticket as the forged one.
+	forged := strings.Replace(u, "/t/crewlet_rt1.", "/t/crewlet_rt1.x", 1)
+	if forged == u {
+		t.Fatalf("the frame's URL %q holds no ticket to forge", u)
+	}
 	empty(t, r.do(request{url: forged, dest: "iframe"}), http.StatusNotFound)
 
 	other := artifacts.IDFor("another-op")

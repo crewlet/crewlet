@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -161,6 +162,36 @@ func TestTheChildSeesTheRunEnvAndTheBoxHomeButNotTheEngineSecrets(t *testing.T) 
 	}
 	if !strings.HasPrefix(parts[3], box.Home()) {
 		t.Fatalf("TMPDIR = %q, want it inside the box", parts[3])
+	}
+}
+
+// EVERY TEMP ROOT A HOST BOX'S PROCESSES READ LIES INSIDE THE BOX, one
+// variable at a time, and as the box's own directory rather than anywhere
+// under its home: a temp root left at its default is a write outside the box,
+// which the host's confinement refuses. TMPDIR alone was set, and Claude Code,
+// which roots its per-uid temp directory at CLAUDE_CODE_TMPDIR or else /tmp,
+// had every Bash command of a confined deep-work run refused before it ran.
+func TestEveryTempRootOfAHostBoxIsItsOwnTmp(t *testing.T) {
+	t.Parallel()
+	local := newDirect(t)
+	box := mustCreate(t, local, Spec{})
+	want := filepath.Join(box.Home(), ".tmp")
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Fatalf("the box's temporary directory %s does not exist: %v", want, err)
+	}
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"} {
+		if !slices.Contains(TempRootEnv, name) {
+			t.Errorf("%s is missing from TempRootEnv", name)
+		}
+	}
+	for _, name := range TempRootEnv {
+		result, err := box.Exec(t.Context(), `printf %s "$`+name+`"`, ExecOptions{})
+		if err != nil {
+			t.Fatalf("Exec: %v", err)
+		}
+		if result.Stdout != want {
+			t.Errorf("%s = %q, want the box's own %q", name, result.Stdout, want)
+		}
 	}
 }
 

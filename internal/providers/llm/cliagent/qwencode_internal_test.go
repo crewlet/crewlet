@@ -273,8 +273,11 @@ func TestQwenCodeIsConfiguredByTheCallAlone(t *testing.T) {
 }
 
 // qwenPlainOutput reads the fake CLI's stdout as the answer, for a case whose
-// fake reports what it was handed rather than printing the CLI's events.
-var qwenPlainOutput = map[string]any{"output": "text", "event_type_path": []any{}, "text_events": []any{}}
+// fake reports what it was handed rather than printing the CLI's events — and
+// so drops what reads those events on a run with tools: the request record and
+// the failure events, which a text stream does not carry.
+var qwenPlainOutput = map[string]any{"output": "text", "event_type_path": []any{}, "text_events": []any{},
+	"requests": nil, "mcp": map[string]any{"failure_events": []any{}}}
 
 // qwenProvider is the shipped profile with the suite's fake CLI in its place.
 func qwenProvider(t *testing.T, env map[string]string, overrides map[string]any, auth Auth) *Provider {

@@ -228,12 +228,12 @@ func TestTheOpenCodeInvocationRunsAgainstItsOwnServer(t *testing.T) {
 
 // AN OPENCODE ENTRY'S MODEL REACHES THE BOX AS WRITTEN.
 //
-// It is the string every text call on the same entry passes to `opencode run
+// It is the string every run on the engine host on the same entry passes to `opencode run
 // --model`, which OpenCode splits at its first slash into a provider and a
 // model. The runner used to put a family in front of it, so an entry naming
 // `openrouter/anthropic/claude-sonnet-5` ran its box on
 // `anthropic/openrouter/anthropic/claude-sonnet-5` — a provider-qualified id
-// broke the agent run, and a bare one broke every text call.
+// broke the agent run, and a bare one broke every run on the engine host.
 func TestAnOpenCodeEntrysModelIsPassedAsWritten(t *testing.T) {
 	t.Parallel()
 	for _, model := range []string{
@@ -682,7 +682,7 @@ func TestAToolOnlyStreamReportsNoAnswer(t *testing.T) {
 // request, and the continued row goes red.
 func TestAContinuedRunResumesTheAskingRunsSession(t *testing.T) {
 	t.Parallel()
-	continued := sandbox.RunRequest{Brief: "the answer: main", ResumeSession: "ses_0123456789abcdef0123456789abcdef"}
+	continued := sandbox.RunRequest{Brief: "the answer: main", Resume: "ses_0123456789abcdef0123456789abcdef"}
 
 	cmd := claude().Command(continued, codingagent.Paths{}, "")
 	if !strings.Contains(cmd, "--resume 'ses_0123456789abcdef0123456789abcdef'") {

@@ -46,9 +46,7 @@ type API struct {
 	// decides what it carries. With the ingress role it is the whole HTTP
 	// surface: the dashboard, the REST API, the webhooks and the probes,
 	// less the routes [API.Public] moves to a listener of their own.
-	// Without it, the probes alone (/health and /ready) — plus a seats
-	// node's tool bridge, which every executor run dials back on, where
-	// api.public is unset — because an
+	// Without it, the probes alone (/health and /ready), because an
 	// orchestrator runs every node and must be able to probe each, while
 	// the API is placed only where traffic is meant to arrive. ONE PORT
 	// rather than a second setting for the probes: the probes are already
@@ -57,10 +55,22 @@ type API struct {
 	// file keeps working for both shapes. 0 binds nothing at all, on any
 	// node.
 	//
+	// THE BRIDGE IS THE EXECUTOR'S ALONE. A seat's executor is its CLI's own
+	// run in a box, which may be another machine, so it reaches the seat's
+	// tools over HTTP, on an ingress node's listener; every other phase runs
+	// its CLI beside the engine and reaches them through a unix socket in the
+	// engine's own session directory (internal/toolsession), so those need no
+	// port at all. A direct box on a node that serves the bridge route itself
+	// — the ingress role and a bound listener — dials it here on loopback;
+	// every other box dials CREWLET_MCP_BRIDGE_URL, the fleet's address, and
+	// the ingress node that answers relays each call to the node holding the
+	// seat over the broker (internal/api/mcpbridge). So a seats node without
+	// the ingress role serves its seats' tools with this at 0.
+	//
 	// So a port is not what makes a node SERVE the API — a port and the
 	// ingress role together are ([Bootstrap.ServesAPI]), and only that pair
 	// asks for the authentication settings below.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's executor tool bridge, where api.public is unset). 0 binds nothing."`
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it. 0 binds nothing."`
 
 	// ExternalURL is where a BROWSER reaches this deployment — a person, a
 	// session cookie and every link a person follows — and, while no
@@ -240,11 +250,11 @@ func (a *API) Addr() string { return net.JoinHostPort(a.Host, strconv.Itoa(a.Por
 //
 // # On a node without the ingress role
 //
-// Such a node serves its probes on api.port and one route beside them, its
-// seats' tool bridge, and that is a public route: with this block set it binds
-// HERE for it rather than on api.port, so one file still works for every role
-// and the bridge address follows one rule across the fleet. The probes stay on
-// api.port, for the reason above.
+// Such a node serves its probes on api.port and nothing else, and binds no
+// listener here whatever this block says, so one file still works for every
+// role. Its seats' tool bridge is not a route on it: a box dials the ingress
+// nodes, which relay each call to the node holding the seat over the broker
+// (internal/api/mcpbridge).
 type APIPublic struct {
 	// Host is the bind address. Empty binds every interface, which is the
 	// point of a listener meant to be reached from outside.
@@ -1051,6 +1061,16 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 				// refusal is printed by `crewlet validate`,
 				// answered over /config and written to a log.
 				p.add(at(tp, "token"), ErrUnknownValue, "%s", err.Error())
+			}
+			// A VALUE SHAPED AS AN ASSISTANT GRANT could never
+			// authenticate as itself: the guard reads that shape as
+			// a grant before it compares any Tier A token, and
+			// refuses every one presented over the wire.
+			if strings.HasPrefix(t.Token, iam.AssistBearerPrefix) {
+				p.add(at(tp, "token"), ErrUnknownValue,
+					"a token can't start with %q, which the engine reserves "+
+						"for the Dashboard Assistant's grants. Generate one "+
+						"with `crewlet secrets keygen`", iam.AssistBearerPrefix)
 			}
 		}
 

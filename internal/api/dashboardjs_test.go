@@ -1080,7 +1080,37 @@ const (
 	// out of the entry into chunks of their own, each compressed apart (about
 	// 1.1 KiB), beside 0.2 KiB of new kit code and 0.3 KiB of polished kit
 	// rules in the one sheet. 323 KiB, still under two seconds on that link.
-	initialBudget = 323 << 10
+	// The Dashboard Assistant took it to 336.4 KiB: the kit's assistant
+	// pieces (the cards, the aside, the peek rail, the time range picker)
+	// ride the one sheet by the same rule; the Ask button's Orbit mark is
+	// about 8.8 KiB while it is imported from the icons package's main entry,
+	// which brings the vendor marks with it (the `@crewlethq/icons/product-mark`
+	// entry recovers it); and the frame's own half of the assistant (the
+	// button, the page context registry, the bus, the aside's arithmetic) is
+	// the rest. The drawer, its store, its reducer, its cards and its stream
+	// client are a chunk of their own, fetched when the panel first opens.
+	// 337 KiB, still under two seconds on that link. uilet 0.56.0 measured
+	// 336.0 KiB here: its icons package's main entry now tree-shakes to the
+	// one mark asked for, so the Orbit mark costs the same through it as
+	// through `@crewlethq/icons/product-mark`, which the frame imports anyway.
+	// The assistant's page actions took it to 337.8 KiB (measured with and
+	// without them on that release): the registry merging every mounted
+	// screen's actions, the undo a view change leaves, the contract's table
+	// of page actions, the question the palette queues for the panel, and the
+	// object kinds a peek is named by, which a page's selection reads. Every
+	// screen's own actions are in that screen's chunk. 338 KiB, still under
+	// two seconds on that link. uilet 0.57.1 measured 338.1 KiB with the same
+	// dashboard source: the design system's one stylesheet, which first paint
+	// carries whole, gained the proposal card's decision refusal and
+	// unconfirmed outcome, the non-modal overlay aside and table cells that
+	// wrap. 339 KiB, still under two seconds on that link. uilet 0.63.0
+	// measured 340.4 KiB with the same dashboard source: the deep work card,
+	// the file list and the attachment chip join the one stylesheet, and the
+	// labelled value field moves the form field, the text area and the
+	// character count into the shared chunk the entry already loads. Moving
+	// the setup form and its dialogs onto that field took it to 340.3 KiB.
+	// 341 KiB, still under two seconds on that link.
+	initialBudget = 341 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1112,8 +1142,64 @@ const (
 	// gallery's selection about 50 KB, and the design system's new rules in
 	// the one sheet about 41 KB raw. Each of those screens is fetched only
 	// when it is opened, and it moved to 4.25 MiB then, which still refuses a
-	// doubled baseline.
-	treeBudget = 4<<20 + 256<<10
+	// doubled baseline. The Dashboard Assistant took it from 4285.7 KiB to
+	// 4400.5 KiB: its panel is a chunk of about 51 KiB fetched when the
+	// panel first opens, and the rest is the kit's assistant components and
+	// rules and the frame code that came with them. It moved to 4.3 MiB
+	// then, which still refuses a doubled baseline. The assistant's page
+	// actions took it to 4427.2 KiB, 26.6 KiB of it theirs (measured with
+	// and without them on uilet 0.56.0): each screen's parser, gate and
+	// setters in that screen's chunk, the claim and report flow in the
+	// panel's, and the address helper and contract table they share. 4432
+	// KiB, which still refuses a doubled baseline. uilet 0.57.2 measured
+	// 4432.4 KiB, up from 4431.6 KiB with the same dashboard source but the
+	// drawer's one prop: the release drops the result table's first column
+	// truncation and a flush side panel body's scrolling, and the drawer
+	// keeps a scrolling body for its offline notice. 4433 KiB, which still
+	// refuses a doubled baseline. Telling a person the assistant's model
+	// cannot answer before they ask took it to 4434.2 KiB: the drawer's
+	// notice, its words and the viewer's model member, in the panel's chunk
+	// and the frame's. 4435 KiB, which still refuses a doubled baseline.
+	// Folding the assistant's supporting reads and moving the Ask button's
+	// dot onto its mark, on uilet 0.60.0, took it to 4438.7 KiB: the kit's
+	// card fold and IndicatorAnchor and their rules in the one sheet, and
+	// the panel's fold store and summaries. 4439 KiB, which still refuses a
+	// doubled baseline. Drawing the assistant at work with the kit's
+	// ThinkingIndicator in place of the caret and the skeleton, and the new
+	// SendButton's held tint, running arc and glyph cross fade, on uilet
+	// 0.61.0, took it to 4444.1 KiB: their rules in the one sheet, the
+	// Assistant mark in the panel's chunk and the indicator's status words.
+	// 4445 KiB, which still refuses a doubled baseline. Telling the
+	// assistant which draft is open took it from 4444.3 KiB to 4479.1 KiB:
+	// the one draft hook and its parser in the frame, each editing screen's
+	// field list, help and setters in that screen's chunk (about thirty
+	// screens), the card's file thumbnail in the panel's, and the brand and
+	// integration field lists. 4480 KiB, which still refuses a doubled
+	// baseline. uilet 0.63.0 measured 4483.0 KiB with the same dashboard
+	// source: the assistant's deep work card, file list and attachment chip,
+	// and their rules in the one sheet. Moving the dashboard's own labelled
+	// field and its secret completion onto uilet's ValueField took it back
+	// to 4480.0 KiB (the field, its completion helper and its list's rules
+	// leave the bundle). 4481 KiB, which still refuses a doubled baseline.
+	// The assistant's deep work, delivered files and image attachments took
+	// it from 4480.0 KiB to 4491.9 KiB on uilet 0.63.0: in the panel's chunk,
+	// the run card's mapping and its nested steps, the file card, the
+	// composer's pick, drop and paste with their bounds and uploads, and the
+	// preview hook the draft file card now shares. 4493 KiB, which still
+	// refuses a doubled baseline. Merging main's MCP tool route (#371) beside
+	// the assistant's card rendering took it to 4499.8 KiB: the live view's
+	// CLI runs, their calls in flight and a run drawn before its first round.
+	// 4501 KiB, which still refuses a doubled baseline. uilet 0.64.0 and a
+	// card value drawn as what it is (a list as its items, a body as code,
+	// page text as an inert preview, a colour beside its chip) took it to
+	// 4503.4 KiB, in the panel's chunk and ChangeList's block rules in the one
+	// sheet. 4504 KiB, which still refuses a doubled baseline. Marking the
+	// open conversation in the assistant's history, showing each one's last
+	// activity and telling the assistant of a brand draft in progress took it
+	// to 4504.1 KiB: the menu's checked answers and the summary's member in
+	// the panel's chunk, and the Brand page's read-only draft and its help in
+	// that page's. 4505 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 409<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

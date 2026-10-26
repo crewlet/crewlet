@@ -11,6 +11,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BrandPage } from "./BrandPage.tsx";
+import { BRAND_CONTINUE_DRAFT_LABEL } from "~/lib/brand/assistantDraft.ts";
+import { pageSnapshot, resetPageContextForTest, setFramePage } from "~/app/assistant/context.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -188,6 +190,42 @@ test("a draft a setup left is offered to continue, and says what it lacks before
   // NEVER OFFERED FOR ADOPTION, and the empty state offers no second way in.
   expect(screen.queryByRole("button", { name: "Review and adopt" })).toBeNull();
   expect(screen.queryByRole("link", { name: "Set up your brand" })).toBeNull();
+});
+
+// THE ASSISTANT IS TOLD OF A STANDING DRAFT, read-only: the saved kit and
+// version the notice offers to continue, its values, no field it may set and
+// no draft.set, and the help naming where it is changed. A reader the draft
+// is not continued by is told of none. Mutation: declare no draft here while
+// no card is in edit, or keep draft.set for a draft nothing on the page can
+// change, and this fails.
+test("the assistant reads a draft a setup left as saved and changed only in its setup", async () => {
+  resetPageContextForTest();
+  setFramePage({
+    screen: "company-brand",
+    title: "Company › Brand",
+    path: ["company", "brand"],
+    params: {},
+    query: {},
+  });
+  serveVersions({ "01DRAFT:2": PARTIAL });
+  mount(["admin"], null, [brandKitRow()]);
+  expect(await screen.findByRole("link", { name: "Continue setting up" })).toBeTruthy();
+  await waitFor(() => expect(pageSnapshot()?.context.draft).toBeDefined());
+  const context = pageSnapshot()!.context;
+  expect(context.draft).toMatchObject({ kind: "server", id: "01DRAFT", revision: "2" });
+  // THE HELP NAMES THE BUTTON THE PAGE SHOWS, by the label the button reads.
+  const go = screen.getByRole("link", { name: BRAND_CONTINUE_DRAFT_LABEL });
+  expect(context.draft!.help).toContain(go.textContent!);
+  expect(context.draft!.fields.find((f) => f.path === "name")).toMatchObject({
+    value: "FairSplit",
+  });
+  expect(context.draft!.fields.some((f) => f.editable)).toBe(false);
+  expect(context.accepts).not.toContain("draft.set");
+  cleanup();
+  resetPageContextForTest();
+  mount([], null, [brandKitRow({ role: "viewer" })]);
+  expect(await screen.findByText("No brand yet")).toBeTruthy();
+  expect(pageSnapshot()?.context.draft).toBeUndefined();
 });
 
 test("a complete draft is offered to an administrator for review, and an editor continues their own", async () => {

@@ -95,10 +95,11 @@ import {
   type TreeItemAction,
   type TreeModel,
   useMediaMatch,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { NetworkGlyph } from "@crewlethq/icons/glyphs";
 import { useFillScreen } from "~/app/fill.tsx";
-import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeek, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { refToken, type ObjectRef } from "~/app/frame/objects.ts";
 import { usePeekNeighbours, usePeekStep } from "~/app/frame/PeekHost.tsx";
 import { usePeekWidth } from "~/app/frame/peekWidth.ts";
@@ -733,7 +734,7 @@ function SeatRowCell({
             className="oc-name"
             href={peekHref(ref)}
             tabIndex={tabIndex}
-            onClick={rowPeekHandler(onOpen)}
+            onClick={peekClickHandler(onOpen)}
           >
             {seat.name}
           </a>

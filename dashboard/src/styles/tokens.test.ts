@@ -27,21 +27,19 @@ import { describe, expect, test } from "vitest";
  *
  * # What a fallback means
  *
- * `var(--peek-w, 420px)` is DELIBERATE: a property a script sets at runtime,
- * with the default written at the point of use. A two-argument `var()` is
+ * `var(--crewlet-peek-rail-reserve, 0px)` is DELIBERATE: a property a script
+ * sets at runtime, with the default written at the point of use. A two-argument `var()` is
  * therefore exempt — it cannot fail silently, because the fallback IS the
  * value when nothing sets it.
  *
  * # And a property only a script can declare
  *
- * Some values have no honest default. `--peek-reserve` is what the peek's
- * track leaves the list, and it differs by the screen (Settings draws a
- * column inside it) and by the density: any literal fallback is right for
- * one frame and wrong for another, which is the bug it exists to prevent. So
- * the shell publishes it on the same element, in the same render, as the
- * attribute that makes it read ([SCRIPT_DECLARED]), and it counts as declared
- * only while that script still spells it — a rename on either side fails
- * here as it would for a sheet.
+ * Some values have no honest default. `--budget-tracks` is the one track
+ * list a budget row and the seats' table are both handed, and any literal
+ * fallback would be a second list. So the screen publishes it on the same
+ * element, in the same render, that reads it ([SCRIPT_DECLARED]), and it
+ * counts as declared only while that script still spells it: a rename on
+ * either side fails here as it would for a sheet.
  */
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));
@@ -52,11 +50,6 @@ const require_ = createRequire(import.meta.url);
  * writes it — see "a property only a script can declare" above.
  */
 const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
-  {
-    name: "--peek-reserve",
-    by: "app/Shell.tsx",
-    why: "listReserve() for the frame on screen, set on .app with data-peek=column",
-  },
   {
     name: "--budget-tracks",
     by: "routes/spend/Budgets.tsx",

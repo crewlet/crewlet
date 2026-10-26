@@ -26,7 +26,7 @@ import type {
   FeedScheduleRun,
   WorkFlowPoint,
 } from "~/protocol/index.ts";
-import { plural, toWall } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
@@ -469,19 +469,4 @@ export function scheduleVerb(run: FeedScheduleRun): string {
 export function surfaceName(surface: string): string {
   const known: Record<string, string> = { slack: "Slack", mattermost: "Mattermost" };
   return known[surface] ?? surface.charAt(0).toUpperCase() + surface.slice(1);
-}
-
-/**
- * "Good morning, Jane", in the READER's clock, which is whose morning it is,
- * and with the first word of their name. A reader nobody named is greeted
- * without one rather than as "there" or as a token id.
- *
- * THE READER'S CLOCK IS THE BROWSER'S ZONE (`toWall`), the same one every
- * timestamp on the page is drawn in.
- */
-export function greeting(now: number, name: string): string {
-  const hour = Number(toWall(now).slice(11, 13));
-  const part = hour < 5 ? "evening" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
-  const first = name.trim().split(/\s+/)[0] ?? "";
-  return first ? `Good ${part}, ${first}` : `Good ${part}`;
 }

@@ -185,8 +185,8 @@ const (
 	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
 	// holds that window four times over, which is room for a fleet to grow
 	// before anybody has to touch the field. Beside the other logs it is
-	// the last gibibyte of the 4.5 GiB that five unset ceilings reserve at
-	// their smallest, which is what [StoreMaxBytesFloor] is sized from.
+	// one gibibyte of the 7 GiB that eight unset ceilings reserve at their
+	// smallest (see [StoreMaxBytesFloor]).
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
 	// records: the broker grants a stream its whole ceiling when it creates
@@ -201,6 +201,44 @@ const (
 	DefaultUsageLogMaxBytes int64 = 1 << 30
 	UsageLogMaxBytesFloor   int64 = 64 << 20
 	UsageLogMaxBytesCeiling int64 = 64 << 30
+
+	// DefaultAssistantLogMaxBytes is the Dashboard Assistant's log ceiling,
+	// and AssistantLogMaxBytesFloor and AssistantLogMaxBytesCeiling bound it.
+	//
+	// # Half a gibibyte, and the arithmetic behind it
+	//
+	// THE LOG GROWS WITH HEADCOUNT, NOT WITH THE DISK, so unset takes a
+	// fixed default rather than a share of the volume, as the identity
+	// estate's and the usage log's do. A turn writes about eight records
+	// (the question, the answer, a few steps, a card, its opening and its
+	// close), sealed and signed at about 20 KiB together for an ordinary
+	// turn; the reference company's two hundred people asking ten questions
+	// a day write about 40 MB a day. 512 MiB is then about two weeks of a
+	// COMPLETELY BLOCKED trim, against a `trim_blocked` alarm raised after a
+	// day, so the question is how long somebody has to act on a firing
+	// alarm. The conversations themselves go after their retention whatever
+	// the log holds: the rows are purged by their own records.
+	//
+	// SCALED DOWN TO ITS FLOOR WHERE THE BROKER IS SHORT. The engine scales an
+	// unset ceiling no lower than [MinDomainCeiling] in internal/engine, and
+	// holds a log that asked for less at what it asked, so a fixed 512 MiB
+	// was reserved in full on every fresh node: it raised the least a node
+	// boots in past the 9 GiB a stated broker limit commonly gives, and a
+	// deployment sized for everything else stopped booting for a feature it
+	// may never turn on. The assistant's register entry therefore lets
+	// scaling take it down to this field's 64 MiB floor, which is all a fresh
+	// node has to find for it; the default is what it gets wherever the
+	// broker has the room. Two weeks of a blocked trim is still far past the
+	// alarm, and the identity estate's log, which also grows with headcount,
+	// takes the same 512 MiB.
+	//
+	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
+	// records: ten people write a twentieth of the reference rate, for which
+	// 64 MiB is a month. THE CEILING IS A TYPO GUARD: sixty-four times the
+	// default is far past any modelled company.
+	DefaultAssistantLogMaxBytes int64 = 512 << 20
+	AssistantLogMaxBytesFloor   int64 = 64 << 20
+	AssistantLogMaxBytesCeiling int64 = 64 << 30
 
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's ceiling.
@@ -243,22 +281,19 @@ const (
 	// StoreMaxBytesFloor and StoreMaxBytesCeiling bound the embedded
 	// broker's own declared store limit.
 	//
-	// THE FLOOR IS SIX GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside with room beside them. Every node reserves all
-	// FIVE state-log domains' ceilings whatever it runs, and left unset
-	// they come to 4.5 GiB at their smallest: the tracker's, the vectors',
-	// the knowledge base's and the usage log's at the gibibyte scaling stops
-	// at, and the identity log's 512 MiB default (never scaled below what
-	// it asks). What is left, about 1.5 GiB, is for the mailboxes, the event
-	// stream and every coordination bucket, which reserve nothing and grow
-	// against the same number. Below it a node provisions its way to a
-	// refusal on whichever stream happens to be last.
-	//
-	// SIX AND NOT FIVE: at five gibibytes the unreserved streams would have
-	// half a gibibyte, so a document `crewlet validate` admits — every
-	// ceiling unset, which the cross-field check above cannot sum — would
-	// fail at boot on whichever stream the broker reached last, which is
-	// the failure that check exists to move forward to `crewlet validate`.
+	// THE FLOOR IS SIX GIBIBYTES, a bound on what the field may say rather
+	// than what a node of a given configuration needs. Every node reserves
+	// every state-log domain's ceiling whatever it runs, and left unset the
+	// eight come to 7 GiB at their smallest: the tracker's, the vectors', the
+	// knowledge base's, the artifacts', the datastore's and the usage log's at
+	// the gibibyte scaling stops at, and the identity log's and the
+	// assistant's 512 MiB defaults. So a value this floor admits can be short of
+	// what a configuration boots in, and that is said where it can be acted
+	// on: engine.BrokerFloorFor computes the least a fresh node of the
+	// configuration reserves, `crewlet validate` and every start's
+	// advisories warn below it, and a refused reservation quotes it. Before
+	// the artifact and assistant logs the floor was the logs' 4.5 GiB with
+	// room beside them, which is why it is six.
 	//
 	// THE COMPANY'S FILES RESERVE NOTHING HERE: the object store's NATS
 	// bucket is created with no byte ceiling, so it grows against this
@@ -483,7 +518,7 @@ func (s Stream) ArtifactDataMaxBytes(free int64) (int64, bool) {
 func (s Stream) DeclaredLogCeilings() int64 {
 	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
 		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.ArtifactsLogMaxBytes +
-		s.ArtifactDataLogMaxBytes
+		s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
@@ -568,6 +603,20 @@ func (s Stream) UsageMaxBytes() (int64, bool) {
 		return s.UsageLogMaxBytes, false
 	}
 	return DefaultUsageLogMaxBytes, true
+}
+
+// AssistantMaxBytes is the Dashboard Assistant's log ceiling, and whether it
+// was derived: the operator's value, or the fixed default
+// ([DefaultAssistantLogMaxBytes]), which reports `true` because a value nobody
+// wrote is one the shared-budget scaling may lower.
+//
+// IT TAKES NO FREE-SPACE ARGUMENT, for [Stream.IamMaxBytes]'s reason: the log
+// grows with the company's headcount, which a volume has nothing to say about.
+func (s Stream) AssistantMaxBytes() (int64, bool) {
+	if s.AssistantLogMaxBytes > 0 {
+		return s.AssistantLogMaxBytes, false
+	}
+	return DefaultAssistantLogMaxBytes, true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

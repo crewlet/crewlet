@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // A provider chain that falls through has to say so ON THE TURN.
@@ -53,11 +54,12 @@ func (c *capture) fallbacks() []*types.ProviderFallback {
 	return out
 }
 
-// reviewing is a provider whose reviewer reads a round twice before it
-// decides, so a chain in front of it is walked on more than one call.
+// reviewing is a provider whose reviewer answers in prose before it decides,
+// so its phase takes two CLI runs — the prose one and the corrected one — and
+// a chain in front of it is walked on more than one.
 func reviewing(t *testing.T) *scriptedProvider {
 	t.Helper()
-	return &scriptedProvider{review: []llm.Completion{
+	return &scriptedProvider{review: []llmtest.Response{
 		text("Reading the log first."),
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
 	}}
@@ -77,17 +79,17 @@ func TestAProviderHandOffIsPublishedAgainstTheTurnItHappenedIn(t *testing.T) {
 	}
 
 	// ONE PER PROVIDER CALL, not one per phase: a chain is walked on every
-	// round, so a benched member is a hand-off on every round. Counting them
+	// CLI run, so a benched member is a hand-off on every run. Counting them
 	// per phase would report one flap where there were three, which is the
 	// difference between a blip and a provider to take out of the chain.
-	rounds := len(prov.requestsFor("review"))
+	runs := len(prov.requestsFor("review"))
 	got := pub.fallbacks()
-	if rounds < 2 {
-		t.Fatalf("the reviewer reached its provider %d times, want a hand-off per call to count", rounds)
+	if runs < 2 {
+		t.Fatalf("the reviewer reached its provider %d times, want a hand-off per run to count", runs)
 	}
-	if len(got) != rounds {
-		t.Fatalf("published %d provider_fallback events over %d rounds, want one each",
-			len(got), rounds)
+	if len(got) != runs {
+		t.Fatalf("published %d provider_fallback events over %d runs, want one each",
+			len(got), runs)
 	}
 
 	f := got[0]
@@ -264,7 +266,8 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 	// The measurement is of the REAL prompt, so it has to match what the
 	// provider actually received. A builder that measured a draft would
 	// report a number that shrinks every time a section moves.
-	sent := prov.requestsFor("review")[0]
+	run := prov.runsFor("review")[0]
+	sent := run.req
 	var system, user int
 	for _, msg := range sent.Messages {
 		switch msg.Role {
@@ -278,23 +281,25 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 		t.Errorf("measured %d/%d bytes, provider received %d/%d",
 			m.SystemBytes, m.UserBytes, system, user)
 	}
-	// AND THE TOOL ARRAY, which the cli-agent text backend renders into the
-	// prompt literally and its model is billed for as input. The meter
-	// was blind to it: a measured turn reported ~6,900 tokens against the
-	// provider's 205,000, and this row is what "is the prompt getting
-	// smaller" is answered from.
-	tools := toolArrayBytes(t, sent.Tools)
+	// AND THE TOOL ARRAY, which the CLI lists over MCP and hands its model
+	// with every request, billed as input. The meter was blind to it: a
+	// measured turn reported ~6,900 tokens against the provider's 205,000,
+	// and this row is what "is the prompt getting smaller" is answered from.
+	// Read off what the CLI LISTED when it opened the run — the array as it
+	// reached the model, not as the engine meant to send it.
+	offered := run.offered[0]
+	tools := toolArrayBytes(t, offered)
 	// The fixture has to have SENT tools, or the two assertions below hold
 	// nothing: every term on both sides of them is then zero, and a surface
 	// built wrong or a fake that dropped the array would read as a meter
 	// that measured it exactly.
-	if len(sent.Tools) == 0 || tools == 0 {
+	if len(offered) == 0 || tools == 0 {
 		t.Fatalf("the provider was handed %d tool definitions at %d chars; a term at "+
-			"zero is a term this case is not holding", len(sent.Tools), tools)
+			"zero is a term this case is not holding", len(offered), tools)
 	}
-	if m.ToolCount != len(sent.Tools) || m.ToolBytes != tools {
+	if m.ToolCount != len(offered) || m.ToolBytes != tools {
 		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
-			m.ToolCount, m.ToolBytes, len(sent.Tools), tools)
+			m.ToolCount, m.ToolBytes, len(offered), tools)
 	}
 	// EQUALITY, NOT "NOT ZERO". Every review surface carries submit_review,
 	// so the tool term alone makes the sum non-zero — a `!= 0` assertion
@@ -307,7 +312,7 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 }
 
 // toolArrayBytes is the compact JSON the engine measures a tool array as,
-// rebuilt from what the provider was handed.
+// rebuilt from what the CLI listed.
 //
 // Restated here rather than reaching for the engine's own unexported helper:
 // this suite is the one thing holding that helper's answer to what the

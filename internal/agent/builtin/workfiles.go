@@ -515,7 +515,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// be refused on one node after another committed it, and the object
 	// would then be that file's content. The collector removes what no row
 	// names.
-	opID := opIDFor(ctx, actor, t.Name(), "file", project+"/"+filePath, args)
+	opID := opIDFor(actor, t.Name(), "file", project+"/"+filePath, args)
 	result, err := t.deps.FileWriter(actor).PutFile(ctx, opID, worklet.FilePut{
 		Project: project, Path: filePath, ContentType: contentType, Object: object,
 		IfMatch: ifVersion,
@@ -655,7 +655,7 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}); denied != nil {
 		return *denied, nil
 	}
-	opID := opIDFor(ctx, actor, t.Name(), "file-remove", project+"/"+filePath, args)
+	opID := opIDFor(actor, t.Name(), "file-remove", project+"/"+filePath, args)
 	result, err := t.deps.FileWriter(actor).RemoveFile(ctx, opID, project, filePath,
 		uint64(max(argInt(args, "if_version", 0), 0)))
 	switch {

@@ -115,6 +115,11 @@ func (l boxLayout) records() string { return filepath.Join(l.root, "records") }
 
 func (l boxLayout) workspace() string { return filepath.Join(l.home(), WorkspaceSubdir) }
 
+// tmp is the box's own temporary directory: every temp root its processes
+// are pointed at ([TempRootEnv]), inside the home so the box stays the one
+// place a confined run may write.
+func (l boxLayout) tmp() string { return filepath.Join(l.home(), ".tmp") }
+
 // meta is the box's own .crewlet/, where its runner's markers, reports and
 // shim live — the box's side, never a record.
 func (l boxLayout) meta() string { return filepath.Join(l.home(), ".crewlet") }
@@ -751,6 +756,14 @@ type LocalOptions struct {
 	// key file a registry credential helper pulls the image with.
 	// It never reaches a box: that is `role.sandbox.env`.
 	RuntimeEnv map[string]string
+
+	// Confine runs every command a Direct box's job starts inside Host's
+	// boundary, kept from Confine's paths, every other box and the box's
+	// own records (see confine.go). Nil is the unconfined Direct cell a
+	// seat's code work runs in. Both or neither: a confinement with no
+	// mechanism to enforce it is refused at construction, never run open.
+	Confine *Confinement
+	Host    *HostConfinement
 }
 
 // Local mints sandboxes on the engine host, directly or in a container.
@@ -783,6 +796,14 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 	// applied, not when an agent first tries to do code work.
 	if !localSupported {
 		return nil, localErrorf("%s", unsupportedReason)
+	}
+	switch {
+	case opts.Confine != nil && opts.Placement != Direct:
+		return nil, localErrorf("a confined local box is a %q box: %q runs in its own "+
+			"container already", Direct, opts.Placement)
+	case (opts.Confine == nil) != (opts.Host == nil):
+		return nil, localErrorf("a confined local box needs both what it is kept from and " +
+			"the mechanism that keeps it; one was given without the other")
 	}
 	root := opts.StateDir
 	if root == "" {
@@ -837,6 +858,31 @@ func (l *Local) layout(id string) (boxLayout, error) {
 
 func (l *Local) containerName(id string) string { return ContainerPrefix + id }
 
+// confinedRules are one box's confinement, nil for an unconfined backend.
+//
+// EVERY BOX ON THIS BACKEND IS DENIED, its own records included, and only its
+// home is given back: one person's run must never read another's checkout,
+// and the records hold the box's credential map and its job's identity, which
+// are the engine's side of the box.
+func (l *Local) confinedRules(layout boxLayout) (*boxConfine, error) {
+	if l.opts.Confine == nil {
+		return nil, nil
+	}
+	deny, err := resolveAll(append(slices.Clone(l.opts.Confine.Deny), l.root))
+	if err != nil {
+		return nil, localErrorf("local sandbox %s cannot be confined: %v", layout.id, err)
+	}
+	read, err := resolveAll(l.opts.Confine.Read)
+	if err != nil {
+		return nil, localErrorf("local sandbox %s cannot be confined: %v", layout.id, err)
+	}
+	home, err := resolvePath(layout.home())
+	if err != nil {
+		return nil, localErrorf("local sandbox %s cannot be confined: %v", layout.id, err)
+	}
+	return &boxConfine{host: l.opts.Host, rules: confineRules{deny: deny, read: read, write: home}}, nil
+}
+
 // Create mints a box and, in container mode, starts the container behind it.
 func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	id := uuid.NewString()
@@ -855,7 +901,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	if err = os.Chmod(layout.root, hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not secure local sandbox %s at %s: %v", id, layout.root, err)
 	}
-	if err = os.MkdirAll(filepath.Join(layout.home(), ".tmp"), hostbox.DirMode); err != nil {
+	if err = os.MkdirAll(layout.tmp(), hostbox.DirMode); err != nil {
 		return nil, localErrorf("could not create local sandbox %s tmpdir: %v", id, err)
 	}
 	if err = os.MkdirAll(layout.records(), hostbox.DirMode); err != nil {
@@ -878,7 +924,12 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 
 	if l.opts.Placement == Direct {
 		localLog.Info("local_sandbox_created", "sandbox_id", id, "placement", string(Direct), "home", layout.home())
-		return &directBox{layout: layout, env: spec.Env, credentials: seeded}, nil
+		confine, confineErr := l.confinedRules(layout)
+		if confineErr != nil {
+			_ = os.RemoveAll(layout.root)
+			return nil, confineErr
+		}
+		return &directBox{layout: layout, env: spec.Env, credentials: seeded, confine: confine}, nil
 	}
 
 	name := l.containerName(id)
@@ -1016,7 +1067,11 @@ func (l *Local) reattach(sandboxID string) (Sandbox, error) {
 	// teardown still writes a refreshed login back.
 	credentials := readCredentialMap(layout)
 	if l.opts.Placement == Direct {
-		return &directBox{layout: layout, credentials: credentials}, nil
+		confine, err := l.confinedRules(layout)
+		if err != nil {
+			return nil, err
+		}
+		return &directBox{layout: layout, credentials: credentials, confine: confine}, nil
 	}
 	return &containerBox{
 		layout: layout, cli: l.cli,

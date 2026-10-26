@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -59,7 +61,7 @@ func (n *node) conversation(t *testing.T, handle, key string) []ledger.Session {
 //
 // The coding CLI is the stand-in of codingcli_test.go: this binary, installed
 // as `claude` on the box's PATH by the catalogue's setup step, asking the same
-// scripted model the seat's text phases do. That makes the whole detached
+// scripted model the seat's phases on this host do. That makes the whole detached
 // protocol real — a process group, a background job, a done marker, a result
 // line, an ask signal, the bridge — while leaving what the agent DOES up to
 // the test, through role.sandbox.env ([codingModeEnv]).
@@ -98,7 +100,7 @@ turn_engine:
   max_iterations: 1
 `
 
-// sandboxCompany is the coding company's document: its text calls on model's
+// sandboxCompany is the coding company's document: its phases on this host on model's
 // scripted CLI, and its executor's boxes under stateDir, each running the
 // stand-in that asks model.
 func sandboxCompany(t *testing.T, model *scriptedModel, stateDir string) string {
@@ -171,7 +173,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	boot := config.DefaultBootstrap()
 	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
-	boot.Stream.StoreDir = streamDir
+	brokertest.StoreIn(&boot.Stream, streamDir)
 	addr := ""
 	if host != nil {
 		host.ring.hold(&boot)
@@ -180,6 +182,14 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	seedStore(t, &boot)
 
 	ln := bridgeListener(t, addr)
+	// THE API IS SERVED ON ln, and api.port names it, as on a node that
+	// cmd/crewlet starts: an ingress node whose api.port is 0 serves
+	// nothing and joins no relay (internal/engine's joinBridgeFleet), so its
+	// bridge is reachable only once the route below is mounted — and a node
+	// that recovers a running run's seat before then has no bridge to serve
+	// the run's box from again.
+	boot.API.Port = ln.Addr().(*net.TCPAddr).Port
+	boot.API.ExternalURL = hostBridgeURL(ln)
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(env), SandboxPollInterval: runPollInterval,
@@ -318,12 +328,12 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		}
 		return false
 	})
-	submitted := "[tool] mcp__" + config.BridgeServerName + "__" + runner.SubmitWorkTool
+	submitted := "[tool] mcp__" + config.ToolServerName + "__" + runner.SubmitWorkTool
 	if transcript, _ := record["activity_transcript"].(string); !strings.Contains(transcript, submitted) {
 		t.Errorf("the run's transcript is %q; want the bridged call its stream made, %q",
 			transcript, submitted)
 	}
-	wantInput := toolUseUsage.input + toolUseUsage.cacheRead + toolUseUsage.cacheWrite
+	wantInput := toolUseUsage.prompt()
 	if input, _ := record["input_tokens"].(float64); input != float64(wantInput) {
 		t.Errorf("the run's input tokens are %v; want the %d its result line reported",
 			record["input_tokens"], wantInput)
@@ -347,7 +357,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		t.Fatalf("--max-turns %s, want the seat's own 7", argv[i+1])
 	}
 	// AND THE MODEL OF THE ENTRY THE LAUNCH PICKED, which is the half of a
-	// run's pairing the seat's text calls cannot show: those run on the
+	// run's pairing the seat's phases on this host cannot show: those run on the
 	// chain's head, a different entry altogether, so a run handed their
 	// model — or none, on the CLI's own default — would look the same from
 	// everywhere else.

@@ -247,15 +247,16 @@ func (p *Providers) validate(path Path) error {
 //
 // # One entry, two uses
 //
-// A seat's EXECUTOR is its coding CLI's own agentic run: the CLI's loop
-// drives the model, its own shell and editor are enabled, and the seat's
+// A seat's EXECUTOR is its coding CLI's own agentic run in a box: the CLI's
+// loop drives the model, its own shell and editor are enabled, and the seat's
 // tools reach it over the MCP bridge (internal/api/mcpbridge). Only a CLI
 // with an in-box runner can be that run ([CodingAgents]). Every OTHER phase —
-// the reviewer, a delegated worker, the onboarding pass, the side passes — is
-// a model call behind the engine's own tool loop, with the CLI's own tools
-// denied, and any CLI can serve one. So the same entry may be both: the
-// executor of the seats whose `llm` names it, and the reviewer of the seats
-// whose `llm_review` does.
+// the reviewer, a delegated worker, the onboarding pass, the side passes —
+// runs the CLI's own loop on this host, with its own shell and editor denied
+// and the phase's tools reached as the `crewlet` MCP server
+// ([ToolServerName]), and any CLI can serve one. So the same entry may be
+// both: the executor of the seats whose `llm` names it, and the reviewer of
+// the seats whose `llm_review` does.
 type LLMProvider struct {
 	// Agent is which CLI to drive. Empty drives Claude Code.
 	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which coding CLI to drive (default claude-code)."`
@@ -302,20 +303,30 @@ type LLMProvider struct {
 	// directory of its own, and moving back finds the old one intact.
 	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login."`
 
-	// TimeoutSeconds caps one CLI invocation the engine makes itself, wall
-	// clock: a process launch (a Node runtime costs seconds before its first
-	// byte), the model's answer, and the CLI's own internal retry and
-	// backoff. See [defaultCLITimeoutSeconds] for where the default comes
+	// TimeoutSeconds caps one STRETCH of the CLI's own work, wall clock:
+	// from its launch, or from the end of the tool call it last waited on,
+	// to the start of its next tool call or its exit — a process launch (a
+	// Node runtime costs seconds before its first byte), its model's
+	// answers, and its own internal retry and backoff. The engine's tools
+	// are not on the clock: they hold their own bounds, and a CLI run that
+	// drives a phase through many requests and calls is never cut for its
+	// length, only for a stretch in which it made no progress the engine
+	// could see. See [defaultCLITimeoutSeconds] for where the default comes
 	// from.
 	//
-	// THE TEXT PHASES ONLY — the reviewer, a worker, the onboarding pass, a
-	// side pass. An executor run is the CLI's own detached run in a box, and
-	// it is bounded by its round cap (providers.sandbox.default_max_turns,
-	// role.sandbox.max_turns) rather than by a clock.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one text-phase CLI invocation (default 600). Executor runs are bounded by their round cap instead."`
+	// THE PHASES ON THIS HOST ONLY — the reviewer, a worker, the onboarding
+	// pass, a side pass. An executor run is the CLI's own detached run in a
+	// box, and it is bounded by its round cap
+	// (providers.sandbox.default_max_turns, role.sandbox.max_turns) rather
+	// than by a clock.
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of a CLI run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead."`
 
 	// MaxConcurrent is how many CLI processes this provider runs at once on
-	// the engine's own behalf.
+	// the engine's own host. A process lives for a whole run of a phase, its
+	// requests and tool calls included; a model call made from INSIDE one of
+	// its tool calls on this same entry — a delegated worker, an auxiliary
+	// rewrite — runs in the caller's slot rather than waiting for one, which
+	// a run holding the last slot could never free.
 	//
 	// Each is a full Node or Rust runtime at roughly 200-400 MB resident,
 	// so an unbounded fleet of seats starting a turn together can exhaust
@@ -324,9 +335,9 @@ type LLMProvider struct {
 	// waits. Subscription plans also throttle concurrency well below what
 	// an API key allows, so a higher number mostly buys rate-limit errors.
 	//
-	// THE TEXT PHASES ONLY, like timeout_seconds: an executor run is a
-	// process in its own box, and each seat runs at most one at a time.
-	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent text-phase CLI processes; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one."`
+	// THE PHASES ON THIS HOST ONLY, like timeout_seconds: an executor run
+	// is a process in its own box, and each seat runs at most one at a time.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent CLI processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one."`
 
 	// Env is extra environment for every invocation, ${VAR}-resolved. The
 	// child gets an ALLOWLISTED environment, not the engine's, so anything
@@ -474,14 +485,15 @@ type CLIAgentAuth struct {
 // Default entry knobs. See the field comments for where the numbers come
 // from.
 const (
-	// defaultCLITimeoutSeconds is ten minutes. A text call is one model
-	// answer at the CLI's own effort, and on the current Claude models that
-	// is adaptive thinking against a 128K-token output cap: ten minutes is
-	// Anthropic's documented ceiling for such an answer in one call, and
+	// defaultCLITimeoutSeconds is ten minutes. A stretch is at least one
+	// model answer at the CLI's own effort, and on the current Claude models
+	// that is adaptive thinking against a 128K-token output cap: ten minutes
+	// is Anthropic's documented ceiling for such an answer in one call, and
 	// two minutes was measured cutting off exactly the calls doing the most
 	// work when the engine still made them itself. A CLI adds its process
-	// launch on top. A hung child holds its seat for no longer than this,
-	// and a timeout is retryable, so the seat's fallback chain moves on.
+	// launch to the first stretch. A hung child holds its seat for no longer
+	// than this, and a timeout is retryable, so the seat's fallback chain
+	// moves on.
 	defaultCLITimeoutSeconds = 600.0
 	defaultCLIMaxConcurrent  = 4
 	defaultCLIAgentName      = CLIClaudeCode
@@ -506,7 +518,8 @@ func (l *LLMProvider) runsExecutor() bool {
 	return slices.Contains(CodingAgents, CLIAgentName(l.AgentName()))
 }
 
-// Timeout is the invocation cap, applying the default.
+// Timeout is the cap on one stretch of the CLI's own work, applying the
+// default.
 func (l *LLMProvider) Timeout() float64 {
 	if l.TimeoutSeconds <= 0 {
 		return defaultCLITimeoutSeconds
@@ -746,9 +759,9 @@ func (c *Company) validateLLMModels() error {
 // ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
-// makes — the text calls and an executor run alike, which are handed the same
-// value — fails inside the CLI, which OpenCode 2 refuses as "Invalid model
-// reference".
+// makes — its runs on this host and an executor run alike, which are handed
+// the same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid
+// model reference".
 //
 // JUDGED ON THE VALUE THE CLI IS HANDED, the model rendered through the
 // profile's model_args, so an override that puts the provider in the flag

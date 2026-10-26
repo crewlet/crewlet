@@ -131,14 +131,17 @@ func (s *Service) Routes(mux authz.Mux) error {
 	for _, route := range []struct {
 		pattern string
 		handler http.HandlerFunc
+		absent  *authz.Absent
 	}{
-		{"POST /artifacts/{id}/data/writes", s.writes},
-		{"POST /artifacts/{id}/data/undo", s.undo},
-		{"POST /artifacts/{id}/data/state", s.state},
-		{"PUT /artifacts/{id}/data/schema", s.schema},
-		{"GET /artifacts/{id}/data/export.csv", s.export},
+		{"POST /artifacts/{id}/data/writes", s.writes, nil},
+		{"POST /artifacts/{id}/data/undo", s.undo, nil},
+		{"POST /artifacts/{id}/data/state", s.state, nil},
+		// A SCHEMA BELONGS TO AN ARTIFACT, and replacing it makes none.
+		{"PUT /artifacts/{id}/data/schema", s.schema, authz.AddedElsewhere(
+			"An artifact is created with POST /artifacts, and its data schema is written here once it exists.")},
+		{"GET /artifacts/{id}/data/export.csv", s.export, nil},
 	} {
-		if err := router.Handle(route.pattern, pre, route.handler); err != nil {
+		if err := router.Handle(route.pattern, pre.WhenAbsent(route.absent), route.handler); err != nil {
 			failures = append(failures, err)
 		}
 	}

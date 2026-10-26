@@ -24,10 +24,10 @@ func shipped(t *testing.T, agent, model string) *Provider {
 }
 
 // AN EXECUTOR RUN THAT SPENT THE PLAN SITS ITS ENTRY OUT, ON THE VENDOR'S WORD
-// AND NOTHING ELSE. The run is the CLI's own, so nothing a text call reads ever
+// AND NOTHING ELSE. The run is the CLI's own, so nothing a call on this host reads ever
 // saw its limit: the next launch on the entry — a reviewer's send-back an hour
 // into the same window — walked into the same spent plan. Read through the
-// same classification a text call takes, by the profile each CLI ships with:
+// same classification every call takes, by the profile each CLI ships with:
 // Claude Code's report where its answer should be, or in the error of a run it
 // said failed; OpenCode's typed failure event, whose payload the runner
 // collects as the run's error. A model's answer that merely MENTIONS a limit,

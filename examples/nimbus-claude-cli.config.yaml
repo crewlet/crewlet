@@ -188,10 +188,10 @@ api:
   # box on this machine dials this port on loopback, which the node
   # derives from the socket it binds — nothing to set, and `port: 0`
   # would leave every executor launch refused.  A `container` or `e2b`
-  # box needs CREWLET_MCP_BRIDGE_URL, a URL that box reaches this node
-  # at; in a fleet it must address the NODE and never a load balancer: a
-  # bridge session is a live tool surface in one process, and a peer
-  # that never held it answers 401 for ever.
+  # box needs CREWLET_MCP_BRIDGE_URL, a URL that box can dial.  In a
+  # fleet the URL is the fleet's, the same on every node: any node
+  # serving the API, a load balancer in front of several included,
+  # relays each call to the node holding the seat.
   #
   # 8000 rather than 80, deliberately.  The only reason to bind the plain
   # http port is so a webhook URL an external service registers needs no

@@ -1239,7 +1239,20 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 // compared for equality by the lease renewal and never rendered in a
 // width-constrained slot.
 func NewIncarnation(nodeID string) string {
-	return nodeID + ":" + uuid.NewString()
+	return nodeID + incarnationSep + uuid.NewString()
+}
+
+// incarnationSep joins a node's id to an incarnation's own suffix. No node id
+// holds it ([nodeIDPattern]), so the cut at its first occurrence is exact.
+const incarnationSep = ":"
+
+// IncarnationNode is the node an incarnation belongs to: the stable id
+// [NewIncarnation] wrote before the incarnation's own suffix, which is what a
+// peer addresses the node by. ONE CUT, beside the one join, for every reader
+// that holds a lease's owner and needs its node.
+func IncarnationNode(owner string) string {
+	node, _, _ := strings.Cut(owner, incarnationSep)
+	return node
 }
 
 // ---- store ----------------------------------------------------------- //
@@ -1703,6 +1716,21 @@ type Stream struct {
 	// a company whose pages write heavily sets it, up to twice the
 	// artifacts log's bound.
 	ArtifactDataLogMaxBytes int64 `yaml:"artifact_data_log_max_bytes,omitempty" json:"artifact_data_log_max_bytes,omitempty" js:"min=1073741824;max=549755813888" desc:"Byte ceiling on the artifact datastore's log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."`
+
+	// AssistantLogMaxBytes is the byte ceiling on the Dashboard Assistant's
+	// log, where every person's conversations, turns and proposals are
+	// recorded before they are applied.
+	//
+	// UNSET TAKES 512 MiB ([DefaultAssistantLogMaxBytes]), sized by how many
+	// people ask the assistant rather than by the disk: about two weeks of a
+	// completely blocked trim at the reference company's rate. Where the
+	// broker is short it is scaled down as far as its 64 MiB floor, so a
+	// fresh node reserves only the floor for it. It shares the state logs'
+	// one budget, and crossing it refuses the append
+	// (the assistant cannot record the turn) rather than shedding history. A
+	// conversation's own retention is set in the company document and does
+	// not depend on this.
+	AssistantLogMaxBytes int64 `yaml:"assistant_log_max_bytes,omitempty" json:"assistant_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the Dashboard Assistant's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -2176,6 +2204,8 @@ func (s *Stream) validate(path Path) error {
 		ArtifactsLogMaxBytesFloor, ArtifactsLogMaxBytesCeiling)
 	bytesInRange(&p, path, "artifact_data_log_max_bytes", s.ArtifactDataLogMaxBytes,
 		ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling)
+	bytesInRange(&p, path, "assistant_log_max_bytes", s.AssistantLogMaxBytes,
+		AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2206,7 +2236,8 @@ func (s *Stream) validate(path Path) error {
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
 				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
 				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
-				"artifact_data_log_max_bytes %d = %d): the broker "+
+				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d = %d): "+
+				"the broker "+
 				"refuses a stream whose ceiling it cannot back, so this node would "+
 				"fail to provision one of them. Raise store_max_bytes, or lower the "+
 				"ceilings — and leave headroom, because the state logs reserve only "+
@@ -2214,7 +2245,8 @@ func (s *Stream) validate(path Path) error {
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
 			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
-			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, declared)
+			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
+			declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

@@ -1952,12 +1952,12 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
 | `useTab` | which OBJECT tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has three and an agent seat has six — so the hook resolves the parameter against the tabs this object HAS. It binds `1`–`9`; the strip itself is `@crewlethq/ui`'s `Tabs` |
-| `DetailRail` | the peek's chrome: resizable, a column of the sheet where the frame leaves the list beside it its floor (1160 px on most screens, 1396 beside Settings' column), a drawer under that |
-| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's footer slot: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
+| `peekAddress` | the peek's address: `peek=` in the URL, opened by a push and moved by a replace, and the page a row links to (`peekHref`); which clicks peek is the kit's (`peekClickHandler`, `peekRowActivation`) |
+| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell in the kit's `peek` slot and drawn by the kit's `PeekRail` (resizable from the keyboard as well as the pointer, a column of the sheet where the frame leaves the list beside it its floor, 1160 px on most screens and 1396 beside Settings' column, and a drawer under that): the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | the kit's `DataGrid`, bound to the URL (its sort and columns), the peek and the keymap; bands from a grouped answer, typed cells; a row becomes a labelled card under 640 px, or two unlabelled lines on a `compact` grid |
 | `PropertiesRail` | an object's own facts, in sections, with who set each: the kit's `PropertyList`, given routes and turns |
 | `Histogram` + `FacetRail` | a log's time axis (the kit's `Histogram`, given the engine's buckets and the reader's zone), and one dimension of it as chips |
-| `TimeRangePicker` | the one control for `window=` |
+| `lib/rangePicker` | the one control for `window=`: a screen's range mapped onto the kit's `TimeRangePicker` (Today as the company's day, a custom window on the reader's zone or as whole company days) |
 | `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation (the kit's `PageNote`), wrapped so its last line never holds a word alone |
 
 **Three widths, and only one is ours.** Below 1024 px (`breakpoint.shell`) the
@@ -2001,11 +2001,12 @@ It is **the shell, not a media query**, that applies it, because two of those
 terms are not the window's: the section column belongs to the screen, and the
 inset and padding scale with the reader's density — a media query can see
 neither. `app/layout.ts` (`peekColumnMin`) does the arithmetic, the shell asks
-`matchMedia` for the one width right for the frame on screen, and it writes one
-attribute, `data-peek="column"` or `"drawer"`, so there is no width with both
-or neither. And the column's track is the reader's dragged width CAPPED at what
-the sheet can give with the list at its floor (`--peek-reserve`, from
-`listReserve`), because a width dragged to 640 on a wide window outlives it.
+`matchMedia` for the one width right for the frame on screen, and it hands the
+kit's `AppShell` one `peekShape`, which the kit publishes as `data-peek="column"`
+or `"drawer"`, so there is no width with both or neither. And the column is the
+reader's dragged width CAPPED at what the sheet can give with the list at its
+floor (the rail's `reserve`, from `listReserve`), because a width dragged to 640
+on a wide window outlives it.
 
 **Beside a canvas the peek rests at 330.** A list beside a peek keeps its floor
 and reflows; a chart is SHRUNK into whatever width the peek leaves it, so every
@@ -2064,7 +2065,7 @@ for the keys is the reader who does not know `?` yet.
 
 | Where it is live | Keys |
 |---|---|
-| Anywhere | `Mod+K` search (the same chord closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
+| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` the assistant (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
@@ -2075,7 +2076,8 @@ for the keys is the reader who does not know `?` yet.
 | Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
 | Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
-| In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
+| In the assistant | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes the assistant and never a peek beside it; `Up` in an empty box brings back the last question |
+| In a dialog, a menu, the drawer or the assistant | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
 `Mod` is Command on a Mac and Control elsewhere, and every hint is drawn in
 the platform's own notation with the kit's `Kbd`.
@@ -3977,6 +3979,174 @@ restored history entry. `Mod+K` closes it from its own field. The step-up
 confirmation is deliberately not in that rule: it is holding a refused request
 open until the reader answers it, and a navigation answers nothing.
 
+## The assistant: a panel of the frame
+
+The Dashboard Assistant answers questions about the company and prepares
+changes for the person to approve, acting strictly as the signed-in person:
+it reads only what they can open, and nothing changes until they approve it.
+The engine's half is its own section of the docs; what the dashboard owns is
+where the panel stands, what it is told about the page, and how a turn is
+drawn.
+
+**It is a panel of the frame, never of a screen.** The **Ask** button ends
+the page bar (above the panel it opens), carries the assistant's Orbit mark
+and the `Mod+.` hint, and stays inline at a phone's width as an icon button.
+An open artifact, which draws its own head, places the same button at the end
+of its bar.
+It is never hidden: where the reader may not ask it is drawn disabled with the
+engine's reason (`viewer.assistant`: turned off, no model, a session that is
+not a person's, or access that does not include it). While the panel is
+closed, a dot on the button says an answer is on its way or a change waits on
+the reader.
+
+**The frame decides its shape by arithmetic, as it decides the peek's**
+(`app/layout.ts`): a third track of the frame, mirroring the rail, where the
+window holds the page's sheet beside it with the list at its floor (1168 px
+on a screen and 1404 beside Settings' column, at the normal density); over
+the page's end edge, modal, below that; and the whole window on a phone. Its
+track is one more term of every other width, so a peek beside it becomes a
+drawer first (both are columns only from 1588 px) and Settings' column folds
+sooner. It rests at 420 px and is dragged between 360 and 640, from the
+pointer or the keyboard, capped where the page keeps its floor, and kept per
+browser (`crewlet.assistant.width`). It stays open across a navigation, and a
+reload brings back what the tab had (`crewlet_assistant_tab`, in the tab's
+own storage, which the hand-over to another person empties).
+
+**What a page tells it is identifiers, never a record's content**
+(`app/assistant/context.ts`): the screen, its parameters and query, the
+records in view by kind and id, what is selected, a revision, and the draft
+the person has open with its values (below), which exists nowhere a tool
+could read it. A screen
+that knows more registers it with `useAssistantContext`, along with the page
+actions it takes from the assistant (each parsed, gated and applied by the
+screen's own code). The page goes with a question as a chip in the composer,
+named by the last two crumbs; removing it sends the question with no page
+until the reader adds it back or opens another page. The drawer and a screen
+talk over a typed module-scoped bus (`app/assistant/bus.ts`), never
+`postMessage` or a DOM event, which an artifact's frame or any script could
+reach.
+
+**A page action is carried out exactly once** (`app/assistant/chunk/pageActions.ts`).
+Every tab open on the conversation hears it, so the tab it was meant for (the
+one that approved it or asked the question, or else a tab showing the very
+page it was prepared against) claims it first (`PUT /assistant/actions/{id}`,
+`applying`), and every later claim is answered `409 action_already_claimed`.
+A claim nobody answered applies nothing. The screen then applies it through
+its own parser, gate and setters with a fresh look at the page's revision,
+and the outcome goes back on the same claim, so the turn hears it as the
+action's result. An approved change shows its outcome on its card; a pure
+view change the screen declared needs no approval (D11) shows a receipt in
+the thread, with Undo while the page still shows what the change made of it.
+
+**What each screen offers** is one id per change, the same list the engine's
+catalogue holds, each parsed, gated and applied by the screen's own code over
+the vocabulary its own controls offer (`app/assistant/urlAction.ts` builds the
+ones that are address keys). Pure view changes apply at once: Home's window
+and feed (`home.range.set`, `home.feed.set`), the work list's filters, Clear
+and arrangement (`work.filter.apply`, `work.filters.clear`, `work.arrange.set`,
+never widening the person `#/me` is about), a project's lens
+(`project.lens.set`), a task's activity tab (`item.activity.set`), Spend's
+window and split (`spend.range.set`, `spend.group.set`), Live's and the Turns
+list's filters (`live.filter.apply`, `turns.filter.apply`) and Doclet's
+search (`knowledge.search.set`). Changes to a draft ask for approval and write
+into the draft only, saving staying the person's: the open draft's fields on
+any screen that declares one (`draft.set`, below), the org builder's draft
+(`org.draft.apply_ops`, recorded through the builder's own door so undo, the
+dry run and the review work unchanged) and a ceiling filled in for its editor
+(`budgets.ceiling.prefill`). A page of several components offers every one's
+actions together.
+
+**Every screen with a draft says what is open** (`app/assistant/draft.ts`).
+One hook, `useAssistantDraft`, takes the draft, its identity (`client` while
+the values live in the page, `server` where they are saved at an id and a
+revision), the step or section, the screen's help (what the assistant can and
+cannot do there, said by the screen rather than the prompt), and its fields,
+each a `read` from the draft and, where the assistant may set it, a `write`
+that refuses a value in the sentence the field's own control would. The page
+context carries the snapshot redacted (a field marked `secret`, or whose path
+names a credential by the engine's rule, is sent empty) and bounded (forty
+fields, a thousand characters a value, the rest counted in `more`, and fields
+shed from the end before the turn is ever refused). The same hook declares
+`draft.set`, whose card shows each field's value now beside the proposed one,
+which applies through the screen's setter, and which offers Undo while the
+draft still says what the change made of it. A gate
+(`app/assistant/draftGate.test.ts`) fails for a module with draft or form state
+(a leave guard, an editing status, a setup wizard, a rich, inline or list
+editor, a form field) that neither declares a draft nor is listed as part of a
+screen that does, or as a modal or signed-out form with its reason. The brand
+setup and the Brand page share one field list (`lib/brand/assistantDraft.ts`):
+name, tagline, colours, typefaces and voice are settable, and a logo is a
+`file` field, set only by a reference to one of the person's files in the
+conversation (the engine checks it is theirs before the card is drawn). The
+card draws a proposed image through the owner's route in `LogoSlot`'s
+thumbnail, an `<img>`, never inlined (`app/assistant/chunk/DraftFile.tsx`);
+once approved, the screen fetches the bytes and keeps them as a picked file
+for its own save. The help tells the assistant it makes no images there and
+offers an SVG starting point only when asked. The palette offers "Ask the
+assistant" for a typed question, which the panel asks as its own box would.
+
+**A turn is the engine's frames, reduced** (`app/assistant/chunk/turn.ts`):
+one pure reducer over every gesture and every frame, a frame at or below the
+sequence a turn holds dropped, so a resumed stream never draws a delta twice.
+The stream is server-sent events over `fetch` (`protocol/assistant.ts`):
+`Last-Event-ID` on every resume, a stall after two missed keepalives dialled
+again, a refusal or another protocol version stopping it for good.
+
+**What it draws is the design system's** (`app/assistant/chunk/blocks.tsx`
+maps every wire state to exactly one component state): the question in a
+`MessageBubble` with the page it carried, a `RunChip` that opens on the
+`StepList` of the ordinary requests it made, the answer as prose with no
+container, and the engine's cards (`ResultTableCard` with its CSV and XLSX
+downloads from the stored snapshot, `EntityList`, `OpenInAppCard`,
+`RefusalCard`, `ProposalCard` with the before and after of every change, and,
+where the result's visibility changes, who will see it). A conversation an
+administrator read for compliance says so at its top, with each reader, when
+and the reason they gave.
+
+**Deep work is one card, redrawn in place.** When the assistant hands a large
+task to a deep-work run, its step carries the run's progress and the engine
+sends it again under the same step id as the run moves. The drawer draws it as
+a `DeepWorkCard`: the goal, its state, its time against its deadline, its
+Crewlet calls against their cap and the share of its budget used (each a
+meter), and its latest activity lines in mono. The steps the run made (`parent`
+is its index) are nested under the card, folded behind their count when there
+are more than three, rather than listed in the `RunChip`, which says "Deep
+work" while the run works. The turn's Stop ends it; a stopped or failed run
+says why, and a waiting run says it waits on the change card below it.
+
+**Files are bytes read as the person, previewed only as pictures.** A file
+card lists what a run delivered in a `FileList`, each with its name, type,
+size and a `DownloadButton` that fetches its `download` route under the
+session. An image (an SVG included) is previewed through an object URL in an
+`<img>`, typed from the reference rather than from the response, so nothing
+a file carries reaches the page as markup; any other file shows no preview.
+
+**A question can carry images.** The person attaches up to four PNG, JPEG,
+WebP or GIF images of at most 5 MB each by Attach image, by dropping them on
+the composer, or by pasting (a screenshot). Each uploads at once
+(`POST /assistant/conversations/{id}/files`, under its own operation key and
+through the same request path as every other assistant write), stands in the
+composer as an `AttachmentChip` with its thumbnail, and its file id travels
+in the question's `attachments`. One the engine would refuse is refused above
+the composer in a sentence that says what to do, and Send waits while an
+image is still uploading. A sent question shows its images as chips under its
+bubble.
+**A model's words are drawn inert**: a link is its label and the host it
+names, never an anchor; a picture is its alt text, never fetched
+(`ASSISTANT_WORDS` in `lib/markdown.ts`). The assistant moves the page only
+through an engine-built Open in app card, whose address the drawer checks is
+one of this dashboard's own framed routes before it follows it, or through a
+page action the screen itself declared. There is no
+answer rating, and the one toast is "Conversation cleared". The toast stack
+keeps clear of the panel (`app/toastInset.tsx`): beside it while it is a
+column or over the page, above its composer while it is the whole window on a
+phone.
+
+**The panel is a chunk of its own**: the first paint carries the Ask button,
+the page context registry, the bus and the one-word status the button reads,
+and the drawer, its store, its reducer, its cards and its stream client load
+the first time it opens, second in the idle prefetch after the palette.
+
 ---
 
 ## Acting, as yourself
@@ -4848,9 +5018,19 @@ rules fix it, and each one names a specific mechanism:
    closed folds, so what the order costs a reader who only wants the
    transcript is two header rows; what it buys is a card that can be read top
    to bottom as the story of one phase. Their own order is the request's: the
-   prompt is what was sent, and the tool surface is the schema array that went
-   *with* it — one payload described in two folds, so they belong beside each
-   other rather than either side of the transcript.
+   prompt is what was sent, and the tool surface is the tools that went *with*
+   it — served to the CLI as its MCP server's for the length of each run — one
+   call described in two folds, so they belong beside each other rather than
+   either side of the transcript.
+
+   **What it did is grouped by CLI run.** Most phases are one run of their
+   CLI's loop; one that was steered, delegated or corrected is several, each a
+   process handed the conversation so far. So the rounds sit under a head per
+   run (`RunHead`): *CLI run N*, the entry that served it, how many rounds it
+   made, how long it lived, what it spent and how it ended — or, for the run
+   still in flight, that it is running. A run whose CLI's record showed no
+   requests is one round, and its head says so, since that round's timing is
+   the run's.
 
    The error callout is the one thing that does not wait its turn. It is a
    banner rather than a section — the reason the reader opened the card at all
@@ -5364,8 +5544,8 @@ Four rules replace it, and each one names what it fixes.
    self-iterating turns where the question gets asked — and so does every
    **nested** call, a delegate's worker and the round-cap judge included, which
    publish no start and so could never have been given one. Zero means *not
-   measured*, never *took no time*: an agent-mode executor's rounds ran inside
-   a coding CLI's own loop in another process, and that run's wall clock is on
+   measured*, never *took no time*: an executor's rounds ran inside its
+   coding CLI's own loop in another process, and that run's wall clock is on
    `sandbox_run_started` / `sandbox_run_completed` instead.
 
    **And the page says where each one went.** *Relocated* is only better than
@@ -6486,8 +6666,8 @@ tab, then open the phase, to read a word of it.
 
 **A parked turn is watched on the same tab.** Its executor launched a detached
 coding run and suspended, so no phase is in flight while the engine still
-calls the seat working — for the whole of an agent-mode executor's turn, and
-for hours on a long native run. So while the turn is parked the Transcript
+calls the seat working — for most of the turn, and for hours on a long
+one. So while the turn is parked the Transcript
 leads with a **Coding run** card: the run's live output (the same
 `sandbox_tail` poll the Timeline's run span opens, read off the waterfall's
 own open run span), the coding agent, and **Open the run** to the run's page
@@ -6550,7 +6730,12 @@ that can.
 - **Timeline is a waterfall on the engine's own clock** (`lib/waterfall.ts`).
   Every instant is one the engine measured — each round's model call, each
   tool call, a phase, the prefetch, a coding run — and the model only arranges
-  them: rounds under their phase, a round's tool calls after its model call (a
+  them: a phase's CLI runs under it, each a **CLI run N** span from its launch
+  to its exit (`invocations[]`) and its rounds under it — the entry that served
+  it, the rounds it made, whether its CLI's record showed them, how it ended and
+  what it spent in its detail, and the run still going drawn open from its
+  launch (`run_started_at`), saying what it made lands when its CLI exits —
+  a round's tool calls after its model call (a
   call the engine timed but did not stamp is run serially from the model's
   answer and says it was *placed*), a delegate's workers and the round-cap
   judge under the round that spawned them (`host_round`), each coding run as
@@ -6559,10 +6744,12 @@ that can.
   `auxiliary_spend` record of the `reflection` stage from its first call to
   its last, marked where a call failed — and *review pending* while an executor has finished and no
   reviewer has started. The ROUND IN FLIGHT is drawn only from a start the
-  engine announced for it: every round publishes a frame as its provider call
-  is made, and `round_started_at` stays the previous round's while that
-  round's tools run — so a start no later than the last recorded round's is
-  that round's tools, never "the next round" drawn minutes early. The Turn row
+  engine announced for it: a request is in flight from the frame published as
+  its run opens or as the last call of the response before it is answered, and
+  `round_started_at` stays the previous round's while that round's tools run —
+  so a start no later than the last recorded round's is that round's tools,
+  never "the next round" drawn minutes early. Several calls of one response
+  running side by side are each drawn as running (`running_calls`). The Turn row
   ends at the turn's own measurement; the reflection pass, which runs after
   it, trails the bar. A turn that parked is one turn: its executor's record
   carries every round from both sides of the park, so the phase spans the run
@@ -7924,7 +8111,7 @@ field, and the panel says so.
 through the same Admin-only `config` question the Configuration screen asks,
 in config order (the order a seat that names no model falls back through), each
 **as the engine will run it**: a field the entry leaves out is said as the
-default the engine applies — the CLI (`claude-code`), the mode (`text`), the
+default the engine applies — the CLI (`claude-code`), the
 sign-in (`subscription`), the 600-second timeout and four processes at once —
 from `contract/models.ts`, which
 `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes` holds to the
@@ -7933,10 +8120,12 @@ sign-in the engine does not apply. There is **no per-key state** to draw and
 nothing is asked of a node: a model is one CLI, which holds one sign-in and
 rotates nothing, so what an operator needs is how it signs in and whether
 anything still runs on it. Three tiles count the models (and how many no seat
-names), the models in **agent mode**, which run the executor in their CLI, and
-the models **on an API key**, the ones billed to a metered account. Each row is the entry's key over its CLI and model
-(`claude-code · sonnet`), its mode (*Text*, or *Agent* with the cell its
-`run_in` names), how it **signs in** — *Subscription*, *API key* or *Engine
+names), the models that can run a seat's **executor** — a CLI with an in-box
+runner, whose own run in a box every agent seat's executor is — and the models
+**on an API key**, the ones billed to a metered account. Each row is the
+entry's key over its CLI and model (`claude-code · sonnet`), what the engine
+runs it for (*Executor* with the cell its `run_in` names, or *Text phases* for
+a CLI with no in-box runner, which a launch skips), how it **signs in** — *Subscription*, *API key* or *Engine
 environment* — over where that credential comes from: the variable the entry's
 `auth.token` or `auth.api_key` names, or, where it names none, what the CLI
 reads instead (*CLI login*, *from a bundle*; *the CLI's own key variable*; *the
@@ -7968,8 +8157,8 @@ sign-in reads (a secret field — `$` offers the sealed entries, and one the
 document holds inline is a locked row that can be kept or replaced, never shown
 — and none at all under `inherit-env`, since the engine refuses a credential
 under a mode that does not read it) and, under a **Limits** fold, its two caps,
-the wall clock on one CLI invocation and how many run at once, empty meaning
-the default. It checks the whole company twice with `dry_run` — as stored and
+the wall clock on one stretch of a CLI's own work and how many of its CLIs live
+at once, empty meaning the default. It checks the whole company twice with `dry_run` — as stored and
 with the edit — so only a warning the edit introduces is said, places a problem
 the engine names at one of those fields beside it and any other above the form,
 then stores it with `PUT /config/llm-providers/{id}` and `If-Match`, sending

@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -69,6 +70,13 @@ func cliProvider(t *testing.T, m chainMember) *cliagent.Provider {
 		overrides = map[string]any{
 			"binary": script, "complete_args": []any{"run"},
 			"output": "text", "prompt_mode": "stdin",
+			// A text stream has no events to tell apart, so the profile's
+			// event filter goes with it — and so does everything else that
+			// reads such a stream: its requests, its MCP failure events, the
+			// cap's signature in it.
+			"event_type_path": []any{}, "text_events": []any{},
+			"requests": nil, "cap": nil,
+			"mcp": map[string]any{"failure_events": []any{}},
 		}
 	}
 	provider, err := cliagent.New(cliagent.Config{
@@ -237,7 +245,7 @@ func launchReadyEngine(t *testing.T, c *Company) *Engine {
 func launcherOn(e *Engine, c *Company, seat *org.Role, turnID string) *agentLauncher {
 	return &agentLauncher{
 		engine: e, company: c, seat: seat,
-		turn: &turnctx.Turn{RunID: turnID, Seat: seat, Task: "fix the failing test"},
+		turn: &turnctx.Turn{RunID: turnID, Seat: seat, Org: c.Org, Task: "fix the failing test"},
 	}
 }
 
@@ -743,60 +751,80 @@ func TestAnExecutorIsRefusedWithoutACatalogueForItsCompany(t *testing.T) {
 	refusedCleanly(t, e, "t1", jobs)
 }
 
-// THE BRIDGE ENTRY IS ADDED TO A COPY, never to the seat's own server map.
+// EACH RUN'S BOX IS GIVEN ITS OWN JOB'S ENDPOINT, never another's.
 //
-// The rendered map's values come from config the epoch owns, and an endpoint
-// written into it would follow the seat into its NEXT run — where the token is
-// dead and every tool call fails for a reason nothing in the config explains.
-func TestTheBridgeEntryDoesNotFollowTheSeatToItsNextRun(t *testing.T) {
+// The endpoint names the job the store opened for the run — which is what lets
+// a node that takes the run over serve the same session under the token the
+// box holds — so it is minted inside the launch, once the job has a name, and
+// added to a server list of the job's own. A run handed another's endpoint, or
+// one minted before its job existed, calls a session that is not its own or
+// none at all.
+//
+// Mutation: mint the endpoint before the launch names the job, or for a job
+// other than the row's, and the token here names no job the row holds.
+func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	t.Parallel()
-	seatServers := map[string]sandbox.MCPServer{
-		"jira": {Name: "jira", Transport: sandbox.TransportStdio, Command: "jira-mcp"},
+	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code",
+		model: "claude-golden", runIn: config.PlacementE2B})
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	for _, runID := range []string{"t1", "t2"} {
+		l := launcherOn(e, c, seat, runID)
+		if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+			t.Fatalf("LaunchExecutor(%s): %v", runID, err)
+		}
 	}
-	first := withBridge(seatServers, "https://engine.example.com/mcp/tok-1")
-	if _, leaked := seatServers["crewlet"]; leaked {
-		t.Fatal("the bridge entry was written into the seat's own map")
+	started := jobs.Started()
+	if len(started) != 2 {
+		t.Fatalf("%d jobs started, want 2", len(started))
 	}
-	if first["crewlet"].URL != "https://engine.example.com/mcp/tok-1" {
-		t.Errorf("the copy does not carry the endpoint: %v", first["crewlet"])
-	}
-	second := withBridge(seatServers, "https://engine.example.com/mcp/tok-2")
-	if second["crewlet"].URL == first["crewlet"].URL {
-		t.Error("a second run reused the first run's dead endpoint")
-	}
-	// The seat's own servers survive into both, because a bridged run
-	// still needs the credentials only its own MCP children hold.
-	for _, out := range []map[string]sandbox.MCPServer{first, second} {
-		if out["jira"].Command != "jira-mcp" {
-			t.Errorf("the seat's own servers were dropped: %v", out)
+	prefix := "https://engine.example.com" + mcpbridge.PathPrefix
+	agent, _ := c.Org.AgentIDFor(seat)
+	for i, runID := range []string{"t1", "t2"} {
+		url := started[i].MCPServers[config.ToolServerName].URL
+		token, ok := strings.CutPrefix(url, prefix)
+		if !ok {
+			t.Fatalf("run %s's box was given %q, not this node's bridge", runID, url)
+		}
+		run, found, err := e.sandbox.Load().pending.Get(t.Context(), runID)
+		if err != nil || !found {
+			t.Fatalf("run %s has no row (found %v, err %v)", runID, found, err)
+		}
+		if !strings.Contains(token, run.LaunchID+"~"+agent.String()+"~"+runID) {
+			t.Errorf("run %s's endpoint does not name its own job %s and its seat", runID, run.LaunchID)
+		}
+		if got, reason := e.bridge.Miss(token); got != runID || reason != "" {
+			t.Errorf("run %s's endpoint resolves to run %q (%s)", runID, got, reason)
 		}
 	}
 }
 
 // THE DURABLE LOG IS THE RESUME'S WHOLE RECORD, so the conversion has to keep
 // every field the delivery check, the citations, the ledger and the executor's
-// own record read — the bridge's measurement of each call included, which is
-// what the record's timeline places the run's calls by.
+// own record read — the bridge's measurement of each call included: its place
+// in the order the run made its calls, when it ran, for how long and who
+// answered, which is what the record's timeline places the run's calls by.
 //
-// Mutation: drop the start, the duration or the origin from the conversion,
-// and this goes red.
+// Mutation: drop the place, the start, the duration or the origin from the
+// conversion, and this goes red.
 func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 6, 15, 12, 1, 2, 0, time.UTC)
 	got := bridgedCalls([]sandbox.BridgeCall{
-		{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted",
+		{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted", Seq: 2,
 			StartedAt: at, DurationMS: 1500, Origin: "mcp:slack", Server: "slack"},
-		{Name: "jira_create", Args: "not json", Failed: true},
+		{Name: "jira_create", Args: "not json", Failed: true, Seq: 1},
 	})
 	if len(got) != 2 {
 		t.Fatalf("converted %d calls, want 2", len(got))
 	}
-	if got[0].Name != "slack_post" || got[0].Output != "posted" || got[0].Failed {
+	if got[0].Name != "slack_post" || got[0].Result != "posted" || got[0].Failed {
 		t.Errorf("call = %+v", got[0])
 	}
-	if !got[0].StartedAt.Equal(at) || got[0].Duration != 1500*time.Millisecond {
-		t.Errorf("the bridge's measurement was lost: started %s, took %s",
-			got[0].StartedAt, got[0].Duration)
+	if got[0].Seq != 2 || !got[0].StartedAt.Equal(at) || got[0].Duration != 1500*time.Millisecond {
+		t.Errorf("the bridge's measurement was lost: place %d, started %s, took %s",
+			got[0].Seq, got[0].StartedAt, got[0].Duration)
 	}
 	if got[0].Origin != "mcp:slack" || got[0].Server != "slack" {
 		t.Errorf("who answered was lost: origin %q, server %q", got[0].Origin, got[0].Server)
@@ -811,7 +839,7 @@ func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	}
 	// UNDECODABLE ARGUMENTS KEEP THE CALL. One ledger line renders worse;
 	// failing the resume over it would lose the whole turn.
-	if got[1].Name != "jira_create" || !got[1].Failed {
+	if got[1].Name != "jira_create" || !got[1].Failed || got[1].Seq != 1 {
 		t.Errorf("a call with bad arguments was dropped or reshaped: %+v", got[1])
 	}
 	if got[1].Args != nil {
@@ -946,13 +974,14 @@ func composed(t *testing.T, cfg *config.Company) *Company {
 	return &Company{Config: cfg, Org: o}
 }
 
-// A NODE THAT SERVES NO BRIDGE REFUSES AN EXECUTOR, AND SAYS WHICH SETTING.
+// A NODE THAT NOTHING REACHES REFUSES AN EXECUTOR, AND SAYS WHICH SETTING.
 //
-// A base URL on a node that binds no listener (api.port 0) used to mint an
-// endpoint naming this node: the box launched, every tool call it made found
-// nothing listening, and the turn was rescued as incomplete with no sign of
-// why. The refusal names api.port, because the message for an unset base URL
-// would send the operator to a variable that is already set.
+// A bridge that neither serves the route nor joined a fleet relay — a node
+// serving the API with api.port 0 — used to mint an endpoint naming this node:
+// the box launched, every tool call it made found nothing listening, and the
+// turn was rescued as incomplete with no sign of why. The refusal names
+// api.port, because the message for an unset base URL would send the operator
+// to a variable that is already set.
 func TestAnExecutorIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
@@ -965,7 +994,7 @@ func TestAnExecutorIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 	l := launcherOn(e, c, seat, "t1")
 	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if err == nil {
-		t.Fatal("an executor launched on a node whose bridge no listener serves")
+		t.Fatal("an executor launched on a node whose bridge nothing reaches")
 	}
 	if !strings.Contains(err.Error(), "api.port") {
 		t.Errorf("the refusal does not name the setting that fixes it: %v", err)
@@ -1057,6 +1086,54 @@ func TestARunRecordsTheAgentIDOfItsPinnedTurn(t *testing.T) {
 	}
 	if got := l.runTurnRef(t.Context()).AgentID; got != want.String() {
 		t.Errorf("the run records agent id %q, want %q: the id of the turn's own organization", got, want)
+	}
+}
+
+// THE BRIDGE FOLLOWS THE SEAT. A node that takes a seat tells the bridge so
+// once the seat's running jobs are recovered — not at the lease, when a missing
+// session would say nothing about the run — and a node that hands the seat on
+// ends its runs' sessions here, which the seat's next holder serves from then
+// on: left open, they would pin the seat's surface in a process that no longer
+// speaks for it, and every box would go on talking to it.
+func TestTheBridgeFollowsTheSeat(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	})
+	e, _ := launchRig(t, c, bridge)
+	agent, ok := c.Org.AgentIDFor(seat)
+	if !ok {
+		t.Fatal("the seat has no agent id")
+	}
+	held := placement.Seat{ID: agent, Handle: seat.Handle()}
+	if err := e.backends.Queue.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if bridge.Ready(agent) {
+		t.Fatal("the bridge says the seat is taken before the node took it")
+	}
+	if err := e.prepareSeatSandbox(t.Context(), e.sandbox.Load(), held, 1, "node-a:1"); err != nil {
+		t.Fatalf("prepareSeatSandbox: %v", err)
+	}
+	if !bridge.Ready(agent) {
+		t.Fatal("the seat's runs were recovered and the bridge was not told the seat is taken")
+	}
+
+	l := launcherOn(e, c, seat, "t1")
+	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+		t.Fatalf("LaunchExecutor: %v", err)
+	}
+	if bridge.Live() != 1 {
+		t.Fatalf("%d sessions open after the launch, want the run's", bridge.Live())
+	}
+
+	e.releaseSeat(t.Context(), held)
+	if bridge.Live() != 0 {
+		t.Errorf("%d sessions still open for a seat this node handed on", bridge.Live())
+	}
+	if bridge.Ready(agent) {
+		t.Error("the bridge still says this node holds a seat it handed on")
 	}
 }
 

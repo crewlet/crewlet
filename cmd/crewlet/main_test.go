@@ -32,7 +32,9 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -75,7 +77,7 @@ func configPair(t *testing.T, bootstrapYAML, company string) []string {
 	comp := filepath.Join(dir, "company.yaml")
 	if bootstrapYAML == "" {
 		bootstrapYAML = "store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
-			"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n" + fixtureKeyring
+			fixtureStream(dir) + fixtureKeyring
 	}
 	if err := os.WriteFile(boot, []byte(bootstrapYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -271,7 +273,7 @@ func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	dir := t.TempDir()
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	b.API.Host = "127.0.0.1"
 	b.API.Port = port
 	// A COMPLETE SERVING POSTURE. Once a port is set, Tier A must carry an
@@ -345,11 +347,11 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 
 			// NOTHING BOUND before the boot, asked of the one path every
 			// listener is opened through.
-			listeners, err := bindListeners(t.Context(), boot, "node-0", false, bindNothing(t), log)
+			listeners, err := bindListeners(t.Context(), boot, "node-0", bindNothing(t), log)
 			if err != nil || listeners != nil {
 				t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 			}
-			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, log)
+			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, engine.DeepHost{}, log)
 			if err != nil {
 				t.Fatalf("serveAPI: %v", err)
 			}
@@ -454,103 +456,56 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 	}
 }
 
-// A SEATS NODE WITHOUT INGRESS ALSO SERVES ITS OWN TOOL BRIDGE, beside its
-// probes. A bridged session lives in the process that opened it, so a seat's
-// executor box can reach only the node running that seat; gating the
-// bridge on ingress with the rest of the API launched boxes whose every tool
-// call found nothing listening. The listener carries the bridge's own refusal
-// for a bad token, the probes, and no dashboard or REST route.
-func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
+// A NODE WITHOUT INGRESS SERVES ITS PROBES ALONE, whether it runs seats or
+// not and whatever its environment says about a bridge. A seat's executor box
+// reaches its tools through the nodes that serve the API, which relay its call
+// to the node holding the seat over the broker — so the listener here carries
+// the probes, and no bridge, dashboard or REST route.
+func TestANodeWithoutIngressServesItsProbesAlone(t *testing.T) {
 	t.Parallel()
-	var logged bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	for _, roles := range [][]string{{"seats"}, {"data", "workers"}} {
+		var logged bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	port := reservePort(t)
-	bridge := bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
-	})
-	e := testEngineWithBridge(t, bridge)
-	boot := bootstrapFor(t, port)
-	boot.Node.Roles = []string{"seats"}
+		port := reservePort(t)
+		bridge := bridgeFor(t, mcpbridge.Options{
+			Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+		})
+		e := testEngineWithBridge(t, bridge)
+		boot := bootstrapFor(t, port)
+		boot.Node.Roles = roles
 
-	surface, err := serveNodeLogged(t, boot, e, log)
-	if err != nil {
-		t.Fatalf("serveAPI: %v", err)
-	}
-	if surface == nil {
-		t.Fatalf("a seats node with a bridge URL bound no listener, so its "+
-			"executor boxes can reach no tools:\n%s", logged.String())
-	}
-	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-	if surface.app != nil || surface.projector != nil {
-		t.Error("a node without the ingress role built the whole API")
-	}
-	if !bridge.Mounted() {
-		t.Error("the listener did not mount the bridge, so no session can open")
-	}
-	if !strings.Contains(logged.String(), "tool_bridge=true") {
-		t.Errorf("the node did not say its listener serves the bridge:\n%s", logged.String())
-	}
-
-	base := "http://127.0.0.1:" + strconv.Itoa(port)
-	if got := statusOf(t, http.MethodPost, base+mcpbridge.PathPrefix+"not-a-token"); got != http.StatusUnauthorized {
-		t.Errorf("POST %snot-a-token = %d, want the bridge's own 401", mcpbridge.PathPrefix, got)
-	}
-	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
-		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
-	}
-	// AN EXEMPT PATH THIS LISTENER DOES NOT MOUNT 404s: the guard lets it
-	// through to a mux that has nothing there.
-	for _, path := range []string{"/dashboard"} {
-		if got := statusOf(t, http.MethodGet, base+path); got != http.StatusNotFound {
-			t.Errorf("GET %s = %d on a probe listener, want 404", path, got)
+		surface, err := serveNodeLogged(t, boot, e, log)
+		if err != nil {
+			t.Fatalf("%v: serveAPI: %v", roles, err)
 		}
-	}
-	// AND A GUARDED ONE IS REFUSED RATHER THAN 404, which is exactly what
-	// the full surface answers now that every guarded route needs a
-	// credential: the guard runs before routing, so it cannot know the
-	// route is absent, and a 404 here would have disclosed that.
-	if got := statusOf(t, http.MethodGet, base+"/agents"); got != http.StatusUnauthorized {
-		t.Errorf("GET /agents = %d on a probe listener, want the guard's 401", got)
-	}
-}
+		if surface == nil {
+			t.Fatalf("%v: a node without ingress bound no listener for its probes:\n%s", roles, logged.String())
+		}
+		t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+		if surface.app != nil || surface.projector != nil {
+			t.Errorf("%v: a node without the ingress role built the whole API", roles)
+		}
 
-// A NODE THAT RUNS NO SEATS SERVES NO BRIDGE, whatever its environment says.
-// It opens no session, so the route there could only answer every box with
-// 401: its listener carries its probes alone, and the bridge route is absent.
-func TestANodeRunningNoSeatsServesNoBridge(t *testing.T) {
-	t.Parallel()
-	var logged bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	port := reservePort(t)
-	bridge := bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
-	})
-	e := testEngineWithBridge(t, bridge)
-	boot := bootstrapFor(t, port)
-	boot.Node.Roles = []string{"data", "workers"}
-
-	surface, err := serveNodeLogged(t, boot, e, log)
-	if err != nil {
-		t.Fatalf("serveAPI: %v", err)
-	}
-	if surface == nil {
-		t.Fatalf("a workers node bound no listener for its probes:\n%s", logged.String())
-	}
-	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
-	if bridge.Mounted() {
-		t.Error("a node that runs no seats mounted a tool bridge it never uses")
-	}
-	if !strings.Contains(logged.String(), "tool_bridge=false") {
-		t.Errorf("the node did not say its listener serves no bridge:\n%s", logged.String())
-	}
-	base := "http://127.0.0.1:" + strconv.Itoa(port)
-	if got := statusOf(t, http.MethodPost, base+mcpbridge.PathPrefix+"not-a-token"); got != http.StatusNotFound {
-		t.Errorf("POST %snot-a-token = %d on a node running no seats, want 404", mcpbridge.PathPrefix, got)
-	}
-	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
-		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
+		base := "http://127.0.0.1:" + strconv.Itoa(port)
+		if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
+			t.Errorf("%v: GET /health = %d, want the liveness probe's 200", roles, got)
+		}
+		// AN EXEMPT PATH THIS LISTENER DOES NOT MOUNT 404s — the bridge's
+		// prefix among them: the guard lets it through to a mux that has
+		// nothing there.
+		for _, path := range []string{"/dashboard", mcpbridge.PathPrefix + "not-a-token"} {
+			if got := statusOf(t, http.MethodPost, base+path); got != http.StatusNotFound {
+				t.Errorf("%v: POST %s = %d on a probe listener, want 404", roles, path, got)
+			}
+		}
+		// AND A GUARDED ONE IS REFUSED RATHER THAN 404, which is exactly
+		// what the full surface answers now that every guarded route needs
+		// a credential: the guard runs before routing, so it cannot know
+		// the route is absent, and a 404 here would have disclosed that.
+		if got := statusOf(t, http.MethodGet, base+"/agents"); got != http.StatusUnauthorized {
+			t.Errorf("%v: GET /agents = %d on a probe listener, want the guard's 401", roles, got)
+		}
 	}
 }
 
@@ -800,14 +755,12 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	// it configured rather than a second bind of a port it let go (see
 	// [reservePort]) — and here after the engine has booted, which is the
 	// one difference from a running node: the boot surface's own answers are
-	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s. The bridge is the
-	// engine's own, since a case hands it one rather than the environment.
-	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), e.Bridge() != nil,
-		bindReserved, log)
+	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s.
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), bindReserved, log)
 	if err != nil {
 		return nil, reconciler, err
 	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, log)
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, engine.DeepHost{}, log)
 	if err != nil {
 		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
 		listeners.close(context.Background(), log)
@@ -1476,7 +1429,7 @@ func TestValidateDetectsWhichTierADocumentIs(t *testing.T) {
 		{"a company under any name", companyYAML, "company"},
 		{"a bootstrap under any name",
 			"store:\n  path: " + filepath.Join(dir, "c.db") + "\n" +
-				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n" + fixtureKeyring,
+				fixtureStream(dir) + fixtureKeyring,
 			"bootstrap"},
 	}
 	for _, tc := range cases {
@@ -2279,5 +2232,50 @@ func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 				t.Errorf("problems = %+v, want one at %s", report.Problems, tc.path)
 			}
 		})
+	}
+}
+
+// THE RELAY IS DISPATCHED UNDER THE NAME A CLI IS HANDED. The argv the engine
+// writes into a CLI's MCP configuration is built from [mcprelay.Command], and the
+// switch names its cases as literals (which is how this suite reads the
+// binary's command list) — so a rename on one side would leave every CLI
+// starting a command the binary answers `unknown command` to, and every seat
+// without its tools.
+//
+// And run as itself: the bytes the engine's end sends reach stdout and
+// nothing else does, with no logging set up in front of it.
+func TestTheRelayIsDispatchedUnderItsOwnName(t *testing.T) {
+	t.Parallel()
+	if !slices.Contains(dispatchedCommands(t), mcprelay.Command) {
+		t.Fatalf("runIn() dispatches no %q, the command every CLI is told to start",
+			mcprelay.Command)
+	}
+
+	dir, err := os.MkdirTemp("", "relay") //nolint:usetesting // t.TempDir is named for the test, past a socket path's bound
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write([]byte("from the engine\n"))
+		_ = conn.Close()
+	}()
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{mcprelay.Command, path}, &stdout, &stderr); err != nil {
+		t.Fatalf("the relay failed: %v (stderr %q)", err, stderr.String())
+	}
+	if got := stdout.String(); got != "from the engine\n" {
+		t.Errorf("stdout = %q, want exactly what the engine sent", got)
 	}
 }

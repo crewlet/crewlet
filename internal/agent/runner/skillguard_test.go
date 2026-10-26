@@ -93,13 +93,11 @@ func (c *capture) kinds() []string {
 
 var _ queue.Publisher = (*capture)(nil)
 
-// guardedLaunch launches the executor's run on a seat whose surface carries
-// one required skill covering the tool the run will reach for, with the
-// covered tool registered under origin — so the same skill can cover a
-// first-party tool or an MCP server's. What the run then calls is the test's
-// to [play] against the surface it was launched with: the one every bridged
-// call is dispatched through.
-func guardedLaunch(t *testing.T, pub queue.Publisher, origin string) runner.AgentRunRequest {
+// guardedRunner is a seat whose surface carries one required skill covering
+// the tool its run will reach for, with the covered tool registered under
+// origin — so the same skill can cover a first-party tool or an MCP server's —
+// and the launcher its executor's runs are handed to.
+func guardedRunner(t *testing.T, pub queue.Publisher, origin string) (*runner.Runner, *playLauncher) {
 	t.Helper()
 	registry := skills.NewRegistry()
 	if _, err := registry.PutPage(skills.Skill{
@@ -155,11 +153,21 @@ func guardedLaunch(t *testing.T, pub queue.Publisher, origin string) runner.Agen
 				Org:  &org.Organization{Name: "Acme", Roles: []*org.Role{role}},
 			},
 		},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
 	}
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+	return r, launcher
+}
+
+// guardedLaunch launches the executor's run in round on [guardedRunner]'s
+// seat. What the run then calls is the test's to [play] against the surface
+// it was launched with: the one every bridged call is dispatched through.
+func guardedLaunch(t *testing.T, pub queue.Publisher, origin string, round int) runner.AgentRunRequest {
+	t.Helper()
+	r, launcher := guardedRunner(t, pub, origin)
+	if _, _, err := r.Execute(context.Background(), round, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	return launcher.last(t)
@@ -170,17 +178,17 @@ func guardedLaunch(t *testing.T, pub queue.Publisher, origin string) runner.Agen
 // does not stop a model going straight for the tool.
 func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 	t.Parallel()
-	req := guardedLaunch(t, newCapture(), tools.OriginBuiltin)
+	req := guardedLaunch(t, newCapture(), tools.OriginBuiltin, 1)
 	bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 
 	// The refusal names the exact call to make, because the error IS the
 	// recovery path.
 	refusal := bridged[0]
 	if !refusal.Failed {
-		t.Fatalf("the covered tool ran before its skill was loaded: %q", refusal.Output)
+		t.Fatalf("the covered tool ran before its skill was loaded: %q", refusal.Result)
 	}
-	if !strings.Contains(refusal.Output, `load_tool_skill(key="chat-conventions")`) {
-		t.Fatalf("the refusal does not name the call:\n%s", refusal.Output)
+	if !strings.Contains(refusal.Result, `load_tool_skill(key="chat-conventions")`) {
+		t.Fatalf("the refusal does not name the call:\n%s", refusal.Result)
 	}
 }
 
@@ -191,7 +199,9 @@ func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	req := guardedLaunch(t, pub, tools.OriginBuiltin)
+	// A LATER ITERATION, so a refusal stamped with any other number — the
+	// zero a guard built without its iteration reported — is told apart.
+	req := guardedLaunch(t, pub, tools.OriginBuiltin, 2)
 	play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 
 	blocked := pub.blocked()
@@ -203,6 +213,11 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	if got.ToolName != "slack_post" || got.TurnID != "t-guard" ||
 		got.Phase != types.Phase(phase.Execute) {
 		t.Fatalf("the event = %+v", got)
+	}
+	// The iteration the phase ran as, which every other event of the
+	// phase carries: a reader joining refusals to their phase needs it.
+	if got.Iteration != 2 {
+		t.Errorf("the refusal names iteration %d, want the phase's 2", got.Iteration)
 	}
 	// EVERY pending skill, not just the one that blocked: a model about to
 	// be blocked twice more is a model an operator needs to see whole.
@@ -219,7 +234,7 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	req := guardedLaunch(t, pub, tools.Origin("slack"))
+	req := guardedLaunch(t, pub, tools.Origin("slack"), 1)
 	play(t, req, run{calls: []llm.ToolCall{
 		call(t, runner.ActivateTool, `{"name":"slack_post"}`),
 		call(t, "slack_post", `{"text":"hi"}`),
@@ -237,7 +252,7 @@ func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 func TestLoadingTheSkillUnlocksTheTool(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	req := guardedLaunch(t, pub, tools.OriginBuiltin)
+	req := guardedLaunch(t, pub, tools.OriginBuiltin, 1)
 	bridged := play(t, req, run{calls: []llm.ToolCall{
 		call(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`),
 		call(t, "slack_post", `{"text":"hi"}`),
@@ -245,7 +260,7 @@ func TestLoadingTheSkillUnlocksTheTool(t *testing.T) {
 	if got := pub.blocked(); len(got) != 0 {
 		t.Fatalf("a load-then-call sequence was blocked: %+v", got)
 	}
-	if posted := bridged[1]; posted.Failed || posted.Output != "posted" {
+	if posted := bridged[1]; posted.Failed || posted.Result != "posted" {
 		t.Fatalf("the unlocked tool did not run: %+v", posted)
 	}
 }

@@ -495,7 +495,7 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 				"same publish. Leave it out.", tool)
 		}
 		identity := []string{artifactCallNamespace, seed, tool}
-		if n := turn.CallLog().Ordinal(ctx, tool, args); n > 0 {
+		if n := turn.CallLog().Ordinal(tool, args); n > 0 {
 			identity = append(identity, "repeat:"+strconv.Itoa(n))
 		}
 		return statelog.DeriveOpID(turnSince(turn), "", identity...), "", ""

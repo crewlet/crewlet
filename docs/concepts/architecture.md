@@ -183,7 +183,7 @@ back what it wrote.
 | `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. It carries no write. |
 | `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker and knowledge tools a seat holds — served to a person's own assistant over MCP, and to the dashboard's buttons over the act route. Every call acts as the principal the guard resolved: a person writes as the seat they hold, and so does a token or service account the identity directory binds to one; a credential bound to no seat writes under its own login. Always guarded. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
-| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. The exception on this list: a session lives in the process that opened it, so this route belongs to the node that runs the seat, and a `seats` node without `ingress` binds its listener for this route alone. |
+| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
 **`workers` is nine company-wide singletons, each held on its own
@@ -517,10 +517,11 @@ prompt is smaller: is this round's work right, given the record. A frontier mode
 reviews; see [Turn Engine](turn-engine.md).
 
 **Tools are discovered, not enumerated.** A role with 50–150 MCP tools would
-push 15–25 KB of catalogue into every prompt, so the executor sees *server
-names* and walks `list_mcp_server_tools` → `activate_tool` to promote what it
-actually needs. From the model's side a builtin and an MCP tool are the same
-thing: a function it can ask the engine to call.
+send 15–25 KB of tool definitions with every model request, so the executor sees
+*server names* and walks `list_mcp_server_tools` → `activate_tool` to promote
+what it actually needs. From the model's side a builtin and an MCP tool are the
+same thing: two tools of the one `crewlet` server its CLI lists, which the
+engine answers ([Tool calls on this host](llm-backends.md#tool-calls-on-this-host)).
 
 **A suspended turn is the reason there is no parked goroutine anywhere.** A
 detached coding run stops the executor's loop mid-round with its `run_sandbox`
@@ -662,7 +663,7 @@ to the adopted log.
 | **`crewlet_status`** | One key per node: which revision it applied |
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | `crewlet_rebases` | The instant a unit of work's writes are minted at when its own start is older than the operation ledger remembers, so a crash re-run, a retried resume or the next half of the turn mints where the attempt before it did. The bucket's age, 30 days, is the ledger's retention |
-| **`crewlet_token_windows`** · `crewlet_rate` | The token counters — one record per scope, a slot for each calendar window, aged 32 days past its last charge — and the notification valve |
+| **`crewlet_token_windows`** · `crewlet_rate` | The token counters (one record per scope, a slot for each calendar window, aged 32 days past its last charge) and the rate windows of the notification valve and of a person's Dashboard Assistant turns, each window at most a minute wide and kept three |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
 | `crewlet_objects` | The [object store](object-store.md)'s **backend record** (`nats` or `s3:<endpoint>/<bucket>/<prefix>`, written create-only by the first node to boot and compared by every node after it, which refuses to boot configured with another store), and the `object-collector` duty's **last report**, replaced by each pass so every node's `/fleet` shows it whoever ran it, and the `trash-reaper` duty's, which the next holder of the duty resumes from. **No age**: an expired record would let the next node record a different store and split the company's files between two |

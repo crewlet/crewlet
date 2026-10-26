@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -80,7 +81,7 @@ func leadPrompt(t *testing.T, c *Company) string {
 	c.Models = models
 	sent := &promptRecorder{}
 	r, err := c.RunnerFor("ceo", tools.NewRegistry(), RunnerInput{Task: "plan the week",
-		Reply: turn.NoReply(), Launcher: sent})
+		Reply: turn.NoReply(), Launcher: sent, Sessions: testSessions(t)})
 	if err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	}
@@ -150,7 +151,7 @@ roles:
 	}
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg,
 		Environment: config.MapSource{slack: "U0HANDED"}})

@@ -449,7 +449,14 @@ type BridgeCall struct {
 
 	// At is when the row recorded the call, on the store's clock — what the
 	// runs board lists a run's calls by. Always set: the store stamps it.
+	// It is the order the calls FINISHED in, and a CLI making several calls
+	// at once finishes them in whatever order their tools take.
 	At time.Time `json:"at"`
+
+	// Seq is the call's place in the order its session admitted the run's
+	// calls, from 1 — the order the CLI made them in, which is the order a
+	// resume replays them in.
+	Seq int `json:"seq,omitempty"`
 
 	// StartedAt is when the bridge handed the call to the seat's surface,
 	// UTC, and DurationMS how long the surface took to answer — the
@@ -458,10 +465,11 @@ type BridgeCall struct {
 	//
 	// BESIDE At RATHER THAN INSTEAD OF IT, because At is the store's and is
 	// always there, while a measurement is only there when somebody made
-	// one: a call whose StartedAt is zero was not measured, and reads so,
-	// never as an instant call at the moment it was recorded.
+	// one: a call whose StartedAt is zero was not measured — one answered
+	// without running — and reads so, never as an instant call at the
+	// moment it was recorded.
 	StartedAt  time.Time `json:"started_at,omitzero"`
-	DurationMS int       `json:"duration_ms,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
 
 	// Origin and Server are who answered the call — `builtin` or
 	// `mcp:<server>`, and the bare server name — as the surface resolved
@@ -947,25 +955,15 @@ type PendingRun struct {
 	// relaunches included.
 	Deadline time.Time `json:"deadline,omitzero"`
 
-	// LaunchNode is the node that launched the job this row holds, and
-	// BridgeNonce the session it opened for that job on its tool bridge:
-	// half the subject of the token the job's box dials.
+	// LaunchNode is the node that launched the job this row holds.
 	//
-	// ON THE ROW so the launching node can serve the box again after it lost
-	// the session. A session is a live tool surface in the process that
-	// opened it, so a restart drops every one — while the box keeps running,
-	// and keeps dialing the URL it was handed, which addresses that node and
-	// no other. So when that token next arrives, the node it addresses
-	// rebuilds the session from the park under the SAME nonce and the token
-	// the box holds resolves again ([LaunchRequest.BridgeNonce]); without
-	// them every call the box made after a restart — its submit_work
-	// included — was refused, and its turn rescued as incomplete. A token
-	// naming a session a relaunch has since replaced names another nonce,
-	// and a node that did not launch the job is not the one its box dials,
-	// so both are refused as before. Written by every launch, relaunches
-	// included.
-	LaunchNode  string `json:"launch_node,omitempty"`
-	BridgeNonce string `json:"bridge_nonce,omitempty"`
+	// ON THE ROW because a `direct` or `container` box is a process tree on
+	// that node's own host: whichever node holds the seat, and whichever
+	// serves the job's tool bridge session (the seat's holder, reached
+	// through any node of the fleet), the box itself is that node's to
+	// reach. Written by every launch, relaunches included, since a relaunch
+	// may land on another node.
+	LaunchNode string `json:"launch_node,omitempty"`
 
 	// HeldFor and HeldUntil hold back the resume of a job whose collection
 	// the turn could not carry on: its seat's conditions refused it — the

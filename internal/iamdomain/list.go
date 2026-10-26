@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -197,6 +198,59 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 	}
 	return out, nil
 }
+
+// Removed answers which of ids carry a removal tombstone, in the order given:
+// the persons whose removal this node has applied. It is what another domain's
+// erasure is reconciled against (ADR-0053's Dashboard Assistant conversations),
+// because a removal is permanent and nothing names a removed person again.
+//
+// AN ORDINARY READ, never identity work ([store.Identity]): it is asked by a
+// background pass, never before a request can decide anything, so it must not
+// spend the connection the store holds back for the lookups that decide.
+func (r *Reader) Removed(ctx context.Context, ids []string) ([]string, error) {
+	out := []string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := r.db.Read(ctx, func(tx *sql.Tx) error {
+		out = out[:0]
+		for chunk := range slices.Chunk(ids, removedChunk) {
+			among, args := inList(chunk)
+			rows, err := tx.QueryContext(ctx,
+				`SELECT person_id FROM iam_removed WHERE person_id IN `+among, args...)
+			if err != nil {
+				return err
+			}
+			found := map[string]bool{}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				found[id] = true
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return err
+			}
+			for _, id := range chunk {
+				if found[id] {
+					out = append(out, id)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("iamdomain: read which persons were removed: %w", err)
+	}
+	return out, nil
+}
+
+// removedChunk is how many ids one statement of [Reader.Removed] asks about:
+// five hundred, the object store's references batch, far under the driver's
+// bind limit and small enough that one statement never holds the reader long.
+const removedChunk = 500
 
 // Person answers one directory row, or [ErrNotFound].
 //

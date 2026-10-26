@@ -71,7 +71,10 @@ import {
   WandSparklesGlyph,
   XGlyph,
 } from "@crewlethq/icons/glyphs";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
+import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { useOwnStar } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -79,7 +82,13 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { plainText, renderMarkdown } from "~/lib/markdown.ts";
 import { useRecents } from "~/lib/recents.ts";
-import { modeLabel, resolveSearchMode, searchCoverageNote, servedNote } from "~/lib/search.ts";
+import {
+  SEARCH_MODES,
+  modeLabel,
+  resolveSearchMode,
+  searchCoverageNote,
+  servedNote,
+} from "~/lib/search.ts";
 import { clockIn } from "~/lib/range.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -150,9 +159,45 @@ function pageOf(path: readonly string[]): string {
   return path.length === 3 && path[0] === "doclet" && path[1] === "pages" ? (path[2] ?? "") : "";
 }
 
+/** How the results are shown, as the control offers it. */
+const RESULT_GROUPINGS = [
+  { value: "space", label: "By space" },
+  { value: "rank", label: "Ranked" },
+];
+
+const encoder = new TextEncoder();
+
 export function Doclet() {
   const [q] = useParam("q", "");
   const phrase = q.trim();
+  // --- assistant page actions (WP12) ---
+  // THE SEARCH THE BOX, THE MODE PICKER, THE GROUPING AND THE SPACE FILTER
+  // WRITE, held to the bound the engine refuses a longer phrase at rather
+  // than cut, and to the spaces this company has.
+  const { spaces } = useSpaces();
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("knowledge.search.set", {
+      scope: "What Doclet searches for and how it shows it (view only)",
+      keys: {
+        q: {
+          label: "Search",
+          history: "filter",
+          check: (v) =>
+            encoder.encode(v).length <= SEARCH_QUERY_MAX ? null : "That search is too long.",
+        },
+        mode: choiceKey("Mode", SEARCH_MODES, "filter"),
+        by: choiceKey("Show the results", RESULT_GROUPINGS, "filter", "space"),
+        space: choiceKey(
+          "Space",
+          spaces.map((c) => ({ value: c.key, label: c.name || c.key })),
+          "filter",
+        ),
+      },
+      nav,
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
   // NO STAR IN THIS BAR: a page is starred from its own More menu, and the
   // frame's would offer the workspace the sidebar already lists.
   useOwnStar();
@@ -1012,10 +1057,7 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
                 semantics="radio"
                 size="sm"
                 label="Show the results"
-                options={[
-                  { value: "space", label: "By space" },
-                  { value: "rank", label: "Ranked" },
-                ]}
+                options={RESULT_GROUPINGS}
                 value={grouping === "rank" ? "rank" : "space"}
                 onValueChange={(value) => setGrouping(value === "space" ? "space" : value)}
               />

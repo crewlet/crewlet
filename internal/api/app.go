@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -116,6 +117,8 @@ type App struct {
 
 	// routes is every pattern mounted, in mount order. See [routeTable].
 	routes []string
+	// policies are the guarded routes' policies. See [routeTable].
+	policies map[string]authz.Policy
 }
 
 // routeTable is the one mux every surface mounts on, keeping the pattern of
@@ -134,6 +137,18 @@ type App struct {
 type routeTable struct {
 	mux      *http.ServeMux
 	patterns []string
+	// policies are the guarded routes' verbs, each reported by the
+	// [authz.Router] that mounted it ([authz.PolicyMux]), so a walk can
+	// classify a guarded route by the verb it is decided by.
+	policies map[string]authz.Policy
+}
+
+// MountedWith keeps the policy a guarded route was mounted with.
+func (t *routeTable) MountedWith(pattern string, p authz.Policy) {
+	if t.policies == nil {
+		t.policies = map[string]authz.Policy{}
+	}
+	t.policies[pattern] = p
 }
 
 func (t *routeTable) Handle(pattern string, handler http.Handler) {
@@ -312,6 +327,32 @@ type Options struct {
 	// which every node serving the API holds from boot — ingress requires
 	// the `data` role (ADR-0025).
 	Tokens *auth.Tokens
+
+	// --- the Dashboard Assistant's grants (WP1) ---
+
+	// Delegations mints and checks the assistant's grants, and Dispatcher
+	// sends the assistant's tool calls through this API's own handler with
+	// them (ADR-0050). The two are ONE PAIR (the dispatcher sends what the
+	// delegations mint), and New binds the delegations to this API's guard
+	// and the dispatcher to this API's handler, so a grant is accepted only
+	// by the chain it was minted for.
+	//
+	// NIL IS AN API WITH NO ASSISTANT: every grant-shaped bearer is refused,
+	// over the wire and in process alike.
+	Delegations *auth.Delegations
+	Dispatcher  *auth.Dispatcher
+
+	// --- the Dashboard Assistant's routes (WP8) ---
+
+	// Assistant is the Dashboard Assistant's routes under /assistant/ and
+	// the `assistant` member of `viewer` (internal/api/assistantapi). It
+	// needs the grant pair above: a turn's every call carries a grant the
+	// delegations mint and the dispatcher sends, so an Assistant without
+	// them is refused at New.
+	//
+	// NIL IS AN API WITH NO ASSISTANT: no route under /assistant/, and the
+	// viewer answers it `disabled`.
+	Assistant *assistantapi.Surface
 
 	// AuthEvents is where the guard counts a refused credential.
 	// REQUIRED: the engine
@@ -658,6 +699,15 @@ func New(opts Options) (*App, error) {
 		identity:    opts.Identity,
 	}
 	var err error
+	// --- the Dashboard Assistant's grants (WP1) ---
+	if opts.Dispatcher != nil && opts.Dispatcher.Delegations() != opts.Delegations {
+		return nil, errors.New("api: Options.Dispatcher sends grants that " +
+			"Options.Delegations did not mint; build it with auth.NewDispatcher " +
+			"over the same delegations")
+	}
+	if err = a.guard.BindDelegations(opts.Delegations); err != nil {
+		return nil, fmt.Errorf("api: %w", err)
+	}
 	a.stream, err = stream.NewService(state, stream.Options{
 		Health: a.streamHealth,
 		// The SAME set /ready refuses on, read from the one place it is
@@ -779,6 +829,12 @@ func New(opts Options) (*App, error) {
 	if sources.Acts == nil && opts.Operator != nil {
 		sources.Acts = opts.Operator.Acts
 	}
+	// --- the Dashboard Assistant's routes (WP8) ---
+	// WHETHER THE ASK PILL IS LIT, from the surface whose routes the pill
+	// opens, so the viewer and a refused question cannot disagree.
+	if sources.Assistant == nil && opts.Assistant != nil {
+		sources.Assistant = opts.Assistant.Viewer
+	}
 	// WHO MAY CHANGE THE COMPANY DOCUMENT, from the same Tier A the config
 	// surface enforces it from, so the viewer offers exactly the edits that
 	// surface admits (ADR-0030). A caller that supplied its own keeps it.
@@ -822,6 +878,20 @@ func New(opts Options) (*App, error) {
 	// prefix rather than under /mcp/, which is exempt from the guard
 	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
+	// --- the Dashboard Assistant's routes (WP8) ---
+	// THE ASSISTANT, every route on one of its two verbs. Its grants are
+	// refused under this prefix whatever they carry (auth.AssistantPrefix),
+	// so it can never be reached through itself.
+	if opts.Assistant != nil {
+		if opts.Delegations == nil || opts.Dispatcher == nil {
+			return nil, errors.New("api: Options.Assistant needs Options.Delegations and " +
+				"Options.Dispatcher: every call a turn makes carries a grant they mint " +
+				"and send")
+		}
+		if err := opts.Assistant.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the assistant surface: %w", err)
+		}
+	}
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
@@ -949,6 +1019,7 @@ func New(opts Options) (*App, error) {
 	// drained exactly once, and which socket answers it is decided by one
 	// predicate rather than by which of two muxes somebody registered it on.
 	a.routes = mux.patterns
+	a.policies = mux.policies
 	chain := a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(
 		a.drainGate(httpjson.Mux(mux.mux)))))
 	// EACH SOCKET SAYS WHETHER IT IS HTTPS BY ITS OWN ADDRESS
@@ -960,11 +1031,34 @@ func New(opts Options) (*App, error) {
 	// exactly where the deployment had published them over https.
 	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
 		a.handler = servedOn(opts.Bootstrap, false, chain)
+		// --- the Dashboard Assistant's dispatcher (WP1) ---
+		if err := bindDispatcher(opts.Dispatcher, a.handler); err != nil {
+			return nil, err
+		}
 		return a, nil
 	}
 	a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
+	// --- the Dashboard Assistant's dispatcher (WP1) ---
+	if err := bindDispatcher(opts.Dispatcher, a.handler); err != nil {
+		return nil, err
+	}
 	a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
 	return a, nil
+}
+
+// --- the Dashboard Assistant's dispatcher (WP1) ---
+
+// bindDispatcher binds the assistant's dispatcher, when there is one, to the
+// handler api.port serves: the whole chain a click meets, and never the public
+// listener's, which serves none of the routes a grant may reach.
+func bindDispatcher(d *auth.Dispatcher, h http.Handler) error {
+	if d == nil {
+		return nil
+	}
+	if err := d.Bind(h); err != nil {
+		return fmt.Errorf("api: %w", err)
+	}
+	return nil
 }
 
 // servedOn is the outermost wrapping of everything one of a node's sockets

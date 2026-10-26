@@ -458,15 +458,18 @@ func (w *Workspace) checkOut(dir, callID string, open func(*seatState) error) (_
 // openKeyGeneration is the first call into a key home taking its generation
 // lock and emptying the home of every credential file and volatile path —
 // whatever an earlier generation's CLI wrote down, a process that ended
-// mid-call included — before the home's own settings are seeded. On success
-// the lock is the seat's to hold until its last call is out.
+// mid-call included — before the home's own settings are seeded: the
+// profile's, then a key home's own over them
+// ([cliprofile.Profile.KeySeedFiles]). On success the lock is the seat's to
+// hold until its last call is out.
 func (w *Workspace) openKeyGeneration(ctx context.Context, dir string, state *seatState) error {
 	release, err := w.lockSeat(ctx, dir)
 	if err != nil {
 		return err
 	}
 	home := filepath.Join(dir, "home")
-	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, cliprofile.SeedHome)); err != nil {
+	if err := errors.Join(w.dropCopies(home), w.prune(home), w.seedFiles(home, cliprofile.SeedHome),
+		writeSeeds(home, w.profile.KeySeedFiles)); err != nil {
 		release()
 		return err
 	}
@@ -583,6 +586,47 @@ func (c *Checkout) Release(ctx context.Context) error {
 	}
 	pruneErr := c.ws.prune(c.Home)
 	return errors.Join(workErr, pruneErr, clearGeneration(c.record))
+}
+
+// carryRefreshed carries a login the CLI refreshed WHILE ITS CALL GOES ON back
+// to the shared directory, and moves the generation's baseline to the login
+// the shared directory then holds — on disk too, so a later carry-out compares
+// against it.
+//
+// A call is a seat's whole phase now, its CLI alive through every tool it
+// calls, and a generation stays open for as long as any call of the seat runs:
+// carried out only at the last release, a token the CLI refreshed an hour into
+// a phase would sit in this home while every other seat seeded from the shared
+// login the vendor had already rotated away, and failed its own refresh. So it
+// is carried at each tool call the CLI makes, which is when its process waits
+// on the engine rather than writing to its home.
+//
+// THE BASELINE MOVES WITH THE WRITE, WHOLE: the shared login now holds what
+// this home holds, and the next carry — another refresh, or the release — is
+// judged against that login, under the same compare-and-swap of the whole
+// login ([Workspace.carry]). Left on the old baseline, the release would find
+// the shared login changed since the seed, by this very write, and drop the
+// second refresh as superseded. A carry a newer login superseded moves
+// nothing, so this home's next refresh is dropped as that one was.
+//
+// A key home carries nothing ([Workspace.AcquireForKey]).
+func (c *Checkout) carryRefreshed(ctx context.Context) error {
+	if c == nil || c.keyed || c.released {
+		return nil
+	}
+	c.seat.mu.Lock()
+	defer c.seat.mu.Unlock()
+	_, landed, err := c.ws.carryChanged(ctx, c.Home, c.Cache, c.store, c.seat.gen)
+	if err != nil || landed == nil {
+		return err
+	}
+	gen := c.seat.gen
+	gen.Seeded = landed
+	if err := writeGeneration(c.record, gen); err != nil {
+		return err
+	}
+	c.seat.gen = gen
+	return nil
 }
 
 // seatState returns the share of the home in a seat directory, creating it
@@ -890,10 +934,19 @@ func acquireFailureKind(err error) llm.ErrorKind {
 // changed under a seat is the hole these files exist to close. Verbatim at
 // 0600, parents created, rooted the same way prune's targets are.
 func (w *Workspace) seedFiles(root string, scope cliprofile.SeedScope) error {
+	var files []cliprofile.SeedFile
 	for _, f := range w.profile.SeedFiles {
-		if f.Scope() != scope {
-			continue
+		if f.Scope() == scope {
+			files = append(files, f)
 		}
+	}
+	return writeSeeds(root, files)
+}
+
+// writeSeeds writes settings files into root, in order — so a later one at a
+// path replaces an earlier one's content there.
+func writeSeeds(root string, files []cliprofile.SeedFile) error {
+	for _, f := range files {
 		dst, err := cliprofile.UnderRoot(root, f.Path)
 		if err != nil {
 			return err
@@ -1267,6 +1320,19 @@ func (w *Workspace) sweepOne(ctx context.Context, store loginStore, dir, record 
 func (w *Workspace) syncCredentialsOut(
 	ctx context.Context, home, cache string, store loginStore, gen generation,
 ) (bool, error) {
+	holds, _, err := w.carryChanged(ctx, home, cache, store, gen)
+	return holds, err
+}
+
+// carryChanged is [Workspace.syncCredentialsOut], reporting besides the digests
+// of the login the shared directory holds once the carry is made, by file name
+// — when that is this home's login, written or found there already — and nil
+// when a newer login superseded it or the home changed nothing: the baseline a
+// generation that goes on running carries out from next
+// ([Checkout.carryRefreshed]).
+func (w *Workspace) carryChanged(
+	ctx context.Context, home, cache string, store loginStore, gen generation,
+) (bool, map[string]string, error) {
 	// held is every file of the login the home holds; changed is those of
 	// them that differ from what the home was seeded with.
 	held := map[string][]byte{}
@@ -1275,14 +1341,14 @@ func (w *Workspace) syncCredentialsOut(
 	for _, rel := range w.profile.CredentialPaths {
 		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		content, err := os.ReadFile(src) //nolint:gosec // path is rooted by cliprofile.UnderRoot
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
-			return false, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
+			return false, nil, fmt.Errorf("cli-agent: reading the refreshed login %q: %w", src, err)
 		}
 		name := filepath.Base(rel)
 		held[name] = content
@@ -1299,12 +1365,12 @@ func (w *Workspace) syncCredentialsOut(
 	}
 	if w.profile.CredentialStore != nil {
 		if store == nil {
-			return false, fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
+			return false, nil, fmt.Errorf("cli-agent: %q keeps its login in its own database, and this "+
 				"home was released with no way to export it", w.agent)
 		}
 		document, err := store.exportLogin(ctx, home, cache)
 		if err != nil {
-			return false, fmt.Errorf("cli-agent: exporting the login from %q: %w", home, err)
+			return false, nil, fmt.Errorf("cli-agent: exporting the login from %q: %w", home, err)
 		}
 		if holdsLogin(document) {
 			holds = true
@@ -1315,7 +1381,7 @@ func (w *Workspace) syncCredentialsOut(
 		}
 	}
 	if len(changed) == 0 {
-		return holds, nil
+		return holds, nil, nil
 	}
 	who := ""
 	if store != nil {
@@ -1323,7 +1389,7 @@ func (w *Workspace) syncCredentialsOut(
 	}
 	unlock, err := w.lockShared(ctx)
 	if err != nil {
-		return holds, err
+		return holds, nil, err
 	}
 	defer unlock()
 	if gen.Mode == syncLogin && gen.After != nil {
@@ -1332,22 +1398,22 @@ func (w *Workspace) syncCredentialsOut(
 		// [generation.After].
 		epoch, epochErr := w.loginEpoch()
 		if epochErr != nil {
-			return holds, epochErr
+			return holds, nil, epochErr
 		}
 		if epoch != *gen.After {
 			for _, name := range slices.Sorted(maps.Keys(changed)) {
 				w.superseded(ctx, who, w.sharedPath(name), "replaced")
 			}
-			return holds, nil
+			return holds, nil, nil
 		}
 	}
 	current, err := w.readLoginLocked()
 	if err != nil {
-		return holds, err
+		return holds, nil, err
 	}
-	next, err := w.carry(ctx, who, gen, current, held, changed)
+	login, write, err := w.carry(ctx, who, gen, current, held, changed)
 	if err != nil {
-		return holds, err
+		return holds, nil, err
 	}
 	// NOTHING TO WRITE is not nothing to do. A refresh a newer login
 	// superseded stops here, but a login whose files the shared login
@@ -1355,9 +1421,9 @@ func (w *Workspace) syncCredentialsOut(
 	// failed — IS the login of record, written, and still ends the logout
 	// below: answered as a carry with nothing left to do, the retry left the
 	// logout standing for good.
-	if next != nil {
-		if err := w.writeLoginLocked(ctx, who, next); err != nil {
-			return holds, err
+	if write {
+		if err := w.writeLoginLocked(ctx, who, login); err != nil {
+			return holds, nil, err
 		}
 	}
 	if gen.Mode == syncLogin {
@@ -1365,10 +1431,13 @@ func (w *Workspace) syncCredentialsOut(
 		// configured bundle restores again into a directory left empty later
 		// ([Workspace.markLoggedOut]). Under the lock, with the write.
 		if err := w.clearLoggedOut(); err != nil {
-			return holds, err
+			return holds, nil, err
 		}
 	}
-	return holds, nil
+	if login == nil {
+		return holds, nil, nil
+	}
+	return holds, digestsOf(login), nil
 }
 
 // carry decides what a home's changed login makes of the shared one, read as
@@ -1416,9 +1485,14 @@ func (w *Workspace) syncCredentialsOut(
 // A home whose changes the shared login already holds — two homes that
 // refreshed to the same login, or a carry repeated after its write landed —
 // writes nothing and says nothing.
+//
+// It answers the login the shared directory holds once the carry is made, and
+// whether that is a write: the login to write, true; the shared login as it
+// is, false, when it already holds this home's; nil, false, when a newer login
+// superseded the refresh.
 func (w *Workspace) carry(
 	ctx context.Context, who string, gen generation, current, held, changed map[string][]byte,
-) (map[string][]byte, error) {
+) (map[string][]byte, bool, error) {
 	next := maps.Clone(current)
 	switch gen.Mode {
 	case syncLogin:
@@ -1440,7 +1514,7 @@ func (w *Workspace) carry(
 				if refreshed == nil {
 					only, err := w.onlyRefreshedSince(gen)
 					if err != nil {
-						return nil, err
+						return nil, false, err
 					}
 					refreshed = &only
 				}
@@ -1457,10 +1531,19 @@ func (w *Workspace) carry(
 			}
 		}
 	default:
-		return nil, fmt.Errorf("cli-agent: carrying a login out under an unknown mode %q", gen.Mode)
+		return nil, false, fmt.Errorf("cli-agent: carrying a login out under an unknown mode %q", gen.Mode)
 	}
 	if maps.EqualFunc(next, current, bytes.Equal) {
-		return nil, nil
+		// NOTHING TO WRITE, and the shared login is this home's only where
+		// the home holds exactly it — its refresh already there, or a carry
+		// repeated after its write landed. A home that changed only files a
+		// refresh never carries holds the seed beside a newer writer's
+		// login, which is no baseline of its own: taken for one, its next
+		// refresh would pass the compare-and-swap and revert that login.
+		if homeHolds(gen, current, held) {
+			return current, false, nil
+		}
+		return nil, false, nil
 	}
 	if gen.Mode == syncRefresh && !maps.Equal(digestsOf(current), gen.Seeded) {
 		// Somebody else's newer write — another seat's refresh, an
@@ -1475,9 +1558,30 @@ func (w *Workspace) carry(
 			}
 			w.superseded(ctx, who, w.sharedPath(name), how)
 		}
-		return nil, nil
+		return nil, false, nil
 	}
-	return next, nil
+	return next, true, nil
+}
+
+// homeHolds reports whether a home holds exactly the login given: every file
+// the generation was seeded with and every file of the login, each present in
+// both with the same bytes or absent from both.
+func homeHolds(gen generation, login, held map[string][]byte) bool {
+	names := map[string]bool{}
+	for name := range gen.Seeded {
+		names[name] = true
+	}
+	for name := range login {
+		names[name] = true
+	}
+	for name := range names {
+		have, holds := held[name]
+		want, in := login[name]
+		if holds != in || !bytes.Equal(have, want) {
+			return false
+		}
+	}
+	return true
 }
 
 // onlyRefreshedSince reports whether every write the shared login has taken

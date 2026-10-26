@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -24,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -41,15 +41,15 @@ import (
 // collection and the resume.
 //
 // What a run DOES is the case's: a [fakePlayer]. [modelPlayer] is the usual one
-// — the case's scripted model, driven the way a coding CLI drives its own model,
-// calling the seat's tools over the bridge — so a fixture written for the
-// engine's own loop scripts the run unchanged.
+// — the pick of the case's scripted CLI ([phasedCLI]), played as the run,
+// calling the seat's tools over the bridge — so one fixture scripts the run
+// and the reviewer that judges it alike.
 
 // runnerKey is the providers.llm key a rigged seat's executor launches on.
 const runnerKey = "cli"
 
-// runnerEntry is a claude-code entry an executor can launch on and that no text
-// call can ever reach: its binary does not exist. The run itself is played by
+// runnerEntry is a claude-code entry an executor can launch on and that no
+// phase on this host can ever reach: its binary does not exist. The run itself is played by
 // the rig's double, so the CLI is never started — and a phase that fell
 // through to this entry by mistake fails on the missing binary rather than
 // starting a real CLI on the machine running the suite.
@@ -69,8 +69,8 @@ func runnerEntry(t *testing.T) phase.Entry {
 }
 
 // runnable is a model registry over entries with the runner entry appended
-// AFTER them, and every seat's `llm` ending on it: each seat's text phases are
-// still answered by the case's own model — the head of every chain — and its
+// AFTER them, and every seat's `llm` ending on it: each seat's phases on this
+// host are still answered by the case's own model — the head of every chain — and its
 // executor launches on the one member that has an in-box runner, which the
 // launch's pick reaches by passing over the head.
 func runnable(t *testing.T, entries []phase.Entry, seats ...*org.Role) *phase.Registry {
@@ -225,26 +225,24 @@ func runToItsEnd(t *testing.T, e *Engine, rig *runRig, req Request) {
 	}
 }
 
-// playerRounds bounds a [modelPlayer]'s loop: a run that has not finished in
-// this many model rounds is a fixture that never stops calling tools.
-const playerRounds = 16
-
-// modelPlayer plays a run as its coding CLI would, with model as the CLI's
-// model: the run's standing instructions and its brief are the conversation's
-// opening, the seat's tools are the bridge's, listed and called over a real MCP
-// session to the run's own endpoint — so every call the model makes lands on
-// the run's row exactly as a box's would — and the run ends when the model
-// answers without calling a tool, or once it has submitted its work. Its
-// closing text is the run's report, and what its model billed — the cached
-// share included — is the run's spend, as a CLI reports its own.
+// modelPlayer plays a run as its coding CLI would, with pick as the CLI's
+// model: the seat's tools are the bridge's, listed over a real MCP session to
+// the run's own endpoint, and the run is the one pick chooses for the names
+// they offer — the pick a [phasedCLI] makes for a phase of the engine's own,
+// so a fixture scripts the run and the phases around it the same way. Each response's calls are made over that
+// session in order, so every call lands on the run's row exactly as a box's
+// would, and the run ends after its last response, or once it has submitted
+// its work. Its closing text is the run's report, and what its responses cost
+// — the cached share included — is the run's spend, as a CLI reports its own.
 //
-// A failure to reach the bridge, or the model failing, is the run's failure,
-// with the reason, as a CLI that could not start or whose vendor refused it.
-func modelPlayer(t *testing.T, model llm.Provider) fakePlayer {
+// A failure to reach the bridge, or a run the script fails, is the run's
+// failure, with the reason, as a CLI that could not start or whose vendor
+// refused it.
+func modelPlayer(t *testing.T, pick func(offered []string) llmtest.Run) fakePlayer {
 	t.Helper()
 	client := httpxtest.Pool(t)
 	return func(ctx context.Context, req sandbox.RunRequest) sandbox.Result {
-		endpoint := req.MCPServers[config.BridgeServerName].URL
+		endpoint := req.MCPServers[config.ToolServerName].URL
 		if endpoint == "" {
 			return sandbox.Result{Error: "the run was handed no bridge to dial"}
 		}
@@ -258,57 +256,55 @@ func modelPlayer(t *testing.T, model llm.Provider) fakePlayer {
 		if err != nil {
 			return sandbox.Result{Error: "listing the bridge's tools: " + err.Error()}
 		}
-		defs := make([]llm.ToolDef, 0, len(listed.Tools))
+		offered := make([]string, 0, len(listed.Tools))
 		for _, tool := range listed.Tools {
-			defs = append(defs, llm.ToolDef{Name: tool.Name, Description: tool.Description,
-				Parameters: schemaOf(tool.InputSchema)})
+			offered = append(offered, tool.Name)
 		}
-		messages := []llm.Message{
-			{Role: llm.RoleSystem, Content: req.System},
-			{Role: llm.RoleUser, Content: req.Brief},
-		}
-		var spent llm.Completion
+		run := pick(offered)
+		var spent llm.Usage
 		billed := func(r sandbox.Result) sandbox.Result {
-			r.InputTokens, r.OutputTokens = spent.InputTokens, spent.OutputTokens
+			r.InputTokens, r.OutputTokens = spent.Input, spent.Output
 			r.CacheReadTokens, r.CacheWriteTokens = spent.CacheRead, spent.CacheWrite
 			return r
 		}
-		for range playerRounds {
-			c, err := model.Complete(ctx, llm.Request{Messages: messages, Tools: defs, Agent: true})
-			if err != nil {
-				return billed(sandbox.Result{Error: err.Error()})
+		var text string
+		for _, response := range run.Responses {
+			usage := response.Usage
+			if usage == (llm.Usage{}) {
+				usage = llmtest.DefaultUsage
 			}
-			spent.InputTokens += c.InputTokens
-			spent.OutputTokens += c.OutputTokens
-			spent.CacheRead += c.CacheRead
-			spent.CacheWrite += c.CacheWrite
-			if len(c.ToolCalls) == 0 {
-				return billed(sandbox.Result{Success: true, Text: c.Content})
-			}
-			messages = append(messages, llm.Message{Role: llm.RoleAssistant,
-				Content: c.Content, ToolCalls: c.ToolCalls})
+			spent.Input += usage.Input
+			spent.Output += usage.Output
+			spent.CacheRead += usage.CacheRead
+			spent.CacheWrite += usage.CacheWrite
+			text = cmp.Or(response.Text, text)
 			submitted := false
-			for _, call := range c.ToolCalls {
-				out, failed := callBridged(ctx, session, call)
-				messages = append(messages, llm.Message{Role: llm.RoleTool,
-					ToolCallID: call.ID, Name: call.Name, Content: out, Failed: failed})
-				if call.Name == runner.SubmitWorkTool && !failed {
+			for _, call := range response.Calls {
+				if _, failed := callBridged(ctx, session, call); call.Name == runner.SubmitWorkTool && !failed {
 					submitted = true
 				}
 			}
 			if submitted {
-				return billed(sandbox.Result{Success: true, Text: cmp.Or(c.Content, "submitted")})
+				return billed(sandbox.Result{Success: true, Text: cmp.Or(text, "submitted")})
 			}
 		}
-		return billed(sandbox.Result{Error: fmt.Sprintf(
-			"the run's model was still calling tools after %d rounds", playerRounds)})
+		if run.Err != nil {
+			return billed(sandbox.Result{Error: run.Err.Error()})
+		}
+		return billed(sandbox.Result{Success: true, Text: cmp.Or(text, "done")})
 	}
 }
 
-// callBridged makes one of a model's calls over the run's bridge session and
+// callBridged makes one of a script's calls over the run's bridge session and
 // answers what the model reads back: the tool's text, and whether it failed.
-func callBridged(ctx context.Context, session *mcp.ClientSession, call llm.ToolCall) (string, bool) {
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: call.Name, Arguments: call.Arguments})
+// Arguments that do not parse fail the call as the CLI's own client would,
+// before anything is sent.
+func callBridged(ctx context.Context, session *mcp.ClientSession, call llmtest.Call) (string, bool) {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(cmp.Or(call.Args, "{}")), &args); err != nil {
+		return "the call's arguments do not parse: " + err.Error(), true
+	}
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: call.Name, Arguments: args})
 	if err != nil {
 		return err.Error(), true
 	}
@@ -319,18 +315,4 @@ func callBridged(ctx context.Context, session *mcp.ClientSession, call llm.ToolC
 		}
 	}
 	return strings.Join(text, "\n"), res.IsError
-}
-
-// schemaOf is a bridged tool's input schema as the model's tool definition
-// carries it.
-func schemaOf(schema any) map[string]any {
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		return nil
-	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil
-	}
-	return out
 }

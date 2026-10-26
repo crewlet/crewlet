@@ -86,9 +86,9 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	}
 	started := rig.runner.Started()
 	last := started[len(started)-1]
-	if last.ResumeSession != "sess-ask" || last.Brief != "the answer: use main" {
+	if last.Resume != "sess-ask" || last.Brief != "the answer: use main" {
 		t.Fatalf("the carried-on job started with session %q and brief %q, want the asking "+
-			"run's session and the answer", last.ResumeSession, last.Brief)
+			"run's session and the answer", last.Resume, last.Brief)
 	}
 }
 
@@ -116,9 +116,9 @@ func TestARunWhoseBoxWasReclaimedCarriesOnFresh(t *testing.T) {
 	}
 	started := rig.runner.Started()
 	last := started[len(started)-1]
-	if last.ResumeSession != "" || !strings.Contains(last.Brief, "the question and the answer") {
+	if last.Resume != "" || !strings.Contains(last.Brief, "the question and the answer") {
 		t.Fatalf("the fresh job started with session %q and brief %q, want no session and "+
-			"the round's brief", last.ResumeSession, last.Brief)
+			"the round's brief", last.Resume, last.Brief)
 	}
 }
 

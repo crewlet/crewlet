@@ -28,6 +28,7 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 		Registry: tools.NewRegistry(),
 		Models:   &phase.Registry{},
 		Launcher: stubLauncher{},
+		Sessions: testHost(t),
 		Seat: prompts.Seat{Org: &org.Organization{Name: "Acme"},
 			Role: &org.Role{Name: "Engineer"}},
 	})
@@ -166,11 +167,11 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 	r := &Runner{cfg: Config{Skills: registry, Seat: prompts.Seat{Role: &org.Role{Name: "CTO", DeclaredHandle: "cto"}}}}
 
 	inactive := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{"slack_post"})
-	if g := r.guardFor(phase.Execute, inactive, nil); g.guard != nil {
+	if g := r.guardFor(phase.Execute, 1, inactive, nil); g.guard != nil {
 		t.Error("a guard was armed over a loader the phase never activated")
 	}
 	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{skills.LoaderTool})
-	if g := r.guardFor(phase.Execute, active, nil); g.guard == nil {
+	if g := r.guardFor(phase.Execute, 1, active, nil); g.guard == nil {
 		t.Error("no guard was armed although the loader is active and slack_post is in the universe")
 	}
 }

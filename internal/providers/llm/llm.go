@@ -6,9 +6,13 @@
 // (internal/providers/llm/cliagent), and the only other implementations are
 // the seat's fallback chain (internal/providers/llm/chain) and test doubles.
 // So the contract is what a CLI can be handed and what it can honestly
-// report: a conversation and the tools on offer in, an answer, its tool calls
-// and its usage out. A field no CLI reads or writes is not here, because a
-// caller that sets one believes it changed something.
+// report: a conversation in, an answer and its usage out — and, for a seat at
+// work, the phase's tools beside the conversation as a [ToolHost], which the
+// backend serves to its CLI as one MCP server. The CLI calls them NATIVELY, in
+// its own loop, so there are no tool calls in an answer: they happened during
+// the call, through the host, which recorded them. A field no CLI reads or
+// writes is not here, because a caller that sets one believes it changed
+// something.
 //
 // It is deliberately small and deliberately dumb about failure. Two things it
 // does NOT do, each learned the expensive way:
@@ -27,6 +31,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"time"
 )
 
 // Role names a message's author.
@@ -39,23 +45,29 @@ const (
 
 // Message is one turn of a conversation.
 //
-// It is never persisted: a conversation lives for one phase's tool loop in
-// one process, and a turn that parks on its executor's run carries the
-// turn's bookkeeping across the park, not a conversation
-// ([github.com/crewlet/crewlet/internal/agent/execstate]).
+// The JSON tags are a WIRE FORMAT, and they are the field names on purpose.
+// A Dashboard Assistant turn parked on a proposal serializes its whole
+// conversation into a durable record that another node, or another BUILD,
+// reads back once its owner decides (internal/assistant's parked record), and
+// untagged these keys are whatever the Go field happens to be called — so a
+// rename here is an unresumable turn with no compile error and no symptom but
+// a refusal in a log. Pinned to the spellings already on the wire; changing
+// one is a format change and needs a version bump on the other side. A seat's
+// turn persists none: what it parks on is its executor's run, and the turn's
+// bookkeeping across that park is internal/agent/execstate's.
 type Message struct {
-	Role       string
-	Content    string
-	ToolCalls  []ToolCall
-	ToolCallID string
-	Name       string
+	Role       string     `json:"Role,omitempty"`
+	Content    string     `json:"Content,omitempty"`
+	ToolCalls  []ToolCall `json:"ToolCalls,omitempty"`
+	ToolCallID string     `json:"ToolCallID,omitempty"`
+	Name       string     `json:"Name,omitempty"`
 
 	// Failed marks a tool message whose call FAILED — the tool refused,
 	// errored, or never ran because its arguments did not parse. The
 	// Content still says why; this is the flag beside it, which a backend
 	// renders so the model reads the result as the failure it is.
 	// Meaningless on any other role.
-	Failed bool
+	Failed bool `json:"Failed,omitempty"`
 }
 
 // ToolDef is a tool offered to the model. Parameters is a JSON Schema object.
@@ -67,9 +79,9 @@ type ToolDef struct {
 
 // ToolCall is the model asking for a tool to run.
 type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments map[string]any
+	ID        string         `json:"ID,omitempty"`
+	Name      string         `json:"Name,omitempty"`
+	Arguments map[string]any `json:"Arguments,omitempty"`
 
 	// ArgumentsError is why the arguments the model wrote could not be
 	// decoded, and empty when they could. Arguments is then EMPTY, and the
@@ -77,20 +89,21 @@ type ToolCall struct {
 	// never asked for (a search over everything, a post with no body). The
 	// tool loop answers such a call with this reason as a failed result
 	// instead, which the model can read and fix.
-	ArgumentsError string
+	ArgumentsError string `json:"ArgumentsError,omitempty"`
 }
 
-// StopReason is why a model stopped writing one response, so the tool loop
-// decides on ONE vocabulary and the round's record says which it was.
+// StopReason is why a model stopped writing — one response, or one CLI run's
+// whole loop — so the tool loop decides on ONE vocabulary and the record says
+// which it was.
 //
 // THE ZERO VALUE IS "NOT REPORTED", and it reads as an ordinary end: a backend
-// that names no reason has not said the response was cut short. Every backend
-// in this tree reports one; the zero value is for a test double.
+// that names no reason has not said the response was cut short.
 //
-// TWO REASONS, because a CLI reports two. It is asked for an envelope that is
-// either an answer or a set of calls, so those are the only two a backend can
-// honestly name; a CLI that hit its own cap or declined the request returns
-// that as prose, or as a failure its exit path classifies.
+// THREE REASONS, the ones a CLI can honestly name. A model request ends in an
+// answer or in calls to run; a CLI run ends when its model answers with no
+// call, or when the CLI's OWN turn cap stops it, which each CLI that has one
+// reports in a shape its profile recognises. A run the engine stopped is not
+// a reason the model gave, and is the tool loop's to record.
 type StopReason string
 
 const (
@@ -100,11 +113,15 @@ const (
 
 	// StopToolUse is a response that ended to let its tool calls run.
 	StopToolUse StopReason = "tool_use"
+
+	// StopCap is a CLI run its own turn cap ended, with the model still
+	// working: the CLI stopped asking it rather than the model stopping.
+	StopCap StopReason = "cap"
 )
 
 // stopReasons is the closed set, written once: [StopReason.Valid] reads it,
 // and so does the gate holding the dashboard's copy of it.
-var stopReasons = []StopReason{StopEnd, StopToolUse}
+var stopReasons = []StopReason{StopEnd, StopToolUse, StopCap}
 
 // StopReasons is every named stop reason — a copy, so no caller can edit the
 // set [StopReason.Valid] answers from.
@@ -144,11 +161,12 @@ type Completion struct {
 	// which is the more specific of the two.
 	ProviderKey string
 
-	Content   string
-	ToolCalls []ToolCall
+	// Content is the answer: for a call with tools, what the model said in
+	// its LAST response of the run — its earlier responses are the host's,
+	// observed as the run went.
+	Content string
 
-	// StopReason is why the model stopped writing this response — see
-	// [StopReason].
+	// StopReason is why the model stopped writing — see [StopReason].
 	StopReason StopReason
 
 	InputTokens  int
@@ -159,14 +177,6 @@ type Completion struct {
 
 // TotalTokens is the figure a budget is charged.
 func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
-
-// Message is the assistant turn this answer adds to its conversation.
-//
-// ONE PLACE builds it, so a field added to the answer cannot reach the turn's
-// record and miss the conversation.
-func (c Completion) Message() Message {
-	return Message{Role: RoleAssistant, Content: c.Content, ToolCalls: c.ToolCalls}
-}
 
 // Request is one call's inputs. A struct rather than a parameter list because
 // it grows, and every feature added over time would otherwise become another
@@ -180,12 +190,16 @@ func (c Completion) Message() Message {
 type Request struct {
 	Messages []Message
 
-	// Tools are offered, never forced: there is deliberately no field to
-	// force a call. A phase that must end in a call NAMES the call that
-	// ends it, and the tool loop asks again when a round finishes without
-	// it (internal/agent/toolloop) — which works whatever the model does
-	// with a request to call something.
-	Tools []ToolDef
+	// Tools is the phase's live tool host, served to the CLI as ONE MCP
+	// server for the length of the call, or nil for a call that offers none
+	// — a text function. See [ToolHost].
+	//
+	// Offered, never forced: there is deliberately no way to force a call.
+	// A phase that must end in a call NAMES the call that ends it, and the
+	// tool loop asks again when a run finishes without it
+	// (internal/agent/toolloop) — which works whatever the model does with a
+	// request to call something.
+	Tools ToolHost
 
 	// Agent marks a call made by a seat at work — a round of one phase of
 	// its turn — rather than a text function the engine runs on its behalf
@@ -197,7 +211,9 @@ type Request struct {
 	// after it — the vendor writes that prompt for an agent and moves it
 	// with every model it ships — and replaces it for any other call, whose
 	// system prompt is the whole instruction and whose answer is parsed.
-	// False is a text function, which is every caller but the tool loop.
+	// False is a text function, which is every caller but a seat's tool
+	// loop, and the Dashboard Assistant's loop, whose system prompt is its
+	// whole instruction (toolloop's Config.OwnPrompt).
 	Agent bool
 
 	// OnDelta, when set, asks the backend to stream and calls this as text
@@ -244,6 +260,27 @@ type Delta struct {
 	// Model names the backend that is answering now. Set on a Restart, so a
 	// consumer can say which model gave up and which took over.
 	Model string
+
+	// Request is the CLI's id of the model request this text belongs to
+	// ([Turn.ID]), where the backend knows it. A CLI's record can show a
+	// request before its prose is written, so text that arrives after the
+	// host was told of the request is filed under it by this id — read by
+	// arrival instead, it was filed under the request after.
+	Request string
+}
+
+// Reconcile is what takes a reader who was shown `shown` to `want`: the tail
+// to append when shown is a prefix of want, or want whole with restart set
+// when it is not, so the reader discards what it drew and starts again.
+//
+// The one rule a consumer applies at the end of what it streamed, so "what
+// was shown" and "what is true" can never quietly differ: the Dashboard
+// Assistant settling its frames against a request's committed text.
+func Reconcile(shown, want string) (tail string, restart bool) {
+	if strings.HasPrefix(want, shown) {
+		return want[len(shown):], false
+	}
+	return want, true
 }
 
 // Send delivers one fragment, and is a no-op when nothing asked to stream or
@@ -335,6 +372,17 @@ const (
 	// vendor or binary that may well answer, and the entry is not sat out,
 	// since nothing says the failure lasts.
 	KindServer
+
+	// KindCancelled is a call its CALLER gave up on: a person stopped the
+	// turn, a node began to drain, a seat's turn was stopped. The CLI it
+	// started was signalled with it (and exits 143, or 130, or not at
+	// all), which says nothing about the CLI, its login or its vendor, so
+	// NOTHING is learned from it: the chain does not try another member,
+	// the entry's readiness is not touched, and it is not an incident to
+	// log. Decided from the caller's context, never from how the process
+	// ended: a CLI the engine killed exits exactly as one that crashed on a
+	// signal of its own.
+	KindCancelled
 )
 
 func (k ErrorKind) String() string {
@@ -347,6 +395,8 @@ func (k ErrorKind) String() string {
 		return "timeout"
 	case KindServer:
 		return "server"
+	case KindCancelled:
+		return "canceled"
 	default:
 		return "fatal"
 	}
@@ -355,8 +405,9 @@ func (k ErrorKind) String() string {
 // Retryable reports whether another member of a fallback chain is worth
 // trying: every kind but a fatal, which is a fault of the engine's or its
 // host's for the operator to fix rather than a failure one member's CLI or
-// vendor had.
-func (k ErrorKind) Retryable() bool { return k != KindFatal }
+// vendor had, and a cancellation, which no member can answer since nobody is
+// waiting for the answer.
+func (k ErrorKind) Retryable() bool { return k != KindFatal && k != KindCancelled }
 
 // Error is a classified provider failure.
 //
@@ -367,7 +418,14 @@ type Error struct {
 	Kind     ErrorKind
 	Provider string
 	Model    string
-	Err      error
+	// Key is the providers.llm key of the entry that failed, so a remedy
+	// can name the entry an operator signs in again; empty where the
+	// backend was built without one.
+	Key string
+	// RetryAt is when the entry is tried again, for a [KindRateLimit] whose
+	// backend sits the entry out until then; zero where no instant is known.
+	RetryAt time.Time
+	Err     error
 }
 
 func (e *Error) Error() string {
@@ -375,6 +433,12 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
+
+// ErrNotRunnable is a CLI that could not be started on this host at all: its
+// binary missing or not executable, or no process to give it. A backend wraps
+// it under [KindFatal], so a caller telling a person why the model did not
+// answer can say the model's program is missing rather than that it failed.
+var ErrNotRunnable = errors.New("the model's CLI could not be started on this host")
 
 // KindOf returns the classification of an error, or KindFatal for anything
 // this package did not classify. Fatal is the safe default for an UNRECOGNISED
@@ -388,6 +452,9 @@ func KindOf(err error) ErrorKind {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return KindTimeout
+	}
+	if errors.Is(err, context.Canceled) {
+		return KindCancelled
 	}
 	return KindFatal
 }

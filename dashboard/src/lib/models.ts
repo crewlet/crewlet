@@ -75,7 +75,7 @@ export interface ModelEntry {
   executor: boolean;
   /** The sandbox cell an executor run on this entry happens in; "" takes `providers.sandbox`'s default. */
   runIn: string;
-  /** The wall-clock cap on one CLI invocation, in seconds, the default applied. */
+  /** The wall-clock cap on one stretch of the CLI's own work with no tool call in flight, in seconds, the default applied. */
   timeoutSeconds: number;
   /** Whether the entry names its own `timeout_seconds`. */
   timeoutSet: boolean;
@@ -346,9 +346,9 @@ export function usesOf(seats: readonly Seat[], key: string): ModelUse[] {
 
 /**
  * What the form edits: the parts of an entry a person changes by hand. The
- * CLI, the mode and how it signs in are the entry's identity rather than its
- * tuning — changing one changes what the model id means or which account is
- * billed — and are changed in Configuration, where the whole entry is in view.
+ * CLI and how it signs in are the entry's identity rather than its tuning —
+ * changing one changes what the model id means or which account is billed —
+ * and are changed in Configuration, where the whole entry is in view.
  */
 export interface ModelForm {
   model: string;

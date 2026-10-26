@@ -424,6 +424,7 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 		// credential they held, with the rows it deleted.
 		a.moved.Seats = true
 		a.moved.person(id, login)
+		a.moved.removed(id)
 	}
 	return int(written), nil
 }

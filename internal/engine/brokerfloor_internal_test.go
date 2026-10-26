@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // freshFits reports whether a fresh node of stream boots on a stream volume
@@ -195,5 +196,66 @@ func TestAStoreLimitBelowTheFloorIsAnAdvisory(t *testing.T) {
 		if got := advised(b()); len(got) != 0 {
 			t.Errorf("%s gave an advisory it cannot be sure of: %+v", name, got)
 		}
+	}
+}
+
+// THE ASSISTANT'S LOG RESERVES ONLY ITS FLOOR ON A FRESH NODE, so a deployment
+// sized for everything else boots with it. Its unset 512 MiB counted in full
+// raised the least a fresh node reserves past a stated 9 GiB broker limit, the
+// size crewlet-operator's getting-started company sets, and every such node
+// refused to boot on CREWLET_ASSISTANT_LOG. Scaled, it counts its field's
+// 64 MiB floor, and a 9 GiB limit holds the whole fresh node again.
+func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
+	t.Parallel()
+	boot := config.DefaultBootstrap()
+	floor := BrokerFloorFor(&boot)
+	var assistant domainCeiling
+	for _, entry := range register() {
+		if entry.Domain.Name() == "assistant" {
+			assistant = entry.Ceiling(boot.Stream, 0)
+		}
+	}
+	if assistant.Bytes != config.DefaultAssistantLogMaxBytes || assistant.scaleFloor() != config.AssistantLogMaxBytesFloor {
+		t.Fatalf("the assistant's ceiling asks %d and scales to %d, want its default and its field's floor",
+			assistant.Bytes, assistant.scaleFloor())
+	}
+	stated := config.DefaultBootstrap()
+	stated.Stream.StoreMaxBytes = 9 << 30
+	if got := BrokerFloorFor(&stated).Limit; got > stated.Stream.StoreMaxBytes {
+		t.Errorf("a fresh node reserves at least %d bytes, more than a stated 9 GiB limit (%d)",
+			got, stated.Stream.StoreMaxBytes)
+	}
+	// An explicit ceiling is reserved as written, never scaled.
+	explicit := config.DefaultBootstrap()
+	explicit.Stream.AssistantLogMaxBytes = config.DefaultAssistantLogMaxBytes
+	if grew := BrokerFloorFor(&explicit).Logs - floor.Logs; grew != config.DefaultAssistantLogMaxBytes-config.AssistantLogMaxBytesFloor {
+		t.Errorf("an explicit 512 MiB moved the logs' floor by %d, want %d", grew,
+			config.DefaultAssistantLogMaxBytes-config.AssistantLogMaxBytesFloor)
+	}
+}
+
+// THE SIZE A TEST BROKER DECLARES BOOTS A FRESH NODE OF THE FIXTURES.
+//
+// The suites size their brokers from brokertest.StoreMaxBytes rather than from
+// the runner's free disk, so that a boot passes or fails on the code and not on
+// the machine. That holds only while the figure is above the floor of the
+// fixtures' own Tier A, and the floor grows whenever a log joins the register:
+// past it, every node boot in every suite is refused on every machine. This
+// case fails beside them, as the one that names the cause, both figures and
+// the constant to raise — and through Tier A's own validation, so the figure
+// is one an operator could write.
+func TestTheTestBrokerSizeHoldsAFreshNode(t *testing.T) {
+	t.Parallel()
+	boot := testBootstrap(t)
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
+	if err := boot.Validate(); err != nil {
+		t.Fatalf("Tier A refuses the fixtures' broker size of %d bytes: %v",
+			brokertest.StoreMaxBytes, err)
+	}
+	floor := BrokerFloorFor(&boot)
+	if floor.Limit > brokertest.StoreMaxBytes {
+		t.Fatalf("brokertest.StoreMaxBytes is %d bytes and %s: raise it, or every "+
+			"suite booting a node is refused at whichever state log no longer fits",
+			brokertest.StoreMaxBytes, floor.Sentence())
 	}
 }

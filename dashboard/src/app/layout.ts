@@ -65,6 +65,7 @@
  */
 
 import { breakpoint, density, size, spacing } from "@crewlethq/tokens";
+import { useSyncExternalStore } from "react";
 import { useMediaMatch } from "@crewlethq/ui";
 import type { SectionRenderer } from "./nav.ts";
 
@@ -190,7 +191,7 @@ export const SECTION_COLUMN_MIN = Math.ceil(
     SECTION_BODY_FLOOR,
 );
 
-/** Which frame a screen sits in, for the one term that differs. */
+/** Which frame a screen sits in, for the terms that differ. */
 export interface Frame {
   /**
    * The width of the column drawn inside the screen beside the list —
@@ -200,6 +201,13 @@ export interface Frame {
   column: number;
   /** The reader's density multiplier ([densityScale]). */
   scale: number;
+  /**
+   * What the assistant takes from the window while it is a COLUMN of the
+   * frame ([assistantTrack]): its width and the inset it is held off the
+   * window's edge by. Absent, or 0, while it is closed or stands over the
+   * page, where it takes no track.
+   */
+  assistant?: number;
 }
 
 /**
@@ -223,6 +231,138 @@ export function peekColumnMin(frame: Frame): number {
       px(size.shell.inset) * frame.scale +
       SHEET_HAIRLINES +
       PEEK_WIDTH +
-      listReserve(frame),
+      listReserve(frame) +
+      (frame.assistant ?? 0),
   );
+}
+
+/*
+ * # The assistant: a third track of the frame
+ *
+ * The assistant is a second sheet on the frame, to the right of the page's,
+ * mirroring the rail (the kit's `AppShell` `aside`). While it is a COLUMN the
+ * window holds, at the reader's density:
+ *
+ *       236  the sidebar                          (`size.shell.rail`)
+ *     +   8  the seam: the page sheet's end inset (`size.shell.inset`, x density)
+ *     +   2  the page sheet's two hairlines
+ *     + 494  the list's reserve ([listReserve]: gutter, padding, the list)
+ *     + 420  the assistant
+ *     +   8  the inset it is held off the window's edge by
+ *
+ * = 1168 on a screen and 1404 beside Settings' column, at the normal density.
+ * Below that it stands OVER the page's end edge (an overlay, modal), and
+ * below the phone breakpoint it is the whole window (a sheet).
+ *
+ * A PEEK BESIDE AN OPEN ASSISTANT BECOMES A DRAWER FIRST: the assistant's
+ * track is one more term of [peekColumnMin], so both are columns only where
+ * the window holds both and the list at its floor (1588 on a screen). The
+ * reader opened the assistant to talk about the list, and the list keeps its
+ * floor. And Settings' column folds to its picker sooner, by the same track
+ * ([sectionColumnMin]).
+ */
+
+/** The assistant's resting width, and the range a reader may drag it through. */
+export const ASSISTANT_WIDTH = 420;
+export const ASSISTANT_MIN = 360;
+export const ASSISTANT_MAX = 640;
+
+/** Which shape the assistant takes: a column of the frame, over the page, or the whole window. */
+export type AssistantShape = "column" | "overlay" | "sheet";
+
+/** What the assistant's column takes from the window: its width and its outer inset. */
+export function assistantTrack(width: number, scale: number): number {
+  return width + px(size.shell.inset) * scale;
+}
+
+/**
+ * The narrowest the page's SHEET may be beside an assistant column, its seam
+ * and hairlines included: what the kit caps the column at
+ * (`AppShell` `asideReserve`), so a width dragged on a wide window never
+ * takes a narrower one's list away. With a peek column in the sheet, the
+ * peek's resting width is the sheet's too.
+ */
+export function sheetFloor(frame: Frame, peekColumn = false): number {
+  return (
+    px(size.shell.inset) * frame.scale +
+    SHEET_HAIRLINES +
+    listReserve(frame) +
+    (peekColumn ? PEEK_WIDTH : 0)
+  );
+}
+
+/**
+ * The narrowest window the assistant is a column at, in this frame, at its
+ * resting width; below it, an overlay. Rounded UP, because a column a
+ * fraction too narrow is the defect.
+ */
+export function assistantColumnMin(frame: Frame): number {
+  return Math.ceil(
+    px(size.shell.rail) + sheetFloor(frame) + assistantTrack(ASSISTANT_WIDTH, frame.scale),
+  );
+}
+
+/** The assistant's shape at a window `width`, in this frame. */
+export function assistantShape(width: number, frame: Frame): AssistantShape {
+  if (width < PHONE_BREAKPOINT) return "sheet";
+  return width >= assistantColumnMin(frame) ? "column" : "overlay";
+}
+
+/**
+ * The widest a reader may drag the assistant column to at a window `width`:
+ * [ASSISTANT_MAX], capped at what leaves the page's sheet its floor. Never
+ * under [ASSISTANT_MIN], where the column would not have been chosen.
+ */
+export function assistantMaxWidth(width: number, frame: Frame, peekColumn = false): number {
+  const room =
+    width -
+    px(size.shell.rail) -
+    sheetFloor(frame, peekColumn) -
+    px(size.shell.inset) * frame.scale;
+  return Math.max(ASSISTANT_MIN, Math.min(ASSISTANT_MAX, Math.floor(room)));
+}
+
+/**
+ * What the assistant takes from the window's end edge while it is a column
+ * or stands over the page, so the toast stack stands beside it rather than
+ * over it: its width (an overlay's is capped at the window less a strip of
+ * the page, as the kit draws it) and the inset holding it off the edge. A
+ * sheet is the whole window and takes the stack's foot instead.
+ */
+export function assistantOccupied(
+  shape: AssistantShape,
+  width: number,
+  viewport: number,
+  scale: number,
+): number {
+  if (shape === "sheet") return 0;
+  const inset = px(size.shell.inset) * scale;
+  const drawn =
+    shape === "overlay" ? Math.min(width, viewport - px(spacing["10"]) - 2 * inset) : width;
+  return Math.max(0, Math.round(drawn + inset));
+}
+
+/**
+ * The narrowest window Settings' column stands beside its section at, with
+ * the assistant's track (if any) taken first: [SECTION_COLUMN_MIN] plus it.
+ */
+export function sectionColumnMin(assistant: number): number {
+  return Math.ceil(SECTION_COLUMN_MIN + assistant);
+}
+
+/**
+ * The window's width, as a value a component re-renders on. For the one
+ * figure no media query can hand back: how far a reader may drag a panel.
+ */
+export function useViewportWidth(): number {
+  return useSyncExternalStore(onViewportResize, viewportWidth, () => 0);
+}
+
+function viewportWidth(): number {
+  return typeof window === "undefined" ? 0 : window.innerWidth;
+}
+
+function onViewportResize(notify: () => void): () => void {
+  window.addEventListener("resize", notify);
+  return () => window.removeEventListener("resize", notify);
 }

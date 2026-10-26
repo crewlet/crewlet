@@ -1,10 +1,11 @@
 // Package cliagent drives a coding CLI the operator already pays a
-// subscription for as a headless text model behind [llm.Provider].
+// subscription for, headless, behind [llm.Provider]: a seat's phase as the
+// CLI's own loop over the seat's tools, and a text function as one answer.
 //
-// It is the TEXT-CALL backend of every phase but one: the reviewer, delegated
-// workers, onboarding and the side passes call [Provider.Complete], with the
-// CLI's own shell and file tools denied by its profile. A seat's EXECUTOR is
-// not a text call — it is the same CLI's own agentic run in a box
+// It is the backend of every phase but one: the reviewer, delegated workers,
+// onboarding and the side passes call [Provider.Complete] on this host, with
+// the CLI's own shell and file tools denied by its profile. A seat's EXECUTOR
+// is not a call through it — it is the same CLI's own agentic run in a box
 // (internal/sandbox/codingagent), which reads this entry's identity from here
 // ([Provider.Agent], [Provider.ModelArgument], the Sandbox* credentials) and,
 // at launch, whether the entry sits out ([Provider.SittingOut]).
@@ -27,10 +28,19 @@
 //     inside it, in an empty per-call working directory, with an ALLOWLISTED
 //     environment rather than the engine's — see workspace.go and env.go.
 //
-//   - NO TOOL CHANNEL. The tool loop needs tool calls back, and a CLI prints
-//     prose. The catalogue and a response contract ride in the prompt, and
-//     the reply is parsed by a deliberately forgiving parser that never
-//     errors — see prompt.go and envelope.go.
+//   - A LOOP OF ITS OWN. A seat's phase hands the CLI its tools as one MCP
+//     server ([llm.ToolHost]), served for the run alone on a socket the
+//     relay reaches, and the CLI calls them natively, asking its model again
+//     and again until it answers or the engine ends the run. So the engine
+//     sees the calls and nothing between them: the CLI's own record — its
+//     stream, or a file it writes — is read as it goes for each model request,
+//     its prose and its cost, and handed to the host; a refreshed login is
+//     carried back at each call; and a model call made inside one of the
+//     run's calls runs on the run's slot — see toolrun.go, record.go and
+//     slots.go. A CLI whose loop runs in a server of its own (OpenCode 2.1)
+//     has that server started first and waited for until it has the tools,
+//     and the run is its client — see serve.go. A text function — no tools —
+//     is one prompt in and one answer out, as it always was.
 //
 //   - VENDOR DRIFT. These flags and JSON shapes change between releases, so
 //     every profile field is data an operator can replace from YAML rather
@@ -50,6 +60,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,9 +97,12 @@ type Config struct {
 	StateDir string
 	// Overrides are the operator's profile edits.
 	Overrides map[string]any
-	// Timeout caps one invocation, wall clock.
+	// Timeout caps one stretch of the model's own work: a text function's
+	// whole call, and on a run with tools each stretch with none of the
+	// seat's tools in flight — see [stretch].
 	Timeout time.Duration
-	// MaxConcurrent caps this provider's simultaneous processes.
+	// MaxConcurrent caps this provider's simultaneous processes — see
+	// slots.go for the calls made inside a run's own tool calls.
 	MaxConcurrent int
 	// Env is extra child environment, already ${VAR}-resolved.
 	Env map[string]string
@@ -141,6 +155,9 @@ type Provider struct {
 	// sitOut is the window this entry sits out after its CLI reported a
 	// spent plan ([Provider.bench]).
 	sitOut bench
+
+	// ready is what the entry's calls met, for [Provider.Unready].
+	ready readiness
 
 	// now is the clock the bench is read against — time.Now, and a fixed
 	// clock in the suite, which has to watch a window end without waiting
@@ -218,9 +235,9 @@ func (p *Provider) Model() string { return p.model }
 // Key is the providers.llm key the entry was built under.
 func (p *Provider) Key() string { return p.key }
 
-// ModelArgument is the model exactly as this entry's text calls hand it to the
-// CLI ([cliprofile.Profile.ModelArgument]) — what a coding run of the same CLI
-// is handed too, so a box and a text call on one entry name one model.
+// ModelArgument is the model exactly as this entry's runs on this host hand it
+// to the CLI ([cliprofile.Profile.ModelArgument]) — what the executor's run of
+// the same CLI in a box is handed too, so the two name one model.
 func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
 
 // Profile is the resolved profile, for `crewlet llm doctor`.
@@ -286,9 +303,37 @@ func (p *Provider) routeFor(req llm.Request) cliprofile.Route {
 // launched to learn again what the last one said. Checked as the call arrives
 // and again once it holds a slot, because a call that queued for one may have
 // waited out the very call that sat the entry out.
+//
+// What the call met is remembered for [Provider.Unready].
+//
+// A CALL ITS CALLER CANCELLED FAILED AS A CANCELLATION, however it surfaced:
+// a CLI signalled with the call that exited 143 or held its pipes, a slot or
+// a home the call stopped waiting for. Decided here, once, from the caller's
+// context rather than from the process, which a cancellation and a crash
+// end identically, so no path below can report a person's Stop as the
+// vendor's outage ([llm.KindCancelled]).
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	comp, err := p.complete(ctx, req)
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		comp, err = nil, p.fail(llm.KindCancelled, fmt.Errorf("the call was cancelled before "+
+			"the %s CLI answered: %w", p.agent, context.Cause(ctx)))
+	}
+	p.remember(err)
+	return comp, err
+}
+
+// complete is one call, as [Provider.Complete] describes it.
+func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if err := p.SittingOut(); err != nil {
 		return nil, err
+	}
+	if req.Tools != nil && p.profile.MCP == nil {
+		// The operator's to fix, and the same on every attempt: the
+		// profile says nothing about how this CLI is handed an MCP server,
+		// so a seat's phase on it would run with none of its tools.
+		return nil, p.fail(llm.KindFatal, fmt.Errorf("the %q profile has no mcp block, so its "+
+			"CLI cannot be handed a seat's tools — declare providers.llm.%s.overrides.mcp, or "+
+			"run seats on another entry and keep this one for text functions", p.agent, p.key))
 	}
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
@@ -310,15 +355,11 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		return nil, p.fail(llm.KindFatal, err)
 	}
 
-	select {
-	case p.slots <- struct{}{}:
-		defer func() { <-p.slots }()
-	case <-ctx.Done():
-		// Queued behind other seats and the caller gave up. Reported as
-		// a timeout rather than fatal: nothing about the request was
-		// wrong, and the chain should be free to try another member.
-		return nil, p.fail(llm.KindTimeout, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
+	slot, err := p.acquire(ctx)
+	if err != nil {
+		return nil, err
 	}
+	defer slot.release()
 	// AGAIN, NOW THAT THE SLOT IS HELD. A call that queued behind a full
 	// entry passed the check above before the sit-out existed, so when the
 	// calls ahead of it report the spent plan it would otherwise take its
@@ -363,19 +404,21 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 
 	in := invocation{
 		binary:  p.profile.Binary,
-		args:    p.argv(),
+		args:    p.argv(req.Tools != nil),
 		dir:     checkout.Work,
 		env:     buildEnv(p.profile, checkout, p.env, p.auth),
 		timeout: p.timeout,
 		grace:   p.termGrace,
+		failOn:  p.profile.FailureMarkers,
 	}
 	// Streamed only for a JSONL profile, where each event's text IS a
 	// fragment of the answer. The other two output modes are extracted
 	// from the WHOLE of stdout — a fenced block, one JSON document — so
 	// there is no faithful incremental view of them, and forwarding raw
 	// lines would stream a banner and a half-written fence as though they
-	// were what the model said.
-	if req.Streaming() && p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
+	// were what the model said. A run with tools streams what its record
+	// reader reads instead — see [Provider.serveTools].
+	if req.Tools == nil && req.Streaming() && p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
 		in.onLine = func(line string) {
 			doc, ok := decodeObject(strings.TrimSpace(line))
 			if !ok {
@@ -418,6 +461,19 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		for _, arg := range p.profile.UsageFileArgs {
 			in.args = append(in.args, strings.ReplaceAll(arg, "{usage_file}", usagePath))
 		}
+	}
+	// THE SEAT'S TOOLS, served for this run alone, and the CLI told how to
+	// reach them — before the system prompt and the prompt, as the model is.
+	// Closed on every way out, BEFORE the checkout is released (deferred
+	// earlier, so run later): the release waits for the calls still running,
+	// and a refreshed login's carry works in the home.
+	var tools *toolRun
+	if req.Tools != nil {
+		tools, err = p.serveTools(ctx, req, checkout, slot, &in, session, system+prompt)
+		if err != nil {
+			return nil, err
+		}
+		defer tools.close()
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
 	// have something to put in it — see [cliprofile.SystemPromptFile]. A
@@ -475,8 +531,24 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		in.stdin = prompt
 	}
 
+	// A SERVE LIFECYCLE'S SERVER, started now that everything the run writes
+	// into its working directory is there — see [toolRun.up]. Its end ends
+	// the run, through the context the run is made under.
+	runCtx := ctx
+	if tools != nil {
+		var up bool
+		runCtx, up, err = tools.up(ctx, p, &in)
+		if err != nil {
+			return nil, err
+		}
+		if !up {
+			// The host ended the run before the CLI's server was up:
+			// nothing ran, and nothing was spent.
+			return &llm.Completion{Model: p.model}, nil
+		}
+	}
 	started := time.Now()
-	res, err := run(ctx, in)
+	res, err := run(runCtx, in)
 	if err != nil {
 		// NO CLI RAN, which is all run's error ever says: the binary is
 		// missing or not executable here, or the host would not give it a
@@ -484,10 +556,19 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		// the next member is no answer to, so it is fatal. A CLI that DID run
 		// comes back as a result whatever happened to it, and [completion]
 		// classifies it by what that was.
-		return nil, p.fail(llm.KindFatal, err)
+		return nil, p.fail(llm.KindFatal, fmt.Errorf("%w: %w", llm.ErrNotRunnable, err))
 	}
 	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
+	connected := false
+	if tools != nil {
+		// THE RECORD WHOLE, THEN THE RUN RELEASED: every request the record
+		// showed is told before the host's server for the run is retired,
+		// which waits for every call still running on it.
+		tools.ran(ctx, res)
+		connected = tools.finish()
+		reportOffered(ctx, tools.reader.offeredTools())
+	}
 
 	// READ BEFORE THE CHECKOUT IS RELEASED, which removes the directory.
 	// A missing or unreadable report is not an error: the vendor writes it
@@ -522,30 +603,53 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// file, a report that cannot be had leaves the counts to stdout rather
 	// than failing an answer the operator paid for. In the working directory
 	// the call ran in, before the checkout is released.
-	if len(p.profile.UsageArgs) > 0 && !res.timedOut {
+	//
+	// A RUN WITH TOOLS ASKS ON EVERY OUTCOME, a timeout and a run the host
+	// stopped included, and past the cancellation that may have ended it
+	// (bounded by the command's own timeout): such a run is a phase's whole
+	// loop, and its report is the one count of what the run spent before it
+	// was cut.
+	//
+	// A RUN WITH TOOLS MAY ASK THROUGH ITS CLI'S SERVER ([cliprofile.MCP.UsageArgs]),
+	// which is then asked while it is still up — and not at all once a run cut
+	// short took it down.
+	if len(p.profile.UsageArgs) > 0 && (!res.timedOut || tools != nil) {
 		args := make([]string, 0, len(p.profile.UsageArgs))
 		for _, arg := range p.profile.UsageArgs {
 			args = append(args, strings.ReplaceAll(arg, "{session}", session))
 		}
-		report, reportErr := p.runAuxiliary(ctx, args, checkout.Work,
-			buildEnv(p.profile, checkout, p.env, p.auth), "")
-		switch {
-		case reportErr != nil:
-			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
-				"agent", p.agent, "error", reportErr)
-		case strings.TrimSpace(report) == "":
-			// A command that succeeded and printed nothing reported nothing,
-			// and the empty string handed on below reads as no report at all
-			// — so this is the one place that can say so.
-			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
-				"agent", p.agent, "error", fmt.Sprintf("%s %s exited 0 and printed nothing",
-					p.profile.Binary, strings.Join(args, " ")))
-		default:
-			usageDoc = report
+		env := buildEnv(p.profile, checkout, p.env, p.auth)
+		ask := true
+		reportCtx := ctx
+		if tools != nil {
+			reportCtx = context.WithoutCancel(ctx)
+			if len(p.profile.MCP.UsageArgs) > 0 {
+				args, env, ask = tools.usageCommand(p, session, env)
+			}
+		}
+		if ask {
+			report, reportErr := p.runAuxiliary(reportCtx, args, checkout.Work, env, "")
+			switch {
+			case reportErr != nil:
+				log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+					"agent", p.agent, "error", reportErr)
+			case strings.TrimSpace(report) == "":
+				// A command that succeeded and printed nothing reported
+				// nothing, and the empty string handed on below reads as no
+				// report at all — so this is the one place that can say so.
+				log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+					"agent", p.agent, "error", fmt.Sprintf("%s %s exited 0 and printed nothing",
+						p.profile.Binary, strings.Join(args, " ")))
+			default:
+				usageDoc = report
+			}
 		}
 	}
 
-	return p.completion(ctx, system+prompt, len(req.Tools) > 0, res, usageDoc)
+	if tools != nil {
+		return p.toolCompletion(ctx, res, usageDoc, tools, connected)
+	}
+	return p.completion(ctx, system+prompt, res, usageDoc)
 }
 
 // newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
@@ -565,10 +669,16 @@ func newSessionID() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// argv is the invocation's arguments: the profile's completion argv, then the
-// model, then (in argv mode) the prompt, which the caller appends.
-func (p *Provider) argv() []string {
-	args := append([]string(nil), p.profile.CompleteArgs...)
+// argv is the invocation's arguments: the profile's completion argv — its tool
+// route's in place of it for a run with tools, where the route declares one,
+// rendered by [Provider.serveTools] — then the model, then (in argv mode) the
+// prompt, which the caller appends.
+func (p *Provider) argv(tools bool) []string {
+	complete := p.profile.CompleteArgs
+	if m := p.profile.MCP; tools && m != nil && len(m.CompleteArgs) > 0 {
+		complete = m.CompleteArgs
+	}
+	args := append([]string(nil), complete...)
 	if p.model == "" {
 		return args
 	}
@@ -592,12 +702,8 @@ func (p *Provider) argv() []string {
 // budget charged for the transcript alone undercounts every call by the
 // largest stable thing in it; what is NOT in it is a vendor's own system
 // prompt kept beside the engine's, which the engine never sees.
-//
-// offeredTools says whether the prompt carried the response contract, which
-// [RenderPrompt] appends exactly when the request offered tools. Only then is
-// the reply read as an envelope: see the read below.
 func (p *Provider) completion(
-	ctx context.Context, sent string, offeredTools bool, res *rawResult, usageDoc string,
+	ctx context.Context, sent string, res *rawResult, usageDoc string,
 ) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, fmt.Errorf(
@@ -682,12 +788,13 @@ func (p *Provider) completion(
 	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(said, res.stderr))
 		if hit.Kind == llm.KindRateLimit {
-			p.bench(hit.Retry, reason)
+			until := p.bench(hit.Retry, reason)
 			// WHERE IT MATCHED, beside what it matched: a sit-out takes the
 			// entry from every seat on this node, and the one question an
 			// operator who doubts it has is whether the vendor said it.
 			log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
 				"source", string(hit.Source), "said", reason)
+			return nil, p.limited(fmt.Errorf("%s", reason), until)
 		}
 		return nil, p.fail(hit.Kind, fmt.Errorf("%s", reason))
 	}
@@ -702,8 +809,9 @@ func (p *Provider) completion(
 	// which does not share this one's outage: trying it costs one process
 	// launch, and stopping cost the seat every turn for as long as the outage
 	// lasted, each redelivered against the same dead head. Nothing is
-	// repeated by the walk, either — a text call runs none of the seat's
-	// tools; the engine runs those once an answer is back.
+	// repeated by the walk, either: the calls a run made are on its
+	// session's record, which the next member continues from rather than
+	// runs again (internal/providers/llm/chain).
 	//
 	// NOT BENCHED: only a spent plan sits the entry out ([Provider.bench]),
 	// because only a spent plan is known to last. A failure the next call
@@ -796,44 +904,6 @@ func (p *Provider) completion(
 		Content:    out.text,
 		StopReason: llm.StopEnd,
 	}
-	// AN ENVELOPE ONLY WHERE ONE WAS ASKED FOR. A call that offered no tools
-	// sent no contract, so its reply is the answer verbatim — and reading it
-	// as an envelope anyway is not harmless forgiveness: the envelope reader
-	// accepts `content`, `text`, `message` and `response` as the message key,
-	// so an auxiliary answer that IS a JSON object carrying one of them
-	// (the persist decider's `{"kind": "LONG", "content": "..."}`) came back
-	// as that one field, its caller's decode failed, and the decision was
-	// silently dropped.
-	var env Envelope
-	if offeredTools {
-		env = ParseEnvelope(out.text)
-		if env.Parsed {
-			comp.Content = env.Message
-		}
-	}
-	for i, call := range env.ToolCalls {
-		comp.ToolCalls = append(comp.ToolCalls, llm.ToolCall{
-			// The CLI has no id of its own to give, and the tool loop
-			// pairs results to calls by it. Derived from the position
-			// so two calls in one answer stay distinguishable.
-			ID:        fmt.Sprintf("cli_%d", i),
-			Name:      call.Name,
-			Arguments: call.Arguments,
-			// Arguments the envelope could not read: the tool loop
-			// answers the call with this instead of running it on an
-			// empty map, as it does for every other backend.
-			ArgumentsError: call.ArgumentsError,
-		})
-	}
-	if len(comp.ToolCalls) > 0 {
-		// The CLI reports no stop reason of its own on a text call: the
-		// envelope it was asked for is either an answer or a set of
-		// calls, so those are the only two this backend can honestly
-		// name. A CLI that hit its own cap or refused returns that as
-		// prose or a failure the exit path classifies.
-		comp.StopReason = llm.StopToolUse
-	}
-
 	if out.reported {
 		// InputTokens is ALWAYS the full prompt count, cache included —
 		// the contract's rule, and what keeps it a correct budget figure
@@ -854,7 +924,7 @@ func (p *Provider) completion(
 		comp.OutputTokens = EstimateTokens(out.text)
 	}
 
-	if strings.TrimSpace(comp.Content) == "" && len(comp.ToolCalls) == 0 {
+	if strings.TrimSpace(comp.Content) == "" {
 		// Warned rather than returned, because nothing above this frame
 		// can reconstruct WHY: the output token count is the evidence
 		// that the model worked and said nothing (a thinking-only round
@@ -909,9 +979,12 @@ func (p *Provider) completion(
 //     is.
 //
 // Stderr is matched anywhere: it is the CLI's own channel, and the answer
-// does not reach it. The events scope reads the CLI's own failure
-// events and nothing else, and the stderr scope stderr alone — see
-// [cliprofile.MarkerScope].
+// does not reach it. So are the fields of a FAILED run with tools' own failure
+// events ([cliprofile.MCP.FailureEvents]): that run's answer is its record's
+// last prose, which a failed run never wrote, and a CLI whose stderr says only
+// that it failed (Muse Code: "run ended with Failed") says why there alone.
+// The events scope reads the CLI's own failure events and nothing else, and
+// the stderr scope stderr alone — see [cliprofile.MarkerScope].
 func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 	var haystacks []haystack
 	switch p.EffectiveMarkerScope() {
@@ -925,6 +998,9 @@ func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 			said = haystack{text: out.said, source: sourceFailedRun}
 		}
 		haystacks = []haystack{said, {text: out.stderr, source: sourceStderr}}
+		if out.failed && out.events != "" {
+			haystacks = append(haystacks, haystack{text: out.events, source: sourceEvent})
+		}
 	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
@@ -960,6 +1036,9 @@ type cliOutput struct {
 	stdout string
 	// stderr is the CLI's own diagnostic channel.
 	stderr string
+	// events is a run with tools' own failure events, by the profile's
+	// fields, one a line ([cliprofile.MCP.FailureEvents]).
+	events string
 	// failed is the CLI's own word that the run failed: a non-zero exit, or
 	// the flag at the profile's error_paths.
 	failed bool
@@ -1003,7 +1082,8 @@ const (
 	// sourceStderr is the CLI's stderr.
 	sourceStderr markerSource = "stderr"
 	// sourceEvent is one of the CLI's own failure events, under
-	// [cliprofile.MarkerScopeEvents].
+	// [cliprofile.MarkerScopeEvents] or, for a failed run with tools, by the
+	// profile's [cliprofile.MCP.FailureEvents].
 	sourceEvent markerSource = "event"
 )
 
@@ -1073,8 +1153,13 @@ func resetAfter(from string, marker cliprofile.LimitMarker) time.Duration {
 }
 
 // fail wraps an error as a classified provider failure.
-func (p *Provider) fail(kind llm.ErrorKind, err error) error {
-	return &llm.Error{Kind: kind, Provider: providerName + "/" + p.agent, Model: p.model, Err: err}
+func (p *Provider) fail(kind llm.ErrorKind, err error) error { return p.failure(kind, err) }
+
+// failure is [Provider.fail] as its concrete type, for a caller that adds to
+// it.
+func (p *Provider) failure(kind llm.ErrorKind, err error) *llm.Error {
+	return &llm.Error{Kind: kind, Provider: providerName + "/" + p.agent, Model: p.model,
+		Key: p.key, Err: err}
 }
 
 // firstLine is the first non-empty line across the given texts, for a failure

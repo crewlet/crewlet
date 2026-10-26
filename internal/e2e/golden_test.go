@@ -817,6 +817,15 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		if limit, _ := rec["max_rounds"].(float64); limit < used {
 			t.Errorf("the %v phase ran %v rounds under a stated cap of %v", rec["phase"], used, limit)
 		}
+		// THE EXECUTOR'S RECORD IS COLLECTED, NOT OBSERVED: every executor is
+		// its coding CLI's own run in a box, and its record states that run as
+		// the one round the engine saw — the launch and the answer — with the
+		// calls the run made over the seat's bridge, timed there. The engine
+		// saw none of the run's model requests, so no CLI run of the engine's
+		// covers its round, and the bridge has no request a call's tool_use id
+		// joins it to: the two checks below that read a phase's own requests
+		// are the phases on this host's.
+		collected := rec["phase"] == "execute"
 		calls, _ := rec["tool_executions"].([]any)
 		for _, raw := range calls {
 			call, _ := raw.(map[string]any)
@@ -826,6 +835,49 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			if origin, _ := call["origin"].(string); origin == "" {
 				t.Errorf("the %v call %v names no origin", rec["phase"], call["name"])
 			}
+			if collected {
+				continue
+			}
+			// EVERY CALL UNDER THE ID ITS REQUEST GAVE IT: Claude Code hands
+			// the server its tool_use id with each call, which is how the
+			// engine joins a call to the request that asked for it, and the
+			// id a running call and its answered row are matched on.
+			if id, _ := call["call_id"].(string); !strings.HasPrefix(id, "toolu_") {
+				t.Errorf("the %v call %v carries call_id %q, not the tool_use id its request "+
+					"named", rec["phase"], call["name"], call["call_id"])
+			}
+		}
+		// ROUNDS ARE MODEL REQUESTS, AND THE CLI RUNS THAT MADE THEM NAME
+		// THEM. A phase's loop is its CLI's own, so the record carries each
+		// run beside the requests: one contiguous stretch of rounds per run,
+		// together every round the phase used — each run having shown its
+		// requests, as Claude Code's record does — and the model that served.
+		if collected {
+			continue
+		}
+		covered := 0
+		invocations, _ := rec["invocations"].([]any)
+		for _, raw := range invocations {
+			run, _ := raw.(map[string]any)
+			first, _ := run["first_round"].(float64)
+			last, _ := run["last_round"].(float64)
+			if first == 0 && last == 0 {
+				// A run that made no request before it ended.
+				continue
+			}
+			if int(first) != covered+1 || last < first {
+				t.Errorf("a %v CLI run made rounds %v to %v after rounds up to %d were "+
+					"another's: %v", rec["phase"], first, last, covered, run)
+			}
+			covered = int(last)
+			if run["requests_observed"] != true || run["model"] != "claude-golden" {
+				t.Errorf("a %v CLI run reads %v, want one that showed its requests, served "+
+					"by claude-golden", rec["phase"], run)
+			}
+		}
+		if covered != int(used) {
+			t.Errorf("the %v phase used %v rounds and its CLI runs %v made %d", rec["phase"],
+				used, invocations, covered)
 		}
 	}
 
@@ -1426,11 +1478,12 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	// the two agree once the charges are through, and the poll that sees them
 	// agree is a snapshot in which every refused round so far is counted.
 	// Every round of the loop here is a tool-use reply, and every auxiliary
-	// pass a text reply, so each call's cost is known from its kind. EVERY
-	// call the model answered is summed: each is one run of the scripted CLI,
-	// whose answer and usage the backend reads off the one document it prints
-	// ([scriptedEntry]), so there is no call the engine was billed for and
-	// never handed.
+	// pass a text reply, so each request's cost is known from its kind. EVERY
+	// request the model answered is summed: each is one model request of a
+	// scripted CLI run, whose usage the backend reads off the record the CLI
+	// prints for it, and a stop never lands between the model's answer and
+	// that record ([cliRun.handleStop]) — so there is no request the engine
+	// was billed for and never read.
 	var used, want int
 	var calls []string
 	waitFor(t, "the counter to hold every completion the model answered", func() bool {

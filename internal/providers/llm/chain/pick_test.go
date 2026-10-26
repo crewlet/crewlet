@@ -21,7 +21,7 @@ func sittingOut(key string) error {
 }
 
 // A LAUNCH SKIPS A MEMBER SITTING OUT AND LANDS ON THE NEXT, with no special
-// case: the refusal is a retryable classification, as a text call's is, and
+// case: the refusal is a retryable classification, as a call's is, and
 // that alone moves the walk.
 //
 // Mutation: return the head whatever ready says, and the launch lands on the

@@ -8,9 +8,16 @@
  * reads the step's place and folds the preview.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BrandSetup } from "./BrandSetup.tsx";
+import {
+  applyPageAction,
+  pageActionPreview,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -46,6 +53,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   Object.assign(URL, { createObjectURL, revokeObjectURL });
   Object.defineProperty(globalThis, "matchMedia", {
@@ -441,4 +449,67 @@ test("a low pair says what it needs and why in one line, and offers shades and d
       .getAttribute("aria-pressed"),
   ).toBe("true");
   expect(screen.getAllByDisplayValue(/00baba/).length).toBeGreaterThan(0);
+});
+
+test("the open draft is the assistant's to read, and a change it proposes previews and applies through the setup", async () => {
+  engine(draft());
+  setFramePage({
+    screen: "company-brand-setup",
+    title: "Brand › Set up",
+    path: ["company", "brand", "setup"],
+    params: {},
+    query: {},
+  });
+  mount(["admin"], [brandKitRow()]);
+  expect(await stepHeading("Typography")).toBeTruthy();
+  const open = () => pageSnapshot()!.context;
+  const field = (path: string) => open().draft?.fields.find((f) => f.path === path);
+  // WHAT IS OPEN: the kit and version it was opened on, the step, the values,
+  // and the logos as metadata the assistant reads and never sets.
+  expect(open().draft).toMatchObject({ kind: "client", id: KIT, revision: "2", step: "type" });
+  expect(open().draft!.help).toMatch(/no images/);
+  expect(open().accepts).toContain("draft.set");
+  expect(field("colors.primary")).toMatchObject({ value: "#0f7b5f", editable: true });
+  expect(field("type.heading")).toMatchObject({ value: "geist", editable: true });
+  expect(field("logos.primary")).toEqual({
+    path: "logos.primary",
+    label: "Primary logo",
+    kind: "file",
+    value: "logos/primary.svg",
+    hint: expect.stringContaining("image/svg+xml"),
+    editable: true,
+  });
+  const payload = { values: { "colors.primary": "#5B21B6", "voice.summary": "Plain and warm." } };
+  // THE CARD SHOWS EACH FIELD'S VALUE NOW beside the proposed one, in the
+  // setup's own words.
+  expect(pageActionPreview("draft.set", payload)).toEqual({
+    rows: [
+      { field: "Primary colour", next: "#5b21b6", current: "#0f7b5f" },
+      { field: "Voice summary", next: "Plain and warm.", current: "(empty)" },
+    ],
+    blocked: null,
+  });
+  let result: ReturnType<typeof applyPageAction> | undefined;
+  act(() => {
+    result = applyPageAction({
+      correlation_id: "c1",
+      action: "draft.set",
+      payload,
+      source_revision: open().source_revision,
+    });
+  });
+  expect(result).toMatchObject({ outcome: "applied" });
+  await waitFor(() => expect(field("colors.primary")?.value).toBe("#5b21b6"));
+  expect(field("voice.summary")?.value).toBe("Plain and warm.");
+  // NOTHING IS SAVED: the change is the person's draft until they continue.
+  expect(screen.getByRole("heading", { name: "Typography", level: 3 })).toBeTruthy();
+  // A LOGO IS A FILE OF THE CONVERSATION, never markup or a name.
+  expect(
+    applyPageAction({
+      correlation_id: "c2",
+      action: "draft.set",
+      payload: { values: { "logos.primary": "<svg/>" } },
+      source_revision: open().source_revision,
+    }),
+  ).toMatchObject({ outcome: "invalid", reason: expect.stringMatching(/takes one of your files/) });
 });

@@ -132,8 +132,8 @@ func TestABridgedCallActsAsTheRunsSeatBehindTheGuard(t *testing.T) {
 					guardLogin, guardSaw)
 			}
 
-			url := bridge.Open(&mcpbridge.Session{
-				RunID: "run-1", Handle: "dev", Role: "Engineer", Surface: surface,
+			url := bridge.Open(t.Context(), &mcpbridge.Session{
+				RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer", Surface: surface,
 			})
 			if url == "" {
 				t.Fatal("no endpoint was minted")

@@ -80,6 +80,7 @@ var companyFields = map[string]classified{
 	"NotificationCoalesceWindowSeconds": {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
 	"Workers":                           {exposure: exposureGuarded, why: "operational configuration of the delegate surface"},
+	"Assistant":                         {exposure: exposureGuarded, why: "the Dashboard Assistant's model chain and limits, an operational setting"},
 	"Roles":                             {exposure: exposurePublic, why: "the tree itself"},
 	"Units":                             {exposure: exposurePublic, why: "the tree itself"},
 }

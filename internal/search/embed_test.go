@@ -23,6 +23,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1523,7 +1524,11 @@ func (h *embedHarness) advance(d time.Duration) { h.now = h.now.Add(d) }
 
 func newEmbedHarness(t *testing.T) *embedHarness {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
+	// its cap from the runner's free space it takes three quarters of it,
+	// a fact about the machine rather than about the round trip under test.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -1534,8 +1539,9 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	})
 	spec := search.Domain{}.Stream()
 	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES: the shipped
-	// default is sized for the declared supported corpus, and an embedded
-	// broker in a temporary directory refuses to reserve it.
+	// default is sized for the declared supported corpus, and a case here
+	// embeds a corpus of its own making, which the sixteen mebibytes it is
+	// held to instead keep with room to spare.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
 		MaxMessageBytes: spec.MaxAppendBytes(),

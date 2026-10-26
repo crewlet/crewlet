@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"maps"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -58,18 +57,27 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 //     its own, and a seat that moved or a stop placed meanwhile must not still
 //     buy a box.
 //  2. The node can launch at all: a sandbox runtime, the epoch's catalogue, a
-//     mounted bridge, a surface bound to the seat.
+//     bridge something reaches, a surface bound to the seat.
 //  3. The BUDGET FLOOR ([executorHeadroom]): below it the launch is refused as
 //     a budget refusal, which the dispatcher answers by parking the seat
 //     rather than by a redelivery the floor would refuse again.
-//  4. The MEMBER, picked here and at every launch ([agentLauncher.member]).
-//  5. The bridge session, then the box.
+//  4. The MEMBER, picked here and at every launch ([agentLauncher.member]),
+//     and the cell it runs in, which a box has to be able to reach the
+//     bridge from.
+//  5. The job, its bridge session, then the box.
 //
-// THE SESSION IS OPENED BEFORE THE RUN, and closed by every path that ends one.
-// A run whose box could dial a live session after the run finished would hold a
-// working key to a seat's whole tool surface — the window this closes is the
-// difference between a credential that expires with a job and one that expires
-// on a four-hour clock.
+// THE SESSION IS OPENED BEFORE THE RUN'S BOX EXISTS, and closed by every path
+// that ends one. A run whose box could dial a live session after the run
+// finished would hold a working key to a seat's whole tool surface — the
+// window this closes is the difference between a credential that expires with
+// a job and one that expires on a four-hour clock.
+//
+// AND UNDER THE JOB'S OWN NAME, which the store mints as the launch opens the
+// job — so the session is opened from inside the launch
+// ([sandbox.LaunchRequest.Opened]) rather than before it. The endpoint names
+// that job, and the job is on the run's durable row: a node that takes the
+// run over opens the same job's session again ([Engine.reopenAgentRun]), and
+// the token the box already holds reaches it.
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) error {
 	e, company, handle := l.engine, l.company, l.seat.Handle()
 	// THE TURN'S OWN FENCE, the closure its runner was built with, asked
@@ -110,24 +118,38 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		return fmt.Errorf("seat %q's executor runs in a box, and this node has no sandbox "+
 			"runtime for this company: configure providers.sandbox", handle)
 	}
-	// A BRIDGE NOTHING SERVES IS REFUSED BY NAME, before Open, because the
-	// settings it takes are different fixes: a node that binds no listener
-	// (api.port 0) serves no bridge whatever else is set, and a box that is
-	// not on this host needs an address it can dial, which only the
-	// variable gives. Open refuses the same cases on its own; asking here is
-	// what lets the error say which.
-	if e.bridge != nil && !e.bridge.Mounted() {
-		return fmt.Errorf("an executor needs this node to serve its tool bridge, and "+
-			"it serves none: this node binds no HTTP listener; set api.port on this "+
-			"node (a direct box then reaches it on loopback, and %s points a container "+
-			"or a remote box at it)", mcpbridge.BaseURLVar)
+	// NO BRIDGE IS A REFUSAL, not a degraded run. A coding agent with none
+	// of the seat's tools cannot answer anybody, cannot touch a ticket and
+	// cannot submit its work — it would burn a subscription producing prose
+	// nothing collects, and the turn would be rescued as incomplete with no
+	// sign of why. Refused HERE, before the launch opens a job, as every
+	// case Open refuses is: the session is opened from inside the launch,
+	// and a refusal there costs a row opened and abandoned.
+	if e.bridge == nil {
+		return fmt.Errorf("an executor needs a tool bridge its box can dial, and this "+
+			"node has none: set %s to the fleet's address a box can reach (any node "+
+			"serving the API, or a load balancer in front of them); a direct box on a "+
+			"node that serves the API reaches it on loopback without it",
+			mcpbridge.BaseURLVar)
 	}
-	// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, before Open, for the
-	// reason the refusal above is: Open refuses it too — every bridged call
-	// acts as the surface's seat, so a surface with none could decide
-	// nothing — and its empty answer would otherwise be reported below as a
-	// missing bridge URL, sending an operator to a variable that is set.
-	if req.Surface == nil || req.Surface.Turn().Handle() == "" {
+	// A BRIDGE NOTHING REACHES IS REFUSED BY NAME, because the settings it
+	// takes are different fixes: an unset base URL is one variable, and a
+	// node that serves the API with no listener (api.port 0) is a second one
+	// the first message would send an operator past.
+	if !e.bridge.Reachable() {
+		return fmt.Errorf("an executor needs a node serving its tool bridge, and "+
+			"nothing here reaches it: this node serves the API with api.port 0, so "+
+			"it binds no listener for the bridge's route; set api.port, and point %s "+
+			"at the nodes that serve the API as a sandbox reaches them",
+			mcpbridge.BaseURLVar)
+	}
+	// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, before the launch, for
+	// the reason the two refusals above are: Open refuses it too — every
+	// bridged call acts as the surface's seat, and the token names it, so a
+	// surface with none could decide nothing — and its empty answer would
+	// otherwise be reported as a missing bridge URL, sending an operator to
+	// a variable that is set.
+	if _, err := mcpbridge.SeatOf(req.Surface); err != nil {
 		return fmt.Errorf("the executor's tool surface is bound to no seat, so a " +
 			"bridged call would have nobody to act as; this is an assembly fault " +
 			"in the runner, not a setting")
@@ -148,6 +170,17 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	if cell == "" {
 		cell = manager.DefaultPlacement()
 	}
+	// A CELL THAT CANNOT DIAL THE BRIDGE IS REFUSED BY NAME, before the launch
+	// opens a job, for the reason the refusals above are. A direct box is a
+	// process of this host and dials this node's own listener on loopback,
+	// where the node serves the bridge's route; a box in any other cell is
+	// not on this host's loopback, and reaches the fleet only at the
+	// address the variable gives.
+	if e.bridge.Reaches(cell == sandbox.Direct) == "" {
+		return fmt.Errorf("an executor needs a tool bridge its box can dial, and a box in "+
+			"the %s cell cannot reach this node on its loopback: set %s to the fleet's "+
+			"address that box can reach", cell, mcpbridge.BaseURLVar)
+	}
 
 	// The run's calls, and with each what they have cost the engine so far,
 	// for the segment that resumes from the run to pay — bound to the run's
@@ -159,24 +192,23 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Role:    l.seat.Name,
 		Surface: req.Surface,
 		Ledger:  ledger,
-		OnHost:  cell == sandbox.Direct,
-	}
-	endpoint := e.bridge.Open(session)
-	if endpoint == "" {
-		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
-		// with none of the seat's tools cannot answer anybody, cannot
-		// touch a ticket and cannot submit its work — it would burn a
-		// subscription producing prose nothing collects, and the turn
-		// would be rescued as incomplete with no sign of why.
-		if cell == sandbox.Direct {
-			return fmt.Errorf("an executor needs a tool bridge its box can dial, and this "+
-				"node has none: a direct box reaches this node's own listener, and it binds "+
-				"none — set api.port on this node (or %s to a URL this host can reach)",
-				mcpbridge.BaseURLVar)
-		}
-		return fmt.Errorf("an executor needs a tool bridge its box can dial, and a box in "+
-			"the %s cell cannot reach this node on its loopback: set %s to a URL that box "+
-			"can reach this node at", cell, mcpbridge.BaseURLVar)
+		// WHICH ADDRESS THE BOX DIALS: this node's own listener for a box
+		// on its host, the fleet's address for any other. NEVER
+		// [mcpbridge.Session.Loopback], which a direct box could otherwise
+		// be held to: a seat's session follows the seat, and once a peer
+		// takes it over the box's calls reach their holder only relayed
+		// from this node — which a loopback-only session refuses.
+		OnHost: cell == sandbox.Direct,
+		// THE SEAT'S FENCE, built HERE, inside the turn the run is the
+		// executor of, so it closes on the grant that turn was admitted
+		// under — the same check the turn's own phases run, now asked
+		// before and after every call the box makes. The run outlives the
+		// turn: the seat can move off this node, or a person stop it,
+		// while it runs, and a call after either is refused rather than
+		// made as a seat this node no longer speaks for. A plain pause
+		// closes nothing: it holds the seat's mailbox, not its running
+		// work.
+		Fence: e.seatFence(handle),
 	}
 
 	settings := seatSandbox(company, handle)
@@ -190,15 +222,15 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	runEnv := e.runEnvironment(ctx, company, l.seat, settings, manager.DefaultSetup())
 	runEnv.logGap(ctx, handle, "the run starts without them")
 	runEnv.logFacts(ctx, handle)
+	// THE SEAT'S OWN SERVERS, and the bridge beside them once the job has a
+	// name (below). Both, because they answer different questions: a scoped
+	// MCP server is a credential the box holds, and the bridge is the seat's
+	// engine-side surface — its colleagues, its channels, its memory, its
+	// submission.
 	var servers map[string]sandbox.MCPServer
 	if settings != nil {
 		servers = e.boxServers(ctx, company, l.seat, settings)
 	}
-	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer
-	// different questions: a scoped MCP server is a credential the box
-	// holds, and the bridge is the seat's engine-side surface — its
-	// colleagues, its channels, its memory, its submission.
-	servers = withBridge(servers, endpoint)
 
 	run := newCodingRun(agent, runEnv.env)
 	spec := manager.BuildSpec(sandbox.SpecInput{
@@ -213,10 +245,10 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// a fallback launch on a later member is judged on that member's entry,
 	// never the chain's head.
 	if err = sandboxCredentials(agent, member.Key, handle, spec.Placement, run.env); err != nil {
-		e.bridge.Close(l.turn.RunID)
 		return err
 	}
 
+	var opened bool
 	_, err = coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:        l.runTurnRef(ctx),
 		Spec:        spec,
@@ -237,20 +269,46 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// session where the launch runs it in the asking run's box — see
 		// [runner.Asked].
 		Continue: sandboxContinuation(req.Continue),
-		// WHO SERVES THE BOX ITS TOOLS, and under which session, so this
-		// node can serve it again after a restart — see
-		// [Engine.reopenBridgeSession].
-		Node:        e.nodeID(),
-		BridgeNonce: session.Nonce(),
-		Opened:      ledger.bind,
+		// THE NODE THAT LAUNCHED IT: a direct or a container box lives on
+		// this host whichever node holds the seat later — the bridge
+		// session follows the seat, the box does not.
+		Node: e.nodeID(),
+		Opened: func(launch string) (map[string]sandbox.MCPServer, error) {
+			bridge, openErr := e.openBridge(ctx, session, ledger, launch)
+			opened = openErr == nil
+			return bridge, openErr
+		},
 	})
 	if err != nil {
-		// The launch failed, so nothing will ever close this session on
-		// the completion path.
-		e.bridge.Close(l.turn.RunID)
+		if opened {
+			// The launch failed after the job's session opened, so
+			// nothing will ever close it on the completion path.
+			e.bridge.Close(l.turn.RunID)
+		}
 		return err
 	}
 	return nil
+}
+
+// openBridge opens a job's bridge session under the job's own name, with its
+// ledger bound to the same job, and answers the box's server entry for it:
+// [sandbox.LaunchRequest.Opened], for the launch, and the same opening for a
+// run taken over while it works ([Engine.reopenAgentRun]), whose box already
+// holds the endpoint and is never handed the one minted here.
+func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
+	launch string,
+) (map[string]sandbox.MCPServer, error) {
+	ledger.bind(launch)
+	s.Launch = launch
+	endpoint := e.bridge.Open(ctx, s)
+	if endpoint == "" {
+		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
+		// are every case Open refuses — said rather than assumed, because a
+		// box launched without its endpoint has none of the seat's tools.
+		return nil, fmt.Errorf("the tool bridge opened no session for run %s's job %s; "+
+			"this node's log says why (mcp_bridge_*)", s.RunID, launch)
+	}
+	return bridgeServer(endpoint), nil
 }
 
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox
@@ -282,7 +340,8 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 //     ([chain.Pick]), published against this turn through onFallback;
 //   - every runner member sitting out is a [*chain.Error], the same
 //     unavailability an exhausted call reports, so the seat reads as stopped
-//     on its provider exactly as it does for a text phase.
+//     on its provider exactly as it does when a reviewer's run finds every
+//     member spent.
 //
 // A run that meets its limit midway is not relaunched on the next member: its
 // box did the work it did, and the next launch is where the chain moves on.
@@ -386,22 +445,18 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor int
 	return nil
 }
 
-// withBridge adds the engine-side surface to a box's MCP server list.
-//
-// A COPY, because the seat's rendered server map is built per launch but its
-// values come from config the epoch owns, and a bridge endpoint written into
-// a shared map would follow the seat into its next run — where the token is
-// dead and every tool call fails for a reason nothing in the config explains.
-func withBridge(servers map[string]sandbox.MCPServer, endpoint string) map[string]sandbox.MCPServer {
-	out := make(map[string]sandbox.MCPServer, len(servers)+1)
-	maps.Copy(out, servers)
+// bridgeServer is the engine-side surface as one entry of a box's MCP server
+// list, which the launch adds beside the seat's own servers in a map of the
+// job's own: an endpoint written into the seat's rendered map, whose values
+// the epoch owns, would follow the seat into its next run, where the token
+// names a job that is over.
+func bridgeServer(endpoint string) map[string]sandbox.MCPServer {
 	// Under the reserved name, which config refuses to any mcp_servers
-	// entry — so this write can never shadow a server the seat scoped into
-	// its box. See [config.BridgeServerName] for why it is not the handle.
-	out[config.BridgeServerName] = sandbox.MCPServer{
-		Name: config.BridgeServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
-	}
-	return out
+	// entry — so this entry can never shadow a server the seat scoped into
+	// its box. See [config.ToolServerName] for why it is not the handle.
+	return map[string]sandbox.MCPServer{config.ToolServerName: {
+		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
+	}}
 }
 
 // agentRunFor is THE construction path for a turn's executor launcher, used by

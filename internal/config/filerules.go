@@ -349,7 +349,7 @@ func spelledUnlike(p *problems, server *MCPServer, path Path, block, unit map[st
 // seventh copy of it is precisely the drift that table exists to end.
 //
 // THE BRIDGE NAME NEEDS NO CASE OF ITS OWN. A server may not be called
-// [BridgeServerName] — that is refused where servers are declared — so an
+// [ToolServerName] — that is refused where servers are declared — so an
 // `mcp_env` block keyed on it names no server and is reported by this rule
 // like any other. Writing a second, better-worded case for it would be a
 // second place to keep the reserved name.

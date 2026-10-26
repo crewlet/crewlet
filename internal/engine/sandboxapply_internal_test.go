@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -349,7 +350,7 @@ func TestAPollIntervalNoDutyAdmitsIsRefusedAtBootWithoutASandbox(t *testing.T) {
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	e, err := New(t.Context(), Options{
 		Bootstrap:           &b,
 		SandboxPollInterval: coord.MaxDutyTTL/dutyTTLTicks + time.Second,
@@ -417,7 +418,7 @@ func newSandboxNode(t *testing.T, company *config.Company) *Engine {
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(dir, "stream"))
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,
@@ -503,7 +504,7 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: json.RawMessage(
-		`{"version":3,"iteration":1}`)})
+		`{"version":4,"iteration":1}`)})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}

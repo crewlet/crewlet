@@ -94,6 +94,10 @@ func NewOpenCode() *Runner { return New(OpenCode{}) }
 // Name is the coding agent's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
+// Resumes says OpenCode continues a session it reported: naming the session
+// is the whole of continuing it ([openCodeSessionFor]).
+func (OpenCode) Resumes() bool { return true }
+
 // Command is the run: a short shell script, because OpenCode 2 has to be
 // driven through a server of the run's own rather than in one command.
 //
@@ -102,8 +106,9 @@ func (OpenCode) Name() string { return OpenCodeName }
 // into the binary and shared by every box on a host, which outlives the run
 // and keeps the environment, and so the credentials, of whichever run started
 // it — or, with `--standalone`, starts a server inside the run and sends the
-// brief at once. That second shape is what text calls use and it is wrong
-// here: it sends the brief before the run's MCP servers have connected, and
+// brief at once. That second shape is what the engine's runs on its own host
+// use, and it is wrong here: it sends the brief before the run's MCP servers
+// have connected, and
 // 2.0 fixes a step's tools as the step starts, so the first step of every
 // run — measured on 2.0.32, the first step of every run with a server
 // declared — was offered none of the seat's bridged tools, which only
@@ -177,13 +182,13 @@ func newOpenCodeSession() string {
 }
 
 // openCodeSessionFor is the session a run works in: the asking run's own, where
-// this one carries it on with the answer ([sandbox.RunRequest.ResumeSession]),
+// this one carries it on with the answer ([sandbox.RunRequest.Resume]),
 // and a fresh one otherwise. OpenCode CONTINUES a session it already holds, and
 // a continued box holds the asking run's — so naming it is the whole of
 // continuing it. The id the session report gave ([sandbox.Result.SessionID])
 // carries the `ses_` the script adds, which comes off here.
 func openCodeSessionFor(req sandbox.RunRequest) string {
-	if id := strings.TrimPrefix(req.ResumeSession, "ses_"); id != "" {
+	if id := strings.TrimPrefix(req.Resume, "ses_"); id != "" {
 		return id
 	}
 	return newOpenCodeSession()
@@ -220,7 +225,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
 		"--title", "crewlet", "--session", shellQuote(sid)}
-	// THE ENTRY'S MODEL AS WRITTEN. It is the string every text call on
+	// THE ENTRY'S MODEL AS WRITTEN. It is the string every run on the host on
 	// the same providers.llm entry hands `opencode run --model`, which
 	// OpenCode splits at its first slash into a provider and a model — so
 	// `anthropic/claude-sonnet-5` or `openrouter/anthropic/claude-sonnet-5`
@@ -531,7 +536,8 @@ const openCodeAgent = "build"
 //
 // A REMOTE SERVER NEVER STARTS OAUTH (`oauth: false`): 2.0 tries it by default
 // on a remote server that refuses a request, and a headless run has nobody to
-// complete it — the bridge authenticates with the run's token, in its headers.
+// complete it — the bridge authenticates with the run's token, which is a
+// segment of the endpoint's URL path rather than a header.
 func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
 	out := make(map[string]any, len(servers))
 	for name, s := range servers {

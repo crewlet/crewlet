@@ -39,9 +39,9 @@
 #
 # GROWING PAST CHAT.  Every other integration is additive and documented
 # on its own page — a code host (docs/integrations/gitlab.md,
-# docs/integrations/github.md) and the code sandbox that needs one
-# (docs/concepts/code-sandbox.md).  Each page shows the blocks to add
-# here.  Nothing in this file has to be undone first.
+# docs/integrations/github.md), which the executor runs below then push
+# their branches to (docs/concepts/code-sandbox.md).  Each page shows the
+# blocks to add here.  Nothing in this file has to be undone first.
 #
 # MOVING TO A VENDOR TRACKER OR WIKI is the one change that is not purely
 # additive: Jira (docs/integrations/jira.md) and Confluence
@@ -119,7 +119,7 @@ providers:
     # ── The one model: a coding CLI on YOUR subscription ──────────────
     #
     # Every providers.llm entry is a locally installed coding CLI the engine
-    # drives — here Claude Code, on the flat-rate
+    # drives — here Claude Code, headless, on the flat-rate
     # plan you already pay for, so this company needs no metered API key at
     # all.  Crewlet never sees a password: the CLI holds the vendor's own
     # OAuth login and `crewlet llm login` only decides WHERE that credential
@@ -160,11 +160,11 @@ providers:
     # `doctor` is the command that matters here.  An entry can be
     # configured perfectly and still not work — a missing binary, a
     # profile whose flags drifted from the installed version, an expired
-    # login, or the one nothing else catches: a model that answers PROSE
-    # instead of the tool-call envelope, which costs every phase
-    # corrective rounds and, when the model never manages the envelope,
-    # ends the phase without its submission.  Only a real completion with a real tool
-    # proves that, so `doctor` runs one.
+    # login, or the one nothing else catches: a CLI that never reaches the
+    # seat's tools — the `crewlet` MCP server it is handed — and answers
+    # in prose with nothing called, which ends the phase without its
+    # submission.  Only a real run calling a real tool proves that, so
+    # `doctor` runs one.
     #
     # See docs/concepts/llm-backends.md.
     default:
@@ -179,9 +179,9 @@ providers:
                                     #   model id.  Haiku is the cheapest
                                     #   against a plan window and the
                                     #   fastest to launch; it is also the
-                                    #   weakest at the tool-call envelope,
-                                    #   which is exactly what
-                                    #   `crewlet llm doctor` measures.
+                                    #   weakest at calling the seat's tools
+                                    #   when it should, which is what
+                                    #   `crewlet llm doctor` exercises.
       run_in: direct                # where a seat's executor runs on this
                                     #   entry: a cell of providers.sandbox
                                     #   below.  On the ENTRY rather than the
@@ -211,7 +211,7 @@ providers:
       # with no browser round-trip.  Point it at a persistent volume
       # when the engine runs in an ephemeral container.
       state_dir: "./nimbus-data/llm-cli/claude"
-      max_concurrent: 4             # text-phase CLI processes at once (the
+      max_concurrent: 4             # CLI processes on this host at once (the
                                     #   reviewer, workers, side passes),
                                     #   ACROSS the whole company; executor
                                     #   runs are not counted — each seat
@@ -243,12 +243,13 @@ providers:
     # A seat's EXECUTOR is this CLI's own agentic run: its own loop, its
     # own shell, its own editor, in a box from the sandbox catalogue below
     # (`run_in: direct` above — this machine).  The seat's own tools reach
-    # it back over the MCP bridge, so a bridged call is the same frame the
-    # engine's own loop would call — the same guards, the same recording,
+    # it back over the MCP bridge, so a bridged call is the same frame a
+    # phase on this host would call — the same guards, the same recording,
     # the same `submit_work` ending the turn.  The reviewer, the delegated
-    # workers, the summariser and the onboarding pass are text calls on
-    # this same entry, which is what keeps the reviewer a genuinely
-    # separate judgement of what the run did.
+    # workers, the summariser and the onboarding pass run on this host, on
+    # this same entry — the CLI's own loop with its shell and editor
+    # denied, calling the seat's tools over MCP — which is what keeps the
+    # reviewer a genuinely separate judgement of what the run did.
     #
     # The run is DETACHED: the turn suspends at launch, its state goes on a
     # durable row, and the same turn resumes when the run finishes —
@@ -263,8 +264,9 @@ providers:
     #     Without one a launch is REFUSED rather than started: a coding
     #     agent with none of the seat's tools cannot answer anybody,
     #     cannot reach a colleague and cannot submit its work.  In a
-    #     fleet that URL must address the NODE, never a load balancer — a
-    #     session is a live tool surface in one process.
+    #     fleet that URL is the fleet's, the same on every node: any node
+    #     serving the API, a load balancer in front of several included —
+    #     the node a call lands on relays it to the one holding the seat.
 
     # AN API KEY AS A BACKSTOP.  A spent plan window arrives as prose on a
     # successful exit ("Usage limit reached. Resets at 4pm."); the engine
@@ -394,10 +396,13 @@ providers:
 # (the agent is thrashing).  See
 # docs/concepts/turn-engine.md#round-cap-extension-judge.
 #
-# The judge's step is smaller than the engine's 8 because on a coding CLI
-# EVERY ROUND OF THE PASS IS A PROCESS LAUNCH: a Node runtime costs seconds
-# before the first byte, and the pass's tool surface here is one MCP
-# server.  The executor's own rounds are bounded by
+# The judge's step is smaller than the engine's 8 because EVERY ROUND OF
+# THE PASS RE-SENDS THE WHOLE CONVERSATION: the CLI's own loop sends the
+# prompt and everything since with each request, and the budget charges
+# cached input in full, so each round a thrashing pass spends past what it
+# needed costs more than the one before — and the pass's tool surface here
+# is one MCP server, which a first turn finds its way around in a handful
+# of rounds.  The executor's own rounds are bounded by
 # providers.sandbox.default_max_turns above, not here.
 turn_engine:
   extension_enabled: true                 # round-cap extension judge

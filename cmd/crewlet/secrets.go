@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -288,6 +289,9 @@ type rotation struct {
 type engineHeld struct {
 	Keys     secrets.EngineKeys
 	Identity *iamdomain.SealedCount
+	// Assistant is the Dashboard Assistant's sealed values, which a
+	// rotation waits out rather than moves; nil where the backend holds none.
+	Assistant *assistantdomain.SealedCount
 }
 
 // secretTarget is the backend plus what to tell the operator about it.
@@ -815,7 +819,7 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 					"(sealed under another key)\n", identityStale)
 			}
 		}
-		waitOutInvitations(stdout, held, active)
+		waitOut(stdout, held, active)
 		if stale == 0 && engineStale == 0 && identityStale == 0 {
 			fmt.Fprintf(stdout, "every secret is already sealed under %s\n", active)
 			noIdentityHere(stdout, sv, held.Identity == nil)
@@ -861,15 +865,24 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 	if err != nil {
 		return err
 	}
-	waitOutInvitations(stdout, held, active)
+	waitOut(stdout, held, active)
 	return nil
 }
 
-// waitOutInvitations says how many live invitations are still sealed under
-// another key — which no rekey moves, because only a re-issue could carry the
-// address again and its own claim refuses one while the invitation is open.
-// The old key must stay on the ring until each is redeemed or lapses.
-func waitOutInvitations(stdout io.Writer, held engineHeld, active string) {
+// waitOut says what is still sealed under another key that no rekey moves,
+// and so keeps the old key on the ring until it is gone: live invitations,
+// because only a re-issue could carry the address again and its own claim
+// refuses one while the invitation is open, and the Dashboard Assistant's
+// conversations, which leave only with their retention.
+func waitOut(stdout io.Writer, held engineHeld, active string) {
+	if held.Assistant != nil {
+		if n := held.Assistant.Outside(active); n > 0 {
+			fmt.Fprintf(stdout, "%d values in Dashboard Assistant conversations are "+
+				"sealed under another key and are not re-sealed: keep that key on the "+
+				"ring until none is left (a conversation leaves once it is untouched "+
+				"for assistant.retention_days, or when its owner clears it)\n", n)
+		}
+	}
 	if held.Identity == nil {
 		return
 	}

@@ -280,7 +280,7 @@ func TestAnAnswerIsNeverTheAnswerToTheNextQuestion(t *testing.T) {
 			return
 		}
 		if ok, err := rig.pending.MarkSuspended(ctx, "t1", Suspension{
-			State: json.RawMessage(`{"version":3,"iteration":2}`),
+			State: json.RawMessage(`{"version":4,"iteration":2}`),
 		}); err != nil || !ok {
 			t.Errorf("MarkSuspended = %v, %v", ok, err)
 		}

@@ -42,7 +42,7 @@
               "type": "string"
             }
           ],
-          "description": "Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's executor tool bridge, where api.public is unset). 0 binds nothing."
+          "description": "Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it. 0 binds nothing."
         },
         "public": {
           "$ref": "#/$defs/APIPublic"
@@ -1134,6 +1134,23 @@
             }
           ],
           "description": "Byte ceiling on the artifacts log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."
+        },
+        "assistant_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 68719476736,
+              "minimum": 67108864,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the Dashboard Assistant's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."
         },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"

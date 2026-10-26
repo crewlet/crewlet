@@ -245,6 +245,16 @@ operator_acted             # an operator tool call that is not a proven read,
 backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`
+assistant_conversation_read # an administrator's compliance read of a
+                           # person's Dashboard Assistant conversation (D06):
+                           # the reader, conversation_id, owner_id and the
+                           # reason they gave; the conversation stays sealed
+assistant_turn_completed   # one segment of a person's Dashboard Assistant
+                           # turn ending: conversation_id, assistant_turn_id,
+                           # state, error_code, prompt_version, model, and
+                           # every step's tool, route pattern, outcome,
+                           # status and bytes; never an argument, an answer
+                           # or the question
 seat_paused                # a person paused a seat (paused_by,
                            # paused_by_kind and operator_id from
                            # iam.ActorFor, reason, stop_running, paused_at).
@@ -368,15 +378,18 @@ agent_turn_steered         # what became of a person's note to this running
 agent_phase_started
 agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool calls, and `rounds[]` — each provider call's
-                           # timing, tokens and `stop_reason` (end or
-                           # tool_use; absent where the backend reported
-                           # none). A coding run's own record (`phase:
+                           # timing, tokens and `stop_reason` (end,
+                           # tool_use or cap, the CLI's own turn cap; absent
+                           # where the backend reported none) — and
+                           # `invocations[]`, one per CLI run the phase
+                           # started (its outcome, first and last round,
+                           # tokens). A coding run's own record (`phase:
                            # sandbox`) carries `cli_turns`, the model turns
                            # its CLI reported. A failed phase carries
                            # `error_kind` — a provider kind (rate_limit,
-                           # auth, timeout, server, fatal), budget_exhausted,
-                           # stopped for a phase a person ended, canceled, or
-                           # error
+                           # auth, timeout, server, fatal, canceled),
+                           # budget_exhausted, stopped for a phase a person
+                           # ended, canceled, or error
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider
@@ -406,11 +419,9 @@ provider_fallback          # the chain moved to its next provider. One per
 subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
 prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # plus a token approximation: the system and user
-                           # text, a resumed phase's seeded conversation — its
-                           # text and its tool-call arguments — and the
-                           # tool-definition array the backend writes into
-                           # the prompt, under system_bytes / user_bytes /
-                           # message_bytes / tool_bytes and tool_count. A
+                           # text and the tool-definition array its CLI is
+                           # handed over MCP, under system_bytes /
+                           # user_bytes / tool_bytes and tool_count. A
                            # separate row rather than a
                            # derivation: the prompts themselves are on
                            # agent_phase_completed, and measuring them there

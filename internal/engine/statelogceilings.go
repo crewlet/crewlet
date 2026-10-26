@@ -81,6 +81,23 @@ type domainCeiling struct {
 	// declared but MEASURED, by [followsVolume], so it cannot disagree
 	// with the arithmetic it describes.
 	FollowsVolume bool
+
+	// ScalesTo is how far sharing the broker may lower an UNSET ceiling,
+	// where that is below [MinDomainCeiling]; zero is that gibibyte. A log
+	// that grows with headcount rather than with a corpus declares its
+	// field's own floor here, so its fixed default is what it is created
+	// with where the broker has the room and what gives way where it does
+	// not, instead of a reservation every fresh node must find in full.
+	ScalesTo int64
+}
+
+// scaleFloor is where scaling stops for this ceiling: [domainCeiling.ScalesTo]
+// where the entry declares one, [MinDomainCeiling] otherwise.
+func (c domainCeiling) scaleFloor() int64 {
+	if c.ScalesTo > 0 {
+		return c.ScalesTo
+	}
+	return MinDomainCeiling
 }
 
 // StreamBudgetShare is how much of what the broker can grant the state logs
@@ -544,7 +561,9 @@ func shortOfFit(asked map[string]domainCeiling, held map[string]int64,
 // pool over a total that counts the explicit values hands the derived logs a
 // share of bytes the explicit ones had already spent.
 //
-// And a log whose share falls below [MinDomainCeiling] is HELD at the floor
+// And a log whose share falls below where its scaling stops (its
+// [domainCeiling.scaleFloor], [MinDomainCeiling] unless it declares less) is
+// HELD at that floor
 // and the rest divide what remains, rather than being raised to it after the
 // division: raised afterwards, every floored log is bytes the others were also
 // given. So the derived logs never share more than the explicit ones leave,
@@ -578,7 +597,7 @@ func divide(asked map[string]domainCeiling, pool int64) map[string]domainCeiling
 		share := max(remaining, 0)
 		var floored []string
 		for _, name := range open {
-			if proportion(asked[name].Bytes, share, want) < MinDomainCeiling {
+			if proportion(asked[name].Bytes, share, want) < asked[name].scaleFloor() {
 				floored = append(floored, name)
 			}
 		}
@@ -594,7 +613,7 @@ func divide(asked map[string]domainCeiling, pool int64) map[string]domainCeiling
 			// SCALING NEVER RAISES: a log that asked for less than
 			// the floor keeps what it asked for.
 			ceiling := out[name]
-			ceiling.Bytes = min(ceiling.Bytes, MinDomainCeiling)
+			ceiling.Bytes = min(ceiling.Bytes, ceiling.scaleFloor())
 			out[name] = ceiling
 			remaining -= ceiling.Bytes
 		}
@@ -716,7 +735,11 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 		from = fmt.Sprintf("%s is unset, so the ceiling was derived from the "+
 			"stream volume's free space and scaled into the state logs' share of "+
 			"the broker, and scaling takes it no lower than %d bytes",
-			ceiling.Field, MinDomainCeiling)
+			ceiling.Field, ceiling.scaleFloor())
+	case ceiling.ScalesTo > 0:
+		from = fmt.Sprintf("%s is unset, so the ceiling is the log's own default "+
+			"scaled into the state logs' share of the broker, and scaling takes it "+
+			"no lower than %d bytes", ceiling.Field, ceiling.scaleFloor())
 	default:
 		from = fmt.Sprintf("%s is unset, so the ceiling is the log's own fixed "+
 			"default rather than a share of the stream volume's free space",

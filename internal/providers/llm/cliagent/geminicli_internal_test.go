@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -237,6 +238,71 @@ func TestGeminiSignsInWithWhatTheModeNames(t *testing.T) {
 	}
 }
 
+// A KEY CALL BEHIND A GATEWAY STAYS ON ITS KEY, AND A LOGIN CALL ON ITS LOGIN.
+// Naming no sign-in in its settings, the CLI takes one from its environment,
+// where GOOGLE_GEMINI_BASE_URL — an operator's gateway in front of the API —
+// outranks GEMINI_API_KEY and selects a sign-in 0.65.0 refuses: exit 41,
+// "Invalid auth method selected", before any request (measured through the
+// engine). Settings outrank the environment, so the home a key call runs in
+// names the key sign-in, and the home a subscription call runs in names none,
+// leaving GOOGLE_GENAI_USE_GCA to pick the login — the key sign-in there would
+// send it to a key it does not have.
+//
+// Mutation: drop the profile's key_seed_files, and the key home names no
+// sign-in; put its content in seed_files instead, and the login home names the
+// key.
+func TestGeminiKeyHomeNamesTheKeySignIn(t *testing.T) {
+	t.Parallel()
+	selected := func(t *testing.T, home string) (string, bool) {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(home, ".gemini", "settings.json")) //nolint:gosec // the test's own home
+		if err != nil {
+			t.Fatalf("the home has no settings: %v", err)
+		}
+		var settings struct {
+			Privacy struct {
+				UsageStatisticsEnabled *bool `json:"usageStatisticsEnabled"`
+			} `json:"privacy"`
+			Security struct {
+				Auth struct {
+					SelectedType *string `json:"selectedType"`
+				} `json:"auth"`
+			} `json:"security"`
+		}
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			t.Fatalf("settings.json is not JSON: %v", err)
+		}
+		if on := settings.Privacy.UsageStatisticsEnabled; on == nil || *on {
+			t.Errorf("the home's settings report usage statistics: %s", raw)
+		}
+		if settings.Security.Auth.SelectedType == nil {
+			return "", false
+		}
+		return *settings.Security.Auth.SelectedType, true
+	}
+
+	keyed := geminiProvider(t, nil)
+	co, err := keyed.ws.AcquireForKey(t.Context(), "pm", "call-1")
+	if err != nil {
+		t.Fatalf("AcquireForKey: %v", err)
+	}
+	t.Cleanup(func() { _ = co.Release(t.Context()) })
+	if got, ok := selected(t, co.Home); got != "gemini-api-key" {
+		t.Errorf("the key home names sign-in %q (named: %v), want gemini-api-key: behind a gateway "+
+			"the CLI picks its gateway sign-in and exits 41", got, ok)
+	}
+
+	login := geminiProvider(t, nil)
+	lc, err := login.ws.Acquire(t.Context(), "pm", "call-1", login)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	t.Cleanup(func() { _ = lc.Release(t.Context()) })
+	if got, ok := selected(t, lc.Home); ok {
+		t.Errorf("the login home names sign-in %q: a subscription call would go to a key it does not have", got)
+	}
+}
+
 // NO ENVIRONMENT FILE ABOVE THE CALL IS READ. The CLI loads the first
 // `.gemini/.env` or `.env` it meets walking up from its working directory to
 // the root — past the engine's `.git` marker — and takes every key its
@@ -352,7 +418,7 @@ func TestTheGeminiProfileChargesEveryModelACallUsed(t *testing.T) {
 			got.input, got.cacheRead, got.output, got.reasoning, got.toolPrompt)
 	}
 	prov := &Provider{profile: p, model: "gemini-2.5-pro", now: time.Now}
-	comp, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: geminiAnswer}, "")
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: geminiAnswer}, "")
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}

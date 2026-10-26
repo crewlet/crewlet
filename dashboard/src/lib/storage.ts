@@ -70,8 +70,18 @@ export const STORAGE_KEYS = {
    * the tab holds (`lib/reader.ts`).
    */
   reader: "crewlet_reader",
-  /** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
+  /** The width the reader dragged the detail rail to (`app/frame/PeekHost.tsx`). */
   peekWidth: "crewlet.peek.width",
+  /** The width the reader dragged the assistant to (`app/assistant/AssistantFrame.tsx`). */
+  assistantWidth: "crewlet.assistant.width",
+  /**
+   * Whether the assistant is open in THIS TAB and which conversation it
+   * shows, in `sessionStorage` (`app/assistant/tab.ts`): a reload comes back
+   * to it, and the hand-over that empties the tab's storage when somebody
+   * else signs in (`lib/session.ts`) takes it with everything else, so a
+   * shared browser never shows one person's conversation to the next.
+   */
+  assistantTab: "crewlet_assistant_tab",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
   /** How the Artifacts gallery is drawn, `grid` or `list` (`routes/artifacts/Gallery.tsx`). */

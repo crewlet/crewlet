@@ -32,7 +32,9 @@ func (s *Service) pageRoutes(mount mounter) {
 	page := func(a authz.Action) authz.Policy { return kinded(a, authz.KindPage) }
 
 	route("POST /doclet/pages", page(authz.ActionPageCreate), (*served).postPage)
-	route("PUT /doclet/pages/{id}", page(authz.ActionPageSave), (*served).putPage)
+	// A SAVE NAMES THE VERSION IT EDITS, so it never creates a page.
+	route("PUT /doclet/pages/{id}", page(authz.ActionPageSave).WhenAbsent(authz.AddedElsewhere(
+		"A page is created with POST /doclet/pages.")), (*served).putPage)
 	route("POST /doclet/pages/{id}/rename", page(authz.ActionPageRead), (*served).postPageRename)
 	route("POST /doclet/pages/{id}/comments", page(authz.ActionPageComment), (*served).postPageComment)
 	route("PATCH /doclet/pages/{id}/comments/{cid}", page(authz.ActionPageComment),

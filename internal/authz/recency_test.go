@@ -190,6 +190,8 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 	t.Parallel()
 	unproved := map[authz.Action]string{
 		authz.ActionConfigRead: "a read of the company document changes nothing",
+		authz.ActionPrinciplesRead: "a read of the company's principles changes " +
+			"nothing",
 		authz.ActionSecretList: "a listing of credential names changes nothing, " +
 			"and hands over no value",
 		authz.ActionSetupRead: "a read of what the integrations need changes " +

@@ -52,13 +52,14 @@ import {
   TableStatusCell,
   TableTextCell,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import {
   CircleQuestionMarkGlyph,
@@ -538,7 +539,7 @@ export function Runs() {
   const openRun = useCallback(
     (r: SandboxRun, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "run", id: r.turn_id });
-      // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one
+      // THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one
       // copy of "which clicks mean elsewhere" and reads a mouse event — ⌘,
       // ctrl, shift, alt and the middle button belong to the browser, which is
       // what keeps the row a real link to the run's page. The `enter` chord
@@ -547,7 +548,7 @@ export function Runs() {
         go();
         return;
       }
-      rowPeekHandler(go)?.(e);
+      peekClickHandler(go)?.(e);
     },
     [openPeek],
   );

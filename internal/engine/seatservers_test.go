@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -94,7 +95,7 @@ func sealingOptions(t *testing.T, doc string) engine.Options {
 	return engine.Options{
 		Company: parsedCompany(t, doc),
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 			b.Secrets = config.Secrets{
 				ActiveKeyID: "k1",
 				Keys: []config.SecretKey{{

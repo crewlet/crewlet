@@ -76,7 +76,12 @@ var ErrSeatMoved = errors.New("seat: the seat moved to another node")
 // which asks this fence immediately before it opens a bridge session or a box
 // (the engine's seatFence), so a seat that moved while its turn built the
 // prompt starts nothing; and the RESUME — the turn that comes back to collect
-// the run runs under the grant the collecting node holds.
+// the run runs under the grant the collecting node holds. Between the two,
+// each CALL the running box makes over its tool bridge is asked of the fence
+// of the node serving the run's session — the launch's grant, or the grant of
+// the node that recovered the seat and opened the session again
+// (internal/api/mcpbridge) — so a seat that moved has its run's calls refused
+// until its new holder serves them, and the run itself is still not killed.
 //
 // A nil Host returns nil, and so does a handle no grant covers at all: with
 // no grant to compare against there is nothing to fence, which is the

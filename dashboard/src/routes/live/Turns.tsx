@@ -51,7 +51,9 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { useParam } from "~/app/router.tsx";
+import { useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import {
@@ -64,10 +66,12 @@ import {
   TableEntityCell,
   TableNumberCell,
   Tag,
+  peekClickHandler,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -76,7 +80,7 @@ import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { spanWords, useTimeRange } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { TurnWhatCell, UnsettledCell, plainSeat } from "~/app/frame/cells.tsx";
@@ -115,6 +119,18 @@ export const TURN_PAGE = 100;
 
 /** The two orders the engine's turn list answers in (`store.TurnQuery.Sort`). */
 export const TURN_SORTS = ["-started", "-tokens"] as const;
+
+/** The orders as the Order control words them, one per [TURN_SORTS]. */
+const TURN_ORDERS: { value: (typeof TURN_SORTS)[number]; label: string }[] = [
+  { value: "-started", label: "Newest" },
+  { value: "-tokens", label: "Most tokens" },
+];
+
+/** Which turns the list holds, as the control words them; every turn is the key's absence. */
+const WHICH_TURNS = [
+  { value: "true", label: "Carried a failure" },
+  { value: "false", label: "Clean" },
+];
 
 /**
  * What the axis says while the list is narrowed by failure.
@@ -263,13 +279,36 @@ export function Turns() {
     [index.seats],
   );
 
+  // --- assistant page actions (WP12) ---
+  // A VIEW OF WHAT THE READER CAN ALREADY READ, written as the controls below
+  // write it: a seat from the menu's own agent seats, the two switches, and
+  // the window from this screen's offer.
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("turns.filter.apply", {
+      scope: "Turns list filters and window (view only)",
+      keys: {
+        window: windowKey(TURN_OFFER, () => now),
+        seat: choiceKey(
+          "Seat",
+          seats.map((s) => ({ value: s.handle, label: s.name })),
+          "filter",
+        ),
+        failed: choiceKey("Which turns", WHICH_TURNS, "filter"),
+        sort: choiceKey("Order", TURN_ORDERS, "filter", "-started"),
+      },
+      nav,
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
+
   const total = series.data?.total ?? 0;
   const failedTotal = series.data?.failed ?? 0;
 
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
       </PageActions>
 
       <Card>
@@ -335,11 +374,7 @@ export function Turns() {
           label="Which turns"
           value={failed || "all"}
           onValueChange={(v) => setFailed(v === "all" ? "" : v)}
-          options={[
-            { value: "all", label: "All" },
-            { value: "true", label: "Carried a failure" },
-            { value: "false", label: "Clean" },
-          ]}
+          options={[{ value: "all", label: "All" }, ...WHICH_TURNS]}
         />
         <span className="spacer" />
         <SegmentedControl
@@ -348,10 +383,7 @@ export function Turns() {
           label="Order"
           value={sort}
           onValueChange={setSort}
-          options={[
-            { value: "-started", label: "Newest" },
-            { value: "-tokens", label: "Most tokens" },
-          ]}
+          options={TURN_ORDERS}
         />
       </div>
 
@@ -383,14 +415,14 @@ export function Turns() {
           rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
           onRowActivate={(t, e) => {
             const go = () => openPeek({ kind: "turn", id: t.turn_id });
-            // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's
+            // THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's
             // one copy of "which clicks mean elsewhere" and reads a mouse
             // event; the `enter` chord carries no button at all.
             if (!("button" in e)) {
               go();
               return;
             }
-            rowPeekHandler(go)?.(e);
+            peekClickHandler(go)?.(e);
           }}
           columns={[
             {

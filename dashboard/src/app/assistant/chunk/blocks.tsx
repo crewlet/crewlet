@@ -1,0 +1,966 @@
+/**
+ * The wire's closed sets as the design system's components draw them, and
+ * the cards an answer carries.
+ *
+ * ONE MODULE MAPS EVERY WIRE STATE TO EXACTLY ONE COMPONENT STATE: a step's
+ * state to `StepList`'s, a turn's phase to `RunChip`'s, a proposal's state to
+ * `ProposalCard`'s, a change's kind to `ChangeList`'s row and a word's op to
+ * its mark. Each map is a `Record` over the wire's union, so a member the
+ * engine adds is a compile error here until it is drawn, and `blocks.test.ts`
+ * holds each value to the component's own list.
+ *
+ * TWO RULES THE MAPPING KEEPS: an `unknown` proposal offers Retry under the
+ * same operation key and no other failed one does; and a step-up the engine
+ * asks of an approval is confirmed by the dashboard's one step-up dialog
+ * (`protocol/rest.ts` replays the approval), never drawn as a failure.
+ *
+ * A SUPPORTING READ IS ONE LINE: a table or a record a read built is folded
+ * to its head (its title, how much it holds, its downloads and its link) and
+ * opened by the person, because the answer is the model's prose. A proposal,
+ * a refusal and a receipt are the point of the turn and are drawn whole.
+ *
+ * EVERY CARD IS THE ENGINE'S: built from tool results and its own route
+ * table, never from the model's words. Only prose is the model's, and it is
+ * drawn inert (`ASSISTANT_WORDS` in `lib/markdown.ts`): no live link and no
+ * picture. A card this build cannot draw is a sentence saying so.
+ *
+ * A DEEP RUN IS ONE CARD, NOT A STEP AMONG STEPS: the step whose `deep` is set
+ * is drawn as `DeepWorkCard` (its goal, its limits, its latest activity),
+ * redrawn in place as the engine re-sends it under the same step id, and the
+ * steps it made (`parent` is its index) are nested under it rather than
+ * listed in the run chip.
+ */
+
+import { type ReactNode } from "react";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  CopyButton,
+  DeepWorkCard,
+  EntityList,
+  OpenInAppCard,
+  PropertyList,
+  ProposalCard,
+  Prose,
+  ReceiptStrip,
+  RefusalCard,
+  ResultTableCard,
+  StatusCard,
+  type ChangeListRow,
+  type DeepWorkMeasure,
+  type DeepWorkState,
+  type ProposalState,
+  type ReceiptStripTone,
+  type RunState,
+  type StepListStep,
+  type StepState,
+} from "@crewlethq/ui";
+import { ArrowUpRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import {
+  ASSISTANT_DEEP_ACTIVITY_LINES,
+  type AssistantCardEvent,
+  type AssistantDeepProgress,
+  type AssistantEntityCard,
+  type AssistantProposalCard,
+  type AssistantStepEvent,
+  type AssistantTableCard,
+} from "~/contract/assistant.ts";
+import { narrowCard } from "~/protocol/assistantWire.ts";
+import { exportFile } from "~/protocol/assistant.ts";
+import { statusLabel } from "~/lib/work.ts";
+import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
+import { fmtCount, fmtDateTime, fmtDuration, fmtExact } from "~/lib/format.ts";
+import { youNeedWords } from "~/lib/access.ts";
+import { crumbsFor } from "../../crumbs.ts";
+import { href as hrefOf } from "../../router.tsx";
+import { openInApp, type InAppTarget } from "./openInApp.ts";
+import { useCardOpen } from "./fold.ts";
+import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
+import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
+import { DraftFile } from "./DraftFile.tsx";
+import { drawValue } from "./changeValue.tsx";
+import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
+import { FilesCard } from "./files.tsx";
+
+type WireStepState = AssistantStepEvent["state"];
+type WireProposalState = AssistantProposalCard["state"];
+type WireChangeKind = AssistantProposalCard["changes"][number]["kind"];
+type WireWordOp = NonNullable<AssistantProposalCard["changes"][number]["words"]>[number]["op"];
+type WireColumnType = AssistantTableCard["columns"][number]["type"];
+type WireDeepState = AssistantDeepProgress["state"];
+
+/** A step's state as `StepList` draws it. */
+export const STEP_STATE: Record<WireStepState, StepState> = {
+  running: "running",
+  done: "done",
+  failed: "failed",
+  refused: "refused",
+  stopped: "stopped",
+  waiting: "waiting",
+};
+
+/** A deep run's state as `DeepWorkCard` draws it. */
+export const DEEP_STATE: Record<WireDeepState, DeepWorkState> = {
+  starting: "starting",
+  running: "running",
+  waiting: "waiting",
+  finished: "finished",
+  stopped: "stopped",
+  failed: "failed",
+};
+
+/** A turn's phase as `RunChip` draws it. */
+export const RUN_STATE: Record<TurnPhase, RunState> = {
+  sending: "thinking",
+  thinking: "thinking",
+  working: "working",
+  awaiting_approval: "waiting",
+  applying: "applying",
+  unconfirmed: "failed",
+  refused: "refused",
+  completed: "done",
+  stopped: "stopped",
+  failed: "failed",
+  interrupted: "failed",
+  expired: "stopped",
+  budget_exhausted: "failed",
+};
+
+/** A proposal's wire state as `ProposalCard` draws it. */
+export const PROPOSAL_STATE: Record<WireProposalState, ProposalState> = {
+  proposed: "pending",
+  approved: "applying",
+  executing: "applying",
+  applying: "applying",
+  applied: "applied",
+  failed: "failed",
+  // NOBODY CAN SAY WHETHER IT LANDED: drawn failed, and the one failed
+  // proposal that offers Retry, under the same operation key.
+  unknown: "failed",
+  declined: "declined",
+  expired: "expired",
+  stale: "stale",
+};
+
+/** A change's wire kind as `ChangeList`'s row kind. */
+export const CHANGE_KIND: Record<WireChangeKind, ChangeListRow["kind"]> = {
+  fact: "fact",
+  changed: "changed",
+  added: "added",
+  removed: "removed",
+  text: "text",
+};
+
+/** A word's op as `ChangeList`'s word mark. */
+export const WORD_OP: Record<WireWordOp, "=" | "+" | "-"> = {
+  same: "=",
+  added: "+",
+  removed: "-",
+};
+
+/**
+ * How a table's cell, or an entity's fact, is written, by its type: with the
+ * formatters the dashboard's own screens use for the same fields, so the
+ * drawer and the screens never word one value two ways.
+ */
+const CELL: Record<WireColumnType, (value: string | number | boolean | null) => string> = {
+  text: (v) => (v === null ? "" : String(v)),
+  number: (v) => (typeof v === "number" ? fmtExact(v) : v === null ? "" : String(v)),
+  tokens: (v) => (typeof v === "number" ? fmtCount(v) : v === null ? "" : String(v)),
+  duration: (v) => (typeof v === "number" ? fmtDuration(v) : v === null ? "" : String(v)),
+  datetime: (v) => (typeof v === "string" ? fmtDateTime(v) : v === null ? "" : String(v)),
+  // A closed set's slug, in the words the work screens name it by (a
+  // project's own status words aside, which a card does not carry).
+  label: (v) => (typeof v === "string" && v !== "" ? statusLabel(v) : v === null ? "" : String(v)),
+};
+
+/** The types whose wire value is a number, which a fact carries as a string. */
+const NUMERIC = new Set<WireColumnType>(["number", "tokens", "duration"]);
+
+/** A fact's value as it is drawn, by its type. */
+export function factText(fact: { value: string; type?: WireColumnType }): string {
+  const type = fact.type ?? "text";
+  const n = Number(fact.value);
+  return CELL[type](NUMERIC.has(type) && fact.value !== "" && Number.isFinite(n) ? n : fact.value);
+}
+
+/** A number of seconds, as the run chip says it. */
+function seconds(ms: number): string {
+  return ms < 10_000 ? `${(ms / 1000).toFixed(ms < 1000 ? 1 : 0)}s` : `${Math.round(ms / 1000)}s`;
+}
+
+const steps = (n: number) => `${n} ${n === 1 ? "step" : "steps"}`;
+
+/** A run's step count as the chip's meta: none for a turn that took no step. */
+const stepMeta = (n: number) => (n > 0 ? steps(n) : undefined);
+
+/** The run chip for a turn: its state, the words it says, and what it says beside them. */
+export function runChipOf(
+  turn: TurnView,
+  now: number,
+): { state: RunState; title: string; meta?: string } {
+  const elapsed = turn.done?.duration_ms ?? Math.max(0, now - Date.parse(turn.askedAt));
+  const taken = turn.done?.steps ?? turn.steps.length;
+  const state = RUN_STATE[turn.phase];
+  // THE ASSISTANT SWITCHED TO DEEP WORK: the chip says so while the run works.
+  if (BUSY.has(turn.phase) && deepRunsOf(turn).some((run) => DEEP_ACTIVE.has(run.deep.state))) {
+    return { state: RUN_STATE.working, title: "Deep work", meta: seconds(elapsed) };
+  }
+  switch (turn.phase) {
+    case "sending":
+    case "thinking":
+      // A LATER ROUND IS WORK: once a step has run, the model thinking
+      // again is the turn still working, not a turn that has not started.
+      if (turn.steps.length > 0) {
+        return { state: RUN_STATE.working, title: "Working", meta: seconds(elapsed) };
+      }
+      return { state, title: "Thinking" };
+    case "working":
+      return { state, title: "Working", meta: seconds(elapsed) };
+    case "applying":
+      return { state, title: "Applying", meta: stepMeta(taken) };
+    case "awaiting_approval":
+      return { state, title: "Waiting for your approval", meta: stepMeta(taken) };
+    case "completed":
+      // A TURN READ BACK FROM ITS TRANSCRIPT carries no duration; the time
+      // since it was asked is not how long it ran, so it says Done alone.
+      return {
+        state,
+        title: turn.done ? `Done in ${seconds(turn.done.duration_ms)}` : "Done",
+        meta: stepMeta(taken),
+      };
+    case "stopped":
+    case "expired": {
+      const done = turn.steps.filter((s) => s.state === "done").length;
+      return {
+        state,
+        title: `Stopped after ${seconds(elapsed)}`,
+        meta: taken > 0 ? `${done} of ${steps(taken)}` : undefined,
+      };
+    }
+    case "refused":
+      return { state, title: "Not permitted", meta: stepMeta(taken) };
+    case "unconfirmed":
+      return { state, title: "Could not confirm the change" };
+    case "failed":
+    case "interrupted":
+    case "budget_exhausted": {
+      const at = turn.steps.find((s) => s.state === "failed" || s.state === "refused");
+      const refused = at?.state === "refused";
+      if (refused) return { state: "refused", title: "Not permitted", meta: stepMeta(taken) };
+      return { state, title: at ? `Failed at step ${at.index}` : "Failed" };
+    }
+  }
+}
+
+/** The phases in which the assistant itself is busy on a turn: not waiting on the person, not applying a change. */
+const BUSY: ReadonlySet<TurnPhase> = new Set(["sending", "thinking", "working"]);
+
+/**
+ * What the thinking indicator says under a turn, or null where it is not
+ * drawn: only while the assistant itself is busy on the turn, never while it
+ * waits on the person or applies an approved change, which their cards say.
+ *
+ * THE STATUS IS WHAT IS HAPPENING NOW: "Stopping" once a stop is on its way,
+ * the running step's own sentence while a tool runs, and "Thinking" while
+ * nothing of the answer is written yet. Once the answer's words are arriving
+ * the mark stands alone after them, with no words of its own, as a caret
+ * would have but never inside the text.
+ */
+export function thinkingOf(turn: TurnView): { status: string | undefined } | null {
+  if (!BUSY.has(turn.phase)) return null;
+  if (turn.stopping) return { status: "Stopping" };
+  const running = turn.steps.filter((step) => step.state === "running").at(-1);
+  if (running) return { status: running.label };
+  const writing = (turn.replies.at(-1)?.text.trim() ?? "") !== "";
+  return { status: writing ? undefined : "Thinking" };
+}
+
+/**
+ * The shortest step whose time is said. Under it a step said "0.0s", which
+ * reads as a step that did nothing rather than one that was quick, so a step
+ * that quick says no time at all.
+ */
+export const STEP_DURATION_FLOOR_MS = 100;
+
+/** A step's time as its line says it, or nothing for one under the floor or not yet ended. */
+export function stepDuration(ms: number | undefined): string | undefined {
+  return ms === undefined || ms < STEP_DURATION_FLOOR_MS ? undefined : seconds(ms);
+}
+
+/** The deep run states in which the run is still at work. */
+const DEEP_ACTIVE: ReadonlySet<WireDeepState> = new Set(["starting", "running"]);
+
+/** A deep run of a turn, and the steps it made. */
+export interface DeepRun {
+  step: AssistantStepEvent;
+  deep: AssistantDeepProgress;
+  children: AssistantStepEvent[];
+}
+
+/** A turn's deep runs, in step order, each with the steps nested under it. */
+export function deepRunsOf(turn: TurnView): DeepRun[] {
+  return turn.steps.flatMap((step) =>
+    step.deep
+      ? [
+          {
+            step,
+            deep: step.deep,
+            children: turn.steps.filter((child) => child.parent === step.index),
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * The steps the run chip lists: every step but a deep run and the steps it
+ * nests. A step naming a parent no deep run in the turn has (its run not yet
+ * heard) stays in the chip rather than being lost.
+ */
+export function chipStepsOf(turn: TurnView): AssistantStepEvent[] {
+  const runs = new Set(turn.steps.flatMap((step) => (step.deep ? [step.index] : [])));
+  return turn.steps.filter(
+    (step) => !step.deep && (step.parent === undefined || !runs.has(step.parent)),
+  );
+}
+
+/** A turn's chip steps as `StepList` draws them. */
+export function stepsOf(turn: TurnView): StepListStep[] {
+  return stepListOf(chipStepsOf(turn));
+}
+
+/** Steps as `StepList` draws them: the label, the request it made in mono, its time. */
+export function stepListOf(steps: readonly AssistantStepEvent[]): StepListStep[] {
+  return steps.map((step) => {
+    const duration = stepDuration(step.duration_ms);
+    return {
+      id: step.step_id,
+      label: step.label,
+      state: STEP_STATE[step.state],
+      ...(duration === undefined ? {} : { duration }),
+      detail: stepDetail(step),
+    };
+  });
+}
+
+/**
+ * What a step's line says under its sentence: the request it made, and for a
+ * step that failed or was refused, why, in the engine's own words, with what
+ * to do about it where the route said.
+ */
+function stepDetail(step: TurnView["steps"][number]): string {
+  const request = step.request
+    ? `${step.tool} · ${step.request.method} ${step.request.route}`
+    : step.tool;
+  if (step.state !== "failed" && step.state !== "refused") return request;
+  const why = step.refusal
+    ? [step.refusal.message, step.refusal.hint].filter(Boolean).join(" ")
+    : (step.summary ?? "");
+  return why ? `${why} (${request})` : request;
+}
+
+/** A deep run's time, rounded to the second it is said in. */
+const wholeSeconds = (ms: number) => Math.floor(Math.max(0, ms) / 1000) * 1000;
+
+/**
+ * A deep run's limits as meters: its time against its deadline, its Crewlet
+ * calls against their cap and the share of its budget used. A settled run's
+ * time is how long it ran, where its step says so.
+ */
+export function deepMeasures(run: DeepRun, now: number): DeepWorkMeasure[] {
+  const { deep, step } = run;
+  const measures: DeepWorkMeasure[] = [];
+  const started = Date.parse(deep.started_at);
+  const deadline = Date.parse(deep.deadline_at);
+  if (Number.isFinite(started) && Number.isFinite(deadline) && deadline > started) {
+    const total = deadline - started;
+    const end = DEEP_ACTIVE.has(deep.state)
+      ? now
+      : step.duration_ms !== undefined
+        ? started + step.duration_ms
+        : Math.min(now, deadline);
+    const spent = wholeSeconds(Math.min(total, end - started));
+    measures.push({
+      key: "time",
+      label: "Time",
+      value: spent,
+      max: total,
+      hint: `${fmtDuration(spent)} of ${fmtDuration(total)}`,
+    });
+  }
+  if (deep.max_steps > 0) {
+    measures.push({
+      key: "calls",
+      label: "Crewlet calls",
+      value: deep.steps,
+      max: deep.max_steps,
+      hint: `${fmtExact(deep.steps)} of ${fmtExact(deep.max_steps)}`,
+    });
+  }
+  const budget = Math.min(100, Math.max(0, deep.budget_percent));
+  measures.push({
+    key: "budget",
+    label: "Budget used",
+    value: budget,
+    max: 100,
+    hint: `${Math.round(budget)}%`,
+    valueText: `${Math.round(budget)} percent of the run's budget`,
+  });
+  return measures;
+}
+
+/** What a deep run's foot says: what a waiting run waits on, why one stopped or failed. */
+export function deepNote(deep: AssistantDeepProgress): string | undefined {
+  switch (deep.state) {
+    case "waiting":
+      return "Waiting for your approval of the change below.";
+    case "stopped":
+      return deep.reason ?? "It stopped before it finished.";
+    case "failed":
+      return deep.reason ?? "It could not finish.";
+    default:
+      return undefined;
+  }
+}
+
+/** A deep run, as its card at its latest state, with the steps it made nested under it. */
+export function DeepRunBlock({ run, now }: { run: DeepRun; now: number }) {
+  return (
+    <DeepWorkCard
+      state={DEEP_STATE[run.deep.state]}
+      goal={run.deep.goal}
+      measures={deepMeasures(run, now)}
+      activity={(run.deep.activity ?? []).slice(-ASSISTANT_DEEP_ACTIVITY_LINES)}
+      steps={stepListOf(run.children)}
+      note={deepNote(run.deep)}
+    />
+  );
+}
+
+/**
+ * A model's prose, drawn inert; `dimmed` for an abandoned attempt.
+ *
+ * NO CARET WHILE IT STREAMS: the turn's `ThinkingIndicator` stands after the
+ * answer instead. A caret drawn by the block landed after its last paragraph
+ * or list, on a line of its own, and on an empty reply alone above its cards.
+ */
+export function ReplyProse({ text, dimmed = false }: { text: string; dimmed?: boolean }) {
+  // A SILENT ROUND IS STORED as an empty message its cards hang from, and
+  // draws nothing of its own, streaming or not.
+  if (text.trim() === "") return null;
+  return (
+    // A DIV, NOT PROSE'S DEFAULT PARAGRAPH: rendered Markdown is blocks
+    // (paragraphs, lists), which a <p> may not hold. `prose md` is the class
+    // pair the dashboard's Markdown rhythm is written for, as every other
+    // rendered body here carries it, so the reply's paragraphs are spaced.
+    <Prose as="div" measure="narrow" dimmed={dimmed} className="prose md">
+      {renderMarkdown(text, ASSISTANT_WORDS)}
+    </Prose>
+  );
+}
+
+/**
+ * A proposal's change rows in `ChangeList`'s grammar (D10): the facts first,
+ * then WHO WILL SEE THE RESULT where its visibility changes (a share, a
+ * comment others are told of, D09), as one more fact, then the changes.
+ */
+export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
+  const rows = proposal.changes.map((change): ChangeListRow => {
+    const note = change.note;
+    const base = note === undefined ? { label: change.label } : { label: change.label, note };
+    const to = drawValue(change.to ?? "", change.items);
+    const from = drawValue(change.from ?? "", change.from_items);
+    switch (CHANGE_KIND[change.kind]) {
+      case "fact": {
+        const value = change.to === undefined && change.from !== undefined ? from : to;
+        return { ...base, kind: "fact", value: value.node, block: value.block };
+      }
+      case "changed":
+        return {
+          ...base,
+          kind: "changed",
+          from: from.node,
+          to: to.node,
+          block: from.block || to.block,
+        };
+      case "added":
+        return { ...base, kind: "added", to: to.node, isNew: change.new === true, block: to.block };
+      case "removed":
+        return { ...base, kind: "removed", from: from.node, block: from.block };
+      case "text":
+        return {
+          ...base,
+          kind: "text",
+          words: (change.words ?? []).map((w) => ({ op: WORD_OP[w.op], text: w.text })),
+        };
+    }
+  });
+  const audience = proposal.audience ?? [];
+  if (audience.length === 0) return rows;
+  const facts = rows.findIndex((row) => row.kind !== "fact");
+  const at = facts < 0 ? rows.length : facts;
+  return [
+    ...rows.slice(0, at),
+    { kind: "fact", label: "Who will see it", value: audience.join(", ") },
+    ...rows.slice(at),
+  ];
+}
+
+/**
+ * What a replacing change removes, as the sentence the card leads with: never
+ * only a struck-through row among the others, so a person approving "add a
+ * seat" sees that it also takes the unit's project away (ADR-0055). Nothing
+ * where the change removes nothing.
+ */
+export function removalSummary(proposal: AssistantProposalCard): string | undefined {
+  const removes = (proposal.removes ?? []).filter((label) => label.trim() !== "");
+  if (removes.length === 0) return undefined;
+  const named =
+    removes.length === 1
+      ? removes[0]
+      : `${removes.slice(0, -1).join(", ")} and ${removes[removes.length - 1]}`;
+  return `This also removes ${named}. Approve only if you asked for that.`;
+}
+
+/** What the person does with a proposal: the drawer's session answers each. */
+export interface ProposalHandlers {
+  approve: (proposal: AssistantProposalCard) => void;
+  decline: (proposal: AssistantProposalCard) => void;
+  /**
+   * Ask for an expired or stale change again: a question in the same
+   * conversation, so a fresh proposal comes through the normal flow against
+   * what is there now, never a replay of the old request.
+   */
+  prepareAgain: (proposal: AssistantProposalCard) => void;
+}
+
+/** The question "Prepare it again" asks, naming the change it was. */
+export function prepareAgainQuestion(proposal: AssistantProposalCard): string {
+  return `Please prepare that change again (${proposal.title}), from how things stand now.`;
+}
+
+/** What the person does with a card that leads somewhere. */
+export interface CardHandlers extends ProposalHandlers {
+  /** Go to an address the engine built, already checked to be this dashboard's own. */
+  openHere: (target: InAppTarget) => void;
+  /** Undo a page change from its receipt. */
+  undo: (actionId: string) => void;
+}
+
+/** A page action's outcome as its receipt's tone. */
+export const ACTION_TONE: Record<ActionLocalState, ReceiptStripTone> = {
+  applied: "success",
+  undone: "neutral",
+  elsewhere: "info",
+  stale: "warning",
+  blocked: "danger",
+  invalid: "danger",
+  no_handler: "danger",
+  unconfirmed: "danger",
+};
+
+/**
+ * What a page change the person approved nothing for (a pure view change,
+ * D11) came to: a receipt in the thread, with Undo while the page still shows
+ * what it made of it. A change that came with a card is drawn on the card.
+ */
+export function ActionReceipt({
+  actionId,
+  local,
+  on,
+}: {
+  actionId: string;
+  local: ActionLocal;
+  on: CardHandlers;
+}) {
+  return (
+    <ReceiptStrip
+      tone={ACTION_TONE[local.state]}
+      actions={
+        local.undoable ? (
+          <Button size="small" variant="ghost" onClick={() => on.undo(actionId)}>
+            Undo
+          </Button>
+        ) : undefined
+      }
+    >
+      {changedNothing(local.state) && local.state !== "undone"
+        ? `${local.words} Nothing changed.`
+        : local.words}
+    </ReceiptStrip>
+  );
+}
+
+/** A screen's preview row in `ChangeList`'s grammar: what it sets, from what. */
+function previewRow(row: PageActionPreview["rows"][number]): ChangeListRow {
+  // A PROPOSED FILE IS DRAWN, by its name, its type and a thumbnail.
+  const next = row.file
+    ? { node: <DraftFile file={row.file} ground={row.fileGround} />, block: false }
+    : drawValue(row.next, row.items);
+  if (row.current === null || (row.file && row.current === "(empty)")) {
+    return { kind: "added", label: row.field, to: next.node, isNew: false, block: next.block };
+  }
+  if (!row.file && row.current === row.next) {
+    return { kind: "fact", label: row.field, value: next.node, block: next.block };
+  }
+  const current = drawValue(row.current, row.currentItems);
+  return {
+    kind: "changed",
+    label: row.field,
+    from: current.node,
+    to: next.node,
+    block: current.block || next.block,
+  };
+}
+
+/**
+ * The screen's own account of a page proposal still waiting on the person,
+ * or null where the card keeps the engine's rows: an action no screen here
+ * declares, a payload its parser refuses, or a card already decided.
+ */
+export function screenPreviewOf(proposal: AssistantProposalCard): PageActionPreview | null {
+  if (proposal.scope !== "page" || proposal.state !== "proposed" || !proposal.page_action) {
+    return null;
+  }
+  return pageActionPreview(proposal.page_action.name, proposal.page_action.payload);
+}
+
+/** A proposal card, at its state now. */
+function Proposal({
+  proposal,
+  local,
+  on,
+}: {
+  proposal: AssistantProposalCard;
+  local: ProposalLocal | undefined;
+  on: ProposalHandlers;
+}) {
+  // THE PAGE UNDER THE DRAWER IS READ AGAIN AS IT MOVES, so the card's rows
+  // and its gate are the screen's as it is now.
+  usePageSnapshot();
+  const screen = screenPreviewOf(proposal);
+  const unknown = proposal.state === "unknown";
+  const stale = local?.pageMoved === true && proposal.state === "proposed";
+  const state: ProposalState = stale ? "stale" : PROPOSAL_STATE[proposal.state];
+  // A FAILED CARD SAYS WHY in the page's words where the page refused it
+  // here first, else the engine's; one nobody could confirm says so in the
+  // card's own words (failureOutcome) and never "Nothing changed.".
+  const failure = local?.failure ?? proposal.failure?.refusal.message;
+  const refusal = local?.refusal;
+  return (
+    <ProposalCard
+      title={proposal.title}
+      subtitle={proposal.scope === "page" ? "This page only" : "Saved for the company"}
+      scope={proposal.scope}
+      state={state}
+      // WHAT IT REMOVES LEADS THE CARD, above every row (removalSummary).
+      summary={removalSummary(proposal)}
+      changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
+      note={proposal.note}
+      // THE SCREEN'S GATE HOLDS APPROVE, with its sentence, before the person
+      // presses anything; the page checks it again when it applies the change.
+      approveBlocked={screen?.blocked ?? undefined}
+      approveLabel={proposal.approve_label}
+      onApprove={() => on.approve(proposal)}
+      onDecline={() => on.decline(proposal)}
+      onPrepareAgain={
+        state === "expired" || state === "stale" ? () => on.prepareAgain(proposal) : undefined
+      }
+      onRetry={unknown || proposal.failure?.retryable ? () => on.approve(proposal) : undefined}
+      receipt={proposal.receipt?.summary}
+      failure={failure}
+      failureOutcome={unknown ? "unknown" : undefined}
+      // THE ROUTE'S NEXT STEP, on its own line in the failure strip, where the
+      // engine's own refusal is shown (never beside the drawer's own words).
+      failureHint={local?.failure ? undefined : proposal.failure?.refusal.hint}
+      // A DECISION THE ENGINE REFUSED, or nobody answered, while the card
+      // still waits: said above the decision, until the next press clears it.
+      decisionRefusal={
+        refusal ? { sentence: refusal.sentence, hint: refusal.hint ?? undefined } : undefined
+      }
+    />
+  );
+}
+
+/** A count of things in words: "1 row", "7 rows". */
+function countOf(n: number, one: string, many: string): string {
+  return `${fmtExact(n)} ${n === 1 ? one : many}`;
+}
+
+/** What a folded table says after its title: how many rows the read answered. */
+export function tableSummary(table: AssistantTableCard): string {
+  return countOf(table.row_count, "row", "rows");
+}
+
+/** The most fact labels a folded record names before it is cut short. */
+const SUMMARY_FACTS = 3;
+
+/**
+ * What a folded record says after its title: its subtitle where it has one
+ * (a task's key, a page's place), else the names of the facts it holds
+ * ("Mission, vision"), and how many entries its list holds ("6 policies").
+ * Nothing where it holds neither.
+ */
+export function entitySummary(entity: AssistantEntityCard): string | undefined {
+  const facts = (entity.facts ?? []).filter((fact) => !fact.detail).map((fact) => fact.label);
+  const head = entity.subtitle
+    ? [entity.subtitle]
+    : facts.slice(0, SUMMARY_FACTS).map((label, i) => (i === 0 ? label : inSentence(label)));
+  const items = entity.items?.length ?? 0;
+  const noun = entity.items_noun ?? { one: "entry", many: "entries" };
+  const parts = items > 0 ? [...head, countOf(items, noun.one, noun.many)] : head;
+  return parts.length > 0 ? parts.join(", ") : undefined;
+}
+
+/** A label inside a sentence: its first letter lowered, unless it opens an acronym ("URL"). */
+function inSentence(label: string): string {
+  const second = label.charAt(1);
+  return second !== "" && second === second.toUpperCase() && second !== second.toLowerCase()
+    ? label
+    : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+}
+
+/** How a supporting read folds: closed until the person opens it, remembered for the session. */
+interface Fold {
+  collapsible: true;
+  summary: string | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/** A table card with its downloads from the stored snapshot. */
+function Table({
+  table,
+  cardId,
+  on,
+  fold,
+}: {
+  table: AssistantTableCard;
+  cardId: string;
+  on: CardHandlers;
+  fold: Fold;
+}) {
+  // THE DRAWER DRAWS THE COLUMNS THE ENGINE CHOSE FOR IT, name first; the
+  // rest stay in the card's downloads.
+  const drawn = table.columns.flatMap((c, i) => (c.detail ? [] : [i]));
+  const align = drawn.map((i) => {
+    const c = table.columns[i]!;
+    return c.align ?? (c.type === "text" || c.type === "label" ? "start" : "end");
+  });
+  const cells = (row: (string | number | boolean | null)[]) =>
+    drawn.map((i) => CELL[table.columns[i]!.type](row[i] ?? null));
+  const base =
+    table.title
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-|-$/g, "")
+      .toLowerCase() || cardId;
+  const downloads = table.exports
+    ? [
+        { label: "CSV", filename: `${base}.csv`, file: () => exportFile(table.exports!.csv) },
+        { label: "XLSX", filename: `${base}.xlsx`, file: () => exportFile(table.exports!.xlsx) },
+      ]
+    : undefined;
+  return (
+    <ResultTableCard
+      {...fold}
+      title={table.title}
+      window={table.window}
+      headers={drawn.map((i) => table.columns[i]!.label)}
+      rows={table.rows.map(cells)}
+      align={align}
+      total={table.total ? cells(table.total) : undefined}
+      downloads={downloads}
+      link={table.open ? <EngineLink link={table.open} on={on} /> : undefined}
+      emptyMessage="No rows match."
+    />
+  );
+}
+
+/** A link the engine built, followed only where it is one of this dashboard's own routes. */
+function EngineLink({ link, on }: { link: { label: string; href: string }; on: CardHandlers }) {
+  const target = openInApp(link.href);
+  if (!target) return <span>{link.label}</span>;
+  return (
+    <ButtonLink
+      size="small"
+      variant="ghost"
+      href={hrefOf(target.path, target.query)}
+      trailingIcon={<ArrowUpRightGlyph size="sm" />}
+      onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+        event.preventDefault();
+        on.openHere(target);
+      }}
+    >
+      {link.label}
+    </ButtonLink>
+  );
+}
+
+/** Where an address goes, as a trail of the dashboard's own crumbs. */
+function placeOf(target: InAppTarget): string {
+  return crumbsFor(target.path)
+    .map((c) => c.label)
+    .join(" › ");
+}
+
+/** The words a refusal says about the person's own access. */
+function refusalBody(grants: readonly string[] | undefined, message: string): string {
+  return grants && grants.length > 0 ? youNeedWords(grants) : message;
+}
+
+/** One card of an answer, drawn as the design system's component for its kind. */
+export function CardBlock({
+  event,
+  local,
+  on,
+  opened,
+}: {
+  event: AssistantCardEvent;
+  local: ProposalLocal | undefined;
+  on: CardHandlers;
+  /** Whether this card's place was opened beside the conversation. */
+  opened: boolean;
+}): ReactNode {
+  const card = narrowCard(event.card);
+  // EVERY CARD ASKS, so the hooks run in one order; only a read uses it.
+  const [open, setOpen] = useCardOpen(event.card_id);
+  const fold = (summary: string | undefined): Fold => ({
+    collapsible: true,
+    summary,
+    open,
+    onOpenChange: setOpen,
+  });
+  if (card === null) {
+    return (
+      <Callout variant="neutral">
+        This answer carries a card this version of the dashboard cannot draw. Reload to see it.
+      </Callout>
+    );
+  }
+  switch (card.type) {
+    case "table":
+      return (
+        <Table
+          table={card.table}
+          cardId={event.card_id}
+          on={on}
+          fold={fold(tableSummary(card.table))}
+        />
+      );
+    case "proposal":
+      return <Proposal proposal={card.proposal} local={local} on={on} />;
+    case "entity": {
+      const entity = card.entity;
+      const folded = fold(entitySummary(entity));
+      const facts = (entity.facts ?? []).filter((fact) => !fact.detail);
+      const items =
+        entity.items && entity.items.length > 0
+          ? entity.items.map((item) => ({
+              id: `${item.kind ?? ""}:${item.id}`,
+              name: item.label,
+              ...(item.fact === undefined ? {} : { fact: item.fact }),
+              ...(item.open ? { action: <EngineLink link={item.open} on={on} /> } : {}),
+            }))
+          : null;
+      // A LIST AND NOTHING ELSE (a task's comments) is the list card. A RECORD
+      // WITH A LIST UNDER IT (a page and its comments, the company's mission and
+      // vision over its policies, a company over its units) keeps both: drawn
+      // as the list alone, the record's facts, text and link were dropped.
+      if (items && facts.length === 0 && !entity.subtitle && !entity.text && !entity.open) {
+        return <EntityList {...folded} title={entity.title} items={items} />;
+      }
+      return (
+        <StatusCard
+          {...folded}
+          title={entity.title}
+          subtitle={entity.subtitle}
+          actions={entity.open ? <EngineLink link={entity.open} on={on} /> : undefined}
+          actionsAlign="start"
+        >
+          {facts.length > 0 ? (
+            <PropertyList
+              groups={[
+                {
+                  items: facts.map((fact) => ({
+                    label: fact.label,
+                    value: fact.mono ? <code>{factText(fact)}</code> : factText(fact),
+                  })),
+                },
+              ]}
+            />
+          ) : null}
+          {entity.text ? <ReplyProse text={entity.text} /> : null}
+          {items ? <EntityList label={entity.title} items={items} /> : null}
+        </StatusCard>
+      );
+    }
+    case "open_in_app": {
+      const { link, permitted } = card.open_in_app;
+      const target = permitted ? openInApp(link.href) : null;
+      if (!target) {
+        return (
+          <RefusalCard title={link.label} heading="You cannot open this from here.">
+            {permitted
+              ? "The address is not one of this dashboard's pages."
+              : "Your access does not include it."}
+          </RefusalCard>
+        );
+      }
+      return (
+        <OpenInAppCard
+          icon={<LayoutDashboardGlyph size="md" />}
+          title={link.label}
+          path={placeOf(target)}
+          href={hrefOf(target.path, target.query)}
+          onOpenHere={() => on.openHere(target)}
+          state={opened ? "opened" : "ready"}
+        />
+      );
+    }
+    case "error": {
+      const { refusal, phrase } = card.error;
+      // THE CARD'S OWN NEXT STEP, or else the route's (the envelope's `hint`).
+      const hint = card.error.hint ?? refusal.hint;
+      return (
+        <RefusalCard
+          // THE HEAD NAMES WHAT WAS ASKED FOR ("Read the fleet"), and the
+          // card's own tag says it was not permitted; the sentence says why.
+          title={phrase ? `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}` : "Not permitted"}
+          heading={phrase ? `You do not have permission to ${phrase}.` : undefined}
+          actions={
+            <CopyButton
+              size="small"
+              text={`Please grant me the access I need${phrase ? ` to ${phrase}` : ""}. ${refusalBody(refusal.grants, refusal.message)}`}
+              label="Copy a request to an admin"
+            />
+          }
+        >
+          {refusalBody(refusal.grants, refusal.message)}
+          {/* A REFUSED READ IS NOT A CHANGE: the sentence fits a read and a write. */}
+          {hint ? ` ${hint}` : ""} The assistant acts with your access only, so it cannot do this
+          for you.
+        </RefusalCard>
+      );
+    }
+    case "notice":
+      return (
+        <Callout variant={card.notice.tone === "warning" ? "warning" : "info"}>
+          {card.notice.text}
+        </Callout>
+      );
+    case "file":
+      return <FilesCard card={card.file} />;
+  }
+}
+
+/** A Try again for a turn that failed for a reason the engine says may pass. */
+export function RetryButton({ onRetry }: { onRetry: () => void }) {
+  return (
+    <Button size="small" variant="secondary" onClick={onRetry}>
+      Try again
+    </Button>
+  );
+}

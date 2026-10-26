@@ -46,6 +46,9 @@ func NewClaudeCode() *Runner { return New(ClaudeCode{}) }
 // Name is the coding agent's key in the runner registry.
 func (ClaudeCode) Name() string { return ClaudeCodeName }
 
+// Resumes says Claude Code continues a session it reported (`--resume`).
+func (ClaudeCode) Resumes() bool { return true }
+
 // Command builds the headless `claude -p` invocation.
 //
 // Pure and deterministic so the exact flags can be pinned by a test. Budget
@@ -71,8 +74,8 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // adds the run's standing instructions after Claude Code's own system prompt,
 // which stays whole (measured on 2.1.310, off the request the CLI sent). That
 // prompt is the harness this run exists to use — how to drive its shell and
-// editor and work through a task — which a text call, denying every one of
-// those tools, has no use for. The FILE variant, written by [ClaudeCode.WriteConfig]:
+// editor and work through a task — which a run on the engine host, denying
+// every one of those tools, has no use for. The FILE variant, written by [ClaudeCode.WriteConfig]:
 // see [Paths.System] for why never argv. Passed only for a run that has system
 // text, so a run with none runs on the vendor's prompt alone.
 func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string) string {
@@ -81,21 +84,20 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
 	}
+	// THE EARLIER RUN'S OWN CONVERSATION, carried on with the brief — an
+	// answer, an approval — as its next prompt ([sandbox.RunRequest.Resume]).
+	// Claude Code keeps its sessions under the box's home, which a
+	// continued box still has.
+	if req.Resume != "" {
+		parts = append(parts, "--resume", shellQuote(req.Resume))
+	}
 	if req.System != "" {
 		parts = append(parts, "--append-system-prompt-file", shellQuote(paths.System()))
 	}
-	// THE ASKING RUN'S OWN CONVERSATION, carried on with the brief — the
-	// answer — as its next prompt, where the job before this one parked on
-	// a question in this box ([sandbox.RunRequest.ResumeSession]). Claude
-	// Code keeps its sessions under the box's home, which a continued box
-	// still has.
-	if req.ResumeSession != "" {
-		parts = append(parts, "--resume", shellQuote(req.ResumeSession))
-	}
 	// VERBATIM, because the only entry that reaches this runner is a
 	// claude-code one, which already names the model in Claude Code's own
-	// terms — its alias or id exactly as its text calls pass it. A launch
-	// passes over every other CLI's entry, so none reaches here.
+	// terms — its alias or id exactly as its runs on the engine host pass
+	// it. A launch passes over every other CLI's entry, so none reaches here.
 	if req.Model != "" {
 		parts = append(parts, "--model", shellQuote(req.Model))
 	}

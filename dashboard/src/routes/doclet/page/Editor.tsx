@@ -56,6 +56,9 @@ import { useAct } from "~/lib/useAct.ts";
 import type { PageDetail } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { linkPageCommand } from "./LinkPicker.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { refuse, useAssistantDraft } from "~/app/assistant/draft.ts";
+import { pageBodyProblem } from "./assistantAction.ts";
 
 export function PageEditor({
   detail,
@@ -89,6 +92,46 @@ export function PageEditor({
 
   const moved = page.version > base.version;
   const dirty = draft !== base.body;
+
+  // --- assistant page actions (WP12) ---
+  // THE OPEN DRAFT, declared once (`useAssistantDraft`): its body reaches the
+  // assistant, and a new body is set as typing writes it ([pageBodyProblem]);
+  // the save stays the person's. The page and its base are what is in view.
+  useAssistantContext({
+    resources: [{ kind: "page", id: page.id, version: String(base.version) }],
+  });
+  useAssistantDraft<string>({
+    kind: "client",
+    id: page.id,
+    revision: base.version,
+    scope: `The draft of “${page.title}” you are editing (not saved)`,
+    help:
+      "The body is Markdown and a change replaces all of it. Where the body here is cut, " +
+      "read the page in full before proposing a new one. Saving stays the person's.",
+    value: draft,
+    fields: [
+      {
+        path: "body",
+        label: "Body",
+        hint: "Markdown",
+        read: (d) => d,
+        write: (_, body) => {
+          const problem =
+            typeof body === "string" ? pageBodyProblem(body) : "A page's body is Markdown text.";
+          return problem === null ? (body as string) : refuse(problem);
+        },
+        summary: (body) => plural(markdownWords(typeof body === "string" ? body : ""), "word"),
+      },
+    ],
+    apply: setDraft,
+    blocked: () =>
+      merging
+        ? "Settle where both edits changed the same lines first."
+        : save.busy
+          ? "The page is being saved."
+          : null,
+  });
+  // --- end assistant page actions (WP12) ---
   // WHY SAVE CANNOT BE PRESSED, one answer for the button and the shortcut
   // alike: a shortcut that skipped the "moved" clause sent a save the engine
   // could only refuse.

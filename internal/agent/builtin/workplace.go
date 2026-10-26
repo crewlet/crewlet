@@ -204,7 +204,7 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// ONE OPERATION PER DISTINCT CALL, derived from what was sent — see
 	// [opIDFor]. A retry is the same drag and is answered step by step from
 	// the ledger; the same card dropped somewhere else is another.
-	opID := opIDFor(ctx, actor, t.Name(), "place", task.ID, args)
+	opID := opIDFor(actor, t.Name(), "place", task.ID, args)
 	got, err := t.deps.Placer(actor).PlaceTask(ctx, opID, place, notify)
 	if err != nil {
 		return writeFailure(ctx, actor, name, err), nil

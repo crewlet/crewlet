@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -52,7 +53,7 @@ func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 	t.Parallel()
 	// Three rounds of work against a two-round cap, so the phase exhausts
 	// its budget once, is granted an extension, and re-enters the loop.
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "conventions", "start with the conventions"),
 		persist(t, "owners", "and who owns what"),
 		markDone(t, "that is enough"),
@@ -112,7 +113,7 @@ func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 // ledger exists to guarantee.
 func TestALiveFrameNeverDropsTheRoundsBehindIt(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "conventions", "start with the conventions"),
 		persist(t, "owners", "and who owns what"),
 		markDone(t, "that is enough"),
@@ -164,22 +165,22 @@ func (alwaysExtend) Decide(context.Context, extension.Request) (extension.Decisi
 
 // sayAndCall is a round in which the model says something and then asks for a
 // tool — the shape whose two halves have to end up in one block.
-func sayAndCall(t *testing.T, name, argsJSON, prose string) llm.Completion {
+func sayAndCall(t *testing.T, name, argsJSON, prose string) llmtest.Response {
 	t.Helper()
 	call := submitCall(t, name, argsJSON)
-	call.Content = prose
-	call.InputTokens, call.OutputTokens = 60, 40
+	call.Text = prose
+	call.Usage = llm.Usage{Input: 60, Output: 40}
 	return call
 }
 
 // persist is an onboarding round that says something and keeps a note.
-func persist(t *testing.T, note, prose string) llm.Completion {
+func persist(t *testing.T, note, prose string) llmtest.Response {
 	t.Helper()
 	return sayAndCall(t, runner.ReflectAndPersistTool, `{"note":"`+note+`"}`, prose)
 }
 
 // markDone is the round that finishes the onboarding pass.
-func markDone(t *testing.T, prose string) llm.Completion {
+func markDone(t *testing.T, prose string) llmtest.Response {
 	t.Helper()
 	return sayAndCall(t, runner.MarkOnboardedTool, `{"notes":"read the pages"}`, prose)
 }
@@ -254,6 +255,7 @@ func cappedRunner(
 		Judge:     judge,
 		Budget:    budgetOf(meter),
 		Turn:      runner.Turn{RunID: "t-rounds", WorkKey: "wk-rounds", AgentID: "agent-1"},
+		Sessions:  sessions,
 		Onboarding: runner.Onboarding{
 			Markers: &markers{claimHeld: true}, Latch: runner.NewLatch(),
 			Rounds: caps.rounds, Ceiling: caps.ceiling,
@@ -316,7 +318,7 @@ func progressFrames(t *testing.T, c *capture, ph string) []*types.AgentTurnProgr
 // exactly like one whose phases deserved no extension.
 func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "a", "one"),
 		persist(t, "b", "two"),
 		markDone(t, "enough"),
@@ -369,7 +371,7 @@ func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 // call that never happened, which is the fact the judge phase exists to carry.
 func TestNoJudgePhaseIsPublishedWhenNoJudgeWasAsked(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		markDone(t, "straight in"),
 		text("done"),
 	}}
@@ -404,7 +406,7 @@ func (spendingJudge) Decide(context.Context, extension.Request) (extension.Decis
 // records like any round it refuses.
 func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "a", "one"),
 		persist(t, "b", "two"),
 		markDone(t, "enough"),
@@ -425,7 +427,7 @@ func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 		t.Errorf("decision = %q, want rescue: the budget refused the judgement, so "+
 			"the phase was not extended", judged[0].Decision)
 	}
-	if got := prov.n["onboarding"]; got != 2 {
+	if got := prov.roundsOf("onboarding"); got != 2 {
 		t.Errorf("the pass made %d model calls, want its 2 rounds and no extension", got)
 	}
 	if got := meter.charges(); !slices.Equal(got, []int{100, 100, 30}) {
@@ -444,11 +446,11 @@ func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{
-		onboarding: []llm.Completion{
+		onboarding: []llmtest.Response{
 			persist(t, "a", "one"),
 			persist(t, "b", "two"),
 		},
-		review: []llm.Completion{
+		review: []llmtest.Response{
 			sayAndCall(t, runner.SubmitReviewTool, `{"decision":"done","notes":"ok"}`, "judged"),
 		},
 	}
@@ -457,28 +459,31 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
 
 	onboard(t, r)
-	calls := len(prov.seen)
+	runs := len(prov.allRuns())
 	_, err := r.Review(context.Background(), 1, workFor("posted"), nil)
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Fatalf("Review = %v, want the refusal the judgement left standing", err)
 	}
-	if got := len(prov.seen) - calls; got != 0 {
-		t.Errorf("the reviewer made %d model calls after the turn was refused, want none", got)
+	if got := len(prov.allRuns()) - runs; got != 0 {
+		t.Errorf("the reviewer started %d CLI runs after the turn was refused, want none", got)
 	}
 	if got := meter.charges(); !slices.Equal(got, []int{100, 100, 30}) {
 		t.Errorf("charges = %v, want both rounds and the refused judgement, and nothing after", got)
 	}
 }
 
-// A JUDGE IS NOT CALLED ON A REFUSAL ALREADY CERTAIN. The judge is a model
-// call like any other — billed, then charged — and once nothing more fits a
-// window every charge after is refused. Here the phase's two rounds fill the
-// ceiling exactly: both are admitted, nothing refused them, and the meter
-// knows no later charge can fit. Asking the judge would have paid for a call
-// whose only possible verdict was the refusal.
-func TestTheJudgeIsNotCalledOnARefusalAlreadyCertain(t *testing.T) {
+// NOTHING MORE IS BOUGHT ON A REFUSAL ALREADY CERTAIN — not a judgement, and
+// not another of the CLI's requests. The judge is a model call like any other
+// — billed, then charged — and once nothing more fits a window every charge
+// after is refused. Here the phase's two rounds fill the ceiling exactly: both
+// are admitted, nothing refused them, and the phase runs out of rounds with the
+// window full. So the extension is decided by the budget, not the judge: no
+// judgement is bought, and the CLI asks its model nothing past the two
+// requests the window held. (The judge's own guard is held in
+// judge_internal_test.go.)
+func TestNothingMoreIsBoughtOnARefusalAlreadyCertain(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		persist(t, "a", "one"),
 		persist(t, "b", "two"),
 	}}
@@ -492,6 +497,9 @@ func TestTheJudgeIsNotCalledOnARefusalAlreadyCertain(t *testing.T) {
 	}
 	if got := meter.charges(); !slices.Equal(got, []int{100, 100}) {
 		t.Errorf("charges = %v, want the two rounds and no judgement", got)
+	}
+	if got := prov.roundsOf("onboarding"); got != 2 {
+		t.Errorf("the CLI made %d model requests, want the two the window held", got)
 	}
 }
 
@@ -591,7 +599,7 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 // gets now is the FINISHING one, naming that tool.
 func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{review: []llm.Completion{
+	prov := &scriptedProvider{review: []llmtest.Response{
 		// Round 1: says something, calls nothing. Nothing forces a call
 		// and some models answer-then-stop; this is that round.
 		text("The work looks fine to me."),
@@ -620,7 +628,7 @@ func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T
 		t.Errorf("rounds_used = %d, want the prose round plus the corrected one", done.RoundsUsed)
 	}
 	// And the model was told what to do, by name. A bare "no" sends it round
-	// the same loop.
+	// the same loop. The corrective opens the run after the prose one.
 	var corrective string
 	for _, msg := range prov.requestsFor("review")[1].Messages {
 		if strings.Contains(msg.Content, runner.SubmitReviewTool) && msg.Role == llm.RoleUser {
@@ -643,7 +651,7 @@ func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T
 func TestALiveFrameCarriesNeitherThePromptNorWholeToolResults(t *testing.T) {
 	t.Parallel()
 	huge := strings.Repeat("x", 20_000)
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		activating("read_file"),
 		submitCall(t, "read_file", `{"path":"/big"}`),
 		markDone(t, "read it"),
@@ -714,6 +722,7 @@ func bigResultRunner(
 		Task:      "read the big file",
 		Publisher: pub,
 		Turn:      runner.Turn{RunID: "t-frames", WorkKey: "wk-t-frames", AgentID: "agent-1"},
+		Sessions:  sessions,
 		Onboarding: runner.Onboarding{
 			Markers: &markers{claimHeld: true}, Latch: runner.NewLatch(), Rounds: 4,
 		},
@@ -758,19 +767,19 @@ func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 		buildOpts{calls: calls, resume: &runner.Resume{
 			State:  execstate.State{Version: execstate.Version, Round: 2},
 			Answer: "done",
-			Bridged: []toolloop.Execution{
-				{Name: "jira_create", Args: map[string]any{"summary": "bridged"}},
+			Bridged: []runner.BridgedCall{
+				{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "bridged"}}},
 			},
 		}})
 	if _, _, err := r.Resume(context.Background(), closed); err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if got := calls.Ordinal(t.Context(), "jira_create", first); got != 1 {
+	if got := calls.Ordinal("jira_create", first); got != 1 {
 		t.Fatalf("after the resume the first create counts %d different creates "+
 			"before it, want the bridged call's 1 — made again, it would take "+
 			"the first copy's id", got)
 	}
-	if got := calls.Ordinal(t.Context(), "jira_create", map[string]any{"summary": "new"}); got != 2 {
+	if got := calls.Ordinal("jira_create", map[string]any{"summary": "new"}); got != 2 {
 		t.Fatalf("a new create counts %d, want both the closed round's and the "+
 			"bridged call's", got)
 	}
@@ -807,7 +816,7 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 				resume: &runner.Resume{
 					State:   execstate.State{Version: execstate.Version, Round: 2},
 					Answer:  "done",
-					Bridged: []toolloop.Execution{{Name: runner.SubmitWorkTool, Args: args}},
+					Bridged: []runner.BridgedCall{{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: args}}},
 				}})
 		w, _, err := r.Resume(context.Background(), history)
 		if err != nil {

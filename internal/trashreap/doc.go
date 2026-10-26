@@ -20,6 +20,11 @@
 // source a pass. It then records a [Report] in the coordination store, which is
 // what the next holder of the duty resumes the schedule from.
 //
+// A source may keep a term of its own ([Termed]), asked at every pass: the
+// Dashboard Assistant's conversations are purged their retention after they were
+// last used rather than thirty days after a trash. The floor ([MinTerm]) holds
+// for every term, whichever source states it.
+//
 // # Why nothing is purged twice, or wrongly
 //
 // The list only nominates. Each source decides its purge again in the snapshot

@@ -34,7 +34,9 @@
  */
 
 import { useMemo } from "react";
-import { useParam } from "~/app/router.tsx";
+import { useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { urlAction } from "~/app/assistant/urlAction.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { GROUPS } from "~/contract/spend.ts";
@@ -45,7 +47,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 import { ByAgent } from "./ByAgent.tsx";
 import { ByModel } from "./ByModel.tsx";
@@ -55,7 +57,8 @@ import { Hero } from "./Hero.tsx";
 import { PhaseChart } from "./PhaseChart.tsx";
 import { Workers } from "./Workers.tsx";
 import { agentLines, spendCsv, spendOffer, spendWindowParams, windowWords } from "./model.ts";
-import { DownloadButton } from "@crewlethq/ui";
+import { spendGroupKeys, spendRangeKeys } from "./assistantActions.ts";
+import { DownloadButton, TimeRangePicker } from "@crewlethq/ui";
 
 /** The dimensions the chart splits on — the contract's six, and nothing else. */
 const GROUP_VALUES: readonly string[] = GROUPS.map((g) => g.value);
@@ -72,6 +75,24 @@ export function Spend() {
   // a hand-edited `group=turn` (the dimension this answer no longer has) is a
   // stale link, and the chart is still worth drawing.
   const group = GROUP_VALUES.includes(rawGroup) ? rawGroup : "phase";
+
+  // --- assistant page actions (WP12) ---
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: {
+      ...urlAction("spend.range.set", {
+        scope: "Spend window (view only)",
+        keys: spendRangeKeys(range.offer, () => now),
+        nav,
+      }),
+      ...urlAction("spend.group.set", {
+        scope: "Spend chart split (view only)",
+        keys: spendGroupKeys(),
+        nav,
+      }),
+    },
+  });
+  // --- end assistant page actions (WP12) ---
 
   const tokens = useQuery("tokens", params);
   const series = useQuery("token_series", { ...params, group, bucket: "day" });
@@ -113,7 +134,7 @@ export function Spend() {
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
         <DownloadButton
           label="Export"
           filename={`crewlet-spend-${rollup?.from ?? "window"}-${rollup?.to ?? ""}.csv`}

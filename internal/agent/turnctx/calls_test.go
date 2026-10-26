@@ -21,7 +21,7 @@ func TestACallCountsTheDifferentCallsBeforeIt(t *testing.T) {
 	}) []int {
 		var out []int
 		for _, c := range calls {
-			out = append(out, log.Ordinal(t.Context(), c.tool, c.args))
+			out = append(out, log.Ordinal(c.tool, c.args))
 			log.Record(c.tool, c.args)
 		}
 		return out
@@ -76,7 +76,7 @@ func TestARerunReproducesEveryCount(t *testing.T) {
 		log := turnctx.NewCallLog()
 		var out []int
 		for _, args := range calls {
-			out = append(out, log.Ordinal(t.Context(), "update", args))
+			out = append(out, log.Ordinal("update", args))
 			log.Record("update", args)
 		}
 		return out
@@ -96,7 +96,7 @@ func TestASeededLogCountsTheCallsBeforeTheSeed(t *testing.T) {
 	log := turnctx.NewCallLog()
 	log.Seed(turnctx.SeededCall{Tool: "update", Args: a},
 		turnctx.SeededCall{Tool: "update", Args: b})
-	if got := log.Ordinal(t.Context(), "update", a); got != 1 {
+	if got := log.Ordinal("update", a); got != 1 {
 		t.Fatalf("a call made again after the seeded different one counts %d, "+
 			"want 1 — the resumed run would take the first copy's id", got)
 	}
@@ -111,25 +111,68 @@ func TestAForkCountsItsOwnCallsAndIsAbsorbed(t *testing.T) {
 	run.Record("update", a)
 
 	first, second := run.Fork(), run.Fork()
-	if got := first.Ordinal(t.Context(), "update", b); got != 1 {
+	if got := first.Ordinal("update", b); got != 1 {
 		t.Fatalf("a fork counts %d different calls before it, want the run's 1", got)
 	}
 	first.Record("update", b)
-	if got := second.Ordinal(t.Context(), "update", a); got != 0 {
+	if got := second.Ordinal("update", a); got != 0 {
 		t.Fatalf("a sibling's call reached another fork (count %d, want 0) — a "+
 			"count that depends on which sibling finished first is one a re-run "+
 			"does not reproduce", got)
 	}
-	if got := run.Ordinal(t.Context(), "update", a); got != 0 {
+	if got := run.Ordinal("update", a); got != 0 {
 		t.Fatalf("a fork's call reached the run before it was absorbed (count %d)", got)
 	}
 
 	run.Absorb(first)
 	run.Absorb(second)
-	if got := run.Ordinal(t.Context(), "update", a); got != 1 {
+	if got := run.Ordinal("update", a); got != 1 {
 		t.Fatalf("after the wave the run counts %d different calls before a "+
 			"repeat of its first, want the worker's 1 — the repeat would take "+
 			"the first copy's id with the worker's value in place", got)
+	}
+}
+
+// CALLS THAT RUN SIDE BY SIDE COUNT IN THE ORDER THEY WERE ADMITTED, whatever
+// order they return in: each counts the run's calls admitted before it and
+// none admitted after, so a re-run that makes the same calls in the same order
+// reproduces every count however its tools happen to finish.
+//
+// Mutation: hand back the run's own log rather than a fork, and the first
+// call counts the second, admitted after it; leave the record to the return,
+// and the run counts nothing before a fourth.
+func TestAdmittedCallsCountInTheOrderTheyArrived(t *testing.T) {
+	t.Parallel()
+	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
+	run := turnctx.NewCallLog()
+	first := run.Admit("update", a)
+	second := run.Admit("update", b)
+	third := run.Admit("update", a)
+	// Asked in the reverse of the admission order, as calls returning
+	// out of order would ask.
+	if got := third.Ordinal("update", a); got != 1 {
+		t.Fatalf("the third call counts %d different calls before it, want 1", got)
+	}
+	if got := second.Ordinal("update", b); got != 1 {
+		t.Fatalf("the second call counts %d different calls before it, want 1", got)
+	}
+	if got := first.Ordinal("update", a); got != 0 {
+		t.Fatalf("the first call counts %d, want 0: it saw a call admitted after it", got)
+	}
+	// Each is in the run's log from its admission, so a call admitted
+	// later counts all three without waiting for any to return.
+	if got := run.Ordinal("update", b); got != 2 {
+		t.Fatalf("the run counts %d calls before a fourth, want the two that differ", got)
+	}
+	// What a call recorded on its own fork reaches the run once absorbed.
+	second.Record("comment", b)
+	run.Absorb(second)
+	if got := run.Ordinal("comment", a); got != 1 {
+		t.Fatalf("a call's own fork was not absorbed (count %d, want 1)", got)
+	}
+	var none *turnctx.CallLog
+	if none.Admit("update", a) != nil {
+		t.Fatal("a nil log admitted a call")
 	}
 }
 
@@ -140,7 +183,7 @@ func TestANilLogCountsNothing(t *testing.T) {
 	var log *turnctx.CallLog
 	log.Record("update", map[string]any{"status": "done"})
 	log.Absorb(log.Fork())
-	if got := log.Ordinal(t.Context(), "update", map[string]any{"status": "todo"}); got != 0 {
+	if got := log.Ordinal("update", map[string]any{"status": "todo"}); got != 0 {
 		t.Fatalf("a nil log counted %d", got)
 	}
 	var turn *turnctx.Turn
@@ -160,37 +203,5 @@ func TestWithCallsDerivesATurn(t *testing.T) {
 	}
 	if child.RunID != parent.RunID || child.WorkKey != parent.WorkKey {
 		t.Fatal("the derived turn lost the run it belongs to")
-	}
-}
-
-// A CALL COUNTS FROM ITS OWN PLACE IN THE LOG, taken as it is made: the calls
-// reserved before it, finished or not, and none reserved after it — and a
-// place in one log says nothing about another, so a worker's fork reading its
-// parent call's context counts its own log whole.
-func TestACallCountsFromThePlaceItReserved(t *testing.T) {
-	t.Parallel()
-	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
-	log := turnctx.NewCallLog()
-	first := log.Reserve(t.Context(), "update", a)
-	inFlight := log.Reserve(t.Context(), "update", b)
-	again := log.Reserve(t.Context(), "update", a)
-
-	if got := log.Ordinal(first, "update", a); got != 0 {
-		t.Errorf("the first call counted %d calls after it", got)
-	}
-	if got := log.Ordinal(inFlight, "update", b); got != 1 {
-		t.Errorf("the in-flight call counted %d, want the one call before it and not the one after", got)
-	}
-	if got := log.Ordinal(again, "update", a); got != 1 {
-		t.Errorf("the call made again counted %d, want the in-flight different call before it", got)
-	}
-
-	fork := log.Fork()
-	if got := fork.Ordinal(again, "update", a); got != 1 {
-		t.Errorf("a fork read under its parent's place counted %d, want its whole log", got)
-	}
-	worker := fork.Reserve(again, "update", b)
-	if got := fork.Ordinal(worker, "update", b); got != 2 {
-		t.Errorf("a worker's call counted %d, want every differing call of the log it forked", got)
 	}
 }

@@ -57,6 +57,8 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
 };
 
 let sent: { tool: string; body: { request_id: string; args: Record<string, unknown> } }[];

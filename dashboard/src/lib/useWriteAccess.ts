@@ -472,9 +472,18 @@ export function orgWriteAccess(
 
 /** [orgWriteAccess] for the person reading, now. */
 export function useOrgWriteAccess(target: OrgTarget): ConfigWriteAccess {
+  return useOrgWriteAccessFor()(target);
+}
+
+/**
+ * [orgWriteAccess] for the person reading, now, for a target named later: a
+ * gate that learns what it is about from a payload (an assistant's prepared
+ * ceiling) rather than from the component it is drawn in.
+ */
+export function useOrgWriteAccessFor(): (target: OrgTarget) => ConfigWriteAccess {
   const viewer = useViewer();
   const link = linkOf(useConnection());
   const held = useContext(Held);
   const scope = useLeadScope();
-  return orgWriteAccess(viewer, link, scope, target, held);
+  return (target) => orgWriteAccess(viewer, link, scope, target, held);
 }

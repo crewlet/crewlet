@@ -103,7 +103,7 @@ func newBudgetedTurn(t *testing.T, dayCeiling, auxTokens int) *budgetedTurn {
 	models := runnable(t, []phase.Entry{
 		{Key: "main", Provider: r.executor}, {Key: "cheap", Provider: r.auxiliary},
 	}, seat)
-	r.e = &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet}}
+	r.e = withSessions(t, &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet}})
 	r.e.epoch.current.Store(&Company{
 		Org: r.org, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{

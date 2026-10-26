@@ -103,6 +103,37 @@ func TestAnUnboundBridgeSessionFilesNothing(t *testing.T) {
 	}
 }
 
+// A BRIDGED CALL'S ROW SAYS WHEN IT RAN, FOR HOW LONG, IN WHAT ORDER AND WHO
+// ANSWERED — everything the bridge measured, in the row's own shape, so a
+// resumed executor's record can place its calls on a timeline, in the order
+// the run made them, and name the server each came from — read off the row,
+// which is the only place a collection, often another process, can read them.
+//
+// Mutation: drop any of the five from the append, and this goes red.
+func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
+	t.Parallel()
+	store := &appendingStore{}
+	l := newBridgeLedger(store, nil)
+	l.bind("launch-1")
+	started := time.Date(2026, 10, 25, 9, 30, 0, 0, time.UTC)
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{
+		Call: tools.Call{Name: "list_issues", Args: map[string]any{"repo": "core"}, Output: "[]"},
+		Seq:  4, StartedAt: started, Duration: 1500 * time.Millisecond,
+		Origin: "mcp", Server: "github",
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if len(store.appends) != 1 {
+		t.Fatalf("%d appends, want 1", len(store.appends))
+	}
+	got := store.appends[0].Call
+	want := sandbox.BridgeCall{Name: "list_issues", Args: `{"repo":"core"}`, Output: "[]",
+		Seq: 4, StartedAt: started, DurationMS: 1500, Origin: "mcp", Server: "github"}
+	if got != want {
+		t.Errorf("the row is %+v, want %+v", got, want)
+	}
+}
+
 // A SESSION WITH NO METER SENDS NO SPEND, and a call its job no longer takes
 // is not an error to the box: the store's "not recorded" is the ordinary end
 // of a job.
@@ -120,37 +151,5 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 		if a.Spent != (sandbox.EngineSpend{}) {
 			t.Errorf("append %d carried spend %+v from a session with no meter", i+1, a.Spent)
 		}
-	}
-}
-
-// THE BRIDGE'S MEASUREMENT REACHES THE ROW. The session times each call and
-// names who answered it, and the row is the only place a collection — often
-// another process — can read either from: the executor's record places the
-// run's calls on its timeline by them.
-//
-// Mutation: drop the start, the duration, the origin or the server from the
-// append, and this goes red.
-func TestABridgedCallsMeasurementIsFiledWithIt(t *testing.T) {
-	t.Parallel()
-	store := &appendingStore{}
-	l := newBridgeLedger(store, nil)
-	l.bind("launch-1")
-	at := time.Date(2026, 6, 15, 12, 1, 2, 0, time.UTC)
-	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{
-		Call:      tools.Call{Name: "jira_search"},
-		StartedAt: at, Duration: 2345 * time.Millisecond,
-		Origin: "mcp:jira", Server: "jira",
-	}); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if len(store.appends) != 1 {
-		t.Fatalf("%d appends, want 1", len(store.appends))
-	}
-	got := store.appends[0].Call
-	if !got.StartedAt.Equal(at) || got.DurationMS != 2345 {
-		t.Errorf("filed start %s and %d ms, want %s and 2345", got.StartedAt, got.DurationMS, at)
-	}
-	if got.Origin != "mcp:jira" || got.Server != "jira" {
-		t.Errorf("filed origin %q and server %q, want mcp:jira and jira", got.Origin, got.Server)
 	}
 }

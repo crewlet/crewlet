@@ -100,12 +100,30 @@ roles:
     llm: main
 `
 
+// A NODE WITH NO BRIDGE AT ALL REFUSES AN EXECUTOR, naming the fleet's
+// address, and opens nothing: a box with none of the seat's tools would burn
+// its run producing prose nothing collects.
+func TestAnExecutorIsRefusedOnANodeWithNoBridge(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	e, jobs := launchRig(t, c, hostOnlyBridge(t))
+	e.bridge = nil
+	l := launcherOn(e, c, seat, "t1")
+	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	if err == nil || !strings.Contains(err.Error(), mcpbridge.BaseURLVar) {
+		t.Fatalf("a launch on a node with no bridge = %v, want it refused naming %s",
+			err, mcpbridge.BaseURLVar)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+}
+
 // AN UNREACHABLE CELL IS SAID ONCE, AT APPLY, PER CELL. Every launch in it is
 // refused naming the same fix, and the line that says so before the first turn
 // is the one an operator needs — so each cell the company's executors launch
-// in is weighed against the bridge this node built: none where it binds no
-// listener, a direct cell on the node's own listener, any other cell on the
-// variable alone. A fallback member's cell is a cell a launch reaches too.
+// in is weighed against the fleet's reach rule: nothing where this node serves
+// the API on no listener, the fleet's address alone where it has no bridge, a
+// direct cell on the node's own listener, any other cell on the variable
+// alone. A fallback member's cell is a cell a launch reaches too.
 //
 // Mutation: weigh only the catalogue's default and the e2b row is never said;
 // give every cell the host address and the e2b row reads as reachable.
@@ -120,26 +138,33 @@ func TestEveryCellAnExecutorCannotReachIsSaidOnceAtApply(t *testing.T) {
 		BaseURL: "https://engine.example.com",
 	})
 	for name, tc := range map[string]struct {
-		listens bool
+		offline bool
 		bridge  *mcpbridge.Bridge
 		want    map[config.Placement]string
 	}{
-		"a node that binds no listener": {
-			listens: false, bridge: nil,
+		"an ingress node on api.port 0, the variable set": {
+			offline: true, bridge: bridgeFor(t, mcpbridge.Options{
+				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+			}),
 			want: map[config.Placement]string{config.PlacementDirect: "api.port",
 				config.PlacementE2B: "api.port"},
 		},
+		"a node with no bridge": {
+			bridge: nil,
+			want: map[config.Placement]string{config.PlacementDirect: mcpbridge.BaseURLVar,
+				config.PlacementE2B: mcpbridge.BaseURLVar},
+		},
 		"its own listener alone": {
-			listens: true, bridge: hostOnlyBridge(t),
-			want: map[config.Placement]string{config.PlacementE2B: mcpbridge.BaseURLVar},
+			bridge: hostOnlyBridge(t),
+			want:   map[config.Placement]string{config.PlacementE2B: mcpbridge.BaseURLVar},
 		},
 		"its own listener and the variable": {
-			listens: true, bridge: both, want: map[config.Placement]string{},
+			bridge: both, want: map[config.Placement]string{},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			gaps := bridgeGaps(cfg, tc.listens, tc.bridge)
+			gaps := bridgeGaps(cfg, tc.offline, tc.bridge)
 			got := map[config.Placement]string{}
 			for _, gap := range gaps {
 				if _, twice := got[gap.cell]; twice {

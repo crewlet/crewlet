@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -28,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -81,7 +84,7 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	// whose every request is refused.
 	ring := fleetRing(t)
 	dataLn := bridgeListener(t, "")
-	data, dataBoot := bootDataMember(t, cfg, model, env, hostBridgeURL(dataLn), ring)
+	data, dataBoot := bootDataMember(t, cfg, model, env, dataLn, ring)
 	data.app, data.server = serveAPI(t, data.engine, dataBoot, dataLn, nil)
 	port := dataBoot.Stream.Leaf.Port
 
@@ -94,26 +97,18 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
 	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
 	ring.hold(&agentBoot)
-	agentLn := bridgeListener(t, "")
-	agent := bootNode(t, &agentBoot, cfg, model, env, hostBridgeURL(agentLn))
-	serveBridge(t, agent, &agentBoot, agentLn)
-	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
-}
-
-// serveBridge serves a node's tool bridge alone on ln, as `crewlet run` binds
-// a seats node without the ingress role ([api.BridgeOnly]): the seat runs
-// here, so its executor's box calls its tools back on this node and no other.
-func serveBridge(t *testing.T, n *node, boot *config.Bootstrap, ln net.Listener) {
-	t.Helper()
-	handler := api.BridgeOnly(boot, n.engine.Bridge())
-	if handler == nil {
-		t.Fatalf("node %s built no tool bridge to serve", n.id)
+	// THE FLEET'S BRIDGE ADDRESS FOR THE SEATS NODE, which serves no route of
+	// its own: a node without the ingress role binds nothing a box could
+	// dial, so its executor's box dials the data node — the one serving the
+	// API — and that node relays each call to this one, which holds the seat
+	// (internal/api/mcpbridge).
+	agentEnv := maps.Clone(env)
+	if agentEnv == nil {
+		agentEnv = map[string]string{}
 	}
-	srv := httptest.NewUnstartedServer(handler)
-	_ = srv.Listener.Close()
-	srv.Listener = ln
-	srv.Start()
-	t.Cleanup(srv.Close)
+	agentEnv[mcpbridge.BaseURLVar] = hostBridgeURL(dataLn)
+	agent := bootNode(t, &agentBoot, cfg, model, agentEnv, "")
+	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
 }
 
 // dataMemberBootstrap is the pair's data member: a node holding the data, with
@@ -126,7 +121,7 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 	withCredential(t, &boot)
 	boot.Node.ID = "data-a"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 	boot.Stream.Leaf.Host, boot.Stream.Leaf.Port = "127.0.0.1", port
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
 	return &boot
@@ -147,12 +142,20 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 // help and a different number does. Any other failure ends the case — the
 // route listener's [jetstream.ErrRoutePortTaken] among them, since this member
 // is no cluster's and opens no route listener to lose.
+//
+// THE API IS SERVED ON ln, and the member's api.port names it: the member is
+// the pair's one node with the ingress role, so it is the address the seats
+// node's executor box dials, and an ingress node whose api.port is 0 serves
+// nothing and joins no relay (internal/engine's joinBridgeFleet) — the box's
+// every call would reach a node that cannot hand it to the seat's holder.
 func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
-	env map[string]string, bridge string, ring keyring) (*node, *config.Bootstrap) {
+	env map[string]string, ln net.Listener, ring keyring) (*node, *config.Bootstrap) {
 	t.Helper()
 	for attempt := 1; ; attempt++ {
 		boot := dataMemberBootstrap(t, leafPort(t), ring)
-		n, err := newNode(t, nodeOptions(boot, cfg, env, bridge), model)
+		boot.API.Port = ln.Addr().(*net.TCPAddr).Port
+		boot.API.ExternalURL = hostBridgeURL(ln)
+		n, err := newNode(t, nodeOptions(boot, cfg, env, hostBridgeURL(ln)), model)
 		switch {
 		case err == nil:
 			return n, boot
@@ -542,7 +545,7 @@ func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 			boot.Node.ID = "probed"
 			boot.Node.Roles = tc.roles
 			boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-			boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 			boot.Coordination.Type = config.CoordinationEmbeddedKV
 			withKeyring(t, &boot)
 			n := bootNodeWith(t, engine.Options{

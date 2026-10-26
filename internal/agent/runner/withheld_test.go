@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // THE WITHHELD FINISHING CORRECTIVE, on the one engine-driven phase whose
@@ -28,14 +29,14 @@ func (j *countingJudge) Decide(context.Context, extension.Request) (extension.De
 }
 
 // working is a round that works: one call that is not the finishing one.
-func working(t *testing.T) llm.Completion {
+func working(t *testing.T) llmtest.Response {
 	t.Helper()
 	return persist(t, "a", "reading")
 }
 
 // declining is a round that answers in prose where the pass had to end in its
 // finishing call.
-func declining() llm.Completion { return text("I have read everything I need.") }
+func declining() llmtest.Response { return text("I have read everything I need.") }
 
 // finishingCorrectivesIn counts the finishing correctives one request carries.
 func finishingCorrectivesIn(req llm.Request) int {
@@ -64,7 +65,7 @@ func passed(t *testing.T, r *runner.Runner, pub *capture) *types.AgentPhaseCompl
 // the work is done and only the call reporting it is missing.
 func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		working(t), declining(), markDone(t, "done"),
 	}}
 	pub := newCapture()
@@ -74,11 +75,16 @@ func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T)
 	if done.Decision != "done" {
 		t.Fatalf("decision = %q, want the pass that marked", done.Decision)
 	}
-	reqs := prov.requestsFor("onboarding")
-	if len(reqs) != 3 {
-		t.Fatalf("the pass was asked %d times, want 3", len(reqs))
+	if got := prov.roundsOf("onboarding"); got != 3 {
+		t.Fatalf("the pass was asked %d times, want 3", got)
 	}
-	if last := reqs[2].Messages[len(reqs[2].Messages)-1]; !isFinishingCorrective(last, runner.MarkOnboardedTool) {
+	// Round 3 is a CLI run of its own — the one the declined round ended, the
+	// corrective it was owed opening the next.
+	reqs := prov.requestsFor("onboarding")
+	if len(reqs) != 2 {
+		t.Fatalf("the pass took %d CLI runs, want the declined one and the corrected one", len(reqs))
+	}
+	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.MarkOnboardedTool) {
 		t.Errorf("round 3 opened on %q, want the withheld finishing corrective", last.Content)
 	}
 	if n := judge.calls.Load(); n != 0 {
@@ -93,7 +99,7 @@ func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T)
 // nudge sends a phase to finish — and so where a decline is likeliest.
 func TestADeclineOnTheLastRoundOfAnExtensionIsAskedAgain(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		working(t), working(t), // the budget, exhausted: the judge grants 4
 		working(t), working(t), working(t), declining(),
 		markDone(t, "done"),
@@ -105,7 +111,7 @@ func TestADeclineOnTheLastRoundOfAnExtensionIsAskedAgain(t *testing.T) {
 	if done.Decision != "done" {
 		t.Fatalf("decision = %q, want the pass that marked", done.Decision)
 	}
-	if got := len(prov.requestsFor("onboarding")); got != 7 {
+	if got := prov.roundsOf("onboarding"); got != 7 {
 		t.Errorf("the pass was asked %d times, want 7", got)
 	}
 	if n := judge.calls.Load(); n != 1 {
@@ -124,7 +130,7 @@ func TestADeclineOnTheLastRoundEndsThePassWhereTheCapIsHard(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			prov := &scriptedProvider{onboarding: []llm.Completion{
+			prov := &scriptedProvider{onboarding: []llmtest.Response{
 				working(t), declining(), markDone(t, "done"),
 			}}
 			pub := newCapture()
@@ -132,7 +138,7 @@ func TestADeclineOnTheLastRoundEndsThePassWhereTheCapIsHard(t *testing.T) {
 			if done.Decision == "done" {
 				t.Error("the pass ran past a hard cap to mark")
 			}
-			if got := len(prov.requestsFor("onboarding")); got != 2 {
+			if got := prov.roundsOf("onboarding"); got != 2 {
 				t.Errorf("the pass was asked %d times, want 2", got)
 			}
 		})
@@ -144,7 +150,7 @@ func TestADeclineOnTheLastRoundEndsThePassWhereTheCapIsHard(t *testing.T) {
 // past it: two in all, exactly as if the budget had been one round longer.
 func TestAContinuationSharesTheFinishingAllowance(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		declining(), declining(), declining(), declining(),
 	}}
 	pub := newCapture()
@@ -168,7 +174,7 @@ func TestAContinuationSharesTheFinishingAllowance(t *testing.T) {
 // deserves more.
 func TestAContinuationThatGoesBackToWorkIsTheJudgesQuestion(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		declining(), declining(), // one corrective inside the budget
 		working(t),          // the one round past it, spent working
 		markDone(t, "done"), // in the window the judge granted
@@ -191,7 +197,7 @@ func TestAContinuationThatGoesBackToWorkIsTheJudgesQuestion(t *testing.T) {
 // budget without the judge are capped at that same allowance.
 func TestRoundsPastTheBudgetWithoutTheJudgeAreBounded(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		working(t), declining(), // the budget: declines on its last round
 		working(t), declining(), // two rounds past it: works, declines again
 		markDone(t, "done"),
@@ -202,7 +208,7 @@ func TestRoundsPastTheBudgetWithoutTheJudgeAreBounded(t *testing.T) {
 	if done.Decision == "done" {
 		t.Error("the pass ran past its budget a second time without the judge")
 	}
-	if got := len(prov.requestsFor("onboarding")); got != 4 {
+	if got := prov.roundsOf("onboarding"); got != 4 {
 		t.Errorf("the pass was asked %d times, want 4", got)
 	}
 	if n := judge.calls.Load(); n != 0 {
@@ -217,7 +223,7 @@ func TestRoundsPastTheBudgetWithoutTheJudgeAreBounded(t *testing.T) {
 // priced rounds after the finishing call.
 func TestAFinishingCallOnTheLastRoundIsNotExhaustion(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llm.Completion{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
 		working(t), markDone(t, "done"), text("anything further is a wasted round"),
 	}}
 	pub := newCapture()
@@ -226,7 +232,7 @@ func TestAFinishingCallOnTheLastRoundIsNotExhaustion(t *testing.T) {
 	if done.Decision != "done" || done.ExhaustedRounds {
 		t.Errorf("decision = %q exhausted = %v, want a finished phase", done.Decision, done.ExhaustedRounds)
 	}
-	if got := len(prov.requestsFor("onboarding")); got != 2 {
+	if got := prov.roundsOf("onboarding"); got != 2 {
 		t.Errorf("the pass was asked %d times, want 2", got)
 	}
 	if n := judge.calls.Load(); n != 0 {

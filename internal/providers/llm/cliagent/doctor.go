@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // probeTimeout caps a version or status probe.
@@ -27,9 +29,9 @@ const probeTimeout = 10 * time.Second
 
 // smokePrompt is what the smoke test asks for. Short, unambiguous, and
 // answerable with one tool call — a profile can look perfect and still not
-// produce a parseable tool call, which is the whole reason the smoke test
-// runs a real one rather than just a completion.
-const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with only the JSON block."
+// hand its CLI the seat's tools, which is the whole reason the smoke test runs
+// a real call rather than just a completion.
+const smokePrompt = "Call the " + smokeTool + " tool with ok set to true, then reply with only: done"
 
 // The two isolation probes.
 //
@@ -38,13 +40,36 @@ const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with
 // by the shell, or from a public endpoint by the browser. A model asked to
 // echo a fixed token can simply write the token; a model asked for the time
 // has no way to be within a couple of minutes of it except by actually
-// running the tool. Each is sent with no tools of Crewlet's own, so no
-// envelope contract is rendered and the reply is plain prose.
+// running the tool. Each is sent with no tools of Crewlet's own, so the CLI's
+// own tools are the only ones it has and the reply is plain prose.
+
+// THE NO-TOOL ANSWER COMES FIRST, AND A CALL WRITTEN AS TEXT IS RULED OUT. A
+// prompt that opened "Using your shell tool, run ..." on a CLI given no tools
+// at all (Claude Code 2.1.310 under `--tools ""`, Sonnet) was answered with a
+// tool call typed out as prose (`<invoke name="Bash">...`), measured: no
+// command ran, and a model that goes on to write the call's output and the
+// next step as prose kept the probe running to the entry's whole timeout
+// before the doctor could read a refusal. Asked which case it is in first,
+// the model answers the refusal at once, and a model that has the tool still
+// runs it, which is the finding the probe exists for.
 
 // shellProbePrompt asks the CLI to run a command on the engine host.
-const shellProbePrompt = "Using your shell or command-execution tool, run exactly this " +
-	"command and reply with only its output, nothing else: date +%s\n" +
-	"If you have no tool that can run commands, reply with only: " + noLocalToolsReply
+const shellProbePrompt = "If you were given a tool that runs shell commands, use it to run " +
+	"exactly this command and reply with only its output, nothing else: date +%s\n" +
+	"If you were given no such tool, reply with only: " + noLocalToolsReply + "\n" +
+	noProseCall
+
+// fileProbePrompt asks the CLI to read a file on the engine host, the path
+// substituted for %s. The file holds a value minted for the one run, so a
+// model can echo it only by reading it.
+const fileProbePrompt = "If you were given a tool that reads files, use it to read the file " +
+	"at %s and reply with only its contents, nothing else.\n" +
+	"If you were given no such tool, reply with only: " + noLocalToolsReply + "\n" +
+	noProseCall
+
+// noProseCall is the line every isolation probe ends on: a tool is called or
+// the refusal is given, never a call written out as text.
+const noProseCall = "Never write a tool call, or what a tool would return, as text."
 
 // noLocalToolsReply is what a CLI whose shell is denied is asked to say.
 const noLocalToolsReply = "NO-LOCAL-TOOLS"
@@ -57,10 +82,11 @@ const noLocalToolsReply = "NO-LOCAL-TOOLS"
 const webProbeURL = "https://www.cloudflare.com/cdn-cgi/trace"
 
 // webProbePrompt asks the CLI to fetch the URL with its own browser.
-const webProbePrompt = "Using your web fetch tool, fetch " + webProbeURL + " and reply with " +
-	"only the value after ts= on the line that starts with ts=, nothing else.\n" +
-	"If you have no tool that can fetch a URL, or the fetch fails, reply with only: " +
-	noWebReply
+const webProbePrompt = "If you were given a tool that fetches URLs, use it to fetch " +
+	webProbeURL + " and reply with only the value after ts= on the line that starts with " +
+	"ts=, nothing else.\n" +
+	"If you were given no such tool, or the fetch fails, reply with only: " + noWebReply + "\n" +
+	noProseCall
 
 // noWebReply is what a CLI with no reachable web tool is asked to say.
 const noWebReply = "NO-WEB"
@@ -114,7 +140,9 @@ type Diagnosis struct {
 	// LocalTools is the profile's stance on the CLI's own shell and file
 	// tools, beside what the shell probe measured.
 	LocalTools string
-	// Web is whether the CLI's own fetch tool reached the web, measured.
+	// Web is the entry's web stance beside whether the CLI's own fetch tool
+	// reached the web, measured. On a denied entry a fetch that succeeded is
+	// a problem, as a shell that ran is on a profile denying local tools.
 	Web string
 
 	// Executor is what an entry a seat's EXECUTOR can launch on needs beyond
@@ -140,7 +168,7 @@ type DiagnoseOptions struct {
 
 	// ExecutorSeats are the agent seats whose executor chain holds this
 	// entry, as the company resolves them. Empty means no seat's executor
-	// can launch here, and the entry serves text calls only.
+	// can launch here, and the entry serves the phases on this host only.
 	ExecutorSeats []string
 
 	// AgentRunners are the in-box coding-agent runner names this build has.
@@ -148,13 +176,14 @@ type DiagnoseOptions struct {
 	AgentRunners []string
 
 	// Cell is the cell a run launched on this entry is placed in — its own
-	// run_in, else the company's default_run_in. A `direct` box dials the
-	// node's own listener on loopback; a box in any other cell dials
-	// BridgeURL alone.
+	// run_in, else the company's default_run_in. A `direct` box on a node
+	// that serves the API dials the node's own listener on loopback; every
+	// other box dials BridgeURL.
 	Cell string
 
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
-	// means a launch whose box is not on the node's host is refused.
+	// means a launch whose box cannot dial a listener of its own node's is
+	// refused.
 	BridgeURL string
 }
 
@@ -254,28 +283,36 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	answered := false
 
 	stance := p.localToolsStance()
+	web := p.webStance()
 	switch {
 	case !smoke:
 		d.Smoke = "skipped (-no-smoke)"
-		d.LocalTools = stance + " — probe skipped (-no-smoke)"
-		d.Web = "probe skipped (-no-smoke)"
+		d.LocalTools = stance + "; probe skipped (-no-smoke)"
+		d.Web = web + "; probe skipped (-no-smoke)"
 	case d.BinaryPath == "not on PATH":
-		d.Smoke = "skipped — no binary to run"
-		d.LocalTools = stance + " — probe skipped, no binary to run"
-		d.Web = "probe skipped — no binary to run"
+		d.Smoke = "skipped: no binary to run"
+		d.LocalTools = stance + "; probe skipped, no binary to run"
+		d.Web = web + "; probe skipped, no binary to run"
 	default:
 		d.Smoke, answered = p.smokeTest(ctx)
 		if strings.HasPrefix(d.Smoke, "failed") {
 			d.Problems = append(d.Problems, d.Smoke)
 		}
 		verdict, problem := p.shellProbe(ctx)
-		d.LocalTools = stance + " — " + verdict
+		if verdict == refusedVerdict {
+			// A refused shell is half the stance: the file tools read
+			// the host as well as a shell does, and the deny list that
+			// refused one says nothing about the other.
+			verdict, problem = p.fileProbe(ctx)
+		}
+		d.LocalTools = stance + "; " + verdict
 		if problem != "" {
 			d.Problems = append(d.Problems, problem)
 		}
-		d.Web = p.webProbe(ctx)
-		if strings.HasPrefix(d.Web, "failed") {
-			d.Problems = append(d.Problems, d.Web)
+		verdict, problem = p.webProbe(ctx)
+		d.Web = web + "; " + verdict
+		if problem != "" {
+			d.Problems = append(d.Problems, problem)
 		}
 	}
 
@@ -414,11 +451,11 @@ func (p *Provider) keyRemedy() string {
 // A NON-RUNNER MEMBER IS A LINE, NOT A PROBLEM. The company refuses an agent
 // seat whose executor chain holds no runner at all, so a CLI without one sits
 // in a chain beside one that has it — skipped at launch, and still the seat's
-// model for every text call the chain serves. Faulting it would make `doctor`
+// model for every phase on this host the chain serves. Faulting it would make `doctor`
 // red on a configuration the engine runs.
 //
-// AN ENTRY NO EXECUTOR CHAIN HOLDS REPORTS NOTHING HERE: it serves text calls
-// as a subprocess of this engine and needs neither.
+// AN ENTRY NO EXECUTOR CHAIN HOLDS REPORTS NOTHING HERE: it serves the phases
+// on this host, as a subprocess of this engine, and needs neither.
 func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 	if len(opts.ExecutorSeats) == 0 {
 		return nil, nil
@@ -427,21 +464,26 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 	if !slices.Contains(opts.AgentRunners, p.agent) {
 		lines = append(lines, fmt.Sprintf(
 			"runner: none for %q — skipped at launch (runners: %s); serves "+
-				"those seats' text calls only",
+				"those seats' phases on this host only",
 			p.agent, strings.Join(opts.AgentRunners, ", ")))
 		return lines, nil
 	}
 	lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
 	switch {
 	case opts.Cell == directCell:
-		// ON THE HOST, so the node's own listener is the address, derived
-		// by the node that binds it: the variable is not needed, and a
-		// report calling it missing would send an operator to set what the
-		// quickstart never asks for. What the box does need — a listener —
-		// is the node's Tier A, which this command does not read; a node
-		// with none says so itself at start (`api.port`).
-		lines = append(lines, "tool bridge: this node's own listener, on loopback "+
-			"(a direct box; the node needs api.port)")
+		// ON THE HOST, so on a node that serves the bridge route itself —
+		// the ingress role and a listener — the node's own listener is the
+		// address, derived by the node that binds it: the variable is not
+		// needed there, and a report calling it missing would send an
+		// operator to set what the quickstart never asks for. Whether this
+		// node is one is its Tier A, which this command does not read; a
+		// seats node that is not says so itself at apply.
+		via := "a node without the ingress role dials " + bridgeURLVar
+		if url := strings.TrimSpace(opts.BridgeURL); url != "" {
+			via = "a node without the ingress role dials " + url
+		}
+		lines = append(lines, "tool bridge: this node's own listener, on loopback, "+
+			"where the node serves the API (the ingress role and api.port); "+via)
 	case strings.TrimSpace(opts.BridgeURL) != "":
 		lines = append(lines, "tool bridge: "+opts.BridgeURL)
 	default:
@@ -496,7 +538,7 @@ func (p *Provider) localToolsStance() string {
 func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 	comp, err := p.Complete(ctx, probeRequest(shellProbePrompt))
 	if err != nil {
-		return "probe failed — " + err.Error(), ""
+		return "probe failed: " + err.Error(), ""
 	}
 	ran := reportsCurrentClock(comp.Content, time.Now())
 	switch {
@@ -513,40 +555,110 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 				"a host you would hand an autonomous agent, or prefer a backend whose "+
 				"profile denies local tools", p.agent, orNone(p.profile.LocalToolsNote))
 	default:
-		return "probe: refused", ""
+		return refusedVerdict, ""
 	}
 }
 
+// refusedVerdict is a probe that found its tool refused.
+const refusedVerdict = "probe: refused"
+
+// fileProbe asks the CLI to read a file the doctor has just written on the
+// engine host, outside the seat's home, and reports whether it did, on the
+// argv the entry runs every call on. The second
+// return is the problem line, empty when there is none.
+func (p *Provider) fileProbe(ctx context.Context) (verdict, problem string) {
+	dir, err := os.MkdirTemp("", "crewlet-file-probe-")
+	if err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			log.WarnContext(ctx, "cli_agent_file_probe_cleanup_failed", "dir", dir, "error", rmErr)
+		}
+	}()
+	token := "crewlet-file-probe-" + newSessionID()
+	path := filepath.Join(dir, "probe.txt")
+	if writeErr := os.WriteFile(path, []byte(token+"\n"), 0o600); writeErr != nil {
+		return "file probe failed: " + writeErr.Error(), ""
+	}
+	comp, err := p.Complete(ctx, probeRequest(fmt.Sprintf(fileProbePrompt, path)))
+	if err != nil {
+		return "file probe failed: " + err.Error(), ""
+	}
+	if !strings.Contains(comp.Content, token) {
+		return refusedVerdict + " (shell and file read)", ""
+	}
+	if p.profile.LocalTools == cliprofile.LocalToolsDenied {
+		return "probe: FILE READ", fmt.Sprintf(
+			"the %q profile says local tools are denied, but the CLI read a file the doctor "+
+				"wrote on the engine host, outside its seat home: its file tools are not "+
+				"off on this build (%s), so it can read the engine's own data; check "+
+				"overrides against the installed version before running seats or the "+
+				"assistant on it", p.agent, orNone(p.profile.WrittenFor))
+	}
+	return "probe: FILE READ", fmt.Sprintf(
+		"the %q CLI reads files on the engine host as the engine user (%s): it can read "+
+			"the engine's own data. Run seats on it only on a host you would hand an "+
+			"autonomous agent", p.agent, orNone(p.profile.LocalToolsNote))
+}
+
+// webStance renders the entry's declared web stance.
+func (p *Provider) webStance() string {
+	if p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied {
+		return "denied by entry (" + orNone(p.profile.WebToolsNote) + ")"
+	}
+	return "allowed"
+}
+
 // webProbe asks the CLI to fetch a URL with its own browser and reports
-// whether it did.
+// whether it did. The second return is the problem line, empty when there is
+// none.
 //
-// Web is the one local tool a profile keeps ON, so a CLI that cannot reach
-// it is a problem: the seat has less reach than the same CLI at a terminal,
-// and the cause is usually a vendor sandbox flag that also cut the network,
-// or an egress proxy the child environment was not told about.
-func (p *Provider) webProbe(ctx context.Context) string {
+// WHICH ANSWER IS THE PROBLEM DEPENDS ON THE STANCE, and the verdict is
+// measured either way rather than inferred from the profile. On an entry that
+// keeps web on, a CLI that cannot reach it is the problem: the seat has less
+// reach than the same CLI at a terminal, and the cause is usually a vendor
+// sandbox flag that also cut the network, or an egress proxy the child
+// environment was not told about. On an entry that DENIES web (the one an
+// assistant runs on), a CLI that fetched is the problem, and the worse one:
+// the denial is a claim the assistant is admitted on, and a vendor that
+// renamed a flag would leave the model fetching under a configuration that
+// says it cannot.
+func (p *Provider) webProbe(ctx context.Context) (verdict, problem string) {
+	denied := p.profile.EffectiveWebTools() == cliprofile.WebToolsDenied
 	comp, err := p.Complete(ctx, probeRequest(webProbePrompt))
 	if err != nil {
-		return "failed — " + err.Error()
+		return "probe failed: " + err.Error(), "the web probe failed: " + err.Error()
 	}
-	if reportsCurrentClock(comp.Content, time.Now()) {
-		return "ok — fetched " + webProbeURL
-	}
-	// Same split as smokeTest, and for the same reason: an empty answer is
-	// a completion now, so "it said: \"\"" would send an operator to the
-	// egress proxy for a model that never spoke.
-	if strings.TrimSpace(comp.Content) == "" {
-		return fmt.Sprintf(
-			"failed — the %q CLI exited 0 and answered with nothing (%d output tokens "+
-				"billed), so this probe says nothing about web access either way. "+
-				"Point this entry at a stronger model and run the doctor again",
+	fetched := reportsCurrentClock(comp.Content, time.Now())
+	switch {
+	case fetched && denied:
+		return "probe: FETCHED " + webProbeURL, fmt.Sprintf(
+			"the entry denies the %q CLI its web tools, but the CLI fetched %s with "+
+				"its own web tool: the profile's web_denial is not taking effect on "+
+				"this build (%s); check overrides.web_denial against the installed "+
+				"version before an assistant runs on this entry",
+			p.agent, webProbeURL, orNone(p.profile.WrittenFor))
+	case fetched:
+		return "ok: fetched " + webProbeURL, ""
+	case strings.TrimSpace(comp.Content) == "":
+		// Same split as smokeTest, and for the same reason: an empty
+		// answer is a completion now, so "it said: \"\"" would send an
+		// operator to the egress proxy, or past a denial that may not
+		// hold, for a model that never spoke.
+		return "probe inconclusive", fmt.Sprintf(
+			"the web probe is inconclusive: the %q CLI exited 0 and answered with "+
+				"nothing (%d output tokens billed), so it says nothing about web access "+
+				"either way. Point this entry at a stronger model and run the doctor again",
 			p.agent, comp.OutputTokens)
+	case denied:
+		return "probe: refused", ""
 	}
 	// WHAT IT SAID, WHOLE: the reader is an operator deciding what to fix,
 	// and a refusal's reason — a sandbox flag, a proxy's answer — is rarely
 	// in its first hundred and twenty bytes, which is where this used to stop.
-	return fmt.Sprintf(
-		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
+	return "failed", fmt.Sprintf(
+		"the %q CLI could not fetch %s with its own web tool (it said: %q). "+
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
 			"environment (env / passthrough_env)",
@@ -616,53 +728,71 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])
 }
 
-// smokeTest runs a REAL completion with a REAL tool.
+// smokeTest runs a REAL completion with a REAL tool, served the way a seat's
+// are.
 //
 // The command that matters, and the reason it is not merely a version probe:
 // a profile can look perfect — binary present, login present, flags accepted
-// — and still not produce a parseable tool call, because the envelope
-// contract is a request to a model rather than a schema the vendor enforces.
-// That failure only shows up on the first turn of a real seat otherwise.
+// — and still not hand its CLI the seat's tools, because how a CLI is told of
+// an MCP server, which of its tools it lets the model call, and how it records
+// its requests all move with every vendor release. That failure only shows up
+// on the first turn of a real seat otherwise.
 //
-// THE PRODUCTION SHAPE, and nothing stronger: tools offered, no call forced,
-// and the instruction naming the tool in the conversation — which is exactly
-// what a phase that finishes by a call sends, its corrective round included.
-// It used to force a call, which rendered the envelope's "you MUST request a
-// tool call" contract that no phase ever receives; a CLI that only called a
-// tool when told it must would have passed here and failed every seat.
+// THE PRODUCTION ROUTE, end to end: one tool, `crewlet_smoke`, on a real
+// session server this command opens for itself ([toolsession.NewHost]); the
+// profile's tool route renders the CLI's server configuration; the CLI starts
+// this binary as the relay, lists the tool and — asked the way a phase asks,
+// the instruction naming the tool and nothing forcing it — calls it. It passes
+// when the server recorded the call, and it says how the call was joined to
+// the CLI's record and which tools the CLI offered its model, which is where a
+// confinement that stopped holding shows first.
 //
 // answered reports whether the model replied at all, however badly: a reply
 // is proof the CLI reached its model signed in, which the doctor needs apart
 // from whether the reply was usable.
 func (p *Provider) smokeTest(ctx context.Context) (verdict string, answered bool) {
-	comp, err := p.Complete(ctx, smokeRequest())
+	if p.profile.MCP == nil {
+		// Asked plainly, so the doctor still learns whether the CLI is
+		// signed in; the missing route is the finding.
+		comp, err := p.Complete(ctx, probeRequest("Reply with only: ok"))
+		return fmt.Sprintf("failed — the %q profile has no mcp block, so a seat's phase on "+
+			"this entry cannot be handed its tools and is refused (text functions still run); "+
+			"declare providers.llm.%s.overrides.mcp", p.agent, p.key), err == nil && comp != nil
+	}
+	sessions, err := toolsession.NewHost()
 	if err != nil {
-		return "failed — " + err.Error(), false
+		return "failed — this process cannot serve a tool session: " + err.Error(), false
 	}
-	if len(comp.ToolCalls) == 0 {
-		// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of
-		// them. A CLI that answered with prose misread the envelope
-		// contract; a CLI that answered with NOTHING spent its output on
-		// hidden reasoning and needs a different model, not a different
-		// prompt. The provider hands both back as a completion now — an
-		// empty answer is a value, not an error — so this probe is the
-		// only command that names which one an operator has.
-		if strings.TrimSpace(comp.Content) == "" {
-			return fmt.Sprintf(
-				"failed — the CLI exited 0 and answered with nothing at all (%d output "+
-					"tokens billed), so it spent its whole answer on hidden reasoning. "+
-					"Every phase a seat runs on this provider will spend corrective rounds "+
-					"asking again and then end without its submission: point this entry "+
-					"at a stronger model",
-				comp.OutputTokens), true
-		}
+	defer func() { _ = sessions.Close() }()
+	host := newSmokeHost(sessions)
+	var offered []string
+	comp, err := p.Complete(withOffered(ctx, func(tools []string) { offered = tools }), smokeRequest(host))
+	if err != nil {
+		return "failed: " + err.Error(), false
+	}
+	if ok, called := host.verdict(offered, comp, p.profile.Requests != nil); called {
+		return ok, true
+	}
+	// TWO DIFFERENT FAILURES, and `It said: ""` describes only one of them. A
+	// CLI that answered with prose never called the tool it was offered; a CLI
+	// that answered with NOTHING spent its output on hidden reasoning and
+	// needs a different model, not a different prompt. The provider hands both
+	// back as a completion — an empty answer is a value, not an error — so
+	// this probe is the only command that names which one an operator has.
+	if strings.TrimSpace(comp.Content) == "" {
 		return fmt.Sprintf(
-			"failed — the CLI answered but produced no parseable tool call, so every phase "+
-				"a seat runs on this provider will spend a corrective round asking again, and "+
-				"end without its submission whenever the model never manages one. It said: %q",
-			strings.TrimSpace(comp.Content)), true
+			"failed — the CLI exited 0 and answered with nothing at all (%d output "+
+				"tokens billed), so it spent its whole answer on hidden reasoning. "+
+				"Every phase a seat runs on this provider will spend corrective rounds "+
+				"asking again and then end without its submission: point this entry "+
+				"at a stronger model",
+			comp.OutputTokens), true
 	}
-	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens), true
+	return fmt.Sprintf(
+		"failed — the CLI reached the seat's tools and answered without calling %s, so "+
+			"every phase a seat runs on this provider will spend a corrective round asking "+
+			"again, and end without its submission whenever the model never makes the call. "+
+			"It said: %q", smokeTool, strings.TrimSpace(comp.Content)), true
 }
 
 // probeSystemPrompt is the system prompt every probe carries.
@@ -702,18 +832,10 @@ func describeRoute(r cliprofile.Route) string {
 }
 
 // smokeRequest is the one call [Provider.smokeTest] makes: the crewlet_smoke
-// tool offered, and the instruction that names it.
-func smokeRequest() llm.Request {
+// tool offered on host, and the instruction that names it.
+func smokeRequest(host llm.ToolHost) llm.Request {
 	req := probeRequest(smokePrompt)
-	req.Tools = []llm.ToolDef{{
-		Name:        "crewlet_smoke",
-		Description: "Confirm the tool channel works.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"ok": map[string]any{"type": "boolean"}},
-			"required":   []any{"ok"},
-		},
-	}}
+	req.Tools = host
 	return req
 }
 
@@ -843,7 +965,7 @@ func (p *Provider) SandboxCredentialDocument() string {
 // doctor reported the entry healthy.
 //
 // Read off [childEnv] like [Provider.signIn], so a run carries exactly the
-// credentials a text call is given: what the auth mode removes from the
+// credentials a run on this host is given: what the auth mode removes from the
 // child it removes from the box.
 func (p *Provider) SandboxEnv() map[string]string {
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)

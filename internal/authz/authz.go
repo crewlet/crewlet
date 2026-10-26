@@ -15,6 +15,22 @@
 // an agent owner's artifacts, and a caller with no relation is answered as if
 // the artifact did not exist.
 //
+// THE DASHBOARD ASSISTANT IS DECIDED HERE TOO: ADR-0052, whose authority this
+// package is. A request the assistant makes is its person's own, so the person
+// is decided exactly as their own click is, and every row says what an
+// assistant grant may do with its verb (read it, carry the one approved
+// request, or never), which can only take away from what the person holds.
+// The SPLIT with the request guard is deliberate: the guard holds a read
+// grant to reads and an exec grant to the one request it binds, and
+// [Decide] holds every grant to the row's class wherever the verb is asked,
+// a verb asked from inside a tool included, which no route sees.
+//
+// A CHECK IS THE WRITE AT THE READ'S PROOF: ADR-0055, whose authority this
+// package is. A route declaring [Policy.Checked] answers `dry_run=true` as its
+// verb decided without the step-up, and that check is the one request with a
+// write's method a read grant may send, so the assistant's preview asks the
+// route before the person is shown a change.
+//
 // # What it replaces, and what each of those got wrong
 //
 // Three structs carried authority into the tracker as BOOLS the caller had
@@ -613,6 +629,19 @@ const (
 	// acting on could not ([DecideWithin]). It names no permission, because
 	// none the agent could hold would change it.
 	ReasonCeiling Reason = "ceiling"
+	// ReasonAssistRefused is a refusal a request made through the
+	// Dashboard Assistant gets and the person's own click would not: the
+	// verb is never the assistant's ([AssistNever], the human-only list).
+	// It names no permission, because none the person could hold would
+	// change it; they take the verb themselves.
+	ReasonAssistRefused Reason = "assist_refused"
+	// ReasonAssistScope is a refusal an assistant grant gets when its
+	// scope does not reach the verb: a read grant asking a verb the
+	// assistant carries only as an approved request ([AssistApprove]), or
+	// one that needs a person at the keyboard ([rule.presence]), which only
+	// the person's approval of the request supplies.
+	// The remedy is a proposal the person approves, never a permission.
+	ReasonAssistScope Reason = "assist_scope"
 )
 
 // Reasons are every one, in declaration order.
@@ -622,6 +651,7 @@ var Reasons = []Reason{
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
 	ReasonUnknownAction, ReasonStepUp, ReasonEverybody, ReasonAsked,
 	ReasonSeatOnly, ReasonShared, ReasonNotShared, ReasonRole, ReasonCeiling,
+	ReasonAssistRefused, ReasonAssistScope,
 }
 
 // Valid reports whether a reason is one this build knows.

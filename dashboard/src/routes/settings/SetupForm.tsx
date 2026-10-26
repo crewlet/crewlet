@@ -40,10 +40,18 @@
  */
 
 import { Fragment, useCallback, useId, useMemo, useRef, useState } from "react";
-import { Button, Callout, InlineCode, StatusDot, Tag, useToast } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  InlineCode,
+  StatusDot,
+  Tag,
+  useToast,
+  ValueField,
+  type ValueFieldKind,
+} from "@crewlethq/ui";
 import { CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
-import { Field, type FieldKind } from "~/ui/Field.tsx";
-import { marked, paths, Problems } from "~/ui/Problems.tsx";
+import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
@@ -54,6 +62,8 @@ import type {
   SetupVerdict,
 } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -671,6 +681,25 @@ export function SetupForm({
     [shownBy, answeredIn],
   );
 
+  // WHAT IS OPEN, for the assistant: every field the form shows, a
+  // credential never, and the text and choice fields set through the same
+  // `setValues` typing uses. Submitting stays the person's.
+  useAssistantDraft<Readonly<Record<string, string>>>({
+    kind: "client",
+    scope: `${title} settings (not saved)`,
+    help: SETUP_ASSISTANT_HELP,
+    value: values,
+    fields: setupDraftFields(
+      sections.flatMap((section) =>
+        (shownBy.get(sectionKey(section)) ?? [])
+          .filter((r) => editable(section, r))
+          .map((r) => ({ key: valueKey(section, r), r })),
+      ),
+    ),
+    apply: (next) => setValues({ ...next }),
+    blocked: () => (busy ? "Waiting for the engine to finish writing." : null),
+  });
+
   /**
    * What one section would send: only what DIFFERS from what the engine
    * reports, plus its mints.
@@ -1182,9 +1211,13 @@ export function SetupForm({
     return (
       <div key={key} className="col gap-1">
         {editable(section, r) ? (
-          <Field
+          <ValueField
+            // OUR OWN CLASS ON THE PACKAGE'S COMPONENT: `.int-form .field > label`
+            // sets this form's questions in sentence case, and a class we write
+            // is a better anchor for that rule than one the package owns.
+            className="field"
             label={r.label}
-            kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
+            kind={r.kind === "toggle" ? "choice" : (r.kind as ValueFieldKind)}
             value={values[key] ?? ""}
             onChange={(v) => {
               setValues((c) => ({ ...c, [key]: v }));
@@ -1201,8 +1234,10 @@ export function SetupForm({
             // placeholder is not a value, so any keystroke produces
             // exactly what was typed. See [HELD].
             placeholder={r.kind === "secret" && !r.value && r.present ? HELD : undefined}
-            secrets={secretNames}
-            onSecretsNeeded={refreshSecrets}
+            references={secretNames}
+            onReferencesNeeded={refreshSecrets}
+            // THE ENGINE'S GRAMMAR decides what reads as a sealed entry's name.
+            isReference={isWholeReference}
             // WHAT THE APP SAYS, and nothing about which button opened the
             // form. Marking a connect field required while connecting and
             // optional afterwards made one field wear two labels in two
@@ -1226,7 +1261,7 @@ export function SetupForm({
             // thing standing between the answer above it and its working.
             // Required is the unmarked default everywhere else.
             markRequired={r.required_when !== undefined}
-            error={fieldErrors[key]}
+            error={withProblems(fieldErrors[key])}
             choices={
               r.kind === "toggle"
                 ? [

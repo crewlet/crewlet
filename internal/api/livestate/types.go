@@ -179,6 +179,14 @@ type LiveCall struct {
 	// CLI's run.
 	Rounds []any `json:"rounds"`
 
+	// Invocations is the phase's CLI runs that have ENDED — when each was
+	// launched and how long it lived, who served it, how it ended, the
+	// rounds it made (`first_round`, `last_round`) and what it spent — as
+	// the progress frame carries them ([types.PhaseInvocation]). The run in
+	// flight is not on it until it ends: its rounds are the ones past every
+	// entry's last. Empty until the first run ends.
+	Invocations []any `json:"invocations"`
+
 	// MaxRounds is the round cap currently GRANTED to this phase, which an
 	// extension raises mid-phase, and RoundCeiling the most any extension
 	// may raise it to. Zero on a frame that did not state them.
@@ -192,13 +200,21 @@ type LiveCall struct {
 	// round's tools run. Empty before the first round opens.
 	RoundStartedAt string `json:"round_started_at,omitempty"`
 
-	// RunningCall is the tool call the phase is running RIGHT NOW —
-	// `{round, name, arguments, started_at}`, published before the call is
-	// handed to its tool and cleared by the frame after it returns. Absent
+	// RunStartedAt is when the CLI run in flight was launched: the run whose
+	// rounds are past every entry in Invocations. Empty between runs, and on
+	// a frozen call.
+	RunStartedAt string `json:"run_started_at,omitempty"`
+
+	// RunningCalls is every tool call the phase is running RIGHT NOW, in the
+	// order they arrived — `{id, round, name, arguments, started_at}`, each
+	// listed by the frame published before the call is handed to its tool
+	// and gone from the frame after it returns ([types.RunningCall]). A
+	// LIST because a coding CLI may run a response's calls at once. Absent
 	// between calls. Never merged into ToolExecutions, which lists calls
 	// that ANSWERED: a reader has to be able to tell a call in flight from
-	// one that returned nothing.
-	RunningCall map[string]any `json:"running_call,omitempty"`
+	// one that returned nothing — and `id` is what the answered row's
+	// `call_id` carries, so a reader can tell which one did.
+	RunningCalls []any `json:"running_calls,omitempty"`
 
 	// Steers is every person's note the phase has read so far —
 	// `{round, note_id}`, the round whose provider call first saw it — as
@@ -238,10 +254,10 @@ type LiveCall struct {
 	StartedAt string `json:"started_at"`
 
 	// Versions numbers the copy of each heavy field — the prompt, the
-	// response, the narration, the tool calls, the rounds' timing — this
-	// call holds, so an `agents` push can leave out what a tab already has
-	// and a tab can tell when it missed a change (see detail.go). ALWAYS
-	// PRESENT, on every surface that carries a call.
+	// response, the narration, the tool calls, the rounds' timing, the CLI
+	// runs — this call holds, so an `agents` push can leave out what a tab
+	// already has and a tab can tell when it missed a change (see
+	// detail.go). ALWAYS PRESENT, on every surface that carries a call.
 	Versions CallVersions `json:"versions"`
 }
 

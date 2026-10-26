@@ -68,13 +68,25 @@ const (
 	// SourceBrandVoice is the adopted brand's voice: how the company
 	// writes, read by an agent before it writes an artifact.
 	SourceBrandVoice Source = "brand_voice"
+	// SourceAPIAnswer is an API answer the Dashboard Assistant read as the
+	// person it acts for: a route's own JSON, carrying whatever text its
+	// records hold, which colleagues and vendors wrote.
+	SourceAPIAnswer Source = "api_answer"
+	// SourcePageContext is what the person's open screen told the assistant
+	// about itself: its title, filters and selection, whose labels are names
+	// other people chose.
+	SourcePageContext Source = "page_context"
+	// SourceDeepWork is a Dashboard Assistant deep-work run's account of
+	// what it did: a coding CLI's own words, written after it read web pages
+	// and files nobody in the company wrote (ADR-0054).
+	SourceDeepWork Source = "deep_work"
 )
 
 // Sources are every surface.
 var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceArtifactFile, SourceArtifactRow,
-	SourceBrandVoice,
+	SourceBrandVoice, SourceAPIAnswer, SourcePageContext, SourceDeepWork,
 }
 
 // Valid reports whether s is one of [Sources].

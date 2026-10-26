@@ -1954,7 +1954,7 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 			t.Errorf("relaunch: %v", err)
 		}
 		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, Suspension{State: json.RawMessage(
-			`{"version":3,"iteration":1}`)}); err != nil || !suspended {
+			`{"version":4,"iteration":1}`)}); err != nil || !suspended {
 			t.Errorf("the relaunch's suspension: suspended=%v err=%v", suspended, err)
 		}
 		rig.runner.Finish(Result{NeedsInput: true, Question: "which file?", AskTo: "requester"})

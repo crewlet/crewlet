@@ -52,7 +52,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARequesterSurvivesTheLaunchThatRecordsIt", testARequesterSurvivesTheLaunchThatRecordsIt},
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
 		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
-		{"EveryLaunchRecordsTheBridgeSessionItsBoxDials", testEveryLaunchRecordsTheBridgeSessionItsBoxDials},
+		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
@@ -244,7 +244,7 @@ func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) st
 // nineteen-digit argument is the value a lossy store gets wrong: it is past
 // 2^53, so any decode of it into a float64 on the way through comes back as a
 // different number.
-const suspendedState = `{"version":3,"iteration_history":[{"Calls":[{"Name":"tracker_update",` +
+const suspendedState = `{"version":4,"iteration_history":[{"Calls":[{"Name":"tracker_update",` +
 	`"Args":{"row":1234567890123456789}}]}],` +
 	`"active_tool_names":["tracker_update","activate_tool"],"iteration":2}`
 
@@ -383,25 +383,22 @@ func testARelaunchsBoxMovesTheRowToItsCell(t *testing.T, s sandbox.PendingStore)
 	}
 }
 
-// EVERY LAUNCH RECORDS THE BRIDGE SESSION ITS BOX DIALS, and the node that
-// opened it — the relaunch's, not the first job's: the first job's box dials a
-// session the relaunch replaced, and a node rebuilding a lost session from the
-// row must rebuild the one the live box holds a token for, on the node that
-// box's URL addresses.
-func testEveryLaunchRecordsTheBridgeSessionItsBoxDials(t *testing.T, s sandbox.PendingStore) {
-	first := run("t-bridge")
-	first.LaunchNode, first.BridgeNonce = "node-a", "nonce-1"
+// EVERY LAUNCH RECORDS THE NODE THAT LAUNCHED IT — the relaunch's, not the
+// first job's: a relaunch may land on another node, and a local box is on the
+// host of the node that started it, never on the one that started the job
+// before it.
+func testEveryLaunchRecordsTheNodeThatLaunchedIt(t *testing.T, s sandbox.PendingStore) {
+	first := run("t-node")
+	first.LaunchNode = "node-a"
 	mustLaunched(t, s, first)
-	if got := mustGet(t, s, "t-bridge"); got.LaunchNode != "node-a" || got.BridgeNonce != "nonce-1" {
-		t.Fatalf("the launch recorded session %q on %q, want nonce-1 on node-a",
-			got.BridgeNonce, got.LaunchNode)
+	if got := mustGet(t, s, "t-node"); got.LaunchNode != "node-a" {
+		t.Fatalf("the launch recorded node %q, want node-a", got.LaunchNode)
 	}
-	next := run("t-bridge")
-	next.LaunchNode, next.BridgeNonce = "node-b", "nonce-2"
+	next := run("t-node")
+	next.LaunchNode = "node-b"
 	mustBeginLaunch(t, s, next)
-	if got := mustGet(t, s, "t-bridge"); got.LaunchNode != "node-b" || got.BridgeNonce != "nonce-2" {
-		t.Errorf("the relaunch left session %q on %q, want its own nonce-2 on node-b",
-			got.BridgeNonce, got.LaunchNode)
+	if got := mustGet(t, s, "t-node"); got.LaunchNode != "node-b" {
+		t.Errorf("the relaunch left node %q, want its own node-b", got.LaunchNode)
 	}
 }
 

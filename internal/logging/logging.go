@@ -262,13 +262,14 @@ func SetConsole(enabled bool) {
 	install(current)
 }
 
-// install builds one handler per destination and publishes them.
+// install builds one handler per destination and publishes them, behind the
+// redaction every record passes through ([redacting]).
 //
-// ONE SINK IS INSTALLED UNWRAPPED, deliberately: the overwhelming majority of
-// runs have no log file, and a fan-out around a single handler would put an
-// indirection on every record to no purpose — and would hide which handler a
-// format installed from the test that asserts each format has its own. A node
-// that silenced its console in favour of a file gets the same unwrapped
+// ONE SINK IS INSTALLED WITHOUT A FAN-OUT, deliberately: the overwhelming
+// majority of runs have no log file, and a fan-out around a single handler
+// would put an indirection on every record to no purpose, and would hide which
+// handler a format installed from the test that asserts each format has its
+// own. A node that silenced its console in favour of a file gets the same
 // treatment, for the same reason.
 func install(s settings) {
 	var handlers []slog.Handler
@@ -321,7 +322,7 @@ func install(s settings) {
 	if len(handlers) > 1 {
 		h = fanout{level: admits, handlers: handlers}
 	}
-	l := slog.New(h)
+	l := slog.New(redacting{next: h})
 	root.Store(l)
 	slog.SetDefault(l)
 

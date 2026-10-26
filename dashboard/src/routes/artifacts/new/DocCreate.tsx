@@ -67,6 +67,8 @@ import {
 } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { createDraft } from "./assistantDraft.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import {
   AskAgentPanel,
   askTitleHold,
@@ -109,6 +111,48 @@ export function docBrief(brief: string, body: string, template: DocTemplate | un
     return `${own}\n\nFollow the ${template.label.toLowerCase()} outline:\n\n${body.trim()}`;
   }
   return `${own}\n\nBuild on this first draft:\n\n${body.trim()}`;
+}
+
+/** What a new doc holds beyond what every create page does. */
+interface DocDraft {
+  readonly body: string;
+  readonly template: string;
+}
+
+/**
+ * A new doc's own fields: its body, and the template it starts from, which
+ * is offered while nothing of the writer's own is on the page (`untouched`)
+ * and fills the body as a press of it would.
+ */
+export function docFields(untouched: boolean): DraftFieldSpec<DocDraft>[] {
+  return [
+    {
+      path: "body",
+      label: "Body",
+      hint: "Markdown",
+      read: (d) => d.body,
+      write: (d, body) =>
+        typeof body === "string" ? { ...d, body } : refuse("The body is Markdown text."),
+      summary: (body) => plural(markdownWords(typeof body === "string" ? body : ""), "word"),
+    },
+    {
+      path: "template",
+      label: "Template",
+      hint: `One of ${DOC_TEMPLATES.map((t) => t.key).join(", ")}, or empty for none`,
+      read: (d) => d.template,
+      write: (d, key) => {
+        if (!untouched) {
+          return refuse("A template is offered while the body is empty or still a template's.");
+        }
+        if (typeof key !== "string") return refuse("A template is one choice.");
+        if (key.trim() === "") return { body: "", template: "" };
+        const chosen = docTemplate(key.trim());
+        return chosen
+          ? { body: chosen.body, template: chosen.key }
+          : refuse(`Choose one of ${DOC_TEMPLATES.map((t) => t.key).join(", ")}.`);
+      },
+    },
+  ];
 }
 
 export function DocCreate() {
@@ -175,6 +219,35 @@ export function DocCreate() {
           return true;
         }
       : null,
+  );
+
+  // WHAT IS OPEN, for the assistant: the title, the body and the template it
+  // started from, and the hand-off beside them, each set through the page's
+  // own setters; Create and Ask stay the writer's presses.
+  useAssistantDraft(
+    createDraft<DocDraft>({
+      what: "doc",
+      help:
+        "The body is Markdown and a change replaces all of it. A template fills the body " +
+        "while it is empty or still holds a template untouched.",
+      step: panel.open ? "ask" : "write",
+      title,
+      setTitle,
+      brief,
+      setBrief,
+      who,
+      extra: {
+        value: { body, template: template?.key ?? "" },
+        fields: docFields(untouched),
+        apply: (next) => {
+          if (next.template !== (template?.key ?? "")) setTemplate(docTemplate(next.template));
+          setBody(next.body);
+          // THE EDITOR TAKES A WHOLE NEW BODY only as a fresh document.
+          setLoaded((n) => n + 1);
+        },
+      },
+      blocked: () => (busy ? "The doc is being created." : null),
+    }),
   );
 
   // CANCEL AND ESCAPE ASK FIRST while anything is written: the shell leaves

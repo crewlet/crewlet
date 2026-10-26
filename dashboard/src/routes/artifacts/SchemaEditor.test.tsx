@@ -14,6 +14,7 @@ import { ToastProvider } from "@crewlethq/ui";
 import type { ArtifactDetail } from "~/protocol/index.ts";
 import { reviewSheetSchema } from "~/lib/artifacts/schema.ts";
 import { SchemaEditor } from "./SchemaEditor.tsx";
+import { context, draftField, openFrame, setDraft } from "./draftTesting.ts";
 
 afterEach(cleanup);
 
@@ -104,4 +105,37 @@ test("a store with no collections says what one is and how to add it", () => {
   );
   expect(screen.getByText("No collections yet")).toBeTruthy();
   expect(screen.getByText("Lowercase letters, digits and underscores.")).toBeTruthy();
+});
+
+// THE SCHEMA BEING CHANGED IS THE ASSISTANT'S TO READ, and a change it proposes
+// lands in the editor's own draft, counted with the reader's; Save stays theirs.
+test("the open schema is the assistant's to read, and a draft.set is one more unsaved change", () => {
+  openFrame("artifact");
+  const collections = mount();
+  expect(context().draft).toMatchObject({ kind: "client", id: "a-1", step: "collections.1" });
+  expect(draftField("collections.1.columns")).toMatchObject({ kind: "list" });
+  expect(draftField("collections.1.columns")).not.toHaveProperty("editable");
+  expect(setDraft({ "collections.1.title": "Launch reviews" })).toMatchObject({
+    outcome: "applied",
+  });
+  expect(screen.getByText("1 unsaved change")).toBeTruthy();
+  expect(draftField("collections.1.title")?.value).toBe("Launch reviews");
+  expect(setDraft({ "collections.1.preset": "everyone" })).toMatchObject({ outcome: "invalid" });
+  expect(collections[0]!.title).not.toBe("Launch reviews");
+});
+
+// A READER WHO MAY NOT CHANGE THE SCHEMA HOLDS NO DRAFT to change.
+test("a schema read by a viewer declares no draft", () => {
+  openFrame("artifact");
+  render(
+    <ToastProvider>
+      <SchemaEditor
+        detail={detail}
+        collections={reviewSheetSchema()}
+        role="viewer"
+        onSaved={() => {}}
+      />
+    </ToastProvider>,
+  );
+  expect(context().draft).toBeUndefined();
 });

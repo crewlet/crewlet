@@ -116,6 +116,7 @@ var sentinels = []sentinel{
 	// a data node ([opIdentityBinding], [opSeatHolders]) — and the identity
 	// vocabulary's and the session's, which the questions a person verb is
 	// decided on answer in ([iam.Holders], [session.ResolveSeat]).
+	{"iamdomain.ErrAssistRefused", iamdomain.ErrAssistRefused},
 	{"iamdomain.ErrCollapsed", iamdomain.ErrCollapsed},
 	{"iamdomain.ErrInvalid", iamdomain.ErrInvalid},
 	{"iamdomain.ErrInvalidLogin", iamdomain.ErrInvalidLogin},

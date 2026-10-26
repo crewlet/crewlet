@@ -64,12 +64,11 @@ func TestTheApproximationCoversEveryTermMeasured(t *testing.T) {
 // A TOOL ARRAY IS MEASURED AS THE WIRE CARRIES IT: compact JSON, one
 // {name, description, parameters} object per tool.
 //
-// The compact form is the number both HTTP vendors put on the wire, which is
-// what makes the figure comparable across providers. The cli-agent text
-// backend renders the same definitions indented inside a fence and follows
-// them with a response contract, so its prompt carries strictly more — which
-// is why the choice is written down rather than left to be inferred from a
-// number.
+// The compact form is the definitions' own JSON in no vendor's wrapping, which
+// is what makes the figure comparable across CLIs: each one reads them over
+// MCP, annotations and all, and hands them to its model in its own vendor's
+// shape, so the model is sent strictly more — which is why the choice is
+// written down rather than left to be inferred from a number.
 func TestAToolArrayIsMeasuredAsCompactWireJSON(t *testing.T) {
 	t.Parallel()
 	defs := []llm.ToolDef{{

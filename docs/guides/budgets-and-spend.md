@@ -62,7 +62,7 @@ round in on room that was already spent.
 
 Because every later round is certain to be refused, **a refusal also stops every
 later model call of the turn before it is sent**: the next phase, the round-cap
-judge, the seat's other workers and an agent-mode coding run are refused without
+judge, the seat's other workers and an executor launch are refused without
 being made, rather than each billed and then refused — and a call stopped that
 way is the gate's refusal like any other, recorded as the window's `refused_at`
 (the "last refused" on Company › Budgets and in `crewlet budgets show`) the
@@ -191,7 +191,7 @@ Each call states its **stage** — whose cost it is — and its **purpose**:
 
 | Stage | What spent it (purposes) | Charged to | In the turn's cost and its task's spend |
 |---|---|---|---|
-| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what a coding run cost between two parts of the turn — an agent-mode run's bridged tools and the condensing of a collected run's report, failure or question (`condense_report`, `condense_tool_error`, `condense_question`) | the seat and the company | **yes** — the part a coding run cost between two parts of the turn is paid by the part that resumes from it |
+| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what a coding run cost between two parts of the turn — an executor run's bridged tools and the condensing of a collected run's report, failure or question (`condense_report`, `condense_tool_error`, `condense_question`) | the seat and the company | **yes** — the part a coding run cost between two parts of the turn is paid by the part that resumes from it |
 | `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) and the conversation ledger's account of it | the seat and the company | no — drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
 | `background` | The episode compaction, clustered synthesis and skill promotion passes (`episode_compaction`, `skill_clustering`, `skill_promotion`) | the seat and the company — the company alone for a unit a person leads | no — no turn |
 | `operator` | A person's question answered on the operator surface (`answer_knowledge`, and `condense_source` for a page too long to read whole) | the company alone: a person has no seat budget | no — no turn |
@@ -283,6 +283,6 @@ usage at all is charged an estimate, four characters a token, which
 ## Tokens, never money
 
 The dashboard measures spend in tokens only. A price is reported only by a
-coding run — a `run_sandbox` job or an agent-mode executor, in its CLI's own
-figure — and by no text call, so a currency figure would cover a small minority
+coding run — a seat's executor run, in its CLI's own figure — and by no
+call on this host, so a currency figure would cover a small minority
 of calls while reading as the company's spend.

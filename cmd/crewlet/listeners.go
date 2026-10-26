@@ -27,24 +27,21 @@ type nodeListeners struct {
 // serves them the boot surface, or binds nothing when api.port is 0, which is
 // the hard off switch for every one of them.
 //
-// bridge says whether this node will have its executors' tool bridge, which is
-// what decides whether a node without the ingress role binds api.public at all
-// ([api.PublicListener]), and whether its boot surface tells a call to the
-// bridge to come back ([api.NewBoot]). The artifact origin is bound by
-// [api.ArtifactsListener]'s rule: on an ingress node whose file sets a port for
-// it. A failed bind of any of them closes what was bound and fails the boot,
+// api.public is bound by [api.PublicListener]'s rule and the artifact origin by
+// [api.ArtifactsListener]'s: each on an ingress node whose file sets a port
+// for it. A failed bind of any of them closes what was bound and fails the boot,
 // naming the address, before anything slow has run.
 //
 // THE NODE ID IS THE ONE THE ENGINE WILL RUN UNDER, resolved by the same rule,
 // so /health names the node by the name its peers will know it by from its
 // first answer.
-func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string, bridge bool,
+func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string,
 	bind bindFunc, log *slog.Logger,
 ) (*nodeListeners, error) {
 	if boot.API.Port == 0 {
 		return nil, nil
 	}
-	surface, err := api.NewBoot(boot, nodeID, bridge)
+	surface, err := api.NewBoot(boot, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +51,7 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string, b
 	}
 	l := &nodeListeners{api: server, boot: surface}
 	publicAddr := ""
-	if api.PublicListener(boot, nodeID, bridge) {
+	if api.PublicListener(boot, nodeID) {
 		l.public, publicAddr, err = listenAPI(ctx, bind, boot.API.Public.Addr(), surface.Public(), log)
 		if err != nil {
 			l.close(context.WithoutCancel(ctx), log)
@@ -88,16 +85,18 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string, b
 }
 
 // bridgeHostURL is where a box on this node's own host — the `direct` cell —
-// reaches the node's tool bridge: the listener that serves the bridge, as this
-// host dials it ([engine.Options.BridgeHostURL]). Empty where the node serves
-// none: it binds no listener (api.port 0), or it runs no seat and so opens no
-// session.
+// reaches the fleet's tool bridge: this node's own listener that serves the
+// bridge route, as this host dials it ([engine.Options.BridgeHostURL]). Empty
+// where the node serves no route a direct box of its own would dial: it binds
+// no listener (api.port 0), it serves no API (the route is the ingress
+// role's, [api.PublicListener]), or it runs no seat and so launches no box.
+// Such a node's direct boxes dial CREWLET_MCP_BRIDGE_URL like any other.
 //
 // THE LISTENER THE BRIDGE IS SERVED ON, which is api.public where this node
-// binds one — the bridge is a public route — and api.port otherwise
-// ([api.PublicListener], [serveProbes]).
+// binds one — the bridge is a public route — and api.port otherwise.
 func (l *nodeListeners) bridgeHostURL(boot *config.Bootstrap, nodeID string) string {
-	if l == nil || !boot.Profile(nodeID).RunsSeats() {
+	profile := boot.Profile(nodeID)
+	if l == nil || !profile.RunsIngress() || !profile.RunsSeats() {
 		return ""
 	}
 	served := l.api

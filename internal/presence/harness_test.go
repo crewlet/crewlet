@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -63,9 +64,13 @@ type node struct {
 	clock *clock
 }
 
+// startNode starts a hub with the engine's own ask budget. Not a shorter one:
+// a room fills from its peers on that ask alone until the next rebroadcast,
+// which is later than a case waits, and an answer applies the moment it
+// arrives, so a longer budget slows nothing that passes.
 func startNode(t *testing.T, broker *memory.Broker, name string, c *clock) *node {
 	t.Helper()
-	return startNodeAsking(t, broker, name, c, 300*time.Millisecond)
+	return startNodeAsking(t, broker, name, c, eventfan.FleetReadBudget)
 }
 
 // startNodeAsking is [startNode] with the join-time ask given askBudget.

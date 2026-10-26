@@ -40,11 +40,24 @@
  * [ViewerState.loading] rather than a value. See [useViewer].
  */
 
-import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
 import { ADMIN, DOCLET, WORKLET, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
+import type { AssistantModelNotice } from "~/contract/assistant.ts";
+import {
+  assistantModelNotice,
+  assistantUnavailable,
+  type AssistantAccessReason,
+} from "~/protocol/assistantWire.ts";
 
 export interface ViewerState {
   /** The login the engine resolved this browser to, or "". */
@@ -128,6 +141,31 @@ export interface ViewerState {
   configWriter: boolean;
   /** Who manages the company document, or empty when nothing does. */
   configManagedBy: readonly string[];
+  /**
+   * Why this caller may not ask the Dashboard Assistant, or null when they
+   * may: the engine's own first failing condition, and `disabled` for an
+   * engine whose answer carries no `assistant` member at all.
+   */
+  assistant: AssistantAccessReason | null;
+  /**
+   * What the reader is told of the assistant's model before they ask (it is
+   * signed out, its plan is spent, its CLI cannot start), or null when nothing
+   * is known to be wrong with it: the drawer's notice, never a reason above.
+   */
+  assistantModel: AssistantModelNotice | null;
+}
+
+/** The mounted reads of the viewer, asked again by [rereadViewer]. */
+const rereads = new Set<() => void>();
+
+/**
+ * Ask the viewer again now, rather than at the next slow poll: for a surface
+ * that has just learned something the answer carries, the assistant's model
+ * failing or a question refused for it, so its notice is drawn (or cleared)
+ * at once.
+ */
+export function rereadViewer(): void {
+  for (const reread of rereads) reread();
 }
 
 /**
@@ -138,7 +176,13 @@ export interface ViewerState {
  * than a push, and a reconnect re-asks it.
  */
 function useViewerRead(): ViewerState {
-  const { data, loading, error } = useQuery("viewer", undefined, { pollMs: 300_000 });
+  const { data, loading, error, refetch } = useQuery("viewer", undefined, { pollMs: 300_000 });
+  useEffect(() => {
+    rereads.add(refetch);
+    return () => {
+      rereads.delete(refetch);
+    };
+  }, [refetch]);
   const login = data?.login ?? "";
   const handle = data?.handle ?? "";
   const grants = data?.grants ?? [];
@@ -169,6 +213,8 @@ function useViewerRead(): ViewerState {
     asking: loading && data === null && error === null,
     configWriter: data?.config_writer ?? false,
     configManagedBy: data?.config_managed_by ?? [],
+    assistant: assistantUnavailable(data?.assistant),
+    assistantModel: assistantModelNotice(data?.assistant),
   };
 }
 

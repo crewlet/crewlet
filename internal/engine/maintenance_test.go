@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -69,6 +70,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// delete.
 		"artifacts_anchors",
 		"artifacts_ops",
+		// THE ASSISTANT LOG'S TWO, for the same reason. Its conversations
+		// are NOT here: they are Replicated, so their retention rides a
+		// record (the trash reaper's retention purge) rather than a local
+		// delete.
+		"assistant_anchors",
+		"assistant_ops",
 		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
 		// node adopts its own copy of every revision it has ever met,
 		// one row per config write holding the whole document, and
@@ -270,7 +277,7 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	company := parsedCompany(t, companyDoc)
 	backends, err := engine.OpenBackends(t.Context(), boot, company)

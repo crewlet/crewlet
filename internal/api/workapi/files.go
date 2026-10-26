@@ -99,7 +99,9 @@ func (s *Service) fileRoutes(mount mounter) {
 		}}
 	}
 	route("GET "+filesPattern, project(authz.ActionFileRead), (*served).getFile)
-	route("PUT "+filesPattern, project(authz.ActionFileWrite), (*served).putFile)
+	// A PUT WITH NO If-Match WRITES A NEW FILE ([fileVersion]).
+	route("PUT "+filesPattern, project(authz.ActionFileWrite).WhenAbsent(authz.CreatesWhenAbsent()),
+		(*served).putFile)
 	route("DELETE "+filesPattern, project(authz.ActionFileRemove), (*served).deleteFile)
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -73,7 +74,7 @@ func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 			t.Errorf("the system prompt lacks %q", want)
 		}
 	}
-	// Not the heading a text call's prompt gives the definitions themselves.
+	// Not a heading of its own for the definitions the CLI already lists.
 	if strings.Contains(system, "## Available tools") {
 		t.Error("the system prompt has a second `## Available tools` section")
 	}
@@ -108,7 +109,7 @@ func TestTheReviewNamesOnlyTheToolsTheSeatHolds(t *testing.T) {
 	t.Parallel()
 	review := func(t *testing.T, opts buildOpts) string {
 		t.Helper()
-		prov := &scriptedProvider{review: []llm.Completion{
+		prov := &scriptedProvider{review: []llmtest.Response{
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)}}
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, opts)
 		if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {

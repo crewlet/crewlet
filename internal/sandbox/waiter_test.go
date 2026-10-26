@@ -220,7 +220,7 @@ func (r *waiterRig) suspend(turnID string) {
 func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
 	r.t.Helper()
 	suspended, err := r.pending.MarkSuspended(ctx, turnID, Suspension{State: json.RawMessage(
-		`{"version":3,"iteration":1}`),
+		`{"version":4,"iteration":1}`),
 		Iteration: rigIteration})
 	if err != nil {
 		r.t.Fatalf("MarkSuspended: %v", err)

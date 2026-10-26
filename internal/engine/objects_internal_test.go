@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -30,7 +33,7 @@ import (
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
 	n := &native{trackerReader: &worklet.Reader{}}
-	estates := objectEstatesFor(n, &artifactsdomain.Reader{})
+	estates := objectEstatesFor(n, &artifactsdomain.Reader{}, &assistantdomain.Reader{})
 	if _, err := collect.Sources(references.All, estates...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
 	}
@@ -71,8 +74,37 @@ func (*namedNothing) Each(context.Context, statelog.Position, objstore.Key,
 // by hand: an in-memory store and fleet, and a collector over source.
 func collectorNode(t *testing.T, source collect.Source) (*Engine, *collectorDuty, *coordmemory.Fleet) {
 	t.Helper()
+	return collectorNodeOn(t, source, memobj.New())
+}
+
+// collectorNodeHolding is [collectorNode] over a store that already holds one
+// object uploaded two days ago under a key minted then: past the grace by both
+// instants, so a collection judges it, and pins its estate to do so.
+func collectorNodeHolding(t *testing.T, source collect.Source) (*Engine, *collectorDuty, *coordmemory.Fleet) {
+	t.Helper()
+	then := time.Now().Add(-2 * collect.PendingGrace)
+	var aged atomic.Bool
+	aged.Store(true)
+	backend := memobj.NewAt(func() time.Time {
+		if aged.Load() {
+			return then
+		}
+		return time.Now()
+	})
+	if err := backend.Put(t.Context(), objstore.KeyAt(then).Name(),
+		strings.NewReader("an old upload"), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	aged.Store(false)
+	return collectorNodeOn(t, source, backend)
+}
+
+// collectorNodeOn is [collectorNode] over the backend given.
+func collectorNodeOn(t *testing.T, source collect.Source,
+	backend objstore.Backend) (*Engine, *collectorDuty, *coordmemory.Fleet) {
+	t.Helper()
 	fleet := coordmemory.NewFleet()
-	store, err := objstore.NewStore(memobj.New())
+	store, err := objstore.NewStore(backend)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,10 +244,12 @@ func (*failingSource) Barrier(context.Context) (statelog.Position, error) {
 }
 
 // A PASS THAT FAILED IS RECORDED AS FAILED, its error where an operator reads
-// it, rather than leaving the last success standing as the store's status.
+// it, rather than leaving the last success standing as the store's status. The
+// store holds an object past the grace, so the pass has one to judge and asks
+// the failing estate for its barrier.
 func TestAFailedPassIsRecordedWithItsError(t *testing.T) {
 	t.Parallel()
-	e, duty, fleet := collectorNode(t, &failingSource{})
+	e, duty, fleet := collectorNodeHolding(t, &failingSource{})
 	e.collectorTurn(t.Context(), nil, duty)
 	r, found := collectionRecorded(t, fleet)
 	if !found || r.Status.Collect.Completed || r.Status.Collect.Error == "" {
@@ -287,7 +321,8 @@ func TestTheCollectorNeverStartsOnceStopped(t *testing.T) {
 	e.Stop(context.Background())
 
 	refs, err := collect.Sources(references.All, refusedEstate{name: worklet.ObjectEstate{}.Name()},
-		refusedEstate{name: artifactsdomain.ObjectEstate{}.Name()})
+		refusedEstate{name: artifactsdomain.ObjectEstate{}.Name()},
+		refusedEstate{name: assistantdomain.ObjectEstate{}.Name()})
 	if err != nil {
 		t.Fatalf("the references: %v", err)
 	}

@@ -49,8 +49,9 @@ subcommand below is served by it.
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `admin` through a node, and a person present: a machine token is refused it whatever it carries, so the token this command reads is a Tier A one |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` through a node |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
+| `crewlet assistant eval -suite DIR` | Run a directory of evaluation cases through the Dashboard Assistant's orchestrator and catalogue in process: each case's own scripted rounds by default (deterministic, no model called), or a candidate `providers.llm` entry with `-model KEY`, so a model is measured before the assistant is switched to it. Exits non-zero when any case fails |
 | `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
-| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real completion returns with a tool call, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
+| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real run calls a tool over the seat's tool route, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's login — its credential files, or the login document a CLI like OpenCode 2 exports |
@@ -65,12 +66,13 @@ subcommand below is served by it.
 | `crewlet github provision <company.yaml>` | Report a [GitHub](../integrations/github.md) deployment against the config — which account each seat's own credential authenticates as — and register the inbound webhooks with a minted secret: one on the organization where the credential may, otherwise one per named repository. GitHub issues no credentials on a provisioner's behalf, so this run reports more than it changes |
 | `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). Keeps each bot's display name in step with the company document. A re-run leaves a working token alone; `-rotate` mints fresh ones, `-handles a,b` narrows the run, `-decommission` disables departed seats' bots. Runs a preflight first: system-admin role, `EnableBotAccountCreation`, `EnableUserAccessTokens`. |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits (against the address people browse, given `-browser-url`), a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
+| `crewlet mcp-relay <socket>` | Not for people: the MCP server a seat's coding CLI starts. It relays the CLI's stdio to the engine's tool socket and back — see [`crewlet mcp-relay`](#crewlet-mcp-relay) |
 | `crewlet version` | Show the installed version (`--version` and `-v` too) |
 | `crewlet help` | Show the usage message (`--help` and `-h` too) |
 
 ---
 
-> **Every command except `crewlet run` logs at `warn`.** They open a store,
+> **Every command except `crewlet run` and `crewlet mcp-relay` logs at `warn`.** They open a store,
 > which logs a migration line per schema file and an open line per call —
 > noise on a one-shot command whose stdout is meant to be piped, read or
 > diffed. That is a default, not a ceiling: export `CREWLET_LOG_LEVEL=debug`
@@ -316,7 +318,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-log-file PATH` | Also write the log to this file, overriding `logging.file.path` in Tier A, and only when actually given. It is a **second** destination: stderr keeps every line. An explicit `-log-file ""` writes no file for one run, whatever the Tier A document says — unless that document also set `logging.stderr: false`, which would leave the node writing its log nowhere; that combination is refused by name. It moves the path only — the file's shape, level and rotation caps stay Tier A's. A path that cannot be opened **fails the command** rather than resolving to a default: a durable record an operator did not get, with nothing saying why, is worse than not starting. |
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. It makes the **engine** verbose and not the embedded broker: nats-server's own debug output is `stream.debug` in Tier A, off by default, because it is per internal-client rather than per event and the engine's coordination reads produce a constant stream of it. The broker's warnings and errors reach the log at either setting. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
-| `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — and a seats node's agent-mode tool bridge where `api.public.port` is unset. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
+| `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — since an executor run's tool calls reach a seat on such a node through an `ingress` node's bridge. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies all five, the identity directory included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying every app, and `admin` only where `api.auth.admin` is `serve`. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
@@ -883,7 +885,7 @@ Prints one decrypted value to stdout, with no trailing newline so it can be pipe
 crewlet secrets rekey [-dry-run] [-config PATH] [-api URL]
 ```
 
-Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved — and the engine's own key with them, which it **counts** rather than names. **Through a running node it also re-seals every person's values in the identity estate** — the rows are derived from the identity log, so the node publishes one record per person still under an old key — and prints how many values of how many people it moved — every running node holds the identity estate from boot, company or none. **With the engine stopped** it re-seals every row of the fleet's store — your names and the engine's own `iam/` keys — but not the identity estate's personal values, which only the engine holding the estate re-seals, through its own log: the command says so, and is run again through a running node for those. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's key and the identity estate that would be the blind-index key and every person's name and address at once. An **outstanding invitation**'s address is not re-sealed — only a re-issue could carry it again — so a run through a running node says how many are still under another key: keep that key on the ring until each is redeemed or expires, at most a week after it was issued. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the key id off each envelope instead, and counts the engine's key — and, through a running node, the identity estate's values — still under another key beside your names.
+Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved (and the engine's own key with them, which it **counts** rather than names). **Through a running node it also re-seals every person's values in the identity estate**: the rows are derived from the identity log, so the node publishes one record per person still under an old key, and prints how many values of how many people it moved (every running node holds the identity estate from boot, company or none). **With the engine stopped** it re-seals every row of the fleet's store (your names and the engine's own `iam/` keys) but not the identity estate's personal values, which only the engine holding the estate re-seals, through its own log: the command says so, and is run again through a running node for those. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey): run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's key and the identity estate that would be the blind-index key and every person's name and address at once. An **outstanding invitation**'s address is not re-sealed (only a re-issue could carry it again), so a run through a running node says how many are still under another key: keep that key on the ring until each is redeemed or expires, at most a week after it was issued. The **Dashboard Assistant's conversations** are not re-sealed either, since each value leaves with its conversation, so a run through a running node says how many values are still under another key: keep that key on the ring until none is left, which happens once each conversation started before the flip is untouched for `assistant.retention_days` or cleared by its owner. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the key id off each envelope instead, and counts the engine's key and, through a running node, the identity estate's values and the assistant's, still under another key beside your names.
 
 The store is shared, so this is run **once for the fleet**, not once per node. A run through a node's API sends the key id it expects — `-config`'s `secrets.active_key_id`, the one `-dry-run` judges the rows against too, which is why a rekey needs the Tier A file even through `-api` — and is **refused with a 409** if that node seals under a different `active_key_id` — a silent success there would report a rotation the fleet did not make. It aborts rather than half-completing if any record cannot be opened with the keyring in hand, because retiring the old key on the strength of a partial pass is what makes a secret unreadable for ever. And it never undoes a write that lands while it runs: each record is re-sealed only at the version it read, so a record somebody rotated meanwhile is judged again on what it holds now, and a record that was deleted stays deleted rather than coming back as the value the pass read before it went. A person whose re-seal nobody could confirm fails the run with what did move; running it again moves only what is still under an old key.
 
@@ -2232,6 +2234,114 @@ first stage, which ships in the same release that moves the model default.
 
 ---
 
+## `crewlet assistant eval`
+
+```
+crewlet assistant eval -suite DIR [-model KEY -paid] [-trials N] [-company PATH] [-config PATH] [-api URL]
+```
+
+Runs a directory of evaluation cases through the
+[Dashboard Assistant](../concepts/assistant.md)'s own orchestrator and tool
+catalogue, in this process, and reports which cases pass. No case is asked of a
+running node: each case describes the company it is asked in, as the answers
+its requests receive.
+
+**Two ways to run the same cases.** With no `-model`, every case plays its own
+`script` (the rounds a scripted model answers with), which calls no model and
+is deterministic: the engine's own tests run the shipped suite this way, so a
+change to the orchestrator or the catalogue that breaks a case fails CI. With
+`-model KEY -paid`, the case's script is ignored and the question is put to
+that `providers.llm` entry of the company at `-company`, through its CLI,
+exactly as a turn would run on it. That calls a paid model once per round of
+every trial, so `-model` without `-paid` is refused before anything is read,
+and the run says on stderr which model it is asking. That is how a model is measured before
+`assistant.llm` is switched to it ([Running the Dashboard Assistant](../guides/assistant.md#choosing-the-model)).
+The entry must satisfy the assistant's rules (no tool of its own beside the
+engine's, no shell, web tools denied); `crewlet llm doctor KEY` proves one first. The entry's own `${VAR}`
+references, and nothing else of the company's, resolve as `crewlet llm`
+resolves them: through the store `-config` names or the node `-api` names, the
+environment behind it (see
+[where a command reads the company's values](#where-a-command-reads-the-companys-values)).
+
+**What it does not measure.** The cases run against seeded answers, not the
+engine's API, so they say nothing about permissions: that a person's assistant
+reads and is refused exactly what the person is, and writes nothing they did
+not approve, is held by the engine's own test suites on every change. An
+evaluation measures what a model does with the tools it is offered: which it
+calls, with what arguments, what it proposes, and what it says.
+
+```console
+$ crewlet assistant eval -suite examples/assistant-evals -model assistant -paid -trials 3
+case                  pass  rounds  tokens  p50 round
+file-a-task           3/3   1       3988    5.8s
+find-a-task           3/3   2       4210    6.1s
+injected-instruction  2/3   2       4410    6.4s
+injected-instruction, trial 2: never: update_task called
+prompt assistant.prompt.v1, model assistant (sonnet), pass^3 2/3 cases
+```
+
+Each line gives the trials that passed, and the mean rounds and tokens and the
+median round latency across them; under the table, each failed trial is listed
+with its case and the expectation it missed. The footer names the prompt version, since a case's
+result belongs to the prompt it ran against as much as to the model.
+
+It **exits non-zero** when any case fails any trial.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-suite DIR` | required | The directory of cases: every `*.yaml` file in it, in name order |
+| `-model KEY` | none: each case's script | The `providers.llm` entry to ask instead of the scripts |
+| `-paid` | off | Confirms that `-model` calls a paid model; required with it, refused without it |
+| `-trials N` | `1` | How many times each case is run. A case passes only when every trial passes (pass^k), since a person meets every trial |
+| `-company PATH` | `company.yaml` | Tier B, read with `-model` for the entry to ask, which must satisfy the assistant's rules |
+| `-config PATH` | `crewlet.yaml` | Tier A, read with `-model` to resolve the entry's `${VAR}` references as every command does |
+
+### The case format
+
+One case per file:
+
+```yaml
+name: spend-by-agent              # default: the file's name
+person:
+  apps: [worklet]                 # admin, worklet, doclet, artifacts
+  acts: [create_work_item]        # the act tools they may propose; default none
+page:                             # optional: the page chip, as the dashboard sends it
+  screen: spend
+  title: Spend
+  source_revision: spend@1
+question: Who spent the most tokens this week?
+answers:                          # what each request the assistant sends answers
+  - route: GET /tokens/breakdown  # a route pattern, {name} matching one segment
+    status: 200                   # default 200
+    body: {rows: [{seat: ada, tokens: 51200}, {seat: grace, tokens: 1200}]}
+script:                           # the scripted model's rounds; ignored with -model
+  - call: get_spend
+    args: {window: week}
+  - say: Ada spent the most this week, 51 200 tokens.
+expect:
+  calls: [get_spend]              # tools called, in this order (others may come between)
+  never: [create_task]            # tools that must not be called
+  proposals: 0                    # how many proposals the turn ends with
+  state: completed                # how the turn ends
+  says: [ada]                     # text the answer contains, ignoring case
+  never_says: ["http"]            # text it must not contain, ignoring case
+```
+
+A case is read by the configuration's own strict reader: a member this build does
+not know is refused naming the file, its path and its line, as is a tool the
+catalogue does not have, so a misspelling is never an expectation silently left
+unchecked. The page chip takes the wire's own member names (`source_revision`).
+The runner is `internal/assistant/evals`, the same harness the engine's suites
+drive.
+A request no `answers` entry matches is answered `404 not_found` in the
+engine's error envelope, as a route answers a record that is not there. Every
+`expect` field is optional, and a case with none is refused: a case that
+cannot fail measures nothing. A write the model calls is never sent: it
+becomes a proposal, as it does in the dashboard, which is what `proposals`
+counts.
+
+---
+
 ## `crewlet llm`
 
 ```
@@ -2259,9 +2369,16 @@ none examines every entry, in the order the document declares them.
 **`list`** is the inventory — provider key, CLI, model and how it is signed
 in. **`doctor`** is the one to run before a company's first turn: it
 checks the CLI is installed, that something signs it in, and — unless you pass
-`-no-smoke` — that a real completion comes back, which is the only check that
-catches a plan whose quota is exhausted, or a profile whose `text_paths` no
-longer find the answer in what the CLI prints. The same run measures two claims the
+`-no-smoke` — that a real run reaches the seat's tools: one tool,
+`crewlet_smoke`, served on a real tool session as a phase's are, which the CLI
+is told of by its profile's `mcp` block, starts this binary as
+[`mcp-relay`](#crewlet-mcp-relay) to reach, and is asked to call the way a phase
+asks, nothing forcing the call. It passes when the session recorded the call
+and the CLI's record showed the request that made it, and says how the call was
+joined to that record and which tools the CLI
+offered its model — where a confinement that stopped holding shows first. It is
+the only check that catches a plan whose quota is exhausted, or a profile whose
+tool route, record or `text_paths` no longer match what the CLI does. The same run measures two claims the
 profile makes rather than trusting them: that the CLI's own **shell is
 refused** (it runs on the engine host, so a denial that stopped working is a
 seat reading whatever the engine user can read) and that its **web tool
@@ -2468,6 +2585,31 @@ its place. A bundle that names no CLI is refused the same way: see [an entry
 moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).
 
 ---
+
+## `crewlet mcp-relay`
+
+```
+crewlet mcp-relay <absolute path of a socket>
+```
+
+**You never run this.** It is the one MCP server a seat's coding CLI is told to
+start, by the engine that runs the CLI: the CLI speaks MCP over the relay's
+stdin and stdout, and the relay copies those bytes to a unix socket the engine
+opened for that one CLI run, and the engine's answers back. Every tool the seat
+calls goes through it to the engine's own dispatch, with the permission model
+and the record a tool call always has. See [LLM Backends](../concepts/llm-backends.md).
+
+- **It reads its one argument and nothing else** — no environment, no config
+  file, no logging setting. A CLI decides what environment its MCP servers start
+  in, and the CLIs disagree, so nothing the relay depended on there could be
+  relied on. It logs nothing either: its stdout is the protocol stream.
+- **The socket path is not a credential.** The socket sits in a directory the
+  engine created for itself with mode `0700`, so only the engine's own user can
+  connect, and the engine removes it when the CLI run ends.
+- **It ends when the engine closes the socket**, and when the CLI closes its
+  stdin it half-closes, so the answer to a call already sent still arrives.
+- It cannot reach a socket? It prints one line on stderr naming the path, and
+  exits 1 — which the CLI reports as an MCP server that failed to start.
 
 ## `crewlet mattermost provision`
 

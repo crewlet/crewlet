@@ -72,8 +72,8 @@ func (p *auxProvider) request(t *testing.T, i int) llm.Request {
 // pass reads as "nothing to learn" with no error anywhere to say why.
 func wantNoTools(t *testing.T, req llm.Request) {
 	t.Helper()
-	if len(req.Tools) != 0 {
-		t.Errorf("%d tools offered; the contract is text in the content", len(req.Tools))
+	if req.Tools != nil {
+		t.Error("tools offered; the contract is text in the content")
 	}
 }
 

@@ -21,6 +21,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // newEngine stands up a real engine on an embedded stream in a temp directory.
@@ -32,7 +34,7 @@ func newEngine(t *testing.T, opts engine.Options) *engine.Engine {
 	t.Helper()
 	if opts.Bootstrap == nil {
 		opts.Bootstrap = bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		})
 	}
 	if opts.Company == nil {
@@ -52,7 +54,7 @@ func unconfiguredEngine(t *testing.T) *engine.Engine {
 	t.Helper()
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		}),
 	})
 	if err != nil {
@@ -60,6 +62,44 @@ func unconfiguredEngine(t *testing.T) *engine.Engine {
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	return e
+}
+
+// THE SHARED FIXTURES' BROKER IS SIZED BY DECLARATION, never by the runner's
+// disk.
+//
+// Every case here boots through these two, so a fixture that dropped the size
+// would pass on any roomy runner and fail every boot on a small one — the
+// regression nothing else in a passing run would show (#343). Read off the
+// running broker, as the boot's own sizing reads it.
+//
+// Mutation: drop brokertest.StoreIn from either fixture for a bare store_dir
+// and its row reads three quarters of this machine's free disk.
+func TestTheSharedFixturesBrokerIsSizedByDeclaration(t *testing.T) {
+	t.Parallel()
+	for name, boot := range map[string]func(*testing.T) *engine.Engine{
+		"newEngine": func(t *testing.T) *engine.Engine {
+			return newEngine(t, engine.Options{})
+		},
+		"unconfiguredEngine": unconfiguredEngine,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			q, ok := boot(t).Backends().Queue.(*jetstream.Queue)
+			if !ok {
+				t.Fatal("the fixture's broker is not the embedded JetStream one")
+			}
+			budget, err := q.StreamBudget(t.Context())
+			if err != nil {
+				t.Fatalf("StreamBudget: %v", err)
+			}
+			if budget.Source != jetstream.BudgetServerStore ||
+				budget.Limit != brokertest.StoreMaxBytes {
+				t.Errorf("the fixture's broker budget = %+v, want its declared "+
+					"cap of %d (brokertest.StoreMaxBytes)", budget,
+					brokertest.StoreMaxBytes)
+			}
+		})
+	}
 }
 
 func TestAnEngineBuildsEverySeam(t *testing.T) {
@@ -106,7 +146,7 @@ func TestAKeylessNodeIsRefusedBeforeAnythingOpens(t *testing.T) {
 	_, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
 			b.Store.Path = storePath
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 			b.Secrets = config.Secrets{}
 		}),
 	})
@@ -174,7 +214,7 @@ func TestAnInvalidBootstrapIsRefusedBeforeAnythingIsOpened(t *testing.T) {
 			// UNSEEDED: that nothing is at the store's path afterwards
 			// is the assertion.
 			boot, _ := unseededBootstrap(t, func(b *config.Bootstrap) {
-				b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+				brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 				tc.mutate(b)
 			})
 			_, err := engine.New(t.Context(), engine.Options{
@@ -361,7 +401,7 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 	// record read back). An engine that closed what it was lent would take
 	// the caller's broker with it.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
 	if err != nil {
@@ -397,7 +437,7 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 func TestAStoppedEngineAppliesNothing(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, nil)
 	if err != nil {
@@ -433,7 +473,7 @@ func TestAStoppedEngineAppliesNothing(t *testing.T) {
 func TestASecondStopTearsNothingDownAgain(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
 	if err != nil {
@@ -483,7 +523,7 @@ func (c *countingWithdrawals) ForgetAdmission(ctx context.Context, nodeID, incar
 func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
 	if err != nil {
@@ -519,7 +559,7 @@ func TestOwnedBackendsCloseWithTheEngine(t *testing.T) {
 	// just as well by "never closes anything", which leaks a broker and a
 	// database file per engine.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc),
@@ -588,7 +628,7 @@ func TestStopLetsAnInFlightTurnFinish(t *testing.T) {
 		},
 	}
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc), Dispatch: d,
@@ -642,7 +682,7 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 		},
 	}
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc), Dispatch: d,
@@ -736,7 +776,7 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 func TestADrainRefusesAnApplyBeforeTheTeardownDoes(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	})
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc),
@@ -819,7 +859,7 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	// wait below is two TTLs so a dead renewer is caught with a TTL to
 	// spare.
 	b := bootstrap(t, func(b *config.Bootstrap) {
-		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 		b.Coordination.LeaseTTLSeconds = 3
 	})
 	e := newEngine(t, engine.Options{Bootstrap: b})

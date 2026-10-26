@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
 import { CommandPalette } from "./Palette.tsx";
+import { AssistantControlContext, type AssistantControl } from "../assistant/control.ts";
 import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS, destinationHits } from "./hits.ts";
@@ -61,6 +62,8 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
 };
 
 const ANONYMOUS: ViewerState = {
@@ -167,11 +170,14 @@ function mount({
   answers = {},
   hash = "#/",
   agents = [{ id: "swe", agent_id: "a-swe", role: "SWE", handle: "swe", activity: "working" }],
+  assistant,
 }: {
   viewer?: ViewerState;
   answers?: Answers;
   hash?: string;
   agents?: Record<string, unknown>[];
+  /** The frame's hold on the assistant; absent, the frame offers none. */
+  assistant?: AssistantControl;
 } = {}) {
   location.hash = hash;
   vi.mocked(useViewer).mockReturnValue(viewer);
@@ -198,7 +204,13 @@ function mount({
         <Router>
           {/* THE FRAME'S SWITCHER, which "Switch project…" opens. */}
           <ProjectSwitcherProvider>
-            <CommandPalette onClose={closed} onShowKeys={keys} />
+            {assistant ? (
+              <AssistantControlContext.Provider value={assistant}>
+                <CommandPalette onClose={closed} onShowKeys={keys} />
+              </AssistantControlContext.Provider>
+            ) : (
+              <CommandPalette onClose={closed} onShowKeys={keys} />
+            )}
           </ProjectSwitcherProvider>
         </Router>
       </ClientContext.Provider>
@@ -1492,4 +1504,39 @@ describe("artifacts", () => {
     expect(screen.queryByText("get_artifact")).toBeNull();
     expect(screen.getByText("artifact_lint")).toBeTruthy();
   });
+});
+
+// THE QUESTION, ASKED OF THE ASSISTANT: offered only where this reader may
+// ask, and handed to the frame's own control, which opens the panel with it.
+test("a typed question can be asked of the assistant, where the reader may ask", async () => {
+  const ask = vi.fn();
+  const p = mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask } });
+  await p.type("why did spend go up");
+  const row = p.row("Ask the assistant: “why did spend go up”");
+  await act(async () => {
+    fireEvent.click(row);
+  });
+  expect(ask).toHaveBeenCalledWith("why did spend go up");
+  expect(p.closed).toHaveBeenCalled();
+  cleanup();
+  const q = mount();
+  await q.type("why did spend go up");
+  expect(screen.queryByText("Ask the assistant: “why did spend go up”")).toBeNull();
+});
+
+// THE LAST ANSWER, NEVER ENTER'S BY DEFAULT: the assistant's row closes the
+// list (05-ux-design, "Keyboard"), and with nothing found the row Enter takes
+// is not the artifacts scope either, which only moves the reader to another
+// scope.
+test("the assistant's row is last, and the artifacts scope is not what Enter takes", async () => {
+  const ask = vi.fn();
+  mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask } });
+  const box = screen.getByRole("combobox");
+  await act(async () => {
+    fireEvent.change(box, { target: { value: "why did spend go up" } });
+  });
+  const options = screen.getAllByRole("option");
+  expect(options.at(-1)?.textContent).toContain("Ask the assistant: “why did spend go up”");
+  const id = box.getAttribute("aria-activedescendant") ?? "";
+  expect(document.getElementById(id)?.textContent ?? "").not.toContain("in artifacts");
 });

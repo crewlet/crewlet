@@ -2276,11 +2276,23 @@ func tokenOwnable(personID string, owner Person) error {
 // the route refuses such a request, and the record refuses it again for the
 // route's reason, since a party is composed as the token's OWNER and would
 // otherwise pass the person arm below as that owner.
+//
+// AND NOTHING THROUGH THE DASHBOARD ASSISTANT, for the same reason: it is
+// composed as its person, so the person arm would admit it, and a token it
+// minted would be a credential a model was one step from holding. Both locks
+// read the CLASS of the operator id, as [Writer.mayAdminister] does: the token
+// lock read a well-formed name, so an operator id of the token's class this
+// build could not parse fell through to the person arm and minted as the
+// token's owner.
 func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
-	if iam.ValidMachineTokenName(w.OperatorID) {
+	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
 		return fmt.Errorf("%w: you're using the access token %s, and a token "+
 			"can't create another. Sign in to create one",
 			ErrRefused, w.OperatorID)
+	}
+	if strings.HasPrefix(w.OperatorID, iam.AssistPrefix) {
+		return fmt.Errorf("%w: %w. Create the token yourself from your account "+
+			"page (%s)", ErrRefused, ErrAssistRefused, w.OperatorID)
 	}
 	switch owner.Kind {
 	case iam.KindPerson:

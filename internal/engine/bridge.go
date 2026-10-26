@@ -2,15 +2,13 @@ package engine
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -25,7 +23,7 @@ import (
 // it a restart mid-run leaves the reviewer judging a turn whose entire tool log
 // is gone, which the delivery check reads as a turn that acted on nothing.
 
-// bridgedCalls turns a run's durable bridged-call log into the executions the
+// bridgedCalls turns a run's durable bridged-call log into the shape the
 // resumed phase reads.
 //
 // THE ONLY RECORD A RUN'S RESUME HAS. The process collecting a run may
@@ -36,20 +34,23 @@ import (
 // which renders one ledger line worse — failing the resume over it would lose
 // the whole turn.
 //
-// EXECUTIONS rather than bare ledger calls, because the row carries the
-// bridge's measurement of each call — its start, its duration and who
-// answered it — and the executor's record places the run's calls on its
-// timeline by exactly that. A call the bridge did not measure keeps a zero
-// start, which every reader takes for "not measured". The round is the
+// EACH CALL WITH THE BRIDGE'S MEASUREMENT OF IT — its place in the order the
+// bridge admitted the run's calls, its start, its duration and who answered
+// it — because the executor's record places the run's calls on its timeline,
+// and in their order, by exactly that. A call the bridge did not measure keeps
+// a zero start, which every reader takes for "not measured". The round is the
 // runner's to state: the run's record has one, and it is not this layer's.
-func bridgedCalls(logged []sandbox.BridgeCall) []toolloop.Execution {
-	out := make([]toolloop.Execution, 0, len(logged))
+func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
+	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
-		out = append(out, toolloop.Execution{
-			Name:      call.Name,
-			Args:      decodeBridgeArgs(call.Args),
-			Output:    call.Output,
-			Failed:    call.Failed,
+		out = append(out, runner.BridgedCall{
+			Call: ledger.Call{
+				Name:   call.Name,
+				Args:   decodeBridgeArgs(call.Args),
+				Result: call.Output,
+				Failed: call.Failed,
+			},
+			Seq:       call.Seq,
 			StartedAt: call.StartedAt,
 			Duration:  time.Duration(call.DurationMS) * time.Millisecond,
 			Origin:    call.Origin,
@@ -85,14 +86,6 @@ type bridgeLedger struct {
 	// spend is the run's bridged meter, whose running total rides every
 	// append — see [runner.BridgedSpend]. Nil records the calls alone.
 	spend bridgedMeter
-
-	// base is what the job's bridged calls had cost before this session's
-	// meter began: zero for a launch's session, and the row's total for one
-	// rebuilt after a restart ([Engine.reopenBridgeSession]), whose fresh
-	// meter starts at nothing. The row keeps the larger of two totals
-	// ([sandbox.EngineSpend.Newest]), so a rebuilt meter written alone
-	// would be ignored until it overtook what the job had spent before.
-	base sandbox.EngineSpend
 
 	mu sync.Mutex
 	// launch is the job this session's calls are recorded under, as the
@@ -163,10 +156,12 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 			Output: call.Output,
 			Failed: call.Failed,
 			// THE BRIDGE'S MEASUREMENT, kept for the executor's record:
-			// the one account of when each of the run's calls ran and
-			// who answered it. See [sandbox.BridgeCall.StartedAt].
+			// the one account of the order the run's calls were made in,
+			// when each ran and who answered it. See
+			// [sandbox.BridgeCall.StartedAt].
+			Seq:        call.Seq,
 			StartedAt:  call.StartedAt,
-			DurationMS: int(call.Duration / time.Millisecond),
+			DurationMS: call.Duration.Milliseconds(),
 			Origin:     call.Origin,
 			Server:     call.Server,
 		},
@@ -187,9 +182,9 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 // nothing where the run has no meter.
 func (l *bridgeLedger) spent() sandbox.EngineSpend {
 	if l.spend == nil {
-		return l.base
+		return sandbox.EngineSpend{}
 	}
-	return l.base.Plus(engineSpendOf(l.spend.Total()))
+	return engineSpendOf(l.spend.Total())
 }
 
 // nodeID is this node's id: "" for an engine built without a node, which no
@@ -201,86 +196,22 @@ func (e *Engine) nodeID() string {
 	return e.node.ID()
 }
 
-// reopenBridgeSession rebuilds the bridge session runID's box holds a token
-// for, on this node, after this process lost it — a restart — while the run
-// goes on ([mcpbridge.Bridge.SetReopener]).
-//
-// REBUILT ONLY FOR THE JOB THE TOKEN NAMES, ON THE NODE THAT LAUNCHED IT,
-// WHILE IT RUNS:
-//
-//   - the row's session nonce is the token's, or a relaunch has since
-//     replaced the session and the token is an earlier box's;
-//   - this node launched it, because the box's URL addresses the launching
-//     node and no other — a call reaching another one is a misrouted URL,
-//     and serving it there would split one run's calls across two
-//     surfaces counting ordinals apart;
-//   - the job is running, with its park on the row: a job that ended has no
-//     tools to call, and one whose turn never parked was lost with the
-//     process before it suspended — the recovery that fails it answers it.
-//
-// THE SURFACE IS THE PARKED TURN'S, built as the collection builds it
-// ([Engine.parkedRunner], [runner.Runner.BridgeSurface]), in the epoch live
-// now — the same choice a resume makes, for the same reason.
-func (e *Engine) reopenBridgeSession(ctx context.Context, runID, nonce string) (*mcpbridge.Session, error) {
-	rt := e.sandbox.Load()
-	if rt == nil {
-		return nil, errors.New("this node has no sandbox runtime")
-	}
-	row, found, err := rt.pending.Get(ctx, runID)
-	switch {
-	case err != nil:
-		return nil, fmt.Errorf("reading the run: %w", err)
-	case !found:
-		return nil, errors.New("the run has ended")
-	case row.BridgeNonce == "" || row.BridgeNonce != nonce:
-		return nil, errors.New("the token names a session a later launch of the turn replaced")
-	case row.LaunchNode != e.nodeID():
-		return nil, fmt.Errorf("node %q launched the run, and its box's URL addresses "+
-			"that node", row.LaunchNode)
-	case row.Status != sandbox.StatusRunning:
-		return nil, fmt.Errorf("the run is %s, and only a running job's box calls its tools",
-			row.Status)
-	}
-	state, parkedOK, err := execstate.Decode(row.ExecuteState)
-	if err != nil {
-		return nil, fmt.Errorf("the run's park cannot be read: %w", err)
-	}
-	if !parkedOK {
-		return nil, errors.New("the run's row holds no park: its turn has not parked on it yet")
-	}
-	company := e.Company()
-	if company == nil {
-		return nil, errors.New("this node has no applied company")
-	}
-	seat := company.Org.AgentSeatByHandle(row.AgentHandle)
-	if seat == nil {
-		return nil, fmt.Errorf("seat %q is not in this node's company", row.AgentHandle)
-	}
-	built, err := e.parkedRunner(ctx, company, resumeInput{
-		Company: company, Run: row, State: state,
-		Turn: resumedTurn(row, seat, company.Org),
-	}, nil)
-	if err != nil {
-		return nil, err
-	}
-	surface, meter, err := built.runner.BridgeSurface(ctx)
-	if err != nil {
-		return nil, err
-	}
-	ledger := newBridgeLedger(rt.pending, meter)
-	ledger.base = row.Launch.Bridged
-	ledger.bind(row.LaunchID)
-	return &mcpbridge.Session{
-		RunID: runID, Handle: row.AgentHandle, Role: seat.Name,
-		Surface: surface, Ledger: ledger,
-		OnHost: sandbox.Placement(row.Placement) == sandbox.Direct,
-	}, nil
-}
-
 // engineSpendOf is a bridged meter's total in the shape a run's row carries.
 func engineSpendOf(b runner.Bridged) sandbox.EngineSpend {
 	return sandbox.EngineSpend{Aux: auxTokensOf(b.Aux), Workers: b.Workers,
 		WorkerInput: b.WorkerInput, WorkerOutput: b.WorkerOutput}
+}
+
+// bridgedOf is [engineSpendOf] read back: the total a run's row holds, as the
+// meter of a run taken over while it works starts from it
+// ([runner.NewBridgedSpendFrom]). The row keeps no count of auxiliary calls,
+// only their tokens, and nothing reads the count off a bridged meter.
+func bridgedOf(s sandbox.EngineSpend) runner.Bridged {
+	return runner.Bridged{
+		Aux: auxspend.Spent{Input: s.Aux.Input, Output: s.Aux.Output,
+			CacheRead: s.Aux.CacheRead, CacheWrite: s.Aux.CacheWrite},
+		Workers: s.Workers, WorkerInput: s.WorkerInput, WorkerOutput: s.WorkerOutput,
+	}
 }
 
 // encodeArgs renders a call's arguments as the JSON text the row holds.

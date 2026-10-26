@@ -76,6 +76,10 @@ func catalogue() []events.Payload {
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 		// operator.go
 		OperatorActed{}, BackupRequested{},
+		// assistant_read.go
+		AssistantConversationRead{},
+		// assistant.go
+		AssistantTurnCompleted{},
 		// seat.go
 		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
 	}
@@ -99,6 +103,8 @@ var wireTypes = []string{
 	"agent_turn_started",
 	"agent_turn_steered",
 	"agent_turn_stopped",
+	"assistant_conversation_read",
+	"assistant_turn_completed",
 	"auxiliary_spend",
 	"backup_requested",
 	"budget_exhausted",
@@ -321,7 +327,7 @@ var wireTags = map[string][]string{
 	"agent_spawned":                   {"agent_handle", "agent_id", "role"},
 	"agent_terminated":                {"agent_handle", "agent_id", "reason", "role"},
 	"config_revision_activated":       {"created_by", "created_by_kind", "operator_id", "revision_id", "revision_source", "revision_summary"},
-	"operator_acted":                  {"actor", "actor_kind", "failed", "operator_id", "outcome", "position", "refusal", "request_id", "tool", "transport"},
+	"operator_acted":                  {"actor", "actor_kind", "assistant", "conversation_id", "failed", "operator_id", "outcome", "position", "refusal", "request_id", "tool", "transport"},
 	"backup_requested":                {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
@@ -337,6 +343,8 @@ var wireTags = map[string][]string{
 	"a2a_channel_closed":              {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
 	"budget_exhausted":                {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
 	"budget_meters":                   {"meter_id", "org", "seats", "seq", "timezone"},
+	"assistant_conversation_read":     {"actor", "actor_kind", "conversation_id", "file_id", "operator_id", "owner_id", "reason"},
+	"assistant_turn_completed":        {"actor", "actor_kind", "assistant_turn_id", "conversation_id", "duration_ms", "error_code", "failed", "model", "operator_id", "prompt_version", "provider_key", "state", "steps"},
 	"auxiliary_spend":                 {"actor_role", "actor_seat", "agent_handle", "agent_id", "cache_read_tokens", "cache_write_tokens", "calls", "day", "duration_ms", "ended_at", "failed_calls", "input_tokens", "model", "output_tokens", "provider_key", "purpose", "role", "stage", "started_at", "total_tokens", "turn_id", "work_key"},
 	"custody_batch":                   {"events"},
 	"reflection_due":                  {"turn"},
@@ -346,8 +354,8 @@ var wireTags = map[string][]string{
 	"agent_turn_completed":            {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "ask", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_phase_started":             {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_item", "work_key"},
-	"agent_phase_completed":           {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "backend", "cache_read_tokens", "cache_write_tokens", "cli_turns", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
-	"agent_turn_progress":             {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "running_call", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
+	"agent_phase_completed":           {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "backend", "cache_read_tokens", "cache_write_tokens", "cli_turns", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
+	"agent_turn_progress":             {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "invocations", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "run_started_at", "running_calls", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
 	"subagent_batched":                {"failures", "graph", "parent_handle", "round", "started_at", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
 	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
 	"persist_decider_completed":       {"agent_handle", "agent_id", "classification", "doc_id", "persisted", "review_outcome", "role", "scope", "ttl_until", "turn_id", "work_key"},

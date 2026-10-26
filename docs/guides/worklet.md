@@ -349,7 +349,7 @@ calls it made along the way — the turn-start memory filter, knowledge query an
 episode summary, every rewrite its ledgers and tools needed, and the
 condensing of its card — in input and output, with the prompt cache's share of
 the input beside them. That includes what the engine spends on a coding run
-while no part of the turn is running: an agent-mode run's calls through the
+while no part of the turn is running: an executor run's calls through the
 tool bridge (the rewrites its tools ask for, the workers it delegates to) and
 the condensing of a collected run's report, failure or question, which the part
 of the turn that resumes from the run pays. Learning afterwards (reflection,

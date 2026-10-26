@@ -32,10 +32,15 @@
 //
 // Evolution is additive WITHIN a version — new fields get defaults, nothing is
 // removed or repurposed — and a shape that cannot be read that way takes a new
-// version, and the build that introduces it must carry a reader for the
-// version it replaces for as long as rows of it can be parked: nothing
-// rewrites a parked row, and the layer that holds the blob cannot decode it,
-// so the only thing that can read an old row is a build that still knows how.
+// version. A version a RELEASED build wrote then needs a reader in the build
+// that replaces it, for as long as rows of it can be parked: nothing rewrites
+// a parked row, and the layer that holds the blob cannot decode it, so the
+// only thing that can read an old row is a build that still knows how.
+//
+// A version no release wrote needs none, and gets none. Nobody can be running
+// a build that parked a row in it, so a reader for one would be code that
+// exists only for a build that never shipped. Versions 1 to 3 are such: this
+// build reads 4 alone and refuses the others as unknown.
 package execstate
 
 import (
@@ -49,19 +54,21 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// Version is the format this build writes.
+// Version is the format this build writes, and the one it reads.
 //
 // Bumped only for a change a previous build could MISREAD. An added field a
 // reader can default is not a bump; a changed meaning for an existing field
 // is.
 //
-// It is 3 because 2 described a parked engine conversation — a tool loop
-// stopped on an unanswered call — with a flag marking the states that were
-// not one. Every state is a parked run now and the conversation is gone, so a
-// build that read a new row as 2 would take it for a conversation with no
-// messages; a number is never reused, so a blob carrying 2 (or 1) is refused
-// as a version this build does not read, never decoded as this one.
-const Version = 3
+// It is 4 because 2 and 3 described a parked engine conversation — a tool
+// loop stopped on an unanswered call, 3 the one a CLI drove over MCP — with a
+// flag marking the states that were not one. Every state is a parked run now
+// and the conversation is gone, so a build that read a new row as 3 would
+// take it for a conversation with no messages; a number is never reused, so a
+// blob carrying 3, 2 or 1 is refused as a version this build does not read,
+// never decoded as this one. Images of main wrote rows of 3, which is why that
+// number is retired rather than taken over.
+const Version = 4
 
 // State is a turn parked on its executor's run.
 //

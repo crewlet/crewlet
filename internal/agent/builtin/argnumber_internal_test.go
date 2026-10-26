@@ -6,8 +6,9 @@ import (
 )
 
 // EVERY DECODER ON THIS PATH READS THROUGH json.Number, so that is the shape a
-// model's number actually arrives in — the CLI backend's envelope decoder does
-// it for a text call, and `mcpbridge` does it for a bridged run.
+// model's number actually arrives in — the tool session's server does it for
+// every phase on this host (internal/toolsession), and the bridge serves the
+// executor's run through the same server.
 //
 // These readers only knew float64, and the failure was SILENT in both
 // directions: a `limit` fell through to its fallback, so a search quietly

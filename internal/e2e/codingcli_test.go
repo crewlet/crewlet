@@ -22,8 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
-	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 )
 
 // THE EXECUTOR'S CODING CLI: this test binary again, standing in for Claude
@@ -43,16 +41,17 @@ import (
 // right while the engine was wrong: it reads its brief off `-p`, its system
 // prompt off `--append-system-prompt-file` and its tool surface off
 // `--mcp-config`, dials the seat's bridge over a REAL MCP session, and loops —
-// each round asked of the scripted model exactly as the text backend asks one
-// (the transcript [cliagent.RenderPrompt] flattens, over the tools the bridge
-// listed, the system prompt on the append channel), and each call the model
-// answers made over the bridge, so every call lands on the run's row as a
+// each round asked of the scripted model exactly as the scripted CLI on the
+// engine host asks one ([modelRequest]: the brief, the tools the bridge
+// listed by the server's own names, the system prompt on the append channel
+// and the run so far), and each call the model answers made over the bridge
+// under a Claude Code tool-use id, so every call lands on the run's row as a
 // box's does. It ends when the model submits its work or answers in prose, or
 // at `--max-turns`, and prints stream-json as Claude Code does: one object a
 // line, the result message last, its usage the sum of every round's.
 //
 // SO THE SCRIPTED MODEL IS ONE MODEL FOR BOTH HALVES. The executor's rounds
-// reach the same [scriptedModel.serve] the text phases do, keyed on the same
+// reach the same [scriptedModel.serve] the phases on the host do, keyed on the same
 // offered tools, so a case scripting what the executor calls
 // ([scriptedModel.callOnExecute]) scripts what the run calls.
 
@@ -177,7 +176,7 @@ func codingSandbox(boxes, shim string) string {
 // indented to sit under `providers: llm:`.
 //
 // A VENDOR'S ENTRY WITH NOTHING OVERRIDDEN, because nothing of it runs on this
-// host: a seat's chain names it after the scripted entry, so every text phase
+// host: a seat's chain names it after the scripted entry, so every phase on the host
 // takes the scripted CLI at the chain's head, and the executor's launch skips
 // that member (its CLI has no in-box runner) to take this one. What the entry
 // decides is what the runner is handed — its CLI, its model, its cell.
@@ -260,7 +259,7 @@ func (s codingStream) toolUse(id, name string, input map[string]any) {
 	s.line(map[string]any{"type": "assistant", "session_id": codingSession,
 		"message": map[string]any{"content": []map[string]any{{
 			"type": "tool_use", "id": id,
-			"name": "mcp__" + config.BridgeServerName + "__" + name, "input": input,
+			"name": "mcp__" + config.ToolServerName + "__" + name, "input": input,
 		}}}})
 }
 
@@ -282,12 +281,7 @@ func (s codingStream) result(subtype, text string, turns int, spent replyUsage) 
 	s.line(map[string]any{
 		"type": "result", "subtype": subtype, "is_error": false, "result": text,
 		"session_id": codingSession, "num_turns": turns,
-		"usage": map[string]int{
-			"input_tokens":                spent.input,
-			"output_tokens":               spent.output,
-			"cache_read_input_tokens":     spent.cacheRead,
-			"cache_creation_input_tokens": spent.cacheWrite,
-		},
+		"usage": spent.claudeUsage(),
 	})
 }
 
@@ -416,11 +410,8 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, stream co
 	if err != nil {
 		return fmt.Errorf("listing the bridge's tools: %w", err)
 	}
-	defs := make([]llm.ToolDef, 0, len(listed.Tools))
 	names := make([]string, 0, len(listed.Tools))
 	for _, tool := range listed.Tools {
-		defs = append(defs, llm.ToolDef{Name: tool.Name, Description: tool.Description,
-			Parameters: schemaMap(tool.InputSchema)})
 		names = append(names, tool.Name)
 	}
 	stream.init(names)
@@ -429,44 +420,39 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, stream co
 	if rounds <= 0 {
 		rounds = codingMaxRounds
 	}
-	messages := []llm.Message{{Role: llm.RoleUser, Content: args.brief}}
+	// THE REQUEST THE SCRIPTED CLI ON THE HOST POSTS, so the one script
+	// answers both: the brief as the prompt, the bridge's tools by the
+	// server's own names, and every earlier round of this run.
+	req := modelRequest{System: system, Channel: channelAppend, Prompt: args.brief, Tools: names}
 	var spent replyUsage
 	for round := range rounds {
-		answer, usage, err := askModel(endpoint, system, llm.Request{Messages: messages, Tools: defs})
+		reply, err := askModel(endpoint, req)
 		if err != nil {
 			return err
 		}
-		spent.input += usage.input
-		spent.output += usage.output
-		spent.cacheRead += usage.cacheRead
-		spent.cacheWrite += usage.cacheWrite
-		env := cliagent.ParseEnvelope(answer)
-		if len(env.ToolCalls) == 0 {
-			stream.text(env.Message)
-			stream.result("success", env.Message, round+1, spent)
+		spent = spent.plus(reply.Usage)
+		if len(reply.Calls) == 0 {
+			stream.text(reply.Text)
+			stream.result("success", reply.Text, round+1, spent)
 			return nil
 		}
-		calls := make([]llm.ToolCall, len(env.ToolCalls))
-		for i, call := range env.ToolCalls {
-			calls[i] = llm.ToolCall{ID: fmt.Sprintf("toolu_%02d_%d", round, i),
-				Name: call.Name, Arguments: call.Arguments}
-		}
-		messages = append(messages, llm.Message{Role: llm.RoleAssistant,
-			Content: env.Message, ToolCalls: calls})
+		ex := exchange{Reply: reply}
 		report := ""
-		for _, call := range calls {
-			stream.toolUse(call.ID, call.Name, call.Arguments)
-			out, failed := callOverBridge(ctx, session, call)
-			stream.toolResult(call.ID, out, failed)
-			messages = append(messages, llm.Message{Role: llm.RoleTool,
-				ToolCallID: call.ID, Name: call.Name, Content: out, Failed: failed})
+		for _, call := range reply.Calls {
+			id := claudeID("toolu_")
+			input := orEmptyArgs(call.Args)
+			stream.toolUse(id, call.Name, input)
+			out, failed := callOverBridge(ctx, session, id, call.Name, input)
+			stream.toolResult(id, out, failed)
+			ex.Results = append(ex.Results, callResult{Name: call.Name, Content: out, Failed: failed})
 			if call.Name == runner.SubmitWorkTool && !failed {
 				// THE RUN'S LAST WORD is what it submitted, as a CLI
 				// that finished by reporting ends on its report.
-				report, _ = call.Arguments["summary"].(string)
+				report, _ = input["summary"].(string)
 				report = cmp.Or(report, "Submitted the work.")
 			}
 		}
+		req.Run = append(req.Run, ex)
 		if report != "" {
 			stream.text(report)
 			stream.result("success", report, round+1, spent)
@@ -504,13 +490,14 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, stream codingStream)
 	}
 	defer func() { _ = session.Close() }()
 	stream.init([]string{runner.SubmitWorkTool})
-	call := llm.ToolCall{ID: "toolu_held", Name: runner.SubmitWorkTool, Arguments: map[string]any{
+	id := claudeID("toolu_")
+	input := map[string]any{
 		"outcome": codingHeldOutcome, "summary": codingHeldReport,
 		"evidence": "the run was held across its engine's restart and released after it",
-	}}
-	stream.toolUse(call.ID, call.Name, call.Arguments)
-	out, failed := callOverBridge(ctx, session, call)
-	stream.toolResult(call.ID, out, failed)
+	}
+	stream.toolUse(id, runner.SubmitWorkTool, input)
+	out, failed := callOverBridge(ctx, session, id, runner.SubmitWorkTool, input)
+	stream.toolResult(id, out, failed)
 	if failed {
 		return fmt.Errorf("submitting over the bridge after the release: %s", out)
 	}
@@ -519,7 +506,7 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, stream codingStream)
 }
 
 // bridgeURL is the seat's tool bridge, read off the MCP config the runner
-// wrote — the one server it names under [config.BridgeServerName].
+// wrote — the one server it names under [config.ToolServerName].
 func bridgeURL(path string) (string, error) {
 	if path == "" {
 		return "", errors.New("the run was handed no --mcp-config, so it has no tools")
@@ -537,81 +524,50 @@ func bridgeURL(path string) (string, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return "", fmt.Errorf("reading the MCP config: %w", err)
 	}
-	server, ok := doc.Servers[config.BridgeServerName]
+	server, ok := doc.Servers[config.ToolServerName]
 	if !ok || server.URL == "" {
-		return "", fmt.Errorf("the MCP config names no %q server: %s", config.BridgeServerName, raw)
+		return "", fmt.Errorf("the MCP config names no %q server: %s", config.ToolServerName, raw)
 	}
 	return server.URL, nil
 }
 
-// askModel asks the scripted model one round, as the text backend asks one:
-// the request flattened by [cliagent.RenderPrompt], the system prompt on the
-// append channel — which is the one Claude Code's runner puts it on — and
-// answers the reply's text and what it billed.
-func askModel(endpoint, system string, req llm.Request) (string, replyUsage, error) {
-	prompt, err := cliagent.RenderPrompt(req)
+// askModel asks the scripted model one round, posting the request the
+// scripted CLI on the engine host posts ([cliRun.ask]), and answers its reply.
+func askModel(endpoint string, req modelRequest) (modelReply, error) {
+	body, err := json.Marshal(req)
 	if err != nil {
-		return "", replyUsage{}, fmt.Errorf("rendering the round: %w", err)
-	}
-	body, err := json.Marshal(cliCall{System: system, Channel: channelAppend, Prompt: prompt})
-	if err != nil {
-		return "", replyUsage{}, err
+		return modelReply{}, fmt.Errorf("encoding the round: %w", err)
 	}
 	resp, err := httpx.Client(0).Post(endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return "", replyUsage{}, fmt.Errorf("asking the model: %w", err)
+		return modelReply{}, fmt.Errorf("asking the model: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", replyUsage{}, fmt.Errorf("reading the model's answer: %w", err)
+		return modelReply{}, fmt.Errorf("reading the model's answer: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", replyUsage{}, fmt.Errorf("the model answered %d: %s", resp.StatusCode,
+		return modelReply{}, fmt.Errorf("the model answered %d: %s", resp.StatusCode,
 			bytes.TrimSpace(raw))
 	}
-	var answer struct {
-		Result string `json:"result"`
-		Usage  struct {
-			Input      int `json:"input_tokens"`
-			Output     int `json:"output_tokens"`
-			CacheRead  int `json:"cache_read_input_tokens"`
-			CacheWrite int `json:"cache_creation_input_tokens"`
-		} `json:"usage"`
+	var reply modelReply
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return modelReply{}, fmt.Errorf("reading the model's answer: %w", err)
 	}
-	if err := json.Unmarshal(raw, &answer); err != nil {
-		return "", replyUsage{}, fmt.Errorf("reading the model's answer: %w", err)
-	}
-	return answer.Result, replyUsage{input: answer.Usage.Input, output: answer.Usage.Output,
-		cacheRead: answer.Usage.CacheRead, cacheWrite: answer.Usage.CacheWrite}, nil
+	return reply, nil
 }
 
-// callOverBridge makes one call over the run's bridge session and answers what
-// the model reads back: the tool's text, and whether it failed.
-func callOverBridge(ctx context.Context, session *mcp.ClientSession, call llm.ToolCall) (string, bool) {
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: call.Name, Arguments: call.Arguments})
+// callOverBridge makes one call over the run's bridge session, under the
+// tool-use id Claude Code names it by in `_meta` — which the bridge records as
+// the call's id — and answers what the model reads back: the tool's text, and
+// whether it failed.
+func callOverBridge(ctx context.Context, session *mcp.ClientSession, id, name string,
+	args map[string]any) (string, bool) {
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args,
+		Meta: mcp.Meta{claudeCodeToolUseMeta: id}})
 	if err != nil {
 		return err.Error(), true
 	}
-	var text []string
-	for _, content := range res.Content {
-		if tc, ok := content.(*mcp.TextContent); ok {
-			text = append(text, tc.Text)
-		}
-	}
-	return strings.Join(text, "\n"), res.IsError
-}
-
-// schemaMap is a bridged tool's input schema as a model's tool definition
-// carries it.
-func schemaMap(schema any) map[string]any {
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		return nil
-	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil
-	}
-	return out
+	return callText(res), res.IsError
 }

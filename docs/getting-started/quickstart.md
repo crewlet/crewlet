@@ -786,16 +786,21 @@ coordination:
 
 ```bash
 crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
-crewlet run -config agents.yaml -api-port 8001    # terminal 2
+
+# terminal 2: the agents node's boxes reach their tools through terminal 1
+export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
+crewlet run -config agents.yaml -api-port 0
 ```
 
-The agents node needs a port of its own: every seat's executor runs its CLI in
-a box, and the box calls the seat's tools back through the node's tool bridge,
-served on that listener and dialled on loopback. Without the `ingress` role it
-serves `/health`, `/ready` and that bridge there and nothing else, and its
+Every seat's executor runs its CLI in a box on the agents node, and the box
+calls the seat's tools back through the tool bridge. A node without the
+`ingress` role serves no route of its own, so its boxes dial the data node's
+API — `CREWLET_MCP_BRIDGE_URL` — which relays each call to the agents node over
+the broker. `-api-port 0` binds nothing on the agents node. Give it a port of
+its own instead (`-api-port 8001`) when something should probe it: without the
+`ingress` role it serves `/health` and `/ready` there and nothing else, and its
 `/ready` turns `200` once it has joined the fleet and been admitted — see
 [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
-`-api-port 0` would bind nothing, so the node could launch no executor at all.
 
 The agents node claims the seats once the data node answers that its copy of
 the company's records is level with its logs, and its seats' tracker and knowledge

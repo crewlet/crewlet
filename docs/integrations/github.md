@@ -867,18 +867,14 @@ one.
 
 ## How code authoring works
 
-A seat the founder has gated with `role.sandbox.enabled` authors code through
-the [code sandbox](../concepts/code-sandbox.md). Where its executor is not in
-[agent mode](../concepts/llm-backends.md#agent-mode),
-`run_sandbox` is on the executor's surface; it calls it, and a coding agent
-runs in an isolated box and opens a pull request **as the agent's own GitHub
-identity** — the token the role declares in `role.sandbox.env`, by convention
-the same one as its `mcp_env.github` header. The call is detached: the
-executor loop suspends and resumes with the result, so the agent reports the
-pull request in the same turn. An agent-mode executor is never offered
-`run_sandbox`: it does its code work in its own run, whose box reads the same
-`role.sandbox.env` (see
-[Where code work runs](../concepts/code-sandbox.md#where-code-work-runs)).
+Every agent seat authors code through the
+[code sandbox](../concepts/code-sandbox.md): its executor is its coding CLI's
+[own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box),
+which opens a pull request **as the agent's own GitHub identity** — the token
+the role declares in `role.sandbox.env`, by convention the same one as its
+`mcp_env.github` header. The run is detached: the turn suspends at launch and
+resumes with the run's report, so the agent reports the pull request in the
+same turn.
 
 GitHub stays in the picture on the read/review/track side. Once the pull
 request exists, its `review_requested` event wakes the reviewer through

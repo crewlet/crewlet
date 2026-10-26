@@ -594,6 +594,12 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 			what, e.posture)
 	case !principal.Stage.MayAct():
 		return nil, &Refusal{What: what, Reason: authz.ReasonStage}
+	// A PRINCIPAL ACTING THROUGH THE ASSISTANT asks exactly what its
+	// person may ask, at every posture (ADR-0052's parity): a question is
+	// a read, and no question answers a credential or a secret in clear,
+	// which is all the authority table's human-only list keeps from the
+	// assistant among reads. A [DecidedBy] question decides each record
+	// through the authority table, whose assistant column then applies.
 	case e.posture.kind == postureRequires && !principal.Can(e.posture.grant):
 		return nil, &Refusal{What: what, Reason: authz.ReasonNoGrant,
 			Grants: []iam.Grant{e.posture.grant}}

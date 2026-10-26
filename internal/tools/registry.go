@@ -487,11 +487,12 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 // only — in registration order, or "" when there is nothing to discover.
 //
 // ONLY WHAT IS NOT ACTIVE, because an active tool's whole definition already
-// reaches the model with every request — over the tool bridge to the
-// executor's run, or as the tool catalogue of a text call's prompt for every
-// other phase — and a second copy of its description in the system prompt is
-// the same words paid for twice. On the executor, which holds every
-// first-party tool from its launch, that copy was most of its system prompt. What is left is what the model can learn
+// reaches the model with every request — as a tool of the CLI's `crewlet` MCP
+// server, over the tool bridge to the executor's run in its box and over its
+// phase's tool session for every phase on this host — and a second copy of its
+// description in the system prompt is the same words paid for twice. On the
+// executor, which holds every first-party tool from its launch, that copy was
+// most of its system prompt. What is left is what the model can learn
 // nowhere else: that a server exists, and that a tool it does not hold yet
 // does.
 //

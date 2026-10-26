@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -38,12 +39,20 @@ import (
 //
 // Generic over the payload so a caller gets its own type back rather than a
 // map it has to re-check at every use.
+//
+// SAFE FOR CONCURRENT USE. A coding CLI makes a response's calls at once, and
+// an executor run's bridge hands each one to the surface on its own goroutine
+// with nothing in front of them that runs a submission alone — so two
+// submissions, or a submission and the read of one, can meet here. The decoder
+// runs outside the lock: it is the caller's, it may read the surface this tool
+// sits on, and nothing it does decides the captured value.
 type Tool[T any] struct {
 	name   string
 	desc   string
 	schema map[string]any
 	decode func(map[string]any) (T, error)
 
+	mu     sync.Mutex
 	value  T
 	called bool
 }
@@ -87,14 +96,21 @@ func (t *Tool[T]) Call(_ context.Context, args map[string]any) (tools.Result, er
 	}
 	// LAST WRITE WINS, and the call is still accepted. A model that
 	// submits twice has corrected itself; rejecting the second submission
-	// leaves the engine acting on the draft the model just replaced.
-	t.value = v
-	t.called = true
+	// leaves the engine acting on the draft the model just replaced. Of two
+	// made at once, the one that lands last is the answer: the order a
+	// model wrote two concurrent calls in is not one their arrival keeps.
+	t.mu.Lock()
+	t.value, t.called = v, true
+	t.mu.Unlock()
 	return tools.Result{Output: "submitted"}, nil
 }
 
 // Value returns the captured submission and whether one arrived.
-func (t *Tool[T]) Value() (T, bool) { return t.value, t.called }
+func (t *Tool[T]) Value() (T, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.value, t.called
+}
 
 // Remarshal moves a decoded argument map into a typed struct.
 //

@@ -62,6 +62,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useQuiet } from "~/lib/useQuiet.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import type { PageSummary, PageStatus } from "~/protocol/index.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
+import { composerDraft } from "./composerDraft.ts";
 import { linkPageCommand } from "./page/LinkPicker.tsx";
 import { DocletBar, PageGlyph, pagePath, useSpaces } from "./parts.tsx";
 import { PAGES_WINDOW } from "./usePagedPages.ts";
@@ -207,6 +209,27 @@ export function Composer() {
           return true;
         }
       : null,
+  );
+
+  // WHAT IS OPEN, for the assistant: the page as written so far, its fields
+  // set through the composer's own setters and refused in its own words;
+  // Save as draft and Publish stay the person's.
+  const parentTitle =
+    filed.find(({ page }) => page.id === parent)?.page.title ?? named.data?.page?.title ?? "";
+  useAssistantDraft(
+    composerDraft({
+      value: { space, parent, title, body, labels },
+      parentTitle,
+      spaces,
+      busy: write.busy,
+      apply: (next) => {
+        setSpace(next.space);
+        setParent(next.parent);
+        setTitle(next.title);
+        setBody(next.body);
+        setLabels([...next.labels]);
+      },
+    }),
   );
 
   const back = () => {

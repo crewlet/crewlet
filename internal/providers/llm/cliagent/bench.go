@@ -20,7 +20,8 @@ import (
 //
 // # Two readers
 //
-// A text call reads the sit-out as it arrives and again once it holds a slot.
+// A call through [Provider.Complete] reads the sit-out as it arrives and again
+// once it holds a slot.
 // A seat's EXECUTOR reads it at launch ([Provider.SittingOut]): the run is the
 // CLI's own, started in a box rather than through [Provider.Complete], so the
 // engine asks before it launches and takes the next member of the seat's
@@ -29,7 +30,7 @@ import (
 // work so far lives in its own box and session — but how it ended is read
 // against the same markers when it is collected ([Provider.RunEnded]), so the
 // turn's NEXT launch, and every other seat's on this node, skips the spent
-// entry as a text call would.
+// entry as a call on this host would.
 //
 // # Why the backend benches itself
 //
@@ -94,11 +95,12 @@ type bench struct {
 	said string
 }
 
-// bench sits the entry out for retry — the CLI's own reset, or [limitBench]
-// when it named none — capped at [maxLimitBench]. A later bench never SHORTENS
-// an earlier one: two seats' calls that both met the spent plan report the
-// same window, and the one that lands last must not cut it.
-func (p *Provider) bench(retry time.Duration, said string) {
+// bench sits the entry out for retry (the CLI's own reset, or [limitBench]
+// when it named none), capped at [maxLimitBench], and answers when the entry
+// is tried again. A later bench never SHORTENS an earlier one: two seats'
+// calls that both met the spent plan report the same window, and the one that
+// lands last must not cut it.
+func (p *Provider) bench(retry time.Duration, said string) time.Time {
 	if retry <= 0 {
 		retry = limitBench
 	}
@@ -108,6 +110,7 @@ func (p *Provider) bench(retry time.Duration, said string) {
 	if until.After(p.sitOut.until) {
 		p.sitOut.until, p.sitOut.said = until, said
 	}
+	return p.sitOut.until
 }
 
 // SittingOut is the classified refusal of a call made while the entry sits
@@ -116,7 +119,7 @@ func (p *Provider) bench(retry time.Duration, said string) {
 //
 // Exported for the executor's launch, which is not a [Provider.Complete] and
 // so has to ask: an error here is what makes the launch skip this member for
-// the next in the chain, classified exactly as a text call's refusal is so
+// the next in the chain, classified exactly as a call's refusal is so
 // the hand-off reads the same in either place.
 func (p *Provider) SittingOut() error {
 	p.sitOut.mu.Lock()
@@ -125,26 +128,34 @@ func (p *Provider) SittingOut() error {
 	if !p.now().Before(until) {
 		return nil
 	}
-	return p.fail(llm.KindRateLimit, fmt.Errorf(
-		"%s — sitting out until %s, when this entry is tried again",
-		said, until.UTC().Format(time.RFC3339)))
+	return p.limited(fmt.Errorf("%s, sitting out until %s, when this entry is tried again",
+		said, until.UTC().Format(time.RFC3339)), until)
+}
+
+// limited is a classified rate limit carrying when the entry is tried again,
+// so a caller telling a person to wait can name the instant without reading
+// it out of the vendor's sentence.
+func (p *Provider) limited(err error, until time.Time) error {
+	failure := p.failure(llm.KindRateLimit, err)
+	failure.RetryAt = until
+	return failure
 }
 
 // RunEnded reads how one of this entry's EXECUTOR runs ended — the answer its
 // CLI gave, the error it reported and whether it failed, as the in-box runner
 // collected them — against the entry's own limit markers, and sits the entry
-// out exactly as a text call that met the same report would. It reports
+// out exactly as a call on this host that met the same report would. It reports
 // whether it did.
 //
 // THE OTHER HALF OF THE SECOND READER. A launch skips a member that sits out
 // ([Provider.SittingOut]), but an executor's run never goes through
 // [Provider.Complete], so a run that spent the plan benched nothing: the next
 // launch on the entry — a reviewer sending the turn back an hour into the same
-// window — walked straight into the same limit while a text call on any other
+// window — walked straight into the same limit while a call on any other
 // seat would already have moved on. The resuming node calls this before the
 // turn launches again, and that node is the one whose launch must see it.
 //
-// ON THE VENDOR'S WORD ALONE, by the one classification every text call takes
+// ON THE VENDOR'S WORD ALONE, by the one classification every call takes
 // (classifyMarkers): the answer of a run that did not fail counts only where a
 // sentinel opens it, its error anywhere — and for a CLI whose failures are
 // typed events ([cliprofile.MarkerScopeEvents]), the error the runner

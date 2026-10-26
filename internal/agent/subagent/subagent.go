@@ -73,6 +73,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 var log = logging.Get("agent.subagent")
@@ -239,6 +240,14 @@ func (l Limits) validate() error {
 	return nil
 }
 
+// sessionTitle is how a worker's tool session names itself to its CLI.
+func sessionTitle(parent prompts.Seat, task string) string {
+	if parent.Role == nil {
+		return "worker " + task
+	}
+	return "worker " + task + " of " + parent.Role.Handle()
+}
+
 // Config is everything one parent turn's spawns need. Built once per Execute
 // phase and shared by every spawn in it, including every child of a batch.
 type Config struct {
@@ -304,6 +313,10 @@ type Config struct {
 	// Budget is the parent turn's shared token counter. Nil disables
 	// charging entirely, which is the embedded single-node case.
 	Budget toolloop.BudgetMeter
+
+	// Sessions is where the worker's tools are served to its CLI: the
+	// parent's own host. Required.
+	Sessions *toolsession.Host
 
 	// Fence is the PARENT's seat fence, handed down unchanged. A worker
 	// runs on the parent's grant, calls a slice of the parent's tools and
@@ -396,6 +409,12 @@ func (c Config) validate() error {
 	}
 	if c.Seat.Role == nil {
 		errs = append(errs, errors.New("no parent role"))
+	}
+	if c.Sessions == nil {
+		// Refused before any task starts, rather than by every worker's loop
+		// once it has rendered its prompts: a worker reaches its tools
+		// through nothing else.
+		errs = append(errs, errors.New("no tool session host (Config.Sessions)"))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("subagent: %w", err)
@@ -735,6 +754,10 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	progress := &toolloop.Progress{}
 	loop, err := toolloop.Run(ctx, toolloop.Config{
 		Provider: provider,
+		Host:     cfg.Sessions,
+		// The worker names itself after its task and its parent seat, in
+		// the CLI's own logs.
+		ServerTitle: sessionTitle(cfg.Seat, task.ID),
 		// The resolved head, until a completion names the entry that
 		// actually served — which, on a seat's chain, can be a later one.
 		ProviderKey: key,
