@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -293,14 +294,12 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	fc, ok := s.companyFor(w, r, "no company configuration is active")
+	if !ok {
 		return
 	}
-	seat := seatByHandle(roster, handle)
+	company := fc.company
+	seat := seatByHandle(fc.roster, handle)
 	if seat == nil {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchSeat, map[string]string{
 			"hint": fmt.Sprintf("this company has no agent seat %q", handle),
@@ -381,10 +380,14 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 		return handle, err
 	}
 	s := f.service
-	company, roster := s.company()
-	if company == nil || seatByHandle(roster, handle) == nil {
+	fc, err := s.readCompany(ctx)
+	if errors.Is(err, configapi.ErrNoActiveRevision) || (err == nil && seatByHandle(fc.roster, handle) == nil) {
 		return handle, fmt.Errorf("setupapi: this company has no agent seat %q", handle)
 	}
+	if err != nil {
+		return handle, fmt.Errorf("setupapi: read the company the app is for: %w", err)
+	}
+	company := fc.company
 	// ASKED AGAIN BEFORE THE EXCHANGE, which is the last moment a refusal
 	// costs nothing: the begin route asked on the node that minted the
 	// state, and the callback may land on a node whose Tier A names the
@@ -513,12 +516,13 @@ func authorOf(by iam.Actor) secrets.Author {
 // BUILT FROM THE SLUG GITHUB RETURNED, never from the name that was asked
 // for: GitHub slugifies a name and disambiguates a collision, so the app that
 // exists may not be the one whose name was requested.
-func (f *AppFlow) InstallURL(handle string) string {
-	company, roster := f.service.company()
-	if company == nil {
+func (f *AppFlow) InstallURL(ctx context.Context, handle string) string {
+	fc, err := f.service.readCompany(ctx)
+	if err != nil {
 		return ""
 	}
-	seat := seatByHandle(roster, handle)
+	company := fc.company
+	seat := seatByHandle(fc.roster, handle)
 	if seat == nil || seat.GitHub == nil {
 		return ""
 	}
@@ -552,7 +556,7 @@ func secretNameFor(handle, field string) string {
 	})
 }
 
-// seatByHandle finds one agent seat in the company this node is running.
+// seatByHandle finds one agent seat in the fleet's company ([fleetCompany]).
 //
 // AN INDEX ON THE ORG, not a walk of the document: a stored revision carries
 // no seats at all, so the walk this replaced answered "no such seat" for every

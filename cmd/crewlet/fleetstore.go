@@ -31,10 +31,12 @@ import (
 // # Each lock guards what it names, and the command holds only what it uses
 //
 // The node's database is ASKED, never held ([store.Probe]): its lock says
-// whether the engine is running — [store.ErrLocked] routes the command to its
-// API instead — and the command does not use the file, so keeping the claim
-// would only make a second command read the first as a running engine, and
-// refuse an engine over a database nobody had open. What the command does use
+// whether the engine is running — or starting, from the read its boot decides
+// on ([bootEngine]) — and [store.ErrLocked] routes the command to its API
+// instead, which a node still starting answers `503 starting`. The command
+// does not use the file, so keeping the claim would only make a second
+// command read the first as a running engine, and refuse an engine over a
+// database nobody had open. What the command does use
 // is a broker on the node's store directory, and that broker holds the
 // directory's own lock ([jetstream.StoreDirLock]) until it stops: an engine
 // started part way through is refused there, naming the command, as is a
@@ -59,8 +61,8 @@ import (
 // invocation starts one broker; a second one on the store directory would be
 // refused, in this process as in any other ([jetstream.StoreDirLock]).
 //
-// [store.ErrLocked] means the engine is running: returned as it came, for the
-// caller to route through the node's API. Every other refusal names its way
+// [store.ErrLocked] means the engine is running, or starting: returned as it
+// came, for the caller to route through the node's API. Every other refusal names its way
 // round.
 func openFleetStore(ctx context.Context, boot *config.Bootstrap, bootstrapPath string) (
 	*engine.FleetStore, func(), error) {
@@ -88,10 +90,15 @@ func fleetStoreRemedy(err error, bootstrapPath string) error {
 			"tokens in %s — or start this node's engine and re-run", err,
 			bootstrapPath, apiTokenEnv)
 	case errors.Is(err, jetstream.ErrStoreDirHeld):
+		// AN ENGINE STARTING WITH -import-company is the one engine named
+		// here: any other start holds the node's database from the read it
+		// decides on, before its broker starts ([bootEngine]), so the probe
+		// above has already sent the run to its API.
 		return fmt.Errorf("%w\n\n%s's engine is not running, and the process named "+
 			"above holds its store directory: another crewlet command reaching the "+
-			"fleet's store, or an engine part way through starting. Re-run once "+
-			"that command has finished, or once the engine is up", err, bootstrapPath)
+			"fleet's store, or an engine part way through a start with "+
+			"-import-company. Re-run once that command has finished, or once the "+
+			"engine is up", err, bootstrapPath)
 	}
 	return err
 }

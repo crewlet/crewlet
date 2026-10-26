@@ -24,10 +24,12 @@ import (
 // next reconcile exactly as an API edit would.
 //
 // What stays open is what changes no byte of the company: `config rekey`
-// re-seals the active revision under the keyring, which is Tier A's own
-// business and nothing the managing system can do, and `config activate` of
-// the revision that is already active, which is the offline re-publish a
-// rotated credential needs.
+// re-seals the revision this node boots on under the keyring, which is Tier
+// A's own business and nothing the managing system can do, and `config
+// activate` of the company's own revision — the one this node knows the fleet
+// to run ([store.Configs.Restorable]) — which is the offline re-publish a
+// rotated credential needs. Any other revision, the one this node boots on
+// while it refuses the fleet's included, is a change of document.
 
 // managedRefusal is what a host-side write of a managed document is told:
 // who manages it, why the write is refused, and the two ways forward.
@@ -48,19 +50,19 @@ func refuseManagedOffline(boot *config.Bootstrap, gesture string) error {
 }
 
 // refuseManagedActivation refuses an offline activation of any revision but
-// the active one on a managed document.
+// the company's own on a managed document.
 func refuseManagedActivation(ctx context.Context, cs *configStore, revisionID string) error {
 	if !cs.boot.API.Auth.CompanyManaged() {
 		return nil
 	}
-	active, found, err := cs.configs.Active(ctx)
+	known, found, err := cs.configs.Restorable(ctx)
 	if err != nil {
-		return fmt.Errorf("read the active revision: %w", err)
+		return fmt.Errorf("read the company this node knows: %w", err)
 	}
-	if found && revisionID == active.ID {
+	if found && revisionID == known.ID {
 		return nil
 	}
-	return managedRefusal(cs.boot, "`crewlet config activate` of a revision that is not the active one")
+	return managedRefusal(cs.boot, "`crewlet config activate` of a revision that is not the company's own")
 }
 
 // refuseManagedOverride refuses `-import-company` on a managed deployment.

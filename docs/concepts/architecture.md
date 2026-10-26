@@ -149,7 +149,7 @@ are the other way round.
 1. The **backends** — the stream, coordination and the store file — opened together (below).
 2. The **core runtime**, on a node that holds `data`: the state log (every registered domain's stream provisioned and its applier started), with the node gate over every identity-claiming log and the [identity estate](identity-and-access.md). On a data node this is unconditional, **with a company or without one**: a node nobody has configured yet is the one a Tier A token's session signs in on to create its company, and the one its first person is invited to and signs in on once that company declares the human seat they will hold, and `ingress` requires `data`, so the node anybody signs in on always has it. A node without `data` runs no core: it applies no log, and reaches the estate, the identity directory included, through a node that holds it. It is every domain rather than the one a companyless node can use, because a join replaces the whole replicated file, a snapshot names every registered domain, and the trim counts nodes per log. What waits for a company is only **Worklet's and Doclet's halves** (their writers and readers, their index, feeds and embedding duty), started here when the node boots on a company that keeps them, or by the first apply that hands it one; on a node without `data` they are the router's remote halves.
 3. The **tool catalogue**, equipped onto the company before anything is published — a turn can start the instant the epoch is current, and one that found an empty registry would run a seat with no tools at all.
-4. The **epoch**, built from the active revision — its organization included — and published. Every reader from here on is a single atomic load.
+4. The **epoch**, built from the revision this node boots on — the last one its engine applied, or an offline change it has not published yet ([Control plane](control-plane.md#a-nodes-own-store-keeps-three-facts-apart)) — its organization included, and published. Every reader from here on is a single atomic load. A node that boots on no revision starts unconfigured: the engine never boots on a Tier B file, so a `-company` bootstrap or an `-import-company` file comes in by its import once the node is up. The reconciler then converges the node on the revision the fleet's pointer names.
 5. The **node**, its seats, its duties and its inbound edge.
 
 **Two slots and a file.** The stream and coordination are the two *chosen*
@@ -206,7 +206,7 @@ back what it wrote.
 | Always on | What it does |
 |---|---|
 | Notification service | One fleet-wide group, `notify-inbound`: parse → resolve → valve → wake, publishing the wake to the seat's inbox on the stream. |
-| Config reconciler | Polls the activation pointer, applies an epoch, reports status — all in the KV. |
+| Config reconciler | Polls the activation pointer, applies an epoch, and reports in the KV what it attempted and the revision it serves; once an apply succeeds, that revision is what this node boots on. |
 | Node presence | The `node:ID` lease in the KV, plus the posture heartbeat. |
 | Observability edge | Two routes off one published event: a publish listener writes the store row, a projector pushes it live onto `/ws/stream`. |
 | Usage publisher (data nodes) | This node's own days — what its seats, its schedules and the people its auxiliary model spent for spent, ran and read — derived from the rows its own event log **keeps** and republished to `CREWLET_USAGE_LOG` whenever they move: today and yesterday on every tick, any older day a custody batch settled as kept has changed (back to the event log's 30-day read floor), every day it still owed when it stopped, from its watermark, at boot, and today and yesterday once more as it stops in an orderly way. Not a duty: a node's event log holds only what its own seats did, and the batches [custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data) gave it from nodes holding no data, so it is the only thing that can derive its day — a node without `data` keeps no event log, and its spend is counted in the day of the data node that keeps its events. |
@@ -596,7 +596,7 @@ What each of the four holds, in full:
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | `memory_change_sequence` | One counter, which every new diary note, episode and skill version — and every vector set on a note or an episode — is stamped from, so the [memory changelog](seat-ownership.md#a-seats-memory-follows-it) carries what changed since its last cycle. It only ever increases: a row's rowid is handed out again once the newest row is deleted, and a watermark over it skipped the next row written |
 | **`conversation_sessions`** | What this seat already said in that thread |
-| `company_config` · `scheduled_runs` | Revisions and cron bookkeeping |
+| `company_config` · `scheduled_runs` | Every config revision this node has met, with three facts only it can know — the revision it boots on, the fleet's revision as it last saw it, and an offline change it has not published ([Control plane](control-plane.md#a-nodes-own-store-keeps-three-facts-apart)) — and cron bookkeeping. Which revision is the company is the activation pointer, below, never a row here |
 | `kb_docs` · `kb_postings` | The **lexical** half of the knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer changes. The semantic half is not here — an embedding costs a provider call, so it is derived once by the fleet and lives in the estate below |
 | `page_links` | Which pages and tasks link to which page: the **backlinks**, derived by the same indexer from the same bodies it tokenises (`doclet.Links`), so a page answers "linked from" with no scan of anybody's text. Cascades from `kb_docs`, and rebuilt by the same local walk |
 | `statelog_adoption` | This node's own history of the peer snapshots it has adopted — which donor's artefact, when the join began and whether it completed. Nothing on the write path reads it: the operation ledger travels inside the snapshot with its own watermark |
@@ -659,7 +659,7 @@ to the adopted log.
 | **`crewlet_duties`** | `worker:` ownership, and every other lease, Worklet's `move:` · `merge:` · `bulk:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
-| **`crewlet_status`** | One key per node: which revision it applied |
+| **`crewlet_status`** | One key per node: the epoch and revision it last attempted, how that went (`error` or `degraded` is a refusal), and the revision it serves. A refused re-activation of the revision a node already runs names one revision in both, so a refusal is read from the status, never from the two differing |
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | `crewlet_rebases` | The instant a unit of work's writes are minted at when its own start is older than the operation ledger remembers, so a crash re-run, a retried resume or the next half of the turn mints where the attempt before it did. The bucket's age, 30 days, is the ledger's retention |
 | **`crewlet_token_windows`** · `crewlet_rate` | The token counters (one record per scope, a slot for each calendar window, aged 32 days past its last charge) and the rate windows of the notification valve and of a person's Dashboard Assistant turns, each window at most a minute wide and kept three |
@@ -861,9 +861,21 @@ it may have to fetch when the logs can no longer bring its rows level, which
 `rejoin_window` budgets — and nothing the company configures can hold it. See [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
 
 **One config, agreed by pointer.** An activation is a compare-and-set on an
-append-only pointer whose own revision *is* the epoch, so two operators
-activating at once get two revisions rather than overwriting each other. Each
-node polls it, applies, and writes its own status; a node that is behind picks
+append-only pointer whose own revision *is* the epoch: it lands only while the
+pointer still names the revision it was built on, so of two operators editing
+the same revision at once one lands and the other is refused
+`409 revision_advanced` rather than overwriting it. The
+pointer **is** the company — `GET /config` answers it on every node. Each node
+polls it, applies, and writes its own status, naming the epoch it last applied,
+the revision it serves and the one it would come back on;
+while it runs, what it boots on moves only once an apply has succeeded, so a node that refuses
+a revision goes on serving the one before it, and would restart on that one too
+unless a write to its boot row is still being retried, or its own database is
+discarded at every start (`store.scratch`, every node without `data`), which
+restarts on nothing — that write is local and
+best effort, so the status names what it boots on as a fact of its own rather
+than leaving a reader to infer it from what it runs. A node that
+is behind picks
 a posture — `serve`, `wait`, `shed`, `isolated` or `stuck` — from what it can see
 of the pointer and of its peers. A shedding node refuses at *trigger
 admission*: the delivery goes straight back to the broker and this node stops

@@ -54,8 +54,8 @@ import (
 // WHICH of those a file is, and what the engine boots on, is decided once,
 // before the engine starts — see seed.go. This file carries the decision out.
 //
-// The seed is compared against the ACTIVE revision's opened document, not its
-// stored bytes — see [tierBSeed.is].
+// The seed is compared against a revision's opened document, not its stored
+// bytes — see [tierBSeed.is].
 
 // startReconciler carries out the decided seed, converges this node on the
 // pointer, and returns the loop for the caller to run.
@@ -79,9 +79,13 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 		nodeID, e.Buildable, log); err != nil {
 		return nil, err
 	}
-	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
+	reconciler, err := e.NewReconciler(ctx, engine.ReconcilerOptions{
 		Store: db, Fleet: plane, Queue: e.Backends().Queue,
 		NodeID: nodeID,
+		// WHAT THE ENGINE STARTED ON, which is what it serves until an
+		// apply succeeds: the fleet view's row says so while this node
+		// refuses the fleet's revision, and the boot row moves only from it.
+		Booted: plan.boot,
 		OnApply: func(epoch int64, status configplane.ApplyStatus) {
 			log.InfoContext(ctx, "config_revision_applied",
 				"epoch", epoch, "status", string(status))
@@ -168,82 +172,138 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 			fleetOutranks(ctx, plane, plan.file, target, cipher, log)
 			return nil
 		}
-		return importSeed(ctx, configs, plane, pub, plan.file, "", cipher, nodeID,
-			build, log)
+		return importSeed(ctx, configs, plane, pub, plan.file, store.Revision{}, cipher,
+			nodeID, build, log)
 	case seedImport:
-		target, pointed, err := plane.Target(ctx)
-		if err != nil {
-			return fmt.Errorf("read the activation pointer: %w", err)
-		}
-		active, found, err := configs.Active(ctx)
-		if err != nil {
-			return fmt.Errorf("read the active revision: %w", err)
-		}
-		switch {
-		case pointed:
-			// AGAINST THE REVISION THE FLEET RUNS, which is what the
-			// override replaces: compared with this node's own copy, a
-			// node that was down while a peer changed the company, and
-			// restarted with -import-company naming its old file, found
-			// the file equal to that stale copy and replaced nothing.
-			same, uncompared := plan.file.isFleets(ctx, plane, target, cipher)
-			if uncompared != nil {
-				// NOT SHOWN TO BE THE FILE, so it is replaced, as the
-				// override asks — and said, because a fleet revision
-				// this node cannot open is usually a keyring that
-				// differs from the one the fleet sealed it under.
-				log.WarnContext(ctx, "company_import_uncompared", "file", plan.file.Path,
-					"fleet_revision", target.RevisionID, "epoch", target.Epoch,
-					"error", uncompared,
-					"detail", "the file replaces the fleet's revision without a comparison")
-			}
-			if same {
-				log.InfoContext(ctx, "company_import_unchanged", "file", plan.file.Path,
-					"fleet_revision", target.RevisionID, "epoch", target.Epoch,
-					"detail", "the fleet already runs this file; nothing is imported")
-				return nil
-			}
-		case found:
-			current, err := openStored(cipher, active)
-			if err != nil {
-				return err
-			}
-			same, err := plan.file.is(current)
-			if err != nil {
-				return err
-			}
-			if same {
-				// The file IS this node's revision and the fleet has
-				// none, so there is nothing to import — only a pointer
-				// this node owes the fleet. See publishLocalActive.
-				return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
-			}
-		}
-		// CHAINED TO THE REVISION THIS NODE HOLDS, as an edit through its
-		// API is: the parent is a foreign key into this node's own
-		// history, which may not hold the fleet's newer revision yet.
-		parent := ""
-		if found {
-			parent = active.ID
-		}
-		return importSeed(ctx, configs, plane, pub, plan.file, parent, cipher, nodeID,
-			build, log)
+		return importOverride(ctx, configs, plane, pub, plan.file, cipher, nodeID, build, log)
 	case seedNone:
 		// No file to import. The store is authoritative, so this is a
 		// normal way to run a node — it serves whatever the fleet
-		// activated, and publishes what it holds where the fleet has
-		// nothing newer.
-		active, found, err := configs.Active(ctx)
-		if err != nil {
-			return fmt.Errorf("read the active revision: %w", err)
-		}
-		if !found {
-			return nil
-		}
-		return publishLocalActive(ctx, plane, pub, configs, active, cipher, log)
+		// activated, publishes an offline change it boots on over the
+		// revision that change was built on, and restores the company it
+		// knows where the fleet's pointer is gone.
+		return publishBoot(ctx, plane, pub, configs, plan.boot, plan.fleets, cipher,
+			time.Now, log)
 	default:
 		return errUndecidedSeed
 	}
+}
+
+// importOverride is -import-company: the file replaces whatever the fleet runs,
+// unless the fleet already runs it.
+//
+// AGAINST THE REVISION THE FLEET RUNS, which is what the override replaces:
+// compared with this node's own copy, a node that was down while a peer changed
+// the company, and restarted with -import-company naming its old file, found
+// the file equal to that stale copy and replaced nothing. With no pointer, the
+// fleet's company is the one this node knows ([store.Configs.Restorable]), and
+// a file that IS that revision is that revision published again rather than a
+// copy of it imported.
+func importOverride(ctx context.Context, configs *store.Configs, plane coord.Plane,
+	pub queue.Publisher, seed tierBSeed, cipher secrets.Cipher, nodeID string,
+	build revisionBuild, log *slog.Logger,
+) error {
+	target, pointed, err := plane.Target(ctx)
+	if err != nil {
+		return fmt.Errorf("read the activation pointer: %w", err)
+	}
+	known, knows, err := configs.Restorable(ctx)
+	if err != nil {
+		return fmt.Errorf("read the company this node knows: %w", err)
+	}
+	// BUILT ON WHAT IT REPLACES: the fleet's revision where the pointer can
+	// be opened, kept as this node's history first, as an API write keeps
+	// its base; otherwise the company this node knows.
+	var base store.Revision
+	if knows {
+		base = known
+	}
+	if pointed {
+		same, fleets, uncompared := seed.isFleets(ctx, plane, target, cipher)
+		if uncompared != nil {
+			// NOT SHOWN TO BE THE FILE, so it is replaced, as the
+			// override asks — and said, because a fleet revision this
+			// node cannot open is usually a keyring that differs from the
+			// one the fleet sealed it under.
+			log.WarnContext(ctx, "company_import_uncompared", "file", seed.Path,
+				"fleet_revision", target.RevisionID, "epoch", target.Epoch,
+				"error", uncompared,
+				"detail", "the file replaces the fleet's revision without a comparison")
+		} else {
+			base = fleets
+		}
+		if same {
+			log.InfoContext(ctx, "company_import_unchanged", "file", seed.Path,
+				"fleet_revision", target.RevisionID, "epoch", target.Epoch,
+				"detail", "the fleet already runs this file; nothing is imported")
+			return nil
+		}
+		return importSeed(ctx, configs, plane, pub, seed, base, cipher, nodeID, build, log)
+	}
+	if knows {
+		current, err := openStored(cipher, known)
+		if err != nil {
+			// NOT SHOWN TO BE THE FILE, so it is replaced, as the override
+			// asks, exactly as a fleet revision this node cannot open is:
+			// a company stored unsealed or under a key this keyring has
+			// dropped is the state this flag exists to repair, and refusing
+			// the boot over it left the operator no way out but the store.
+			log.WarnContext(ctx, "company_import_uncompared", "file", seed.Path,
+				"known_revision", known.ID, "error", err,
+				"detail", "the file replaces the company this node knows without a comparison")
+			return importSeed(ctx, configs, plane, pub, seed, base, cipher, nodeID, build, log)
+		}
+		same, err := seed.is(current)
+		if err != nil {
+			return err
+		}
+		if same {
+			// THE FILE IS THE COMPANY THIS NODE KNOWS and the fleet has
+			// no pointer, so there is nothing to import — only a pointer
+			// this node owes the fleet, and the override's posture says
+			// how: unconditionally.
+			return publishOverride(ctx, plane, pub, configs, known, log)
+		}
+	}
+	return importSeed(ctx, configs, plane, pub, seed, base, cipher, nodeID, build, log)
+}
+
+// publishOverride points the fleet at a revision this node holds,
+// unconditionally: -import-company naming a file that is that revision.
+//
+// A CHOICE MADE NOW, at this node's clock, never at the revision's own instant.
+// Stamped with the instant the revision last activated, the operator's choice
+// read as the company the fleet ran back then: a peer that remembers the fleet
+// moving on, restoring a pointer lost again later, found it older than what it
+// remembered, and the override lost to that memory (bootpublish.go, 2b).
+func publishOverride(ctx context.Context, plane coord.Plane, pub queue.Publisher,
+	configs *store.Configs, revision store.Revision, log *slog.Logger,
+) error {
+	at := time.Now().UTC()
+	published, err := plane.Activate(ctx, coord.ActivationRequest{
+		RevisionID: revision.ID, Summary: revision.Summary, Payload: revision.Payload,
+		At: at, Origin: originOf(revision),
+	})
+	if err != nil {
+		return fmt.Errorf("publish revision %s: %w", revision.ID, err)
+	}
+	// AN OFFER IT BOOTS ON IS THE FLEET'S NOW, and stays what it boots on as
+	// a revision rather than a choice; any other revision is history this
+	// node noted the activation of.
+	if revision.Offer != nil {
+		if err := configs.ConfirmOffer(ctx, revision.ID); err != nil {
+			log.WarnContext(ctx, "offline_revision_not_confirmed", "revision", revision.ID,
+				"error", err, "detail", "the fleet runs it; this node boots on it once "+
+					"its reconciler has applied it")
+		}
+	} else {
+		landed(ctx, configs, revision, published, log)
+	}
+	nudge(ctx, pub, revision, log)
+	log.InfoContext(ctx, "company_import_published", "revision", revision.ID,
+		"epoch", published.Epoch,
+		"detail", "the file is the company this node knows; it is published as it is")
+	return nil
 }
 
 // fleetOutranks says that a -company file is not imported because the fleet
@@ -252,7 +312,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
 	target coord.Activation, cipher secrets.Cipher, log *slog.Logger) {
 
-	same, err := seed.isFleets(ctx, plane, target, cipher)
+	same, _, err := seed.isFleets(ctx, plane, target, cipher)
 	if same {
 		return
 	}
@@ -260,9 +320,7 @@ func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
 		"epoch", target.Epoch,
 		"reason", "the fleet already runs a company, and -company only " +
 			"bootstraps a company that does not exist yet",
-		"hint", "to make this file the company, restart with -import-company " +
-			seed.Path + "; to change the running fleet with no restart, run " +
-			"`crewlet config import " + seed.Path + "`"}
+		"hint", seedIgnoredHint(seed.Path)}
 	if err != nil {
 		// NOT COMPARED, so not shown to be the file: said, with why.
 		attrs = append(attrs, "compare_error", err)
@@ -274,10 +332,11 @@ func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
 // changing anything, and discards it ([engine.Engine.Buildable]).
 type revisionBuild func(*config.Company) error
 
-// importSeed writes the seed's file as a new revision, chained to parent, and
-// points the fleet at it.
+// importSeed writes the seed's file as a new revision built on base, and points
+// the fleet at it. A zero base is a company built on nothing: a bootstrap, or
+// an override on a node that knows no company.
 func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
-	pub queue.Publisher, seed tierBSeed, parent string, cipher secrets.Cipher,
+	pub queue.Publisher, seed tierBSeed, base store.Revision, cipher secrets.Cipher,
 	nodeID string, build revisionBuild, log *slog.Logger,
 ) error {
 	document, err := json.Marshal(seed.Company)
@@ -287,8 +346,8 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 
 	// THE FILE IS BEING WRITTEN, so it meets every rule a written document
 	// meets. It was loaded against the runnable rules only, because most
-	// boots never write it: unchanged from the active revision, or a
-	// bootstrap a company that exists outranks. Here it is a new
+	// boots never write it: unchanged from the revision this node boots on,
+	// or a bootstrap a company that exists outranks. Here it is a new
 	// revision, the same act as `crewlet config import`, and admitting a
 	// duplicate here would store exactly what every other write refuses.
 	// Nothing has been stored or activated yet.
@@ -305,9 +364,9 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	// nothing where a backend refuses an empty value (an E2B key), a coding
 	// CLI whose profile or directory cannot be had, a sandbox cell this
 	// host cannot run — and written first it would be the fleet's company,
-	// refused by this node's every apply and its next boot. The engine
-	// booted on the file once, which made the same refusal the boot's with
-	// nothing written; this is that order kept.
+	// refused by this node's every apply. The engine booted on the file
+	// once, which made the same refusal the boot's with nothing written;
+	// this is that order kept.
 	if err = build(seed.Company); err != nil {
 		return fmt.Errorf("company config %s cannot be imported: this node cannot "+
 			"build it, so nothing was stored or activated. Correct the file and "+
@@ -328,25 +387,22 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	// needs, and of the system kind, since nobody ran a command.
 	by := iam.Actor{Name: nodeID, Kind: iam.ActorSystem}
 	seeded := store.Revision{
-		ParentID: parent, Source: "file", CreatedBy: by.Name,
+		ParentID: base.ID, Source: "file", CreatedBy: by.Name,
 		CreatedByKind: by.Kind, Summary: summary, Payload: payload,
 		CreatedAt: at,
 	}
-	// STORED AS HISTORY FIRST, and made this node's active revision only
-	// once the fleet has taken it — the order an edit through the API
-	// keeps, for its reason: this node's active revision is what its next
-	// boot publishes over the fleet's whenever it reads as the newer, so a
-	// bootstrap that lost to a peer's first company and stayed active here
-	// would be published over that company one restart later. A crash
-	// between the two leaves a revision nothing points at, inert.
-	id, err := configs.Insert(ctx, seeded)
+	// STORED AS HISTORY FIRST, and what this node boots on only once its
+	// engine has applied it — the order an edit through the API keeps. A
+	// crash between the store and the activation leaves a revision nothing
+	// points at, inert; one the fleet refused stays inert for good.
+	id, err := configs.InsertOn(ctx, base, seeded)
 	if err != nil {
 		return fmt.Errorf("seed the company config: %w", err)
 	}
 	seeded.ID = id
 	published, err := plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: at,
-		// THE ORIGIN RIDES THE POINTER, so every peer that adopts this
+		// THE ORIGIN RIDES THE POINTER, so every peer that keeps this
 		// revision records the node that seeded it, from `file`, at the
 		// instant it was written — rather than itself, at the instant it
 		// happened to apply it.
@@ -357,11 +413,12 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 		// that read no pointer an instant before a peer wrote one does not
 		// replace that peer's company. An OVERRIDE is unconditional, and
 		// that is its whole posture: it asserts what this node was told to
-		// make the company, over whatever the fleet is running.
+		// make the company, over whatever the fleet is running. It is the
+		// only unconditional activation this build makes.
 		ExpectAbsent: !seed.Override,
 	})
 	if errors.Is(err, coord.ErrActivationRaced) {
-		// THE REVISION IS KEPT, inactive, as history: the fleet's first
+		// THE REVISION IS KEPT, inert, as history: the fleet's first
 		// company is whichever landed, and this node converges on it.
 		current, _, terr := plane.Target(ctx)
 		if terr != nil {
@@ -374,115 +431,38 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
-	// THE FLEET TOOK IT, so it is this node's company too — AT THE
-	// POINTER'S INSTANT, which may be later than the one asked for
-	// ([coord.ActivationAt]): the local row's `activated_at` is what this
-	// node's config history shows for the activation, what the reconciler
-	// holds against the pointer's on every tick, and what the next boot
-	// compares with the pointer to decide whether this node holds a newer
-	// revision to publish. BEST EFFORT, because the activation has landed
-	// and cannot be taken back: the reconciler marks the fleet's revision
-	// active here when it applies the epoch.
-	if _, err := configs.Activate(ctx, id, published.At); err != nil {
-		log.WarnContext(ctx, "local_revision_not_marked_active",
-			"revision", id, "epoch", published.Epoch, "error", err,
-			"detail", "the fleet is running this revision; this node marks "+
-				"it active when its reconciler applies the epoch")
-	}
+	landed(ctx, configs, seeded, published, log)
 	nudge(ctx, pub, seeded, log)
 	// THE KEY IT WAS SEALED UNDER, read off the envelope: a `sealed` flag
 	// said `true` on every line, since nothing is stored unsealed.
 	sealedUnder, _ := secrets.EnvelopeKeyIDOf(payload)
 	log.InfoContext(ctx, "company_config_seeded", "revision", id, "epoch", published.Epoch,
-		"parent", parent, "sealed_under", sealedUnder)
+		"parent", base.ID, "sealed_under", sealedUnder)
 	return nil
 }
 
-// publishLocalActive points the fleet at this node's active revision when the
-// fleet has no pointer, or an OLDER one.
+// landed records an activation this node made in its history, at the
+// pointer's instant, which may be later than the one it asked for
+// ([coord.ActivationAt]).
 //
-// This is what makes an offline `crewlet config import` reach the fleet. The
-// activation pointer lives in the coordination store, which that command does
-// not open: it marks the revision active in the node's own database, where
-// the revision itself lives, and this publishes it at the next start.
-//
-// # The pointer wins when it is NEWER
-//
-// A node booting into a running fleet must converge on what the fleet already
-// decided, not overwrite it with whatever its local database happens to say —
-// that would let one restarted node roll a company back. So the local
-// revision is published only when the fleet has nothing, or when it was
-// activated AFTER the pointer was.
-//
-// Both instants are written by the same node in the offline case, which is
-// the case this exists for. Across a fleet they come from different clocks,
-// and the consequence is bounded and stated: a node whose clock is ahead can
-// republish its own revision once, which every peer then converges on — the
-// same outcome as an operator re-activating it deliberately.
-//
-// # AUTHENTICATED BEFORE IT IS PUBLISHED
-//
-// What this publishes, every peer applies — and every peer refuses a body that
-// is not sealed, because the seal is what says a node of this fleet wrote it.
-// So a revision this node holds in the clear is refused HERE, where this
-// node's operator can act on it, rather than published to be refused on every
-// node.
-func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publisher,
-	configs localActivator, active store.Revision, cipher secrets.Cipher, log *slog.Logger,
-) error {
-	target, found, err := plane.Target(ctx)
-	if err != nil {
-		return fmt.Errorf("read the activation pointer: %w", err)
+// History only: the revision becomes what this node boots on when its engine
+// applies it ([store.Configs.Serve]). BEST EFFORT, because the activation has
+// landed and cannot be taken back, and the reconciler records the same instant
+// when its tick meets the pointer.
+func landed(ctx context.Context, configs activationNoter, revision store.Revision,
+	published coord.Activation, log *slog.Logger) {
+
+	if err := configs.NoteActivation(ctx, revision.ID, published.At); err != nil {
+		log.WarnContext(ctx, "config_activation_not_noted",
+			"revision", revision.ID, "epoch", published.Epoch, "error", err,
+			"detail", "the fleet is running this revision; this node's history "+
+				"shows the activation once its reconciler meets the pointer")
 	}
-	switch {
-	case found && target.RevisionID == active.ID:
-		return nil
-	case found && !active.ActivatedAt.After(target.At):
-		// The fleet is on something else and decided it later. Converging
-		// on the pointer is the reconciler's job, not this function's.
-		log.InfoContext(ctx, "local_revision_superseded", "local", active.ID,
-			"fleet", target.RevisionID, "epoch", target.Epoch,
-			"detail", "this node converges on the fleet's revision")
-		return nil
-	}
-	if _, err = openStored(cipher, active); err != nil {
-		return fmt.Errorf("this node's active revision is not published to the "+
-			"fleet: %w", err)
-	}
-	// The payload goes up with it. This node is telling the fleet to serve
-	// a revision only it holds, so the body has to travel or every peer
-	// converges on a pointer whose revision it cannot read.
-	//
-	// UNCONDITIONAL, unlike a bootstrap seed's create-only write, because
-	// what it offers is a company somebody ACTIVATED here — an offline
-	// `crewlet config import`, which is the case this exists for, or what
-	// the fleet itself once pointed this node at — and it has just read
-	// that the fleet holds nothing newer. A seed proposes a first company
-	// from a file nobody activated, so it must not land over one that
-	// exists; this asserts one that was. Two nodes booting at once may both
-	// decide to publish, and last-write-wins is the right answer there:
-	// each is offering the revision IT holds, both are legitimate, and
-	// every node converges on whichever landed. A compare-and-set would
-	// turn that into a boot-time failure to retry for nothing. It is the
-	// EDIT path that must not lose a write.
-	//
-	// THE REVISION'S OWN ORIGIN goes up with it, never this node's: an
-	// offline `crewlet config import` is an operator's write that only
-	// reaches the fleet here, so every peer that adopts it records who
-	// wrote it, through which credential, from where and when — rather
-	// than the node that happened to publish it.
-	published, err := plane.Activate(ctx, coord.ActivationRequest{
-		RevisionID: active.ID, Summary: active.Summary,
-		Payload: active.Payload, At: active.ActivatedAt,
-		Origin: originOf(active),
-	})
-	if err != nil {
-		return fmt.Errorf("publish the active revision: %w", err)
-	}
-	keepPointersInstant(ctx, configs, active.ID, active.ActivatedAt, published, log)
-	nudge(ctx, pub, active, log)
-	log.InfoContext(ctx, "local_revision_published", "revision", active.ID, "epoch", published.Epoch)
-	return nil
+}
+
+// activationNoter is what [landed] asks of this node's config history.
+type activationNoter interface {
+	NoteActivation(ctx context.Context, revisionID string, at time.Time) error
 }
 
 // originOf is a stored revision's own record, as the pointer carries it: the
@@ -493,41 +473,6 @@ func originOf(r store.Revision) coord.RevisionOrigin {
 		Author: r.CreatedBy, AuthorKind: r.CreatedByKind, OperatorID: r.OperatorID,
 		Source: r.Source, CreatedAt: r.CreatedAt,
 	}
-}
-
-// keepPointersInstant makes this node's local copy of a revision it just
-// published carry the instant the pointer does.
-//
-// The pointer publishes an instant later than the one it replaces
-// ([coord.ActivationAt]), so it can differ from the one this node asked for —
-// and the local row's `activated_at` is the instant this node's config history
-// shows for the activation and the one the reconciler holds against the
-// pointer's. Left at the instant this node asked for, the row names an
-// activation the fleet never made: the history dates it wrongly, and the
-// reconciler's next tick reads the same revision at another instant — which
-// is the re-activation gesture — and re-activates it locally to realign it.
-//
-// BEST EFFORT, because the activation has landed and cannot be taken back:
-// the reconciler realigns the local copy with the pointer on every tick, so a
-// failure here costs one tick of a stale local instant.
-func keepPointersInstant(ctx context.Context, configs localActivator, id string,
-	asked time.Time, published coord.Activation, log *slog.Logger) {
-
-	if store.EncodeTime(asked) == store.EncodeTime(published.At) {
-		return
-	}
-	if _, err := configs.Activate(ctx, id, published.At); err != nil {
-		log.WarnContext(ctx, "local_revision_instant_not_aligned",
-			"revision", id, "asked", asked, "published", published.At, "error", err,
-			"detail", "the pointer carries a later instant than this node's copy; "+
-				"the reconciler aligns the copy on its next tick")
-	}
-}
-
-// localActivator is the one thing [keepPointersInstant] asks of the node's
-// config history.
-type localActivator interface {
-	Activate(ctx context.Context, revisionID string, at time.Time) (string, error)
 }
 
 // nudge announces an activation this node made, so peers converge in

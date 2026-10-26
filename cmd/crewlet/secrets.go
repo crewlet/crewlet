@@ -478,8 +478,14 @@ const revealTakesATierAToken = "\n\nEach value is read with a reveal, which take
 //
 // The NODE DATABASE'S LOCK is what tells the two apart, and it is a fact
 // rather than a guess: the engine holds an OS advisory lock on its database
-// file for exactly as long as it is running, so [store.ErrLocked] means "the
-// engine is up" with a pid attached, and a lock found free means it is not.
+// file for as long as it is running — from the read its start decides on,
+// before its broker starts ([bootEngine]) — so [store.ErrLocked] means "the
+// engine is up, or coming up" with a pid attached, and a lock found free means
+// it is not. A node still starting answers the API route `503 starting` until
+// it serves, which is the truth: the run is made again once it does. Only a
+// start with -import-company, which reads no store first, holds the store
+// directory before the database, and a run in that stretch meets its broker
+// ([fleetStoreRemedy]).
 // The lock is only asked ([store.Probe]); what keeps an engine from starting
 // beneath a run that reached the store directly is the broker the run
 // started, which holds the store directory until the run lets it go

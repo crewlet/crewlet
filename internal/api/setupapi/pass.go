@@ -110,14 +110,12 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		})
 		return
 	}
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	fc, ok := s.companyFor(w, r, "no company configuration is active")
+	if !ok {
 		return
 	}
-	state, ok := s.state(company, roster, kind)
+	company := fc.company
+	state, ok := s.state(company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),

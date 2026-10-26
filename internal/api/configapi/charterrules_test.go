@@ -143,7 +143,7 @@ func TestAnImportWarnsAboutTheCharterWhereAnEditIsRefused(t *testing.T) {
 	if body := decode(t, res); !warnedAt(body, "mission") || !warnedAt(body, "policies[1]") {
 		t.Errorf("the import does not warn about the charter: %v", body["warnings"])
 	}
-	active, _, err := s.configs.Active(t.Context())
+	active, _, err := s.active(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

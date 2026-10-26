@@ -412,6 +412,9 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 	// estate is ever opened on it — a path that reaches for one is told
 	// [store.ErrNoEstate] rather than handed an empty database that reads as
 	// a company with nothing in it.
+	//
+	// DECIDED HERE ALONE: whoever else needs to know whether this node keeps
+	// what it writes asks the handle this opens ([store.DB.Scratch]).
 	if !HoldsEstate(b) {
 		opts.Scratch = b.Store.Scratch
 	}
