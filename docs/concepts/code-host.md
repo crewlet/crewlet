@@ -1136,7 +1136,8 @@ audit ([ADR-0055](https://github.com/crewlet/crewlet/blob/main/adr/0055-a-person
 - **Every push is recorded** as one `operator_acted` event with transport
   `git`, naming the caller exactly as every write does — the seat, its kind
   and the credential the push came through — with the repository and what
-  became of the push, refused ones included. A fetch is a read and is not.
+  became of the push, refused and failed ones included. A fetch is a read and
+  is not.
 - **`/git/` and `/code/` are guarded like every route**, reads included: a
   repository is the company's source. The token may arrive as git's Basic
   password on `/git/` and on no other route. Neither prefix is ever on the
@@ -1772,7 +1773,16 @@ is one `operator_acted` record on the node that received it, with transport
 names them — the author the human seat the principal holds (a credential bound
 to none, whose push is refused, under its own login), the credential
 `pat:<credential id>` for a machine token or `token:<id>` for a Tier A token —
-the repository and what became of the push. A fetch is not recorded.
+the repository and what became of the push. That holds however the push's
+request ends: a push the node answered `503` because its sync could not read
+the code log, one stopped by the node's own failure on its way to
+receive-pack, and one whose body the node could not decode are each recorded
+`failed`, and one whose request declares more than `code.limits.max_push_bytes`
+allows is recorded `refused` (`push_too_large`) as whoever sent it. A request
+is recorded once the node knows who sent it and to which repository: one
+refused before that — a request that is not git's, its credential refused or
+unresolved, a repository the node does not have, the node stopping — names
+nobody and nothing, and is not recorded. A fetch is not recorded.
 
 **Large fetch requests.** git's own HTTP server holds a fetch request in
 memory and refuses one past 10 MiB, and a partial clone breaks that: a

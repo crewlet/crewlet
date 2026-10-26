@@ -76,16 +76,6 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 			"a git-receive-pack request must be application/x-git-receive-pack-request")
 		return
 	}
-	limits := s.limits()
-	drainLimit := limits.MaxPushBytes + MaxCommandSectionBytes
-	if r.ContentLength > drainLimit {
-		// A DECLARED LENGTH THIS LARGE is a client configured to buffer a
-		// gigabyte (git sends one only under its post buffer); draining it
-		// to say so is the cost the bound exists to refuse.
-		auth.GitText(w, http.StatusRequestEntityTooLarge, "this push is "+humanBytes(r.ContentLength)+
-			", past code.limits.max_push_bytes ("+humanBytes(limits.MaxPushBytes)+")")
-		return
-	}
 	ctx, end, ok := s.begin(r.Context(), w)
 	if !ok {
 		return
@@ -93,6 +83,26 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	defer end()
 	adm, ok := s.admit(ctx, w, r, auth.GitPush)
 	if !ok {
+		return
+	}
+	// THE PUSH'S ONE RECORD from here (pushAudit), settled however this
+	// request ends: refused, concluded by its run, or — every return below
+	// that records nothing: a body this node cannot decode, a fault, the
+	// sync, a rule this build cannot read, the scratch, a panic — failed.
+	audit := s.newPushAudit(ctx, adm, start)
+	defer audit.settle()
+	limits := s.limits()
+	drainLimit := limits.MaxPushBytes + MaxCommandSectionBytes
+	if r.ContentLength > drainLimit {
+		// A DECLARED LENGTH THIS LARGE is a client configured to buffer a
+		// gigabyte (git sends one only under its post buffer); draining it
+		// to say so is the cost the bound exists to refuse. Judged once the
+		// request is admitted, never before it, so the push is recorded as
+		// whoever sent it — and a client nobody knows is challenged first,
+		// as for every other refusal of a push.
+		auth.GitText(w, http.StatusRequestEntityTooLarge, "this push is "+humanBytes(r.ContentLength)+
+			", past code.limits.max_push_bytes ("+humanBytes(limits.MaxPushBytes)+")")
+		audit.record(pushRecord{outcome: types.AuditRefused, refusal: RefusalPushTooLarge})
 		return
 	}
 	in, ok := decodedBody(w, r, s)
@@ -106,8 +116,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	refuseAll := func(reason AuditRefusal, answers []answered) {
 		drain(body, drainLimit)
 		writeRefusalReport(w, sec.Caps, answers, refusedNote)
-		s.audit(ctx, adm, pushRecord{outcome: types.AuditRefused, refusal: reason, commands: len(sec.Commands),
-			started: start})
+		audit.record(pushRecord{outcome: types.AuditRefused, refusal: reason, commands: len(sec.Commands)})
 	}
 	switch {
 	case errors.Is(err, errTooManyCommands), errors.Is(err, errSectionTooLarge):
@@ -118,7 +127,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(sec.Commands) == 0 {
 			auth.GitText(w, http.StatusRequestEntityTooLarge, words)
-			s.audit(ctx, adm, pushRecord{outcome: types.AuditRefused, refusal: RefusalCommands, started: start})
+			audit.record(pushRecord{outcome: types.AuditRefused, refusal: RefusalCommands})
 			return
 		}
 		refuseAll(RefusalCommands, refuseWith(sec.Commands, func(parsedCommand) (code.Refusal, string) {
@@ -128,8 +137,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errPushCertificate):
 		drain(body, drainLimit)
 		auth.GitText(w, http.StatusBadRequest, pushCertificateSentence)
-		s.audit(ctx, adm, pushRecord{outcome: types.AuditRefused, refusal: RefusalCommands, commands: len(sec.Commands),
-			started: start})
+		audit.record(pushRecord{outcome: types.AuditRefused, refusal: RefusalCommands, commands: len(sec.Commands)})
 		return
 	case err != nil:
 		// A COMMAND LIST THAT COULD NOT BE READ is a push all the same, and
@@ -137,20 +145,24 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		// are not pkt-lines — the client's to fix, as git's own unpack error
 		// over a pack that is not one is — and failed when the body itself
 		// failed (cut short, not gzip, too slow), as it is past the section.
-		rec := pushRecord{outcome: types.AuditFailed, commands: len(sec.Commands), started: start}
+		rec := pushRecord{outcome: types.AuditFailed, commands: len(sec.Commands)}
 		if errors.Is(err, errMalformed) {
 			rec.outcome, rec.refusal = types.AuditRefused, RefusalCommands
 		}
 		auth.GitText(w, http.StatusBadRequest, "the push's command list could not be read: "+sentence(err.Error()))
-		s.audit(ctx, adm, rec)
+		audit.record(rec)
 		return
 	case sec.Empty():
 		// GIT'S PROBE before a push past its post buffer: a 200 and nothing
-		// run, so git sends the real request.
+		// run, so git sends the real request — the push's end, which records
+		// it. This one is none.
+		audit.none()
 		w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	// A FAILURE FROM HERE ON is recorded with the commands the push names.
+	audit.failed.commands = len(sec.Commands)
 	// THE GRANT (ADR-0058), before the repository's status: a principal that
 	// may push nothing here — a token bound to nobody — is refused whole, as
 	// its advertisement refused it, every command with the sentence its grant
@@ -240,7 +252,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	// refused — WHATEVER THEN BECAME OF THE CONNECTION: once a push reached
 	// its proposal, the record may have landed, and "failed" would say it
 	// did not. Only a push no session concluded is recorded failed.
-	rec := pushRecord{pushID: pushID, commands: len(sec.Commands), started: start, outcome: types.AuditFailed}
+	rec := pushRecord{pushID: pushID, commands: len(sec.Commands), outcome: types.AuditFailed}
 	if claimed {
 		result := sess.outcome()
 		if result.outcome != "" {
@@ -259,7 +271,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		// receive-pack is that end's: answered as it (s.ended — a 503 a
 		// stopping host gives, nothing to a client that is gone), never as
 		// the code log failing, and a started response is cut.
-		s.audit(ctx, adm, rec)
+		audit.record(rec)
 		if out.Started() {
 			panic(http.ErrAbortHandler)
 		}
@@ -278,18 +290,18 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	case !out.Started():
 		// GIT FAILED BEFORE ITS FIRST BYTE, or never started (every
 		// transfer slot busy): answered with a status.
-		s.audit(ctx, adm, rec)
+		audit.record(rec)
 		s.syncFailed(w, r, adm.name, runErr, "push_id", pushID)
 		return
 	default:
 		// PAST THE FIRST BYTE: git that exited by itself has written its
 		// report, which ends the response as git ended it; a process the
 		// engine killed (a deadline, a stall, its output failing) is cut.
-		s.audit(ctx, adm, rec)
+		audit.record(rec)
 		s.failedStarted(r, adm.name, runErr, "push_id", pushID)
 		return
 	}
-	s.audit(ctx, adm, rec)
+	audit.record(rec)
 }
 
 // receiving is what a push brings to one run of its steps 3 to 7: its

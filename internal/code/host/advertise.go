@@ -27,7 +27,9 @@ import (
 // without objects is refused HERE — a token bound to nobody, an archived or a
 // deleted repository — in the one form git prints at this step, `fatal:
 // remote error: <sentence>`; a push that ends here never POSTs, so it is
-// audited here.
+// audited here — refused, or failed however its advertisement failed — and
+// one whose advertisement was served is not, since its POST is the push's
+// end (pushAudit).
 func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	start := s.now()
 	svc, dumb, ok := serviceFor(r)
@@ -55,7 +57,15 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.refusedAtAdvertisement(ctx, w, svc, push, adm, adm.repo, start) {
+	// A PUSH'S ONE RECORD from here, settled however this request ends: every
+	// return below that records nothing — the sync, the advertisement's git —
+	// is a push recorded failed. A fetch keeps none.
+	var audit *pushAudit
+	if push {
+		audit = s.newPushAudit(ctx, adm, start)
+		defer audit.settle()
+	}
+	if s.refusedAtAdvertisement(w, svc, push, adm, adm.repo, audit) {
 		return
 	}
 
@@ -71,7 +81,7 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	defer func() { synced.Release() }()
 	// AGAIN ON THE SYNCED ROW: a linearizable sync may know better than the
 	// stale resolve admission answered from.
-	if s.refusedAtAdvertisement(ctx, w, svc, push, adm, synced.Repo, start) {
+	if s.refusedAtAdvertisement(w, svc, push, adm, synced.Repo, audit) {
 		return
 	}
 
@@ -85,7 +95,7 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	defer func() { s.served(adm, out, use) }()
 	w.Header().Set("Cache-Control", "no-cache")
 	if push {
-		s.advertisePush(ctx, w, r, adm, &synced, out)
+		s.advertisePush(ctx, w, r, adm, &synced, out, audit)
 		return
 	}
 	if protocolVersion(r.Header.Get("Git-Protocol")) != 2 {
@@ -123,8 +133,13 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 // this request (repairing) — every push begins with this advertisement, so a
 // cache git refuses for its shape would otherwise refuse every push. *synced
 // is the rebuilt one after a rebuild, still the caller's to release.
+//
+// SERVED, the request is none of the push's ends (audit.none): the push's
+// POST follows, and records it — or none follows, a push that found nothing
+// to send, which is no push. FAILED, it is left to the request's record,
+// which settles it failed.
 func (s *Server) advertisePush(ctx context.Context, w http.ResponseWriter, r *http.Request, adm admission,
-	synced *cache.Synced, out *sink) {
+	synced *cache.Synced, out *sink, audit *pushAudit) {
 
 	out.prefix = serviceLine(receivePackService)
 	err := s.repairing(ctx, r, adm.name, synced, asAlternate, out.Started, func(in cache.Synced) error {
@@ -142,11 +157,12 @@ func (s *Server) advertisePush(ctx context.Context, w http.ResponseWriter, r *ht
 		})
 		return err
 	})
-	if err != nil && !out.Started() {
+	switch {
+	case err == nil:
+		audit.none()
+	case !out.Started():
 		s.syncFailed(w, r, adm.name, err)
-		return
-	}
-	if err != nil {
+	default:
 		s.failedStarted(r, adm.name, err, "step", "advertisement")
 	}
 }
@@ -185,10 +201,11 @@ func exitedByItself(err error) bool {
 // refusedAtAdvertisement answers the refusals an advertisement makes from a
 // repository row — a deleted or purging repository for either service, and
 // for a push a principal whose grant lets it push nothing (a token bound to
-// nobody: code.Grant.MayPush) or an archived repository — and audits a push
-// that ends here. It reports whether it answered.
-func (s *Server) refusedAtAdvertisement(ctx context.Context, w http.ResponseWriter, svc string, push bool,
-	adm admission, repo code.RepoRef, start time.Time) bool {
+// nobody: code.Grant.MayPush) or an archived repository — and records a push
+// that ends here through its request's record (a fetch's is nil, and records
+// nothing). It reports whether it answered.
+func (s *Server) refusedAtAdvertisement(w http.ResponseWriter, svc string, push bool, adm admission,
+	repo code.RepoRef, audit *pushAudit) bool {
 
 	var (
 		words   string
@@ -205,9 +222,7 @@ func (s *Server) refusedAtAdvertisement(ctx context.Context, w http.ResponseWrit
 		return false
 	}
 	errAdvert(w, svc, words)
-	if push {
-		s.audit(ctx, adm, pushRecord{outcome: types.AuditRefused, refusal: refusal, started: start})
-	}
+	audit.record(pushRecord{outcome: types.AuditRefused, refusal: refusal})
 	return true
 }
 

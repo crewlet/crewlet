@@ -18,11 +18,16 @@ import (
 // advertisement of upload-pack is a fetch — every git process that reads a
 // repository opens with one — and a fetch's transfer that offered no `have`
 // and was served to its end is a clone; a push is counted where it is
-// recorded (audit), which every push reaches exactly once, refused at its
-// advertisement or answered after its run; and every answer adds the bytes
-// git's process wrote its client (sink.Sent). A request refused before git
-// ran — its credential, its repository, its body — served nothing of the
-// repository and counts nothing.
+// recorded (audit), which every push the node admits reaches exactly once
+// however its request ends (pushAudit) — refused or failed at its
+// advertisement, or at its POST whatever became of it; and every answer adds
+// the bytes git's process wrote its client (sink.Sent). A FETCH refused before
+// git ran — its credential, its repository, its body — served nothing of the
+// repository and counts nothing. A push refused or failed before git ran is
+// counted all the same, at its record, as the push the node was asked for;
+// only a request refused before its admission — a credential refused, a
+// repository the node does not have, a host stopping — names no repository
+// and nobody, and counts nothing.
 
 // CodeStatus is what this node's code host says of itself, as of At.
 type CodeStatus struct {

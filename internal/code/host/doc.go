@@ -242,7 +242,10 @@
 // to a human seat nobody else holds pushes as that seat's one holder; a
 // credential bound to no seat fetches only; and every
 // push is one operator_acted record on the receiving node, transport git — the
-// third person transport. WHO is asking is the API guard's answer, read off
+// third person transport — kept by the push's request from its admission and
+// settled however the request ends (pushAudit), so a push that failed on its
+// way to its run is recorded failed rather than not at all. WHO is asking is
+// the API guard's answer, read off
 // the request (iam.From): the seat is the principal's own, which the guard
 // resolved through the identity directory and the running org, so this
 // package looks nobody up a second time. It imports nothing from the API but
@@ -305,8 +308,9 @@
 // fresh clone of any shape, and a partial clone's fetch of what it lacks, which
 // git asks for the same way — so the blame above counts two hundred and one of
 // each, all light; a PUSH is counted where it is recorded (audit), the one
-// place every push reaches exactly once, refused at its advertisement or
-// answered after its run; and every answer adds the bytes git's process wrote
+// place every push the node admits reaches exactly once, however its request
+// ends (pushAudit) — refused or failed at its advertisement, or at its POST
+// whatever became of it; and every answer adds the bytes git's process wrote
 // its client (sink.Sent). [Server.Status] reads it back — the node's cache, the
 // hottest repositories of the hour and the day with their copies in service,
 // and one repository asked about by id — and the engine answers its peers

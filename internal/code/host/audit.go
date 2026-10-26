@@ -20,12 +20,25 @@ import (
 // operator id) — whatever became of it: a refused push writes no row in the code
 // domain, so this record is the only one that says it happened, and where. A
 // fetch is a proven read and is not audited.
+//
+// EVERY PUSH THE NODE ADMITS, HOWEVER ITS REQUEST ENDS (pushAudit): the record
+// is the REQUEST'S, settled once by whichever way the request ends, never
+// written exit by exit — so an exit nobody thought to record is a push
+// recorded failed rather than a push that never happened. Written exit by
+// exit, every request that failed on its way to its run — its sync, its
+// scratch, a fault, a rule this build cannot read, a body it cannot decode,
+// a failed advertisement — was answered and recorded by nobody, which left
+// ADR-0055's audit and the repository's heat (its pushes counted here) a
+// push short of what the node did. Before admission there is nobody to name:
+// a request that is not git's, a credential refused, a repository the node
+// does not have and a host stopping are answered before the node knows who
+// pushed, or where, and are not recorded.
 
 // AuditTool is the operator_acted tool a git push is recorded as.
 const AuditTool = "git_push"
 
 // AuditRefusal is the refusal class of a push recorded `refused`: every
-// code.Refusal, and the three only the receiver can name. A closed set.
+// code.Refusal, and the four only the receiver can name. A closed set.
 type AuditRefusal string
 
 // The receiver's own refusals.
@@ -39,15 +52,21 @@ const (
 	// pkt-lines or carries a push certificate, or commands more than one push
 	// may carry (code.Proposal.ValidateCommands).
 	RefusalCommands AuditRefusal = "commands"
+	// RefusalPushTooLarge is a push whose request declared more than one push
+	// may send — code.limits.max_push_bytes beside its command section's bound
+	// — refused 413 before a byte of it was read. The same limit git's own
+	// receive.maxInputSize holds a push to that declared no length (git sends
+	// one only under its post buffer), which git refuses itself (RefusalGit).
+	RefusalPushTooLarge AuditRefusal = "push_too_large"
 )
 
-// AuditRefusals is every class: each code.Refusal, then the receiver's three.
+// AuditRefusals is every class: each code.Refusal, then the receiver's four.
 func AuditRefusals() []AuditRefusal {
 	var out []AuditRefusal
 	for _, r := range code.Refusals() {
 		out = append(out, AuditRefusal(r))
 	}
-	return append(out, RefusalUnbound, RefusalGit, RefusalCommands)
+	return append(out, RefusalUnbound, RefusalGit, RefusalCommands, RefusalPushTooLarge)
 }
 
 // Valid reports whether r is one of AuditRefusals.
@@ -70,10 +89,76 @@ type pushRecord struct {
 	git string
 }
 
+// pushAudit is ONE PUSH REQUEST'S RECORD, from its admission to its handler's
+// return, so that every request an admitted push makes ends in exactly one of
+// three ways:
+//
+//   - RECORDED by the exit that knows what became of the push (record):
+//     refused, or as its run and its session concluded it;
+//   - NONE, a request that is no push's end (none): an advertisement served,
+//     and git's probe before a push past its post buffer, each followed by the
+//     POST that is the push's end;
+//   - FAILED, every other exit — the push's sync failing, a fault, its
+//     scratch, a protection rule this build cannot read, a body this node
+//     cannot decode, git failing before the push was judged, a handler cut
+//     short by a panic — recorded failed when the handler returns (settle),
+//     with what the request had learnt of the push by then (failed).
+//
+// So no return of a push's handler is a push nobody recorded, and none is
+// recorded twice. Each handler makes one with its admission (newPushAudit)
+// and defers its settle at once. A fetch makes none: every method of a nil
+// pushAudit does nothing.
+type pushAudit struct {
+	s   *Server
+	ctx context.Context
+	adm admission
+	// failed is the record settle writes when no exit recorded the push:
+	// outcome failed, the request's arrival, and what the request has learnt
+	// of the push since (its commands, once read).
+	failed pushRecord
+	// done: the push is recorded, or the request is none of a push's ends.
+	done bool
+}
+
+// newPushAudit is the record of the push adm admitted, whose request arrived
+// at started.
+func (s *Server) newPushAudit(ctx context.Context, adm admission, started time.Time) *pushAudit {
+	return &pushAudit{s: s, ctx: ctx, adm: adm, failed: pushRecord{outcome: types.AuditFailed, started: started}}
+}
+
+// record writes rec as the push's one record — its started the request's
+// arrival — unless the request is recorded already or is none of a push's
+// ends.
+func (a *pushAudit) record(rec pushRecord) {
+	if a == nil || a.done {
+		return
+	}
+	a.done = true
+	rec.started = a.failed.started
+	a.s.audit(a.ctx, a.adm, rec)
+}
+
+// none ends the request as no push's end: settle records nothing.
+func (a *pushAudit) none() {
+	if a != nil {
+		a.done = true
+	}
+}
+
+// settle records the push failed unless an exit recorded it or ended the
+// request as none: deferred by every push's handler from its admission, so it
+// runs however the handler returns, a panic's unwinding included.
+func (a *pushAudit) settle() {
+	if a != nil {
+		a.record(a.failed)
+	}
+}
+
 // audit records one push: its operator_acted record through Options.Audit, its
 // code_push line, its duration under its outcome, and the push in its
 // repository's heat — counted here because this is the one place every push
-// reaches exactly once, whatever became of it.
+// reaches exactly once, whatever became of it: called only by a pushAudit,
+// which calls it once a request.
 func (s *Server) audit(ctx context.Context, adm admission, rec pushRecord) {
 	if rec.pushID == "" {
 		rec.pushID = uuid.Must(uuid.NewV7()).String()

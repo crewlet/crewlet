@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -245,6 +246,168 @@ func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 		refused.ActorName != "ceo" || refused.ActorKind != string(iam.ActorHuman) || !refused.Failed {
 		t.Errorf("the refused force-push was recorded as %+v", refused)
 	}
+}
+
+// EVERY PUSH THE NODE ADMITS IS ONE RECORD, HOWEVER IT ENDS — and one push in
+// its repository's heat, counted at that record. A push answered 503 at its
+// sync, as a git node in a minority of the code log answers every push, at
+// its advertisement or at its POST; one a fault stopped on its way to its
+// run; one whose body this node cannot decode: each is recorded failed, as
+// the person who pushed it. And one declaring more than a push may send is
+// recorded refused, as that person's too: judged after its admission, not
+// before it. Each step's failure is confirmed where it was meant to be — the
+// code log's line for its request, the fault's point reached, the status the
+// client was told — so a step that failed elsewhere proves nothing.
+//
+// Mutation: answer any one of these exits without its record — the request's
+// record ended as none of a push's ends there (pushAudit.none), or the
+// declared length judged before admission again — and its step finds no
+// record and the repository's heat a push short.
+func TestEveryPushTheNodeAdmitsIsRecordedHoweverItEnds(t *testing.T) {
+	var failing atomic.Bool
+	e := &recording{state: func(ctx context.Context, inner host.Estate, q code.StateQuery) (code.RepoSnapshot, error) {
+		if failing.Load() && q.Fresh.Level == statelog.ReadLinearizable {
+			return code.RepoSnapshot{}, errNoQuorum
+		}
+		return inner.RepoState(ctx, q)
+	}}
+	var l logs
+	c := newCase(t, codetest.SoloOptions{Logger: l.logger(), Shape: codetest.Shape{WrapEstate: e.wrap}},
+		codetest.Settings())
+	node := c.Fleet.Nodes()[0]
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main", "main:refs/heads/topic")
+	rows := c.Rows()
+	id, topic := rows.Repo.ID, rows.Refs["refs/heads/topic"]
+	p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
+
+	// gitPush is the person's own push of main, which fails.
+	gitPush := func(t *testing.T) {
+		t.Helper()
+		if res := p.Push(c.Ctx, work, c.URL(0), "main"); res.Err == nil {
+			t.Fatalf("the push went through: %s", res)
+		}
+	}
+	// unavailable is a push whose sync's read at the log's head fails, and
+	// the code log's line its request logged, which says it failed there.
+	unavailable := func(push func(t *testing.T), path string) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			lines := l.count("code_git_unavailable", path)
+			failing.Store(true)
+			push(t)
+			failing.Store(false)
+			if l.count("code_git_unavailable", path) != lines+1 {
+				t.Errorf("the push's request logged no code_git_unavailable for %s: %q", path,
+					l.lines("code_git_unavailable"))
+			}
+		}
+	}
+	errFault := errors.New("a fault this case injected")
+	// fault is the person's push stopped at the point at.
+	fault := func(at codefault.Point) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			reached := make(chan struct{})
+			c.Fleet.Faults().Arm(at, codefault.Action{Once: true, Err: errFault, Reached: reached})
+			gitPush(t)
+			select {
+			case <-reached:
+			default:
+				t.Errorf("the push never reached %s", at)
+			}
+		}
+	}
+	// answered is a hand-built POST of the push service, which is answered
+	// status, saying says.
+	answered := func(status int, says string, req func(t *testing.T) (*http.Response, string)) func(t *testing.T) {
+		return func(t *testing.T) {
+			t.Helper()
+			if resp, body := req(t); resp.StatusCode != status || !strings.Contains(body, says) {
+				t.Errorf("the push was answered %d %q, want %d saying %q", resp.StatusCode, body, status, says)
+			}
+		}
+	}
+	for _, step := range []struct {
+		name    string
+		push    func(t *testing.T)
+		outcome types.AuditOutcome
+		refusal host.AuditRefusal
+	}{
+		{"its advertisement's sync failing", unavailable(gitPush, "/info/refs"), types.AuditFailed, ""},
+		// A DELETION OF TOPIC, sent alone: it carries no pack, so its command
+		// section is its whole body, and nothing before the sync refuses it.
+		{"its POST's sync failing", unavailable(func(t *testing.T) {
+			answered(http.StatusServiceUnavailable, "the code log could not be read here",
+				func(t *testing.T) (*http.Response, string) {
+					return post(t, c, 0, "ceo", "git-receive-pack", "",
+						pkt(topic+" "+gitrefZero+" refs/heads/topic\x00report-status\n")+"0000")
+				})(t)
+		}, "/git-receive-pack"), types.AuditFailed, ""},
+		{"a fault past its commands", fault(codefault.HostAfterCommands), types.AuditFailed, ""},
+		{"a fault past its sync", fault(codefault.HostAfterSync), types.AuditFailed, ""},
+		{"a fault past its scratch", fault(codefault.HostAfterScratch), types.AuditFailed, ""},
+		{"a body it cannot decode", answered(http.StatusUnsupportedMediaType, "content encoding br",
+			func(t *testing.T) (*http.Response, string) {
+				return postEncoded(t, c, "ceo", "br", "0000")
+			}), types.AuditFailed, ""},
+		{"a length declared past what one push may send", answered(http.StatusRequestEntityTooLarge,
+			"past code.limits.max_push_bytes", func(t *testing.T) (*http.Response, string) {
+				return raw(t, c, "ceo", "git-receive-pack", "", 2<<30, "0000")
+			}), types.AuditRefused, host.RefusalPushTooLarge},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			before, pushes := len(c.Fleet.Audited()), node.Host().Status(id).Repo.Day.Pushes
+			step.push(t)
+			audited := c.Fleet.Audited()[before:]
+			// FAILED, stamped for a refused push as for a failed one, so the
+			// event store's failure filter finds both.
+			want := types.OperatorActed{ActorName: "ceo", ActorKind: string(iam.ActorHuman),
+				OperatorID: iam.TokenLogin("ceo"), Transport: types.TransportGit, Tool: host.AuditTool,
+				Repo: codetest.RepoName, Outcome: step.outcome, Refusal: string(step.refusal), Failed: true}
+			if len(audited) != 1 {
+				t.Fatalf("the push was recorded %d times: %+v; want once, as %+v", len(audited), audited, want)
+			}
+			got := audited[0]
+			if got.RequestID == "" {
+				t.Errorf("the push's record names no request id: %+v", got)
+			}
+			want.RequestID = got.RequestID
+			if got != want {
+				t.Errorf("the push was recorded as %+v, want %+v", got, want)
+			}
+			if n := node.Host().Status(id).Repo.Day.Pushes; n != pushes+1 {
+				t.Errorf("the repository's heat counts %d pushes after the push, want %d", n, pushes+1)
+			}
+		})
+	}
+}
+
+// postEncoded is a hand-built POST of the push service to node 0, as who, its
+// body sent under the Content-Encoding encoding.
+func postEncoded(t *testing.T, c *codetest.Case, who, encoding, body string) (*http.Response, string) {
+	t.Helper()
+	n := c.Fleet.Nodes()[0]
+	req, err := http.NewRequestWithContext(c.Ctx, http.MethodPost,
+		n.URL()+"/git/"+codetest.RepoName+"/git-receive-pack", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-git-receive-pack-request")
+	req.Header.Set("Content-Encoding", encoding)
+	req.SetBasicAuth("crewlet", c.Fleet.Token(t, who))
+	resp, err := n.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST git-receive-pack: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	answer, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the answer to POST git-receive-pack: %v", err)
+	}
+	return resp, string(answer)
 }
 
 // ADR-0054: receive-pack never runs in a cache — every push, its
