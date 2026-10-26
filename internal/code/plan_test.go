@@ -60,9 +60,10 @@ import (
 // out of code_pushes_repo_idx's key, and it sorts every push of the
 // repository; order the purge's walk of a repository's changes by `c.number,
 // r.n` and it sorts every revision the repository holds; write a claim's live
-// states in another order and it seeks code_changes_state_idx; drop `old` from
-// code_ref_drops_at_idx's key and the drops' expiry and a purge part sort what
-// they seek rather than read it in order.
+// states in another order and it seeks code_changes_state_idx; lead
+// code_ref_drops' key with the position again (replicated 0061 moved the
+// instant ahead of it) and the drops' expiry and a purge part sort what they
+// seek rather than read it in order.
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
@@ -287,7 +288,6 @@ const (
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
 	activationKey = "sqlite_autoindex_code_activation_1"
 	evictionKey   = "sqlite_autoindex_code_evictions_1"
-	dropsKey      = "sqlite_autoindex_code_ref_drops_1"
 )
 
 // registeredStatements is every statement this package spells against its
@@ -393,9 +393,9 @@ func registeredStatements() map[string]statement {
 		"purge all retired": {purgeAllRetiredSQL, []any{"repo-1"}, []string{retiredRepoIdx + " (repo_id=?)"}},
 		// THE DROPS' EXPIRY AT ITS LARGEST LIMIT, a whole record's budget,
 		// past a horizon half the seeded drops are older than.
-		"expire drops":    {expireDropsSQL, []any{"repo-1", 100, MaxRecordRows}, []string{dropsAtIdx + " (repo_id=? AND at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
-		"purge drops":     {purgeDropsSQL, []any{"repo-1", PurgePartRows}, []string{dropsAtIdx + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
-		"purge all drops": {purgeAllDropsSQL, []any{"repo-1"}, []string{dropsAtIdx + " (repo_id=?)"}},
+		"expire drops":    {expireDropsSQL, []any{"repo-1", 100, MaxRecordRows}, []string{"COVERING INDEX " + dropsKey + " (repo_id=? AND at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge drops":     {purgeDropsSQL, []any{"repo-1", PurgePartRows}, []string{"COVERING INDEX " + dropsKey + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all drops": {purgeAllDropsSQL, []any{"repo-1"}, []string{dropsKey + " (repo_id=?)"}},
 		// A PURGE'S CHANGES: the walk in number order, each change's
 		// dependents counted by its key; the whole changes' rows by the list
 		// of their ids; the cut change's in its key's order; and the final
@@ -555,11 +555,6 @@ func claimName(index string) string { return "the read claimed for " + index }
 // pack_id, part): the order every statement over a repository's retired rows
 // names, so a sweep and a purge remove them alike on every node.
 const retiredRepoIdx = "code_packs_retired_repo_idx"
-
-// dropsAtIdx is code_ref_drops_at_idx, (repo_id, at, position, ref, old): the
-// order every statement over a repository's ref drops names, so an expiry and
-// a purge remove them alike on every node.
-const dropsAtIdx = "code_ref_drops_at_idx"
 
 // seededPlanEstate is an estate holding five repositories of 500 refs, 50
 // packs, 200 pushes, 200 retired packs, 200 ref drops and 50 changes each,

@@ -267,10 +267,10 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	// because an insert aborted on its primary key would stall the log on
 	// every node.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
-		`INSERT INTO code_ref_drops (repo_id, position, ref, old, at) VALUES `, `(?, ?, ?, ?, ?)`,
-		`ON CONFLICT (repo_id, position, ref, old) DO NOTHING`,
+		`INSERT INTO code_ref_drops (repo_id, at, position, ref, old) VALUES `, `(?, ?, ?, ?, ?)`,
+		`ON CONFLICT (repo_id, at, position, ref, old) DO NOTHING`,
 		len(drops), func(i int) []any {
-			return []any{p.RepoID, at.packed, drops[i].ref, drops[i].old, at.at()}
+			return []any{p.RepoID, at.at(), at.packed, drops[i].ref, drops[i].old}
 		}); err != nil {
 		return 0, fmt.Errorf("code: record the objects the push at %s left: %w", at.position, err)
 	}
@@ -317,8 +317,8 @@ func leavesObject(c Command) bool {
 
 // expireRefDrops removes, inside the record's own repository and within limit
 // rows, its ref drops older than PruneGrace by the record's broker instant —
-// oldest first, by instant and then by the key, the order
-// code_ref_drops_at_idx keeps — and answers how many it removed.
+// oldest first, by instant and then by the rest of the key, the order
+// code_ref_drops' key keeps ([dropsKey]) — and answers how many it removed.
 //
 // # The drops take what the tombstones leave, and no fixed share
 //
@@ -335,15 +335,17 @@ func leavesObject(c Command) bool {
 // thousand drops a record for as long as such pushes come — as a fixed
 // share of the tombstones once did (HorizonDeletesPerRecord); and a share
 // bounds no lane time a full budget does not, since a record touches
-// MaxRecordRows at most either way, and deleting a drop moves two index
-// entries where the tombstones a sweep may take as many of move three.
+// MaxRecordRows at most either way, and deleting a drop moves one index
+// entry, its key's, where the tombstones a sweep may take as many of move
+// three.
 //
-// BY THE INSTANT, which the index orders by, so the read seeks the expired
+// BY THE INSTANT, which the key leads with, so the read seeks the expired
 // rows and stops at the first inside the grace or at its limit, whatever
 // order a leader change stamped the records in — every node holds the same
-// rows and removes the same ones, never one inside the grace; and by the key
-// after it, so a removal cut at its limit cuts every node's rows at one row.
-// A record's own drops are never past the grace at its own instant.
+// rows and removes the same ones, never one inside the grace; and by the rest
+// of the key after it, so a removal cut at its limit cuts every node's rows
+// at one row. A record's own drops are never past the grace at its own
+// instant.
 func (a *Applier) expireRefDrops(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	limit int) (int, error) {
 
@@ -912,11 +914,11 @@ const (
 		WHERE r.repo_id = ?1 AND r.ref = CAST(j.value AS TEXT))`
 	sweptTombstonesSQL = `UPDATE code_repos SET tombstones_through = MAX(tombstones_through, ?),
 		tombstones = tombstones - ? WHERE id = ?`
-	// expireDropsSQL is the drops' expiry: the rowid idiom over the
-	// instant's order, so the rows are the oldest the index reaches, cut at
-	// the record's budget at one row on every node.
+	// expireDropsSQL is the drops' expiry: the rowid idiom over the key's
+	// order, the instant's, so the rows are the oldest the key reaches, cut
+	// at the record's budget at one row on every node.
 	expireDropsSQL = `DELETE FROM code_ref_drops WHERE rowid IN (SELECT rowid
-		FROM code_ref_drops INDEXED BY code_ref_drops_at_idx
+		FROM code_ref_drops INDEXED BY ` + dropsKey + `
 		WHERE repo_id = ? AND at < ? ORDER BY at, position, ref, old LIMIT ?)`
 	purgePartsSQL  = `SELECT purge_parts FROM code_repos WHERE id = ?`
 	purgePushesSQL = `SELECT push_id, row_bytes FROM code_pushes WHERE repo_id = ?
@@ -935,7 +937,7 @@ const (
 	// purgeDropsSQL is a part's ref drops, oldest first and no more than the
 	// part has left — the expiry's own order.
 	purgeDropsSQL = `DELETE FROM code_ref_drops WHERE rowid IN (SELECT rowid
-		FROM code_ref_drops INDEXED BY code_ref_drops_at_idx WHERE repo_id = ?
+		FROM code_ref_drops INDEXED BY ` + dropsKey + ` WHERE repo_id = ?
 		ORDER BY at, position, ref, old LIMIT ?)`
 	purgeCountersSQL = `UPDATE code_repos SET status = 'purging', purge_parts = ?, refs = refs - ?,
 		branches = branches - ?, tags = tags - ?, tombstones = tombstones - ?,
@@ -947,7 +949,7 @@ const (
 	purgeAllPacksSQL   = `DELETE FROM code_packs WHERE repo_id = ?`
 	purgeAllRetiredSQL = `DELETE FROM code_packs_retired INDEXED BY code_packs_retired_repo_idx
 		WHERE repo_id = ?`
-	purgeAllDropsSQL = `DELETE FROM code_ref_drops INDEXED BY code_ref_drops_at_idx WHERE repo_id = ?`
+	purgeAllDropsSQL = `DELETE FROM code_ref_drops INDEXED BY ` + dropsKey + ` WHERE repo_id = ?`
 	removeRepoSQL    = `DELETE FROM code_repos WHERE id = ?`
 	markSQL          = `INSERT INTO code_deletions
 			(repo_id, name, at, by, reason, purge_record_id, rejects, last_reject_at, version)

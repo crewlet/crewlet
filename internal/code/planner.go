@@ -80,4 +80,12 @@ const (
 	// pack_id, part), which shares its leading column with
 	// code_packs_retired_repo_idx as packsKey does with code_packs_added_idx.
 	retiredKey = "sqlite_autoindex_code_packs_retired_1"
+	// dropsKey is code_ref_drops' PRIMARY KEY index, (repo_id, at, position,
+	// ref, old) (replicated migration 0061): a repository's ref drops by the
+	// instant their records landed, the one order every statement over them
+	// reads — the push apply's expiry, a purge part's and the final purge's
+	// removal, and the purge's bounded count. It is the table's only index,
+	// so nothing shares its leading column; it is named for the guard, as
+	// every key index here is.
+	dropsKey = "sqlite_autoindex_code_ref_drops_1"
 )
