@@ -52,10 +52,9 @@ func TestExecutorPromptCarriesTheToolsToDiscoverAndIdentity(t *testing.T) {
 	}).Text
 	contains(t, p, "## Your turn", "\n## Tools to discover\n- MCP server `github`",
 		"Engineer", "Acme")
-	// NOT "Available tools": that is the heading a text-mode prompt gives the
-	// JSON definitions of the tools the seat DOES hold, in the same
-	// conversation, and two sections under one heading saying different
-	// things is a model reading whichever it saw last.
+	// NOT "Available tools": the tools the seat holds reach its CLI as its
+	// MCP server's, and a section headed as though it listed them tells the
+	// model it may call what it first has to discover.
 	excludes(t, p, "## Available tools")
 	// Nothing to discover is no section at all, not a heading over nothing.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{Discoverable: " \n"}).Text,
@@ -185,7 +184,7 @@ func TestExecutorPromptRosterInlinesMemberProfiles(t *testing.T) {
 // THE SANDBOX SECTION FOLLOWS THE TOOL, NOT THE ROLE'S GATE.
 //
 // It used to be rendered for every seat whose gate was enabled, which an
-// agent-mode executor's seat may be — and that seat is never offered
+// box-mode executor's seat may be — and that seat is never offered
 // run_sandbox, so its coding CLI was taught a tool its bridge never lists,
 // every turn. The caller says whether the tool is offered; the gate alone
 // renders nothing.

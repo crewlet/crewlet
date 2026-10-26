@@ -8,7 +8,7 @@ import (
 )
 
 // deepEntry is an agent-mode Claude Code entry deep work may run on.
-const deepEntry = "    deep:\n      agent: claude-code\n      model: sonnet\n      mode: agent\n"
+const deepEntry = "    deep:\n      agent: claude-code\n      model: sonnet\n      mode: box\n"
 
 // deepCompany is a company running the assistant on its usual entry, with
 // deep work's block lines appended under assistant.deep_work.
@@ -22,7 +22,7 @@ func TestDeepWorkIsHandedOutOnlyForAnAgentModeEntry(t *testing.T) {
 	t.Parallel()
 	cfg := mustCompany(t, deepCompany(deepEntry, "    llm: deep\n"))
 	key, entry, err := cfg.AssistantDeepWork()
-	if err != nil || key != "deep" || !entry.AgentMode() {
+	if err != nil || key != "deep" || !entry.Box() {
 		t.Fatalf("AssistantDeepWork = %q, %+v, %v", key, entry, err)
 	}
 	if off := mustCompany(t, assistantCompany(assistantEntry, "  enabled: true\n  llm: [assistant]\n")); off != nil {
@@ -33,13 +33,13 @@ func TestDeepWorkIsHandedOutOnlyForAnAgentModeEntry(t *testing.T) {
 	for name, c := range map[string]struct{ entries, block, field string }{
 		"no llm":      {deepEntry, "    max_steps: 20\n", "assistant.deep_work.llm"},
 		"unknown llm": {deepEntry, "    llm: nope\n", "assistant.deep_work.llm"},
-		"text mode": {"    deep:\n      agent: claude-code\n      model: sonnet\n",
+		"host mode": {"    deep:\n      agent: claude-code\n      model: sonnet\n",
 			"    llm: deep\n", "assistant.deep_work.llm"},
-		"no runner": {"    deep:\n      agent: codex\n      model: gpt-5\n      mode: agent\n",
+		"no runner": {"    deep:\n      agent: codex\n      model: gpt-5\n      mode: box\n",
 			"    llm: deep\n", "assistant.deep_work.llm"},
-		"no session to continue": {"    deep:\n      agent: opencode\n      model: x/y\n      mode: agent\n",
+		"no session to continue": {"    deep:\n      agent: opencode\n      model: x/y\n      mode: box\n",
 			"    llm: deep\n", "assistant.deep_work.llm"},
-		"unconfigured e2b": {"    deep:\n      agent: claude-code\n      mode: agent\n      run_in: e2b\n",
+		"unconfigured e2b": {"    deep:\n      agent: claude-code\n      mode: box\n      run_in: e2b\n",
 			"    llm: deep\n", "providers.llm.deep.run_in"},
 	} {
 		t.Run(name, func(t *testing.T) {

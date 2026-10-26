@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 const companyDoc = `
@@ -91,7 +92,8 @@ func TestTheSeatListIsStable(t *testing.T) {
 func TestARunnerIsBuiltPerSeat(t *testing.T) {
 	t.Parallel()
 	c := company(t, companyDoc)
-	if _, err := c.RunnerFor("ceo", nil, engine.RunnerInput{Task: "post it", Reply: turn.NoReply()}); err != nil {
+	if _, err := c.RunnerFor("ceo", nil, engine.RunnerInput{Task: "post it", Reply: turn.NoReply(),
+		Sessions: toolSessions(t)}); err != nil {
 		t.Errorf("RunnerFor(ceo): %v", err)
 	}
 	// A human seat has no runner, and the refusal must name the seat —
@@ -177,13 +179,15 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 	// would disable round-cap extensions for every company that never
 	// mentioned them.
 	c := company(t, companyDoc)
-	if got, err := c.RunnerFor("ceo", nil, engine.RunnerInput{Reply: turn.NoReply()}); err != nil {
+	if got, err := c.RunnerFor("ceo", nil, engine.RunnerInput{Reply: turn.NoReply(),
+		Sessions: toolSessions(t)}); err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	} else if !got.Caps().ExtensionOn {
 		t.Error("an unset extension_enabled disabled the round-cap judge")
 	}
 	off := company(t, companyDoc+"\nturn_engine:\n  extension_enabled: false\n")
-	got, err := off.RunnerFor("ceo", nil, engine.RunnerInput{Reply: turn.NoReply()})
+	got, err := off.RunnerFor("ceo", nil, engine.RunnerInput{Reply: turn.NoReply(),
+		Sessions: toolSessions(t)})
 	if err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	}
@@ -286,4 +290,17 @@ roles:
 	if got := built.SignInState(t.Context()); got != "token" {
 		t.Errorf("SignInState = %q, want token — the conventional variable was not read", got)
 	}
+}
+
+// toolSessions is the session directory a runner serves its phases' tools
+// from, for one case, removed when it ends: what the engine hands every
+// runner it builds ([engine.RunnerInput.Sessions]).
+func toolSessions(t *testing.T) *toolsession.Host {
+	t.Helper()
+	host, err := toolsession.NewHost()
+	if err != nil {
+		t.Fatalf("toolsession.NewHost: %v", err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
+	return host
 }

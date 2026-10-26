@@ -31,12 +31,18 @@ func suspended() execstate.State {
 		Round:           2,
 		InputTokens:     1200,
 		OutputTokens:    340,
-		ToolExecutions:  []types.ToolExecution{{"name": "read_file", "success": true, "round": 1}},
-		RoundsUsed:      2,
+		ToolExecutions: []types.ToolExecution{
+			{"name": "read_file", "success": true, "round": 1, "call_id": "call-0"},
+		},
+		RoundsUsed: 2,
 		RoundNarration: []types.RoundNarration{
 			{"round": 1, "content": "Reading it first."},
 			{"round": 2, "content": "Starting a coding run."},
 		},
+		Invocations: []types.PhaseInvocation{{
+			DurationMS: 5_000, ProviderKey: "claude", Model: "m", Outcome: "stopped",
+			RequestsObserved: true, InputTokens: 1200, OutputTokens: 340, ToolCalls: 2,
+		}},
 		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
 		Task:       "fix the flake",
 		Uncharged:  &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
@@ -71,6 +77,15 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	}
 	if len(got.ToolExecutions) != 1 || len(got.Iterations) != 1 {
 		t.Fatalf("prior-work state lost: %+v", got)
+	}
+	// THE CALL'S OWN ID, which pairs the row with the call the conversation
+	// made: two calls of one response are otherwise the same row twice.
+	if got.ToolExecutions[0]["call_id"] != "call-0" {
+		t.Fatalf("the execution's call id did not survive: %+v", got.ToolExecutions[0])
+	}
+	// AND THE CLI RUNS, the unit the engine started and stopped itself.
+	if len(got.Invocations) != 1 || got.Invocations[0] != want.Invocations[0] {
+		t.Fatalf("the phase's CLI runs did not survive: %+v", got.Invocations)
 	}
 	// THE ROUNDS THEMSELVES. Nothing else holds them — a suspending phase
 	// publishes no completed event and its progress frames are stream-only —
@@ -293,12 +308,13 @@ func TestAnAnsweredStateHasNoDanglingCallLeft(t *testing.T) {
 // every round before the suspend had called nothing — so it would re-fire
 // whatever they delivered.
 //
-// The retired number is one of them: 1 named an earlier shape, and a blob
-// carrying it is refused like any other version this build does not read
-// rather than decoded as this one.
+// The retired numbers are among them: 1 and 2 named earlier shapes, neither in
+// a release, and a blob carrying either is refused like any other version this
+// build does not read rather than decoded as this one — a reader for a version
+// no release wrote would be code for a build nobody runs.
 func TestAVersionThisBuildDoesNotKnowIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int{execstate.Version + 1, 1} {
+	for _, version := range []int{execstate.Version + 1, 1, 2} {
 		blob, err := execstate.Encode(suspended())
 		if err != nil {
 			t.Fatalf("Encode: %v", err)
@@ -309,5 +325,92 @@ func TestAVersionThisBuildDoesNotKnowIsRefused(t *testing.T) {
 			t.Fatalf("Decode(version %d) = %+v, %v, %v; want ErrUnknownVersion",
 				version, got, ok, err)
 		}
+	}
+}
+
+// besideASibling is a parked phase whose last response made a call BESIDE its
+// detached run: the sibling ran first — a detached call runs alone, after the
+// others its response made — and was answered; the run is the one call left.
+func besideASibling() execstate.State {
+	state := suspended()
+	state.Messages[2].ToolCalls = []llm.ToolCall{
+		{ID: "call-0", Name: "read_file", Arguments: map[string]any{"path": "/a"}},
+		{ID: "call-1", Name: "run_sandbox", Arguments: map[string]any{"brief": "fix it"}},
+	}
+	state.Messages = append(state.Messages,
+		llm.Message{Role: llm.RoleTool, ToolCallID: "call-0", Name: "read_file", Content: "contents"})
+	return state
+}
+
+// A ROUND THAT CALLED SOMETHING BESIDE ITS DETACHED RUN PARKS. Its sibling was
+// answered before the run started, so the one call left unanswered is the run
+// — and the resume's answer follows the sibling's, closing the response.
+//
+// Mutation: count every call of the last response as dangling, the shape a
+// loop that parked before the round's other calls ran left, and this is
+// refused as two unanswered calls.
+func TestAParkedCallBesideAnAnsweredSiblingIsResumable(t *testing.T) {
+	t.Parallel()
+	state := besideASibling()
+	blob, err := execstate.Encode(state)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, ok, err := execstate.Decode(blob)
+	if err != nil || !ok {
+		t.Fatalf("Decode = %v, %v", ok, err)
+	}
+	answered := got
+	answered.Messages = got.Answer("the run succeeded")
+	last := answered.Messages[len(answered.Messages)-1]
+	if last.ToolCallID != "call-1" || last.Name != "run_sandbox" {
+		t.Fatalf("the resume's answer is %+v, want the parked run's", last)
+	}
+	if err := answered.Validate(); !errors.Is(err, execstate.ErrNoPendingCall) {
+		t.Fatalf("Validate after Answer = %v; every call should read as answered", err)
+	}
+
+	// The counterfactual: the sibling NOT answered is two calls stranded,
+	// one of them a box nothing would collect.
+	stranded := besideASibling()
+	stranded.Messages = stranded.Messages[:len(stranded.Messages)-1]
+	if _, err := execstate.Encode(stranded); !errors.Is(err, execstate.ErrDanglingCalls) {
+		t.Fatalf("Encode = %v, want ErrDanglingCalls for the unanswered sibling", err)
+	}
+}
+
+// TWO CALLS SHARING AN ID make "answered" mean nothing: one answer reads as
+// both, and a parked call answered by its namesake's result reads as closed.
+func TestTwoCallsSharingAnIDAreRefused(t *testing.T) {
+	t.Parallel()
+	state := besideASibling()
+	state.Messages[2].ToolCalls[0].ID = "call-1"
+	state.Messages[3].ToolCallID = "call-1"
+	if _, err := execstate.Encode(state); !errors.Is(err, execstate.ErrDuplicateCallID) {
+		t.Fatalf("Encode = %v, want ErrDuplicateCallID", err)
+	}
+}
+
+// THE PARKED CALL IS THE CONVERSATION'S LAST WORD. The resume appends its
+// answer at the end, so a turn the model took after the parked response would
+// put the answer after a reply that never saw it.
+func TestAConversationThatGoesOnPastItsParkedCallIsRefused(t *testing.T) {
+	t.Parallel()
+	state := besideASibling()
+	state.Messages = append(state.Messages,
+		llm.Message{Role: llm.RoleAssistant, Content: "while that runs, a word"})
+	if _, err := execstate.Encode(state); !errors.Is(err, execstate.ErrPastTheParkedCall) {
+		t.Fatalf("Encode = %v, want ErrPastTheParkedCall", err)
+	}
+}
+
+// THE PENDING CALL IS NAMED AS IT WAS MADE: an id that matches with a name
+// that does not is a state written about some other call.
+func TestThePendingNameMustBeTheOpenCalls(t *testing.T) {
+	t.Parallel()
+	state := suspended()
+	state.PendingCallName = "read_file"
+	if _, err := execstate.Encode(state); !errors.Is(err, execstate.ErrNoPendingCall) {
+		t.Fatalf("Encode = %v, want ErrNoPendingCall", err)
 	}
 }

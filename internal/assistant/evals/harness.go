@@ -45,7 +45,7 @@ func (c *Clock) Advance(d time.Duration) {
 }
 
 // companyDoc is a company document with the assistant on, on the entry the
-// assistant may run on (Claude Code in text mode, its web tools off), and one
+// assistant may run on (Claude Code in host mode, its web tools off), and one
 // human seat for each handle the caller names.
 const companyDoc = `name: Nimbus
 providers:
@@ -72,7 +72,7 @@ providers:
     deep:
       agent: claude-code
       model: sonnet
-      mode: agent
+      mode: box
 assistant:
   enabled: %t
   llm: [assistant]

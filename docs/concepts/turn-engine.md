@@ -11,7 +11,7 @@ The engine used to plan in one conversation and act in another. That split cost 
 One agentic loop removes the reconciliation rather than improving it. What remains:
 
 - **Onboarding** (first turn only, conditional) runs *before* the executor when the agent has no onboarding marker for its current org chain. It reads the team's `Onboarding` pages, captures conventions via `reflect_and_persist`, and calls `mark_onboarded`. It has its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10) so onboarding never competes with the turn's own budget — if it ran inside the executor it could consume every round before the agent ever called `submit_work`, silently dropping a first-turn request. Skipped on resume turns and once the agent is marked. See [First-turn onboarding](#first-turn-onboarding).
-- **Executor** decides what to do and does it, in one conversation. It starts with every first-party tool in its reach — all but `mark_onboarded`, and `run_sandbox` unless the seat's gate is enabled and its executor is not in [agent mode](llm-backends.md#agent-mode) — and its MCP servers by name; it discovers and activates MCP tools as it turns out to need them. It ends by calling `submit_work` with an outcome, a summary, and the deliveries it claims.
+- **Executor** decides what to do and does it, in one conversation. It starts with every first-party tool in its reach — all but `mark_onboarded`, and `run_sandbox` unless the seat's gate is enabled and its executor is not in [box mode](llm-backends.md#box-mode) — and its MCP servers by name; it discovers and activates MCP tools as it turns out to need them. It ends by calling `submit_work` with an outcome, a summary, and the deliveries it claims.
 - **Reviewer** judges the work. No domain tools; a single `submit_review` structured-output tool forces the decision enum. There is no handoff decision, and no *waiting* decision either. When the turn cannot finish without a manager or peer, the reviewer splits on whether they have been told — a fact the tool log settles, not the agent's prose. **Not yet** → `self_iterate`, and the note tells the next round to reach them with its own colleague-surface tools, the same tools a human teammate would use (there is no special escalation mechanism). **Already asked** → `done`: their reply is what re-triggers the agent, so no further round of *this* turn can produce it, and sending it back burns the iterations the real work needs while posting the same question a second time. Being blocked is the **executor's** word for what happened — the `blocked` outcome, whose `evidence` the schema demands — and `done` / `self_iterate` / `failed` are the **reviewer's** for whether that was good enough. One thing a handoff never buys: whoever triggered the turn is still owed a reply where *they* asked, which is why a turn that asks a colleague while the requester hears nothing is overturned (see [Who is waiting](#who-is-waiting-and-how-they-get-an-answer) below).
 
 **Workers** (`delegate`) are short-lived helpers the executor hands narrowly-scoped work to — web research, a bounded read, summarising something large — without it counting as colleague delegation. See [Workers](#workers) below.
@@ -25,7 +25,7 @@ Each phase gets a filtered view over the shared `tools.Registry` through a `tool
 | Phase | Tools | System prompt | Notes |
 |-------|---------------|---------------|-------|
 | **Onboarding** | `reflect_and_persist` and `mark_onboarded` active from the first round, plus the `activate_tool` / `list_mcp_server_tools` discovery meta-tools | One-line identity + the onboarding instructions (which pages to read, persist conventions, then `mark_onboarded`) + `## Tools to discover` | Runs only on a first turn for an unmarked agent, on its own budget. Activates its knowledge-base tools from `## Tools to discover`, which lists every tool it can reach and does not hold: a first-party one (`search_knowledge` on either backend, `get_page` on Doclet) by name and description, an MCP server (the Confluence server's page tools) by name, its tools listed with `list_mcp_server_tools` first. **No required-skill guard**: onboarding is a fixed read → persist → mark workflow and the prompt is its own guidance, so the load-before-use tax is skipped. Terminates on `mark_onboarded`; on budget exhaustion the agent stays unmarked and retries next turn. |
-| **Executor** | Every first-party tool except `mark_onboarded` — and `run_sandbox` unless the seat's gate is enabled and its executor is not in [agent mode](llm-backends.md#agent-mode) — plus `submit_work`, `activate_tool`, `list_mcp_server_tools`, `delegate` where the seat may hand work to [workers](#workers), and any MCP tool it has activated this turn | Identity + **full policy text** + role profile + skills metadata + roster (leads) + the executor's contract + prefetch blocks + `## Tools to discover` (its MCP servers by name) | The system prompt lists **no tool the executor holds**: every one it is offered reaches the model as a tool definition with every request — in text mode as the prompt's tool catalogue, in agent mode over the CLI's tool bridge — so a second copy of each description in the system prompt was the same words paid for twice, ~17 KB with every builtin wired. `## Tools to discover` names what it can reach and does not hold yet, which on the executor is its MCP servers; `delegate` has a `## Your workers` block beside it where the company publishes worker templates. A tool left out of the universe the surface is built from is out of that list too, and `activate_tool` cannot reach it; individual MCP tool names (often 50 to 150 per role) stay out of the prompt. To use one the agent calls `list_mcp_server_tools(server)` for discovery, then `activate_tool(name)` to make it callable from the next round. Nothing is named in advance, so nothing has to be reconciled afterwards. Mission, vision, backstory, full policy text, and behavioral guidelines render directly into the prompt from the in-memory `Organization` model, with no database seed step. `mark_onboarded` is the whole phase-scoped denylist, kept from every executor: a seat that could mark itself here would permanently skip orientation. `run_sandbox` is left out only where the seat is offered no box. |
+| **Executor** | Every first-party tool except `mark_onboarded` — and `run_sandbox` unless the seat's gate is enabled and its executor is not in [box mode](llm-backends.md#box-mode) — plus `submit_work`, `activate_tool`, `list_mcp_server_tools`, `delegate` where the seat may hand work to [workers](#workers), and any MCP tool it has activated this turn | Identity + **full policy text** + role profile + skills metadata + roster (leads) + the executor's contract + prefetch blocks + `## Tools to discover` (its MCP servers by name) | The system prompt lists **no tool the executor holds**: every one it is offered reaches the model as a tool definition with every request — a tool of the CLI's `crewlet` MCP server, in either mode — so a second copy of each description in the system prompt was the same words paid for twice, ~17 KB with every builtin wired. `## Tools to discover` names what it can reach and does not hold yet, which on the executor is its MCP servers; `delegate` has a `## Your workers` block beside it where the company publishes worker templates. A tool left out of the universe the surface is built from is out of that list too, and `activate_tool` cannot reach it; individual MCP tool names (often 50 to 150 per role) stay out of the prompt. To use one the agent calls `list_mcp_server_tools(server)` for discovery, then `activate_tool(name)` to make it callable from the next round. Nothing is named in advance, so nothing has to be reconciled afterwards. Mission, vision, backstory, full policy text, and behavioral guidelines render directly into the prompt from the in-memory `Organization` model, with no database seed step. `mark_onboarded` is the whole phase-scoped denylist, kept from every executor: a seat that could mark itself here would permanently skip orientation. `run_sandbox` is left out only where the seat is offered no box. |
 | **Review** | `submit_review` meta-tool only | One-line identity + the rules that decide its decision + the round's intent, outcome, tool log and produced text | No catalogue, no policies, no prefetch. Whether anything was DELIVERED is settled before this prompt is built — the reviewer's question is whether the work is any good, and neither its prompt nor `submit_review`'s schema asks the other question. What each decision means is the schema's to say, beside the field; the rule for judging a sandbox run's report renders only where the executor was offered `run_sandbox`, and `a2a_ask` is named only where the seat holds it. |
 | **Worker** | The task's (or its template's) allowlist minus the engine-control denylist (`delegate`, `run_sandbox`, `a2a_ask`, the discovery meta-tools) **and** minus any tool whose [MCP annotations](tool-capabilities.md) mark it a write to a shared surface, **and** minus anything the parent cannot itself call — plus `submit_result` always | Persona (template or inline) + `## Tools to discover` (what it can reach and was not granted) + mandated preamble | Fresh context; a wall-clock timeout; runtime-clamped `max_turns`. A worker CAN discover and activate more *read-only* tools itself, against the safety-filtered universe its grant was cut from — so discovery cannot widen it into a write or a control tool. External writes are denied by *capability* (derived from MCP annotations), not by a hardcoded name list, so the guard holds for any tool stack. |
 
@@ -77,7 +77,7 @@ type Work struct {
 
 To hand a task off to a colleague the executor reaches them where the work lives — a chat mention, an issue comment or reassignment, or `a2a_ask` — and reports that as the delivery. There is no dedicated `delegate` outcome: a handoff is just a colleague-surface tool call.
 
-**Real code work** is the `run_sandbox` tool. For a role gated with `role.sandbox.enabled` whose executor is not in [agent mode](llm-backends.md#agent-mode), the executor calls it to run a coding agent (Claude Code / OpenCode) in an isolated sandbox. The call **suspends** the tool loop (detached run); when the run completes the engine **resumes the same loop** with the result spliced in as that call's reply, so the agent reports and acts in the same turn. An agent-mode executor is never offered it: it already holds a shell, and its code work rides its own run. See [Code Sandbox](code-sandbox.md).
+**Real code work** is the `run_sandbox` tool. For a role gated with `role.sandbox.enabled` whose executor is not in [box mode](llm-backends.md#box-mode), the executor calls it to run a coding agent (Claude Code / OpenCode) in an isolated sandbox. The call **suspends** the tool loop (detached run); when the run completes the engine **resumes the same loop** with the result spliced in as that call's reply, so the agent reports and acts in the same turn. A box-mode executor is never offered it: it already holds a shell, and its code work rides its own run. See [Code Sandbox](code-sandbox.md).
 
 ### Who is waiting, and how they get an answer
 
@@ -124,7 +124,7 @@ In both, the flat question is the answer — so the check is strictly stricter t
 
 **The per-phase headers say only what the model cannot learn elsewhere, each rule once.** A seat's phase runs inside a vendor's coding CLI whose model and harness already know how to be an agent, so the engine states what nothing else can: the seat's identity and chart, the company's own words, what it prefetched, and the phase's contract. A rule about a tool or a submission field lives in that tool's description or that field's schema, which reach the model beside the tool on every round; a rule about the turn (act with tool calls, finish the arc and discover what is missing, stay reachable, how to judge a blocked round) lives in the header. Each rule left traces to an observed turn-ending failure, and it is written once: the review contract was once three copies that drifted until the submission schema asked the reviewer about delivery in words its prompt had retired. `internal/agent/prompts/budget_test.go` holds the prompts under explicit token budgets (executor < 870, review < 590, the whole turn < 2,430), each measured with every section a tool on the seat's surface turns on (the escalation guidance Worklet brings by default, the workers list, the sandbox rules, the MCP servers left to discover) rather than against a synthetic catalogue, so the prose cannot grow unchecked.
 
-**Prompt caching does not make repetition free.** Every round of a text-mode phase is a fresh CLI process handed one prompt: the system prompt on the CLI's system channel where it has one, then the flattened transcript, the tool catalogue and the response contract as one user text (see [how the prompt itself travels](llm-backends.md#how-the-prompt-itself-travels)). What can be reused across rounds is the system prompt alone, and only if its bytes do not move — which is why every builder is a pure function of turn-start inputs and per-round growth rides the user message. Across turns even that does not hold: the prefetch blocks (the thread, memory, knowledge, similar prior work, the counterparty) are resolved per turn and sit inside the system prompt. And a seat's budget charges cached input in full, so every byte of a header is paid on every round whether a cache served it or not.
+**Prompt caching does not make repetition free.** A host-mode phase is a run of its CLI's own loop, handed one prompt: the system prompt on the CLI's system channel where it has one, then the conversation so far as one user text, the seat's tools reaching it as an MCP server rather than in any prompt (see [how the prompt itself travels](llm-backends.md#how-the-prompt-itself-travels)). Within a run the CLI re-sends that prefix on every request; a phase that needs another run — after a person's note, a corrective, a call too long to hold the CLI for — starts a fresh process handed the whole conversation again. What can be reused across requests and runs is the system prompt above all, and only if its bytes do not move — which is why every builder is a pure function of turn-start inputs and what grows during a phase rides the conversation. Across turns even that does not hold: the prefetch blocks (the thread, memory, knowledge, similar prior work, the counterparty) are resolved per turn and sit inside the system prompt. And a seat's budget charges cached input in full, so every byte of a header is paid on every round whether a cache served it or not.
 
 ---
 
@@ -510,13 +510,14 @@ the model to fix. So a round that ends with **no tool call** is never a
 finish there, however it reads — no submission can have succeeded yet,
 or the phase would already have ended. It is a model that wrote its
 report where nobody reads it. The measured case was an executor on a
-text-mode CLI entry whose last reply was one fenced JSON block
+host-mode CLI entry whose last reply was one fenced JSON block
 holding `submit_work`'s *arguments*: the phase ended on it, the engine
 rescued it as `incomplete`, and the reviewer then read the fenced JSON
 as "what the agent produced".
 
-The loop re-prompts that round with a **finishing corrective** naming
-the tool, verbatim (one tool shown; several are offered as "one of …"):
+The loop follows a run that ended that way with another, opened by a
+**finishing corrective** naming the tool, verbatim (one tool shown; several are
+offered as "one of …"):
 
 > Your last reply ended without calling `submit_work`, so this phase has
 > not finished. Nothing written in a reply is read or delivered — a report
@@ -541,9 +542,9 @@ the rescue below takes over.
 
 **No request forces a call, the corrective included.** A request offers
 tools and never names a tool choice — the provider contract has no field
-for one, and no CLI takes one: in text mode the tools ride the prompt as a
-catalogue whose response contract never demands a call, and in agent mode
-the CLI's own loop decides — so the executor, the reviewer, onboarding and
+for one, and no CLI takes one: in either mode the tools reach the CLI as
+an MCP server and its own loop decides whether to call one — so the
+executor, the reviewer, onboarding and
 every worker get the model deciding, on their corrective rounds too. The
 loop is what enforces the call. The forced choice was retired from the
 contract while the engine still called vendors' APIs itself, because
@@ -592,10 +593,10 @@ declining by turns cannot extend a phase round by round on nobody's
 decision. With extensions off, or a ceiling equal to the budget, the cap
 stays hard: the phase ends on the declined round, and is rescued.
 
-**The agent-mode executor is not covered.** An executor that runs as a
-[coding CLI's own agentic loop](llm-backends.md#agent-mode)
-makes its rounds inside the CLI, so the engine's loop never sees a round
-end in prose and cannot ask again. Its submission arrives over the
+**The box-mode executor is not covered.** An executor that runs
+[detached in a box](llm-backends.md#box-mode) makes its rounds inside a
+CLI the turn does not drive — the turn is parked until the run reports — so
+the engine's loop never sees a run end in prose and cannot start another. Its submission arrives over the
 bridge or not at all; a run that ends without one is rescued exactly as
 a native phase whose correctives ran out.
 
@@ -683,11 +684,11 @@ unset, the judge runs on whatever the role's primary model is.
 
 ### How a round ends
 
-Every completion carries a **stop reason** (`llm.StopReason`): `end` — the model answered — or `tool_use` — it asked for calls to run. Those are the two a CLI can honestly report: in text mode it is asked for an envelope that is either an answer or a set of calls, and the backend names whichever it got. A missing reason reads as an ordinary end, because a backend that names none has not said the response was cut short. Every round records its reason (`rounds[].stop_reason` on the phase record).
+A round is one model request, as the CLI's own record shows it, and it carries a **stop reason** (`llm.StopReason`) where the record names one: `end` — the model answered — `tool_use` — it asked for calls to run — or `cap` — the CLI's own turn cap ended its run at that request with the model still working. Those are what a CLI can honestly report; the profile maps its record's own words onto them (`requests.stops`), and recognises its cap by its exit status and what it printed (`cap`). A run its cap ended is the phase out of rounds by another name, never a failure. A missing reason reads as an ordinary end, because a record that names none has not said the response was cut short. Every round records its reason (`rounds[].stop_reason` on the phase record), and a CLI whose record shows no requests has its whole run recorded as one round ([Rounds, runs and the CLI's record](llm-backends.md#rounds-runs-and-the-clis-record)).
 
 There is no reason for a response cut short. A CLI whose model hit its output ceiling, filled its context window or declined the request says so its own way — as prose, which the loop reads like any other answer (and a phase that has to end in a call meets the [finishing corrective](#round-cap-extension-judge) over it), or as a failed run, which the backend reports as `server` — unless the CLI's words match one of its profile's limit or login markers — so the seat's chain hands the call to its next model. What each model does at those edges is its vendor's harness to keep current, which is the reason the CLI is the backend.
 
-**A call whose arguments did not parse is answered, not run.** A tool call whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why instead of running the tool with `{}` — a write the model never asked for. The model reads it and calls again. The text backend marks such a call from the reply's envelope, where an `arguments` value that is a number, a list or a string holding no single JSON object is the same unreadable request. Every failed tool result is marked as failed on the conversation (`llm.Message.Failed`), not only this one.
+**A call whose arguments did not parse is answered, not run.** A tool call whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why instead of running the tool with `{}` — a write the model never asked for. The model reads it and calls again. The tool session marks such a call as the CLI's `tools/call` request arrives, and a box's bridge answers it in the same words; where the CLI handed the server an object of its own making instead — Claude Code turns an array into one — the call's entry in the CLI's record, which keeps what the model wrote, marks it (`llm.TurnCall.ArgumentsError`). Some CLIs never send one — Qwen Code repairs the arguments first, and Kimi Code reads them as `{}` and calls only a tool that requires no argument — so a tool validates its own arguments as well ([per CLI](llm-backends.md#what-each-cli-does-with-the-seats-tools)). Every failed tool result is marked as failed on the conversation (`llm.Message.Failed`), not only this one.
 
 ---
 
@@ -700,7 +701,7 @@ Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards
 3. **Delegation depth cap.** The trigger event carries `delegation_depth`. When it meets `turn_engine.delegation_depth_limit` (default 3), the engine publishes a `turn.guard_breach(kind="depth_cap")` and terminates the turn as `failed` before any phase runs. This is the always-on backstop against runaway / circular delegation: it is checked at the top of every turn regardless of how the turn was triggered, and `a2a_ask` propagates the chain so the recipient's turn inherits the accumulated depth.
 4. **Per-turn budget cascade.** Agent budget → phase budgets → the delegation slice (default 20% of the parent's remaining). Exhaustion publishes `budget_exhausted` — naming the refusing window and when it resets — and marks the turn failed; the seat is then [parked](agent-runtime.md#the-budget-park) until that window turns over or a revision raises the ceiling, and a delivery that reaches a seat whose window is already refusing is parked before any turn starts. ONE slice covers a whole `delegate` call whatever its task count, so a fan-out cannot multiply the operator's fraction by N; the wrapper judges and records each worker round on the slice in one step under a lock before it charges the parent's counter, so concurrent workers can't both pass the cap check and overshoot. A worker round is charged once its reply is in, so a round the slice refuses has already been billed: it is still charged to the seat's and the company's counters and still counts against the slice, and the worker stops (`budget_exhausted`). Where the company or the seat refuses the same round, theirs is the refusal reported, and the worker is `failed` on the seat's or the company's budget — whichever refused — rather than its own slice. A call whose slice divided by its task count falls below `min_tokens_per_task` is refused UP FRONT — N workers that each die mid-round have spent the whole slice and produced nothing. And a capped seat whose remaining budget cannot be read, or has nothing left, is not offered `delegate` for the phase at all: the slice is a fraction of that remainder, and a remainder of zero would otherwise read as no ceiling.
 
-   **A refusal also stops every later model call of the turn, before it is made.** A refused round is counted, so the window it was refused in reads past its ceiling, and the turn's ceilings are pinned: every later charge in that window is refused, whatever its size, until the window turns over on the turn's own clock. The turn's one meter — every phase, the judge and every worker charge it, and every [auxiliary call](../guides/budgets-and-spend.md#auxiliary-spend) the turn makes (its context assembly, the conversation block's condensation, and every rewrite its ledgers, the judge's evidence and its tools ask for) is post-charged through it — keeps each window it has seen with no room left (the one a refusal named, any other window of either scope the same refused round filled, one an admitted round filled exactly, and one an auxiliary call's post-charge took to or past its ceiling), and every call asks it first: the tool loop before each round, the first included; the round-cap judge, before it is consulted and again once its evidence is condensed; an agent-mode executor before its launch, again once its brief is built; and each of the turn's auxiliary calls, which is not made at all while a window is full, since the rewrite would feed a round that is never sent — all but the task card's, which is written after the segment's last round as the turn's record rather than an input to one, so a turn the budget ended still gets its card. So the reviewer after a refused judgement, the executor after a correction, the executor's first round after a context assembly that took the seat past its day, the parent's next round and every sibling's after a worker's refusal, and a worker that starts once its call's slice is spent (in a later wave, or behind `max_parallel`) are each refused without being sent — they used to send a whole round the vendor billed and the meter then refused. Each is a refusal as surely as a refused charge, so the meter records it on the shared counter as one: the first call it holds in a window stamps that window's `refused_at` — the "last refused" every screen and `crewlet budgets show` read — on the scope the refusal names, judged against the counter as it stands, and once per window for each part of the turn however often it asks (a turn resumed from a coding run records again in a window still full). Before it did, the stamp was written only by the charge a hold prevents, and a window the turn's own context assembly had filled refused every call while saying it had refused none. The refusal they are told is named as the counter names one, the company's before the seat's, so a seat's refusal that left the company's day full is reported as the company's: that is the refusal every later charge meets, since the company is judged first. What the meter has not seen is spend outside the turn — another seat spending the company's last room since this turn last charged, a background pass on the seat's own counter — and that is left to the next charge, which is the gate. And what it holds is certain on the turn's own calendar only: a peer that moved the shared counter onto the next window sooner — a node whose clock runs ahead, or one that applied a company `timezone` moved east while this turn ran — can end the refusal before the turn's clock does, and the turn then stops on a refusal the counter no longer makes. That fails closed: the turn ends `budget_exhausted`, the [budget park](agent-runtime.md#the-budget-park) reads the counter, finds nothing refusing and parks nothing, and the delivery runs again (or is recorded, if the turn had already written outside the engine, as after any refusal) — so it costs the turn's work so far, never a call billed and then refused.
+   **A refusal also stops every later model call of the turn, before it is made.** A refused round is counted, so the window it was refused in reads past its ceiling, and the turn's ceilings are pinned: every later charge in that window is refused, whatever its size, until the window turns over on the turn's own clock. The turn's one meter — every phase, the judge and every worker charge it, and every [auxiliary call](../guides/budgets-and-spend.md#auxiliary-spend) the turn makes (its context assembly, the conversation block's condensation, and every rewrite its ledgers, the judge's evidence and its tools ask for) is post-charged through it — keeps each window it has seen with no room left (the one a refusal named, any other window of either scope the same refused round filled, one an admitted round filled exactly, and one an auxiliary call's post-charge took to or past its ceiling), and every call asks it first: the tool loop before each round, the first included; the round-cap judge, before it is consulted and again once its evidence is condensed; a box-mode executor before its launch, again once its brief is built; and each of the turn's auxiliary calls, which is not made at all while a window is full, since the rewrite would feed a round that is never sent — all but the task card's, which is written after the segment's last round as the turn's record rather than an input to one, so a turn the budget ended still gets its card. So the reviewer after a refused judgement, the executor after a correction, the executor's first round after a context assembly that took the seat past its day, the parent's next round and every sibling's after a worker's refusal, and a worker that starts once its call's slice is spent (in a later wave, or behind `max_parallel`) are each refused without being sent — they used to send a whole round the vendor billed and the meter then refused. Each is a refusal as surely as a refused charge, so the meter records it on the shared counter as one: the first call it holds in a window stamps that window's `refused_at` — the "last refused" every screen and `crewlet budgets show` read — on the scope the refusal names, judged against the counter as it stands, and once per window for each part of the turn however often it asks (a turn resumed from a coding run records again in a window still full). Before it did, the stamp was written only by the charge a hold prevents, and a window the turn's own context assembly had filled refused every call while saying it had refused none. The refusal they are told is named as the counter names one, the company's before the seat's, so a seat's refusal that left the company's day full is reported as the company's: that is the refusal every later charge meets, since the company is judged first. What the meter has not seen is spend outside the turn — another seat spending the company's last room since this turn last charged, a background pass on the seat's own counter — and that is left to the next charge, which is the gate. And what it holds is certain on the turn's own calendar only: a peer that moved the shared counter onto the next window sooner — a node whose clock runs ahead, or one that applied a company `timezone` moved east while this turn ran — can end the refusal before the turn's clock does, and the turn then stops on a refusal the counter no longer makes. That fails closed: the turn ends `budget_exhausted`, the [budget park](agent-runtime.md#the-budget-park) reads the counter, finds nothing refusing and parks nothing, and the delivery runs again (or is recorded, if the turn had already written outside the engine, as after any refusal) — so it costs the turn's work so far, never a call billed and then refused.
 5. **Worker timeouts.** A per-task deadline from `turn_engine.delegation.task_timeout_seconds` (default 300 s) and an aggregate `call_timeout_seconds` (default 900 s) over the whole call, waves included, plus a `max_parallel` concurrency limit. Hitting the aggregate cap does *not* discard the workers that already finished — they come back with their real answers, and only the ones still running are reported as timed out. Their tokens were spent either way.
 6. **Stall detection.** Two `self_iterate` decisions with the same artifact hash publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed`. The threshold is a constant, not a knob: two identical rounds is the earliest point at which "unchanged" is a fact rather than a single sample, and the round cap already bounds how long a turn that IS changing may run. Max-iteration exhaustion (the executor/reviewer loop hit `max_iterations` without `done`) publishes `turn.guard_breach(kind="max_iter")` with the same terminal effect.
 7. **Tool surface isolation between phases.** Each phase builds its tool list from scratch. The executor, the onboarding pass and a discovery-capable worker each carry `## Tools to discover` — what their universe holds and their surface does not offer yet, rendered by one function (`tools.Snapshot.Discoverable`) — and the same `activate_tool` / `list_mcp_server_tools` discovery meta-tools. A worker's universe is the safety-filtered one the grant was cut from (read-only / non-control / non-shared-write), so discovery cannot breach invariant 1. Review and Judge list nothing to discover and cannot discover tools. A `self_iterate` builds a fresh surface, which is correct: its LLM context started over too. A RESUMED executor is the exception — it replays the surface and the skill-guard state it suspended with, because it is re-entering the same conversation.
@@ -720,7 +721,9 @@ constraint nobody wrote down. Stopping it (a [pause with
 `stop_running`](agent-runtime.md#pausing-a-seat)) throws away what it has done;
 waiting for it to finish costs a second turn. A **steer** is the third answer:
 a short note, sent with [`steer_turn`](../reference/api-endpoints.md#steering-a-running-turn),
-that enters the running conversation at its **next round boundary**.
+that enters the running conversation as soon as the tool calls in flight have
+their answers: the CLI's run ends there, and the next run **opens with the
+note**.
 
 ```mermaid
 sequenceDiagram
@@ -731,17 +734,21 @@ sequenceDiagram
     P->>F: steer_turn{turn_id, note} — scattered on crewlet.steer.note
     F-->>P: nothing (not their turn)
     N-->>P: accepted → outcome "pending"
-    Note over L: the round's tool calls finish
+    Note over L: the response's tool calls finish, and the CLI's run ends
     L->>L: fence, then drain the box
-    L->>L: the note is a user message before the next provider call
+    L->>L: the note is a user message opening the next run
     N->>N: agent_turn_steered{delivered, phase, round}
 ```
 
-- **Where it lands, and nowhere else.** At the top of a round, immediately
-  after the seat fence. That is the one point where the conversation is
-  complete — every tool call the previous round made has its answer — so a note
-  can never sit between a call and its result, which a provider rejects and a
-  model would read as the tool's output. After the fence, so a turn whose seat
+- **Where it lands, and nowhere else.** At the opening of a CLI run,
+  immediately after the seat fence. The CLI drives its own requests and the
+  engine never writes inside a run, so a note that arrives while one is going
+  ends it once every call of the response it arrived during has its answer, and
+  the next run — handed the conversation so far — opens with the note. That is
+  the one point where the conversation is complete, so a note can never sit
+  between a call and its result, which a provider rejects and a model would
+  read as the tool's output; and it is never folded into a tool's result,
+  which any tool's output could imitate. After the fence, so a turn whose seat
   moved or that a person stopped is not handed an instruction it will never act
   on. And as a **user** message, never a system message: the system prompt is
   the frozen prefix a provider caches on.
@@ -757,9 +764,9 @@ sequenceDiagram
 - **Not every loop reads it.** A [worker](#workers) is a leaf its parent
   directs, so a note offered while a worker runs waits for the executor's next
   round. The onboarding pass and the extension judge do not read notes either.
-  A turn whose executor runs as a [coding CLI's own agentic
-  loop](llm-backends.md) cannot take a note at all — its rounds are
-  the CLI's — and says so: `steer_unsupported`.
+  A turn whose executor runs in [box mode](llm-backends.md#box-mode) cannot
+  take a note at all — its CLI runs detached in a sandbox, with no run the
+  engine can end and reopen — and says so: `steer_unsupported`.
 - **Whose turn it is to steer.** The seat's holder, whoever leads the seat,
   or an administrator (`admin`) — never a seat, and never any reader,
   since everybody signed in holds a credential. The seat is the one thing the
@@ -991,7 +998,7 @@ and a resumed half whose earlier half was rebased inherits that instant rather
 than taking one of its own (see
 [Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). The resume also starts from what the run
 already called — the rounds before the suspension, the parked round's own calls
-and whatever an agent-mode run called over the bridge — so the counts in its
+and whatever a box-mode run called over the bridge — so the counts in its
 ids continue rather than start again. A delegated worker counts from the run's
 calls and its own, never a sibling's, and the run counts every worker's calls
 once their wave is done.
@@ -1048,7 +1055,7 @@ spent to the task's own counters — its phases, its delegated workers, the
 round-cap judge, the auxiliary calls made inside it (tallied by the segment as
 each returns, its card's rewrite included) and, on a resumed segment, the
 coding run it collected and what the engine spent on that run while no segment
-was running (an agent-mode run's bridged tools and delegated workers, and the
+was running (a box-mode run's bridged tools and delegated workers, and the
 condensing of the run's report, failure or question at collection) — under
 an id naming the segment (`turn/<turn_id>/dispatch`,
 `turn/<turn_id>/resume/<launch_id>`), so a segment recorded twice counts once
@@ -1102,15 +1109,16 @@ The extension judge additionally emits an `AgentPhaseCompleted` event with `phas
 
 ### What streams during a turn
 
-A phase is not one LLM call — it is a loop of them, and an operator
-watching the dashboard is watching that loop. Two events carry it:
+A phase is not one LLM call — it is a loop of them, run by the seat's CLI in
+one or more CLI runs, and an operator watching the dashboard is watching that
+loop. Two events carry it:
 
 | Event | When | Persisted |
 |---|---|---|
-| `AgentTurnProgress` | Once before the first call, then twice per tool-call round and once before each tool call | No — stream only |
+| `AgentTurnProgress` | Once before the first request; as each CLI run opens; as each model request is read; before and after each tool call; and as each run ends | No — stream only |
 | `AgentPhaseCompleted` | Once, when the phase ends | Yes |
 
-**Before the first call**, because the phase's prompt exists before its
+**Before the first request**, because the phase's prompt exists before its
 answer does. `AgentPhaseStarted` cannot carry it — every phase runner
 publishes that event and only then builds its prompt — so the projection
 seeds a placeholder call with no messages, and a live row showed "No
@@ -1119,25 +1127,30 @@ The opening update carries `prompt_messages` and nothing else, tagged
 `round_num = -1` (consumers read `round_num + 1` as "rounds so far", so
 the sentinel keeps it at zero rather than claiming a round).
 
-**Twice per round, and once per call**, because a round has more than
-one moment worth showing. The first fires the instant the model has
-answered, before any of that round's tools run: the model's prose is what
-explains the tool call that is about to happen, and holding it back until the round's slowest tool returns is holding it back
-for exactly as long as it is most useful. Then one frame
-**before each call**, naming it as `running_call` — `{round, name,
-arguments, started_at}` — because a round's calls are serial and an
-execution is recorded only once its call has answered: a sandbox launch
-or a slow MCP server takes minutes, and a live view that learned of a
-call only when the whole round returned showed a seat doing nothing for
-exactly the stretch somebody was watching it. A round that reads a
-person's [note](#steering-a-running-turn) publishes once more, the moment
-it takes the note and before its provider call, with the note's
-`{round, note_id}` in `steers`. The last fires once the
-round's tool results are in, and names no running call, which is what
-clears it. A round of three calls therefore costs five frames. The final
-round — the one that ends the phase by making no tool call — publishes at
-the first moment and then ends the loop, which is how a phase's closing
-answer streams at all.
+**As each run opens, and as each request is read**, because a round has more
+than one moment worth showing. A run's opening frame carries
+`run_started_at`, its launch, which a reader draws the run in flight from — the
+CLI's own requests are timed only once its record shows them, and a run's
+first moments are a process starting. A request's frame fires the instant the
+CLI's record shows the model has answered, before any of the calls it asked for
+run: the model's prose is what explains the tool call that is about to happen,
+and holding it back until the round's slowest tool returns is holding it back
+for exactly as long as it is most useful. Then one frame **before each call**,
+listing it in `running_calls` — each `{id, round, name, arguments,
+started_at}` — because an execution is recorded only once its call has
+answered: a sandbox launch or a slow MCP server takes minutes, and a live view
+that learned of a call only when it returned showed a seat doing nothing for
+exactly the stretch somebody was watching it. A **list**, because a CLI may make
+a response's calls at once, and `id` — the call's id, the CLI's own where it
+named one — is what tells two calls of one response apart and what the call's
+`tool_executions[]` row carries once it has answered. A frame after each call
+drops it from the list. A run that reads a person's
+[note](#steering-a-running-turn) publishes once more as it opens, the moment it
+takes the note, with the note's `{round, note_id}` in `steers`. And a frame
+fires as each run ends, adding it to `invocations` — the runs that have ended,
+each with its first and last round — and clearing `run_started_at`. The final
+request — the one that ends the phase by making no tool call — publishes when
+it is read, which is how a phase's closing answer streams at all.
 
 **The same text either way.** Both events build their `response` with
 `internal/agent/toolloop` over the same
@@ -1154,12 +1167,11 @@ instant the round commits, because from then on its narration is
 authoritative. Watching is opt-in per CALL: only the tool loop sets `OnDelta`,
 because every other provider call in the engine (reflection, summaries, the
 extension judge) wants an answer rather than a running commentary. And a
-round streams only where its CLI can: the text backend forwards fragments
-for a profile that reads the CLI's output as JSON lines, each event's text a
-piece of the answer, while a CLI whose answer is extracted from the whole of
-what it printed — a fenced block, one JSON document — delivers it in one
-piece at the end. Nothing above the backend reads the absence of fragments
-as a failure.
+round streams only as finely as its CLI's record does: a record that carries
+the model's text as it is written (Claude Code's `text_delta` events) streams
+it in fragments, and one that writes a response's prose only once it is
+finished delivers it in one piece ([what streams](llm-backends.md#finding-the-answer-in-the-clis-output)).
+Nothing above the backend reads the absence of fragments as a failure.
 
 **A tab is sent what moved.** Five frames a second would otherwise mean the
 whole call five times a second to every open dashboard — the prompt, every
@@ -1306,7 +1318,7 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 |---|---|---|
 | `agent_phase_completed` | `started_at` | When **this segment** of the phase began. A resumed executor is one phase in two segments and its `duration_ms` covers both, so `started_at` is deliberately not "published minus duration" — that instant is when the first segment began, possibly a day earlier on another node, and the gap between the segments was the coding run rather than this phase |
 | | `duration_ms` | The phase's own wall clock, extensions and a suspend's pre-resume half included |
-| | `rounds[]` | One entry per provider call: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume |
+| | `rounds[]` | One entry per model request, as the CLI's record showed it: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}` — `stop_reason` is `end`, `tool_use` or `cap`, absent where the record named none. A run whose record shows no requests is one entry, untimed. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume |
 | | `max_rounds` / `round_ceiling` | The round cap the phase **ended** under (its base budget plus every extension the judge granted) and the most it could ever have been raised to. Never a ceiling below the cap: with extensions off, or a resumed executor whose fresh budget sits on top of its parked rounds, the ceiling is the cap |
 | | `cache_read_tokens` / `cache_write_tokens` | The provider's prompt cache's share of `input_tokens`, summed over the rounds. A **breakdown** of the input, never an addition to it: `total_tokens` is still input plus output, and the cache's share is `cache_read_tokens / input_tokens` |
 | | `provider_key` | The `providers.llm` entry that **served** the phase — the operator's name beside the vendor's `model`. The chain reports the member that answered, so after a hand-off it is the entry that took over rather than the head that failed; latched with `model` by the same rule (the first completion that names one), and stated by the head until then. Empty on a phase no entry answered, exactly as its `model` is. A judge names its entry, and a worker the member of its own chain that answered |
@@ -1314,18 +1326,22 @@ wall-clock correction mid-call cannot report a negative or inflated one.
 | | `launch_id` | On a resumed executor that collected a detached coding run: which launch it collected, since one turn can launch more than once. On a `phase: sandbox` record — the run itself, published when it is collected — it is part of the record's identity, `(turn_id, phase, iteration, launch_id)` |
 | | `activity_transcript` | On a `phase: sandbox` record only: the run's own account of what it did, redacted; a long one keeps its first 64 KiB and its last 192 KiB in whole lines, with a note line where its middle was. `activity_transcript_elided_lines` and `activity_transcript_elided_bytes` count what that left out (absent on a transcript kept whole). See [each run is published as a phase](code-sandbox.md#runs-are-uncapped-each-run-is-published-as-a-phase) |
 | | `work_item` | The item the turn is charged to, as the turn knew it when the record was published — absent while nothing named one |
-| `tool_executions[]` | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer. **Absent** on a row nothing timed — a call whose arguments did not parse, an agent-mode run's bridged call — because absent means "not recorded" and a zero would mean "instant" |
+| | `invocations[]` | One entry per CLI run of the phase, in order: `{started_at, duration_ms, provider_key, model, outcome, first_round, last_round, requests_observed, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. `outcome` is `end` (its model stopped), `cap` (its CLI's own turn cap), `stopped` (the engine ended it: the phase finished, parked, paused for a note, handed a call to the next run, needed a re-list, ran out of rounds or was stopped) or `failed`. `first_round` and `last_round` name the run's rounds on the `rounds[].round` scale, both 0 on a run that made no request; `requests_observed` is false where the CLI's record showed none and the run is one round. `tool_calls` counts the seat's tools it called. The dashboard groups a phase's rounds under "CLI run N" by it |
+| `tool_executions[]` | `call_id` | The call's id — the CLI's own where it named one (and the id its record joined the call by), the loop's otherwise — what pairs the call with its result in the conversation |
+| | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer — a box-mode run's bridged call as its bridge timed it. **Absent** on a row nothing timed — a call whose arguments did not parse, one refused before any tool ran, one its run ended before — because absent means "not recorded" and a zero would mean "instant" |
 | | `origin` / `server` | Who **answered**: `builtin` or `mcp:<server>`, and the bare server name for the second. Absent on a call no tool answered — an unknown name, one not offered to the surface, one the skill guard refused — since the surface refused it before any server saw it |
 | `agent_turn_progress` | `rounds[]`, the cache tokens | As on the record, so far |
 | | `max_rounds` / `round_ceiling` | The cap the phase is running under **now** — an extension raises it mid-phase — and on the opening frame, before the model has answered once |
 | | `round_started_at` | When the latest round's provider call was made: the round being written while the model answers, the round whose tools are running after it has. Every round publishes a frame the moment its call is made, so a start later than every entry in `rounds[]` is a model call in flight and one equal to the last is that round's tools; the frame names the new round (`round_num`) and nothing from the one before it. Without it a unary round said nothing until it answered, and for the whole of a slow call a reader saw the previous round as the one in flight |
-| | `running_call` | The call in flight, published immediately before it runs and cleared by the next frame |
+| | `run_started_at` | When the CLI run in flight was launched — the run whose rounds are past every entry in `invocations[]`, which lists only the runs that have ended. Absent between runs |
+| | `running_calls` | The calls in flight, in the order they arrived, each `{id, round, name, arguments, started_at}`: listed by the frame published immediately before a call runs and gone from the frame after it returns. Absent whenever no call is running |
+| | `invocations[]` | As on the record: the runs that have ended so far |
 | `agent_phase_started` | `work_item` | As on the record |
 | `subagent_batched` | `started_at` / `round` | When the delegate call began and the executor round that made it, so a fan-out is placed under its call; each worker's `host_round` matches it |
 | `prefetch_summary` | `started_at` / `duration_ms` | The context assembly — the stretch between `agent_turn_started` and the first phase opening, which reads a diary, a thread and a knowledge base and calls an auxiliary model for two of them |
 
-Every one of these is **additive and optional**: a figure nothing measured (an
-agent-mode run's bridged call) is absent, decodes as absent and re-encodes as
+Every one of these is **additive and optional**: a figure nothing measured (a
+box-mode run's bridged call) is absent, decodes as absent and re-encodes as
 absent (a zero start is omitted rather than written as the year 1), so a
 timeline reads a missing figure as "not recorded". The cache counts are the one producer of that
 figure in the engine — every backend reports them on its completion, and until
@@ -1342,10 +1358,10 @@ Each phase row in that view leads with its **phase word** on the neutral pill (e
 | Event | Purpose |
 |-------|---------|
 | `agent_turn_started` | A turn beginning, published **before** its context is gathered, so a seat whose prefetch is reading a long thread is visibly working and a turn that dies there still leaves a row naming its run. Carries `turn_id`, `work_key`, the seat (`agent_id`, `agent_handle`, `role`), the `trigger` descriptor, `conversation_key` and `started_at` (the same instant `turn_completed` reports), plus `work_item` / `work_item_basis`, which are **absent** while nothing named the item the turn is on. Its depth and chain are the envelope's `delegation_depth` / `delegation_chain`. A resumed coding run publishes one per segment with `resumed: true` under the **same** `turn_id`, once the segment is certain to run and the coordinator has recorded that it began (for a person's answer, that this turn took it) — a resume that could not start is retried as the same run, so it announces nothing. Every start is paired with the turn's `agent_turn_completed`, a turn whose runner could not be built included. A start with no completion is a turn that died in its own frames: a panic recovered outside the loop, which the `turn.guard_breach` under the same `turn_id` names, or a process that died under it |
-| `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens` (and its halves `subagent_input_tokens` / `subagent_output_tokens`; on a resumed segment these include the workers its agent-mode run delegated to over the tool bridge, which ran while no segment was running), `cache_read_tokens` / `cache_write_tokens` over the turn's own phases, `work_item` / `work_item_basis` (see [Which work a turn is on](#which-work-a-turn-is-on) — the one record that can name a `sole_write`), `suspended` on a segment that parked rather than ended, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base). `turn_completed`, the learning subsystem's record of the same turn, carries the same `work_item`, `work_item_basis` and `suspended`, and `ask` — what the turn was asked, without the integration's wrapping — on a wake whose `interactions` do not already say it (a colleague's question, a schedule's task, a resumed segment); it has no `task_id` |
+| `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens` (and its halves `subagent_input_tokens` / `subagent_output_tokens`; on a resumed segment these include the workers its box-mode run delegated to over the tool bridge, which ran while no segment was running), `cache_read_tokens` / `cache_write_tokens` over the turn's own phases, `work_item` / `work_item_basis` (see [Which work a turn is on](#which-work-a-turn-is-on) — the one record that can name a `sole_write`), `suspended` on a segment that parked rather than ended, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base). `turn_completed`, the learning subsystem's record of the same turn, carries the same `work_item`, `work_item_basis` and `suspended`, and `ask` — what the turn was asked, without the integration's wrapping — on a wake whose `interactions` do not already say it (a colleague's question, a schedule's task, a resumed segment); it has no `task_id` |
 | `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`, `scheduled_timeout`, `unhandled_exception`) and `detail` carries its message |
 | `a2a_channel_opened` / `a2a_message_sent` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic, the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain`. Each record names the turn that published it in `turn_id` / `work_key`, which is what draws the exchange on that turn's page; a close performed by the idle sweep carries neither, because no turn finished it |
-| `prompt.size` | The size of one phase's OPENING prompt — the system and user text, the conversation a resumed phase re-enters instead of them, and the **tool-definition array** (as compact JSON, with its count), plus a ~4-bytes-per-token approximation over all of it — so prompt growth is measurable across builds without reading every phase payload back. The figures are **bytes**, under keys that say so (`system_bytes`, `user_bytes`, `message_bytes`, `tool_bytes`): that is what the engine can measure without a tokenizer and what a vendor bounds a request body in, and a byte count agrees with a character count on ASCII while diverging on a prompt carrying non-Latin names, emoji or CJK. The array is counted because a text-mode CLI is handed it in its prompt literally and an agent-mode CLI reads it over the tool bridge; the figure is **round one's**, since a mid-phase `activate_tool` adds to what later rounds send. It is measured in one **canonical** shape (`{name, description, parameters}` per tool) rather than in any CLI's own, so that one number is comparable across a chain that moved a seat between CLIs — which makes it a **floor**: the text backend renders the same definitions indented inside a fenced catalogue followed by a response contract, and an agent-mode CLI reads them in its vendor's own wrapping, so the backend always sends more than the row says. A resumed phase's conversation is counted as every message's text and the arguments of its tool calls, for the same reason: the text backend writes them into the prompt it builds |
+| `prompt.size` | The size of one phase's OPENING prompt — the system and user text, the conversation a resumed phase re-enters instead of them, and the **tool-definition array** (as compact JSON, with its count), plus a ~4-bytes-per-token approximation over all of it — so prompt growth is measurable across builds without reading every phase payload back. The figures are **bytes**, under keys that say so (`system_bytes`, `user_bytes`, `message_bytes`, `tool_bytes`): that is what the engine can measure without a tokenizer and what a vendor bounds a request body in, and a byte count agrees with a character count on ASCII while diverging on a prompt carrying non-Latin names, emoji or CJK. The array is counted because a CLI is handed it literally either way — over its run's tool session in host mode and over the tool bridge in box mode — and sends it to its model with every request; the figure is the **opening** array's, since a mid-phase `activate_tool` adds to what later requests send. It is measured in one **canonical** shape (`{name, description, parameters}` per tool) rather than in any CLI's own, so that one number is comparable across a chain that moved a seat between CLIs — which makes it a **floor**: every CLI reads the same definitions in its vendor's own wrapping, so the backend always sends more than the row says. A resumed phase's conversation is counted as every message's text and the arguments of its tool calls, for the same reason: the backend writes them into the transcript a continuation run is handed |
 | `phase.tool_skill_blocked` | The required-skill guard rejected a tool call: the session tried a tool covered by a required [tool skill](tool-skills.md) (the default; `required: false` opts out) before loading it via `load_tool_skill`. Carries the tool name and the missing skill keys; the LLM recovers by loading and retrying |
 | `budget_exhausted` | The token budget ended the turn: a charge it refused, or a call the turn did not make because its meter already knew the budget would refuse it ([invariant 4](#runtime-invariants)); published by the engine beside `agent_turn_completed` when the tool loop's budget check returns `toolloop.BudgetError`. Names the scope, the refusing window (`period`, `window`, `resets_at`) and that window's spend and ceiling — the spend with the refused round counted, so a window a charge refused reads past its ceiling by that round, and one a round filled reads at or past it. Where the company's window and the seat's are both full the company's is named, because the company is judged first: a seat's refusal that left the company's day full is reported as the company's |
 | `llm_unavailable` | Every member of the seat's provider chain failed retryably; carries the chain it tried and the last error |

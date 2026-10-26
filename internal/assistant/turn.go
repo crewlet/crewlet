@@ -484,7 +484,7 @@ func (t *turn) run(r loopRun) {
 		// written, through the CLI's token stream where it has one. A CLI
 		// that cannot stream never sends a fragment, and its round arrives
 		// whole when it commits, as before.
-		StreamPartials: true, StreamTokens: true,
+		StreamPartials: true,
 		// The assistant's prompt is its whole instruction: it replaces a
 		// CLI's own coding-agent prompt rather than running under it.
 		OwnPrompt: true,
@@ -617,16 +617,6 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 	case errors.Is(cause, errTurnTimeout):
 		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorTurnTimeout,
 			Message:   wire.ErrorTurnTimeout.Sentence(),
-			Retryable: true}
-	case errors.Is(err, toolloop.ErrModelProtocol):
-		// THE ANSWER WAS NEVER SHOWN ([toolloop.ErrModelProtocol]), so the
-		// person is told it could not be read, never what it said; the
-		// fault itself is the operator's, in this node's log.
-		t.svc.log.WarnContext(ctx, "assistant_model_protocol", "turn", t.id,
-			"error", redact.Secrets(err.Error()))
-		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorModelProtocol,
-			Message:   wire.ErrorModelProtocol.Sentence(),
-			Hint:      "Ask again. If it keeps happening, try another model in assistant.llm.",
 			Retryable: true}
 	}
 	if problem, ok := modelProblemOf(err, t.person.Can(iam.GrantAdmin)); ok {

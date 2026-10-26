@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // A provider chain that falls through has to say so ON THE TURN.
@@ -65,17 +66,17 @@ func TestAProviderHandOffIsPublishedAgainstTheTurnItHappenedIn(t *testing.T) {
 	}
 
 	// ONE PER PROVIDER CALL, not one per phase: a chain is walked on every
-	// round, so a benched member is a hand-off on every round. Counting them
+	// CLI run, so a benched member is a hand-off on every run. Counting them
 	// per phase would report one flap where there were three, which is the
 	// difference between a blip and a provider to take out of the chain.
-	rounds := len(prov.requestsFor("execute"))
+	runs := len(prov.requestsFor("execute"))
 	got := pub.fallbacks()
-	if rounds == 0 {
+	if runs == 0 {
 		t.Fatal("the executor never reached its provider")
 	}
-	if len(got) != rounds {
-		t.Fatalf("published %d provider_fallback events over %d rounds, want one each",
-			len(got), rounds)
+	if len(got) != runs {
+		t.Fatalf("published %d provider_fallback events over %d runs, want one each",
+			len(got), runs)
 	}
 
 	f := got[0]
@@ -200,7 +201,8 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 	// The measurement is of the REAL prompt, so it has to match what the
 	// provider actually received. A builder that measured a draft would
 	// report a number that shrinks every time a section moves.
-	sent := prov.requestsFor("execute")[0]
+	run := prov.runsFor("execute")[0]
+	sent := run.req
 	var system, user int
 	for _, msg := range sent.Messages {
 		switch msg.Role {
@@ -220,24 +222,26 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 		t.Errorf("message_bytes = %d on a phase that opened its own conversation, want 0",
 			m.MessageBytes)
 	}
-	// AND THE TOOL ARRAY, which the cli-agent text backend renders into the
-	// prompt literally and its model is billed for as input. The meter
-	// was blind to it: a measured turn reported ~6,900 tokens against the
-	// provider's 205,000, and this row is what "is the prompt getting
-	// smaller" is answered from.
-	tools := toolArrayBytes(t, sent.Tools)
+	// AND THE TOOL ARRAY, which the CLI lists over MCP and hands its model
+	// with every request, billed as input. The meter was blind to it: a
+	// measured turn reported ~6,900 tokens against the provider's 205,000,
+	// and this row is what "is the prompt getting smaller" is answered from.
+	// Read off what the CLI LISTED when it opened the run — the array as it
+	// reached the model, not as the engine meant to send it.
+	offered := run.offered[0]
+	tools := toolArrayBytes(t, offered)
 	// The fixture has to have SENT tools, or the two assertions below hold
 	// nothing: every term on both sides of them is then zero, and a surface
 	// built wrong or a fake that dropped the array would read as a meter
 	// that measured it exactly. Same rule the resumed case applies to its
 	// own terms.
-	if len(sent.Tools) == 0 || tools == 0 {
+	if len(offered) == 0 || tools == 0 {
 		t.Fatalf("the provider was handed %d tool definitions at %d chars; a term at "+
-			"zero is a term this case is not holding", len(sent.Tools), tools)
+			"zero is a term this case is not holding", len(offered), tools)
 	}
-	if m.ToolCount != len(sent.Tools) || m.ToolBytes != tools {
+	if m.ToolCount != len(offered) || m.ToolBytes != tools {
 		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
-			m.ToolCount, m.ToolBytes, len(sent.Tools), tools)
+			m.ToolCount, m.ToolBytes, len(offered), tools)
 	}
 	// EQUALITY, NOT "NOT ZERO". Every executor surface carries submit_work,
 	// so the tool term alone makes the sum non-zero — a `!= 0` assertion
@@ -250,7 +254,7 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 }
 
 // toolArrayBytes is the compact JSON the engine measures a tool array as,
-// rebuilt from what the provider was handed.
+// rebuilt from what the CLI listed.
 //
 // Restated here rather than reaching for the engine's own unexported helper:
 // this suite is the one thing holding that helper's answer to what the
@@ -324,7 +328,7 @@ func seedChars(t *testing.T, msgs []llm.Message) int {
 func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		submitCall(t, runner.SubmitWorkTool,
 			`{"outcome":"blocked","summary":"the run reported a failing build",`+
 				`"evidence":"the box could not compile it"}`),
@@ -346,7 +350,8 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 		t.Fatalf("published %d prompt.size events for one resumed phase, want 1", len(got))
 	}
 	m := got[0]
-	sent := prov.requestsFor("execute")[0]
+	run := prov.runsFor("execute")[0]
+	sent := run.req
 	messages := seedChars(t, sent.Messages)
 	var text, args int
 	for _, msg := range sent.Messages {
@@ -371,17 +376,18 @@ func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
 		t.Errorf("measured %d/%d system/user chars on a resumed phase, which prepends neither",
 			m.SystemBytes, m.UserBytes)
 	}
-	tools := toolArrayBytes(t, sent.Tools)
+	offered := run.offered[0]
+	tools := toolArrayBytes(t, offered)
 	// The tool array is a term of this case exactly as the two above are,
 	// and it is held to the same bar: at zero the comparison below is 0 == 0
 	// and says nothing about what a resumed phase re-offers.
-	if len(sent.Tools) == 0 || tools == 0 {
+	if len(offered) == 0 || tools == 0 {
 		t.Fatalf("the resumed phase was handed %d tool definitions at %d chars; a term "+
-			"at zero is a term this case is not holding", len(sent.Tools), tools)
+			"at zero is a term this case is not holding", len(offered), tools)
 	}
-	if m.ToolCount != len(sent.Tools) || m.ToolBytes != tools {
+	if m.ToolCount != len(offered) || m.ToolBytes != tools {
 		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
-			m.ToolCount, m.ToolBytes, len(sent.Tools), tools)
+			m.ToolCount, m.ToolBytes, len(offered), tools)
 	}
 	if want := (messages + tools) / 4; m.ApproximateTokens != want {
 		t.Errorf("approximate_tokens = %d, want %d over what the provider received",

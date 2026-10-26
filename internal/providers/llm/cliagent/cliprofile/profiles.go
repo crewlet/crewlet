@@ -174,6 +174,7 @@ func (p Profile) Clone() Profile {
 	out.MarkerEvents = append([]string(nil), p.MarkerEvents...)
 	out.MarkerPath = append(Path(nil), p.MarkerPath...)
 	out.SeedFiles = append([]SeedFile(nil), p.SeedFiles...)
+	out.KeySeedFiles = append([]SeedFile(nil), p.KeySeedFiles...)
 	out.ConfigEnv = cloneMap(p.ConfigEnv)
 	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
 	out.IsolationEnv = cloneMap(p.IsolationEnv)
@@ -192,9 +193,11 @@ func (p Profile) Clone() Profile {
 			CompleteArgs: slices.Clone(p.WebDenial.CompleteArgs),
 			SeedFiles:    slices.Clone(p.WebDenial.SeedFiles),
 		}
+		if dm := p.WebDenial.MCP; dm != nil {
+			out.WebDenial.MCP = &WebDenialMCP{CompleteArgs: slices.Clone(dm.CompleteArgs),
+				Seed: slices.Clone(dm.Seed)}
+		}
 	}
-	out.DeltaPaths = clonePaths(p.DeltaPaths)
-	out.DeltaEvents = append([]string(nil), p.DeltaEvents...)
 	if p.ToolsOff != nil {
 		args := make([][]string, len(p.ToolsOff.Args))
 		for i, run := range p.ToolsOff.Args {
@@ -203,21 +206,16 @@ func (p Profile) Clone() Profile {
 		out.ToolsOff = &ToolsOff{Args: args, Refuses: append([]string(nil), p.ToolsOff.Refuses...),
 			Note: p.ToolsOff.Note}
 	}
-	if p.Stream != nil {
-		out.Stream = &Stream{
-			Args:          append([]string(nil), p.Stream.Args...),
-			EventTypePath: append(Path(nil), p.Stream.EventTypePath...),
-			TextEvents:    append([]string(nil), p.Stream.TextEvents...),
-			DeltaPaths:    clonePaths(p.Stream.DeltaPaths),
-			DeltaEvents:   append([]string(nil), p.Stream.DeltaEvents...),
-		}
-	}
 	if p.CredentialStore != nil {
 		out.CredentialStore = &CredentialStore{
 			ExportArgs: append([]string(nil), p.CredentialStore.ExportArgs...),
 			ImportArgs: append([]string(nil), p.CredentialStore.ImportArgs...),
 		}
 	}
+	out.MCP = p.MCP.clone()
+	out.Requests = p.Requests.clone()
+	out.Cap = p.Cap.clone()
+	out.FailureMarkers = append([]string(nil), p.FailureMarkers...)
 	return out
 }
 

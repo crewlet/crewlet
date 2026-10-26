@@ -84,11 +84,12 @@ open editor) is applied by the page itself and saves nothing.
 ## Turning it on
 
 1. **Add a dedicated `providers.llm` entry** for the assistant that meets the
-   assistant's rules: text mode, a CLI run with no tool of its own, and
+   assistant's rules: host mode, a CLI run with no tool of its own beside the
+   engine's `crewlet` server, and
    `overrides: { web_tools: denied }`. Which CLIs qualify, and why the others
    are refused, is stated once in the
    [Configuration Reference](../getting-started/configuration.md#the-dashboard-assistant)
-   and in [Tool calls in text mode](../concepts/llm-backends.md#tool-calls-in-text-mode).
+   and in [Tool calls in host mode](../concepts/llm-backends.md#tool-calls-in-host-mode).
    A dedicated entry keeps its own `max_concurrent` slots, so a busy company's
    seats never queue people's questions and the reverse.
 2. **Prove the entry** with `crewlet llm doctor assistant` (the entry's key),
@@ -162,7 +163,7 @@ providers:
     assistant-deep:
       agent: claude-code
       model: sonnet
-      mode: agent            # the CLI runs its own loop and tools
+      mode: box              # the CLI runs its own loop and tools
       # run_in: e2b          # optional; see "Where a run happens"
 assistant:
   enabled: true
@@ -174,7 +175,7 @@ assistant:
     max_tokens: 3000000      # 10000..20000000 tokens a task may spend
 ```
 
-The entry must be Claude Code in agent mode, because a run parked on a
+The entry must be Claude Code in box mode, because a run parked on a
 proposal is continued in that CLI's own session after the approval. A run's
 wall clock never passes the read grant of the turn it belongs to, which is why
 twenty minutes is the ceiling; a longer task proposes, waits and continues on
@@ -304,7 +305,6 @@ suite is under `examples/assistant-evals/`.
 | Signed out (`model_signed_out`) | The CLI's login expired or is missing. Sign it in again with `crewlet llm login <key>`, then `crewlet llm doctor <key>` |
 | Usage limit reached (`model_busy`) | The plan is spent until the reset the notice names. Add a second model to `assistant.llm` to keep answering through a limit |
 | Took too long (`model_timeout`) | The entry's `timeout_seconds`, and the CLI's own start time on the host |
-| Answer could not be read (`model_protocol`) | The model wrote its tool calls as markup or in another vendor's format, twice. The engine log's `assistant_model_protocol` line names the fault. Asking again usually works; if it keeps happening, put another model first in `assistant.llm` |
 | Cannot be started (`model_unavailable`) | The CLI's binary on the engine host's `PATH`: `crewlet llm doctor <key>` names it |
 
 **The model's state is checked before anyone asks.** When every model in

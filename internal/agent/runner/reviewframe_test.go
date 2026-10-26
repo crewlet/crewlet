@@ -7,7 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // The FRAME REACHES THE MODEL, which is the half a unit test of the helper
@@ -21,7 +21,7 @@ import (
 func TestTheReviewerReceivesTheTriggerFramedAsTheTurnsOwn(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	w := turn.Work{Outcome: turn.OutcomeDelivered, Summary: "posted it", Text: "posted"}
 	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
@@ -44,7 +44,7 @@ func TestTheReviewerReceivesTheTriggerFramedAsTheTurnsOwn(t *testing.T) {
 // and would cost the prompt-prefix cache on every round after.
 func TestTheExecutorIsStillHandedTheTriggerBare(t *testing.T) {
 	t.Parallel()
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	r, prov, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestTheExecutorIsStillHandedTheTriggerBare(t *testing.T) {
 func TestTheReviewFrameDoesNotMoveBetweenRounds(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{
+		review: []llmtest.Response{
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate","notes":"try again"}`),
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
 		},
@@ -100,7 +100,7 @@ func TestTheReviewFrameDoesNotMoveBetweenRounds(t *testing.T) {
 func TestTheSpendCountsTheReviewsThatSentWorkBack(t *testing.T) {
 	t.Parallel()
 	r, _, _ := fixture(t, &scriptedProvider{
-		review: []llm.Completion{
+		review: []llmtest.Response{
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate","notes":"try again"}`),
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate","notes":"closer"}`),
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),

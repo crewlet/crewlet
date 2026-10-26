@@ -46,13 +46,14 @@ import (
 //
 // # Only a model that can reach nothing else
 //
-// Every member of `llm` must be a text-mode entry whose profile denies the
-// CLI's own local tools AND its own web tools. The assistant's guarantee
-// (ADR-0050) is that it reads only what the person's own requests return; a
-// CLI in agent mode runs its own tool loop whose calls never pass the guard, a
-// shell reads whatever the engine user can, and a web fetch is both text no
-// authority decision ever saw and a way out for whatever the person's data
-// put in the prompt. [Company.AssistantChain] is the one place the chain is
+// Every member of `llm` must be a host-mode entry whose profile denies the
+// CLI's own local tools AND its own web tools, so the one tool source its run
+// has is the engine's `crewlet` server, serving the person's own requests
+// (ADR-0049). The assistant's guarantee (ADR-0050) is that it reads only what
+// the person's own requests return; a CLI in box mode runs its own tool loop
+// with its own tools, a shell reads whatever the engine user can, and a web
+// fetch is both text no authority decision ever saw and a way out for
+// whatever the person's data put in the prompt. [Company.AssistantChain] is the one place the chain is
 // handed out, and it refuses a chain that breaks this, so a stored revision
 // carrying one leaves the assistant unavailable rather than unsafe.
 type Assistant struct {
@@ -272,7 +273,7 @@ func (c *Company) DeepWorkPlacement() (Placement, bool) {
 }
 
 // deepWorkProblems reports every way `assistant.deep_work` cannot run: no
-// entry, an unknown one, one not in agent mode, a CLI other than Claude
+// entry, an unknown one, one not in box mode, a CLI other than Claude
 // Code, or a run_in this company configures no backend for.
 func (c *Company) deepWorkProblems(path Path) error {
 	var p problems
@@ -293,7 +294,7 @@ func (c *Company) deepWorkProblems(path Path) error {
 	llmPath := at(path, "llm")
 	if d.LLM == "" {
 		p.add(llmPath, ErrMissing, "deep work names no model: set it to a providers.llm "+
-			"key whose entry has mode: agent and agent: claude-code")
+			"key whose entry has mode: box and agent: claude-code")
 		return p.err()
 	}
 	entry, ok := c.Providers.LLM[d.LLM]
@@ -303,9 +304,9 @@ func (c *Company) deepWorkProblems(path Path) error {
 		return p.err()
 	}
 	entryField := func(f string) Path { return at(entryPath(d.LLM), f) }
-	if !entry.AgentMode() {
-		p.add(llmPath, ErrConflict, "providers.llm.%s is in text mode, where the CLI has "+
-			"no tool of its own and deep work would be quick mode again: set %s: agent",
+	if !entry.Box() {
+		p.add(llmPath, ErrConflict, "providers.llm.%s is in host mode, where the CLI has "+
+			"no tool of its own and deep work would be quick mode again: set %s: box",
 			d.LLM, entryField("mode"))
 	}
 	// CLAUDE CODE ALONE: a run parked on a proposal is continued, after
@@ -382,7 +383,7 @@ func (c *Company) validateAssistant() error {
 
 // assistantChainProblems reports every way `assistant.llm` cannot carry the
 // assistant: empty while enabled, a key providers.llm does not configure, an
-// entry in agent mode, or one whose merged profile leaves the CLI's local or
+// entry in box mode, or one whose merged profile leaves the CLI's local or
 // web tools reachable. Each problem names the field to change.
 func (c *Company) assistantChainProblems(path Path) error {
 	var p problems
@@ -390,7 +391,7 @@ func (c *Company) assistantChainProblems(path Path) error {
 	if len(c.Assistant.LLM) == 0 {
 		p.add(llmPath, ErrMissing,
 			"the assistant is enabled but names no model: list a providers.llm "+
-				"key, e.g. llm: [assistant], whose entry is in text mode and has "+
+				"key, e.g. llm: [assistant], whose entry is in host mode and has "+
 				"overrides: {web_tools: denied}")
 		return p.err()
 	}
@@ -430,11 +431,11 @@ func (c *Company) AssistantEntryProblems(key string) error {
 func assistantMemberProblems(member Path, key string, entry *LLMProvider) error {
 	var p problems
 	entryField := func(f string) Path { return at(entryPath(key), f) }
-	if entry.AgentMode() {
+	if entry.Box() {
 		p.add(member, ErrConflict,
-			"providers.llm.%s is in agent mode, where the CLI runs its own tool loop "+
-				"and its calls never pass the guard the assistant's every read goes "+
-				"through: point the assistant at a text-mode entry (remove %s)",
+			"providers.llm.%s is in box mode, where the CLI runs with its own tools "+
+				"beside the engine's, which never pass the guard the assistant's every "+
+				"read goes through: point the assistant at a host-mode entry (remove %s)",
 			key, entryField("mode"))
 	}
 	if entry.Agent != "" && !entry.Agent.Valid() {
@@ -452,9 +453,9 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 	}
 	// NO TOOL OF ITS OWN, BY CONSTRUCTION. The stance is a claim; what the
 	// assistant is admitted on is the argv its calls run (the profile Load
-	// returned, its web denial applied, as written and streamed), which must
-	// leave the model no shell, file tool or tool server: one on the engine
-	// host reads the engine's own data and keys, outside every request of the
+	// returned, its web denial applied), which must leave the model no shell,
+	// file tool or tool server but the engine's own: one on the engine host
+	// reads the engine's own data and keys, outside every request of the
 	// person's (ADR-0050).
 	eligible := strings.Join(cliprofile.AssistantEligible(), ", ")
 	switch {

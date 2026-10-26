@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // countingJudge grants every request and counts them: what these cases assert
@@ -21,7 +22,7 @@ func (j *countingJudge) Decide(context.Context, extension.Request) (extension.De
 }
 
 // readFile is a working round: one call that is not the submission.
-func readFile(t *testing.T) llm.Completion {
+func readFile(t *testing.T) llmtest.Response {
 	t.Helper()
 	return submitCall(t, "read_file", `{"path":"/a"}`)
 }
@@ -46,7 +47,7 @@ func finishingCorrectivesIn(req llm.Request) int {
 // missing.
 func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		readFile(t), writtenSubmission(), submitWork(t),
 	}}
 	pub := newCapture()
@@ -60,11 +61,16 @@ func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T)
 	if w.Rescued || w.Outcome != turn.OutcomeBlocked {
 		t.Fatalf("outcome = %s rescued = %v, want the submitted blocked", w.Outcome, w.Rescued)
 	}
-	exec := prov.requestsFor("execute")
-	if len(exec) != 3 {
-		t.Fatalf("the executor was asked %d times, want 3", len(exec))
+	if got := prov.roundsOf("execute"); got != 3 {
+		t.Fatalf("the executor was asked %d times, want 3", got)
 	}
-	if last := exec[2].Messages[len(exec[2].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
+	// Round 3 is a CLI run of its own — the one the declined round ended, the
+	// corrective it was owed opening the next.
+	exec := prov.requestsFor("execute")
+	if len(exec) != 2 {
+		t.Fatalf("the executor took %d CLI runs, want the declined one and the corrected one", len(exec))
+	}
+	if last := exec[1].Messages[len(exec[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
 		t.Errorf("round 3 opened on %q, want the withheld finishing corrective", last.Content)
 	}
 	if n := judge.calls.Load(); n != 0 {
@@ -82,7 +88,7 @@ func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T)
 // submit_work" — and so where a written-out submission is likeliest.
 func TestADeclineOnTheLastRoundOfAnExtensionIsAskedAgain(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		readFile(t), readFile(t), // the budget, exhausted: the judge grants 4
 		readFile(t), readFile(t), readFile(t), writtenSubmission(),
 		submitWork(t),
@@ -97,7 +103,7 @@ func TestADeclineOnTheLastRoundOfAnExtensionIsAskedAgain(t *testing.T) {
 	if w.Rescued || w.Outcome != turn.OutcomeBlocked {
 		t.Fatalf("outcome = %s rescued = %v, want the submitted blocked", w.Outcome, w.Rescued)
 	}
-	if got := len(prov.requestsFor("execute")); got != 7 {
+	if got := prov.roundsOf("execute"); got != 7 {
 		t.Errorf("the executor was asked %d times, want 7", got)
 	}
 	if n := judge.calls.Load(); n != 1 {
@@ -116,7 +122,7 @@ func TestADeclineOnTheLastRoundIsRescuedWhereTheCapIsHard(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			prov := &scriptedProvider{execute: []llm.Completion{
+			prov := &scriptedProvider{execute: []llmtest.Response{
 				readFile(t), writtenSubmission(), submitWork(t),
 			}}
 			r := cappedRunner(t, prov, newCapture(), &countingJudge{}, caps)
@@ -127,9 +133,8 @@ func TestADeclineOnTheLastRoundIsRescuedWhereTheCapIsHard(t *testing.T) {
 			if !w.Rescued || w.Outcome != turn.OutcomeIncomplete {
 				t.Errorf("outcome = %s rescued = %v, want the rescue", w.Outcome, w.Rescued)
 			}
-			exec := prov.requestsFor("execute")
-			if len(exec) != 2 {
-				t.Errorf("the executor was asked %d times, want 2", len(exec))
+			if got := prov.roundsOf("execute"); got != 2 {
+				t.Errorf("the executor was asked %d times, want 2", got)
 			}
 		})
 	}
@@ -140,7 +145,7 @@ func TestADeclineOnTheLastRoundIsRescuedWhereTheCapIsHard(t *testing.T) {
 // past it: two in all, exactly as if the budget had been one round longer.
 func TestAContinuationSharesTheFinishingAllowance(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		writtenSubmission(), writtenSubmission(), writtenSubmission(), writtenSubmission(),
 	}}
 	r := extendableRunner(t, prov, newCapture(), &countingJudge{})
@@ -167,7 +172,7 @@ func TestAContinuationSharesTheFinishingAllowance(t *testing.T) {
 // that is an exhausted budget, and the judge decides whether it deserves more.
 func TestAContinuationThatGoesBackToWorkIsTheJudgesQuestion(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		writtenSubmission(), writtenSubmission(), // one corrective inside the budget
 		readFile(t),   // the one round past it, spent working
 		submitWork(t), // in the window the judge granted
@@ -193,7 +198,7 @@ func TestAContinuationThatGoesBackToWorkIsTheJudgesQuestion(t *testing.T) {
 // budget without the judge are capped at that same allowance.
 func TestRoundsPastTheBudgetWithoutTheJudgeAreBounded(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		readFile(t), writtenSubmission(), // the budget: declines on its last round
 		readFile(t), writtenSubmission(), // two rounds past it: works, declines again
 		submitWork(t),
@@ -207,7 +212,7 @@ func TestRoundsPastTheBudgetWithoutTheJudgeAreBounded(t *testing.T) {
 	if !w.Rescued {
 		t.Error("the phase ran past its budget a second time without the judge")
 	}
-	if got := len(prov.requestsFor("execute")); got != 4 {
+	if got := prov.roundsOf("execute"); got != 4 {
 		t.Errorf("the executor was asked %d times, want 4", got)
 	}
 	if n := judge.calls.Load(); n != 0 {
@@ -222,7 +227,7 @@ func TestRoundsPastTheBudgetWithoutTheJudgeAreBounded(t *testing.T) {
 // priced rounds after the submission.
 func TestASubmissionOnTheLastRoundIsNotExhaustion(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		readFile(t), submitWork(t), text("anything further is a wasted round"),
 	}}
 	pub := newCapture()
@@ -235,7 +240,7 @@ func TestASubmissionOnTheLastRoundIsNotExhaustion(t *testing.T) {
 	if w.Rescued || w.ExhaustedRounds {
 		t.Errorf("rescued = %v exhausted = %v, want a finished phase", w.Rescued, w.ExhaustedRounds)
 	}
-	if got := len(prov.requestsFor("execute")); got != 2 {
+	if got := prov.roundsOf("execute"); got != 2 {
 		t.Errorf("the executor was asked %d times, want 2", got)
 	}
 	if n := judge.calls.Load(); n != 0 {

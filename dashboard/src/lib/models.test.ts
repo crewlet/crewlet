@@ -93,7 +93,7 @@ describe("an entry, read off the document", () => {
     const entry = modelEntry("coder", {
       agent: "codex",
       model: "gpt-5",
-      mode: "agent",
+      mode: "box",
       run_in: "e2b",
       timeout_seconds: 900,
       max_concurrent: 2,
@@ -103,7 +103,7 @@ describe("an entry, read off the document", () => {
     expect(entry).toMatchObject({
       agent: "codex",
       agentDefault: false,
-      mode: "agent",
+      mode: "box",
       runIn: "e2b",
       timeoutSeconds: 900,
       timeoutSet: true,
@@ -185,7 +185,7 @@ describe("how a model signs in, in words", () => {
   // A value a newer engine sends that this build has no words for is drawn as
   // itself, never as nothing and never as a mode it is not.
   test("a mode this build does not know is said as itself", () => {
-    expect(modeWords("agent").label).toBe("Agent");
+    expect(modeWords("box").label).toBe("Box");
     expect(modeWords("swarm").label).toBe("swarm");
     expect(authWords("api-key").label).toBe("API key");
     expect(authWords("passkey").label).toBe("passkey");
@@ -203,7 +203,7 @@ describe("the edit", () => {
   const entity = {
     agent: "codex",
     model: "gpt-5",
-    mode: "agent",
+    mode: "box",
     run_in: "e2b",
     state_dir: "/var/lib/crewlet/codex",
     env: { HTTPS_PROXY: "${PROXY}" },

@@ -639,16 +639,13 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 			if p.EffectiveWebTools() != cliprofile.WebToolsDenied {
 				t.Errorf("web %q: the denied profile keeps the web", p.EffectiveWebTools())
 			}
-			// EVERY ARGV A CALL CAN RUN: the profile as written, and the
-			// streamed variant a call asking for the token stream runs, which
-			// must keep every argument the denial states, in place, and
-			// only add to them.
-			streamed := p.Streamed()
-			if !slices.Equal(streamed.CompleteArgs[:len(p.CompleteArgs)], p.CompleteArgs) {
-				t.Errorf("the streamed argv %q does not keep the denial's %q intact",
-					streamed.CompleteArgs, p.CompleteArgs)
+			// EVERY ARGV A CALL CAN RUN: the profile's own, and a run with
+			// tools' own where its mcp block replaces it.
+			argvs := [][]string{p.CompleteArgs}
+			if p.MCP != nil && len(p.MCP.CompleteArgs) > 0 {
+				argvs = append(argvs, p.MCP.CompleteArgs)
 			}
-			for _, argv := range [][]string{p.CompleteArgs, streamed.CompleteArgs} {
+			for _, argv := range argvs {
 				for _, arg := range argv {
 					if strings.Contains(arg, `web_search="live"`) || strings.Contains(arg, `web_search="cached"`) ||
 						strings.Contains(arg, `web_search="indexed"`) {
@@ -673,9 +670,6 @@ func TestEveryAssistantProfileTurnsTheWebOff(t *testing.T) {
 			}
 			if name == "claude-code" && !allowsAfterFlag(p.CompleteArgs, "--disallowedTools", "WebFetch", "WebSearch") {
 				t.Errorf("claude-code must put both web tools on --disallowedTools: %q", p.CompleteArgs)
-			}
-			if name == "claude-code" && !p.CanStream() {
-				t.Error("claude-code lost its streamed variant, so the assistant's answers arrive whole again")
 			}
 			if name != "pi" && slices.Equal(p.CompleteArgs, seat.CompleteArgs) &&
 				slices.Equal(p.SeedFiles, seat.SeedFiles) {

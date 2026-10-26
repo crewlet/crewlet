@@ -299,10 +299,11 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 		t.Errorf("provider_retry.max_retries = %d: the CLI would wait %ds, want at least "+
 			"one retry and less than the engine's %s sit-out", *n, (1<<*n)-1, limitBench)
 	}
-	// No usage paths, and the profile must not claim otherwise: this
-	// stream carries no token counts under any key.
-	if p.ReadsUsage() {
-		t.Error("the profile claims to read usage from a stream that has none")
+	// The stream's run.usage event carries the run's counts
+	// (TestAMuseCodeRunIsChargedTheCountsItsStreamReports holds how).
+	if !p.ReadsUsage() {
+		t.Error("the profile reads no usage, so every run is charged an estimate " +
+			"although its stream reports its counts")
 	}
 }
 

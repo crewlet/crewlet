@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -321,19 +320,22 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 
 // newSandboxModel is the scripted model for a coding turn.
 //
-// The executor calls run_sandbox on its FIRST Execute round and reports on the
-// resumed one, which is what makes the suspend and the re-entry both real:
+// The executor calls run_sandbox on its FIRST Execute request and reports on
+// the resumed one, which is what makes the suspend and the re-entry both real:
 // the second Execute request is one the engine only sends after the detached
-// job has finished and its result has been spliced in.
+// job has finished and its result has been spliced in — the first request of a
+// fresh CLI run, handed the parked phase's conversation with the run's answer
+// in it.
 func newSandboxModel(t *testing.T) *scriptedModel {
 	t.Helper()
 	m := &scriptedModel{stateDir: t.TempDir()}
 	m.listen(t, func(w http.ResponseWriter, r *http.Request) {
-		call, offered, ok := readCall(w, r)
+		req, ok := readRequest(w, r)
 		if !ok {
 			return
 		}
-		var reply string
+		offered := req.offers()
+		var reply modelReply
 		switch {
 		case offered["submit_review"]:
 			m.saw("review")
@@ -343,9 +345,9 @@ func newSandboxModel(t *testing.T) *scriptedModel {
 		case offered["mark_onboarded"]:
 			m.saw("onboarding")
 			reply = toolUse("mark_onboarded", map[string]any{"notes": "read the handbook"})
-		case offered["submit_work"] && sawSandboxResult(call.Prompt):
-			// The RESUMED executor round: the conversation now carries the
-			// tool message the engine spliced in. Submitting is the
+		case offered["submit_work"] && sawSandboxResult(req):
+			// The RESUMED executor request: the conversation now carries
+			// the tool message the engine spliced in. Submitting is the
 			// executor reporting and finishing.
 			m.saw("resumed")
 			reply = toolUse("submit_work", map[string]any{
@@ -363,24 +365,24 @@ func newSandboxModel(t *testing.T) *scriptedModel {
 		default:
 			// AN AUXILIARY PASS, not a phase. The prefetch's filters reach
 			// this same model with no tools offered, and counting them
-			// as executor rounds made "the executor opened once" a claim
+			// as executor requests made "the executor opened once" a claim
 			// about the memory filter.
 			m.saw("aux")
 			reply = textReply("")
 		}
-		_, _ = io.WriteString(w, reply)
+		answer(w, reply)
 	})
 	return m
 }
 
-// sawSandboxResult reports whether this prompt's conversation already carries
-// the sandbox's answer — which is what makes it the resumed round.
+// sawSandboxResult reports whether this request's conversation already carries
+// the sandbox's answer — which is what makes it the resumed request.
 //
 // IN A TOOL RESULT, which is where the engine splices it: the run's report is
-// the answer to the round's run_sandbox call, and a mention anywhere else in
+// the answer to the phase's run_sandbox call, and a mention anywhere else in
 // the transcript is not the run having come back.
-func sawSandboxResult(prompt string) bool {
-	return slices.ContainsFunc(toolResultsIn(prompt), func(result string) bool {
+func sawSandboxResult(req modelRequest) bool {
+	return slices.ContainsFunc(req.toolResults(), func(result string) bool {
 		return strings.Contains(result, "The sandbox coding run")
 	})
 }

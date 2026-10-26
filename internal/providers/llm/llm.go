@@ -6,9 +6,13 @@
 // (internal/providers/llm/cliagent), and the only other implementations are
 // the seat's fallback chain (internal/providers/llm/chain) and test doubles.
 // So the contract is what a CLI can be handed and what it can honestly
-// report: a conversation and the tools on offer in, an answer, its tool calls
-// and its usage out. A field no CLI reads or writes is not here, because a
-// caller that sets one believes it changed something.
+// report: a conversation in, an answer and its usage out — and, for a seat at
+// work, the phase's tools beside the conversation as a [ToolHost], which the
+// backend serves to its CLI as one MCP server. The CLI calls them NATIVELY, in
+// its own loop, so there are no tool calls in an answer: they happened during
+// the call, through the host, which recorded them. A field no CLI reads or
+// writes is not here, because a caller that sets one believes it changed
+// something.
 //
 // It is deliberately small and deliberately dumb about failure. Two things it
 // does NOT do, each learned the expensive way:
@@ -86,17 +90,18 @@ type ToolCall struct {
 	ArgumentsError string `json:"ArgumentsError,omitempty"`
 }
 
-// StopReason is why a model stopped writing one response, so the tool loop
-// decides on ONE vocabulary and the round's record says which it was.
+// StopReason is why a model stopped writing — one response, or one CLI run's
+// whole loop — so the tool loop decides on ONE vocabulary and the record says
+// which it was.
 //
 // THE ZERO VALUE IS "NOT REPORTED", and it reads as an ordinary end: a backend
-// that names no reason has not said the response was cut short. Every backend
-// in this tree reports one; the zero value is for a test double.
+// that names no reason has not said the response was cut short.
 //
-// TWO REASONS, because a CLI reports two. It is asked for an envelope that is
-// either an answer or a set of calls, so those are the only two a backend can
-// honestly name; a CLI that hit its own cap or declined the request returns
-// that as prose, or as a failure its exit path classifies.
+// THREE REASONS, the ones a CLI can honestly name. A model request ends in an
+// answer or in calls to run; a CLI run ends when its model answers with no
+// call, or when the CLI's OWN turn cap stops it, which each CLI that has one
+// reports in a shape its profile recognises. A run the engine stopped is not
+// a reason the model gave, and is the tool loop's to record.
 type StopReason string
 
 const (
@@ -106,11 +111,15 @@ const (
 
 	// StopToolUse is a response that ended to let its tool calls run.
 	StopToolUse StopReason = "tool_use"
+
+	// StopCap is a CLI run its own turn cap ended, with the model still
+	// working: the CLI stopped asking it rather than the model stopping.
+	StopCap StopReason = "cap"
 )
 
 // stopReasons is the closed set, written once: [StopReason.Valid] reads it,
 // and so does the gate holding the dashboard's copy of it.
-var stopReasons = []StopReason{StopEnd, StopToolUse}
+var stopReasons = []StopReason{StopEnd, StopToolUse, StopCap}
 
 // StopReasons is every named stop reason — a copy, so no caller can edit the
 // set [StopReason.Valid] answers from.
@@ -150,30 +159,12 @@ type Completion struct {
 	// which is the more specific of the two.
 	ProviderKey string
 
-	Content   string
-	ToolCalls []ToolCall
+	// Content is the answer: for a call with tools, what the model said in
+	// its LAST response of the run — its earlier responses are the host's,
+	// observed as the run went.
+	Content string
 
-	// ProtocolError is why the backend could not read the reply's tool calls
-	// under the request's contract, or empty: the model asked for calls in a
-	// form the backend could neither read nor convert (markup naming a tool
-	// that was not offered, a call cut off). ToolCalls is then empty, and
-	// Content is the reply as it was, for the conversation only: the tool
-	// loop shows none of it and asks again ([toolloop.Run]). A FIELD, not an
-	// error, because the model answered and the round is charged; what is
-	// wrong is the answer's form, and the frame that holds the conversation
-	// is the one that can correct it.
-	ProtocolError string
-
-	// RefusedCalls are the calls a reply with a [Completion.ProtocolError]
-	// named, wherever it wrote them, and empty otherwise. NONE OF THEM RAN
-	// and none joins the conversation: they are the record of what the model
-	// asked for and was refused, so a reader of the round (a person watching
-	// the steps) sees that it asked and that nothing ran, rather than a
-	// round that silently produced nothing.
-	RefusedCalls []ToolCall
-
-	// StopReason is why the model stopped writing this response — see
-	// [StopReason].
+	// StopReason is why the model stopped writing — see [StopReason].
 	StopReason StopReason
 
 	InputTokens  int
@@ -184,14 +175,6 @@ type Completion struct {
 
 // TotalTokens is the figure a budget is charged.
 func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
-
-// Message is the assistant turn this answer adds to its conversation.
-//
-// ONE PLACE builds it, so a field added to the answer cannot reach the turn's
-// record and miss the conversation.
-func (c Completion) Message() Message {
-	return Message{Role: RoleAssistant, Content: c.Content, ToolCalls: c.ToolCalls}
-}
 
 // Request is one call's inputs. A struct rather than a parameter list because
 // it grows, and every feature added over time would otherwise become another
@@ -205,12 +188,16 @@ func (c Completion) Message() Message {
 type Request struct {
 	Messages []Message
 
-	// Tools are offered, never forced: there is deliberately no field to
-	// force a call. A phase that must end in a call NAMES the call that
-	// ends it, and the tool loop asks again when a round finishes without
-	// it (internal/agent/toolloop) — which works whatever the model does
-	// with a request to call something.
-	Tools []ToolDef
+	// Tools is the phase's live tool host, served to the CLI as ONE MCP
+	// server for the length of the call, or nil for a call that offers none
+	// — a text function. See [ToolHost].
+	//
+	// Offered, never forced: there is deliberately no way to force a call.
+	// A phase that must end in a call NAMES the call that ends it, and the
+	// tool loop asks again when a run finishes without it
+	// (internal/agent/toolloop) — which works whatever the model does with a
+	// request to call something.
+	Tools ToolHost
 
 	// Agent marks a call made by a seat at work — a round of one phase of
 	// its turn — rather than a text function the engine runs on its behalf
@@ -244,20 +231,6 @@ type Request struct {
 	// and returns the same Completion it always would; nothing above here
 	// may treat the absence of deltas as an error.
 	OnDelta func(Delta)
-
-	// StreamTokens asks a backend that streams only by running the call
-	// differently to do so: the cli-agent backend then runs a profile's
-	// streamed variant (Claude Code's stream-json) instead of the profile as
-	// written. Meaningless without OnDelta. Without it, OnDelta streams what
-	// the backend streams anyway and nothing about how the call runs changes.
-	//
-	// AN EXPLICIT OPT-IN rather than implied by OnDelta, because changing how
-	// a CLI is run changes what has to be read back, and a caller watching a
-	// round for a live view (every seat) must not have its whole runtime moved
-	// onto an output shape it never asked for. The Dashboard Assistant asks;
-	// seats do not, until a live streamed round has been proven against the
-	// installed CLI by `crewlet llm doctor`.
-	StreamTokens bool
 }
 
 // Delta is a fragment of a completion as it is being written.
@@ -286,28 +259,21 @@ type Delta struct {
 	// consumer can say which model gave up and which took over.
 	Model string
 
-	// Retract says the text THIS attempt streamed so far is not its answer:
-	// discard it, and what follows replaces it.
-	//
-	// Not a Restart, because nothing failed and nothing is tried again. A
-	// backend that streams a VIEW of its output rather than the output
-	// itself (the cli-agent backend streams the prose inside the envelope
-	// it asked the model for) learns only once the call is over whether
-	// that view and the authoritative reading agree, and when they do not,
-	// keeping the shown text as an abandoned attempt would tell a reader a
-	// model had given up when it had answered. The text that follows a
-	// Retract is the completion's content from the start.
-	Retract bool
+	// Request is the CLI's id of the model request this text belongs to
+	// ([Turn.ID]), where the backend knows it. A CLI's record can show a
+	// request before its prose is written, so text that arrives after the
+	// host was told of the request is filed under it by this id — read by
+	// arrival instead, it was filed under the request after.
+	Request string
 }
 
 // Reconcile is what takes a reader who was shown `shown` to `want`: the tail
 // to append when shown is a prefix of want, or want whole with restart set
 // when it is not, so the reader discards what it drew and starts again.
 //
-// The one rule every streaming hop applies at the end of what it streamed, so
-// "what was shown" and "what is true" can never quietly differ: a backend
-// settling its stream against its [Completion], and a consumer settling its
-// frames against a round's committed text.
+// The one rule a consumer applies at the end of what it streamed, so "what
+// was shown" and "what is true" can never quietly differ: the Dashboard
+// Assistant settling its frames against a request's committed text.
 func Reconcile(shown, want string) (tail string, restart bool) {
 	if strings.HasPrefix(want, shown) {
 		return want[len(shown):], false
@@ -325,7 +291,7 @@ func (r Request) Send(d Delta) {
 	if r.OnDelta == nil {
 		return
 	}
-	if !d.Restart && !d.Retract && d.Content == "" {
+	if !d.Restart && d.Content == "" {
 		return
 	}
 	r.OnDelta(d)

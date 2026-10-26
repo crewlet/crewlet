@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	llm "github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -31,9 +31,9 @@ func (h headroom) Remaining(context.Context) (int, error) { return h.left, h.err
 func spawnRunner(t *testing.T, sub *runner.SubagentConfig) *runner.Runner {
 	t.Helper()
 	prov := &scriptedProvider{
-		execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+		execute: []llmtest.Response{submitCall(t, runner.SubmitWorkTool,
 			`{"outcome":"no_action","summary":"nothing to fan out"}`)},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","final_artifact":"a"}`)},
 	}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
@@ -48,6 +48,7 @@ func spawnRunner(t *testing.T, sub *runner.SubagentConfig) *runner.Runner {
 		Caps:     runner.Caps{ExecutorRounds: 6},
 		Task:     "fan this out",
 		Subagent: sub,
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -157,9 +158,9 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 		Remaining: headroom{err: errors.New("the coordination store is unreachable")},
 	}
 
-	native := func(t *testing.T, sub *runner.SubagentConfig) string {
+	hostMode := func(t *testing.T, sub *runner.SubagentConfig) string {
 		t.Helper()
-		prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+		prov := &scriptedProvider{execute: []llmtest.Response{submitCall(t, runner.SubmitWorkTool,
 			`{"outcome":"no_action","summary":"nothing to fan out"}`)}}
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
 			buildOpts{subagent: sub})
@@ -168,7 +169,7 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 		}
 		return systemOf(t, prov, "execute")
 	}
-	agentMode := func(t *testing.T, sub *runner.SubagentConfig) string {
+	boxMode := func(t *testing.T, sub *runner.SubagentConfig) string {
 		t.Helper()
 		launcher := &recordingLauncher{}
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
@@ -183,7 +184,7 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 	}
 
 	for name, prompt := range map[string]func(*testing.T, *runner.SubagentConfig) string{
-		"native": native, "agent mode": agentMode,
+		"host mode": hostMode, "box mode": boxMode,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

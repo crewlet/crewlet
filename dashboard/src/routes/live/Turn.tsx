@@ -1579,12 +1579,12 @@ export function turnCrumbLabel(view: TurnView, ordinal: number | null): string {
  *
  * A parked turn is the engine's "working" with no phase in flight: its
  * executor launched a detached run and suspended, and the run is the work —
- * often for the whole of an agent-mode executor's turn, and for hours on a
- * long native one. Every watch link lands on this tab, and without this card
- * a parked turn's Transcript held nothing live and no way to the thing that
- * was: the run's output was a Timeline span and a click away. It is the SAME
- * poll that span opens (`LiveOutput`, `sandbox_tail`), and the run's own page
- * is one link away for its history.
+ * often for the whole of a box-mode executor's turn, and for hours on a
+ * host-mode one's long `run_sandbox`. Every watch link lands on this tab, and
+ * without this card a parked turn's Transcript held nothing live and no way to
+ * the thing that was: the run's output was a Timeline span and a click away.
+ * It is the SAME poll that span opens (`LiveOutput`, `sandbox_tail`), and the
+ * run's own page is one link away for its history.
  */
 function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now: number }) {
   return (

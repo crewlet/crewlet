@@ -2,7 +2,6 @@ package assistant_test
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -82,33 +81,6 @@ func TestAStreamedRoundShowsItsProseBeforeTheRoundEnds(t *testing.T) {
 	}
 }
 
-// A RETRACTED PARTIAL IS ERASED WITH A RESTART. The backend withdrew the view
-// it had streamed; the drawer is told to discard it, and what it holds in the
-// end is the committed answer alone, never the retracted draft beside it.
-func TestARetractedPartialIsErasedWithARestart(t *testing.T) {
-	t.Parallel()
-	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{{
-		Text: "The keys rotate weekly.", Input: 100, Output: 20,
-		Deltas: []llm.Delta{
-			{Content: "The keys rotate daily.\n"},
-			{Retract: true},
-			{Content: "The keys rotate weekly."},
-		},
-	}}})
-	accepted, err := f.Ask("retract", "When do the keys rotate?", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	frames := f.Follow(accepted.TurnID, 0)
-	text, restarts := drawn(frames)
-	if restarts == 0 {
-		t.Errorf("no restart was sent for the retracted view: %v", kinds(frames))
-	}
-	if text != "The keys rotate weekly." || strings.Contains(text, "daily") {
-		t.Errorf("the drawer ended on %q, want the committed answer alone", text)
-	}
-}
-
 // A CLI THAT CANNOT STREAM STILL SENDS ONE DELTA, AT THE ROUND'S END. Streaming
 // is asked for on every turn, and a backend with no streaming mode never sends
 // a fragment: its round is drawn once, whole, when it commits.
@@ -131,9 +103,8 @@ func TestANonStreamingCLISendsOneDeltaAtTheRoundsEnd(t *testing.T) {
 	if len(deltas) != 1 || deltas[0].Text != "The keys rotate weekly." || deltas[0].Restart {
 		t.Errorf("deltas = %+v, want the round once, whole", deltas)
 	}
-	if req := f.Model.Requests()[0]; !req.Streaming() || !req.StreamTokens {
-		t.Errorf("streaming %v, token stream %v: the turn did not ask its model for its token stream",
-			req.Streaming(), req.StreamTokens)
+	if req := f.Model.Requests()[0]; !req.Streaming() {
+		t.Error("the turn did not ask its model to stream")
 	}
 	// Its prompt is its whole instruction, so it replaces the CLI's own
 	// rather than running under a coding agent's.

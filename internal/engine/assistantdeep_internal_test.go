@@ -39,7 +39,7 @@ import (
 func deepCompany(t *testing.T) *Company {
 	t.Helper()
 	deep, err := cliagent.New(cliagent.Config{
-		Key: "deep", Agent: "claude-code", Model: "sonnet", AgentMode: true,
+		Key: "deep", Agent: "claude-code", Model: "sonnet", Box: true,
 		StateDir: t.TempDir(), Timeout: time.Minute,
 		Auth: cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"},
 	})
@@ -56,7 +56,7 @@ func deepCompany(t *testing.T) *Company {
 			Name: "Acme",
 			Providers: config.Providers{
 				LLM: map[string]config.LLMProvider{"deep": {
-					Agent: config.CLIClaudeCode, Model: "sonnet", Mode: config.CLIModeAgent,
+					Agent: config.CLIClaudeCode, Model: "sonnet", Mode: config.CLIModeBox,
 					Auth: config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
 				}},
 				Sandbox: &config.SandboxProvider{E2B: &config.E2BSandbox{}},
@@ -104,10 +104,12 @@ func (*whoSurface) ToolDefs() []llm.ToolDef {
 		Parameters: map[string]any{"type": "object"}}}
 }
 func (*whoSurface) AnnotationsOf(string) crewletmcp.Annotations { return crewletmcp.Annotations{} }
-func (w *whoSurface) Execute(ctx context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
-	w.calls.Add(1)
-	_, how := iam.From(ctx)
-	return toolloop.ToolResult{Output: string(how)}, nil
+func (w *whoSurface) Admit(string, map[string]any) toolloop.Admitted {
+	return func(ctx context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
+		w.calls.Add(1)
+		_, how := iam.From(ctx)
+		return toolloop.ToolResult{Output: string(how)}, nil
+	}
 }
 
 // started waits for the run's job and answers its request.
@@ -161,7 +163,7 @@ func TestADeepRunReachesCrewletOnlyThroughItsSurface(t *testing.T) {
 			t.Errorf("the run's environment carries %s", name)
 		}
 	}
-	endpoint := req.MCPServers[config.BridgeServerName].URL
+	endpoint := req.MCPServers[config.ToolServerName].URL
 	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)
 	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{
 		Endpoint: endpoint, HTTPClient: httpxtest.Pool(t)}, nil)

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -34,7 +36,7 @@ import (
 //
 // # Every moving part already existed
 //
-// A run is a coding run of the deep_work entry's CLI, in agent mode: the same
+// A run is a coding run of the deep_work entry's CLI, in box mode: the same
 // runner, box, credentials and live reading a seat's agent-mode executor gets
 // (agentrun.go), with the turn's own surface on the bridge in place of a
 // seat's. What it does NOT take is the sandbox coordinator: that machinery is
@@ -140,7 +142,7 @@ func (d *assistantDeep) target() (deepTarget, error) {
 			"does not build", key)
 	}
 	agent, isCLI := provider.(*cliagent.Provider)
-	if !isCLI || !agent.AgentMode() || agent.CodingAgent() != codingagent.ClaudeCodeName {
+	if !isCLI || !agent.Box() || agent.CodingAgent() != codingagent.ClaudeCodeName {
 		return deepTarget{}, fmt.Errorf("providers.llm.%s is not an agent-mode Claude Code "+
 			"entry this node can run deep work on", key)
 	}
@@ -273,10 +275,13 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 			"-capture-token`, or set its run_in to direct to run on the engine host", placement,
 			t.key, t.key)
 	}
-	endpoint := d.e.bridge.Open(&mcpbridge.Session{
-		RunID: r.ID, Handle: "assistant", Role: "Dashboard Assistant deep work",
-		Surface: r.Surface, Caller: assistantRunAs{}, TTL: r.Timeout + deepGrace,
-		Loopback: placement.OnEngineHost() && d.e.bridge.LoopbackBase(),
+	// A JOB OF ITS OWN PER RUN: the token names it beside the run, so a
+	// continued run (a new launch after an approval) is a new job whose
+	// token the earlier box's no longer reaches.
+	endpoint := d.e.bridge.Open(ctx, &mcpbridge.Session{
+		RunID: r.ID, Launch: uuid.NewString(), Handle: "assistant",
+		Role: "Dashboard Assistant deep work", Surface: r.Surface, Caller: assistantRunAs{},
+		TTL: r.Timeout + deepGrace, Loopback: placement.OnEngineHost() && d.e.bridge.LoopbackBase(),
 	})
 	if endpoint == "" {
 		return assistant.DeepOutcome{}, fmt.Errorf("the tool bridge opened no session for "+
@@ -301,7 +306,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	started := d.e.now()
 	handle, err := runner.Start(ctx, box, sandbox.RunRequest{System: r.System, Brief: r.Brief,
 		Env: run.env, Limits: sandbox.Limits{MaxTurns: r.Steps}, Model: run.model,
-		Resume: session, MCPServers: withBridge(nil, endpoint)})
+		Resume: session, MCPServers: bridgeServer(endpoint)})
 	if err != nil {
 		d.discard(ctx, t.manager, placement, box.ID())
 		return assistant.DeepOutcome{}, fmt.Errorf("the deep-work run could not start: %w", err)

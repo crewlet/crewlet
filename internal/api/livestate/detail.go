@@ -64,17 +64,23 @@ type CallVersions struct {
 	Executions int `json:"executions"`
 	// Rounds numbers `rounds`, each round's timing — once a round.
 	Rounds int `json:"rounds"`
+	// Invocations numbers `invocations`, the CLI runs that have ended —
+	// once a run. Versioned for rounds' reason, one level up: a phase that
+	// is steered or delegates ends a run each time, and a list re-sent at
+	// five pushes a second while one round streams is what versions remove.
+	Invocations int `json:"invocations"`
 }
 
 // CallDetail is which of a live call's fields each version numbers, by the
 // keys of both: the dashboard's merge (`LIVE_CALL_DETAIL`) reads a push by
 // exactly this table, and [LiveCall.Without] leaves out exactly these.
 var CallDetail = map[string][]string{
-	"prompt":     {"prompt", "prompt_messages"},
-	"response":   {"response"},
-	"narration":  {"round_narration"},
-	"executions": {"tool_executions"},
-	"rounds":     {"rounds"},
+	"prompt":      {"prompt", "prompt_messages"},
+	"response":    {"response"},
+	"narration":   {"round_narration"},
+	"executions":  {"tool_executions"},
+	"rounds":      {"rounds"},
+	"invocations": {"invocations"},
 }
 
 // restamp is the versions next holds, given the call it replaces: the same
@@ -89,7 +95,7 @@ func (s *LiveState) restamp(prev, next *LiveCall) CallVersions {
 	version := s.versions
 	if prev == nil {
 		return CallVersions{Prompt: version, Response: version, Narration: version,
-			Executions: version, Rounds: version}
+			Executions: version, Rounds: version, Invocations: version}
 	}
 	was := prev.Versions
 	moved := func(held int, same bool) int {
@@ -105,6 +111,8 @@ func (s *LiveState) restamp(prev, next *LiveCall) CallVersions {
 		Narration:  moved(was.Narration, sameList(prev.RoundNarration, next.RoundNarration)),
 		Executions: moved(was.Executions, sameList(prev.ToolExecutions, next.ToolExecutions)),
 		Rounds:     moved(was.Rounds, sameList(prev.Rounds, next.Rounds)),
+		Invocations: moved(was.Invocations,
+			sameList(prev.Invocations, next.Invocations)),
 	}
 }
 
@@ -151,6 +159,9 @@ func (c *LiveCall) Without(held CallVersions) any {
 	if c.Versions.Rounds != held.Rounds {
 		out.Rounds = &c.Rounds
 	}
+	if c.Versions.Invocations != held.Invocations {
+		out.Invocations = &c.Invocations
+	}
 	return out
 }
 
@@ -168,4 +179,5 @@ type leanCall struct {
 	ToolExecutions *[]any  `json:"tool_executions,omitempty"`
 	RoundNarration *[]any  `json:"round_narration,omitempty"`
 	Rounds         *[]any  `json:"rounds,omitempty"`
+	Invocations    *[]any  `json:"invocations,omitempty"`
 }

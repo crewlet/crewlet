@@ -166,7 +166,7 @@ function ModelList({
   onEdit: (id: string) => void;
 }) {
   const unused = entries.filter((e) => usesOf(seats, e.key).length === 0).length;
-  const agentMode = entries.filter((e) => e.mode === "agent").length;
+  const boxMode = entries.filter((e) => e.mode === "box").length;
   const metered = entries.filter((e) => e.authMode === "api-key").length;
 
   return (
@@ -189,12 +189,12 @@ function ModelList({
           />
           <StatCard
             icon={<SquareTerminalGlyph size="xs" />}
-            label="Agent mode"
-            value={agentMode}
+            label="Box mode"
+            value={boxMode}
             sub={
-              agentMode
-                ? `run${agentMode === 1 ? "s" : ""} the executor in its CLI`
-                : "every model behind the engine’s loop"
+              boxMode
+                ? `run${boxMode === 1 ? "s" : ""} the executor detached, in a box`
+                : "every model on this engine’s host"
             }
           />
           <StatCard
@@ -519,7 +519,7 @@ function CredentialName({ value }: { value: Credential }) {
   );
 }
 
-/** "Agent · e2b": how the engine uses the CLI, and where an agent-mode run happens. */
+/** "Box · e2b": where the engine runs the CLI, and the cell a box-mode run happens in. */
 function ModeLine({ entry }: { entry: ModelEntry }) {
   const words = modeWords(entry.mode);
   return (

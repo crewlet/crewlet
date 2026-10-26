@@ -547,7 +547,7 @@ func TestTheFilterDecidesWhichMemoriesReachThePrompt(t *testing.T) {
 	// answer nothing, which renders as an empty block with no error.
 	model.mu.Lock()
 	defer model.mu.Unlock()
-	if len(model.asked) != 1 || len(model.asked[0].Tools) != 0 {
+	if len(model.asked) != 1 || model.asked[0].Tools != nil {
 		t.Errorf("asked %+v, want one call offering no tools", model.asked)
 	}
 }

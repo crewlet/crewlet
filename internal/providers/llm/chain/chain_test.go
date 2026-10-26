@@ -13,10 +13,14 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 func TestMain(m *testing.M) {
+	// FIRST: the session cases serve a phase's tools, and a CLI told to start
+	// this binary as their relay starts it with `mcp-relay` alone.
+	mcprelay.DispatchIfRelay()
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
 	// The package logger bound its handler at package-var init, which
 	// runs before this. Rebind it or every case prints its own log.

@@ -9,7 +9,7 @@
 ## The decision
 
 **A Dashboard Assistant turn may hand its task to a deep-work run: the
-company's `assistant.deep_work` entry, a coding CLI in agent mode, with its own
+company's `assistant.deep_work` entry, a coding CLI in box mode, with its own
 shell, files, web search and fetch, and image reading.** The assistant starts in
 quick mode, whose model still has no tool of its own (ADR-0050), and escalates
 by calling `start_deep_work` itself; the drawer shows the run as one step of

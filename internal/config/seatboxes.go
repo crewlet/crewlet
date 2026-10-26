@@ -26,7 +26,7 @@ type SeatBox struct {
 	// own ([Company.validateSandboxPlacement]).
 	Cell Placement
 
-	// Executor is the providers.llm entry whose agent-mode run this box is,
+	// Executor is the providers.llm entry whose box-mode run this box is,
 	// and empty for the seat's run_sandbox box.
 	Executor string
 
@@ -45,7 +45,7 @@ type BoxStep struct {
 // SeatBoxes is every box a seat's work runs in, seat by seat in the order
 // [Company.EachRole] walks them, placed as the engine places each one.
 //
-// TWO KINDS OF BOX, and a seat has at most one. The box an AGENT-MODE
+// TWO KINDS OF BOX, and a seat has at most one. The box a BOX-MODE
 // EXECUTOR runs every turn in, which its providers.llm entry places
 // (`run_in`) whatever the gate says, and which a seat with no gate at all
 // still runs in — and such a seat has no other, because its surface never
@@ -60,7 +60,7 @@ type BoxStep struct {
 // A SECOND RESOLUTION OF THE ENGINE'S, for [Company.ExecutorProvider]'s
 // reason: validation has to answer before anything is built. The executor's
 // entry is resolved by that function, so the two cannot disagree about which
-// seats run in agent mode; the rest — the cell each box falls to, that such a
+// seats run in box mode; the rest — the cell each box falls to, that such a
 // seat is offered no run_sandbox, and the steps and their order — is held to
 // the engine's own launch paths by a case in internal/engine, since a table
 // here would agree with this function whatever the engine did.
@@ -102,11 +102,11 @@ func (c *Company) SeatBoxes() iter.Seq[SeatBox] {
 			}
 			if hasExecutor {
 				key, entry, resolved := c.executorProvider(role, fallback)
-				if resolved && entry.AgentMode() {
+				if resolved && entry.Box() {
 					if !yield(SeatBox{Seat: role, At: path, Cell: placed(entry.RunIn), Executor: key, Steps: steps}) {
 						return
 					}
-					// ONE BOX, whatever the gate says: an agent-mode
+					// ONE BOX, whatever the gate says: a box-mode
 					// executor is never offered run_sandbox, since it
 					// already holds a shell and a second box would hold
 					// the work where the turn cannot see it.
@@ -300,7 +300,7 @@ func setupFileRefusal(step, file string, cell Placement, first SeatBox, others i
 	}
 	whose := fmt.Sprintf("Seat %q runs its code work in one", first.Seat.Seat().Handle())
 	if first.Executor != "" {
-		whose = fmt.Sprintf("Seat %q runs its executor in one (providers.llm.%s, in agent mode)",
+		whose = fmt.Sprintf("Seat %q runs its executor in one (providers.llm.%s, in box mode)",
 			first.Seat.Seat().Handle(), first.Executor)
 	}
 	switch {

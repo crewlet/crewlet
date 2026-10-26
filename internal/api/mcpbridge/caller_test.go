@@ -32,10 +32,12 @@ func (*probeSurface) ToolDefs() []llm.ToolDef {
 		Parameters: map[string]any{"type": "object"}}}
 }
 func (*probeSurface) AnnotationsOf(string) crewletmcp.Annotations { return crewletmcp.Annotations{} }
-func (p *probeSurface) Execute(ctx context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
-	p.calls.Add(1)
-	_, how := iam.From(ctx)
-	return toolloop.ToolResult{Output: string(how)}, nil
+func (p *probeSurface) Admit(string, map[string]any) toolloop.Admitted {
+	return func(ctx context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
+		p.calls.Add(1)
+		_, how := iam.From(ctx)
+		return toolloop.ToolResult{Output: string(how)}, nil
+	}
 }
 
 // nobody decides every call as no principal at all: the caller's surface
@@ -87,11 +89,11 @@ func ping(t *testing.T, s *served, url string) int {
 func TestACallerBoundToNobodyOpensNoSession(t *testing.T) {
 	t.Parallel()
 	s := serve(t)
-	if url := s.bridge.Open(&mcpbridge.Session{RunID: "deep-1", Surface: s.surface,
+	if url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1", Surface: s.surface,
 		Caller: nobody{bound: false}}); url != "" {
 		t.Fatalf("a session with nobody to act as was opened: %s", url)
 	}
-	if url := s.bridge.Open(&mcpbridge.Session{RunID: "deep-1", Surface: s.surface}); url != "" {
+	if url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1", Surface: s.surface}); url != "" {
 		t.Fatalf("a session with no caller was opened: %s", url)
 	}
 }
@@ -101,7 +103,7 @@ func TestACallerBoundToNobodyOpensNoSession(t *testing.T) {
 func TestACallIsDecidedAsItsCallerNeverAsTheRequest(t *testing.T) {
 	t.Parallel()
 	s := serve(t)
-	url := s.bridge.Open(&mcpbridge.Session{RunID: "deep-1", Surface: s.surface,
+	url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1", Surface: s.surface,
 		Caller: nobody{bound: true}})
 	sess := dial(t, url)
 	if got := text(callTool(t, sess, "probe", nil)); got != string(iam.Unknown) {
@@ -114,7 +116,7 @@ func TestACallIsDecidedAsItsCallerNeverAsTheRequest(t *testing.T) {
 func TestASessionsTTLCapsItsToken(t *testing.T) {
 	t.Parallel()
 	s := serve(t)
-	url := s.bridge.Open(&mcpbridge.Session{RunID: "deep-1", Surface: s.surface,
+	url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1", Surface: s.surface,
 		Caller: nobody{bound: true}, TTL: time.Minute})
 	if got := ping(t, s, url); got == http.StatusUnauthorized {
 		t.Fatal("a fresh token was refused")
@@ -129,7 +131,7 @@ func TestASessionsTTLCapsItsToken(t *testing.T) {
 func TestAClosedDeepRunsTokenIsRefused(t *testing.T) {
 	t.Parallel()
 	s := serve(t)
-	url := s.bridge.Open(&mcpbridge.Session{RunID: "deep-1", Surface: s.surface,
+	url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1", Surface: s.surface,
 		Caller: nobody{bound: true}})
 	s.bridge.Close("deep-1")
 	if got := ping(t, s, url); got != http.StatusUnauthorized {
@@ -146,7 +148,7 @@ func TestAClosedDeepRunsTokenIsRefused(t *testing.T) {
 func TestALoopbackSessionRefusesAnotherHost(t *testing.T) {
 	t.Parallel()
 	s := serve(t)
-	url := s.bridge.Open(&mcpbridge.Session{RunID: "deep-1", Surface: s.surface,
+	url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1", Surface: s.surface,
 		Caller: nobody{bound: true}, Loopback: true})
 	path := strings.TrimPrefix(url, s.server.URL)
 	for addr, want := range map[string]bool{"203.0.113.9:4711": false, "127.0.0.1:4711": true,

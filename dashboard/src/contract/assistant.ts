@@ -135,7 +135,6 @@ export type AssistantErrorCode =
   | "model_signed_out"
   | "model_busy"
   | "model_timeout"
-  | "model_protocol"
   | "turn_timeout"
   | "step_limit"
   | "budget_exhausted"

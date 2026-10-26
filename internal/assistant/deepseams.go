@@ -78,7 +78,7 @@ type DeepSurface interface {
 	Revision() uint64
 	ToolDefs() []llm.ToolDef
 	AnnotationsOf(name string) mcp.Annotations
-	Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error)
+	Admit(name string, args map[string]any) toolloop.Admitted
 }
 
 // DeepProgress is one live reading of a run.

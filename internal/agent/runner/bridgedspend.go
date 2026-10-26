@@ -16,7 +16,7 @@ import (
 // EVERY SURFACE THE RUNNER BUILDS NAMES ONE, because which segment pays for a
 // tool call is decided where the surface is built and nowhere later. Nearly
 // every surface is the runner's own ([Runner.ownMeter]): its calls run inside
-// this segment, which charges what they cost when it ends. An agent-mode
+// this segment, which charges what they cost when it ends. A box-mode
 // executor's is not — see [BridgedSpend].
 type meter struct {
 	turn    *turnctx.Turn
@@ -30,7 +30,7 @@ func (r *Runner) ownMeter() meter {
 	return meter{turn: r.cfg.Turn.Context, compact: r.cfg.Compact, spend: &r.spend, mu: &r.mu}
 }
 
-// BridgedSpend is what an agent-mode executor's BRIDGED calls cost the
+// BridgedSpend is what a box-mode executor's BRIDGED calls cost the
 // engine: the auxiliary calls the seat's tools made for the coding agent and
 // the workers it delegated to.
 //
@@ -54,6 +54,23 @@ type BridgedSpend struct {
 
 // NewBridgedSpend is an empty meter.
 func NewBridgedSpend() *BridgedSpend { return &BridgedSpend{aux: auxspend.NewTally()} }
+
+// NewBridgedSpendFrom is a meter that starts from what a run's bridged calls
+// have already cost: the meter of a box-mode run a node takes over while it
+// works ([Runner.ReopenAgentRun]).
+//
+// FROM THE TOTAL, NEVER FROM ZERO, because the run's row keeps the NEWEST total
+// a session reports — the larger, figure by figure — and not a sum: a meter
+// that started again from zero would report totals the row already holds
+// larger ones of, and every call it served would go uncharged until it had
+// cost as much again as the run cost before the recovery.
+func NewBridgedSpendFrom(so Bridged) *BridgedSpend {
+	b := NewBridgedSpend()
+	b.aux.Add(so.Aux)
+	b.spend.Workers, b.spend.WorkerInput, b.spend.WorkerOutput =
+		so.Workers, so.WorkerInput, so.WorkerOutput
+	return b
+}
 
 // Bridged is a [BridgedSpend]'s running total.
 type Bridged struct {

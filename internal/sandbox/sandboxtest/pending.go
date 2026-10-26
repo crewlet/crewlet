@@ -359,7 +359,7 @@ func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingSto
 // A SECOND LAUNCH UNDER ONE TURN ID IS A SECOND ROUND, and its tool log starts
 // empty.
 //
-// The bridged log is the whole record an agent-mode resume rebuilds its phase
+// The bridged log is the whole record a box-mode resume rebuilds its phase
 // from. A reviewer's self_iterate launches another executor run under the same
 // turn id, and the first round's log left in place is not merely stale: a
 // round that in fact submitted nothing would report the PREVIOUS round's
@@ -400,7 +400,7 @@ func testALaunchNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
 
 // A LAUNCH ANSWERS THE JOB IT OPENED, on the first launch and on a relaunch
 // alike: its name and the instant it began, exactly as the row records them.
-// The answer is what an agent-mode run's bridge session is bound to before its
+// The answer is what a box-mode run's bridge session is bound to before its
 // box exists, so an answer that differed from the row — a stale name, or the
 // previous job's — would file every call the box makes under a job that is not
 // its own.

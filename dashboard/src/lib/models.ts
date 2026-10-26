@@ -67,11 +67,11 @@ export interface ModelEntry {
   agentDefault: boolean;
   /** The model, as written, in the CLI's own grammar; a `${VAR}` stays its reference. */
   model: string;
-  /** `text` or `agent`, the default applied; a value this build does not know, as written. */
+  /** `host` or `box`, the default applied; a value this build does not know, as written. */
   mode: string;
-  /** The sandbox cell an agent-mode run happens in; "" takes `providers.sandbox`'s default. */
+  /** The sandbox cell a box-mode run happens in; "" takes `providers.sandbox`'s default. */
   runIn: string;
-  /** The wall-clock cap on one CLI invocation, in seconds, the default applied. */
+  /** The wall-clock cap on one stretch of the CLI's own work with no tool call in flight, in seconds, the default applied. */
   timeoutSeconds: number;
   /** Whether the entry names its own `timeout_seconds`. */
   timeoutSet: boolean;
@@ -163,18 +163,19 @@ export function modelEntry(key: string, raw: Record<string, unknown>): ModelEntr
 // ---------------------------------------------------------------------------
 
 /**
- * How the engine uses an entry's CLI, in words. EXHAUSTIVE OVER THE CONTRACT'S
- * UNION, so a mode the engine adds fails the typecheck here rather than
- * drawing as nothing.
+ * Where the engine runs an entry's CLI, in words — in either mode the CLI
+ * drives its own loop over the seat's tools, so what the words name is WHERE
+ * and for how long. EXHAUSTIVE OVER THE CONTRACT'S UNION, so a mode the engine
+ * adds fails the typecheck here rather than drawing as nothing.
  */
 export const MODE_WORDS: Record<CLIMode, { label: string; hint: string }> = {
-  text: {
-    label: "Text",
-    hint: "A model behind the engine’s own tool loop.",
+  host: {
+    label: "Host",
+    hint: "Runs the CLI on this engine’s host, turn by turn, with the seat’s tools over MCP.",
   },
-  agent: {
-    label: "Agent",
-    hint: "Runs the seat’s executor as the CLI’s own agentic run, with the seat’s tools over MCP.",
+  box: {
+    label: "Box",
+    hint: "Runs the seat’s executor detached, in a box of providers.sandbox, with the seat’s tools bridged in.",
   },
 };
 

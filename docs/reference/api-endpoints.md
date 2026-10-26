@@ -7,7 +7,7 @@ routes and reaches the rest of the fleet over the event stream. The routes
 below are identical either way.
 
 A node **without** the `ingress` role binds `api.port` too, and serves only
-its two probes there — `/health` and `/ready` — plus a seats node's agent-mode
+its two probes there — `/health` and `/ready` — plus a seats node's box-mode
 tool bridge, unless `api.public` moves the bridge to its own listener: see
 [Probes on a node without ingress](#probes-on-a-node-without-ingress).
 
@@ -28,7 +28,7 @@ operator credential — move to that listener and are served nowhere else:
 |---|---|---|---|
 | `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A sandbox exporting a coding run's telemetry | `api.port` | `api.public` only |
-| `/mcp/{token}` | A sandbox calling its seat's tools (agent mode) | `api.port` | `api.public` only |
+| `/mcp/{token}` | A sandbox calling its seat's tools (box mode) | `api.port` | `api.public` only |
 | Everything else: `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/worklet/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
 A public route asked of `api.port` answers `404` with the code `no_route` and a
@@ -180,7 +180,7 @@ serve — and only for one it will serve:
 |---|---|---|
 | `GET /health`, on `api.port` | `503` while the node recovers what it holds, then `200`, `status: "starting"` both times | The `503` is what a startup probe sized for the node's store — and, on a data node of a fleet, for the join it may have to make — bounds; nothing after the recovery holds it. See the phases below. |
 | `GET /ready`, on `api.port` | `503`, `reason: "starting"` | The node does no work and takes no traffic until it serves, so no load balancer and no rollout counts it. |
-| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; on a node without `ingress` it is its agent-mode tool bridge (`/mcp/{token}`), on `api.public` when that is set and beside the probes otherwise. |
+| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; on a node without `ingress` it is its box-mode tool bridge (`/mcp/{token}`), on `api.public` when that is set and beside the probes otherwise. |
 | A request on the artifact origin (`api.artifacts`) | An empty `503` with `Retry-After: 10` for a ticketed path, the runtime or the kit, and the empty `404` or `405` the origin gives anything else | The origin's own refusal under its own inert headers, never a JSON body, which would be a document an artifact page could read. |
 | Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
 
@@ -399,7 +399,7 @@ node means nothing was done.
 | `POST` | `/webhooks/datadog` | Receive a Datadog monitor alert, authenticated by a constant-time comparison of `X-Crewlet-Token`. Datadog signs nothing, so the token is the whole check: an unset one answers `503`, and one shorter than 26 characters answers `503` too — see [Datadog](../integrations/datadog.md#verification-is-weaker-here-and-that-is-the-providers-ceiling) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
-| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in box mode. Per-run token in the path; all three verbs because that is what the transport uses |
 | `GET` `POST` `DELETE` | `/operator/mcp` | Worklet and Doclet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings Worklet or Doclet up, and `404 no_route` on a company that runs neither |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company that runs neither Worklet nor Doclet |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Dashboard Assistant proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with the `op_id` to retry under. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
@@ -692,7 +692,7 @@ half — on the `agent` and `live_call` questions, the `agents`, `snapshot` and
 that seat (`audit.seat.read`), and, for a coding run's parked question, to the
 person it is put to. The body is a call's `trigger`, `prompt`,
 `prompt_messages`, `response`, `tool_executions`, `round_narration`,
-`partial_round` and `running_call.arguments`, an `llm_history` entry's
+`partial_round` and the `arguments` of each `running_calls` entry, an `llm_history` entry's
 `payload`, and a coding run's `task_description`, `question`, `reply` and
 `bridge_calls`. A status reader receives the rest with **`body_withheld:
 true`** and the body's version counters at zero, so a client never marks the
@@ -3188,7 +3188,7 @@ iteration, so the launch is part of that row's identity), its report as
 A finished row also carries `duration_ms`, which a live one cannot: it is the
 engine's own measurement of the phase, published on the record rather than
 reconstructed by pairing it with the `agent_phase_started` that shares its key.
-Zero means *not measured* — an agent-mode executor's rounds ran inside a coding
+Zero means *not measured* — a box-mode executor's rounds ran inside a coding
 CLI's own loop, in another process — never *took no time*. A phase that failed
 before it reached a provider also truncates to zero at this resolution;
 `failed` is what separates the two.
@@ -3204,15 +3204,21 @@ reader of the record — `phases`, `turn`, `trace` and `event` answer the stored
 payload verbatim: `started_at` (when this segment began — not published minus
 `duration_ms`, which on a resumed phase spans a coding run), `rounds[]` (one
 `{round, started_at, duration_ms, model, input_tokens, output_tokens,
-cache_read_tokens, cache_write_tokens, tool_calls}` per provider call, the
-model's half of the round only), each `tool_executions[]` row's `started_at`,
+cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}` per model
+request the CLI's record showed, the model's half of the round only;
+`stop_reason` is `end`, `tool_use` or `cap`), `invocations[]` (one
+`{started_at, duration_ms, provider_key, model, outcome, first_round,
+last_round, requests_observed, input_tokens, output_tokens, cache_read_tokens,
+cache_write_tokens, tool_calls}` per CLI run, `outcome` one of `end`, `cap`,
+`stopped` and `failed`), each `tool_executions[]` row's `call_id`, `started_at`,
 `duration_ms`, `origin` (`builtin` or `mcp:<server>`) and `server`, the
 phase's `cache_read_tokens` / `cache_write_tokens` (a breakdown of
 `input_tokens`, never an addition to it), `max_rounds` / `round_ceiling`, a
 worker's or a judge's `host_round`, a resumed executor's `launch_id` and the
 turn's `work_item`, and `steers[]` — `{round, note_id}` for each person's note
 the phase read. The live frame carries the same so far plus
-`round_started_at` and the `running_call` in flight. Each is **absent** where
+`round_started_at`, the `run_started_at` of the CLI run in flight and the
+`running_calls` in flight. Each is **absent** where
 nothing measured it — a tool call nobody timed has no `duration_ms`, never a
 zero — so a reader treats absent as *not recorded*. The whole field list, and
 why each is measured where it is, is in [what a turn records about its time](../concepts/turn-engine.md#what-a-turn-records-about-its-time).
@@ -4067,7 +4073,8 @@ counter has since left behind as the current ones.
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
 tool_executions, round_narration, partial_round, round_num, rounds_used, rounds,
-max_rounds, round_ceiling, round_started_at, running_call, steers,
+invocations, max_rounds, round_ceiling, round_started_at, run_started_at,
+running_calls, steers,
 cache_read_tokens, cache_write_tokens, work_item, node, in_progress, versions }`
 while an LLM call is under
 way. The fields are these:
@@ -4075,11 +4082,13 @@ way. The fields are these:
 - `prompt_messages` is `[{role, content, sections}]`, the conversation the phase opened with. `sections` is that message's outline as the prompt's builder recorded it — `[{key, title, bytes, headed?}]`, tiling `content` exactly, with `headed: true` on a part that opens on its own heading line whose text is `title` (absent on a part the builder named, which may still open on a heading of its content's) — and is absent on a message no builder outlined or whose text is not valid UTF-8; a finished phase record carries the same maps as `system_sections` and `user_sections`. See [a prompt carries its outline](../concepts/turn-engine.md#what-streams-during-a-turn) for the keys and the rules a reader checks before slicing by one.
 - `round_narration` is `[{round, content, declined}]`, what the model said in each round so far; `declined: true` marks a round that answered in prose where the phase had to end in a call, and is absent otherwise.
 - `rounds_used` is the round the phase is on, counted from one: the rounds that have come back, and the one in flight from the frame the engine publishes as that round's provider call is made. A finished phase record carries the same count under the same name.
-- `rounds` is each round's own timing and tokens, `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. This used to be the count, under the name the phase record uses for the list.
+- `rounds` is each round's own timing and tokens — a round is one model request, as the CLI's record shows it — `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}`. This used to be the count, under the name the phase record uses for the list.
+- `invocations` is the phase's CLI runs that have **ended**, each `{started_at, duration_ms, provider_key, model, outcome, first_round, last_round, requests_observed, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`, as on the [phase record](../concepts/turn-engine.md#what-a-turn-records-about-its-time). The run in flight is not on it until it ends: its rounds are the ones past every entry's `last_round`. Empty until the first run ends.
 - `max_rounds` is the round cap currently granted, which an extension can raise mid-phase.
 - `round_ceiling` is the highest value any extension may raise `max_rounds` to.
 - `round_started_at` is when the latest round made its provider call. It is later than every entry in `rounds` while that call is out, and equal to the last entry's start while the round's tools run — only the first is a model call in flight.
-- `running_call` is `{round, name, arguments, started_at}`, the tool call running right now. It is absent between calls, and it is never carried forward from an earlier frame. A frame that stops naming a call means the call returned.
+- `run_started_at` is when the CLI run in flight was launched — the run whose rounds are past every entry in `invocations`. Absent between runs, so a reader draws the run in flight from its launch rather than from the first round it happens to have timed.
+- `running_calls` is every tool call running right now, in the order the calls arrived, each `{id, round, name, arguments, started_at}` — a **list**, because a coding CLI may make a response's calls at once. `id` is the call's id, which its `tool_executions` row carries as `call_id` once it has answered. It is absent while no call runs, and never carried forward from an earlier frame: a frame that stops listing a call means the call returned.
 - `steers` is every person's note the phase has read so far, `{round, note_id}` — the round whose provider call first saw it. What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
 - `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call built again under its own key (`turn_id`, `phase`, `iteration`), as a suspended Execute phase is when its resumed rounds stream after the checkpoint cleared it, is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
@@ -5199,9 +5208,9 @@ again is safe for that reason.
 
 It refuses `not_running` for a turn that has ended or parked, `conflict` for one
 already holding five notes it has not read yet (once it reads them, the note may
-be sent again), `steer_unsupported` for a turn whose executor runs as a coding
-CLI's own agentic loop — its rounds are the CLI's, and the engine has no round
-boundary to hand a note to — and `invalid` for an empty or oversized note.
+be sent again), `steer_unsupported` for a turn whose executor runs detached in a box
+([box mode](../concepts/llm-backends.md#box-mode)) — its rounds are its CLI's, the turn is
+parked while it runs, and the engine has no run boundary to hand a note to — and `invalid` for an empty or oversized note.
 
 The note is **signed**: the node running the turn offers it as the person it
 names, on this node's decision that they may, so the request it is scattered in
@@ -7088,7 +7097,6 @@ again can help without anybody acting.
 | `model_signed_out` | The CLI's login expired or is missing, or its token is invalid. An administrator is told to run `crewlet llm login <key>`, anybody else to ask an administrator | No |
 | `model_busy` | The plan is spent or rate limited; `retry_after_seconds` is the wait until the CLI's named reset | Yes, after the reset |
 | `model_timeout` | The CLI ran out of its own time (`providers.llm.<key>.timeout_seconds`) before it answered | Yes |
-| `model_protocol` | The model wrote its tool calls in a form the engine could not read (markup, or another vendor's format naming a tool it was not offered), and again after it was asked once for the response contract. Nothing it wrote is shown | Yes |
 | `model_unavailable` | The CLI could not be started on the node, or failed for a reason none of the codes above names (`retry_after_seconds: 10`) | Only for the second |
 
 The first three, and a CLI that cannot start, are also known before a question

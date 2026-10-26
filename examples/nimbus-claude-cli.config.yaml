@@ -32,7 +32,7 @@
 #     crewlet llm doctor default            -company examples/nimbus-claude-cli.company.yaml \
 #                                           -config  examples/nimbus-claude-cli.config.yaml
 #
-#     # 3. The tool bridge the engineers' agent-mode runs dial back on,
+#     # 3. The tool bridge the engineers' box-mode runs dial back on,
 #     #    and go.
 #     export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"   # = api.port below
 #     set -a; . ./.env; set +a          # MATTERMOST_URL + the bot tokens
@@ -188,7 +188,7 @@ api:
   # the seat's tools reach that box back over /mcp/{token} here.  Set
   # CREWLET_MCP_BRIDGE_URL to a URL the box can dial — for a `direct` box
   # on this machine that is http://127.0.0.1:<this port>.  Change the port
-  # and change that variable with it; without it agent mode is refused at
+  # and change that variable with it; without it box mode is refused at
   # launch rather than started with no tools.  In a fleet the URL must
   # address the NODE and never a load balancer: a bridge session is a live
   # tool surface in one process, and a peer that never held it answers 401

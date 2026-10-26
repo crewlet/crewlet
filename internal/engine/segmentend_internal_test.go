@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 )
 
@@ -32,7 +33,7 @@ func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 	e, served := spendingEngine(t)
 	q := e.backends.Queue.(*memory.Queue)
 	e.auxSpend = auxspend.NewLedger(q)
-	swapModel(t, e, longAccountModel{})
+	swapModel(t, e, longAccountModel())
 
 	if _, err := e.runTurn(t.Context(), Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
@@ -84,7 +85,7 @@ func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
 	e, served := spendingEngine(t)
 	q := e.backends.Queue.(*memory.Queue)
 	e.auxSpend = auxspend.NewLedger(q)
-	swapModel(t, e, slowRewriteModel{delay: 200 * time.Millisecond})
+	swapModel(t, e, slowRewriteModel(200*time.Millisecond))
 
 	if _, err := e.runTurn(t.Context(), Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
@@ -120,19 +121,18 @@ func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
 
 // slowRewriteModel is [longAccountModel] whose rewrites — the calls offering no
 // tools — take a while to answer.
-type slowRewriteModel struct{ delay time.Duration }
-
-func (slowRewriteModel) Model() string { return "billing" }
-
-func (m slowRewriteModel) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	if len(req.Tools) == 0 {
+func slowRewriteModel(delay time.Duration) phasedCLI {
+	m := longAccountModel()
+	text := m.text
+	m.text = func(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 		select {
-		case <-time.After(m.delay):
+		case <-time.After(delay):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+		return text(ctx, req)
 	}
-	return longAccountModel{}.Complete(ctx, req)
+	return m
 }
 
 // swapModel puts one provider behind every chain the spending engine's seat
@@ -150,24 +150,21 @@ func swapModel(t *testing.T, e *Engine, p llm.Provider) {
 
 // longAccountModel answers each phase as billingModel does, with a reviewer's
 // account past what a task's card holds, and a rewrite with a short one.
-type longAccountModel struct{}
-
-func (longAccountModel) Model() string { return "billing" }
-
-func (longAccountModel) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	if len(req.Tools) == 0 {
-		return &llm.Completion{Model: "billing", Content: "Looked; nothing to do.",
-			InputTokens: 400, OutputTokens: 8}, nil
-	}
-	for _, tool := range req.Tools {
-		if tool.Name == runner.SubmitReviewTool {
-			return &llm.Completion{Model: "billing", ToolCalls: []llm.ToolCall{{
-				ID: "c1", Name: runner.SubmitReviewTool, Arguments: map[string]any{
+func longAccountModel() phasedCLI {
+	return phasedCLI{
+		model: "billing",
+		pick: func(offered []string) llmtest.Run {
+			if offers(offered, runner.SubmitReviewTool) {
+				return calling(runner.SubmitReviewTool, map[string]any{
 					"decision":       "done",
 					"completed_work": strings.Repeat("The seat read the task and found nothing to do. ", 20),
-				},
-			}}, InputTokens: billedInput, OutputTokens: billedOutput}, nil
-		}
+				}, llm.Usage{Input: billedInput, Output: billedOutput})
+			}
+			return billingRun(offered)
+		},
+		text: func(context.Context, llm.Request) (*llm.Completion, error) {
+			return &llm.Completion{Model: "billing", Content: "Looked; nothing to do.",
+				InputTokens: 400, OutputTokens: 8}, nil
+		},
 	}
-	return billingModel{}.Complete(ctx, req)
 }

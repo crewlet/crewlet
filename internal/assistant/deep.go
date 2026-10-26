@@ -666,19 +666,11 @@ func (b *deepBridge) Revision() uint64 { return 1 }
 // ToolDefs are the turn's tools but the escalation.
 func (b *deepBridge) ToolDefs() []llm.ToolDef { return b.inner.ToolDefs() }
 
-// AnnotationsOf is a tool's hints as its kind states them: a read reads, a
-// change is proposed and so destroys nothing until the person approves it.
-func (b *deepBridge) AnnotationsOf(name string) mcp.Annotations {
-	tool, ok := b.inner.byName[name]
-	if !ok {
-		return mcp.Annotations{}
-	}
-	switch tool.Kind {
-	case catalog.KindRead, catalog.KindDocs, catalog.KindNavigate:
-		return mcp.Annotations{ReadOnly: mcp.Yes, Destructive: mcp.No}
-	}
-	return mcp.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
-}
+// AnnotationsOf is a tool's hints, the turn's own surface's.
+func (b *deepBridge) AnnotationsOf(name string) mcp.Annotations { return b.inner.AnnotationsOf(name) }
+
+// Admit binds one bridged call to run once ([DeepSurface]).
+func (b *deepBridge) Admit(string, map[string]any) toolloop.Admitted { return b.Execute }
 
 // deepWaitingNote is what a run is told once its change waits for the person.
 const deepWaitingNote = "Proposed: the change is shown to the person for their approval, " +

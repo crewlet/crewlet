@@ -89,6 +89,42 @@ func (s *surface) ToolDefs() []llm.ToolDef { return s.defs }
 // Phase names the loop for telemetry.
 func (s *surface) Phase() string { return "assistant" }
 
+// Revision is constant: a turn's tools never change while it runs, so its CLI
+// never has a tool list to re-read.
+func (s *surface) Revision() uint64 { return 1 }
+
+// AnnotationsOf is a tool's hints as its kind states them, which a CLI reads
+// to decide what may run beside what: a read, the docs and a navigation only
+// read, and a change is proposed, so it destroys nothing until the person
+// approves it.
+func (s *surface) AnnotationsOf(name string) mcp.Annotations {
+	tool, ok := s.byName[name]
+	if !ok {
+		return mcp.Annotations{}
+	}
+	switch tool.Kind {
+	case catalog.KindRead, catalog.KindDocs, catalog.KindNavigate:
+		return mcp.Annotations{ReadOnly: mcp.Yes, Destructive: mcp.No}
+	}
+	return mcp.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
+}
+
+// Detached reports a tool whose call may park the turn: a change waiting on
+// the person's approval, or deep work, which can park on one of its own. Such
+// a call runs alone ([toolloop.Surface.Detached]), since a parked turn waits
+// on one decision.
+func (s *surface) Detached(name string) bool {
+	switch s.byName[name].Kind {
+	case catalog.KindWrite, catalog.KindPageAction, catalog.KindDeep:
+		return true
+	}
+	return false
+}
+
+// Admit binds one call to run once. The turn keeps its own record of its
+// steps in the order they run, so nothing is fixed here.
+func (s *surface) Admit(string, map[string]any) toolloop.Admitted { return s.Execute }
+
 // Execute carries out one call.
 func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
 	tool, offered := s.byName[call.Name]

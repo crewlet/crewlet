@@ -236,6 +236,39 @@
   color: var(--color-feedback-warning-ink);
 }
 
+/* A PHASE'S CLI RUNS, each heading the rounds it made (`RunHead` in
+   PhaseCard.tsx). A run is the coarser boundary of the two, so it is a HEAD
+   rather than another rail: its rounds keep their own bracket and tint, and
+   the run's line above them — its name, its entry, its span of rounds and how
+   it ended — reads as the label of the stretch below it. The gap between two
+   runs beats the gap between two rounds, so the hierarchy reads in space. */
+.run-ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.run {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+}
+.run-name {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
 /* ---- A phase's prompt: a map, an outline and one section -----------------
    `PromptDoc.tsx`. The view measures ITSELF (`container: prompt`) rather than
    the window: the card it sits in is as wide as the turn page's column, which
@@ -700,6 +733,13 @@
 }
 .tool-row.failed {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
+}
+/* A CALL STILL RUNNING is bordered in the accent the live state wears
+   everywhere else, beside the word and its clock in the row's own head: a
+   round can hold several at once, and which of its calls have answered is
+   the question a reader brings to a slow one. */
+.tool-row.running {
+  border-color: color-mix(in srgb, var(--color-brand-accent) 45%, transparent);
 }
 /* A task's artifacts, the design system's compact cards stacked in the rail.
    ONE TRACK AS WIDE AS THE RAIL: an `auto` track grows to a card's widest
@@ -9137,9 +9177,16 @@ a.live-row:focus-visible {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
 }
-/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a run and the
-   reflection pass read as the headings the rows under them belong to. */
-.wf-row:is([data-kind="turn"], [data-kind="phase"], [data-kind="run"], [data-kind="reflection"])
+/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a CLI run, a
+   coding run and the reflection pass read as the headings the rows under them
+   belong to. */
+.wf-row:is(
+    [data-kind="turn"],
+    [data-kind="phase"],
+    [data-kind="invocation"],
+    [data-kind="run"],
+    [data-kind="reflection"]
+  )
   .wf-name {
   font-weight: var(--font-weight-medium);
 }
@@ -9245,6 +9292,7 @@ a.live-row:focus-visible {
 .span-bar:is(
   [data-kind="turn"],
   [data-kind="phase"],
+  [data-kind="invocation"],
   [data-kind="run"],
   [data-kind="reflection"],
   [data-kind="context"]

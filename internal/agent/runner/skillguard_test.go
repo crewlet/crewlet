@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -157,6 +157,7 @@ func guardedRunnerWith(t *testing.T, prov *scriptedProvider, pub queue.Publisher
 				Org:  &org.Organization{Name: "Acme", Roles: []*org.Role{role}},
 			},
 		},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -169,7 +170,7 @@ func guardedRunnerWith(t *testing.T, prov *scriptedProvider, pub queue.Publisher
 // for the tool.
 func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		submitCall(t, "slack_post", `{"text":"hi"}`),
 		text("posted"),
 	}}
@@ -181,14 +182,9 @@ func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 	}
 
 	// The refusal names the exact call to make, because the error IS the
-	// recovery path.
-	var refusal string
-	for _, m := range prov.requestsFor("execute")[1].Messages {
-		if strings.Contains(m.Content, "load_tool_skill") {
-			refusal = m.Content
-		}
-	}
-	if refusal == "" {
+	// recovery path — what the model reads back from the call it made.
+	refusal := prov.answerTo("execute", "slack_post")
+	if !strings.Contains(refusal, "load_tool_skill") {
 		t.Fatal("the model was never told what to load")
 	}
 	if !strings.Contains(refusal, `load_tool_skill(key="chat-conventions")`) {
@@ -202,14 +198,16 @@ func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 // where a block looks like any other failed call.
 func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		submitCall(t, "slack_post", `{"text":"hi"}`),
 		text("gave up"),
 	}}
 	pub := newCapture()
 	r := guardedRunner(t, prov, pub)
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+	// A LATER ITERATION, so a refusal stamped with any other number — the
+	// zero a guard built without its iteration reported — is told apart.
+	if _, _, err := r.Execute(context.Background(), 2, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -222,6 +220,11 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	if got.ToolName != "slack_post" || got.TurnID != "t-guard" ||
 		got.Phase != types.Phase(phase.Execute) {
 		t.Fatalf("the event = %+v", got)
+	}
+	// The iteration the phase ran as, which every other event of the
+	// phase carries: a reader joining refusals to their phase needs it.
+	if got.Iteration != 2 {
+		t.Errorf("the refusal names iteration %d, want the phase's 2", got.Iteration)
 	}
 	// EVERY pending skill, not just the one that blocked: a model about to
 	// be blocked twice more is a model an operator needs to see whole.
@@ -237,7 +240,7 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 // unread, under a catalogue that had called its skill required.
 func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		submitCall(t, runner.ActivateTool, `{"name":"slack_post"}`),
 		submitCall(t, "slack_post", `{"text":"hi"}`),
 		text("gave up"),
@@ -261,7 +264,7 @@ func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 // refusals.
 func TestLoadingTheSkillUnlocksTheTool(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		submitCall(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`),
 		submitCall(t, "slack_post", `{"text":"hi"}`),
 		text("posted"),

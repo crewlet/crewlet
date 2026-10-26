@@ -158,6 +158,11 @@ export function callWords(args: unknown): string {
  * The call a seat is making now, or the last one it made this phase, as one
  * line: `sandbox.run go test ./...`.
  *
+ * SEVERAL CALLS IN FLIGHT — a CLI runs a response's calls side by side — are
+ * the one running longest, which is the one the turn is waiting on, and how
+ * many more run beside it: `sandbox.run make · 2 more running`. One line has
+ * no room for every call; the turn's own page lists them all.
+ *
  * A WITHHELD BODY (`body_withheld`) keeps what is STATUS — the name of the
  * tool running now — and says nothing of what it was handed or what ran
  * before, which are the seat's trail: the line is the tool's name and
@@ -167,10 +172,12 @@ export function callWords(args: unknown): string {
 export function lastCallLine(row: AgentRow): string {
   const call = row.live_call;
   if (!call) return "";
-  if (call.running_call) {
-    if (call.body_withheld) return `${call.running_call.name} (details hidden)`;
-    if (call.running_call.arguments === undefined) return call.running_call.name;
-    return `${call.running_call.name} ${callWords(call.running_call.arguments)}`.trim();
+  const [first, ...rest] = call.running_calls ?? [];
+  if (first) {
+    const more = rest.length ? ` · ${rest.length} more running` : "";
+    if (call.body_withheld) return `${first.name} (details hidden)${more}`;
+    if (first.arguments === undefined) return `${first.name}${more}`;
+    return `${`${first.name} ${callWords(first.arguments)}`.trim()}${more}`;
   }
   const done = call.tool_executions?.at(-1);
   if (!done) return "";

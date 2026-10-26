@@ -368,7 +368,7 @@ assistant:
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
-| `deep_work.llm` | none | The entry deep work runs on: Claude Code in `mode: agent`, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running the Dashboard Assistant](../guides/assistant.md#deep-work)). |
+| `deep_work.llm` | none | The entry deep work runs on: Claude Code in `mode: box`, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running the Dashboard Assistant](../guides/assistant.md#deep-work)). |
 | `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
 | `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
 | `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
@@ -387,11 +387,14 @@ across the whole fleet.
 **Every model in the chain must reach nothing the person's requests did not
 return.** Each `llm` key must name a `providers.llm` entry that is:
 
-- in **text mode**. An entry with `mode: agent` is refused: agent mode runs
-  the CLI's own tool loop, whose calls never pass the engine's guard.
+- in **host mode**, where the CLI's one tool source is the engine's `crewlet`
+  server serving the person's own requests. An entry with `mode: box` is
+  refused: box mode runs the CLI with its own tools beside the engine's, which
+  never pass the engine's guard.
 - on a profile whose run has **no tool of its own, by construction**: its
   profile declares `local_tools: denied` and a measured `tools_off`, and the
-  argv every assistant call runs carries it. A CLI with its own shell or file
+  argv every assistant call runs carries it, with an `mcp` allow list naming
+  the engine's tools alone. A CLI with its own shell or file
   reader on the engine host could read whatever the engine user can, the
   engine's own data and keys included. Today that is `claude-code` and `pi`;
   `codex` keeps `apply_patch`, which has no switch, and `opencode`'s policy has
@@ -401,7 +404,7 @@ return.** Each `llm` key must name a `providers.llm` entry that is:
   no authority decision saw, and a fetch is a way out for the person's data.
   Seats keep their web tools; only the entry that sets this loses them. The
   CLIs that can deny web are `claude-code`, `codex`, `opencode` and `pi`
-  (see [Tool calls in text mode](../concepts/llm-backends.md#tool-calls-in-text-mode));
+  (see [Tool calls in host mode](../concepts/llm-backends.md#tool-calls-in-host-mode));
   any other is refused.
 
 A document that breaks one of these is refused by `crewlet validate` and by
@@ -443,10 +446,10 @@ providers:
                                         #   credential, which still builds: every call then fails
                                         #   with the CLI's own sign-in error, which names it, where
                                         #   a missing model has no such tell
-      mode: text                        # optional — text (default): a model behind the engine's
-                                        #   tool loop; agent: the CLI runs the executor itself
+      mode: host                        # optional — host (default): a model behind the engine's
+                                        #   tool loop; box: the CLI runs the executor itself
                                         #   (claude-code and opencode only)
-      run_in: ""                        # agent mode only — direct | container | e2b; empty takes
+      run_in: ""                        # box mode only — direct | container | e2b; empty takes
                                         #   providers.sandbox.default_run_in
       state_dir: ""                     # optional — the login + per-seat CLI homes, each CLI
                                         #   under <state_dir>/<agent>. Empty:
@@ -459,12 +462,16 @@ providers:
                                         #   live and starts that CLI signed out. Its bundle
                                         #   (auth.credential_bundle) stays the old CLI's and is
                                         #   refused until re-exported from the new one
-      timeout_seconds: 600              # optional — one CLI invocation, wall clock (default 600):
-                                        #   the process launch, the model's whole answer and the
-                                        #   CLI's own retries. A breach is a retryable `timeout`
-      max_concurrent: 4                 # optional — CLI processes at once (default 4). Each is a
-                                        #   200-400 MB runtime, and subscription plans throttle
-                                        #   concurrency hard
+      timeout_seconds: 600              # optional — one stretch of the CLI's own work, wall clock
+                                        #   (default 600): from its launch, or the end of the tool
+                                        #   call it last waited on, to its next call or its exit —
+                                        #   the seat's tools are never on it. A breach is a
+                                        #   retryable `timeout`
+      max_concurrent: 4                 # optional — live CLI processes at once (default 4). Each
+                                        #   is a 200-400 MB runtime that holds its slot for its
+                                        #   whole run, and subscription plans throttle concurrency
+                                        #   hard; a model call made inside one of a run's tool
+                                        #   calls on the same entry borrows the run's slot
       env: {}                           # optional — extra child env, ${ENV_VAR}-resolved. The
                                         #   child gets an ALLOWLISTED environment, never the
                                         #   engine's, so declare anything else the CLI needs here —
@@ -1331,7 +1338,7 @@ api:
   port: 8000            # node.roles decides what it carries. With `ingress`:
                         #   the dashboard, the REST API, the sign-in routes,
                         #   the webhooks and the probes. Without it: /health
-                        #   and /ready only (plus a seats node's agent-mode
+                        #   and /ready only (plus a seats node's box-mode
                         #   tool bridge, unless api.public is set). 0 (the
                         #   default) binds nothing at all
   external_url: "https://crewlet.example.com"
@@ -1784,7 +1791,7 @@ units:
 | `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, it is the project the team files work under, and on Worklet it is what an item filed with no `unit` belongs to, whoever filed it (see [Worklet](../guides/worklet.md#which-team-an-item-belongs-to)). **Vendor-neutral**: it names a Worklet project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
 | `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
-| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own agent-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default — the seat's code work runs on the entry its `llm_sandbox` resolves to, and the coding agent must be that entry's own CLI, so only a `claude-code` or `opencode` entry can do code work ([failure modes](../concepts/code-sandbox.md#failure-modes)); `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared, every `${VAR}` in it resolving before a `run_sandbox` box starts unless its key is listed under `optional_keys`, which leaves it out instead ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)) — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. On a seat whose executor runs in [agent mode](../concepts/llm-backends.md#agent-mode) the gate places nothing and drives nothing — that seat is never offered `run_sandbox`, and its one box is its executor's, placed by the entry's `run_in` — so its `run_in` may only be `self` or empty and its `coding_agent` only empty or that entry's own CLI, while its `setup`, `env`, `mcp`, `pause_ttl_seconds` and `max_turns` reach that box whether or not `enabled` is set. On any other seat a block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read. Each of these is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
+| `sandbox` | dict | no | The seat's [code sandbox](../concepts/code-sandbox.md#per-role-gate--rolesandbox) gate. **Absent means the seat is never offered the sandbox tool.** `enabled: true` offers it; `run_in` picks where its code work runs (`direct`, `container`, `e2b`, or `self` — inside its own box-mode executor run; empty inherits `providers.sandbox.default_run_in`); `coding_agent` (`claude-code` or `opencode`) overrides the provider default — the seat's code work runs on the entry its `llm_sandbox` resolves to, and the coding agent must be that entry's own CLI, so only a `claude-code` or `opencode` entry can do code work ([failure modes](../concepts/code-sandbox.md#failure-modes)); `pause_ttl_seconds` (unset inherits the provider's, `0` never holds a paused box, negative refused) and `max_turns` (unset inherits, `0` uncapped, negative refused) tune its runs; `env` is the environment injected into them and where external-service tokens are declared, every `${VAR}` in it resolving before a `run_sandbox` box starts unless its key is listed under `optional_keys`, which leaves it out instead ([credentials and the run environment](../concepts/code-sandbox.md#credentials-and-the-run-environment)) — a setup step declares its own `optional_keys`, over its `env` and the paths of its `files`; `mcp.servers` names which of the seat's MCP servers the coding agent gets; `setup` is per-seat provisioning applied after `providers.sandbox.setup`. On a seat whose executor runs in [box mode](../concepts/llm-backends.md#box-mode) the gate places nothing and drives nothing — that seat is never offered `run_sandbox`, and its one box is its executor's, placed by the entry's `run_in` — so its `run_in` may only be `self` or empty and its `coding_agent` only empty or that entry's own CLI, while its `setup`, `env`, `mcp`, `pause_ttl_seconds` and `max_turns` reach that box whether or not `enabled` is set. On any other seat a block with any of `run_in`, `env`, `mcp` or `setup` but `enabled` unset is refused, since none of it would be read. Each of these is an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to). A setup step's `files` entry — the seat's own or an engine-wide one — that a box the seat runs in would refuse is refused on the write, naming the step, the path and the seat: a `direct` box writes a file only inside its own home, which it mints per box, so it takes a relative path and refuses every absolute one, and a `container` box writes one only under its home mount at `/home/user`. An `e2b` box writes a file at any other path, but refuses another account's home (`~name/…`) and a path naming a directory, so the home itself and a directory above it are refused on the write as well. Name such a file relative to the box's home instead (`.npmrc`, or `~/.npmrc`), which every cell writes under its home, or have a command of the step write it under `"$HOME"` ([setup steps](../concepts/code-sandbox.md#setup-steps--provisioning-the-box)) |
 | `placement` | dict | no | Which nodes may run this seat; absent means any node that runs seats (see [Placement](../guides/fleet.md#placement)). Agent seats only: a human seat is never claimed, so one carrying a placement is refused. `node` pins it to one node id and `labels` names pairs a node must **all** carry under [`node.labels`](../concepts/configuration.md#nodelabels); give both and both must hold. Everything is compared exactly against what a node advertises, so each part takes the shape a node's own is held to. A **label key** follows the node-label grammar: not empty, at most 63 bytes, and no whitespace or unprintable character anywhere (`zone`, `topology.example.com/rack`). A **label value** may hold spaces inside it or be empty, but none around it, since a node's values are trimmed. **`node`** is a node id: it starts with a letter or digit and holds only letters, digits, `.`, `_` or `-`, at most 64 characters — and it is compared as written, so a `${VAR}` is not resolved here. A selector outside these shapes could never match a node, so it is refused at validation, naming the field, rather than left for the running fleet to report as `seats_unplaceable` |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
@@ -2036,7 +2043,7 @@ mcp_servers:
     request_timeout_seconds: 300        # optional — one tool call
 ```
 
-Full field reference: `name` (required; `crewlet` is reserved — it is the name every agent-mode box sees the seat's own [tool bridge](../concepts/llm-backends.md#the-tool-bridge) under, and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
+Full field reference: `name` (required; `crewlet` is reserved — it is the name every box-mode run sees the seat's own [tool bridge](../concepts/llm-backends.md#the-tool-bridge) under, and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
 
 ### Timeouts
 

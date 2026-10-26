@@ -43,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcprelay"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -176,7 +177,13 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 	// commands because it belongs to the INVOCATION rather than to any one
 	// of them — a CI step exports it once and every command it runs
 	// answers.
-	if cmd != "run" {
+	//
+	// NOR FOR THE RELAY, which sets up nothing at all. It is the process a
+	// coding CLI starts as a seat's MCP server, so its stdout IS the protocol
+	// stream and its environment is whatever the CLI chose to pass: the log
+	// level, format and file below would read variables it must not depend on.
+	// See internal/mcprelay.
+	if cmd != "run" && cmd != mcprelay.Command {
 		// THE LEVEL, NOT THE DESTINATION. This used to install `stderr`
 		// as the process-wide sink, which is wrong twice over: `run`
 		// takes that writer so it can be TESTED, and a function that
@@ -261,6 +268,12 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		return runSearch(rest, stdout, stderr)
 	case "assistant":
 		return runAssistant(environ, rest, stdout, stderr)
+	case "mcp-relay":
+		// The literal is mcprelay.Command, which the argv a CLI is handed is
+		// built from; a case of the switch is read as the binary's command
+		// list ([TestTheRelayIsDispatchedUnderItsOwnName] holds the two
+		// together).
+		return mcprelay.Run(rest, os.Stdin, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
 		return runIntegration(inv, cmd, rest, stdout, stderr)
 	default:
@@ -308,6 +321,8 @@ Usage:
                               on the vectors a store file actually holds
   crewlet assistant eval      Run evaluation cases through the Dashboard Assistant,
                               on their own scripts or against a candidate model
+  crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's coding CLI
+                              starts, relaying its stdio to the engine's tools
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
@@ -1955,11 +1970,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// off Tier A, whose answer is the presence lease's: the profile's id
 		// is the one field it does not need.
 		hint := "api.port is 0, so this node binds no listener: no " +
-			"orchestrator can probe it (/health, /ready) and an agent-mode " +
+			"orchestrator can probe it (/health, /ready) and a box-mode " +
 			"seat's box finds no tool bridge here"
 		if boot.Profile("").RunsIngress() {
 			hint = "api.port is 0, so this node serves no dashboard, no REST " +
-				"API, no webhook endpoint, no probe and no agent-mode tool " +
+				"API, no webhook endpoint, no probe and no box-mode tool " +
 				"bridge; every integration is deaf here"
 		}
 		// A WARNING ONLY WHERE NOTHING ELSE WARNED. An ingress node whose
@@ -2003,7 +2018,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// orchestrator runs every node and has to be able to restart one that
 	// wedged and wait on one that has not joined, and the TOOL BRIDGE, because
 	// a bridged session is a live tool surface in the process that opened it,
-	// so a seats node running an agent-mode seat is the only node its box can
+	// so a seats node running a box-mode seat is the only node its box can
 	// reach. See [api.Probes].
 	if !boot.Profile(nodeID).RunsIngress() {
 		return serveProbes(ctx, boot, e, reconciler, listeners, log)
@@ -2823,7 +2838,7 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Empty unless the bridge has a listener of its own on api.public.
 		"public_addr", publicAddr,
 		"hint", "node.roles does not include ingress, so this node serves only "+
-			"/health and /ready, and the agent-mode tool bridge ("+
+			"/health and /ready, and the box-mode tool bridge ("+
 			mcpbridge.PathPrefix+"{token}) where it runs seats with "+
 			mcpbridge.BaseURLVar+" set — on api.public when the file sets one; "+
 			"webhooks, the dashboard and the REST API are a peer's with the "+

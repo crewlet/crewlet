@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -43,15 +43,14 @@ func runTurn(t *testing.T, prov *scriptedProvider) (turn.Result, *scriptedProvid
 func TestGoldenATurnThatDeliversCompletes(t *testing.T) {
 	t.Parallel()
 	res, prov := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
+		execute: []llmtest.Response{
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_post",
-				Arguments: map[string]any{"channel": "C0ENG", "text": "Weekly: three PRs merged."}}}},
+			calling(callOf(t, "slack_post", map[string]any{"channel": "C0ENG", "text": "Weekly: three PRs merged."})),
 			submitCall(t, runner.SubmitWorkTool, `{
 				"outcome":"delivered","summary":"posted the weekly summary to #eng",
 				"deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","final_artifact":"Posted the weekly summary."}`)},
 	})
 
@@ -82,20 +81,21 @@ func TestGoldenATurnThatDeliversCompletes(t *testing.T) {
 func TestGoldenAFalseDeliveryClaimIsCorrectedInsideTheRound(t *testing.T) {
 	t.Parallel()
 	res, prov := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
+		execute: []llmtest.Response{
 			// The model read through a tool that is positively annotated
 			// read-only, then claimed the read as the delivery.
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_history"}}},
+			activate("slack_history"),
+			calling(llmtest.Call{Name: "slack_history"}),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"answered","deliveries":["slack_history"]}`),
 			// Told what is citable, it discovers the real tool, posts,
 			// and submits honestly.
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "b", Name: "slack_post"}}},
+			calling(llmtest.Call{Name: "slack_post"}),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"posted","deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	if res.Decision != phase.Done {
 		t.Fatalf("decision = %s (breach %+v)", res.Decision, res.Breach)
@@ -105,15 +105,7 @@ func TestGoldenAFalseDeliveryClaimIsCorrectedInsideTheRound(t *testing.T) {
 	}
 	// The refusal reached the model as a tool result, listing what IS
 	// citable rather than a bare no.
-	var sawRefusal bool
-	for _, req := range prov.requestsFor("execute") {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool && strings.Contains(m.Content, "nothing has been delivered yet") {
-				sawRefusal = true
-			}
-		}
-	}
-	if !sawRefusal {
+	if !prov.wasAnswered("execute", "nothing has been delivered yet") {
 		t.Error("the model was not told its delivery claim did not match the record")
 	}
 }
@@ -124,22 +116,22 @@ func TestGoldenAFalseDeliveryClaimIsCorrectedInsideTheRound(t *testing.T) {
 func TestGoldenAnUndeliveredDoneIsOverturnedAndTheSecondRoundDelivers(t *testing.T) {
 	t.Parallel()
 	res, prov := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
+		execute: []llmtest.Response{
 			// Round 1: reads, composes, reports honestly that it is
 			// blocked — which passes the pre-review check and reaches a
 			// reviewer that likes the prose.
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_history"}}},
+			activate("slack_history"),
+			calling(llmtest.Call{Name: "slack_history"}),
 			submitCall(t, runner.SubmitWorkTool, `{
 				"outcome":"blocked","summary":"drafted the summary",
 				"evidence":"I could not find the channel's post tool"}`),
 			// Round 2, after the correction: discovers the tool and posts.
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "b", Name: "slack_post",
-				Arguments: map[string]any{"channel": "C0ENG"}}}},
+			calling(callOf(t, "slack_post", map[string]any{"channel": "C0ENG"})),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"posted","deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 
 	if res.Decision != phase.Done {
@@ -173,12 +165,13 @@ func TestGoldenAKnownReadDoesNotCountAsDelivery(t *testing.T) {
 	// through the runner's surface description, and is applied by the
 	// check. Three components; the property exists in none of them alone.
 	res, _ := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_history"}}},
+		execute: []llmtest.Response{
+			activate("slack_history"),
+			calling(llmtest.Call{Name: "slack_history"}),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"blocked","summary":"read it","evidence":"no write tool"}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	// Every round reads and never posts, so the turn exhausts rather than
 	// completing — which is the correct failure. A silent "done" would be
@@ -193,7 +186,7 @@ func TestGoldenAKnownReadDoesNotCountAsDelivery(t *testing.T) {
 func TestGoldenNoActionOnAnUnaddressedTurnEndsItSilently(t *testing.T) {
 	t.Parallel()
 	r, prov := unaddressedFixture(t, &scriptedProvider{
-		execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+		execute: []llmtest.Response{submitCall(t, runner.SubmitWorkTool,
 			`{"outcome":"no_action","summary":"this was addressed to the CTO"}`)},
 	})
 	res, err := turn.Run(context.Background(), r, settings(),
@@ -217,15 +210,15 @@ func TestGoldenNoActionOnAnUnaddressedTurnEndsItSilently(t *testing.T) {
 func TestGoldenNoActionOnAnAwaitedTurnIsRefusedInsideTheRound(t *testing.T) {
 	t.Parallel()
 	res, prov := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
+		execute: []llmtest.Response{
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"no_action","summary":"not my area"}`),
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_post"}}},
+			calling(llmtest.Call{Name: "slack_post"}),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"declined in the thread","deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	if res.Decision != phase.Done {
 		t.Fatalf("decision = %s (breach %+v)", res.Decision, res.Breach)
@@ -233,15 +226,7 @@ func TestGoldenNoActionOnAnAwaitedTurnIsRefusedInsideTheRound(t *testing.T) {
 	if res.Rounds != 1 {
 		t.Errorf("rounds = %d — the refusal should have stayed inside the round", res.Rounds)
 	}
-	var sawRefusal bool
-	for _, req := range prov.requestsFor("execute") {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool && strings.Contains(m.Content, "even to decline") {
-				sawRefusal = true
-			}
-		}
-	}
-	if !sawRefusal {
+	if !prov.wasAnswered("execute", "even to decline") {
 		t.Error("the model was not told that silence is not an option here")
 	}
 }
@@ -252,13 +237,13 @@ func TestGoldenAStalledTurnFailsRatherThanSpinning(t *testing.T) {
 	// for another. The stall guard has to end it before the round budget
 	// does, and say which guard fired.
 	res, _ := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
+		execute: []llmtest.Response{
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_post"}}},
+			calling(llmtest.Call{Name: "slack_post"}),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"the same output every time","deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"self_iterate","notes":"still not right"}`)},
 	})
 	if res.Decision != phase.Failed {
@@ -280,19 +265,17 @@ func TestGoldenTheLedgerCrossesRoundsWithItsBudgetsApplied(t *testing.T) {
 	// meet.
 	body := strings.Repeat("prose ", 400)
 	res, prov := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
+		execute: []llmtest.Response{
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_post",
-				Arguments: map[string]any{"channel": "C0ENGINEERING", "text": body}}}},
+			calling(callOf(t, "slack_post", map[string]any{"channel": "C0ENGINEERING", "text": body})),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"v1","deliveries":["slack_post"]}`),
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "b", Name: "slack_post",
-				Arguments: map[string]any{"channel": "C0ENGINEERING"}}}},
+			calling(callOf(t, "slack_post", map[string]any{"channel": "C0ENGINEERING"})),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"v2","deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{
+		review: []llmtest.Response{
 			submitCall(t, runner.SubmitReviewTool,
 				`{"decision":"self_iterate","notes":"wrong link","completed_work":"the post landed"}`),
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
@@ -340,19 +323,27 @@ func TestGoldenTheLedgerCrossesRoundsWithItsBudgetsApplied(t *testing.T) {
 func TestGoldenAToolFailureIsOrdinaryAndTheTurnContinues(t *testing.T) {
 	t.Parallel()
 	// A failing tool is not an engine failure: its message goes back to the
-	// model, which is expected to react. The turn must reach a decision.
-	res, _ := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "ghost_tool"}}},
+	// model, which is expected to react. The turn must reach a decision. The
+	// failure is one a tool of the seat's own answers — an activation of a
+	// tool nobody serves — since a name the CLI was never offered is refused
+	// by the CLI and never reaches the engine at all.
+	res, prov := runTurn(t, &scriptedProvider{
+		execute: []llmtest.Response{
+			activate("ghost_tool"),
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "b", Name: "slack_post"}}},
+			calling(llmtest.Call{Name: "slack_post"}),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"recovered and posted","deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	if res.Decision != phase.Done {
 		t.Fatalf("decision = %s (breach %+v)", res.Decision, res.Breach)
+	}
+	if !slices.ContainsFunc(prov.answered("execute"), func(r llmtest.Result) bool {
+		return r.Name == runner.ActivateTool && r.Failed
+	}) {
+		t.Error("no call failed, so this case holds nothing about a failure being ordinary")
 	}
 }
 
@@ -362,14 +353,14 @@ func TestGoldenAMalformedSubmissionIsRetriedInsideThePhase(t *testing.T) {
 	// the phase already did. The model gets told what was wrong and tries
 	// again, inside the same phase.
 	res, prov := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
+		execute: []llmtest.Response{
 			activate("slack_post"),
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_post"}}},
+			calling(llmtest.Call{Name: "slack_post"}),
 			submitCall(t, runner.SubmitWorkTool, `{"outcome":"wat","summary":"s"}`),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"posted","deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	if res.Decision != phase.Done {
 		t.Fatalf("decision = %s (breach %+v)", res.Decision, res.Breach)
@@ -378,15 +369,7 @@ func TestGoldenAMalformedSubmissionIsRetriedInsideThePhase(t *testing.T) {
 		t.Errorf("rounds = %d — the retry should have stayed inside the phase", res.Rounds)
 	}
 	// The failure text reached the model as a tool result.
-	var sawFailure bool
-	for _, req := range prov.requestsFor("execute") {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool && strings.Contains(m.Content, "delivered, no_action or blocked") {
-				sawFailure = true
-			}
-		}
-	}
-	if !sawFailure {
+	if !prov.wasAnswered("execute", "delivered, no_action or blocked") {
 		t.Error("the model was not told why its submission was refused")
 	}
 }
@@ -397,17 +380,15 @@ func TestGoldenAMalformedSubmissionIsRetriedInsideThePhase(t *testing.T) {
 func TestGoldenADiscoveredToolIsAGenuineDelivery(t *testing.T) {
 	t.Parallel()
 	res, _ := runTurn(t, &scriptedProvider{
-		execute: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "list_mcp_server_tools",
-				Arguments: map[string]any{"server": "slack"}}}},
-			{ToolCalls: []llm.ToolCall{{ID: "b", Name: "activate_tool",
-				Arguments: map[string]any{"name": "slack_post"}}}},
-			{ToolCalls: []llm.ToolCall{{ID: "c", Name: "slack_post"}}},
+		execute: []llmtest.Response{
+			calling(callOf(t, "list_mcp_server_tools", map[string]any{"server": "slack"})),
+			calling(callOf(t, "activate_tool", map[string]any{"name": "slack_post"})),
+			calling(llmtest.Call{Name: "slack_post"}),
 			submitCall(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"found the real tool and posted",
 				  "deliveries":["slack_post"]}`),
 		},
-		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 	if res.Decision != phase.Done {
 		t.Fatalf("decision = %s (breach %+v) — a discovered delivery was not "+
@@ -431,7 +412,7 @@ func TestGoldenEveryPhaseRunsOnItsOwnConfiguredModel(t *testing.T) {
 		entries = append(entries, phase.Entry{Key: key, Provider: p})
 	}
 	byPhase["executor"].execute = deliver(t, "posted")
-	byPhase["reviewer"].review = []llm.Completion{
+	byPhase["reviewer"].review = []llmtest.Response{
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)}
 
 	r := runnerWithModels(t, entries)
@@ -443,14 +424,14 @@ func TestGoldenEveryPhaseRunsOnItsOwnConfiguredModel(t *testing.T) {
 		t.Fatalf("decision = %s (breach %+v)", res.Decision, res.Breach)
 	}
 	for key, want := range map[string]string{"executor": "execute", "reviewer": "review"} {
-		got := byPhase[key].seen
+		got := byPhase[key].allRuns()
 		if len(got) == 0 {
 			t.Errorf("%s was never called", key)
 			continue
 		}
-		for _, req := range got {
-			if which, _ := byPhase[key].scriptFor(req); which != want {
-				t.Errorf("%s served a %s request", key, which)
+		for _, run := range got {
+			if run.which != want {
+				t.Errorf("%s served a %s request", key, run.which)
 			}
 		}
 	}
@@ -463,7 +444,7 @@ func TestGoldenPhaseModelsAreNotSilentlyCrossed(t *testing.T) {
 	// passes for a resolver that ignores the per-phase keys entirely.
 	only := &scriptedProvider{
 		execute: deliver(t, "posted"),
-		review:  []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+		review:  []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}
 	r := runnerWithModels(t, []phase.Entry{{Key: "default", Provider: only}})
 	if _, err := turn.Run(context.Background(), r, settings(),
@@ -471,9 +452,8 @@ func TestGoldenPhaseModelsAreNotSilentlyCrossed(t *testing.T) {
 		t.Fatalf("turn.Run: %v", err)
 	}
 	seen := map[string]bool{}
-	for _, req := range only.seen {
-		which, _ := only.scriptFor(req)
-		seen[which] = true
+	for _, run := range only.allRuns() {
+		seen[run.which] = true
 	}
 	if !slices.Equal(sortedKeys(seen), []string{"execute", "review"}) {
 		t.Errorf("one provider served %v, want both phases", sortedKeys(seen))
@@ -556,18 +536,17 @@ func TestGoldenAnAskWithADecisionEndsTheTurnBlockedOnThatBranch(t *testing.T) {
 		"rationale":   "the EU review has no date yet",
 		"evidence":    []any{map[string]any{"kind": "task", "ref": "LAUNCH-12"}},
 	}
-	askCall := llm.Completion{ToolCalls: []llm.ToolCall{{ID: "ask", Name: "comment_on_work_item",
-		Arguments: map[string]any{
-			"item": "LAUNCH-7", "body": "The region is yours to call.",
-			"ask": "founder", "decision": decision,
-		}}}}
+	askCall := calling(callOf(t, "comment_on_work_item", map[string]any{
+		"item": "LAUNCH-7", "body": "The region is yours to call.",
+		"ask": "founder", "decision": decision,
+	}))
 	blocked := submitCall(t, runner.SubmitWorkTool, `{
 		"outcome":"blocked","summary":"asked the founder which region ships first",
 		"evidence":"the region is the founder's call; the rollout plan waits on it"}`)
 	done := submitCall(t, runner.SubmitReviewTool,
 		`{"decision":"done","final_artifact":"Asked the founder to choose the launch region."}`)
 
-	prov := &scriptedProvider{execute: []llm.Completion{askCall, blocked}, review: []llm.Completion{done}}
+	prov := &scriptedProvider{execute: []llmtest.Response{askCall, blocked}, review: []llmtest.Response{done}}
 	res, asker := askingTurn(t, prov)
 
 	// The seat was told how to ask, because it holds the tool that asks.
@@ -607,8 +586,8 @@ func TestGoldenAnAskWithADecisionEndsTheTurnBlockedOnThatBranch(t *testing.T) {
 	// and it must not close as a finished turn. Without this the assertion
 	// above also holds for a loop that accepts every `blocked` as done.
 	silent, _ := askingTurn(t, &scriptedProvider{
-		execute: []llm.Completion{blocked},
-		review:  []llm.Completion{done},
+		execute: []llmtest.Response{blocked},
+		review:  []llmtest.Response{done},
 	})
 	if silent.Decision == phase.Done && silent.Rounds == 1 {
 		t.Error("a blocked round that asked nobody closed as done in one round")

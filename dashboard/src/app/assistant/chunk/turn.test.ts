@@ -682,8 +682,8 @@ describe("a reloaded transcript's ended turns", () => {
             turn_id: "t2",
             state: "failed",
             error: {
-              code: "model_protocol",
-              message: "The assistant's model answered in a form the engine could not read.",
+              code: "model_timeout",
+              message: "The assistant's model took too long to answer.",
               retryable: false,
             },
           },
@@ -693,7 +693,7 @@ describe("a reloaded transcript's ended turns", () => {
     });
     expect(view.turns.map((t) => [t.question, t.phase, t.error?.code ?? null])).toEqual([
       ["awdwad", "stopped", null],
-      ["Add a role", "failed", "model_protocol"],
+      ["Add a role", "failed", "model_timeout"],
       ["Agents?", "completed", null],
     ]);
   });

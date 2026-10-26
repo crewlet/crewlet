@@ -562,10 +562,11 @@ func (e emitter) workItem() *types.WorkItem {
 // to clone the active name list and has released it before it looks a tool up,
 // and neither caller of started holds that lock.
 //
-// AGENT MODE COUNTS THE ARRAY TOO, although the launcher is handed the system
-// and user text alone. Those definitions reach the coding CLI over the MCP
-// bridge and that CLI's own model is billed for every one of them, so leaving
-// them out would report the engine's cheapest-looking phase as its slimmest.
+// THE ARRAY IS COUNTED IN BOTH MODES, although neither puts it in the prompt
+// text: a host-mode CLI lists the definitions from its phase's session and a
+// box-mode one from the MCP bridge, and the CLI's own model is billed for every
+// one of them either way, so leaving them out would report the most tool-heavy
+// phase as the slimmest.
 //
 // The token figure is approximate by construction and says so in its field
 // name: a real count needs the vendor's own tokenizer, which differs per model
@@ -724,10 +725,9 @@ const emptyArgsBytes = len(`{}`)
 // exists for.
 //
 // WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolBytes] where a
-// reader of the row will find it: the backend sends MORE than this. The
-// cli-agent text backend renders the same definitions indented inside a
-// fenced catalogue, and an agent-mode run's CLI reads them over MCP in its own
-// vendor's wrapping.
+// reader of the row will find it: the model is sent MORE than this. Its CLI
+// reads the definitions over MCP, annotations and all, and hands them to its
+// model in its own vendor's wrapping.
 func toolDefBytes(defs []llm.ToolDef) (int, error) {
 	if len(defs) == 0 {
 		return 0, nil
@@ -835,7 +835,9 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		MaxRounds:        caps.max,
 		RoundCeiling:     caps.ceiling,
 		RoundStartedAt:   res.RoundStartedAt,
-		RunningCall:      runningCall(res.Running),
+		RunStartedAt:     utcOrZero(res.RunStartedAt),
+		RunningCalls:     runningCalls(res.Running),
+		Invocations:      phaseInvocations(res.Invocations),
 		WorkItem:         e.workItem(),
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
@@ -906,8 +908,8 @@ type phaseRecord struct {
 	Catalogue []string
 
 	// Run says which box this phase ran in, where that is not this process.
-	// The zero value is the native tool loop, which is what all but the
-	// resumed Execute phases are.
+	// The zero value is a phase that ran on this host, which is what all but
+	// the resumed Execute phases are.
 	Run RunRecord
 
 	// Failed and Err describe a phase that died instead of finishing. The
@@ -1139,6 +1141,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		RoundNarration:   roundNarration(rec.Result.Narration),
 		Rounds:           phaseRounds(rec.Result.Rounds),
 		Steers:           phaseSteers(rec.Result.Steers),
+		Invocations:      phaseInvocations(rec.Result.Invocations),
 		InputTokens:      rec.Result.InputTokens,
 		OutputTokens:     rec.Result.OutputTokens,
 		TotalTokens:      rec.Result.InputTokens + rec.Result.OutputTokens,
@@ -1222,11 +1225,6 @@ func ErrorKind(err error) string {
 		return provider.Kind.String()
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
 		return "budget_exhausted"
-	case errors.Is(err, toolloop.ErrModelProtocol):
-		// The model's answer could not be read, after a corrective: a
-		// model fault an operator answers by moving the seat to another
-		// model, not a provider outage.
-		return "model_protocol"
 	case turn.Stopped(err):
 		// Not a failure at all, and named so: a person paused the seat
 		// and asked for its running turn to stop.
@@ -1286,14 +1284,20 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			"round":     ex.Round,
 		}
 		// ONLY WHAT WAS MEASURED. An execution nobody timed — a call
-		// whose arguments did not parse, answered rather than run, or an
-		// agent-mode run's bridged call — has no start, and writing
+		// whose arguments did not parse, answered rather than run, on
+		// this host or over a box's bridge — has no start, and writing
 		// `duration_ms: 0` for it would state an instant call. Absent is
 		// the honest spelling of "not recorded", and it is the one every
 		// reader already treats that way.
 		if !ex.StartedAt.IsZero() {
 			row["started_at"] = ex.StartedAt.UTC().Format(time.RFC3339Nano)
 			row["duration_ms"] = int(ex.Duration / time.Millisecond)
+		}
+		// The call's own id, which tells two calls of one response apart
+		// — a CLI may run them side by side — and is what a live row's
+		// running call is matched to once it settles.
+		if ex.CallID != "" {
+			row["call_id"] = ex.CallID
 		}
 		if ex.Origin != "" {
 			row["origin"] = ex.Origin
@@ -1377,14 +1381,38 @@ func (e emitter) steerEvent(n steer.Note, outcome types.SteerOutcome) types.Agen
 
 // runningCall renders the call in flight, or nil when none is — so the key is
 // absent on every frame but the one published immediately before a call.
-func runningCall(c *toolloop.RunningCall) *types.RunningCall {
-	if c == nil {
+func runningCalls(calls []toolloop.RunningCall) []types.RunningCall {
+	if len(calls) == 0 {
 		return nil
 	}
-	return &types.RunningCall{
-		Round: c.Round, Name: c.Name, Arguments: encodeArgs(c.Args),
-		StartedAt: c.StartedAt.UTC(),
+	out := make([]types.RunningCall, len(calls))
+	for i, c := range calls {
+		out[i] = types.RunningCall{
+			ID: c.ID, Round: c.Round, Name: c.Name, Arguments: encodeArgs(c.Args),
+			StartedAt: c.StartedAt.UTC(),
+		}
 	}
+	return out
+}
+
+// phaseInvocations renders a phase's CLI runs in their wire shape.
+func phaseInvocations(runs []toolloop.Invocation) []types.PhaseInvocation {
+	if len(runs) == 0 {
+		return nil
+	}
+	out := make([]types.PhaseInvocation, len(runs))
+	for i, r := range runs {
+		out[i] = types.PhaseInvocation{
+			StartedAt: utcOrZero(r.StartedAt), DurationMS: int(r.Duration.Milliseconds()),
+			ProviderKey: r.ProviderKey, Model: r.Model, Outcome: string(r.Outcome),
+			FirstRound: r.FirstRound, LastRound: r.LastRound,
+			RequestsObserved: r.RequestsObserved,
+			InputTokens:      r.InputTokens, OutputTokens: r.OutputTokens,
+			CacheReadTokens: r.CacheRead, CacheWriteTokens: r.CacheWrite,
+			ToolCalls: r.Calls,
+		}
+	}
+	return out
 }
 
 // utcOrZero is t in UTC, or the zero time left zero — which `omitzero` drops,

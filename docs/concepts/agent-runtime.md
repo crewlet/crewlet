@@ -84,7 +84,7 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
 2. Executor phase
    ├── Tool surface = every first-party tool except mark_onboarded —
    │     and run_sandbox unless the seat's gate is enabled and the
-   │     executor is not in agent mode — plus submit_work,
+   │     executor is not in box mode — plus submit_work,
    │     activate_tool, list_mcp_server_tools. A tool left out is out
    │     of reach too, and activate_tool cannot reach it
    ├── The system prompt lists no tool the surface holds — each one's
@@ -124,38 +124,39 @@ The executor and the reviewer can run on different LLM models — see the [Turn 
 
 ## The LLM ↔ Tool Proxy
 
-The LLM is reached through a coding CLI the engine drives as a process — in text mode its own tools are denied, and it cannot reach MCP servers or engine internals directly. The shared tool-call loop (`internal/agent/toolloop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
+The LLM is reached through a coding CLI the engine drives as a process, and the CLI runs its own loop: it asks its model, calls tools, and asks again. In host mode its own tools are denied — all but the web — and it cannot reach MCP servers or engine internals directly. What it can call is the phase's tool surface, which the shared tool loop (`internal/agent/toolloop`, driven by each phase of the [Turn Engine](turn-engine.md)) serves to it as **one MCP server**, `crewlet`, for the length of each CLI run. The loop is the **proxy**: every call the CLI makes arrives there, passes the phase's gates, and is executed locally:
 
 ```mermaid
 flowchart TD
     subgraph machine["YOUR MACHINE — the tool loop (executor / review / sub-agent)"]
         direction TB
-        S1["1. Build messages + tool definitions (JSON schemas)"]
-        S2["2. Request"]
-        S3["3. Response: content + tool_calls [name, arguments]"]
-        S4["4. Execute LOCALLY"]
-        S5["5. Append tool results to message history"]
-        S6["6. Loop back to step 2 (up to max_tool_rounds)"]
+        S1["1. Start a CLI run: the conversation, and the phase's tools<br/>served as the crewlet MCP server (a unix socket for this run)"]
+        S3["3. A tools/call arrives over the relay"]
+        G["4. Gates: grant · skill guard · fence · budget · round cap ·<br/>terminator · a person's note"]
+        S4["5. Execute LOCALLY"]
+        S5["6. Answer the CLI; record the call against the request<br/>the CLI's record shows asked for it"]
         MCP["Per-role MCP tool?<br/>forward to MCP server<br/>(role-specific credentials, checked first)"]
         GLOBAL["Global tool?<br/>builtin function or global MCP"]
-        S1 --> S2
-        S3 --> S4
+        NEXT["7. Another run, when the phase needs one:<br/>a note, a corrective, a call's result"]
+        S3 --> G
+        G --> S4
         S4 --> MCP
         S4 --> GLOBAL
         MCP --> S5
         GLOBAL --> S5
-        S5 --> S6
-        S6 --> S2
+        NEXT --> S1
     end
-    LLM["The model, through its coding CLI<br/>Claude Code · Codex · OpenCode · …"]
-    S2 --> LLM
-    LLM --> S3
-    S6 -->|"LLM responds without tool_calls"| DONE["phase ends"]
+    CLI["2. The coding CLI's own loop<br/>Claude Code · Codex · OpenCode · …<br/>asks its model, calls a tool, asks again"]
+    S1 --> CLI
+    CLI --> S3
+    S5 --> CLI
+    G -->|"the phase finished, parked, ran out of rounds or a note is waiting:<br/>the run is ended"| NEXT
+    CLI -->|"model stops calling"| DONE["phase ends, or the next run opens with a corrective"]
 ```
 
-In text mode the CLI has no tool-call channel of its own, so the tools ride the prompt as a catalogue and a response contract, and step 3 reads the calls out of the envelope the reply carries. Each round records **why the model stopped** — an answer (`end`) or calls to run (`tool_use`), the two a CLI can report — and a tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [How a round ends](turn-engine.md#how-a-round-ends).
+No tool rides the prompt and no call is read out of the model's prose: the CLI calls the seat's tools natively, the way it calls any tool, and the CLI's own record — its output stream or a session file — tells the loop what each model request said, asked for and cost. A round is one such request. Each records **why the model stopped** — an answer (`end`), calls to run (`tool_use`), or the CLI's own turn cap (`cap`) — and a tool call whose arguments did not parse is answered with a failed result saying why rather than run with none. See [How a round ends](turn-engine.md#how-a-round-ends) and, for the route, the relay and every gate, [Tool calls in host mode](llm-backends.md#tool-calls-in-host-mode).
 
-Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and an MCP server's issue-creation tool look the same: a function it can ask the engine to call.
+Both builtin and MCP tools produce identical tool definition schemas. From the LLM's perspective, `lookup_colleague` (builtin) and an MCP server's issue-creation tool look the same: two tools of the one `crewlet` server its CLI lists.
 
 ---
 
@@ -453,10 +454,10 @@ stateDiagram-v2
   node that has not yet read the pauses at all (the seconds after a boot) defers
   its deliveries rather than guessing. A store that cannot be reached is not a
   resume: a node keeps the pauses it last read, and a paused seat stays paused.
-- **Stop now.** The per-round fence every turn runs under — the same one that
-  stops a turn whose seat moved to another node — also closes on a pause that
-  asked to stop, so the turn ends at a round boundary, never between a tool call
-  and its result. What it had not yet done is lost. The trigger is recorded as
+- **Stop now.** The fence every tool call passes, before it runs and after —
+  the same one that stops a turn whose seat moved to another node — also closes
+  on a pause that asked to stop, so the turn ends at its next call, never
+  between a tool call and its result. What it had not yet done is lost. The trigger is recorded as
   worked and acked, not retried: a person who stopped a turn did not ask for it
   to run again the moment they resume the seat. The turn's completion reads
   `stopped` rather than `failed`, and `agent_turn_stopped` names who stopped it.
@@ -475,7 +476,8 @@ stateDiagram-v2
 ### Steering a running turn
 
 Short of stopping a turn, a person can **steer** it: send a note that the turn
-reads at its next round boundary and keeps to for the rest of the turn — from
+reads as soon as its tool calls in flight have their answers, and keeps to for
+the rest of the turn — from
 the live view, or from their own assistant with `steer_turn`. It is the
 seat's holder's, its lead's or an administrator's to send, as a pause
 is — decided on the turn's seat, which only the node running the turn can

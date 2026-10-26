@@ -112,7 +112,7 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 }
 
 // A RUN IS NAMED FROM ITS RECORD AS IT WAS ANNOUNCED: by the label its launch
-// stored, which for an agent-mode executor is its turn's task rather than the
+// stored, which for a box-mode executor is its turn's task rather than the
 // heading its brief opens with.
 func TestARecordIsNamedByTheLabelItsLaunchAnnounced(t *testing.T) {
 	t.Parallel()

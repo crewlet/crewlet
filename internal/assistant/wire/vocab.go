@@ -433,11 +433,6 @@ const (
 	// ErrorModelTimeout is the chain's CLI running out of its own time
 	// before it answered.
 	ErrorModelTimeout ErrorCode = "model_timeout"
-	// ErrorModelProtocol is the chain's model answering, after the
-	// corrective that asked for the response contract, in a form the
-	// engine cannot read: tool calls written as markup or another vendor's
-	// format. Nothing it wrote is shown.
-	ErrorModelProtocol ErrorCode = "model_protocol"
 	// ErrorTurnTimeout is the turn's wall clock running out.
 	ErrorTurnTimeout ErrorCode = "turn_timeout"
 	// ErrorStepLimit is the turn using every step without an answer.
@@ -457,10 +452,10 @@ const (
 	ErrorAccessWithdrawn ErrorCode = "access_withdrawn"
 )
 
-// ErrorCodes are the twelve, in declaration order.
+// ErrorCodes are the eleven, in declaration order.
 var ErrorCodes = []ErrorCode{
 	ErrorModelUnavailable, ErrorModelSignedOut, ErrorModelBusy, ErrorModelTimeout,
-	ErrorModelProtocol, ErrorTurnTimeout, ErrorStepLimit, ErrorBudgetExhausted, ErrorTurnInterrupted,
+	ErrorTurnTimeout, ErrorStepLimit, ErrorBudgetExhausted, ErrorTurnInterrupted,
 	ErrorGrantEnded, ErrorInternal, ErrorAccessWithdrawn,
 }
 
@@ -481,14 +476,12 @@ var errorSentences = map[ErrorCode]string{
 	ErrorModelSignedOut:   "The assistant's model is signed out, so it cannot answer.",
 	ErrorModelBusy:        "The assistant's model has reached its usage limit for now.",
 	ErrorModelTimeout:     "The assistant's model took too long to answer.",
-	ErrorModelProtocol: "The assistant's model answered in a form the engine could not " +
-		"read, so its answer was not shown.",
-	ErrorTurnTimeout:     "The turn took longer than it may. Ask again, or ask a narrower question.",
-	ErrorStepLimit:       "This question needed more steps than a turn may take. Ask a narrower one.",
-	ErrorBudgetExhausted: "The company's token budget for this window is spent.",
-	ErrorTurnInterrupted: "The node answering you restarted before the turn finished.",
-	ErrorGrantEnded:      "Your session ended, so the assistant stopped acting for you.",
-	ErrorInternal:        "Something went wrong inside the engine. The reason is in this node's log.",
+	ErrorTurnTimeout:      "The turn took longer than it may. Ask again, or ask a narrower question.",
+	ErrorStepLimit:        "This question needed more steps than a turn may take. Ask a narrower one.",
+	ErrorBudgetExhausted:  "The company's token budget for this window is spent.",
+	ErrorTurnInterrupted:  "The node answering you restarted before the turn finished.",
+	ErrorGrantEnded:       "Your session ended, so the assistant stopped acting for you.",
+	ErrorInternal:         "Something went wrong inside the engine. The reason is in this node's log.",
 	ErrorAccessWithdrawn: "The assistant stopped: you no longer have access to something this " +
 		"conversation read.",
 }

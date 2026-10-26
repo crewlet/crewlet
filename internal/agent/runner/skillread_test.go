@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -94,6 +94,7 @@ func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture) *runner.R
 			RunID: "t-read", WorkKey: "wk-read", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-read", WorkKey: "wk-read", Seat: role, Org: company},
 		},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -106,7 +107,7 @@ func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture) *runner.R
 // loaded it.
 func TestTheExecutorsSkillCatalogueIsRecordedAsARead(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{
+	prov := &scriptedProvider{execute: []llmtest.Response{
 		submitCall(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`),
 		submitWork(t),
 	}}
@@ -149,7 +150,7 @@ func TestTheExecutorsSkillCatalogueIsRecordedAsARead(t *testing.T) {
 // authored with `phases: [review]` reached nobody.
 func TestAReviewScopedSkillReachesTheReviewer(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{review: []llm.Completion{
+	prov := &scriptedProvider{review: []llmtest.Response{
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
 	}}
 	pub := newCapture()
@@ -218,6 +219,7 @@ func TestAWorkersSkillCatalogueIsRecordedInTheSubagentPhase(t *testing.T) {
 		Subagent:  &runner.SubagentConfig{Limits: shipped()},
 		Turn: runner.Turn{RunID: "t-fan", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-fan", Seat: role, Org: company}},
+		Sessions: sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)

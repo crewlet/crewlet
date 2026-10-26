@@ -120,9 +120,14 @@ func withheld(t *testing.T, who string, i int, call map[string]any) {
 			t.Errorf("%s push %d carries the body field %q", who, i, key)
 		}
 	}
-	if running, _ := call["running_call"].(map[string]any); running != nil {
-		if _, ok := running["arguments"]; ok {
-			t.Errorf("%s push %d carries a running call's arguments", who, i)
+	running, _ := call["running_calls"].([]any)
+	for j, entry := range running {
+		call, _ := entry.(map[string]any)
+		if _, ok := call["arguments"]; ok {
+			t.Errorf("%s push %d carries running call %d's arguments", who, i, j)
+		}
+		if call["name"] == nil {
+			t.Errorf("%s push %d lost which tool running call %d is", who, i, j)
 		}
 	}
 	versions, _ := call["versions"].(map[string]any)
@@ -164,8 +169,12 @@ func TestAStatusAudienceGetsNoBodyAndNoMovingBodyVersions(t *testing.T) {
 	r.frame(t, 2, types.AgentTurnProgress{
 		Response: "reading the suite", RoundNum: 0,
 		RoundNarration: []types.RoundNarration{{"round": 1, "content": "reading"}},
-		RunningCall: &types.RunningCall{Round: 1, Name: "read_file",
-			Arguments: `{"path":"payments_test.go"}`, StartedAt: clock},
+		RunningCalls: []types.RunningCall{
+			{ID: "call-1", Round: 1, Name: "read_file",
+				Arguments: `{"path":"payments_test.go"}`, StartedAt: clock},
+			{ID: "call-2", Round: 1, Name: "read_file",
+				Arguments: `{"path":"ledger_test.go"}`, StartedAt: clock},
+		},
 		PartialRound: map[string]any{"round": 2, "content": "thinking"},
 	})
 
@@ -198,9 +207,14 @@ func TestAStatusAudienceGetsNoBodyAndNoMovingBodyVersions(t *testing.T) {
 			if got[0]["prompt"] != "fix the flaky payments test" {
 				t.Errorf("%s was not sent the prompt: %v", tc.who, got[0]["prompt"])
 			}
-			running, _ := got[len(got)-1]["running_call"].(map[string]any)
-			if running["arguments"] == nil {
-				t.Errorf("%s was not sent the running call's arguments", tc.who)
+			running, _ := got[len(got)-1]["running_calls"].([]any)
+			if len(running) != 2 {
+				t.Fatalf("%s was sent running calls %v, want both", tc.who, running)
+			}
+			for j, entry := range running {
+				if call, _ := entry.(map[string]any); call["arguments"] == nil {
+					t.Errorf("%s was not sent running call %d's arguments", tc.who, j)
+				}
 			}
 		}
 	}

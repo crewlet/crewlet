@@ -11,7 +11,7 @@ import (
 )
 
 // assistantEntry is a providers.llm entry the assistant may run on: Claude
-// Code in text mode with its web tools turned off.
+// Code in host mode with its web tools turned off.
 const assistantEntry = "    assistant:\n" +
 	"      agent: claude-code\n      model: sonnet\n" +
 	"      overrides: {web_tools: denied}\n"
@@ -68,7 +68,7 @@ func TestASafeAssistantChainIsHandedOut(t *testing.T) {
 }
 
 // THE ASSISTANT REFUSES AN ENTRY THAT REACHES THE WEB, or anything else the
-// person's own requests did not return: a CLI in agent mode (its own tool
+// person's own requests did not return: a CLI in box mode (its own tool
 // loop never passes the guard), one whose local tools are not denied (a shell
 // reads what the engine user can), one that keeps its web tools (a page no
 // authority decision saw, and a way out for the person's data), and one on a
@@ -85,8 +85,8 @@ func TestTheAssistantRefusesAnEntryThatReachesTheWeb(t *testing.T) {
 		kind  error
 		want  string
 	}{
-		"agent mode": {
-			entry: "    assistant:\n      agent: claude-code\n      model: sonnet\n      mode: agent\n" +
+		"box mode": {
+			entry: "    assistant:\n      agent: claude-code\n      model: sonnet\n      mode: box\n" +
 				"      overrides: {web_tools: denied}\n",
 			kind: ErrConflict, want: "providers.llm.assistant.mode",
 		},

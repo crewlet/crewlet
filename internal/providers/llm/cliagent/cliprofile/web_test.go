@@ -236,3 +236,41 @@ func TestASeededWebDenialKeepsEverySeatSettingButTheWeb(t *testing.T) {
 		}
 	}
 }
+
+// A RUN WITH TOOLS IS DENIED THE WEB TOO. A profile whose mcp block runs its
+// own argv or writes its own settings hands a run with tools those in place of
+// the profile's, so a denial covers them: Codex's run with tools turns its
+// search off, OpenCode's run policy drops the two web actions, and a denial
+// that replaces the argv while the run with tools keeps its own is refused.
+//
+// Mutation: drop the mcp block from withWebDenied, or the coverage check from
+// validateWebStance, and this is red.
+func TestAWebDenialCoversARunWithTools(t *testing.T) {
+	t.Parallel()
+	codex, err := Load("codex", map[string]any{"web_tools": "denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args := codex.MCP.CompleteArgs; !slices.Contains(args, `web_search="disabled"`) ||
+		slices.Contains(args, `web_search="live"`) {
+		t.Errorf("codex's run with tools keeps the web: %q", args)
+	}
+	opencode, err := Load("opencode", map[string]any{"web_tools": "denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, seed := range opencode.MCP.Seed {
+		lowered := strings.ToLower(seed.Content)
+		if strings.Contains(lowered, "webfetch") || strings.Contains(lowered, "websearch") {
+			t.Errorf("opencode's run with tools still allows the web in %s:\n%s", seed.Path, seed.Content)
+		}
+		if !strings.Contains(seed.Content, `"crewlet_*"`) {
+			t.Errorf("opencode's denied run policy lost the crewlet tools in %s", seed.Path)
+		}
+	}
+	_, err = Load("codex", map[string]any{"web_tools": "denied",
+		"web_denial": map[string]any{"mcp": nil}})
+	if err == nil || !strings.Contains(err.Error(), "mcp.complete_args") {
+		t.Errorf("a denial that leaves a run with tools its own argv loaded: %v", err)
+	}
+}

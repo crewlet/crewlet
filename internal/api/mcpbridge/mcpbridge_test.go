@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -69,32 +68,14 @@ func (s *stubTool) seen() []map[string]any {
 	return append([]map[string]any(nil), s.args...)
 }
 
-// activator stands in for activate_tool: a bridged call that widens the very
-// surface it was called on, which is the only way a coding agent's active set
-// ever moves while its run is in a box.
-type activator struct {
-	surface func() *tools.Surface
-	target  string
-}
-
-func (a *activator) Name() string               { return "activate" }
-func (a *activator) Description() string        { return "activate " + a.target }
-func (a *activator) Parameters() map[string]any { return map[string]any{"type": "object"} }
-func (a *activator) Call(context.Context, map[string]any) (tools.Result, error) {
-	if a.surface().Activate(a.target) {
-		return tools.Result{Output: a.target + " is active"}, nil
-	}
-	return tools.Result{Output: "no such tool", Failed: true}, nil
-}
-
 // ledger records what a resume would read back.
 type ledger struct {
 	mu    sync.Mutex
-	calls []tools.Call
+	calls []mcpbridge.Call
 	err   error
 }
 
-func (l *ledger) Append(_ context.Context, _ string, c tools.Call) error {
+func (l *ledger) Append(_ context.Context, _ string, c mcpbridge.Call) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.err != nil {
@@ -104,10 +85,10 @@ func (l *ledger) Append(_ context.Context, _ string, c tools.Call) error {
 	return nil
 }
 
-func (l *ledger) rows() []tools.Call {
+func (l *ledger) rows() []mcpbridge.Call {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]tools.Call(nil), l.calls...)
+	return append([]mcpbridge.Call(nil), l.calls...)
 }
 
 // denyGuard refuses one tool, standing in for the required-skill gate.
@@ -167,21 +148,19 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		}
 		byName[name] = tool
 	}
-	f := &fixture{ledger: &ledger{}, byName: byName}
-	// In the universe for every case, offered only where a case names it.
-	widen := &activator{surface: func() *tools.Surface { return f.surface }, target: "post_message"}
-	if err := reg.Register(widen, tools.OriginBuiltin); err != nil {
-		t.Fatalf("Register(activate): %v", err)
-	}
 	if err := reg.Register(whoami{}, tools.OriginBuiltin); err != nil {
 		t.Fatalf("Register(whoami): %v", err)
 	}
+	f := &fixture{ledger: &ledger{}, byName: byName}
 	if len(offer) == 0 {
 		offer = []string{"read_page", "post_message"}
 	}
 	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer).ForTurn(seatTurn())
 	f.bridge = bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
-	f.session = mcpbridge.SeatSession("run-1", "dev", "Engineer", f.surface, f.ledger)
+	f.session = &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
+		Surface: f.surface, Ledger: f.ledger,
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
@@ -199,13 +178,19 @@ func (f *fixture) open(t *testing.T) string {
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
 	f.server.Config.Handler = mux
-	return f.bridge.Open(f.session)
+	return f.bridge.Open(t.Context(), f.session)
 }
 
-// dial connects an MCP client the way a coding agent's own client would.
+// dial connects an MCP client the way a coding agent's own client would —
+// re-reading the tool list when the server says it changed, as the CLIs that
+// run in a box do, so an activation's held answer is let go by the re-list.
 func dial(t *testing.T, url string) *mcp.ClientSession {
 	t.Helper()
-	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(ctx context.Context, req *mcp.ToolListChangedRequest) {
+			_, _ = req.Session.ListTools(ctx, nil)
+		},
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	// HTTPClient IS NOT OPTIONAL HERE. Left unset the SDK reaches for
@@ -378,7 +363,7 @@ func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 }
 
 // A DEPLOYMENT WHOSE API IS NOT REACHABLE FROM A BOX cannot bridge, and the
-// honest answer is an empty endpoint the caller can refuse agent mode on —
+// honest answer is an empty endpoint the caller can refuse box mode on —
 // not a run that starts and fails on its first tool call.
 //
 // AND NOTHING IS REGISTERED FOR IT. The minted token is the only way to reach
@@ -390,7 +375,9 @@ func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k")})
 	// Mounted, so the missing base URL is the only reason to refuse.
 	_ = b.Handler()
-	if url := b.Open(mcpbridge.SeatSession("run-1", "", "", emptySurface(), nil)); url != "" {
+	if url := b.Open(t.Context(), &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-1", Surface: emptySurface(),
+	}); url != "" {
 		t.Errorf("endpoint = %q, want empty", url)
 	}
 	if b.Live() != 0 {
@@ -409,7 +396,7 @@ func TestAnExpiredTokenIsRefused(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
 	f.server.Config.Handler = mux
-	url := f.bridge.Open(f.session)
+	url := f.bridge.Open(t.Context(), f.session)
 
 	clock = clock.Add(2 * time.Minute)
 	res, err := f.server.Client().Post(url, "application/json",
@@ -598,59 +585,11 @@ func TestARunWithNoLedgerStillDispatches(t *testing.T) {
 
 // --- what the caller is offered --------------------------------------------
 
-// THE ADVERTISED SET IS THE SURFACE'S LIVE ONE. A server built once when the
-// run opened would advertise the set it started with for the run's whole life,
-// so a tool the agent activates mid-run would be invisible until it ended.
-func TestTheAdvertisedToolsFollowTheLiveSurface(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t, "read_page", "activate")
-	url := f.open(t)
-	// ONE SESSION, HELD FOR THE RUN, the way a coding agent's client holds
-	// it. A fresh session per list would rebuild the server and pass for a
-	// bridge whose connected boxes never see an activation at all.
-	sess := dial(t, url)
-
-	names := func() []string {
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancel()
-		listed, err := sess.ListTools(ctx, nil)
-		if err != nil {
-			t.Fatalf("ListTools: %v", err)
-		}
-		var out []string
-		for _, tool := range listed.Tools {
-			out = append(out, tool.Name)
-		}
-		slices.Sort(out)
-		return out
-	}
-
-	if got := names(); !slices.Equal(got, []string{"activate", "read_page"}) {
-		t.Fatalf("tools = %v", got)
-	}
-	// Activated the only way a box can activate anything: over the bridge.
-	if res := callTool(t, sess, "activate", nil); res.IsError {
-		t.Fatalf("activate failed: %s", text(res))
-	}
-	if got := names(); !slices.Contains(got, "post_message") {
-		t.Fatalf("a tool activated mid-run is not advertised on the box's own session: %v", got)
-	}
-	// Listed AND callable — the server's table is what dispatches, and a
-	// name the surface offers but the server never learned is refused as
-	// unknown before the surface is asked.
-	if res := callTool(t, sess, "post_message", map[string]any{"text": "hi"}); res.IsError {
-		t.Errorf("an activated tool is listed but not callable: %s", text(res))
-	}
-	if seen := f.byName["post_message"].seen(); len(seen) != 1 {
-		t.Errorf("post_message ran %d times, want 1", len(seen))
-	}
-}
-
 // CLOSING A RUN ENDS THE MCP SESSIONS ITS BOX HOLDS, not only the bridge's
 // own map entry. The SDK keeps every session a box opened — transport,
 // server, and through the server's handlers the seat's live surface — until
 // the client sends a DELETE or an idle clock fires, and a box torn down
-// mid-run sends nothing. Left there, each agent-mode run this process ever
+// mid-run sends nothing. Left there, each box-mode run this process ever
 // served would pin its seat's surface for the life of the process.
 func TestClosingARunEndsTheBoxesOpenSessions(t *testing.T) {
 	t.Parallel()
@@ -691,8 +630,11 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 		t.Fatal("no MCP session on the first run")
 	}
 
-	second := mcpbridge.SeatSession("run-1", "dev", "Engineer", f.surface, f.ledger)
-	url := f.bridge.Open(second)
+	second := &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-2", Handle: "dev", Role: "Engineer",
+		Surface: f.surface, Ledger: f.ledger,
+	}
+	url := f.bridge.Open(t.Context(), second)
 	if n := first.Connections(); n != 0 {
 		t.Errorf("the relaunched run's earlier session keeps %d box connections", n)
 	}
@@ -718,7 +660,10 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 		t.Fatalf("the first run could not dispatch: %s", text(res))
 	}
 
-	fresh := f.bridge.Open(mcpbridge.SeatSession("run-1", "dev", "Engineer", f.surface, f.ledger))
+	fresh := f.bridge.Open(t.Context(), &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-2", Handle: "dev", Role: "Engineer",
+		Surface: f.surface, Ledger: f.ledger,
+	})
 	if fresh == stale {
 		t.Fatal("the relaunched run was handed the superseded box's own URL")
 	}
@@ -738,6 +683,65 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 		t.Error("a superseded token resolved")
 	} else if !strings.Contains(reason, "relaunched") {
 		t.Errorf("the miss does not say the run was relaunched: %s", reason)
+	}
+}
+
+// A BOX'S TOKEN OUTLIVES THE PROCESS THAT MINTED IT. A box-mode run goes on
+// calling for as long as its CLI runs, and the node it dials can restart in
+// the meantime: the new process holds no session until it takes the run's
+// seat back, and then it opens the run's JOB again — and the token the box
+// already holds, signed under the fleet's keyring, resolves to it. Nothing the
+// box was given names the process that gave it. And the run's calls go on in
+// its own order: the reopened session numbers them after the last one the
+// run's row records.
+//
+// Mutation: name an opening by an id the opening process draws for itself, and
+// the restarted node refuses the box's every call for the rest of its run;
+// number a reopened session's calls from one, and they sort among the calls
+// made before the restart.
+func TestABoxsTokenOutlivesTheProcessThatMintedIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	url := f.open(t)
+	if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
+		t.Fatalf("the run could not dispatch before the restart: %s", text(res))
+	}
+
+	// THE RESTART: a fresh process at the same address, over the same fleet
+	// keyring, holding nothing yet.
+	restarted := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,
+	})
+	mux := http.NewServeMux()
+	mux.Handle(mcpbridge.PathPrefix+"{token}", restarted.Handler())
+	f.server.Config.Handler = mux
+	token := strings.TrimPrefix(url, f.server.URL+mcpbridge.PathPrefix)
+	if _, reason := restarted.Miss(token); !strings.Contains(reason, "taken the run's seat back") {
+		t.Errorf("before the seat is recovered the miss does not say why: %q", reason)
+	}
+
+	// THE RECOVERY: the run's job opened again, on a surface rebuilt here.
+	recovered := &ledger{}
+	before := f.ledger.rows()
+	if len(before) != 1 {
+		t.Fatalf("%d calls recorded before the restart, want 1", len(before))
+	}
+	if again := restarted.Open(t.Context(), &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-1", LastSeq: before[0].Seq, Handle: "dev",
+		Role: "Engineer", Surface: f.surface, Ledger: recovered,
+	}); again == "" {
+		t.Fatal("the recovered job's session was not opened")
+	}
+	if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
+		t.Fatalf("the box's own token does not reach the recovered session: %s", text(res))
+	}
+	rows := recovered.rows()
+	if len(rows) != 1 || rows[0].Name != "read_page" {
+		t.Fatalf("the recovered session recorded %+v, want the box's call", rows)
+	}
+	if rows[0].Seq != before[0].Seq+1 {
+		t.Errorf("the first call after the recovery is #%d, want #%d: after the run's "+
+			"last call before it", rows[0].Seq, before[0].Seq+1)
 	}
 }
 
@@ -814,17 +818,28 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 		name    string
 		session *mcpbridge.Session
 	}{
-		{"no run id", mcpbridge.SeatSession("", "dev", "", emptySurface(), nil)},
-		{"no surface", mcpbridge.SeatSession("run-1", "dev", "", nil, nil)},
+		{"no run id", &mcpbridge.Session{Launch: "job-1", Handle: "dev", Surface: emptySurface()}},
+		// NO JOB, and a token is minted for one: without it a relaunch's
+		// box could not be told from its predecessor's, and a recovery
+		// would have nothing to open the same session under.
+		{"no job", &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}},
+		// A JOB A TOKEN CANNOT CARRY: "~" ends the job in a token's subject
+		// and "." ends the subject, so either would mint a token that names
+		// some other job.
+		{"a job with the subject's separator", &mcpbridge.Session{RunID: "run-1",
+			Launch: "job~1", Handle: "dev", Surface: emptySurface()}},
+		{"a job with the token's separator", &mcpbridge.Session{RunID: "run-1",
+			Launch: "job.1", Handle: "dev", Surface: emptySurface()}},
+		{"no surface", &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev"}},
 		// A SURFACE NO TURN WAS BOUND TO names no seat, and every bridged
 		// call acts as the run's seat — so it would answer the handshake
 		// and then decide nothing it was asked.
-		{"no seat", mcpbridge.SeatSession("run-1", "dev", "",
-			tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil), nil)},
+		{"no seat", &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev",
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)}},
 		{"nothing at all", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if url := b.Open(tc.session); url != "" {
+			if url := b.Open(t.Context(), tc.session); url != "" {
 				t.Errorf("endpoint = %q, want empty", url)
 			}
 		})
@@ -842,11 +857,11 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	t.Parallel()
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
-	session := mcpbridge.SeatSession("run-1", "dev", "", emptySurface(), nil)
+	session := &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev", Surface: emptySurface()}
 	if b.Mounted() {
 		t.Fatal("a bridge nothing mounted reports itself mounted")
 	}
-	if url := b.Open(session); url != "" {
+	if url := b.Open(t.Context(), session); url != "" {
 		t.Errorf("endpoint = %q for a bridge no listener serves, want empty", url)
 	}
 	if b.Live() != 0 {
@@ -857,7 +872,7 @@ func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	if !b.Mounted() {
 		t.Fatal("building the handler did not mark the bridge mounted")
 	}
-	if url := b.Open(session); url == "" {
+	if url := b.Open(t.Context(), session); url == "" {
 		t.Error("a mounted bridge refused a complete session")
 	}
 	var unset *mcpbridge.Bridge
@@ -922,7 +937,9 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 // for, so a case can hand the transport exactly what a box would.
 func (f *fixture) token(t *testing.T, runID string) string {
 	t.Helper()
-	url := f.bridge.Open(mcpbridge.SeatSession(runID, "dev", "Engineer", f.surface, nil))
+	url := f.bridge.Open(t.Context(), &mcpbridge.Session{
+		RunID: runID, Launch: "job-of-" + runID, Handle: "dev", Role: "Engineer", Surface: f.surface,
+	})
 	if url == "" {
 		t.Fatal("no endpoint")
 	}

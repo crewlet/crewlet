@@ -160,7 +160,7 @@ func (d *DeepScript) Run(ctx context.Context, r assistant.DeepRun) (assistant.De
 	}
 	var answers []toolloop.ToolResult
 	for _, call := range s.Calls {
-		res, err := r.Surface.Execute(ctx, call)
+		res, err := r.Surface.Admit(call.Name, call.Arguments)(ctx, call)
 		if err != nil {
 			break
 		}

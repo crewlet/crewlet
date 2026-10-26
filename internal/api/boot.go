@@ -137,7 +137,7 @@ type Boot struct {
 
 // NewBoot is the boot surface of the node bootstrap describes, answering as
 // nodeID — the name its engine will run under, resolved the way the engine
-// resolves it. bridge says whether this node will have an agent-mode tool
+// resolves it. bridge says whether this node will have a box-mode tool
 // bridge, as for [PublicListener]: on a node without the ingress role it is
 // the one route besides the probes that the node will serve.
 func NewBoot(bootstrap *config.Bootstrap, nodeID string, bridge bool) (*Boot, error) {
@@ -336,7 +336,7 @@ func loggedRoute(path string) string {
 
 // PublicListener reports whether a node binds a listener on api.public: one
 // with the ingress role, for the routes outside parties call, and one without
-// it only where it serves its agent-mode tool bridge, which bridge says it
+// it only where it serves its box-mode tool bridge, which bridge says it
 // has. api.port 0 is the hard off switch for both, as everywhere.
 //
 // ONE PREDICATE for the two moments that need it — `crewlet run` binding the
@@ -366,7 +366,7 @@ func ArtifactsListener(bootstrap *config.Bootstrap, nodeID string) bool {
 }
 
 // servesBridge reports whether a node without the ingress role mounts its
-// agent-mode tool bridge: it must run seats, since only a node running a seat
+// box-mode tool bridge: it must run seats, since only a node running a seat
 // opens a session, and it must have a bridge, which needs
 // [mcpbridge.BaseURLVar] set ([mcpbridge.Configured]).
 func servesBridge(runsSeats, bridge bool) bool {

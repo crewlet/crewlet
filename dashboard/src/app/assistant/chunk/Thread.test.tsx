@@ -209,13 +209,13 @@ test("a turn that failed before it wrote a word shows its sentence", () => {
     ...turn,
     phase: "failed",
     error: {
-      code: "model_protocol",
-      message: "The assistant's model answered in a form the engine could not read.",
+      code: "model_timeout",
+      message: "The assistant's model took too long to answer.",
       retryable: true,
     },
   });
   expect(
-    screen.getByText("The assistant's model answered in a form the engine could not read."),
+    screen.getByText("The assistant's model took too long to answer."),
   ).toBeTruthy();
 });
 

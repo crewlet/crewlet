@@ -58,6 +58,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -424,8 +425,22 @@ type Engine struct {
 
 	// bridge serves a running seat's tool surface to a coding agent over
 	// MCP. Nil where no bridge URL is configured, which is every
-	// deployment that runs no agent mode.
+	// deployment that runs no box mode.
 	bridge *mcpbridge.Bridge
+
+	// sessions is where every phase's tools are served to the CLI that runs
+	// it, on this host: this PROCESS's one [toolsession.Host], a directory
+	// only the engine's user can open, holding one socket per CLI run, which
+	// the CLI's `crewlet mcp-relay` dials. Every turn's runner is handed it
+	// ([RunnerInput.Sessions]).
+	//
+	// ON THE ENGINE, made once by [New] and removed by the teardown after
+	// every turn has ended, because it is a fact about the process: a
+	// directory per turn would be a directory per turn to clean up, and one
+	// made on first use would have no owner to remove it. Never nil on an
+	// engine [New] built. Nothing here binds a port — a node on `api.port:
+	// 0` serves its seats' tools all the same.
+	sessions *toolsession.Host
 
 	// reflector is the learning write side: one dispatcher for the life of
 	// the process, whose org and workers an apply swaps. On the ENGINE
@@ -1153,6 +1168,29 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	}
 	incarnation := config.NewIncarnation(nodeID)
 
+	// THIS PROCESS'S TOOL SESSIONS, the last of what can fail with nothing
+	// open: every phase that offers tools serves them to its CLI through a
+	// socket in this directory, and a TMPDIR long enough to put that socket
+	// past the platform's bound on a unix socket's path is refused HERE,
+	// naming TMPDIR, rather than at every seat's first phase as a bind error
+	// naming no setting.
+	//
+	// IT IS A DIRECTORY, so it is the one thing above that has something to
+	// remove. Removed by this guard until the engine's own failure path is
+	// armed below and takes it over — one deferred step rather than a close
+	// at each return in between, for the reason that path gives.
+	var sessions *toolsession.Host
+	if sessions, err = toolsession.NewHost(); err != nil {
+		return nil, fmt.Errorf("engine: the directory every seat's tools are served "+
+			"to its CLI from: %w", err)
+	}
+	sessionsHanded := false
+	defer func() {
+		if !sessionsHanded {
+			_ = sessions.Close()
+		}
+	}()
+
 	// Only what this engine OPENED does it close. A caller that supplied
 	// backends keeps their lifetime, and must supply all four: see
 	// [Backends.Complete] for why a partial set is refused rather than run.
@@ -1214,6 +1252,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
+		sessions:            sessions,
 		metrics:             opts.Metrics,
 		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,
@@ -1350,6 +1389,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 				"admission are stopped, and any backends this engine opened "+
 				"itself are closed")
 	}()
+	// THE SESSIONS ARE THE ENGINE'S FROM HERE: the failure path above
+	// removes them with everything else.
+	sessionsHanded = true
+
 	// THE FIRST THING THAT OUTLIVES THIS CALL, so the failure path above
 	// is what stops it if the boot goes no further.
 	e.startDataView(ctx)
@@ -2503,6 +2546,25 @@ func (e *Engine) teardown(ctx context.Context) {
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
+	// LAST, once nothing can run a phase: the drain waited out every turn,
+	// the sandbox's resumes stopped with it above, and the seats are gone
+	// with the node. A phase still serving from the directory would find its
+	// socket removed under its CLI.
+	e.closeSessions(ctx)
+}
+
+// closeSessions removes this process's tool-session directory. Nil-safe: a
+// boot that failed before making it has none.
+func (e *Engine) closeSessions(ctx context.Context) {
+	if e.sessions == nil {
+		return
+	}
+	if err := e.sessions.Close(); err != nil {
+		// Nothing to retry and nobody waiting: the directory is this
+		// process's, under the temp root, and holds sockets no process
+		// will dial again. Said so an operator who finds it knows why.
+		log.WarnContext(ctx, "tool_sessions_not_removed", "dir", e.sessions.Dir(), "err", err)
+	}
 }
 
 // custodyStopBudget is how long an orderly stop waits for the broker to take
@@ -2858,6 +2920,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Conversation: e.conversationBlock(ctx, company, req.Handle, req.History, tel.aux()),
 		Publisher:    e.backends.Queue,
 		Turn:         turnIdentity,
+		Sessions:     e.sessions,
 		AgentRun:     agentRun,
 		Steer:        box,
 		Markers:      e.markers(),

@@ -72,27 +72,25 @@ func steps(frames []wire.Frame) map[int]wire.StepEvent {
 // offered is what the model was offered in its first round, by name.
 func offered(t *testing.T, f *assistanttest.Rig) []string {
 	t.Helper()
-	requests := f.Model.Requests()
-	if len(requests) == 0 {
+	if len(f.Model.Requests()) == 0 {
 		t.Fatal("the model was never asked")
 	}
 	var names []string
-	for _, def := range requests[0].Tools {
+	for _, def := range f.Model.OfferedAt(0) {
 		names = append(names, def.Name)
 	}
 	return names
 }
 
-// toolAnswer is the model's reading of a call, by its id.
+// toolAnswer is the model's reading of a call, by its id: what its CLI was
+// answered over the tool session.
 func toolAnswer(f *assistanttest.Rig, id string) (llm.Message, bool) {
-	for _, req := range f.Model.Requests() {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool && m.ToolCallID == id {
-				return m, true
-			}
-		}
+	res, ok := f.Model.Answer(id)
+	if !ok {
+		return llm.Message{}, false
 	}
-	return llm.Message{}, false
+	return llm.Message{Role: llm.RoleTool, ToolCallID: id, Name: res.Name, Content: res.Output,
+		Failed: res.Failed}, true
 }
 
 // DEEP WORK IS OFFERED ONLY WHERE IT CAN RUN: a company that configures none,

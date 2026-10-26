@@ -154,7 +154,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		// One backend is not a choice, so nothing is being decided for the
 		// operator. More than one without a default is a catalogue whose
 		// EVERY CALLER NAMES ITS CELL — config validation holds that for
-		// each seat and each agent-mode entry — and it is never resolved
+		// each seat and each box-mode entry — and it is never resolved
 		// by map order here: that order is random, so the company would
 		// run somewhere different on every restart. A caller that names
 		// none against such a catalogue is refused by [Manager.Provider]

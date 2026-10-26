@@ -29,8 +29,8 @@ const (
 	// the same two reasons: argv is bounded by ARG_MAX, and
 	// /proc/<pid>/cmdline makes it readable by every account on the
 	// machine. A rendered prompt is the whole flattened transcript — the
-	// seat's identity, the tool catalogue, the conversation and its tool
-	// results — so it is the LARGEST and the most sensitive thing this
+	// seat's identity, the conversation and its tool results — so it is
+	// the LARGEST and the most sensitive thing this
 	// backend hands a CLI. Prefer this over argv wherever a vendor offers
 	// a prompt-file flag; `muse exec --prompt-file` is the first that does.
 	PromptFile PromptMode = "file"
@@ -355,9 +355,10 @@ func (s MarkerScope) Valid() bool {
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
 // its file editor, its browser.
 //
-// In text mode the engine uses none of them: Crewlet's tools ride the prompt
-// envelope, and a CLI editing files in its own sandbox is invisible to the
-// tool registry, the permission model, redaction and the event stream. The
+// On this host the engine uses none of them: a seat's tools reach the CLI as
+// the engine's own MCP server ([MCP]), and a CLI editing files in its own
+// sandbox is invisible to the tool registry, the permission model and the
+// event stream. The
 // shell is the one that matters: hostbox isolates a seat's HOME and
 // environment, not the filesystem, so a CLI with a shell on the engine host
 // reads whatever the engine user can read. A profile therefore DENIES local
@@ -433,6 +434,14 @@ func (w WebTools) Valid() bool { return w == WebToolsAllowed || w == WebToolsDen
 // tool policy from a file (OpenCode) denies web without restating its argv.
 // A denial that sets neither field changes nothing and is refused.
 //
+// A RUN WITH TOOLS IS COVERED TOO. A profile whose mcp block runs its own argv
+// or writes its own settings (mcp.complete_args, mcp.seed) hands a run with
+// tools those in place of the profile's, so a denial that replaced only the
+// profile's fields would leave the web on exactly where a seat or the
+// assistant works. Such a profile's denial says what that run uses instead
+// ([WebDenial.MCP]) for each field whose counterpart it replaces, and one that
+// does not is refused.
+//
 // Every built-in denial was measured against the installed CLI with the
 // doctor's own web probe; the profile's web_tools_note says on which release.
 type WebDenial struct {
@@ -440,11 +449,45 @@ type WebDenial struct {
 	CompleteArgs []string `yaml:"complete_args,omitempty"`
 	// SeedFiles replaces seed_files when web is denied.
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
+	// MCP replaces the mcp block's own argv and seeds when web is denied.
+	MCP *WebDenialMCP `yaml:"mcp,omitempty"`
+}
+
+// WebDenialMCP is what a run with tools uses instead when web is denied: each
+// field, when set, replaces the mcp block's field of the same name whole.
+type WebDenialMCP struct {
+	// CompleteArgs replaces mcp.complete_args.
+	CompleteArgs []string `yaml:"complete_args,omitempty"`
+	// Seed replaces mcp.seed.
+	Seed []SeedFile `yaml:"seed,omitempty"`
 }
 
 // changes reports whether the denial replaces anything at all.
 func (d *WebDenial) changes() bool {
-	return d != nil && (d.CompleteArgs != nil || d.SeedFiles != nil)
+	return d != nil && (d.CompleteArgs != nil || d.SeedFiles != nil ||
+		(d.MCP != nil && (d.MCP.CompleteArgs != nil || d.MCP.Seed != nil)))
+}
+
+// mcpUncovered names the mcp block's own fields a denial leaves in place
+// although it replaces their counterpart for a text function, which a run with
+// tools would then use with its web on; empty when it covers them all.
+//
+// THE COUNTERPART DECIDES: a denial that turns the web off in the argv must
+// turn it off in a run's own argv too, and one that does it in a settings file
+// must do it in the run's own settings. A field the denial does not touch
+// carries no web stance it could leave behind.
+func (d *WebDenial) mcpUncovered(m *MCP) []string {
+	if m == nil {
+		return nil
+	}
+	var out []string
+	if d.CompleteArgs != nil && len(m.CompleteArgs) > 0 && (d.MCP == nil || d.MCP.CompleteArgs == nil) {
+		out = append(out, "mcp.complete_args")
+	}
+	if d.SeedFiles != nil && len(m.Seed) > 0 && (d.MCP == nil || d.MCP.Seed == nil) {
+		out = append(out, "mcp.seed")
+	}
+	return out
 }
 
 // SeedScope is where a seeded file lands.
@@ -884,26 +927,6 @@ type Profile struct {
 	// the ANSWER.
 	TextEvents []string `yaml:"text_events,omitempty"`
 
-	// DeltaPaths locates an INCREMENTAL fragment of the answer in one line
-	// of a `jsonl` stream, for a CLI that streams its tokens apart from the
-	// event that carries the whole answer. Empty takes the live view from
-	// [Profile.TextPaths], event by event.
-	//
-	// A second set of paths rather than more text paths, because the two
-	// are read differently and must not be mixed: fragments CONCATENATE as
-	// they arrive, for the person watching, while the answer the call
-	// returns is still read from text_paths alone. Claude Code's stream-json
-	// spells every answer twice, as `text_delta` fragments while it is
-	// written and as the `result` once it is done; reading both as text
-	// would hand the model's answer back doubled.
-	DeltaPaths []Path `yaml:"delta_paths,omitempty"`
-
-	// DeltaEvents restricts fragment extraction to lines whose
-	// discriminator ([Profile.EventTypePath]) is one of these, as
-	// [Profile.TextEvents] restricts the answer. Empty takes every line
-	// delta_paths resolves on.
-	DeltaEvents []string `yaml:"delta_events,omitempty"`
-
 	// ErrorPaths locates a boolean the CLI sets when it failed despite
 	// exiting zero.
 	ErrorPaths []Path `yaml:"error_paths,omitempty"`
@@ -1230,50 +1253,62 @@ type Profile struct {
 	// has no measured way to. See [WebDenial].
 	WebDenial *WebDenial `yaml:"web_denial,omitempty"`
 
-	// Stream is how this CLI streams its answer while it is written, or nil
-	// where it cannot or where output is already a jsonl stream. See
-	// [Stream].
-	Stream *Stream `yaml:"stream,omitempty"`
-}
+	// KeySeedFiles are settings files written into a seat's KEY home alone —
+	// the home its calls run in when they sign in with a key (auth.mode
+	// api-key, or inherit-env handing it the engine's own) — after
+	// seed_files, each over a seed_files entry at the same path.
+	//
+	// The counterpart of [Profile.SubscriptionEnv], for a CLI that picks
+	// its sign-in from SETTINGS before its environment, so no variable can
+	// tell it to use the key. Gemini CLI takes a GOOGLE_GEMINI_BASE_URL — an
+	// operator's gateway in front of the API — as its gateway sign-in, which
+	// it then refuses ("Invalid auth method selected", exit 41), unless its
+	// settings name the key sign-in; and the same settings in a login home
+	// would send every subscription call to a key it does not have (read
+	// from the 0.65.0 bundle, and measured). A key home and a login home are
+	// two directories ([Workspace.AcquireForKey] in the backend), so each
+	// keeps its own.
+	//
+	// The seat's home only (`in` is home, its default): a call's working
+	// directory is written per call and knows nothing of how it signs in.
+	KeySeedFiles []SeedFile `yaml:"key_seed_files,omitempty"`
 
-// Stream is how one CLI whose answer is otherwise ONE document streams its
-// tokens instead: the arguments that switch it to an event stream, and how
-// that stream is read.
-//
-// CHOSEN PER CALL, NEVER PER ENTRY, and only on an explicit ask: the backend
-// runs [Profile.Streamed] for a call that is watched and asks for the token
-// stream ([llm.Request.StreamTokens]), and the profile as written for every
-// other, so no entry, document or operator resource has a setting for it, a
-// call nobody is watching never pays for the larger output, and a caller that
-// watches without asking (a seat's live view) keeps the argv it always ran.
-//
-// THE ARGUMENTS ARE APPENDED to complete_args (after a web denial has
-// replaced them), so every isolation and denial flag the call runs with is
-// the one the profile already states; a variant restating the argv would be
-// a second copy of the denial for drift to separate from the first. That
-// relies on the CLI taking the LAST value of a repeated flag, which each
-// built-in variant measured against its CLI.
-//
-// The answer is still read from the profile's own text_paths, error_paths
-// and usage: a variant names only the events those are read from and the
-// fragments the live view is drawn from.
-type Stream struct {
-	// Args is appended to complete_args for a streamed call.
-	Args []string `yaml:"args,omitempty"`
-	// EventTypePath, TextEvents, DeltaPaths and DeltaEvents are the
-	// streamed call's [Profile] fields of the same names.
-	EventTypePath Path     `yaml:"event_type_path,omitempty"`
-	TextEvents    []string `yaml:"text_events,omitempty"`
-	DeltaPaths    []Path   `yaml:"delta_paths,omitempty"`
-	DeltaEvents   []string `yaml:"delta_events,omitempty"`
+	// MCP is how the CLI is handed a phase's tools as an MCP server — see
+	// [MCP]. Nil: the CLI cannot be handed any, and a seat's phase on it is
+	// refused.
+	MCP *MCP `yaml:"mcp,omitempty"`
+
+	// Requests is how the CLI's own record shows each model request of a run
+	// with tools — see [Requests]. Nil: the record shows none, and the whole
+	// run counts as one round.
+	Requests *Requests `yaml:"requests,omitempty"`
+
+	// Cap is how a run the CLI's own turn cap ended is told from a failure —
+	// see [Cap]. Nil: the CLI has no cap, or the profile cannot tell one.
+	Cap *Cap `yaml:"cap,omitempty"`
+
+	// FailureMarkers are sentinels the CLI writes on stderr when its own
+	// confinement failed to load — a policy file it could not read — after
+	// which it runs on its vendor's defaults. Matched as each stderr line
+	// arrives, on every call, and the run is stopped at once and fails: a CLI
+	// running with its tool policy unloaded must not be left to use the tools
+	// that policy denies (Gemini CLI reports "Policy file error" and carries
+	// on, measured on 0.58.0).
+	FailureMarkers []string `yaml:"failure_markers,omitempty"`
 }
 
 // ToolsOff is the proof, IN THE ARGV, that a CLI's run offers its model no
-// tool of its own: no shell, no file reader or writer, no tool server, nothing
-// that reaches the engine host. [LocalToolsDenied] is a claim about a
-// profile; this is what a caller that must not be reached around (the
-// Dashboard Assistant, whose every read goes through the person's own
-// requests) checks instead, against the exact argv each of its calls runs.
+// tool of its OWN: no shell, no file reader or writer, no web, and no tool
+// server but the engine's. [LocalToolsDenied] is a claim about a profile; this
+// is what a caller that must not be reached around (the Dashboard Assistant,
+// whose every read goes through the person's own requests) checks instead,
+// against the exact argv each of its calls runs.
+//
+// THE ENGINE'S SERVER IS THE ONE TOOL SOURCE LEFT. A run with tools is handed
+// the phase's tools as one MCP server (ADR-0049, the profile's mcp block), and
+// for the assistant those tools are the person's own requests. So the call's
+// own arguments must turn every built-in tool off and load no server of their
+// own, and the mcp block may allow nothing but the engine's tools.
 //
 // A DENY LIST IS NOT THIS. Measured on Claude Code 2.1.310 with no login (no
 // model reached): the profile's --disallowedTools list still left thirteen
@@ -1282,32 +1317,62 @@ type Stream struct {
 // release, and a list of the ones to refuse is always a release behind; an
 // empty allow list is not.
 type ToolsOff struct {
-	// Args are the argument runs that leave the CLI with no tool. Each
-	// must appear in the argv, its elements adjacent and in order, and a
-	// run's flag exactly once, since a CLI takes the last value of a
-	// repeated flag and a second `--tools default` would undo the first.
+	// Args are the argument runs that leave the CLI with no built-in tool
+	// and no server but the ones the mcp block names. Each must appear in
+	// the call's own argv, its elements adjacent and in order, and a run's
+	// flag exactly once, since a CLI takes the last value of a repeated flag
+	// and a second `--tools default` would undo the first.
 	Args [][]string `yaml:"args,omitempty"`
-	// Refuses are flags whose presence anywhere in the argv brings a tool
-	// back (a tool server's config, an allow list), so an argv carrying
-	// one is not off whatever else it says.
+	// Refuses are flags whose presence in the call's own arguments brings a
+	// tool back (a tool server's config, an allow list, a plugin), so an
+	// argv carrying one is not off whatever else it says. The mcp block's
+	// own arguments are judged apart: they may allow only the engine's tools.
 	Refuses []string `yaml:"refuses,omitempty"`
 	// Note says how the construction was measured.
 	Note string `yaml:"note,omitempty"`
 }
 
-// ToolsOffProblem says why the argv this profile runs is NOT left with no
-// tool of its own, or "" when it is: every run of [ToolsOff.Args] present
-// exactly once and no flag of [ToolsOff.Refuses] anywhere, in the argv as
-// written and in its streamed variant ([Profile.Streamed]) alike, since a
-// caller runs both.
+// ToolsOffProblem says why the argv this profile runs with tools is NOT left
+// with no tool of its own, or "" when it is: every run of [ToolsOff.Args]
+// present exactly once and no flag of [ToolsOff.Refuses] in the call's own
+// arguments, and an mcp block whose allow list names the engine's tools alone.
 func (p *Profile) ToolsOffProblem() string {
 	if p.ToolsOff == nil {
 		return "the profile has no measured way to run the CLI with no tool of its own"
 	}
-	streamed := p.Streamed()
-	for _, argv := range [][]string{p.CompleteArgs, streamed.CompleteArgs} {
-		if problem := p.ToolsOff.problemIn(argv); problem != "" {
-			return problem
+	if p.MCP == nil {
+		return "the profile has no mcp block, so the engine's tools cannot reach its CLI"
+	}
+	complete := p.CompleteArgs
+	if len(p.MCP.CompleteArgs) > 0 {
+		complete = p.MCP.CompleteArgs
+	}
+	if problem := p.ToolsOff.problemIn(complete); problem != "" {
+		return problem
+	}
+	return p.mcpAllowProblem()
+}
+
+// mcpAllowProblem says why the mcp block's allow list admits a tool that is
+// not the engine's, or "" when every tool it names is one: spelled with the
+// prefix the CLI gives the engine's server ([Requests.HostPrefix]). A block
+// that allows nothing by name (a CLI whose server's tools need no allow list)
+// admits nothing of its own either.
+func (p *Profile) mcpAllowProblem() string {
+	prefix := ""
+	if p.Requests != nil {
+		prefix = p.Requests.HostPrefix
+	}
+	for _, arg := range p.MCP.AllowArgs {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if prefix == "" {
+			return fmt.Sprintf("mcp.allow_args admits %q, and the profile names no "+
+				"requests.host_prefix to tell the engine's tools from another's", arg)
+		}
+		if !strings.HasPrefix(arg, prefix) {
+			return fmt.Sprintf("mcp.allow_args admits %q, which is not one of the engine's tools", arg)
 		}
 	}
 	return ""
@@ -1355,30 +1420,6 @@ func countOf(argv []string, arg string) int {
 	return n
 }
 
-// CanStream reports whether the profile has a streamed variant.
-func (p *Profile) CanStream() bool { return p.Stream != nil }
-
-// Streamed is the profile a streamed call runs: its arguments extended by the
-// variant's, its output a jsonl stream read through the variant's events and
-// fragment paths. The variant itself is dropped from the result, so applying
-// it twice cannot append its arguments twice. A profile with no variant comes
-// back unchanged.
-func (p Profile) Streamed() Profile {
-	out := p.Clone()
-	s := p.Stream
-	if s == nil {
-		return out
-	}
-	out.CompleteArgs = append(out.CompleteArgs, s.Args...)
-	out.Output = OutputJSONL
-	out.EventTypePath = append(Path(nil), s.EventTypePath...)
-	out.TextEvents = append([]string(nil), s.TextEvents...)
-	out.DeltaPaths = clonePaths(s.DeltaPaths)
-	out.DeltaEvents = append([]string(nil), s.DeltaEvents...)
-	out.Stream = nil
-	return out
-}
-
 // EffectiveWebTools is the web stance with its default applied: empty reads
 // as [WebToolsAllowed].
 func (p *Profile) EffectiveWebTools() WebTools {
@@ -1403,6 +1444,14 @@ func (p Profile) withWebDenied() Profile {
 		}
 		if d.SeedFiles != nil {
 			out.SeedFiles = append([]SeedFile(nil), d.SeedFiles...)
+		}
+		if dm := d.MCP; dm != nil && out.MCP != nil {
+			if dm.CompleteArgs != nil {
+				out.MCP.CompleteArgs = append([]string(nil), dm.CompleteArgs...)
+			}
+			if dm.Seed != nil {
+				out.MCP.Seed = append([]SeedFile(nil), dm.Seed...)
+			}
 		}
 	}
 	return out
@@ -1475,10 +1524,10 @@ const modelPlaceholder = "{model}"
 //
 // ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a cli-agent entry's
 // `model` is written in its CLI's own grammar and every reader of it has to
-// see the same string: a text call's argv, an agent-mode or code-sandbox run
+// see the same string: a host-mode run's argv, a box-mode or code-sandbox run
 // of the same CLI in a box, and the config rule that judges the value as that
 // CLI reads it. A run that rebuilt the value its own way named one model to
-// the box and another to every text call on the same entry.
+// the box and another to every host-mode run on the same entry.
 //
 // THE VALUE, NOT THE ELEMENT. A box's runner writes its own flag
 // (`--model <value>`), so an element that spells flag and value as one —
@@ -1660,6 +1709,11 @@ func (p *Profile) kept(scope SeedScope) []keptPath {
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope {
 			add("seed_files", fmt.Sprintf("seed_files[%d].path", i), f.Path)
+		}
+	}
+	if scope == SeedHome {
+		for i, f := range p.KeySeedFiles {
+			add("key_seed_files", fmt.Sprintf("key_seed_files[%d].path", i), f.Path)
 		}
 	}
 	if scope == SeedWork {
@@ -1906,9 +1960,7 @@ func (p *Profile) problems() []string {
 			"denial the vendor lacks")
 	}
 	p.validateWebStance(add)
-	p.validateDeltas(add)
 	p.validateToolsOff(add)
-	p.validateStream(add)
 	for i, f := range p.SeedFiles {
 		if strings.TrimSpace(f.Path) == "" {
 			add("seed_files[%d].path is empty", i)
@@ -1946,6 +1998,30 @@ func (p *Profile) problems() []string {
 				"configures nothing", i)
 		}
 	}
+	for i, f := range p.KeySeedFiles {
+		label := fmt.Sprintf("key_seed_files[%d]", i)
+		switch {
+		case f.Scope() != SeedHome:
+			add("%s.in is %q — a key home's own settings are written into the seat's home "+
+				"(in: home, the default); a call's working directory is written per call "+
+				"and knows nothing of how the call signs in", label, f.In)
+		case strings.TrimSpace(f.Path) == "":
+			add("%s.path is empty", label)
+		case !staysInside(f.Path):
+			add("%s.path %q must be relative and stay inside the home directory", label, f.Path)
+		case !namesAFile(f.Path):
+			add("%s.path %q must name a FILE inside the home directory — not the directory "+
+				"itself, not a path ending in a separator, and not one whose last element is "+
+				". or .. — e.g. .vendor/settings.json", label, f.Path)
+		}
+		if f.Content == "" {
+			add("%s.content is empty — a settings file with nothing in it configures nothing", label)
+		}
+	}
+	p.validateMCP(add)
+	p.validateRequests(add)
+	p.validateCap(add)
+	p.validateFailureMarkers(add)
 	p.validateCollisions(add)
 	return bad
 }
@@ -1989,6 +2065,16 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 			"nothing off; say what the CLI runs with instead, or remove it")
 		return
 	}
+	if p.WebDenial != nil {
+		if uncovered := p.WebDenial.mcpUncovered(p.MCP); len(uncovered) > 0 {
+			add("web_denial leaves %s in place, which a run with tools uses instead of "+
+				"what the denial replaces, so the web would stay on where a seat works: set "+
+				"web_denial.mcp to what that run uses with web denied", strings.Join(uncovered, " and "))
+		}
+		if p.WebDenial.MCP != nil && p.MCP == nil {
+			add("web_denial.mcp is set but the profile has no mcp block to replace it in")
+		}
+	}
 	switch {
 	case p.EffectiveWebTools() == WebToolsDenied && p.WebDenial == nil:
 		// Refused rather than run: the stance would be a claim the CLI
@@ -2026,51 +2112,6 @@ func (p *Profile) validateToolsOff(add func(string, ...any)) {
 	}
 	if strings.TrimSpace(t.Note) == "" {
 		add("tools_off.note is empty: say how the construction was measured")
-	}
-}
-
-// validateDeltas holds the fragment fields to the stream they read.
-func (p *Profile) validateDeltas(add func(string, ...any)) {
-	if (len(p.DeltaPaths) > 0 || len(p.DeltaEvents) > 0) && p.EffectiveOutput() != OutputJSONL {
-		add("delta_paths or delta_events is set but output is %q: a fragment of the "+
-			"answer only exists in a jsonl stream", p.EffectiveOutput())
-		return
-	}
-	if len(p.DeltaEvents) > 0 && len(p.EventTypePath) == 0 {
-		add("delta_events is set but event_type_path is empty, so there is nothing to " +
-			"compare the event names against")
-	}
-	if len(p.DeltaEvents) > 0 && len(p.DeltaPaths) == 0 {
-		add("delta_events is set but delta_paths is empty: naming the events that " +
-			"carry fragments says nothing about where in them a fragment is")
-	}
-}
-
-// validateStream holds a streamed variant to its rules, and validates the
-// profile it makes as any profile is validated, so a broken variant is
-// refused where it is written rather than on the first call that streams.
-func (p *Profile) validateStream(add func(string, ...any)) {
-	s := p.Stream
-	if s == nil {
-		return
-	}
-	if p.EffectiveOutput() == OutputJSONL {
-		add("stream is set but output is already jsonl: the CLI streams every call " +
-			"as it is; remove stream, and set delta_paths if its fragments are apart " +
-			"from its answer")
-		return
-	}
-	if len(s.Args) == 0 {
-		add("stream.args is empty: a variant that adds no argument cannot switch the " +
-			"CLI to an event stream")
-	}
-	if len(s.DeltaPaths) == 0 {
-		add("stream.delta_paths is empty: say where in a line of the stream a " +
-			"fragment of the answer is")
-	}
-	streamed := p.Streamed()
-	for _, problem := range streamed.problems() {
-		add("with the stream applied, %s", problem)
 	}
 }
 
@@ -2113,9 +2154,30 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 		// label that says the engine owns it.
 		file("the call's project-root marker", ProjectRootMarker)
 	}
+	seeded := map[string]bool{}
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope && staysInside(f.Path) && namesAFile(f.Path) {
 			file(fmt.Sprintf("seed_files[%d].path", i), f.Path)
+			seeded[filepath.Clean(f.Path)] = true
+		}
+	}
+	if scope == SeedHome {
+		// A key home's own: one at a seed_files path is that file's key-home
+		// content, written in its place, so it is the same claim rather than
+		// a second write — and one anywhere else is held to every rule a
+		// seed is.
+		for i, f := range p.KeySeedFiles {
+			if !staysInside(f.Path) || !namesAFile(f.Path) {
+				continue
+			}
+			clean := filepath.Clean(f.Path)
+			if seeded[clean] {
+				// Replacing it, once: a second key seed at the path is a
+				// second write, which the claim below is refused as.
+				seeded[clean] = false
+				continue
+			}
+			file(fmt.Sprintf("key_seed_files[%d].path", i), f.Path)
 		}
 	}
 	if scope == SeedWork {
@@ -2147,6 +2209,12 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 				file(ch.field+".file.name", name)
 			}
 		}
+	}
+	if scope == SeedWork {
+		// Written on a run with tools alone, after the seeds above, so one at
+		// a path a seed or the system prompt file also names replaces it on
+		// exactly those runs.
+		out = append(out, p.mcpClaims()...)
 	}
 	field, relocations := "config_env", p.ConfigEnv
 	if scope == SeedWork {
@@ -2736,6 +2804,25 @@ func (p *Profile) ValidateCredentials(name string) error {
 			add("subscription_env names %q, which is a credential variable — it selects "+
 				"the login a subscription call signs in with and carries no secret; give "+
 				"a credential through the entry's auth", env)
+		}
+	}
+	if p.MCP != nil {
+		for _, env := range slices.Sorted(maps.Keys(p.MCP.Env)) {
+			if p.MCP.mintedByServer(p.MCP.Env[env]) {
+				// A VALUE THE CLI'S OWN SERVER MINTS — the password
+				// OpenCode's `serve` prints as it starts — rendered into
+				// each run and never written anywhere: the profile holds
+				// a placeholder, which is no secret, and the rule below
+				// exists for a secret the profile would hold.
+				continue
+			}
+			// Set on every run with tools whatever auth.mode says, and
+			// stored unredacted like the rest of overrides.
+			if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
+				add("mcp.env names %q, which is a credential variable — the tool route's "+
+					"environment is set whatever auth.mode says and is stored unredacted; give "+
+					"the credential through the entry's auth or its own env", env)
+			}
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
