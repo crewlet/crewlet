@@ -1601,6 +1601,10 @@ type activationRecord struct {
 	// already. Every pointer carries one: an activation is refused
 	// without a body ([coord.CanonicalPayload]).
 	Payload json.RawMessage `json:"payload,omitempty"`
+
+	// Restored is [coord.Activation.Restored]. Absent on a choice, which is
+	// every pointer but a boot's restore.
+	Restored bool `json:"restored,omitempty"`
 }
 
 // origin is the record's revision origin.
@@ -1637,6 +1641,10 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		return coord.Activation{}, errors.New("coord/kv: an activation cannot " +
 			"expect a revision and no revision at once")
 	}
+	if req.ExpectEpoch != 0 && req.Expect == "" {
+		return coord.Activation{}, errors.New("coord/kv: an activation cannot " +
+			"expect an epoch without the revision it names")
+	}
 	payload, err := coord.CanonicalPayload(req.Payload)
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: %w", err)
@@ -1671,6 +1679,7 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 		At:         at,
 		Summary:    req.Summary,
 		Origin:     utcOrigin(req.Origin),
+		Restored:   req.Restore,
 	}, nil
 }
 
@@ -1683,7 +1692,7 @@ func pointerBytes(req coord.ActivationRequest, payload json.RawMessage, at time.
 		RevisionID: req.RevisionID, At: at, Summary: req.Summary,
 		Author: origin.Author, AuthorKind: origin.AuthorKind, OperatorID: origin.OperatorID,
 		Source: origin.Source, CreatedAt: origin.CreatedAt,
-		Payload: payload,
+		Payload: payload, Restored: req.Restore,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: encode the activation: %w", err)
@@ -1717,21 +1726,29 @@ func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationReques
 	switch {
 	case err != nil:
 		return 0, time.Time{}, err
-	case !held:
-		// NOTHING TO HAVE RACED WITH. A node whose store holds an active
-		// revision while the pointer is gone — lost under the running
-		// node, and published again only at its next boot — names that
-		// revision in every config write, and treating that as a race
-		// would refuse each of them until the boot. See
-		// [coord.ActivationRequest.Expect]. It is also exactly what a
-		// create-only write is waiting to see.
+	case !held && req.ExpectAbsent:
+		// Exactly what a create-only write is waiting to see.
 		return 0, time.Time{}, nil
+	case !held:
+		// WHAT THE WRITE WAS BUILT ON IS GONE: the pointer was deleted or
+		// purged since the caller read it, so the write edits a company
+		// the fleet no longer runs. See [coord.ActivationRequest.Expect].
+		return 0, time.Time{}, fmt.Errorf("%w: expected %s, the fleet has no activation",
+			coord.ErrActivationRaced, req.Expect)
 	case req.ExpectAbsent:
 		return 0, time.Time{}, fmt.Errorf("%w: expected no activation, the fleet is on %s",
 			coord.ErrActivationRaced, record.RevisionID)
 	case record.RevisionID != req.Expect:
 		return 0, time.Time{}, fmt.Errorf("%w: expected %s, the fleet is on %s",
 			coord.ErrActivationRaced, req.Expect, record.RevisionID)
+	case req.ExpectEpoch != 0 && int64(seq) != req.ExpectEpoch:
+		// THE EPOCH IS THE SEQUENCE, so this is the compare the Update
+		// below makes anyway, made against what the caller read rather
+		// than against this fresh read — which another writer's
+		// re-activation of the same revision has already moved.
+		return 0, time.Time{}, fmt.Errorf("%w: expected %s at epoch %d, the fleet "+
+			"re-activated it at epoch %d", coord.ErrActivationRaced, req.Expect,
+			req.ExpectEpoch, seq)
 	}
 	return seq, record.At, nil
 }
@@ -1813,9 +1830,11 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 // with — so it reads the pointer again and retries until it lands.
 //
 // BOUNDED BY THE CONTEXT, not by a count. Every lost round is another
-// writer's successful write, and the writers that reach this path are a
-// node publishing at boot, each of which writes once — so the loop makes
-// progress every round and ends when they have all landed.
+// writer's successful write. The one caller of this path is `crewlet run
+// -import-company`, an operator asserting a company at one node's start, and
+// every other writer writes once per its own read of the pointer — so the loop
+// makes progress every round and ends when the writers in flight have
+// landed.
 func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
 	payload json.RawMessage) (uint64, time.Time, error) {
 	for {
@@ -1924,6 +1943,7 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 		At:         record.At,
 		Summary:    record.Summary,
 		Origin:     record.origin(),
+		Restored:   record.Restored,
 	}, true, nil
 }
 
@@ -1932,6 +1952,9 @@ func (f *FleetStore) Target(ctx context.Context) (coord.Activation, bool, error)
 type applyRecord struct {
 	Epoch      int64     `json:"epoch"`
 	RevisionID string    `json:"revision_id,omitempty"`
+	Applied    int64     `json:"applied_epoch,omitempty"`
+	Serving    string    `json:"serving_revision_id,omitempty"`
+	Boots      string    `json:"boots_revision_id,omitempty"`
 	Status     string    `json:"status"`
 	Error      string    `json:"error,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -1944,7 +1967,8 @@ func (f *FleetStore) RecordApply(ctx context.Context, status coord.NodeApply) er
 	}
 	detail := coord.TruncateApplyError(status.Error)
 	raw, err := json.Marshal(applyRecord{
-		Epoch: status.Epoch, RevisionID: status.RevisionID, Status: status.Status,
+		Epoch: status.Epoch, RevisionID: status.RevisionID, Applied: status.Applied,
+		Serving: status.Serving, Boots: status.Boots, Status: status.Status,
 		Error: detail, UpdatedAt: status.UpdatedAt.UTC(),
 	})
 	if err != nil {
@@ -1978,6 +2002,7 @@ func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 		}
 		out = append(out, coord.NodeApply{
 			NodeID: node, Epoch: record.Epoch, RevisionID: record.RevisionID,
+			Applied: record.Applied, Serving: record.Serving, Boots: record.Boots,
 			Status: record.Status, Error: record.Error, UpdatedAt: record.UpdatedAt,
 		})
 		return nil

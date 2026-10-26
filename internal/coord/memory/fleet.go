@@ -266,16 +266,30 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	// exactly what the KV buys with a sequence: the twin has to REFUSE the
 	// same writes, not merely be safe by construction, or a suite that
 	// passes against it proves nothing about the real store.
-	// An unset pointer is NOT a race — see the KV's own note and
-	// [coord.ActivationRequest.Expect].
+	// An unset pointer IS a race for an expectation, since what the write
+	// was built on is gone — see [coord.ActivationRequest.Expect].
 	if req.Expect != "" && req.ExpectAbsent {
 		return coord.Activation{}, errors.New("coord/memory: an activation cannot " +
 			"expect a revision and no revision at once")
 	}
-	if req.Expect != "" && f.set && f.target.RevisionID != req.Expect {
+	if req.ExpectEpoch != 0 && req.Expect == "" {
+		return coord.Activation{}, errors.New("coord/memory: an activation cannot " +
+			"expect an epoch without the revision it names")
+	}
+	if req.Expect != "" && !f.set {
+		return coord.Activation{}, fmt.Errorf(
+			"%w: expected %s, the fleet has no activation",
+			coord.ErrActivationRaced, req.Expect)
+	}
+	if req.Expect != "" && f.target.RevisionID != req.Expect {
 		return coord.Activation{}, fmt.Errorf(
 			"%w: expected %s, the fleet is on %s",
 			coord.ErrActivationRaced, req.Expect, f.target.RevisionID)
+	}
+	if req.ExpectEpoch != 0 && f.target.Epoch != req.ExpectEpoch {
+		return coord.Activation{}, fmt.Errorf(
+			"%w: expected %s at epoch %d, the fleet re-activated it at epoch %d",
+			coord.ErrActivationRaced, req.Expect, req.ExpectEpoch, f.target.Epoch)
 	}
 	// CREATE-ONLY, and the comparison an expectation cannot make: this
 	// write was built on nothing, so any pointer at all is a race with it.
@@ -298,7 +312,7 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: req.RevisionID,
 		At: coord.ActivationAt(req.At, previous), Summary: req.Summary,
-		Origin: req.Origin,
+		Origin: req.Origin, Restored: req.Restore,
 	}
 	if !f.target.Origin.CreatedAt.IsZero() {
 		f.target.Origin.CreatedAt = f.target.Origin.CreatedAt.UTC()

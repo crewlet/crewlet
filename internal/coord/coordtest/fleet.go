@@ -704,34 +704,112 @@ var planeCases = []fleetCase{{
 		}
 	},
 }, {
-	// EXPECTING SOMETHING WHEN NOTHING IS ACTIVE IS NOT A RACE.
-	//
-	// The comparison is "if a pointer exists it must still name this", and
-	// with no pointer there is no winner to have lost to. Refusing here
-	// looks defensible and breaks a state a node reaches having done nothing
-	// wrong: its store holds an active revision that every config write on
-	// it names, while the pointer is gone — lost under the running node,
-	// and published again only at its next boot — so every one of those
-	// writes would fail until then. Refused, it was measured as a 409 on a
-	// single-node deployment that had done nothing wrong.
-	name: "an activation expecting a revision on an empty store still lands",
+	// EXPECTING A REVISION WHEN NOTHING IS ACTIVE IS A RACE: the write
+	// was built on a pointer that is gone, so it edits a company the fleet
+	// no longer runs. Letting it land is how a node whose own copy named
+	// a revision the fleet had dropped published that copy's successor
+	// over the fleet's loss — every config write named the node's local
+	// revision, whatever the fleet ran. A writer that read no pointer
+	// passes ExpectAbsent, which the case below lands.
+	name: "an activation expecting a revision lands only while the pointer names it",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
-			Expect: "rev-0", Origin: anOrigin}); err != nil {
-			h.t.Fatalf("Activate: %v", err)
+			Expect: "rev-0", Origin: anOrigin})
+		if !errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("err = %v, want coord.ErrActivationRaced over no pointer", err)
 		}
-		target, found, err := h.f.Target(h.ctx)
-		if err != nil || !found || target.RevisionID != "rev-1" {
-			h.t.Fatalf("target = %+v found=%v err=%v, want the write to land",
-				target, found, err)
+		// AND IT LEFT NOTHING BEHIND: no pointer, and no body for one.
+		if target, found, err := h.f.Target(h.ctx); err != nil || found {
+			h.t.Fatalf("target = %+v found=%v err=%v, want no activation", target, found, err)
+		}
+		if _, ok, err := h.f.Payload(h.ctx, "rev-1"); err != nil || ok {
+			h.t.Fatalf("payload ok=%v err=%v, want the refused body unpublished", ok, err)
 		}
 	},
 }, {
-	// AN EMPTY EXPECTATION IS UNCONDITIONAL, which is the boot publish:
-	// a node asserting what it holds rather than editing what it read.
-	// Turning that into a race would make a first boot fail against a
-	// fleet that had legitimately moved on.
+	// AN EXPECTED EPOCH PINS THE VERY ACTIVATION THE WRITER READ. With the
+	// revision alone, another writer re-activating it in between lets the
+	// write land a millisecond after that one — at an instant the writer
+	// never planned — and the boot publish of an offline offer, which
+	// records the instant it will land at before it publishes, then reads
+	// its own landed publish as never made. Pinned, the re-activation is the
+	// race it is, and a write at the epoch it read lands at exactly
+	// ActivationAt(its instant, that activation's).
+	name: "an activation expecting an epoch lands only on that activation",
+	fn: func(h *fleetHarness) {
+		read, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(), Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		again, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			Expect: "rev-1", Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("re-activate: %v", err)
+		}
+		planned := coord.ActivationAt(h.now().Add(time.Minute), read.At)
+		_, err = h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-2", Payload: []byte("{}"), At: planned,
+			Expect: "rev-1", ExpectEpoch: read.Epoch, Origin: anOrigin})
+		if !errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("an epoch the pointer has moved past: err = %v, want coord.ErrActivationRaced", err)
+		}
+		if target, _, _ := h.f.Target(h.ctx); target.Epoch != again.Epoch {
+			h.t.Fatalf("the refused write moved the pointer to %+v", target)
+		}
+		planned = coord.ActivationAt(h.now().Add(time.Minute), again.At)
+		landed, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-2", Payload: []byte("{}"), At: planned,
+			Expect: "rev-1", ExpectEpoch: again.Epoch, Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("the epoch the pointer is at was refused: %v", err)
+		}
+		if !landed.At.Equal(planned) {
+			h.t.Fatalf("landed at %s, want exactly the planned %s", landed.At, planned)
+		}
+		if _, err = h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-3", Payload: []byte("{}"), At: h.now(),
+			ExpectEpoch: landed.Epoch, Origin: anOrigin}); err == nil ||
+			errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("an epoch with no revision: err = %v, want a refusal that is no race", err)
+		}
+	},
+}, {
+	// A RESTORE SAYS SO, AND ONLY UNTIL THE NEXT WRITE. A peer that knows the
+	// fleet moved on replaces a restored pointer and never a chosen one, so a
+	// mark that outlived its write would let it replace the next choice, and
+	// one the backend dropped would leave a stale restore standing.
+	name: "a restored pointer says so until the next write",
+	fn: func(h *fleetHarness) {
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			ExpectAbsent: true, Restore: true, Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("restore: %v", err)
+		}
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found || !target.Restored || !published.Restored {
+			h.t.Fatalf("restored pointer reads %+v (published %+v, found=%v err=%v), "+
+				"want it marked restored", target, published, found, err)
+		}
+		if _, err = h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			Expect: "rev-1", Origin: anOrigin}); err != nil {
+			h.t.Fatalf("choose: %v", err)
+		}
+		if target, _, _ = h.f.Target(h.ctx); target.Restored {
+			h.t.Fatalf("a chosen pointer reads %+v, want the restore's mark gone", target)
+		}
+	},
+}, {
+	// AN EMPTY EXPECTATION IS UNCONDITIONAL, which is `crewlet run
+	// -import-company`: an operator asserting a company outright at one
+	// node's start rather than editing what it read. It has nothing to have
+	// raced with, so a pointer that moved under it is replaced, not a
+	// refusal. Every other writer — the boot publish included — read the
+	// pointer, or its absence, and passes what it read.
 	name: "an activation with no expectation overwrites whatever is there",
 	fn: func(h *fleetHarness) {
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
@@ -932,8 +1010,9 @@ var planeCases = []fleetCase{{
 }, {
 	// A LATER ACTIVATION CARRIES A LATER INSTANT, whatever the activating
 	// node's clock said. The instant is how a node tells which of two
-	// activations is newer — a booting node republishes its own only when it
-	// is later than the pointer's — so an activation from a node whose clock
+	// activations is newer — a booting node that remembers the fleet on a
+	// revision activated later than a RESTORED pointer's publishes that one
+	// over it, by compare-and-set — so an activation from a node whose clock
 	// runs behind, or a republish of an older `activated_at`, left a node
 	// holding the replaced revision reading its own copy as the newer. See
 	// [coord.ActivationAt].
@@ -1088,6 +1167,40 @@ var planeCases = []fleetCase{{
 		want := []string{"node-z", "node-a", "node-b", "node-c"}
 		if !slices.Equal(ids, want) {
 			h.t.Fatalf("fleet order = %v, want %v — freshest first, then by node id", ids, want)
+		}
+	},
+}, {
+	// WHAT A NODE RUNS IS NOT WHAT THE EPOCH ASKED FOR when it refused
+	// that revision, and the fleet view is where an operator sees a node
+	// still serving the previous company. A backend that dropped the
+	// field reported every refusing node as running nothing.
+	//
+	// AND WHAT IT BOOTS ON IS A THIRD REVISION while a write to its boot
+	// row is being retried: the node runs rev-6 and would come back on
+	// rev-5, and a backend that dropped that field reported a node as
+	// booting on nothing — which is what a reader keeping a revision's
+	// credentials acts on.
+	//
+	// AND THE EPOCH IT LAST APPLIED IS NOT THE ONE IT ATTEMPTED: the node
+	// refused 7 and runs what it applied at 6, and a backend that dropped
+	// that field reported it as having applied nothing — which a writer
+	// judging whether its save reached the node reads as "not yet" for good.
+	name: "an apply record carries what its node applied, serves and boots on",
+	fn: func(h *fleetHarness) {
+		if err := h.f.RecordApply(h.ctx, coord.NodeApply{
+			NodeID: "node-a", Epoch: 7, RevisionID: "rev-7", Applied: 6, Serving: "rev-6",
+			Boots: "rev-5", Status: "failed", Error: "refused", UpdatedAt: h.now(),
+		}); err != nil {
+			h.t.Fatalf("RecordApply: %v", err)
+		}
+		got, err := h.f.Fleet(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Fleet: %v", err)
+		}
+		if len(got) != 1 || got[0].RevisionID != "rev-7" || got[0].Applied != 6 ||
+			got[0].Serving != "rev-6" || got[0].Boots != "rev-5" {
+			h.t.Fatalf("fleet = %+v, want node-a asked for rev-7 at epoch 7, having "+
+				"applied epoch 6, serving rev-6 and booting on rev-5", got)
 		}
 	},
 }, {
@@ -2022,10 +2135,10 @@ var payloadRaceCases = []fleetCase{{
 	// once could each write a body, and the one whose flip landed FIRST was
 	// then pointed at by a pointer whose body the other had overwritten.
 	// Every peer read "no such revision" for the epoch the fleet was on
-	// until somebody activated again. The boot path does exactly this:
-	// two nodes starting together each publish the revision they hold,
-	// unconditionally. And an edit's compare-and-set only decided the
-	// pointer — the loser's body had already landed.
+	// until somebody activated again. Unconditional writers do exactly
+	// this — two nodes started with -import-company each assert their file —
+	// and an edit's compare-and-set only decided the pointer: the loser's
+	// body had already landed.
 	name: "racing activations leave the pointer's own body readable",
 	fn: func(h *fleetHarness) {
 		const writers = 8
@@ -2040,9 +2153,9 @@ var payloadRaceCases = []fleetCase{{
 						RevisionID: id, At: h.now(), Origin: anOrigin,
 						Payload: []byte(fmt.Sprintf(`{"revision":%q}`, id)),
 					}
-					// Half race unconditionally, as two booting nodes do;
-					// half as editors naming what they read, where all but
-					// one lose the compare-and-set.
+					// Half race unconditionally, as two overriding nodes
+					// do; half as editors naming what they read, where all
+					// but one lose the compare-and-set.
 					if w%2 == 1 && round > 0 {
 						req.Expect = fmt.Sprintf("rev-%d-0", round-1)
 					}

@@ -60,9 +60,11 @@ import (
 // another writer removing the key again inside its own read-to-write window,
 // which nothing in this estate does repeatedly ([createRounds]). And the
 // activation pointer's unconditional write runs until its caller's context
-// ends ([FleetStore.assert]): each round it loses is a booting node's one
-// write landing. A compare-and-swap whose loss IS its answer — a conditional
-// activation, a seat's pause — is not retried at all.
+// ends ([FleetStore.assert]): its one caller is `crewlet run -import-company`,
+// an operator replacing the company at one node's start, and each round it
+// loses is another activation landing — an API write or a peer's boot
+// publish, each of which lands once. A compare-and-swap whose loss IS its
+// answer — a conditional activation, a seat's pause — is not retried at all.
 
 // retryRaces makes attempt until it does not LOSE A RACE — another writer
 // changed the record between its read and its write — waiting [raceRetryDelay]
