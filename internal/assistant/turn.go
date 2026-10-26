@@ -436,6 +436,11 @@ type loopRun struct {
 	// deep is the deep-work run a resumed segment continues before its
 	// loop, the answer to the call it parked on being that run's end.
 	deep *parkedDeep
+	// decision is the engine's words for the decision a resumed segment
+	// answers its parked call with ([resultOf]), and screen the screen the
+	// decision was made from, empty when the decision carried none: kept
+	// apart, so a deep-work task records the decision alone.
+	decision, screen string
 }
 
 // run drives one segment to its end, on its own goroutine.
@@ -669,6 +674,10 @@ type parked struct {
 	// Deep is the deep-work run the turn parked on, continued by the
 	// approval that resumes it; absent for a quick-mode proposal.
 	Deep *parkedDeep `json:"deep,omitempty"`
+	// Page is the page context the segment ran on: what a resumed segment
+	// runs on when its decision carried none. A decision that carries one
+	// replaces it ([Service.Resume]).
+	Page *wire.PageContext `json:"page,omitempty"`
 }
 
 // parkedTail is how many frames a segment tells after its park record has
@@ -683,7 +692,8 @@ func (t *turn) park(ctx context.Context, res *toolloop.Result) error {
 	t.mu.Lock()
 	keep := parked{V: parkedVersion, Messages: res.Messages, PendingCall: res.PendingToolCallID,
 		PendingTool: res.PendingToolName, Steps: t.steps, Cards: t.cards, Count: t.messages,
-		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail, Deep: t.deep.parked}
+		Boundary: string(t.boundary), Seq: t.log.Last() + parkedTail, Deep: t.deep.parked,
+		Page: t.page}
 	if t.anchor != uuid.Nil {
 		keep.Anchor = t.anchor.String()
 	}

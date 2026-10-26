@@ -38,12 +38,13 @@ import {
   ASSISTANT_ACTION_CONTEXT_INVALIDATE,
   type AssistantActionEvent,
   type AssistantActionReport,
+  type AssistantPageContext,
 } from "~/contract/assistant.ts";
 import { call, versioned } from "~/protocol/assistant.ts";
 import { newActOpID } from "~/protocol/act.ts";
 import { RestError } from "~/protocol/rest.ts";
 import { emit, on, type AssistantBusEvents } from "../bus.ts";
-import { pageSnapshot } from "../context.ts";
+import { pageSnapshot, settledPageContext } from "../context.ts";
 
 /** What became of a page action in this tab, as its receipt says it. */
 export type ActionLocalState =
@@ -83,6 +84,8 @@ export interface ActionDeps {
   settle: (local: ActionLocal) => void;
   /** Send a report on the action's claim, under `opKey`; the session's `call`, replaced in a test. */
   report?: (actionId: string, body: AssistantActionReport, opKey: string) => Promise<unknown>;
+  /** The screen once it settled after the action; the page's own, replaced in a test. */
+  screen?: () => Promise<AssistantPageContext | null>;
 }
 
 /** The action ids this tab has taken, so a frame read twice is taken once. */
@@ -232,6 +235,10 @@ export async function takeAction(
     words: wordsOf(result),
     undoable: result.outcome === "applied" && result.undoable === true,
   });
+  // THE SCREEN AS THE ACTION LEFT IT travels with the report, so the turn it
+  // resumes reads the draft the change made and offers the actions the
+  // screen accepts now, not the ones it had when the question was asked.
+  const screen = await (deps.screen ?? settledPageContext)();
   // THE OUTCOME IS THE PAGE'S OWN STATEMENT and already drawn here; a report
   // the engine never heard leaves the turn waiting on it, which the engine's
   // own expiry settles, and is not a reason to say the change did not apply.
@@ -243,6 +250,7 @@ export async function takeAction(
       revision: result.revision,
       ...(result.reason === undefined ? {} : { reason: result.reason }),
       ...(result.receipt === undefined ? {} : { receipt: result.receipt }),
+      ...(screen === null ? {} : { page_context: screen }),
     },
     report,
     wait,

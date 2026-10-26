@@ -39,7 +39,7 @@ var ErrInvalidReport = errors.New("approval: the report is not one a page action
 // Report records a page's claim on or report of one of the person's page
 // actions.
 func (a *Approver) Report(ctx context.Context, r Report) (wire.ActionAnswer, error) {
-	d, err := a.deciderOf(ctx, r.Key)
+	d, err := a.deciderOf(ctx, r.Key, r.Report.PageContext)
 	if err != nil {
 		return wire.ActionAnswer{}, err
 	}
@@ -103,7 +103,7 @@ func (a *Approver) pageMoved(ctx context.Context, d decider, p assistantdomain.P
 		return wire.ActionAnswer{}, ErrStale
 	}
 	if read, err := a.d.Grants.Read(ctx, p.Conversation, p.Turn); err == nil {
-		a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,
+		a.resume(ctx, Resumption{Owner: d.person.ID, Page: d.page, Conversation: p.Conversation,
 			Turn: p.Turn, Proposal: p.ID, Read: read, State: to, Failure: failure,
 			ClientReported: true, Card: proposal.CardAt(p, to, nil, failure)})
 	} else {
@@ -184,7 +184,7 @@ func (a *Approver) reported(ctx context.Context, d decider, p assistantdomain.Pr
 		return wire.ActionAnswer{ActionID: p.ID, State: report.State}, nil
 	}
 	if read, err := a.d.Grants.Read(ctx, p.Conversation, p.Turn); err == nil {
-		a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,
+		a.resume(ctx, Resumption{Owner: d.person.ID, Page: d.page, Conversation: p.Conversation,
 			Turn: p.Turn, Proposal: p.ID, Read: read, State: to, Receipt: receipt,
 			Failure: failure, ClientReported: true,
 			Card: proposal.CardAt(p, to, receipt, failure)})

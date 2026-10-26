@@ -472,6 +472,37 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+/** How long the page must stay unchanged before a changed screen counts as settled. */
+const SETTLE_QUIET_MS = 50;
+/** The longest a settled screen is waited for, however often the page republishes. */
+const SETTLE_MAX_MS = 400;
+
+/**
+ * The page's context once the screen settles after a change it just applied:
+ * a screen's setters re-render it and its draft republishes after the
+ * render, so the context read at once would describe the draft before the
+ * change. Resolves once the page has been quiet for a moment, and never later
+ * than a bound, with the context then (null where the frame published none).
+ */
+export function settledPageContext(): Promise<AssistantPageContext | null> {
+  return new Promise((resolve) => {
+    let quiet: ReturnType<typeof setTimeout>;
+    const done = (): void => {
+      clearTimeout(quiet);
+      clearTimeout(cap);
+      off();
+      resolve(snapshot ? snapshot.context : null);
+    };
+    const cap = setTimeout(done, SETTLE_MAX_MS);
+    const rearm = (): void => {
+      clearTimeout(quiet);
+      quiet = setTimeout(done, SETTLE_QUIET_MS);
+    };
+    const off = subscribe(rearm);
+    rearm();
+  });
+}
+
 /** The page as a value a component re-renders on. */
 export function usePageSnapshot(): PageSnapshot | null {
   return useSyncExternalStore(subscribe, pageSnapshot, () => null);

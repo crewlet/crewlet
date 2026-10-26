@@ -15,7 +15,7 @@ func (s *Decisions) decline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	answer, err := s.approver.Decline(r.Context(), approval.Approval{Proposal: id,
-		Digest: body.Digest, Key: key})
+		Digest: body.Digest, Key: key, Page: body.PageContext})
 	if err != nil {
 		s.refuse(w, r, key, err)
 		return

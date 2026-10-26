@@ -586,6 +586,8 @@ export interface AssistantTurnAccepted {
 export interface AssistantProposalDecision {
   protocol_version: number;
   digest: string;
+  /** The screen the person decided from, as it is now: the resumed turn runs on it. */
+  page_context?: AssistantPageContext | null;
 }
 
 /** A decision's answer: the proposal now, and where a resumed turn streams. */
@@ -609,6 +611,8 @@ export interface AssistantActionReport {
   revision: string;
   reason?: string;
   receipt?: string;
+  /** The screen as it is after the action, on the report that settles it. */
+  page_context?: AssistantPageContext | null;
 }
 
 /** A page action's state after a report. */

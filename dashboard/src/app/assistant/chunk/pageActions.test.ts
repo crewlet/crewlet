@@ -127,6 +127,30 @@ describe("a page action", () => {
     ]);
   });
 
+  test("its outcome report carries the screen as the action left it", async () => {
+    const { reports, deps } = harness();
+    const after = { ...pageSnapshot()!.context, source_revision: "worklet-tasks@2" };
+    await takeAction(action(), true, { ...deps, screen: async () => after }, noWait);
+    expect(reports[0]).not.toHaveProperty("page_context");
+    expect(reports[1]).toMatchObject({ state: "applied", page_context: after });
+  });
+
+  test("the screen it reports is the one the page settled on after applying", async () => {
+    const { reports, deps } = harness();
+    // THE SCREEN REPUBLISHES AFTER ITS SETTERS RAN, as a draft does once the
+    // page re-renders: the report waits for it.
+    const republishing: PageActionSpec<string> = {
+      ...spec,
+      apply: (v) => {
+        spec.apply(v);
+        setTimeout(() => setFramePage({ ...PAGE, title: "Worklet › Blocked" }), 10);
+      },
+    };
+    registerPage({ actions: { "work.filter.apply": republishing } });
+    await takeAction(action(), true, deps, noWait);
+    expect(reports[1]?.page_context?.title).toBe("Worklet › Blocked");
+  });
+
   test("read twice is taken once", async () => {
     const { reports, deps } = harness();
     await takeAction(action(), true, deps, noWait);

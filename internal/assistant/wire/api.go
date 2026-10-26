@@ -46,6 +46,11 @@ type TurnAccepted struct {
 type ProposalDecision struct {
 	ProtocolVersion int    `json:"protocol_version"`
 	Digest          string `json:"digest"`
+	// PageContext is the screen the person decided from, as it is now: the
+	// turn the decision resumes runs on it, so it reads the draft an
+	// applied change left and offers the actions the screen accepts. Null
+	// when the person removed the page chip.
+	PageContext *PageContext `json:"page_context,omitempty"`
 }
 
 // ProposalAnswer is what a decision answers: the proposal's state now and,
@@ -73,6 +78,9 @@ type ActionReport struct {
 	Revision string `json:"revision"`
 	Reason   string `json:"reason,omitempty"`
 	Receipt  string `json:"receipt,omitempty"`
+	// PageContext is the screen as it is after the action, on the report
+	// that settles it ([ProposalDecision.PageContext]).
+	PageContext *PageContext `json:"page_context,omitempty"`
 }
 
 // ActionAnswer is the action's state after a report.

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
+	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -263,5 +264,113 @@ func TestTheOpenDraftReachesTheModelFencedAndRedacted(t *testing.T) {
 		t.Errorf("the open draft did not reach the model inside the fence:\n%s", prompts)
 	case strings.Contains(prompts, key):
 		t.Errorf("a key pasted into the draft reached the model:\n%s", prompts)
+	}
+}
+
+// A RESUMED TURN RUNS ON THE SCREEN THE DECISION WAS MADE FROM.
+//
+// The person applies the turn's draft change, the page reports it with the
+// screen as it is now, and the turn resumes: its model reads the draft the
+// change left, and a second change to the same draft is proposed, not refused
+// as an action the screen does not accept. A decision that carries no screen
+// resumes on the one the turn parked on, which still accepts the action.
+// Mutation: resume with no page and the second change is refused
+// "the screen does not accept that page action"; resume on the parked page
+// alone and the model never reads the applied value.
+func TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom(t *testing.T) {
+	t.Parallel()
+	for _, carried := range []bool{true, false} {
+		f := assistanttest.NewRig(t, evals.RigOptions{
+			Tools: []catalog.Tool{assistanttest.Tool(t, "propose_page_change")},
+			Rounds: []evals.Round{
+				evals.Call("c1", "propose_page_change", map[string]any{"action": catalog.DraftSet,
+					"args": map[string]any{"values": map[string]any{"voice.summary": "Plain and warm."}}}),
+				evals.Call("c2", "propose_page_change", map[string]any{"action": catalog.DraftSet,
+					"args": map[string]any{"values": map[string]any{"name": "FairSplit"}}}),
+				evals.Say("Done.")}})
+		page := draftPage()
+		page.Draft.Fields[3].Editable = true
+		accepted, err := f.Ask("page", "Improve my draft", page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if done := evals.Last(f.Follow(accepted.TurnID, 0), wire.EventDone); done == nil ||
+			done.Done.State != wire.TurnWaitingForApproval {
+			t.Fatalf("the first change's turn ended %+v, want parked", done)
+		}
+		first := f.Store.Proposals()[0]
+		var now *wire.PageContext
+		if carried {
+			now = draftPage()
+			now.Draft.Fields[3].Editable = true
+			now.SourceRevision = "brand-setup@2"
+			now.Draft.Fields[0].Value = "Plain and warm."
+		}
+		ctx := iam.WithPrincipal(context.Background(), f.Person)
+		resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
+			Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: first.ID,
+			Read: f.Grant("report"), State: wire.ProposalApplied, ClientReported: true,
+			Receipt: &wire.Receipt{Summary: "Applied to Brand › Set up"},
+			Card:    cardAt(first, wire.ProposalApplied), Page: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := f.Follow(accepted.TurnID, resumed.AfterSeq)
+		if done := evals.Last(after, wire.EventDone); done == nil ||
+			done.Done.State != wire.TurnWaitingForApproval {
+			t.Fatalf("carried=%v: the resumed turn ended %+v, want parked on the second change "+
+				"(steps %+v)", carried, done, steps(after))
+		}
+		if proposals := f.Store.Proposals(); len(proposals) != 2 {
+			t.Fatalf("carried=%v: %d proposals, want the second change proposed", carried,
+				len(proposals))
+		}
+		answer, ok := lastToolAnswer(f, "c1")
+		if !ok {
+			t.Fatal("the model never read the first change's result")
+		}
+		shown := strings.Contains(answer.Content, "screen now") &&
+			strings.Contains(answer.Content, "brand-setup@2")
+		if shown != carried {
+			t.Fatalf("carried=%v: the model read the screen after the decision: %v\n%s",
+				carried, shown, answer.Content)
+		}
+		if carried && !strings.Contains(answer.Content[strings.Index(answer.Content, "screen now"):],
+			"source=page_context") {
+			t.Fatalf("the screen after the decision is not fenced as the page's:\n%s", answer.Content)
+		}
+	}
+}
+
+// A TURN ASKED WITHOUT A PAGE NEVER GAINS ONE FROM A DECISION: the person
+// removed the chip from the question, so the screen the approval was clicked
+// on stays out of the turn. Mutation: admit the decision's page whatever the
+// turn was asked with and the model reads a screen nobody attached.
+func TestADecisionNeverAttachesAPageTheQuestionLeftOut(t *testing.T) {
+	t.Parallel()
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Tools:   []catalog.Tool{getTask(t), assistanttest.Tool(t, "create_task")},
+		Handler: task, Acts: []string{"create_work_item"},
+		Rounds: []evals.Round{
+			evals.Call("c1", "create_task", map[string]any{"title": "Write the brief"}),
+			evals.Say("Done.")}})
+	accepted, err := f.Ask("nopage", "Add a task to write the brief", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Follow(accepted.TurnID, 0)
+	p := f.Store.Proposals()[0]
+	ctx := iam.WithPrincipal(context.Background(), f.Person)
+	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
+		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
+		Read: f.Grant("approve"), State: wire.ProposalApplied,
+		Receipt: &wire.Receipt{Summary: "Created ENG-8."}, Card: cardAt(p, wire.ProposalApplied),
+		Page: draftPage()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Follow(accepted.TurnID, resumed.AfterSeq)
+	if prompts := f.Model.Prompts(); strings.Contains(prompts, "brand-setup") {
+		t.Fatalf("a decision attached a screen the question left out:\n%s", prompts)
 	}
 }

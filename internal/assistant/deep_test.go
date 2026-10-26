@@ -537,3 +537,58 @@ func TestTheBrandRedesignDeliversAssetsAndProposesThemIntoTheDraft(t *testing.T)
 		t.Fatalf("the logo was proposed as %+v", proposals)
 	}
 }
+
+// A CONTINUED RUN WORKS ON THE SCREEN AS THE DECISION LEFT IT: a run that
+// proposed a draft change is continued after the person applied it, told the
+// screen as it is now, and its next draft change is proposed through the
+// bridge, not refused as an action the screen does not accept. Mutation:
+// resume the turn with no page and the run's second change is refused.
+func TestAContinuedRunWorksOnTheScreenAsTheDecisionLeftIt(t *testing.T) {
+	t.Parallel()
+	set := func(id, path, value string) llm.ToolCall {
+		return llm.ToolCall{ID: id, Name: "propose_page_change", Arguments: map[string]any{
+			"action": catalog.DraftSet, "args": map[string]any{"values": map[string]any{path: value}}}}
+	}
+	script := evals.NewDeepScript(
+		evals.DeepRunScript{Calls: []llm.ToolCall{set("p1", "voice.summary", "Plain and warm.")},
+			Report: "Proposed the voice."},
+		evals.DeepRunScript{Calls: []llm.ToolCall{set("p2", "name", "FairSplit")},
+			Report: "Proposed the name."})
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Company: deepCompany(t), Deep: script,
+		Tools:  []catalog.Tool{assistanttest.Tool(t, "propose_page_change")},
+		Rounds: []evals.Round{startDeep("Redesign my brand"), evals.Say("Done.")}})
+	page := draftPage()
+	page.Draft.Fields[3].Editable = true
+	accepted, err := f.Ask("brand", "Redesign my brand from the draft", page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Follow(accepted.TurnID, 0)
+	first := f.Store.Proposals()[0]
+	now := draftPage()
+	now.Draft.Fields[3].Editable = true
+	now.SourceRevision = "brand-setup@2"
+	ctx := iam.WithPrincipal(context.Background(), f.Person)
+	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
+		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: first.ID,
+		Read: f.Grant("report"), State: wire.ProposalApplied, ClientReported: true,
+		Receipt: &wire.Receipt{Summary: "Applied to Brand › Set up"},
+		Card:    cardAt(first, wire.ProposalApplied), Page: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := f.Follow(accepted.TurnID, resumed.AfterSeq)
+	if done := evals.Last(after, wire.EventDone); done == nil ||
+		done.Done.State != wire.TurnWaitingForApproval {
+		t.Fatalf("the continued run's turn ended %+v, want parked on its second change", done)
+	}
+	if n := len(f.Store.Proposals()); n != 2 {
+		t.Fatalf("%d proposals, want the continued run's second change proposed", n)
+	}
+	runs := script.Runs()
+	if len(runs) != 2 || !strings.Contains(runs[1].Brief, "screen now") ||
+		!strings.Contains(runs[1].Brief, "brand-setup@2") {
+		t.Fatalf("the continued run was not told the screen as it is now: %+v", runs)
+	}
+}

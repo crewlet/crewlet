@@ -31,6 +31,7 @@ import {
   type AssistantFileRef,
   type AssistantProposalAnswer,
   type AssistantProposalCard,
+  type AssistantProposalDecision,
 } from "~/contract/assistant.ts";
 import { SESSION_QUERIES } from "~/contract/domains.ts";
 import {
@@ -48,7 +49,7 @@ import { session as floors, type SessionDomain } from "~/protocol/session.ts";
 import { writeFailed } from "~/protocol/writeOutcome.ts";
 import { setAssistantActivity } from "../status.ts";
 import { writeTab } from "../tab.ts";
-import { undoPageAction, type PageSnapshot } from "../context.ts";
+import { pageSnapshot, undoPageAction, type PageSnapshot } from "../context.ts";
 import { takeAction } from "./pageActions.ts";
 import {
   EMPTY,
@@ -540,11 +541,10 @@ export async function approve(proposal: AssistantProposalCard): Promise<void> {
   const opKey = decisionKey(approvals, id);
   dispatch({ type: "approve", proposalId: id });
   try {
-    const answer = await call(
-      "POST /assistant/proposals/{id}/approve",
-      { ...versioned, digest: proposal.digest },
-      { id, opKey },
-    );
+    const answer = await call("POST /assistant/proposals/{id}/approve", decisionBody(proposal), {
+      id,
+      opKey,
+    });
     decided(proposal, answer);
   } catch (err) {
     if (isAbort(err)) return;
@@ -552,16 +552,29 @@ export async function approve(proposal: AssistantProposalCard): Promise<void> {
   }
 }
 
+/**
+ * A decision's body: the digest the card showed, and the screen the person
+ * decided from as it is now, which the turn the decision resumes runs on (the
+ * engine keeps a turn asked without a page without one).
+ */
+function decisionBody(proposal: AssistantProposalCard): AssistantProposalDecision {
+  const screen = pageSnapshot();
+  return {
+    ...versioned,
+    digest: proposal.digest,
+    ...(screen === null ? {} : { page_context: screen.context }),
+  };
+}
+
 /** Decline a change; nothing is changed, and the turn hears that it was declined. */
 export async function decline(proposal: AssistantProposalCard): Promise<void> {
   const id = proposal.proposal_id;
   const opKey = decisionKey(declines, id);
   try {
-    const answer = await call(
-      "POST /assistant/proposals/{id}/decline",
-      { ...versioned, digest: proposal.digest },
-      { id, opKey },
-    );
+    const answer = await call("POST /assistant/proposals/{id}/decline", decisionBody(proposal), {
+      id,
+      opKey,
+    });
     decided(proposal, answer);
   } catch (err) {
     if (isAbort(err)) return;

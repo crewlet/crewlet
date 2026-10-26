@@ -102,7 +102,7 @@ func (a *Approver) settle(ctx context.Context, d decider, p assistantdomain.Prop
 		at := a.emit(ctx, d.person.ID, p, Emission{Card: &card})
 		return answer(p, wire.ProposalUnknown, at), nil
 	}
-	at := a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,
+	at := a.resume(ctx, Resumption{Owner: d.person.ID, Page: d.page, Conversation: p.Conversation,
 		Turn: p.Turn, Proposal: p.ID, Read: read, State: out.state,
 		Receipt: out.receipt, Failure: out.failure, Answer: out.answer, Card: card,
 		Invalidate: out.invalidate})

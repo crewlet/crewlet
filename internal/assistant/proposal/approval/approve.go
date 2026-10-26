@@ -26,6 +26,9 @@ type Approval struct {
 	// Key is the approving request's operation: its Idempotency-Key as
 	// internal/api/opkey scoped it to the person.
 	Key string
+	// Page is the screen the person decided from, as the request carried
+	// it, or nil: what the resumed turn reads the screen as now.
+	Page *wire.PageContext
 }
 
 // decider is one decision's caller: the person, as every record they write
@@ -35,6 +38,9 @@ type decider struct {
 	by     iam.Actor
 	key    string
 	step   func(string, ...string) string
+	// page is the screen the decision was made from, handed to the turn
+	// it resumes; nil when the request carried none.
+	page *wire.PageContext
 }
 
 // call is the record caller for one step of the decision.
@@ -43,7 +49,7 @@ func (d decider) call(step string) assistantdomain.Call {
 }
 
 // deciderOf is the person the request resolved, and nobody else.
-func (a *Approver) deciderOf(ctx context.Context, key string) (decider, error) {
+func (a *Approver) deciderOf(ctx context.Context, key string, page *wire.PageContext) (decider, error) {
 	p, how := iam.From(ctx)
 	if how != iam.Resolved || p.Kind != iam.KindPerson || p.ID == uuid.Nil {
 		return decider{}, ErrNotAPerson
@@ -57,7 +63,7 @@ func (a *Approver) deciderOf(ctx context.Context, key string) (decider, error) {
 	if key == "" {
 		return decider{}, fmt.Errorf("%w: a decision names its operation", ErrUnavailable)
 	}
-	return decider{person: p, by: iam.ActorFor(p), key: key, step: a.d.StepOp}, nil
+	return decider{person: p, by: iam.ActorFor(p), key: key, step: a.d.StepOp, page: page}, nil
 }
 
 // load is one of the owner's proposals.
@@ -101,7 +107,7 @@ func (a *Approver) move(ctx context.Context, c assistantdomain.Call, id uuid.UUI
 // unknown for a server write (sent within this request), approved for a page
 // action (sent to the page), and where the resumed turn streams from.
 func (a *Approver) Approve(ctx context.Context, ap Approval) (wire.ProposalAnswer, error) {
-	d, err := a.deciderOf(ctx, ap.Key)
+	d, err := a.deciderOf(ctx, ap.Key, ap.Page)
 	if err != nil {
 		return wire.ProposalAnswer{}, err
 	}
@@ -283,7 +289,7 @@ func (a *Approver) stale(ctx context.Context, d decider, p assistantdomain.Propo
 	}
 	failure := &wire.Failure{Refusal: wire.Refusal{Code: CodeStale,
 		Message: "The record changed after this was proposed, so nothing was sent."}}
-	a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation, Turn: p.Turn,
+	a.resume(ctx, Resumption{Owner: d.person.ID, Page: d.page, Conversation: p.Conversation, Turn: p.Turn,
 		Proposal: p.ID, Read: read, State: wire.ProposalStale, Failure: failure,
 		Card: proposal.CardAt(p, wire.ProposalStale, nil, failure)})
 	return wire.ProposalAnswer{}, ErrStale
@@ -314,7 +320,7 @@ func (a *Approver) withdrawn(ctx context.Context, d decider, p assistantdomain.P
 		log.InfoContext(ctx, "assistant_withdrawn_not_told", "proposal", p.ID, "error", err)
 		return answer(p, wire.ProposalFailed, wire.TurnAccepted{TurnID: p.Turn}), nil
 	}
-	at := a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,
+	at := a.resume(ctx, Resumption{Owner: d.person.ID, Page: d.page, Conversation: p.Conversation,
 		Turn: p.Turn, Proposal: p.ID, Read: read, State: wire.ProposalFailed, Failure: failure,
 		Card: proposal.CardAt(p, wire.ProposalFailed, nil, failure)})
 	return answer(p, wire.ProposalFailed, at), nil

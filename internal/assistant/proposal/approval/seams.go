@@ -88,6 +88,11 @@ type Resumption struct {
 	// Card is the proposal card at its state now, for the stream.
 	Card wire.Card
 
+	// Page is the screen the decision was made from, as the deciding
+	// request carried it: the actions it accepts and its draft as they are
+	// after the decision. Nil when the request carried none.
+	Page *wire.PageContext
+
 	// Invalidate is where a server write landed, for the
 	// `context.invalidate` action the open screens raise their read floor
 	// by; nil where nothing landed.

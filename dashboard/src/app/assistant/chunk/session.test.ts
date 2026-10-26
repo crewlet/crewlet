@@ -107,3 +107,34 @@ test("a stale approval reads the turn again, which the engine resumed with that 
   expect(streams).toHaveLength(2);
   expect(streams[1]!.url).toBe("/assistant/conversations/c1/stream?turn=t1");
 });
+
+test("an approval carries the screen it was made from, which the resumed turn runs on", async () => {
+  const { setFramePage, resetPageContextForTest } = await import("../context.ts");
+  setFramePage({
+    screen: "brand-setup",
+    title: "Brand › Set up",
+    path: ["brand", "setup"],
+    params: {},
+    query: {},
+  });
+  try {
+    await approve(proposal);
+    const sent = call.mock.calls.find(
+      ([route]) => route === "POST /assistant/proposals/{id}/approve",
+    );
+    expect(sent?.[1]).toMatchObject({
+      digest: proposal.digest,
+      page_context: { screen: "brand-setup" },
+    });
+  } finally {
+    resetPageContextForTest();
+  }
+});
+
+test("with no screen published, an approval carries none", async () => {
+  await approve(proposal);
+  const sent = call.mock.calls.find(
+    ([route]) => route === "POST /assistant/proposals/{id}/approve",
+  );
+  expect(sent?.[1]).not.toHaveProperty("page_context");
+});

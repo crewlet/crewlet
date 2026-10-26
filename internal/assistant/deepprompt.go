@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -73,12 +72,9 @@ func deepBrief(goal, plan string, attachments []StoredFile, page *wire.PageConte
 	b provenance.Boundary) string {
 	var out strings.Builder
 	out.WriteString("Goal: " + goal)
-	if page != nil {
-		if raw, err := json.Marshal(page); err == nil {
-			out.WriteString("\n\nThe person asked from this screen of the dashboard, " +
-				"described by the screen itself:\n" + provenance.Fence(b,
-				provenance.SourcePageContext, provenance.TrustColleague, nil, string(raw)))
-		}
+	if fenced := pageFence(b, page); fenced != "" {
+		out.WriteString("\n\nThe person asked from this screen of the dashboard, " +
+			"described by the screen itself:\n" + fenced)
 	}
 	if plan != "" {
 		out.WriteString("\n\nPlan (change it where the work shows a better one):\n" + plan)

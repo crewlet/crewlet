@@ -244,19 +244,41 @@ func questionBlock(in promptInput) string {
 	if block := attachmentsBlock(in.Attachments, in.Deep); block != "" {
 		question = block + "\n\n" + question
 	}
-	if in.Page == nil {
+	fenced := pageFence(in.Boundary, in.Page)
+	if fenced == "" {
 		return question
 	}
-	raw, err := json.Marshal(in.Page)
-	if err != nil {
-		// A page context that validated always encodes; one that did not
-		// is left out rather than described.
-		return question
-	}
-	fenced := provenance.Fence(in.Boundary, provenance.SourcePageContext,
-		provenance.TrustColleague, nil, string(raw))
 	return "The person is looking at this screen of the dashboard, described by the " +
 		"screen itself:\n" + fenced + "\n\nTheir question:\n" + question
+}
+
+// pageFence is a page context as every reader of it sees it, the turn's model
+// and a deep-work run alike: the screen's own description, fenced as the
+// page's. Empty for no page, and for one that does not encode, which a page
+// context that validated always does.
+func pageFence(b provenance.Boundary, p *wire.PageContext) string {
+	if p == nil {
+		return ""
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return provenance.Fence(b, provenance.SourcePageContext, provenance.TrustColleague, nil,
+		string(raw))
+}
+
+// admitPage is the one admission of a page context a request carried, a
+// question's or a decision's: validated, then passed through the engine's
+// secret pass. Nil admits as nil, the person having removed the chip.
+func admitPage(p *wire.PageContext) (*wire.PageContext, error) {
+	if p == nil {
+		return nil, nil
+	}
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	return redactedPage(p), nil
 }
 
 // cardSummary is one card as one line of the conversation the model re-reads:

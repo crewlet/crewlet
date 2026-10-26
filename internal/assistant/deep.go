@@ -193,6 +193,11 @@ func (t *turn) continueDeep(ctx context.Context, keep parkedDeep, decision strin
 	brief := "The person decided on the change you proposed. " + decision + "\n\n" +
 		"Continue the task from where you stopped. If nothing is left to do, end with " +
 		"your report."
+	if t.page != nil {
+		// THE SCREEN AS IT IS NOW, since a change the person applied may
+		// have moved the draft the run read when it started.
+		brief += "\n\n" + screenNow(t.boundary, t.page)
+	}
 	var cont *DeepBox
 	if box.Sandbox != "" {
 		cont = &box
@@ -301,7 +306,25 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 	run.end(state, stepState, summary, reason)
 	t.tainted(catalog.Tool{Fence: true, Source: provenance.SourceDeepWork}, provenance.TrustExternal)
 	return toolloop.ToolResult{Output: deepAnswer(t.boundary, outcome, files, notes),
-		Failed: state != wire.DeepFinished}, nil
+		Failed: state != wire.DeepFinished, Cause: deepCause(outcome)}, nil
+}
+
+// deepCause is the class of a run that did not finish, so a surface that is
+// not a model can act on it; nil for a run that finished. A run held to its
+// token cap spent what it may, and one past its clock or ended early is a
+// condition of the run, which asking again on a fresh grant may clear.
+func deepCause(o DeepOutcome) error {
+	switch o.End {
+	case DeepEndFinished:
+		return nil
+	case DeepEndTokens:
+		return mcp.Classify(mcp.RefusalBudgetExhausted,
+			errors.New("assistant: the deep-work run reached its token limit"))
+	case DeepEndTimeout:
+		return mcp.Classify(mcp.RefusalUnavailable, errDeepTimeout)
+	}
+	return mcp.Classify(mcp.RefusalUnavailable, errors.New("assistant: the deep-work run "+
+		"ended before it finished: "+redact.Secrets(o.Reason)))
 }
 
 // deepRefused ends a run's step before any run started, and answers the model
@@ -749,11 +772,15 @@ func (t *turn) answerParkedDeep(ctx context.Context, r *loopRun) (*toolloop.Resu
 			"resumed deep-work segment carries no answer to the call it parked on")
 	}
 	call := r.messages[n-1]
+	decision := r.decision
+	if decision == "" {
+		decision = call.Content
+	}
 	// THE DECISION JOINS THE TASK'S RECORDS before the run continues, so a
 	// run that parks again keeps it, and the task's end carries every one.
 	keep := *r.deep
-	keep.Decisions = append(slices.Clone(keep.Decisions), call.Content)
-	res, err := t.continueDeep(ctx, keep, call.Content)
+	keep.Decisions = append(slices.Clone(keep.Decisions), decision)
+	res, err := t.continueDeep(ctx, keep, decision)
 	before := slices.Clone(r.messages[:n-1])
 	switch {
 	case err != nil:
@@ -762,7 +789,8 @@ func (t *turn) answerParkedDeep(ctx context.Context, r *loopRun) (*toolloop.Resu
 		return &toolloop.Result{Messages: before, Suspended: true,
 			PendingToolCallID: call.ToolCallID, PendingToolName: call.Name}, true, nil
 	}
-	r.messages[n-1].Content, r.messages[n-1].Failed = withDecisions(res.Output, keep.Decisions), res.Failed
+	r.messages[n-1].Content = joinBlocks(withDecisions(res.Output, keep.Decisions), r.screen)
+	r.messages[n-1].Failed = res.Failed
 	return nil, false, nil
 }
 

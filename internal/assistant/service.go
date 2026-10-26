@@ -325,13 +325,12 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		return wire.TurnAccepted{}, errors.New("assistant: a turn needs the read grant " +
 			"derived from the request that asked it")
 	}
-	if ts.Page != nil {
-		if err := ts.Page.Validate(); err != nil {
-			return wire.TurnAccepted{}, invalid("page_context: %v", err)
-		}
+	page, err := admitPage(ts.Page)
+	if err != nil {
+		return wire.TurnAccepted{}, invalid("page_context: %v", err)
 	}
 	input = redact.Secrets(input)
-	ts.Page = redactedPage(ts.Page)
+	ts.Page = page
 	attached, attachErr := s.attachmentsOf(ctx, ts)
 	if attachErr != nil {
 		return wire.TurnAccepted{}, attachErr

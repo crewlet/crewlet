@@ -31,9 +31,10 @@ const (
 )
 
 // DecisionBodyMax bounds a decision's body: a version, a digest, a short
-// report or an audit reason, each a few hundred bytes, with room for a client
-// that pretty-prints.
-const DecisionBodyMax = 16 << 10
+// report or an audit reason, each a few hundred bytes, and the page context
+// the screen sends with them, at most [wire.PageContextMaxBytes], with room
+// for a client that pretty-prints.
+const DecisionBodyMax = wire.PageContextMaxBytes + 16<<10
 
 // DecisionsDeps is what the decision routes are built from.
 type DecisionsDeps struct {
@@ -127,7 +128,7 @@ func (s *Decisions) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	answer, err := s.approver.Approve(r.Context(), approval.Approval{Proposal: id,
-		Digest: body.Digest, Key: key})
+		Digest: body.Digest, Key: key, Page: body.PageContext})
 	if err != nil {
 		s.refuse(w, r, key, err)
 		return
@@ -156,8 +157,26 @@ func (s *Decisions) decision(w http.ResponseWriter, r *http.Request) (uuid.UUID,
 				wire.DigestPrefix + " and 64 lowercase hex digits"})
 		return uuid.Nil, wire.ProposalDecision{}, "", false
 	}
+	if !pageValid(w, body.PageContext) {
+		return uuid.Nil, wire.ProposalDecision{}, "", false
+	}
 	key, ok := opkey.Require(w, r)
 	return id, body, key, ok
+}
+
+// pageValid refuses a decision or report whose page context the screen's
+// own rules refuse, before anything is decided: the turn it resumes would
+// otherwise run on a screen nobody can describe. Nil is valid.
+func pageValid(w http.ResponseWriter, page *wire.PageContext) bool {
+	if page == nil {
+		return true
+	}
+	if err := page.Validate(); err != nil {
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			httpjson.Detail{"detail": "page_context: " + err.Error()})
+		return false
+	}
+	return true
 }
 
 // refuse answers a decision's error in the engine's envelope: the one mapping

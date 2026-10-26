@@ -17,7 +17,7 @@ import (
 // must be the card's, as for an approval: a decline of something the person
 // was not shown is refused rather than recorded.
 func (a *Approver) Decline(ctx context.Context, ap Approval) (wire.ProposalAnswer, error) {
-	d, err := a.deciderOf(ctx, ap.Key)
+	d, err := a.deciderOf(ctx, ap.Key, ap.Page)
 	if err != nil {
 		return wire.ProposalAnswer{}, err
 	}
@@ -54,7 +54,7 @@ func (a *Approver) Decline(ctx context.Context, ap Approval) (wire.ProposalAnswe
 		log.InfoContext(ctx, "assistant_decline_not_resumed", "proposal", p.ID, "error", err)
 		return answer(p, wire.ProposalDeclined, wire.TurnAccepted{TurnID: p.Turn}), nil
 	}
-	at := a.resume(ctx, Resumption{Owner: d.person.ID, Conversation: p.Conversation,
+	at := a.resume(ctx, Resumption{Owner: d.person.ID, Page: d.page, Conversation: p.Conversation,
 		Turn: p.Turn, Proposal: p.ID, Read: read, State: wire.ProposalDeclined,
 		Card: proposal.CardAt(p, wire.ProposalDeclined, nil, nil)})
 	return answer(p, wire.ProposalDeclined, at), nil

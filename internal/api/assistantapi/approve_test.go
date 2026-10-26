@@ -158,6 +158,43 @@ func TestAnApprovalAnswersWhereTheTurnResumes(t *testing.T) {
 	}
 }
 
+// A DECISION HANDS ITS SCREEN TO THE TURN IT RESUMES, and one whose screen the
+// screen's own rules refuse is refused before anything is decided: the turn it
+// resumes would otherwise run on a screen nobody can describe. Mutation: drop
+// the page from the approval and the resumed turn reads no screen; drop the
+// check and an invalid screen is approved.
+func TestADecisionHandsItsScreenToTheTurnItResumes(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	page := &wire.PageContext{Screen: "brand-setup", Title: "Brand › Set up",
+		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
+		SourceRevision: "brand-setup@2", Accepts: []string{"draft.set"}}
+
+	bad := s.fleet.Propose(t, ada, nil)
+	invalid := decide(bad.Digest)
+	invalid.PageContext = &wire.PageContext{Screen: "Not A Screen"}
+	if status, body := s.send(t, ada, http.MethodPost, approvePath(bad), invalid, nil); status !=
+		http.StatusBadRequest || body["error"] != "invalid_body" {
+		t.Fatalf("an invalid screen answered %d %v, want 400 invalid_body", status, body)
+	}
+	if n := len(s.fleet.Turns.Resumed()); n != 0 {
+		t.Fatalf("an approval with an invalid screen resumed %d turns", n)
+	}
+
+	p := s.fleet.Propose(t, ada, nil)
+	body := decide(p.Digest)
+	body.PageContext = page
+	if status, answer := s.send(t, ada, http.MethodPost, approvePath(p), body, nil); status !=
+		http.StatusAccepted {
+		t.Fatalf("approve answered %d %v", status, answer)
+	}
+	resumed := s.fleet.Turns.Resumed()
+	if len(resumed) != 1 || resumed[0].Page == nil || resumed[0].Page.SourceRevision != "brand-setup@2" {
+		t.Fatalf("the resumed turn was handed %+v, want the screen the approval carried", resumed)
+	}
+}
+
 // EVERY DECISION REFUSES IN THE ENGINE'S ENVELOPE, each refusal its own code
 // and status, so the card renders the right state and offers the right next
 // step. Mutation: map any sentinel to another code and its row fails.

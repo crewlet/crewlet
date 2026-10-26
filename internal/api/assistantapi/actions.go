@@ -37,6 +37,9 @@ func (s *Decisions) report(w http.ResponseWriter, r *http.Request) {
 				"one short line"})
 		return
 	}
+	if !pageValid(w, body.PageContext) {
+		return
+	}
 	key, ok := opkey.Key(w, r, time.Now())
 	if !ok {
 		return

@@ -138,7 +138,8 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
 	}
-	t := s.newTurn(person, r.Conversation, r.Turn, "", r.Read, nil, acts)
+	page, fresh := s.resumedPage(ctx, keep, r)
+	t := s.newTurn(person, r.Conversation, r.Turn, "", r.Read, page, acts)
 	t.derived = &Derivation{At: row.StartedAt, Name: "assistant_resume",
 		Identity: []string{r.Turn.String(), r.Proposal.String()}}
 	if provenance.Boundary(keep.Boundary).Valid() {
@@ -153,8 +154,12 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		t.anchor = anchor
 	}
 	t.used(keep.Apps)
+	decision, screen := resultOf(r, t.boundary), ""
+	if fresh {
+		screen = screenNow(t.boundary, page)
+	}
 	messages := slices.Concat(keep.Messages, []llm.Message{{Role: llm.RoleTool, Name: keep.PendingTool,
-		ToolCallID: keep.PendingCall, Content: resultOf(r, t.boundary),
+		ToolCallID: keep.PendingCall, Content: joinBlocks(decision, screen),
 		Failed: r.State != wire.ProposalApplied}})
 
 	after := s.openStream(t, transcript.Conversation, true, floor)
@@ -178,9 +183,46 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	go t.run(loopRun{ //nolint:contextcheck // the turn's own lifetime (t.ctx, under the service's base), never the request's: a turn outlives the POST that started it
 		messages: messages, provider: provider, key: key, meter: meter,
 		tools: s.withDeep(ctx, s.catalogue.Offered(person, acts)), steps: assistantCfg.Steps(),
-		timeout: assistantCfg.TurnTimeout(), deep: keep.Deep})
+		timeout: assistantCfg.TurnTimeout(), deep: keep.Deep, decision: decision, screen: screen})
 	return wire.TurnAccepted{TurnID: r.Turn, StreamURL: StreamPath(r.Conversation, r.Turn),
 		AfterSeq: after}, nil
+}
+
+// resumedPage is the screen a resumed segment runs on: the one the decision
+// was made from, as it is after the decision, admitted exactly as a
+// question's is; else the one the segment parked on. A turn resumed with no
+// page would offer no page action and read no draft, though the person's
+// screen accepted one moments before. fresh says the decision carried it,
+// so the model is shown the screen again.
+//
+// A TURN ASKED WITHOUT A PAGE NEVER GAINS ONE: the person removed the chip
+// from that question, and a decision made from whatever screen they are on
+// later is not their consent to show it.
+func (s *Service) resumedPage(ctx context.Context, keep parked, r approval.Resumption) (*wire.PageContext, bool) {
+	if r.Page == nil || keep.Page == nil {
+		return keep.Page, false
+	}
+	page, err := admitPage(r.Page)
+	if err != nil {
+		// The route refused an invalid one before deciding; a page that
+		// fails here is the parked one's to stand in for.
+		s.log.WarnContext(ctx, "assistant_resume_page_refused", "turn", r.Turn,
+			"error", redact.Secrets(err.Error()))
+		return keep.Page, false
+	}
+	return page, page != nil
+}
+
+// joinBlocks is the non-empty blocks of a tool's answer, a blank line apart.
+func joinBlocks(blocks ...string) string {
+	return strings.Join(slices.DeleteFunc(blocks, func(b string) bool { return b == "" }), "\n\n")
+}
+
+// screenNow is the screen a decision was made from, as the resumed model
+// reads it after the decision's result.
+func screenNow(b provenance.Boundary, page *wire.PageContext) string {
+	return "The person's screen now, after this decision, described by the screen " +
+		"itself (it replaces any earlier description of the screen):\n" + pageFence(b, page)
 }
 
 // resultOf is the answer to the call a turn suspended on, as its model reads
