@@ -2325,6 +2325,7 @@ expect:
   state: completed                # how the turn ends
   says: [ada]                     # text the answer contains, ignoring case
   never_says: ["http"]            # text it must not contain, ignoring case
+  shows: [Spend by agent]         # text the turn's cards carry, ignoring case
 ```
 
 A case is read by the configuration's own strict reader: a member this build does
@@ -2338,7 +2339,10 @@ engine's error envelope, as a route answers a record that is not there. Every
 `expect` field is optional, and a case with none is refused: a case that
 cannot fail measures nothing. A write the model calls is never sent: it
 becomes a proposal, as it does in the dashboard, which is what `proposals`
-counts.
+counts. `shows` reads the cards the turn drew (a table's title and cells, a
+proposal's rows and note), so a case can hold what the person was shown, not
+only what the answer said: the place a page is proposed in, or the reason a
+read card gives.
 
 ---
 

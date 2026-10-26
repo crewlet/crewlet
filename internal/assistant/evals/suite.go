@@ -75,12 +75,17 @@ type Expect struct {
 	// ignoring case.
 	Says      []string `yaml:"says"`
 	NeverSays []string `yaml:"never_says"`
+	// Shows is text the turn's cards carry, ignoring case: a table's title,
+	// columns and cells, an entity's facts, a proposal's rows and note. What
+	// the person was shown, and what the model read of it, which the answer's
+	// own words cannot stand for.
+	Shows []string `yaml:"shows"`
 }
 
 // empty reports whether e expects nothing.
 func (e Expect) empty() bool {
 	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.State == "" &&
-		len(e.Says) == 0 && len(e.NeverSays) == 0
+		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0
 }
 
 // LoadSuite reads every `*.yaml` case in dir, in name order, each checked.
