@@ -276,8 +276,8 @@ func Deliverable(base string, enterprise bool) bool {
 		if ip.IsLoopback() || ip.IsUnspecified() {
 			return false
 		}
-		return enterprise || !(ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-			ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast())
+		return enterprise || (!ip.IsPrivate() && !ip.IsLinkLocalUnicast() &&
+			!ip.IsLinkLocalMulticast() && !ip.IsInterfaceLocalMulticast())
 	}
 	if enterprise {
 		return true
