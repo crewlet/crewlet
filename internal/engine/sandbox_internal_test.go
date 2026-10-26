@@ -459,8 +459,10 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 // It fails in the direction that is hardest to see — the config says yes and
 // the runtime says no — and only for a company that actually runs code, so a
 // boot proves nothing. Hence a test that walks the set.
+//
+// NOT PARALLEL: it puts a stub container runtime first on PATH, and t.Setenv
+// refuses a parallel test.
 func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
-	t.Parallel()
 	// EXACTLY ONE CELL IS EXEMPT, and it is exempt because it is not a
 	// backend: `self` is the executor's own agent-mode run, so nothing
 	// builds a provider for it. Asserted rather than assumed, so a fifth
@@ -470,6 +472,17 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 			t.Fatalf("%q disagrees with itself about needing a backend", p)
 		}
 	}
+	// A STUB `docker`, FIRST ON PATH. Building the `container` cell looks
+	// its runtime up there ([sandbox.ResolveContainerRuntime]) — on
+	// purpose, so a host that cannot run the cell is told when the config
+	// is applied rather than at the first coding run. Left to the host's
+	// PATH, this case failed on every machine with neither docker nor
+	// podman (a contributor's workstation, a runner with no container CLI)
+	// and passed wherever one was installed, so its verdict was about the
+	// machine; a skip there would leave the property unchecked on exactly
+	// those machines. The stub is only found, never run: building a
+	// provider starts no container.
+	stubVendorCLI(t, "docker")
 	for _, placement := range config.BackendPlacements() {
 		spec := &config.SandboxProvider{
 			// The one backend with a required credential of its own: the
@@ -479,7 +492,10 @@ func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 			E2B: &config.E2BSandbox{APIKey: "e2b_test_key"},
 			// An image, because one of the two local cells needs it and
 			// a backend that cannot be built for `container` is exactly
-			// what this test exists to catch.
+			// what this test exists to catch. That cell needs a runtime
+			// on PATH as well, which the stub above stands in for, so a
+			// failure here means the engine cannot build the cell, never
+			// that this machine has no docker.
 			Local: &config.LocalSandbox{Image: "example.invalid/box:1"},
 		}
 		if !spec.Configured(placement) {
