@@ -28,7 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -366,11 +366,11 @@ type runEnv struct {
 func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	gate *org.RoleSandbox, defaults []sandbox.SetupStep) runEnv {
 
-	resolver := e.resolver()
-	setup := slices.Clone(defaults)
-	if gate != nil {
-		setup = append(setup, seatSetupSteps(gate.Setup)...)
-	}
+	// THE SEAT'S OWN RESOLUTION, so its GitHub App token is answered here
+	// and nowhere else, issued good for [github.RunTokenLife]: a run's
+	// environment is fixed when its box starts. See githubtoken.go.
+	resolver, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
+	setup := boxSetup(defaults, gate)
 
 	// THE LAYERS, each value with what declared it.
 	type layered struct {
@@ -398,12 +398,12 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		}
 	}
 
-	var minted map[string]integration.Kind
+	var mint *seatMint
 	if c != nil {
-		minted = e.mintedFor(c, seat.Handle())
+		mint = &seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token}
 	}
-	gap := refGap{env: resolver, minted: minted}
-	facts := refGap{env: resolver, minted: minted}
+	gap := refGap{env: resolver, mint: mint}
+	facts := refGap{env: resolver, mint: mint}
 	out := runEnv{env: make(map[string]string, len(merged))}
 	for _, key := range slices.Sorted(maps.Keys(merged)) {
 		l := merged[key]
@@ -457,6 +457,19 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	states := e.mintingStates(ctx, held)
 	out.gap, out.facts = out.gap.judged(states), out.facts.judged(states)
 	return out
+}
+
+// boxSetup is the setup steps one seat's box is provisioned with: the
+// provider-wide ones, then the seat's own. ONE COMPOSITION for the launch and
+// for the poll that keeps a running box's issued credentials current
+// ([Engine.refreshRunTokens]), so the files one provisions are the files the
+// other keeps.
+func boxSetup(defaults []sandbox.SetupStep, gate *org.RoleSandbox) []sandbox.SetupStep {
+	setup := slices.Clone(defaults)
+	if gate != nil {
+		setup = append(setup, seatSetupSteps(gate.Setup)...)
+	}
+	return setup
 }
 
 // stepOptionalKeys is where a setup step's optional keys are declared, for a
@@ -1634,11 +1647,12 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 // agent would spend a round finding that out — the reason [sandbox.RenderMCP]
 // skips a server it cannot render. It used to be offered with a warning that
 // it "will not authenticate". What was withheld comes back beside the
-// servers, for the caller to judge and say ([Engine.boxServers]); minted is
-// what the seat's provisioning passes mint ([Engine.mintedFor]).
+// servers, for the caller to judge and say ([Engine.boxServers]); env is the
+// seat's own resolution ([Engine.seatResolver]) and mint what is minted or
+// issued for the seat ([seatMint]).
 func sandboxMCP(
 	env *config.Resolver, c *Company, seat *org.Role, gate *org.RoleSandbox,
-	minted map[string]integration.Kind,
+	mint *seatMint,
 ) (map[string]sandbox.MCPServer, []*credentialMissing) {
 	if len(gate.MCP.Servers) == 0 {
 		return nil, nil
@@ -1665,7 +1679,7 @@ func sandboxMCP(
 			scoped = append(scoped, name)
 			continue
 		}
-		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, minted)
+		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)
 		if missing != nil {
 			withheld = append(withheld, missing)
 			continue
@@ -1698,7 +1712,11 @@ func sandboxMCP(
 func (e *Engine) boxServers(
 	ctx context.Context, c *Company, seat *org.Role, gate *org.RoleSandbox,
 ) map[string]sandbox.MCPServer {
-	servers, withheld := sandboxMCP(e.resolver(), c, seat, gate, e.mintedFor(c, seat.Handle()))
+	// THE SAME TOKEN LIFE AS THE RUN'S OWN ENVIRONMENT: a server rendered
+	// into the box is started there once, with whatever it is handed now.
+	env, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
+	servers, withheld := sandboxMCP(env, c, seat, gate,
+		&seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token})
 	states := e.mintingStates(ctx, withheld)
 	for _, missing := range withheld {
 		missing = missing.judged(states)
@@ -1706,8 +1724,8 @@ func (e *Engine) boxServers(
 		if missing.waiting() {
 			log.InfoContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
 				"detail", "the coding agent is not given this server for this run: "+
-					missing.reason()+"; a coding run launched once the seal reaches "+
-					"this node is given it")...)
+					missing.reason()+"; a coding run launched once "+missing.arrival()+
+					" is given it")...)
 			continue
 		}
 		log.WarnContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
@@ -2029,6 +2047,9 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 		// authorises: a poll outlives the pass that started it, and must
 		// not outlive the duty, past which a peer may poll the same box.
 		DutyTTL: waiterDutyTTL(interval),
+		// A LONG RUN'S GITHUB APP TOKEN, kept current in the files the
+		// run was provisioned with: see githubtoken.go.
+		Refresh: e.refreshRunTokens,
 	})
 	if err != nil {
 		return err

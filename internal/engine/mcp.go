@@ -13,7 +13,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -496,7 +495,7 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // launchable spec. Either way the heartbeat reports the server rather than
 // leaving it out as though the seat never declared it.
 func seatSpecs(
-	c *Company, seat *org.Role, env *config.Resolver, minted map[string]integration.Kind,
+	c *Company, seat *org.Role, env *config.Resolver, mint *seatMint,
 ) ([]mcp.Spec, []mcpOutcome) {
 	var out []mcp.Spec
 	var unconfigured []mcpOutcome
@@ -509,7 +508,7 @@ func seatSpecs(
 		}
 		instance := mcp.InstanceName(server.Name, seat.Name)
 		values, missing := resolveServer(server, seat.Handle(), instance,
-			seat.MCPEnv[server.Name], env, minted)
+			seat.MCPEnv[server.Name], env, mint)
 		if missing != nil {
 			unconfigured = append(unconfigured, mcpOutcome{server: server.Name, err: missing})
 			continue

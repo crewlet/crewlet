@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The hosted code host, wired.
@@ -204,7 +205,7 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	lookup := &github.SeatLookup{Opts: github.SeatAppOptions{
 		APIBase: api, WebBase: web, Org: githubOrg(cfg),
 		Seats: e.githubSeatApps(c, env),
-	}}
+	}, Issuer: &e.githubIssuer}
 
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
 	registered := e.intoLiveRegistry(func(reg *notify.Registry) int {
@@ -295,27 +296,32 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 		return out
 	}
 	for seat := range company.Org.AllRoles() {
-		if !seat.IsAgent() {
+		if !seat.IsAgent() || seat.GitHub == nil {
 			continue
 		}
-		app := seat.GitHub
-		if app == nil {
-			continue
-		}
-		// PARSED FROM THE RAW VALUE, not through a "or default" helper:
-		// [github.ParseTier] already answers the default for an empty
-		// string and for a typo, and it is the package that OWNS the
-		// closed set — so there is one place that decides what an
-		// unrecognised tier runs at.
-		tier, _ := github.ParseTier(app.Tier)
-		out = append(out, github.SeatApp{
-			Handle: seat.Handle(), Name: seat.Name, Tier: tier, Repos: app.Repos,
-			AppID: app.AppID, Slug: app.AppSlug,
-			InstallationID: app.InstallationID,
-			Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
-		})
+		out = append(out, githubSeatApp(seat, env))
 	}
 	return github.SeatsFrom(out)
+}
+
+// githubSeatApp is one agent's own app as the company document records it,
+// with its key resolved. The caller has checked the seat carries a block.
+//
+// ONE READING of a seat's app for every reader of it: the roster above, and
+// the token a seat's own values are resolved with ([Engine.seatResolver]).
+func githubSeatApp(seat *org.Role, env *config.Resolver) github.SeatApp {
+	app := seat.GitHub
+	// PARSED FROM THE RAW VALUE, not through a "or default" helper:
+	// [github.ParseTier] already answers the default for an empty string
+	// and for a typo, and it is the package that OWNS the closed set, so
+	// there is one place that decides what an unrecognised tier runs at.
+	tier, _ := github.ParseTier(app.Tier)
+	return github.SeatApp{
+		Handle: seat.Handle(), Name: seat.Name, Tier: tier, Repos: app.Repos,
+		AppID: app.AppID, Slug: app.AppSlug,
+		InstallationID: app.InstallationID,
+		Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
+	}
 }
 
 // githubPrompt is the hosted code host's trigger builder. A value, held by
