@@ -276,6 +276,30 @@ describe("connection state", () => {
     expect(store.state.health).toBeNull();
   });
 
+  // WHAT THE NODE LAST SAID OUTLIVES THE SOCKET, and the tab keeps it: a
+  // follower of a configuration write asks that rather than whether the node
+  // is up, and one mounted during a drop has no earlier render to keep it
+  // from (`lib/useLastHealth.ts`).
+  test("a dropped socket keeps the last frame the tab received", () => {
+    const store = new Store();
+    expect(store.state.lastHealth).toBeNull();
+    const pushed = healthFrame({ applied_epoch: 4 });
+    store.applyHealth(pushed);
+    store.setConnected(false);
+    expect(store.state.health).toBeNull();
+    expect(store.state.lastHealth).toBe(pushed);
+    // An empty frame is no frame the node sent.
+    store.applyHealth(null);
+    expect(store.state.lastHealth).toBe(pushed);
+    // The snapshot's health is a frame like the push.
+    const snapped = healthFrame({ applied_epoch: 5 });
+    store.applySnapshot({ health: snapped, agents: [] });
+    expect(store.state.lastHealth).toBe(snapped);
+    // A refusal drops the company, never the node's own health.
+    store.setAccessRefused("your seat is no longer in the chart");
+    expect(store.state.lastHealth).toBe(snapped);
+  });
+
   // A TAB STILL CONNECTING IS NOT A TAB THAT LOST THE ENGINE. Both are
   // disconnected, and only the second has been answered, by a close or by a
   // failed dial; the engine panel draws an amber dot for that one alone, and

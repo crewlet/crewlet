@@ -1217,8 +1217,16 @@ const (
 	// seat states, the plain sentence for each failure kind with the engine's
 	// message behind a disclosure, the assistant's credit in every history and
 	// the org chart's reveal of a new seat took it to 4513.6 KiB. 4514 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 418<<10
+	// which still refuses a doubled baseline. Saying which revision each node
+	// runs, a refusal included, took it to 4519.6 KiB: the one rule a node's
+	// standing is read by (the sidebar's Nodes figure counts by it, so it is
+	// in the frame), its words beside the Settings screens that say them, the
+	// Nodes screen's Running panel and Lag fact, the Configuration screen's
+	// revision states, the after-save strip and the ceiling and charter
+	// followers settling on a refusal rather than "applying…", and the tab's
+	// last push kept through a dropped socket. 4520 KiB, which still refuses
+	// a doubled baseline.
+	treeBudget = 4<<20 + 424<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

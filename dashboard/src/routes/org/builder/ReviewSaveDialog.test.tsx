@@ -13,12 +13,18 @@ import { fromDocument, toDocument } from "./model/document.ts";
 import { apply, record } from "./model/operations.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
 import { changeSentences } from "./ReviewSaveDialog.tsx";
+import { clearSavedRevision } from "./savedRevision.ts";
 import { company, Engine, json, mountBuilder, refusal, type SentRequest } from "./testkit.tsx";
 import { toastHost, toastText } from "~/testing.tsx";
 
+// THE SAVED REVISION IS TAB-LIVED MODULE STATE, and the engine here names
+// every first save `r-saved`: kept from one case to the next, a save found by
+// settling, which carries no epoch, took the previous case's epoch for its own
+// (`recordSavedRevision` keeps what was known of one revision).
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
+  clearSavedRevision();
 });
 
 afterEach(() => {
@@ -26,6 +32,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
   sessionStorage.clear();
+  clearSavedRevision();
   location.hash = "#/";
 });
 
@@ -34,7 +41,12 @@ const isWrite = (r: SentRequest) =>
 
 /** Opens the builder, edits the CEO, and opens the review once the check is clean. */
 async function reviewEdit(engine: Engine) {
-  mountBuilder({ engine });
+  return reviewEditAsking(engine, () => null);
+}
+
+/** [reviewEdit], with the socket's query channel answering through `query`. */
+async function reviewEditAsking(engine: Engine, query: (what: string) => unknown) {
+  mountBuilder({ engine, query });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await waitFor(() => expect(engine.checks()).toHaveLength(2));
@@ -337,9 +349,15 @@ describe("a save whose answer never arrives", () => {
       expect(engine.revision).toBe("r-saved-2");
 
       mountBuilder({ engine });
+      // Not "being applied": every node applies the colleague's revision,
+      // which carries the save. Mutation: toast every landed save as being
+      // applied, and this reads so beside a strip saying r-saved-2 is active.
       expect(
-        await screen.findByText("Your last save was stored and is being applied."),
+        await screen.findByText(
+          "Your last save was stored. Revision r-saved-2, built on it, is active now.",
+        ),
       ).toBeDefined();
+      expect(screen.queryByText("Your last save was stored and is being applied.")).toBeNull();
       await screen.findByText("No problems");
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(engine.checks().map((c) => c.headers["If-Match"])).not.toContain('"r-saved"');
@@ -424,6 +442,48 @@ describe("a save whose answer never arrives", () => {
       ).toBeDefined();
       await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
     });
+  });
+
+  // A LOST ANSWER SETTLED IN THIS VISIT, beneath a colleague's revision built
+  // on the save since: the toast and the strip mounted for the save say the
+  // same thing, that the later revision is the one active. Mutation: toast
+  // the save as being applied, and the two contradict each other on screen.
+  test("a lost answer found beneath a later revision says that revision is active", async () => {
+    const engine = new Engine(company());
+    engine.script = (r, e) => {
+      if (!isWrite(r) || e.revision !== "r1") return null;
+      e.commit(r);
+      e.commit({
+        method: "PATCH",
+        path: "/config",
+        query: new URLSearchParams(),
+        headers: {},
+        body: { mission: "Somebody else's", _summary: "A colleague's save" },
+      });
+      return Promise.reject(new TypeError("network connection was lost"));
+    };
+    const activation = { epoch: 6, revision_id: "r-saved-2", at: "", summary: "" };
+    const dialog = await reviewEditAsking(engine, (what) =>
+      what === "fleet"
+        ? {
+            nodes: [{ id: "a", roles: ["seats"], broker: "member", seats: 1 }],
+            seats: [],
+            duties: [],
+            unplaceable: [],
+            unmanned_roles: [],
+            this_node: "a",
+            target_epoch: activation.epoch,
+            activation,
+          }
+        : null,
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(toastText()).toContain("Saved. Revision r-saved-2, built on it, is active now."),
+    );
+    expect(toastText()).not.toContain("The engine is applying it.");
+    expect(await screen.findByText("Revision r-saved-2 has been activated since.")).toBeDefined();
+    expect(engine.requests.filter(isWrite)).toHaveLength(1);
   });
 
   test("a second press is recognized as the same write rather than replayed as a conflict", async () => {

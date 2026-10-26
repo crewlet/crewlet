@@ -7399,7 +7399,16 @@ seat's by replacing that seat (`PUT /config/roles/{handle}`, its check the same
 request with `dry_run=true`), because a patch cannot address one seat in a
 roster. The revision's summary says whose ceiling, which window, and from what
 to what. After a save the figure shows the new ceiling marked **applying…**
-until this node reports the saved epoch, and then re-reads. A conflict saves
+until this node has applied the saved revision, and then re-reads — judged by
+where this node stands on that revision (`lib/nodeStanding.ts`), never by its
+applied epoch alone, which a refusal leaves where it was. A node that refused
+it puts the figure back to the ceiling the gate still enforces, marked
+**refused by this node**, until the pencil is pressed again or a later
+revision it applies settles it; a save a later activation passed before this
+node applied it settles on the re-read like an apply. The mark follows this
+node's LAST health push (`lib/useLastHealth.ts`): a dropped socket clears the
+store's health slice, and is no news of the save, so a refusal stays said
+through it rather than turning back into the saved figure, applying. A conflict saves
 nothing and offers **Reload**; so does a request that may have landed. The
 pencils are drawn for every reader and disabled, with the reason said once
 above the page in the standard notice, for a reader without Admin — except a seat's, for
@@ -7565,7 +7574,7 @@ screen shares rather than at an inset of its own.
 
 | Row | Figure | From |
 |---|---|---|
-| Nodes | the nodes holding a presence lease ("1 node live"); a warning dot and "*n* behind on config" in the row's name when a node has applied an older epoch than the fleet activated (the Nodes screen's own "Behind on config" count) | the health push, and `fleet` |
+| Nodes | the nodes holding a presence lease ("1 node live"); a warning dot and "*n* behind on config" in the row's name when a node does not run the revision the fleet activated — an older epoch, a refusal or a partial apply of the activated one, another revision, or no apply reported (the Nodes screen's own "Behind on config" count, by one rule: `lib/configStanding.ts`) | the health push, and `fleet` |
 | Configuration | "epoch *n*" — the epoch this node applied, in words rather than a code | the health push |
 | Backups & retention | how many alarms stand, the count the engine panel shows, drawn only when one does | `retention` |
 
@@ -7652,8 +7661,17 @@ edits as one revision was declined. The source is
   the charter again and writes it with only this part replaced, conditional
   on its tag (`PUT /config/charter`, `If-Match`), so a colleague's change to
   another part is kept. The card then shows the saved words until this
-  browser's chart carries them, with *Sent. This node has not applied it yet.*
-  under them, and a toast says it saved. A refusal keeps the draft and says
+  browser's chart carries them, with *Saved. This page shows it as soon as
+  this node applies the new revision.* under them, and a toast says it saved.
+  The save's answer names the revision it stored beside its epoch, and the
+  card follows this node's standing on that revision (`lib/nodeStanding.ts`):
+  once this node refused it, the card draws the part as this node still runs
+  it, with *Saved, but this node refused the new revision and goes on running
+  the one before. Settings › Nodes says why.*, until a later revision settles
+  it; once it applied the revision, or passed it for a later one, the card
+  draws the chart. It reads this node's last push (`lib/useLastHealth.ts`), so
+  a dropped socket leaves a refusal said rather than drawing the saved words
+  again. A refusal keeps the draft and says
   why once, beside the Save that caused it (the editor's own alert, so no toast
   reads it a second time); a save that got no answer is settled by reading the
   charter back rather than sent twice.
@@ -8391,7 +8409,10 @@ current row is (the raised neutral surface and its hairline), never as the
 primary button: the accent belongs to the one primary action, and a violet
 fill under a handle in its own grey ink was 1.5:1. `#/settings/config/revisions`
 is the history, so it lands on the History lens. **A revision's own page is the
-revision** — its header, where it came from and which nodes report it — with
+revision** — its header, where it came from and which nodes run it (a node
+whose last attempt of it failed is listed as refusing it, naming what it
+runs, even when that is this revision: the refused re-activation a credential
+rotation makes, and not counted among those that run it) — with
 no lens bar and no running document under it, and **See its changes** opens
 the Diff lens against the revision's *parent*, which is what that save
 changed (against the active revision, the active revision's own changes were
@@ -9237,10 +9258,90 @@ while the screen binds the real chart, table, editor and dialogs, and
   than replayed onto it.
 - **A save is not an apply, and the screen says so.** `AfterSaveStrip.tsx`
   keeps `{revision_id, epoch}` in a tab-lived store outside any screen
-  (`savedRevision.ts`), reads this node's `applied_epoch` off the health push
-  (which carries it every five seconds, so there is nothing to poll) and the
+  (`savedRevision.ts`), reads this node's `applied_epoch` and
+  `config_attempt` off the health push (which carries both every five
+  seconds, so there is nothing to poll) and the
   `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
-  N of M nodes, or the node that refused it with a link to Settings › Nodes.
+  N of M nodes, the node that refused it with a link to Settings › Nodes, or
+  "Revision … has been activated since". Each node's fleet row is judged by
+  the rule a lead's strip judges this node's push by
+  (`lib/nodeStanding.ts`, `fleetNodeStanding` beside `nodeStanding`, one
+  predicate over the facts both wires carry): the row's
+  `config_applied_epoch` is the push's `applied_epoch`, and its
+  `config_epoch`, `config_revision_id` and `config_status` are the push's
+  `config_attempt`. So a node counts as having applied the save only on
+  evidence — its attempt at that epoch on that revision went ok, or it has
+  applied that epoch or a later one (a node that applied 5 and refused 6 has
+  applied a save at 4), or it runs that revision
+  (`config_serving_revision_id`) — and one that attempted a later epoch
+  without applying the save's has PASSED it (two activations inside one
+  reconcile tick are never attempted one by one) and is neither applied nor
+  waited on: once every node has applied or passed it and one passed it, the
+  strip settles on "activated since", rather than calling Applied a save no
+  node may run. An Admin and a lead are told the same of the same node, and
+  the row's one fact more is the revision a node runs: one running the saved
+  revision has applied it. A
+  report at the same epoch on another revision — one number names two once a
+  rebuilt coordination store restarts the count — is that revision's, neither
+  this save applied nor refused. A save whose
+  answer was lost carries no epoch: it takes the fleet activation's only
+  while that names the saved revision, never `target_epoch`, which is the
+  newest activation's whatever it names (and 0 for none). An activation
+  naming another revision settles the strip on "Revision … has been
+  activated since" — said as since, not as a replacement, because the
+  history walk that found the save finds it as readily beneath a revision
+  built on it — and no activation keeps it applying and asking. A reader
+  without Admin, who reads no fleet, follows a save by this node's push
+  alone (`lib/nodeStanding.ts`, the rule a ceiling's mark and a charter
+  card follow their own writes by too): the last attempt first — applied when
+  it names that revision at that epoch and went ok, refused when it failed
+  there, since the applied epoch cannot say it (a failed attempt leaves it
+  where it was) and, from a pointer before a rebuilt coordination store, can
+  stand above the save's — then applied once the applied epoch reaches the
+  save's, or passed once it attempted a later epoch first; and a save whose
+  answer was lost takes its epoch from that
+  attempt only while it names the saved revision, and is otherwise told it
+  cannot be followed from here rather than that it is applying, which nothing
+  would ever correct. An epoch an answer supplied for such a save is pinned
+  to it in the store (`pinSavedEpoch`), so the next activation, which moves
+  this node's attempt and the fleet's activation on, does not turn an applied
+  or refused save into one that cannot be followed. What neither wire can tell
+  is a node holding an applied epoch from the previous pointer above the
+  save's that has not attempted the save yet: it reads as applied, on the
+  push and the row alike, since an epoch orders activations within one
+  pointer only, and telling the two apart takes the applied activation whole,
+  which [#322](https://github.com/crewlet/crewlet/issues/322) has the engine
+  keep. Nor does either wire keep the applied epoch across a RESTART: the
+  push's `applied_epoch` and the row's `config_applied_epoch` start again at
+  0 with the process, and move only on the node's next apply that goes ok,
+  while a node with the `data` role boots on the revision it applied before
+  (one without it boots on nothing, runs no company, and has truly passed the
+  save until it applies one). Until it applies
+  again, a restarted node that refused a later activation reads as having
+  passed the save — on its push alone when it booted on the saved revision,
+  which its row says it runs, and on both when it booted on a revision
+  activated after the save — so a verdict said before the restart can turn:
+  the strip's "Applied." into "activated since" (a lead's on the next push,
+  an Admin's on the fleet read a reconnect makes), and the org chart's note,
+  gone once the node applied the save, back as "did not apply". Neither wire
+  carries the epoch of the activation a restarted node booted on, so the
+  dashboard cannot tell this node from one that never ran the save; carrying
+  that epoch across a restart belongs with #322 too, an activation's identity
+  across pointer lifetimes. Every follower reads this node's LAST push
+  (`lib/useLastHealth.ts`), never the store's live health slice: a dropped
+  socket clears that, and is no news of the save — read as a standing, it
+  turned the strip's verdict and the chart's note back into applying for as
+  long as the socket was down. The TAB keeps that push
+  (`StoreState.lastHealth`, written with every frame and left by a drop),
+  not each follower: the strip mounts afresh on every return to the Builder
+  and the note on the chart, Teams and a unit's page, and a follower that
+  kept its own had nothing to read when it mounted during a drop, and said
+  the save was applying. The org chart's `PreviousRevisionNote` reads the same
+  standing, and learns a lost save's epoch from this node's attempt itself,
+  so a node that refused the save says so rather than "still
+  applying" for good. The Builder's toast says the same of the same save: one settled
+  beneath a later revision (`Landed.activeRevisionId`) names that revision as
+  the one active now, rather than saying the save is being applied.
   Its View changes opens the saved revision against its parent
   (`against=`), since against the active revision a save that is active now
   differs from nothing; the conflict banner's Show what changed is the newer

@@ -24,16 +24,42 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
-import type { FleetNode } from "~/protocol/types.ts";
+import type { FleetActivation, FleetNode } from "~/protocol/types.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 
 function node(over: Partial<FleetNode> = {}): FleetNode {
   return { id: "n1", roles: [], broker: "member", seats: 0, config_epoch: 3, ...over };
 }
 
-function fact(n: FleetNode, label: string) {
-  return nodeFacts({ node: n, target: 3 }).find((f) => f.label === label);
+/** The revision the fleet activated at epoch 3, and the one before it. */
+const ACTIVE = "01JACTIVE00000000000000000A";
+const PREVIOUS = "01JPREVIOUS000000000000000P";
+const activation: FleetActivation = {
+  epoch: 3,
+  revision_id: ACTIVE,
+  at: "2026-10-26T08:00:00Z",
+  summary: "",
+};
+const AT3 = { activation };
+
+function fact(n: FleetNode, label: string, answer: { activation?: FleetActivation | null } = AT3) {
+  return nodeFacts({ node: n, answer }).find((f) => f.label === label);
 }
+
+/** A node that runs the revision the fleet activated at epoch 3. */
+const runsActive: Partial<FleetNode> = {
+  config_status: "ok",
+  config_revision_id: ACTIVE,
+  config_serving_revision_id: ACTIVE,
+};
+
+/** A node that refused it at epoch 3 and runs the one before. */
+const refusedIt: Partial<FleetNode> = {
+  config_status: "error",
+  config_error: "env var CREWLET_X is not set",
+  config_revision_id: ACTIVE,
+  config_serving_revision_id: PREVIOUS,
+};
 
 describe("the broker column", () => {
   afterEach(cleanup);
@@ -77,13 +103,13 @@ describe("nodeFacts", () => {
   // two tracks on one line and carries the whole string in its title.
   test("the build version is one token, titled with the whole string", () => {
     const version = "v0.0.0-20260929172955-0123456789ab";
-    const f = nodeFacts({ node: node(), target: 3, version }).find((x) => x.label === "Version");
+    const f = nodeFacts({ node: node(), answer: AT3, version }).find((x) => x.label === "Version");
     expect(f?.token).toBe(true);
     render(<>{f?.value}</>);
     expect(screen.getByText(version).getAttribute("title")).toBe(version);
     cleanup();
     // Unknown stays a worded empty, never a token-styled blank.
-    expect(nodeFacts({ node: node(), target: 3 }).find((x) => x.label === "Version")?.token).toBe(
+    expect(nodeFacts({ node: node(), answer: AT3 }).find((x) => x.label === "Version")?.token).toBe(
       undefined,
     );
   });
@@ -112,9 +138,148 @@ describe("nodeFacts", () => {
     // state is derived from; only one of those makes its seats servable.
     const labels = nodeFacts({
       node: node({ projections_ready: 1, projections_total: 4 }),
-      target: 3,
+      answer: AT3,
     }).map((f) => f.label);
     expect(labels.indexOf("Copies")).toBe(labels.indexOf("Epoch") + 1);
+  });
+
+  // THE EPOCH IS THE ONE IT ATTEMPTED. A node that refused the target reports
+  // the target's epoch, and the epoch-only rule called its lag "current".
+  test("a node that refused the active revision is not current, and its lag says so", () => {
+    expect(fact(node(runsActive), "Lag")?.value).toBe("current");
+    expect(fact(node(refusedIt), "Epoch")?.value).toBe("3 of 3");
+    expect(fact(node(refusedIt), "Lag")?.value).toBe(
+      `refused the active revision; runs ${PREVIOUS.slice(0, 10)}`,
+    );
+  });
+
+  test("a node at the target epoch on another revision is not current", () => {
+    const other = node({
+      ...runsActive,
+      config_revision_id: PREVIOUS,
+      config_serving_revision_id: PREVIOUS,
+    });
+    expect(fact(other, "Lag")?.value).not.toBe("current");
+    expect(fact(other, "Lag")?.value).toBe(`on another revision, ${PREVIOUS.slice(0, 10)}`);
+  });
+
+  test("with no activation there is no target, so no lag and no denominator", () => {
+    const lag = fact(node(runsActive), "Lag", { activation: null });
+    expect(lag?.value).not.toBe("current");
+    render(<>{lag?.value}</>);
+    expect(screen.getByText("No revision activated yet")).toBeDefined();
+    cleanup();
+    expect(fact(node(runsActive), "Epoch", { activation: null })?.value).toBe("3");
+  });
+});
+
+// WHETHER A NODE RUNS THE FLEET'S REVISION, on every part of the screen that
+// says it: the tile, the row, and the node's Running panel. Each case is one
+// the epoch-only rule got wrong — a refusal and another revision both report
+// the target's epoch, and an answer with no activation has no target.
+describe("whether a node runs the fleet's revision", () => {
+  class InertWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSED = 3;
+    readyState = InertWebSocket.CONNECTING;
+    send(): void {}
+    close(): void {}
+  }
+
+  const fleet = (nodes: FleetNode[], active: FleetActivation | null = activation) => ({
+    nodes,
+    seats: [],
+    duties: [],
+    unplaceable: [],
+    unmanned_roles: [],
+    this_node: nodes[0]?.id ?? "",
+    target_epoch: active?.epoch ?? 0,
+    activation: active,
+  });
+
+  function mount(answer: ReturnType<typeof fleet>, id?: string) {
+    Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+    location.hash = id ? `#/settings/nodes/${id}` : "#/settings/nodes";
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+      what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
+    return render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <SessionReading>
+          <ViewerProvider>
+            <Router>
+              <Fleet node={id} />
+            </Router>
+          </ViewerProvider>
+        </SessionReading>
+      </ClientContext.Provider>,
+    );
+  }
+
+  /** The Behind on config tile's figure. */
+  function behindTile(container: HTMLElement) {
+    const tile = [...container.querySelectorAll<HTMLElement>(".crewlet-statcard")].find((c) =>
+      c.textContent?.includes("Behind on config"),
+    );
+    expect(tile, "the tile is drawn").toBeDefined();
+    return tile!.querySelector(".crewlet-statcard__number")?.textContent;
+  }
+
+  afterEach(() => {
+    cleanup();
+    location.hash = "#/";
+  });
+
+  test("the tile counts a refusal and another revision, and the rows say which", async () => {
+    const view = mount(
+      fleet([
+        node({ id: "current-0", ...runsActive }),
+        node({ id: "refused-0", ...refusedIt }),
+        node({ id: "other-0", ...runsActive, config_revision_id: PREVIOUS }),
+      ]),
+    );
+    expect(await screen.findAllByText("refused-0")).not.toHaveLength(0);
+    expect(behindTile(view.container)).toBe("2");
+    const row = (id: string) =>
+      [...view.container.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")].find((r) =>
+        r.textContent?.includes(id),
+      )!;
+    expect(within(row("refused-0")).getByText("refused")).toBeDefined();
+    expect(within(row("other-0")).getByText("elsewhere")).toBeDefined();
+    expect(within(row("current-0")).queryByText(/behind|refused|elsewhere/)).toBeNull();
+  });
+
+  test("an answer with no activation counts no node behind", async () => {
+    const view = mount(fleet([node({ id: "lone-0", config_epoch: 1, ...refusedIt })], null));
+    expect(await screen.findAllByText("lone-0")).not.toHaveLength(0);
+    expect(behindTile(view.container)).toBe("0");
+    expect(screen.getByText("no target epoch")).toBeDefined();
+  });
+
+  /** The node page's Running card. */
+  async function runningPanel() {
+    const title = await screen.findByText("Running", { selector: ".crewlet-card__title" });
+    const card = title.closest<HTMLElement>(".crewlet-card");
+    expect(card, "the Running card is drawn").not.toBeNull();
+    return card!;
+  }
+
+  test("a refused node's Running panel names the refusal and what it runs", async () => {
+    mount(fleet([node({ id: "refused-0", ...refusedIt })]), "refused-0");
+    const panel = await runningPanel();
+    expect(
+      within(panel).getByText(`refused the active revision; runs ${PREVIOUS.slice(0, 10)}`),
+    ).toBeDefined();
+    expect(within(panel).queryByText("running the active revision")).toBeNull();
+    expect(within(panel).getByText(/env var CREWLET_X is not set/)).toBeDefined();
+  });
+
+  test("a current node's Running panel says it runs the active revision", async () => {
+    mount(fleet([node({ id: "current-0", ...runsActive })]), "current-0");
+    const panel = await runningPanel();
+    expect(within(panel).getByText("running the active revision")).toBeDefined();
   });
 });
 

@@ -190,6 +190,27 @@ describe("the posture table", () => {
     expect(await screen.findByText("This process does not serve the configuration")).toBeDefined();
   });
 
+  // GET /config ANSWERS THE FLEET'S POINTER, so a coordination store between
+  // leaders refuses it with 503 `unavailable`, saying why in `reason`.
+  test("a fleet whose pointer cannot be read says why, with Retry", async () => {
+    const engine = new Engine(company());
+    engine.script = () =>
+      json(
+        {
+          error: "unavailable",
+          message: "The engine cannot serve this right now.",
+          reason: "the fleet's activation could not be read from the coordination store",
+        },
+        503,
+      );
+    mountBuilder({ engine });
+    expect(await screen.findByText("The engine could not serve the configuration")).toBeDefined();
+    expect(
+      screen.getByText("the fleet's activation could not be read from the coordination store"),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  });
+
   test("an engine that never answers is unreachable", async () => {
     const engine = new Engine(company());
     engine.script = () => Promise.reject(new TypeError("Failed to fetch"));

@@ -209,6 +209,18 @@ export interface StoreState {
    * known — the socket is down, or no frame has arrived yet.
    */
   health: EngineHealth | null;
+  /**
+   * The last health frame this TAB received, and null only until the first:
+   * `health` without the clearing. For a reader asking what this node last
+   * said about a configuration write (`lib/useLastHealth.ts`), never whether
+   * it is up — a node gone quiet has taken back neither an apply nor a
+   * refusal. The tab keeps it rather than each reader, because the org
+   * chart's note and the Builder's strip follow a save that outlives their
+   * mount: kept per mount, one mounted while the socket was down had nothing
+   * to read, and said the save was still applying. Moves with `health`, and
+   * is read under that slice.
+   */
+  lastHealth: EngineHealth | null;
   tokens: Rollup | null;
   /**
    * The company's live token meter as the last `budget` push stated it, and
@@ -294,6 +306,7 @@ function emptyState(): StoreState {
     org: null,
     tools: [],
     health: null,
+    lastHealth: null,
     tokens: null,
     budget: null,
     schedules: null,
@@ -385,7 +398,7 @@ export class Store {
     // socket is open; deriving it from a payload's contents meant a snapshot
     // arriving over the degraded REST fallback announced a live connection
     // that did not exist.
-    if (snap.health) this.state.health = snap.health;
+    if (snap.health) this.state.health = this.state.lastHealth = snap.health;
     this.emit(...ALL_DATA_SLICES);
   }
 
@@ -554,6 +567,7 @@ export class Store {
 
   applyHealth(health: EngineHealth | null | undefined): void {
     this.state.health = health ?? null;
+    if (health) this.state.lastHealth = health;
     this.link(!!health);
     this.emit("health");
   }
@@ -561,7 +575,8 @@ export class Store {
   setConnected(value: boolean): void {
     this.link(value);
     // A dropped socket CLEARS the health slice rather than freezing it. A stale
-    // "healthy" is a lie with a timestamp nobody can see.
+    // "healthy" is a lie with a timestamp nobody can see. Not `lastHealth`,
+    // which is what the node last said rather than whether it is up.
     if (!value) this.state.health = null;
     this.emit("health");
   }
@@ -605,8 +620,8 @@ export class Store {
    * naming the company, listing its agents and tools in the palette, from the
    * snapshot it held — while a session refused at its first handshake, sent
    * nothing, named and listed none of it. An outage keeps the last state on purpose ("showing the
-   * last state received"); a refusal is not an outage. `health` stays: it is
-   * the unguarded `/health`, not the company.
+   * last state received"); a refusal is not an outage. `health` stays, and
+   * `lastHealth` with it: it is the unguarded `/health`, not the company.
    */
   setAccessRefused(reason: string | null): void {
     // A REFUSAL WITH NO REASON IS STILL A REFUSAL, held as "" rather than a
@@ -619,9 +634,10 @@ export class Store {
       // The transport's own history (`lostAt`, `everConnected`) stays with
       // it: a refusal says who may read the company, not whether the engine
       // was reachable.
-      const { health, connected, lostAt, everConnected, authRejected } = this.state;
+      const { health, lastHealth, connected, lostAt, everConnected, authRejected } = this.state;
       Object.assign(this.state, emptyState(), {
         health,
+        lastHealth,
         connected,
         lostAt,
         everConnected,
