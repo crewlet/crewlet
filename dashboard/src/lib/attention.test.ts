@@ -489,7 +489,9 @@ describe("ordering", () => {
     expect(severities).toEqual(
       [...severities].sort((a, b) => (a === b ? 0 : a === "critical" ? -1 : 1)),
     );
-    expect(items.some((i) => i.detail.includes("provider unreachable"))).toBe(true);
+    // THE ENGINE'S RAW MESSAGE rides along for the disclosure, never as the detail.
+    expect(items.some((i) => i.technical === "provider unreachable")).toBe(true);
+    expect(items.some((i) => i.detail.includes("provider unreachable"))).toBe(false);
   });
 
   test("every id is unique, so a list can key on it", () => {

@@ -1390,3 +1390,29 @@ func TestAnAgentAnswerCarriesNoTranscriptToAStatusReader(t *testing.T) {
 		})
 	}
 }
+
+// A SEAT CAN BE ASKED FOR WITHOUT ITS CALLS: `history=false` answers the seat
+// and its live state with no finished call and no cursor, so a caller asking
+// what a seat is doing is not handed whole transcripts past what it reads (the
+// assistant's step dropped a busy seat's status as "larger than one step
+// reads"). Unset, the history is answered as before. Mutation: ignore the
+// parameter and the rows come back.
+func TestAnAgentAnswerCanLeaveItsCallsOut(t *testing.T) {
+	t.Parallel()
+	cfg, ids := namesakes(t)
+	db := openStore(t)
+	seedPhases(t, db.Events(), ids["ada"], ids["bob"])
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Events: fleetOf(db.Events()), Company: companySource(t, cfg),
+	})
+	got := ask(t, r, "agent", map[string]any{"id": "ada", "history": "false"})
+	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 0 || got["next"] != "" {
+		t.Errorf("history=false answered llm_history %v and next %v", got["llm_history"], got["next"])
+	}
+	if got["handle"] != "ada" {
+		t.Errorf("history=false answered %+v, want the seat", got)
+	}
+	if history, _ := ask(t, r, "agent", map[string]any{"id": "ada"})["llm_history"].([]store.EventRecord); len(history) != 2 {
+		t.Errorf("unset, the history is %d rows, want both finished phases", len(history))
+	}
+}

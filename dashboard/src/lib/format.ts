@@ -906,7 +906,11 @@ export function firstLine(body: string): string {
  */
 export function greeting(now: number, name: string): string {
   const hour = Number(toWall(now).slice(11, 13));
-  const part = hour < 5 ? "evening" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  // THE SMALL HOURS NAME NO PART OF THE DAY: "Good evening" at 01:11 read as a
+  // clock that was wrong, and "Good morning" at 02:00 is no better, so from
+  // midnight until five the greeting is a plain "Hello", true at any hour.
+  const salute =
+    hour < 5 ? "Hello" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const first = name.trim().split(/\s+/)[0] ?? "";
-  return first ? `Good ${part}, ${first}` : `Good ${part}`;
+  return first ? `${salute}, ${first}` : salute;
 }

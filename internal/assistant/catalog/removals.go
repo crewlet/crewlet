@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
@@ -199,15 +198,6 @@ func undeclaredRemoval(title string, paths []string) *PreviewRefusal {
 		Hint: "Include them in the body to keep them, or list them in `removes` if the " +
 			"person asked for that.",
 	}}
-}
-
-// removalLabels are removal paths as the card names them ([cards.FieldLabel]).
-func removalLabels(paths []string) []string {
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		out = append(out, cards.FieldLabel(p))
-	}
-	return out
 }
 
 // inWords is a list of paths joined as a sentence: "project", "project and

@@ -134,3 +134,63 @@ func TestAnEntityNamesAKindOfTheSetOrNone(t *testing.T) {
 		t.Error("an entity item of a kind outside the set is accepted")
 	}
 }
+
+// AN INFERRED TABLE HIDES BOOKKEEPING AND DRAWS INSTANTS AS INSTANTS. A list of
+// containers carrying an epoch, a digest and its timestamps draws its name and
+// key in the drawer, types the timestamps as instants, and keeps the epoch and
+// the digest for the downloads and the model only; a series of points with no
+// name reads by its own values, never "Entry 1". Mutation: type columns by
+// their JSON type alone, or brief the first keys whatever they are, and this
+// fails.
+func TestAnInferredTableHidesBookkeepingAndTypesInstants(t *testing.T) {
+	t.Parallel()
+	answer, err := cards.Decode([]byte(`[
+		{"key":"HOME","name":"Company","chart_epoch":1793001746322,
+		 "css_sha":"9fceb02d0ae598e95dc970b74767f19372d61af8",
+		 "updated_at":"2026-10-25T08:00:00Z"},
+		{"key":"FAIR","name":"FairSplit","chart_epoch":1793001746322,
+		 "css_sha":"0ae598e95dc970b74767f19372d61af89fceb02d",
+		 "updated_at":"2026-10-24T08:00:00Z"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, _, ok := cards.Infer(answer, "Containers")
+	if !ok || spec.Table == nil {
+		t.Fatalf("the containers inferred %+v", spec)
+	}
+	types := map[string]wire.ColumnType{}
+	for _, c := range spec.Table.Columns {
+		types[c.Key] = c.Type
+	}
+	if types["updated_at"] != wire.ColumnDatetime || types["chart_epoch"] != wire.ColumnNumber {
+		t.Errorf("the columns are typed %v", types)
+	}
+	for _, k := range spec.Table.Brief {
+		if k == "chart_epoch" || k == "css_sha" {
+			t.Errorf("the drawer draws %s, which is bookkeeping: %v", k, spec.Table.Brief)
+		}
+	}
+	if len(spec.Table.Brief) == 0 || spec.Table.Brief[0] != "name" {
+		t.Errorf("the drawer draws %v, want the name first", spec.Table.Brief)
+	}
+
+	series, err := cards.Decode([]byte(`{"name":"QA Engineer","series":[
+		{"day":"2026-10-13","tokens":120},{"day":"2026-10-14","tokens":80}],"total":200}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, doc, ok := cards.Infer(series, "Tokens series")
+	if !ok {
+		t.Fatal("the series inferred no card")
+	}
+	body, _ := json.Marshal(doc)
+	built, err := cards.Build(spec, body, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(built.Cards())
+	if strings.Contains(string(encoded), "Entry 1") || !strings.Contains(string(encoded), "2026-10-13") ||
+		!strings.Contains(string(encoded), "Tokens: 120") {
+		t.Errorf("the series reads %s", encoded)
+	}
+}

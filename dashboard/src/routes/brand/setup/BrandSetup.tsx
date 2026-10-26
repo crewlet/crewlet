@@ -12,7 +12,7 @@
  *
  * # How it ends
  *
- * An administrator, a person, finishes with **Adopt as the company brand**
+ * An administrator, a person, finishes with **Publish as the company brand**
  * (the engine asks for a recent sign-in when the proof is stale); a person the
  * kit is shared with to edit finishes with **Save for review**, a draft an
  * administrator adopts from the Brand page. Both ask first that every
@@ -287,7 +287,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     if (now === null) return;
     if (!admin) {
       setFinishing(true);
-      toast.ok("Saved for review. An administrator adopts it from the Brand page.");
+      toast.ok("Saved for review. An administrator publishes it from the Brand page.");
       nav.to(BRAND_PAGE);
       return;
     }
@@ -295,7 +295,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     const answer = await adopt.run(adoptBrand(now.kit, now.version));
     if (answer?.kind === "done") {
       setFinishing(true);
-      toast.ok(`The ${edit.document.name.trim()} brand is adopted`);
+      toast.ok(`The ${edit.document.name.trim()} brand is published`);
       nav.to(BRAND_PAGE);
     } else if (answer) {
       setSaid(answer.text);
@@ -368,7 +368,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
           Save as draft
         </Button>
         <Button variant="primary" loading={busy} onClick={() => void finish()}>
-          {admin ? "Adopt as the company brand" : "Save for review"}
+          {admin ? "Publish as the company brand" : "Save for review"}
         </Button>
       </>
     ) : (
@@ -424,7 +424,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
                 <BrandPreview
                   document={edit.document}
                   assets={assets}
-                  draft
+                  drawn="changes"
                   title="Preview of your draft"
                 />
               ),

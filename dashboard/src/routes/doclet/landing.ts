@@ -11,6 +11,7 @@ import { fmtDateCompact, tsKey } from "~/lib/format.ts";
 import { companyMidnight, dayLabelIn } from "~/lib/range.ts";
 import type { PageChange, PageRevision } from "~/protocol/index.ts";
 import { changeWords, changedBy } from "./parts.tsx";
+import { assisted } from "~/lib/attribution.ts";
 
 /**
  * One row of the landing: one change, or BACK-TO-BACK SAVES of one page by one
@@ -37,6 +38,9 @@ function continues(head: PageChange, next: PageChange, zone: string | undefined)
     next.kind === "saved" &&
     head.page_id === next.page_id &&
     changedBy(head) === changedBy(next) &&
+    // A save through the assistant and the person's own save are two lines:
+    // folded together, one would be named for the other.
+    assisted(head.operator_id) === assisted(next.operator_id) &&
     dayLabelIn(tsKey(head.at), zone) === dayLabelIn(tsKey(next.at), zone)
   );
 }

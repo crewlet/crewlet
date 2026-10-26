@@ -55,7 +55,7 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { roundOf, useSeatBadgeOf } from "~/lib/seats.ts";
+import { failureWords, roundOf, useSeatBadgeOf } from "~/lib/seats.ts";
 import { buildWaterfall, phaseLabel, type Span } from "~/lib/waterfall.ts";
 import { screenScroller } from "~/lib/scroller.ts";
 import { pathOf } from "~/app/frame/objects.ts";
@@ -2204,7 +2204,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
                     running
                   </Tag>
                 )}
-                {p.failed && <Tag variant="danger">{p.errorKind || "failed"}</Tag>}
+                {p.failed && <Tag variant="danger">{failureWords(p.errorKind).tag}</Tag>}
                 <span className="spacer" />
                 <span className="phase-meta" title="tokens this phase spent">
                   {fmtCount(p.totalTokens)}

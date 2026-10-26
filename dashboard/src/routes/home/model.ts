@@ -27,6 +27,7 @@ import type {
   WorkFlowPoint,
 } from "~/protocol/index.ts";
 import { plural } from "~/lib/format.ts";
+import { shownStateOf } from "~/lib/seats.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
@@ -93,18 +94,23 @@ export function deltaWords(
 export interface Crew {
   working: number;
   needs: number;
+  /** Every seat the engine calls stopped, the paused ones among them. */
   stopped: number;
+  /** The stopped seats a person paused (`shownStateOf` reads "paused"). */
+  paused: number;
   idle: number;
   total: number;
 }
 
 export function crewOf(agents: readonly AgentRow[]): Crew {
-  const crew: Crew = { working: 0, needs: 0, stopped: 0, idle: 0, total: agents.length };
+  const crew: Crew = { working: 0, needs: 0, stopped: 0, paused: 0, idle: 0, total: agents.length };
   for (const a of agents) {
     if (a.activity === "working") crew.working++;
     else if (a.activity === "needs") crew.needs++;
-    else if (a.activity === "stopped") crew.stopped++;
-    else if (a.activity === "idle") crew.idle++;
+    else if (a.activity === "stopped") {
+      crew.stopped++;
+      if (shownStateOf(a) === "paused") crew.paused++;
+    } else if (a.activity === "idle") crew.idle++;
   }
   return crew;
 }
@@ -120,13 +126,16 @@ export function joinParts(parts: readonly string[]): string {
   return parts.join(" · ");
 }
 
-/** "1 waiting · 1 stopped · 1 idle" — the parts that are not working, each
- *  named only when it has a seat in it. */
+/** "1 waiting · 1 paused · 1 stopped · 1 idle": the parts that are not
+ *  working, each named only when it has a seat in it. A paused seat is said to
+ *  be paused, as its own badge says, and never counted as stopped. */
 export function crewParts(crew: Crew): string[] {
   if (crew.total === 0) return ["No agent seats in the chart"];
+  const faults = crew.stopped - crew.paused;
   const parts = [
     crew.needs && `${crew.needs.toLocaleString()} waiting`,
-    crew.stopped && `${crew.stopped.toLocaleString()} stopped`,
+    crew.paused && `${crew.paused.toLocaleString()} paused`,
+    faults && `${faults.toLocaleString()} stopped`,
     crew.idle && `${crew.idle.toLocaleString()} idle`,
   ].filter(Boolean) as string[];
   if (parts.length === 0) return crew.working === crew.total ? ["Every seat is working"] : [];

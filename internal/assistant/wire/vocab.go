@@ -311,6 +311,26 @@ var ProposalScopes = []ProposalScope{ScopeServer, ScopePage}
 // Valid reports whether s is a scope this build knows.
 func (s ProposalScope) Valid() bool { return slices.Contains(ProposalScopes, s) }
 
+// ProposalRisk says how much care a proposal asks of the person approving it.
+// Computed by the engine from what the change does, never declared by the
+// model.
+type ProposalRisk string
+
+const (
+	// RiskDestructive is a change that deletes or removes something that
+	// is there now: a record, a member of a list (a seat from a unit), or
+	// fields of the object it replaces. The card is drawn in the danger
+	// tone and asks a deliberate confirmation before its approval.
+	RiskDestructive ProposalRisk = "destructive"
+)
+
+// ProposalRisks are the risks a card names; a card naming none is an ordinary
+// change.
+var ProposalRisks = []ProposalRisk{RiskDestructive}
+
+// Valid reports whether r is a risk this build knows.
+func (r ProposalRisk) Valid() bool { return slices.Contains(ProposalRisks, r) }
+
 // ChangeKind is one row of a proposal's "What will change" list, in the
 // before and after grammar of decision D10.
 type ChangeKind string

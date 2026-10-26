@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
@@ -59,9 +60,9 @@ import (
 //
 // The catalogue's offering is a filter and never authority, so every read is
 // offered to the turn, including those the curated catalogue keeps from this
-// person: a refusal must come from the API, as the same code, sentence and
-// permissions (exec.RefusalOf) the person's own request is refused with, and
-// shown so on the drawer's step. The curated catalogue must never offer a
+// person: a refusal must come from the API, as the same code and permissions
+// (exec.RefusalOf) the person's own request is refused with, and shown so on
+// the drawer's step in the engine's sentence for it (cards.PersonRefusal). The curated catalogue must never offer a
 // read the person is refused.
 //
 // And two principals may not use the assistant at all, a session exchanged
@@ -127,11 +128,12 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 				switch {
 				case status == http.StatusUnauthorized || status == http.StatusForbidden:
 					refused++
-					// THE REFUSAL IN THE ENVELOPE'S OWN TERMS: the code,
-					// the sentence and the permissions that would admit
-					// the person, as the drawer's step shows them, are the
-					// ones the person's own request is refused with.
-					want := exec.RefusalOf(exec.Response{Status: status, Body: body})
+					// THE REFUSAL THE PERSON'S OWN REQUEST GETS: its code
+					// and the permissions that would admit the person, as
+					// the drawer's step shows them, with the engine's
+					// sentence for that kind of refusal (cards.PersonRefusal).
+					want := cards.PersonRefusal(exec.RefusalOf(exec.Response{Status: status,
+						Body: body}), status)
 					if step.Refusal == nil || !reflect.DeepEqual(*step.Refusal, want) {
 						t.Errorf("%s was refused to the person as %+v and the assistant's "+
 							"step shows %+v", tool.Name, want, step.Refusal)

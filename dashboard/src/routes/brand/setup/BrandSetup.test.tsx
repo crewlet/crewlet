@@ -246,7 +246,7 @@ test("the pair that blocks an adoption holds Colours until a suggested shade fix
   engine(draft({ colors: { primary: "#0f7b5f", text: "#9aa3ad" } }));
   mount(["admin"], [brandKitRow()]);
   expect(await stepHeading("Colours")).toBeTruthy();
-  expect(screen.getByText("Blocks adoption")).toBeTruthy();
+  expect(screen.getByText("Blocks publishing")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   await waitFor(() =>
     expect(
@@ -255,21 +255,21 @@ test("the pair that blocks an adoption holds Colours until a suggested shade fix
   );
   expect(screen.getByRole("heading", { name: "Colours", level: 3 })).toBeTruthy();
   fireEvent.click(screen.getAllByRole("button", { name: /^#[0-9a-f]{6}/ })[0]!);
-  await waitFor(() => expect(screen.queryByText("Blocks adoption")).toBeNull());
+  await waitFor(() => expect(screen.queryByText("Blocks publishing")).toBeNull());
 });
 
 test("an administrator adopts from Review once every contrast warning is acknowledged", async () => {
   const sent = engine(whole({ colors: { primary: "#00baba" } }));
   mount(["admin"], [brandKitRow()]);
   expect(await stepHeading("Review")).toBeTruthy();
-  const adopt = screen.getByRole("button", { name: "Adopt as the company brand" });
+  const adopt = screen.getByRole("button", { name: "Publish as the company brand" });
   // NOTHING IS SAID BEFORE A FINISH IS TRIED.
   expect(screen.queryByRole("alert")).toBeNull();
   fireEvent.click(adopt);
   // WHAT HOLDS IT IS SAID AT THE FIELD, and focus moves to the box to tick.
   const warnings = screen.getByRole("group", { name: "Confirm low contrast" });
   const alert = await within(warnings).findByRole("alert");
-  expect(alert.textContent).toBe("Confirm the pair to adopt.");
+  expect(alert.textContent).toBe("Confirm the pair to publish.");
   const [box] = within(warnings).getAllByRole("checkbox");
   await waitFor(() => expect(document.activeElement).toBe(box));
   expect(box!.getAttribute("aria-invalid")).toBe("true");
@@ -293,7 +293,7 @@ test("an editor of the kit finishes with Save for review, and never adopts", asy
   const sent = engine(whole());
   mount([], [brandKitRow({ role: "editor" })]);
   expect(await stepHeading("Review")).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Adopt as the company brand" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Publish as the company brand" })).toBeNull();
   expect(screen.getByRole("region", { name: "Before you save for review" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Save for review" }));
   await waitFor(() => expect(location.hash).toBe("#/company/brand"));
@@ -350,7 +350,7 @@ test("a change made on the way to Review is saved as a version of the draft, and
   expect(await stepHeading("Review")).toBeTruthy();
   const [publish] = writes(sent, /\/artifacts\/01DRAFT\/versions$/);
   expect(JSON.parse(publish!.body)).toMatchObject({ mode: "whole", entry: "brand.json" });
-  fireEvent.click(screen.getByRole("button", { name: "Adopt as the company brand" }));
+  fireEvent.click(screen.getByRole("button", { name: "Publish as the company brand" }));
   await waitFor(() => expect(writes(sent, /\/brand\/adoptions$/)).toHaveLength(1));
   expect(JSON.parse(writes(sent, /\/brand\/adoptions$/)[0]!.body)).toEqual({
     kit: KIT,
@@ -416,8 +416,8 @@ test("Review shows each part's values and status in one summary, beside the prev
   );
   expect(await stepHeading("Review")).toBeTruthy();
   expect(screen.getByRole("region", { name: "Preview of your draft" })).toBeTruthy();
-  const before = screen.getByRole("region", { name: "Before you adopt" });
-  expect(within(before).getByRole("heading", { name: "When you adopt" })).toBeTruthy();
+  const before = screen.getByRole("region", { name: "Before you publish" });
+  expect(within(before).getByRole("heading", { name: "When you publish" })).toBeTruthy();
   expect(within(before).getByText("Docs and dashboards switch to it right away.")).toBeTruthy();
   const boxes = within(before).getAllByRole("checkbox");
   for (const box of boxes) fireEvent.click(box);

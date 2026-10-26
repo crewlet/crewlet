@@ -847,3 +847,99 @@ func TestALogSaysWhichNamedTurnsItsPageLists(t *testing.T) {
 		t.Errorf("naming nothing answered %v (%v), want an empty list", none, err)
 	}
 }
+
+// A FAILED TURN SAYS WHY ON ITS ROW, in the words of the record that ended it.
+//
+// The row said only that a turn failed, so whoever read the list (a lead on
+// their agent's trail, the assistant asked why a turn failed) could not say
+// why without the turn's raw events, an administrator's read. The turn's own
+// completion speaks first, a failed phase on the way does not override it, a
+// turn that died on a failure TYPE names that type, and a turn a person
+// stopped or one that ended well carries no reason. Mutation: drop the rank
+// and the phase's message wins the maximum; drop the event type from the kind
+// and the provider chain's turn has none.
+func TestAFailedTurnSaysWhyOnItsRow(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	appendAll := func(recs ...store.EventRecord) {
+		t.Helper()
+		for _, rec := range recs {
+			if rec.Tags == nil {
+				rec.Tags = map[string]string{}
+			}
+			rec.Tags["agent_role"], rec.Tags["agent_id"] = "QA", "id-qa"
+			rec.Category, rec.Actor = "lifecycle", "QA"
+			if err := log.Append(t.Context(), rec); err != nil {
+				t.Fatalf("append %s: %v", rec.ID, err)
+			}
+		}
+	}
+	payload := func(v map[string]any) json.RawMessage {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	appendAll(
+		store.EventRecord{ID: "ended-p0", Type: "agent_phase_completed", Time: at,
+			Tags:    map[string]string{"turn_id": "ended", "failed": "true"},
+			Payload: payload(map[string]any{"error": "write timed out", "error_kind": "timeout"})},
+		store.EventRecord{ID: "ended-done", Type: "agent_turn_completed",
+			Time:    at.Add(time.Second),
+			Tags:    map[string]string{"turn_id": "ended", "failed": "true"},
+			Payload: payload(map[string]any{"failed": true, "error": "the CLI never reached the seat's tools", "error_kind": "server"})},
+		store.EventRecord{ID: "chain-x", Type: "llm_unavailable", Time: at.Add(time.Minute),
+			Tags:    map[string]string{"turn_id": "chain"},
+			Payload: payload(map[string]any{"last_error": "every model was down"})},
+		store.EventRecord{ID: "stopped-done", Type: "agent_turn_completed",
+			Time:    at.Add(2 * time.Minute),
+			Tags:    map[string]string{"turn_id": "stopped"},
+			Payload: payload(map[string]any{"stopped": true, "error": "stopped by Ada", "error_kind": "stopped"})},
+		store.EventRecord{ID: "clean-p0", Type: "agent_phase_completed", Time: at.Add(3 * time.Minute),
+			Tags: map[string]string{"turn_id": "clean"}},
+	)
+
+	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-qa"})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	got := map[string][2]string{}
+	for _, row := range rows {
+		got[row.TurnID] = [2]string{row.Error, row.ErrorKind}
+	}
+	want := map[string][2]string{
+		"ended":   {"the CLI never reached the seat's tools", "server"},
+		"chain":   {"every model was down", "llm_unavailable"},
+		"stopped": {"", ""},
+		"clean":   {"", ""},
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("turn %s says why %q, want %q", id, got[id], w)
+		}
+	}
+}
+
+// A TURN RESUMED ON ANOTHER NODE SAYS WHY AS ONE LOG WOULD: each log folds its
+// own half into ranked text, and the fleet's combination takes the maximum
+// again, so the completion's reason on one node outranks a phase's on the
+// other whichever half is read first. Mutation: combine by taking the first
+// partial's value and the order decides.
+func TestTheFailureReasonCombinesAcrossLogs(t *testing.T) {
+	t.Parallel()
+	phase := store.TurnPartial{TurnID: "t", Failed: true, Error: "0write timed out",
+		ErrorKind: "0timeout"}
+	ended := store.TurnPartial{TurnID: "t", Failed: true, Error: "1the chain ran out",
+		ErrorKind: "1server"}
+	for _, parts := range [][]store.TurnPartial{{phase, ended}, {ended, phase}} {
+		turn := store.CombineTurnPartials(parts...).Turn()
+		if turn.Error != "the chain ran out" || turn.ErrorKind != "server" {
+			t.Errorf("combined %q (%q), want the completion's reason", turn.Error, turn.ErrorKind)
+		}
+	}
+	if turn := (store.TurnPartial{TurnID: "t"}).Turn(); turn.Error != "" || turn.ErrorKind != "" {
+		t.Errorf("a clean partial says %q (%q)", turn.Error, turn.ErrorKind)
+	}
+}

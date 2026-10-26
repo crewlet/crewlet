@@ -556,7 +556,23 @@ describe("the Nodes table", () => {
       return {
         heads: heads(grid),
         hidden: grid.parentElement?.querySelector(".crewlet-data-grid__foot")?.textContent ?? "",
+        stacked: grid.hasAttribute("data-stacked"),
       };
+    }
+
+    // The narrowest the grid still draws as columns. Squeezed past it, the
+    // kit's DataGrid stacks its rows into cards, which hide nothing, so the
+    // full give-way set is read one step before the grid stacks.
+    async function squeezedToColumns() {
+      let last = await drawn(486);
+      for (let width = 476; width > 0; width -= 10) {
+        cleanup();
+        const at = await drawn(width);
+        if (at.stacked) break;
+        last = at;
+      }
+      cleanup();
+      return last;
     }
 
     test("beside a peek it gives way whole columns, and never cuts one to a letter", async () => {
@@ -585,12 +601,18 @@ describe("the Nodes table", () => {
       expect(at.hidden).not.toContain("Hidden to fit");
     });
 
-    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed to
-    // nothing, every column that can give way does — and each one it names is
-    // a fact the node's own peek draws, so closing nothing and opening the
-    // node still answers what the row stopped saying.
-    test("every column it can give way is one the node's peek carries", async () => {
+    test("squeezed past its columns it stacks into card rows and hides nothing", async () => {
       const at = await drawn(160);
+      expect(at.stacked).toBe(true);
+      expect(at.hidden).not.toContain("Hidden to fit");
+    });
+
+    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed as far
+    // as it still draws columns, every column that can give way does, and
+    // each one it names is a fact the node's own peek draws, so closing
+    // nothing and opening the node still answers what the row stopped saying.
+    test("every column it can give way is one the node's peek carries", async () => {
+      const at = await squeezedToColumns();
       const hidden = at.hidden.replace(/^.*Hidden to fit:\s*/, "").split(/,\s*|\s+and\s+/);
       expect(hidden.sort()).toEqual(["Broker", "In flight", "Lease", "Roles", "Up since"]);
       cleanup();

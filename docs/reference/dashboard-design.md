@@ -668,7 +668,7 @@ Settings and Preferences as glyphs beside them.
 | **My work** | `#/me` | the open work assigned to you — the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
 | *Company* | | |
 | **Principles** | `#/company/principles` (and `#/company`) | none: the company's mission, vision and policies are every reader's |
-| **Brand** | `#/company/brand` | none: the adopted brand is every reader's, and adopting one is an Admin's on the page itself |
+| **Brand** | `#/company/brand` | none: the published brand is every reader's, and publishing one is an Admin's on the page itself |
 | **Org chart** | `#/company/org` | none |
 | **Schedules** | `#/company/schedules` | none |
 | **Integrations** | `#/company/integrations` | none; every reader opens it, and an app's state and connecting are an Admin's on the page itself |
@@ -1165,8 +1165,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/worklet/{KEY}` | **Project**: one project as Worklet's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/worklet/{KEY}-{n}` · `#/worklet/{id}` | **Task**: description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
-| `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the adopted version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, adopting a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
-| `#/company/brand/setup` | **Brand › Set up**: the company's brand set up in six steps (Identity, Logos, Colours, Typography, Voice, Review) on a page of its own, never a dialog: a vertical step rail, the step's fields in one column under a lead sentence saying why the part matters, and the Brand page's preview beside them labelled "Preview of your draft" (under the content at 1024; a Preview disclosure and a horizontal step row on a phone). Every Continue saves the step into a draft version of the company's kit (a keyed publish, never an adoption; the first makes the kit, shared with the company to view), and opening the page again resumes at the first step not done. Colours carries the contrast panel: the pair that refuses an adoption (text on the light ground) in danger tone, the advisory pairs in warning tone with their reason, and one-click shades that keep the hue. Review lists a summary card per step with Edit, the full preview and an acknowledgement for each contrast warning; an Admin, a person, finishes with **Adopt as the company brand**, and a person the kit is shared with to edit with **Save for review**. Entered from the Brand page's empty state, the Make row chip an Admin sees with no brand, the notice over an unadopted draft ("Continue setting up") and the Brand page's **Run setup again** | |
+| `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the published (adopted) version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, publishing a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
+| `#/company/brand/setup` | **Brand › Set up**: the company's brand set up in six steps (Identity, Logos, Colours, Typography, Voice, Review) on a page of its own, never a dialog: a vertical step rail, the step's fields in one column under a lead sentence saying why the part matters, and the Brand page's preview beside them labelled "Preview of your draft" (under the content at 1024; a Preview disclosure and a horizontal step row on a phone). Every Continue saves the step into a draft version of the company's kit (a keyed publish, never an adoption; the first makes the kit, shared with the company to view), and opening the page again resumes at the first step not done. Colours carries the contrast panel: the pair that refuses an adoption (text on the light ground) in danger tone, the advisory pairs in warning tone with their reason, and one-click shades that keep the hue. Review lists a summary card per step with Edit, the full preview and an acknowledgement for each contrast warning; an Admin, a person, finishes with **Publish as the company brand**, and a person the kit is shared with to edit with **Save for review**. Entered from the Brand page's empty state, the Make row chip an Admin sees with no brand, the notice over an unpublished draft (**Finish draft**, or **Edit draft** once it is ready) and the Brand page's **Run setup again** | |
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
@@ -7682,13 +7682,15 @@ switches its limit off (the answer's `off` and `default_off`). Limits is
 read-only and admin's, and Principles offers it as a related row to a reader
 who may open it.
 
-**The brand is Company's too, and adopted.** **Company › Brand**
+**The brand is Company's too, and published.** **Company › Brand**
 (`#/company/brand`) is how the company looks and sounds in everything its
 agents make. A brand KIT is an artifact of kind `brand` (its `brand.json` and
 the logo and font files it names), versioned like any artifact, which agents
 and editors may draft; the company's brand is the one version an
-administrator ADOPTED (`brand{}`), which the engine snapshots and serves by
-its bytes. The page draws that adoption as four cards in the Principles card
+administrator PUBLISHED (`brand{}`; an adoption in the engine's word, which
+`POST /brand/adoptions` and `artifacts.brand.adopt` keep, while every label a
+person reads says publish), which the engine snapshots and serves by its
+bytes. The page draws that adoption as four cards in the Principles card
 grammar, Logos (`image`: the name and tagline over three `LogoSlot`s, primary
 on a light ground, one for dark grounds and the square mark, each with a
 download), Colours (`blend`: each set role as a `ColorSwatch` with its value
@@ -7699,20 +7701,33 @@ doc or a slide, light or dark) in an `AsideLayout` that stacks it under the
 cards on a narrow page. An administrator, a person, edits one card at a time
 in place, the preview drawing every change; Save opens one dialog listing
 what changes (each colour with both values, each logo by its bytes), the
-contrast pairs that fall short, and what adopting makes public, then
-publishes a version of the company's kit and adopts it, the engine asking
-for a recent sign-in when the proof is stale. Text on the light ground below
-4.5:1 holds Save with the engine's own reason; every other pair warns. A
-version somebody else published is offered under the header ("Version 9 by
-@brand-agent is newer than the adopted version 7", with **Review and adopt**
-for an administrator). With no brand adopted, an administrator is offered
-**Set up your brand**, which opens the setup on a page of its own
+contrast pairs that fall short, and what publishing makes public (**Save
+and publish**), then publishes a version of the company's kit and adopts it,
+the engine asking for a recent sign-in when the proof is stale. Text on the
+light ground below 4.5:1 holds Save with the engine's own reason; every other
+pair warns. With no brand published, an administrator is offered **Set up
+your brand**, which opens the setup on a page of its own
 (`#/company/brand/setup`, six steps, each Continue saving a draft), and
-everyone else reads "No brand yet". A draft nobody adopted yet (one a setup
-left, or a version an agent or an editor published) is offered under the
-header with **Continue setting up**, and a draft that lacks a primary logo or
-colour says so ("Draft, not ready to adopt: add a primary logo and colour")
-and is never offered for adoption; the engine publishes such a draft and
+everyone else reads "No brand yet". A draft nobody published yet (one a setup
+left, or a version an agent or an editor published on the published kit) is
+offered under the header in a notice that says it is not live ("This draft
+of the Acme brand is not published yet, so artifacts still use Crewlet's
+look.", or "Version 9 of the Acme brand is a draft. Artifacts keep using the
+published version 7 until this one is published."), who last changed it and
+when (its version's author and day), and ONE primary action chosen by its
+readiness: **Publish brand** for an administrator once it is ready (the
+review of that version, then "Publish version 9 as the Acme brand?"), with
+**Edit draft** beside it; **Finish draft** while it lacks a primary logo or
+colour, beside the sentence saying so ("Not ready to publish: add a primary
+logo and colour"), never offered for publishing; an editor who may not
+publish reads that an administrator can review and publish it. With none
+published, the draft itself is drawn under the notice in the four cards,
+read-only, its preview tagged **Draft**, in place of "No brand yet". Its
+owner or an administrator, a person, may **Discard draft**, which confirms
+and moves the kit to the trash (`DELETE /artifacts/{id}`, `artifacts.trash`),
+restorable by its owner until it is purged; a newer version of the published
+kit is a version, not a kit, and is never offered for discarding. The engine
+publishes a draft that lacks a primary logo or colour as a version and
 refuses only to adopt it. **Run setup again** in the bar walks every part
 again, prefilled from the kit where it stands. The bar holds
 the kit's **History** and **Stop using this brand**. The brand meets people
@@ -7723,7 +7738,8 @@ Details (current, an older brand that changes at the next publish, or
 Crewlet's look; a deck, which copies the brand when it is made and never
 follows it, says "Made with the Acme brand of" the day it was made). A kit's
 own page draws the same cards and preview for the
-version on show, and says whether it is the adopted one.
+version on show, says whether it is the published one, and offers an
+administrator **Publish this version**.
 
 **Access** is the identity directory, over the routes `/iam` serves to an
 admin, split over three pages so that no row is drawn twice: People, Service

@@ -16,7 +16,6 @@ import {
   mayReadRecord,
   mayReadTrail,
   seatRun,
-  pillWord,
   placementWords,
   sandboxWords,
   seatSchedules,
@@ -136,18 +135,6 @@ describe("the week's change", () => {
     } as unknown as SeatActivityRow;
     expect(fortnight(row).map((d) => d.day)).toEqual(["2026-09-14", "2026-09-21"]);
     expect(fortnight(undefined)).toEqual([]);
-  });
-});
-
-describe("the state pill", () => {
-  test("names why a stopped seat stopped, in the engine's own reason", () => {
-    const stopped = (reason: string) =>
-      ({ role: "SWE", activity: "stopped", stopped_reason: reason }) as unknown as AgentRow;
-    expect(pillWord(stopped("paused"))).toBe("Paused");
-    expect(pillWord(stopped("budget"))).toBe("Stopped · budget");
-    expect(pillWord(stopped("unplaced"))).toBe("Not placed");
-    // A reason this build does not know is not guessed at.
-    expect(pillWord(stopped("gremlins"))).toBe("Stopped");
   });
 });
 

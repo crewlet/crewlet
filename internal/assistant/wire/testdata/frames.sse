@@ -48,7 +48,7 @@ data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":
 
 id: 3db96f52-a891-5953-9735-0ae522cf6347.13
 event: step
-data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":13,"at":"2026-10-24T09:41:01.3Z","kind":"step","step":{"step_id":"80829cda-345e-5425-afb7-e8b02cfb1fc4","index":2,"tool":"start_deep_work","label":"Deep work: redesign the brand assets","state":"running","started_at":"2026-10-24T09:41:00Z","deep":{"state":"running","goal":"Redesign the brand assets","started_at":"2026-10-24T09:41:00Z","deadline_at":"2026-10-24T10:01:00Z","steps":1,"max_steps":150,"budget_percent":12,"activity":["Reading the brand draft","[tool] Bash: rsvg-convert logo.svg -o logo.png"]}}}
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":13,"at":"2026-10-24T09:41:01.3Z","kind":"step","step":{"step_id":"80829cda-345e-5425-afb7-e8b02cfb1fc4","index":2,"tool":"start_deep_work","label":"Deep work: redesign the brand assets","state":"running","started_at":"2026-10-24T09:41:00Z","deep":{"state":"running","goal":"Redesign the brand assets","started_at":"2026-10-24T09:41:00Z","deadline_at":"2026-10-24T10:01:00Z","steps":1,"max_steps":150,"budget_percent":12,"activity":["Reading the brand draft","Ran a command"]}}}
 
 id: 3db96f52-a891-5953-9735-0ae522cf6347.14
 event: step

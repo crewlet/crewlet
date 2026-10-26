@@ -1109,8 +1109,15 @@ const (
 	// labelled value field moves the form field, the text area and the
 	// character count into the shared chunk the entry already loads. Moving
 	// the setup form and its dialogs onto that field took it to 340.3 KiB.
-	// 341 KiB, still under two seconds on that link.
-	initialBudget = 341 << 10
+	// 341 KiB, still under two seconds on that link. One vocabulary for seat
+	// states and the plain sentence for each failure kind, which the frame's
+	// shared seat words carry into the entry, took it to 341.1 KiB. 342 KiB,
+	// still under two seconds on that link. uilet 0.66.0 and choosing screen
+	// shapes by the screen's width took it to 345.6 KiB, the one sheet (the
+	// 0.64.1 alignment and spacing pass across every component family, the
+	// stacking grid and the screen width hooks) 115.5 KiB of it. 346 KiB,
+	// still under two seconds on that link.
+	initialBudget = 346 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1203,12 +1210,28 @@ const (
 	// own declaration (the address keys' schema in the entry's registry, the
 	// org builder's operation vocabulary, an open draft's fields), and each
 	// action's own revision took it to 4509.5 KiB. 4510 KiB, which still
-	// refuses a doubled baseline. Running every seat's executor as its coding
-	// CLI's own run took it to 4510.7 KiB: the Models screen's executor tile
-	// and "Runs as" column in place of the mode, the seat's executor box
-	// words, and the runs board's launching member and its run's empty
-	// tool-call state. 4511 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 415<<10
+	// refuses a doubled baseline. Telling the assistant what the Inbox's
+	// "Needs you" holds, from the model the page draws it with, and reading
+	// dates on the company clock took it to 4510.4 KiB, in the Inbox's chunk
+	// and the shared format module. 4511 KiB, which still refuses a doubled
+	// baseline. Drawing the assistant's cards in a person's terms (a seat cell
+	// by its name, a refusal by its kind, a pending change as pending, an
+	// administrator's technical rows), in the panel's chunk, took it to 4511.5
+	// KiB. 4512 KiB, which still refuses a doubled baseline. One vocabulary for
+	// seat states, the plain sentence for each failure kind with the engine's
+	// message behind a disclosure, the assistant's credit in every history and
+	// the org chart's reveal of a new seat took it to 4513.6 KiB. 4514 KiB,
+	// which still refuses a doubled baseline. uilet 0.66.0 (the 0.64.1
+	// alignment and spacing pass across every component family, the stacking
+	// grid and the screen width hooks, a card title registered once,
+	// ProposalCard's danger tone and details, the thread's jumps and
+	// near-future times) and choosing screen shapes by the screen's width took
+	// it to 4545.4 KiB. 4546 KiB, which still refuses a doubled baseline.
+	// Drawing a brand draft in its own cards with one next step, who last
+	// changed it and a confirmed discard, in the Brand page's chunk less the
+	// kit view's copy of the cards, which now shares the page's board, took it
+	// to 4547.1 KiB. 4548 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 452<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

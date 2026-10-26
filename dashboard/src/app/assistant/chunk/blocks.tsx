@@ -38,6 +38,7 @@ import {
   Callout,
   CopyButton,
   DeepWorkCard,
+  DiffView,
   EntityList,
   OpenInAppCard,
   PropertyList,
@@ -55,6 +56,8 @@ import {
   type RunState,
   type StepListStep,
   type StepState,
+  collapseDiff,
+  diffLines,
 } from "@crewlethq/ui";
 import { ArrowUpRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import {
@@ -185,6 +188,26 @@ export function factText(fact: { value: string; type?: WireColumnType }): string
   return CELL[type](NUMERIC.has(type) && fact.value !== "" && Number.isFinite(n) ? n : fact.value);
 }
 
+/**
+ * Whether a refusal is about the person's access: the API's permission codes,
+ * or a refusal naming the grants that would admit them. Every other refusal
+ * (a value not accepted, a record not found, a request the assistant wrote
+ * wrong) is not a permission problem and is never drawn as one.
+ */
+export function isAccessRefusal(refusal: { code: string; grants?: string[] } | undefined): boolean {
+  if (!refusal) return false;
+  if ((refusal.grants ?? []).length > 0) return true;
+  return ACCESS_CODES.has(refusal.code);
+}
+
+/** The refusal codes that are about the person's access. */
+const ACCESS_CODES: ReadonlySet<string> = new Set([
+  "unauthorized",
+  "forbidden",
+  "access_withdrawn",
+  "assistant_not_permitted",
+]);
+
 /** A number of seconds, as the run chip says it. */
 function seconds(ms: number): string {
   return ms < 10_000 ? `${(ms / 1000).toFixed(ms < 1000 ? 1 : 0)}s` : `${Math.round(ms / 1000)}s`;
@@ -239,8 +262,15 @@ export function runChipOf(
         meta: taken > 0 ? `${done} of ${steps(taken)}` : undefined,
       };
     }
-    case "refused":
+    case "refused": {
+      // NOT PERMITTED ONLY FOR AN ACCESS REFUSAL: a value the engine did not
+      // accept is not a permission problem.
+      const at = turn.steps.find((s) => s.state === "refused");
+      if (at && !isAccessRefusal(at.refusal)) {
+        return { state, title: "Could not finish", meta: stepMeta(taken) };
+      }
       return { state, title: "Not permitted", meta: stepMeta(taken) };
+    }
     case "unconfirmed":
       return { state, title: "Could not confirm the change" };
     case "failed":
@@ -248,7 +278,10 @@ export function runChipOf(
     case "budget_exhausted": {
       const at = turn.steps.find((s) => s.state === "failed" || s.state === "refused");
       const refused = at?.state === "refused";
-      if (refused) return { state: "refused", title: "Not permitted", meta: stepMeta(taken) };
+      if (refused && isAccessRefusal(at.refusal)) {
+        return { state: "refused", title: "Not permitted", meta: stepMeta(taken) };
+      }
+      if (refused) return { state, title: `Could not finish step ${at.index}` };
       return { state, title: at ? `Failed at step ${at.index}` : "Failed" };
     }
   }
@@ -326,39 +359,50 @@ export function chipStepsOf(turn: TurnView): AssistantStepEvent[] {
   );
 }
 
-/** A turn's chip steps as `StepList` draws them. */
-export function stepsOf(turn: TurnView): StepListStep[] {
-  return stepListOf(chipStepsOf(turn));
+/** A turn's chip steps as `StepList` draws them; `technical` for an administrator. */
+export function stepsOf(turn: TurnView, technical: boolean): StepListStep[] {
+  return stepListOf(chipStepsOf(turn), technical);
 }
 
-/** Steps as `StepList` draws them: the label, the request it made in mono, its time. */
-export function stepListOf(steps: readonly AssistantStepEvent[]): StepListStep[] {
+/**
+ * Steps as `StepList` draws them: the engine's sentence for each, its time,
+ * and what its line says under it ([stepDetail]).
+ */
+export function stepListOf(
+  steps: readonly AssistantStepEvent[],
+  technical: boolean,
+): StepListStep[] {
   return steps.map((step) => {
     const duration = stepDuration(step.duration_ms);
+    const detail = stepDetail(step, technical);
     return {
       id: step.step_id,
       label: step.label,
       state: STEP_STATE[step.state],
       ...(duration === undefined ? {} : { duration }),
-      detail: stepDetail(step),
+      ...(detail === "" ? {} : { detail }),
     };
   });
 }
 
 /**
- * What a step's line says under its sentence: the request it made, and for a
- * step that failed or was refused, why, in the engine's own words, with what
- * to do about it where the route said.
+ * What a step's line says under its sentence: for a step that failed or was
+ * refused, why, in the engine's sentence for a person.
+ *
+ * NO TOOL NAME, EVER, AND THE REQUEST ONLY FOR AN ADMINISTRATOR. A step's
+ * sentence ("Listing tasks") is what it did; "list_tasks · GET /worklet" is
+ * how the engine spells it, which a person does not read. The request, in
+ * mono, is the administrator's: the same technical detail a proposal keeps
+ * behind its disclosure.
  */
-function stepDetail(step: TurnView["steps"][number]): string {
-  const request = step.request
-    ? `${step.tool} · ${step.request.method} ${step.request.route}`
-    : step.tool;
+export function stepDetail(step: TurnView["steps"][number], technical: boolean): string {
+  const request = technical && step.request ? `${step.request.method} ${step.request.route}` : "";
   if (step.state !== "failed" && step.state !== "refused") return request;
   const why = step.refusal
     ? [step.refusal.message, step.refusal.hint].filter(Boolean).join(" ")
     : (step.summary ?? "");
-  return why ? `${why} (${request})` : request;
+  if (why === "") return request;
+  return request === "" ? why : `${why} (${request})`;
 }
 
 /** A deep run's time, rounded to the second it is said in. */
@@ -426,14 +470,22 @@ export function deepNote(deep: AssistantDeepProgress): string | undefined {
 }
 
 /** A deep run, as its card at its latest state, with the steps it made nested under it. */
-export function DeepRunBlock({ run, now }: { run: DeepRun; now: number }) {
+export function DeepRunBlock({
+  run,
+  now,
+  technical,
+}: {
+  run: DeepRun;
+  now: number;
+  technical: boolean;
+}) {
   return (
     <DeepWorkCard
       state={DEEP_STATE[run.deep.state]}
       goal={run.deep.goal}
       measures={deepMeasures(run, now)}
       activity={(run.deep.activity ?? []).slice(-ASSISTANT_DEEP_ACTIVITY_LINES)}
-      steps={stepListOf(run.children)}
+      steps={stepListOf(run.children, technical)}
       note={deepNote(run.deep)}
     />
   );
@@ -489,14 +541,54 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
         return { ...base, kind: "added", to: to.node, isNew: change.new === true, block: to.block };
       case "removed":
         return { ...base, kind: "removed", from: from.node, block: from.block };
-      case "text":
+      case "text": {
+        // A TEXT ACROSS LINES (a page's body) IS DRAWN AS THE DOCUMENT IT IS,
+        // a line diff the way the page's own History draws it: a word diff
+        // ran its headings and bullets into one paragraph and read a line
+        // break as a word removed and added again.
+        const before = change.from ?? "";
+        const after = change.to ?? "";
+        if (before.includes("\n") || after.includes("\n")) {
+          return {
+            ...base,
+            kind: "fact",
+            value: (
+              <DiffView
+                aria-label={change.label}
+                sections={collapseDiff(diffLines(before, after))}
+              />
+            ),
+            block: true,
+          };
+        }
         return {
           ...base,
           kind: "text",
           words: (change.words ?? []).map((w) => ({ op: WORD_OP[w.op], text: w.text })),
         };
+      }
     }
   });
+  // THE EXACT REQUEST, which the engine sends to an administrator alone, as
+  // the last rows until the card has a "Technical details" disclosure of its
+  // own (uilet's ProposalCard `details`).
+  const technical = proposal.technical;
+  if (technical) {
+    rows.push({
+      kind: "fact",
+      label: "Request (technical details)",
+      value: <code>{`${technical.method} ${technical.path}`}</code>,
+    });
+    if (technical.body) {
+      const body = drawValue(technical.body);
+      rows.push({
+        kind: "fact",
+        label: "Request body (technical details)",
+        value: body.node,
+        block: body.block,
+      });
+    }
+  }
   const audience = proposal.audience ?? [];
   if (audience.length === 0) return rows;
   const facts = rows.findIndex((row) => row.kind !== "fact");
@@ -506,22 +598,6 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
     { kind: "fact", label: "Who will see it", value: audience.join(", ") },
     ...rows.slice(at),
   ];
-}
-
-/**
- * What a replacing change removes, as the sentence the card leads with: never
- * only a struck-through row among the others, so a person approving "add a
- * seat" sees that it also takes the unit's project away (ADR-0055). Nothing
- * where the change removes nothing.
- */
-export function removalSummary(proposal: AssistantProposalCard): string | undefined {
-  const removes = (proposal.removes ?? []).filter((label) => label.trim() !== "");
-  if (removes.length === 0) return undefined;
-  const named =
-    removes.length === 1
-      ? removes[0]
-      : `${removes.slice(0, -1).join(", ")} and ${removes[removes.length - 1]}`;
-  return `This also removes ${named}. Approve only if you asked for that.`;
 }
 
 /** What the person does with a proposal: the drawer's session answers each. */
@@ -652,11 +728,13 @@ function Proposal({
   return (
     <ProposalCard
       title={proposal.title}
-      subtitle={proposal.scope === "page" ? "This page only" : "Saved for the company"}
+      subtitle={scopeLine(proposal.scope, state)}
       scope={proposal.scope}
       state={state}
-      // WHAT IT REMOVES LEADS THE CARD, above every row (removalSummary).
-      summary={removalSummary(proposal)}
+      // WHAT IT DOES LEADS THE CARD, above every row, in the engine's words:
+      // what a destructive change takes away (ADR-0055), never only a
+      // struck-through row among the others.
+      summary={proposal.summary}
       changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
       note={proposal.note}
       // THE SCREEN'S GATE HOLDS APPROVE, with its sentence, before the person
@@ -682,6 +760,24 @@ function Proposal({
       }
     />
   );
+}
+
+/**
+ * Where a change lands, as the card's subtitle, in words true at its state: a
+ * company change still waiting is not "Saved" yet.
+ */
+export function scopeLine(scope: AssistantProposalCard["scope"], state: ProposalState): string {
+  if (scope === "page") return "This page only";
+  switch (state) {
+    case "applied":
+      return "Saved for the company";
+    case "pending":
+    case "stepup":
+    case "applying":
+      return "For the company, once approved";
+    default:
+      return "For the company";
+  }
 }
 
 /** A count of things in words: "1 row", "7 rows". */
@@ -799,10 +895,18 @@ function EngineLink({ link, on }: { link: { label: string; href: string }; on: C
   );
 }
 
-/** Where an address goes, as a trail of the dashboard's own crumbs. */
-function placeOf(target: InAppTarget): string {
+/** A crumb that is a record's raw id (a UUID), which a person does not read. */
+const RAW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Where an address goes, as a trail of the dashboard's own crumbs, without a
+ * raw id: "Live › Turns", never "Live › Turns › 01a175e0-6ced-...". The card's
+ * title names the record.
+ */
+export function placeOf(target: InAppTarget): string {
   return crumbsFor(target.path)
     .map((c) => c.label)
+    .filter((label) => !RAW_ID.test(label.trim()))
     .join(" › ");
 }
 
@@ -924,11 +1028,22 @@ export function CardBlock({
       const { refusal, phrase } = card.error;
       // THE CARD'S OWN NEXT STEP, or else the route's (the envelope's `hint`).
       const hint = card.error.hint ?? refusal.hint;
+      const asked = phrase ? `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}` : undefined;
+      // A REFUSAL THAT IS NOT ABOUT ACCESS (a value not accepted, a record
+      // not found) is never drawn as "You do not have permission".
+      if (!isAccessRefusal(refusal)) {
+        return (
+          <Callout variant="warning" title={asked ?? "This could not be done"}>
+            {refusal.message}
+            {hint ? ` ${hint}` : ""}
+          </Callout>
+        );
+      }
       return (
         <RefusalCard
           // THE HEAD NAMES WHAT WAS ASKED FOR ("Read the fleet"), and the
           // card's own tag says it was not permitted; the sentence says why.
-          title={phrase ? `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}` : "Not permitted"}
+          title={asked ?? "Not permitted"}
           heading={phrase ? `You do not have permission to ${phrase}.` : undefined}
           actions={
             <CopyButton

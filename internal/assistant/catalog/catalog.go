@@ -39,6 +39,15 @@
 // wrote (ADR-0040) and with every marker defused where it does not. A second
 // copy of any step elsewhere is a step that can be skipped.
 //
+// # Names resolve to keys before anything is built
+//
+// A person names a seat, a unit, a project or a space by its name, and a route
+// takes its key. A tool declares the arguments that name one ([Tool.Names]),
+// and [Resolver.Resolve] replaces a name with the key, reading each directory
+// through the turn's grant, before a read is sent or a write is previewed
+// (names.go). It never decides access: a directory the person cannot read
+// resolves nothing, and the route decides the value as written.
+//
 // # A write is previewed from the object as it is now
 //
 // Every write and page action carries its Preview (internal/assistant/proposal):
@@ -208,6 +217,18 @@ type Tool struct {
 	Infer bool
 	// Label renders the step's sentence from the call's safe arguments.
 	Label func(args map[string]any) string
+	// Scope is what the call's arguments narrowed a read to, in a few words
+	// a person reads ("last 14 days", "urgent, due in the next 7 days"),
+	// or "" for a call that narrowed nothing. The step's label and the
+	// card's title both carry it ([Tool.StepLabel], [Shape]), so two reads
+	// of one tool with different arguments never look like one read drawn
+	// twice.
+	Scope func(args Args) string
+	// Names are the arguments that name a seat, a unit, a project or a
+	// space, each by its directory: the call takes the record's key or its
+	// name, and the turn resolves a name to the key before the request or
+	// the preview is built ([Resolver.Resolve]).
+	Names map[string]Directory
 	// Build turns the call's arguments into the one request it sends, on
 	// one of Routes. Call it through [Tool.Request], which checks the
 	// arguments against the schema first and the request against Routes
@@ -263,7 +284,7 @@ type Tool struct {
 func (t Tool) StepLabel(args map[string]any) string {
 	if t.Label != nil {
 		if l := strings.TrimSpace(t.Label(args)); l != "" {
-			return l
+			return withScope(l, t.ScopeOf(Args(args)))
 		}
 	}
 	switch t.Kind {
@@ -281,6 +302,23 @@ func (t Tool) StepLabel(args map[string]any) string {
 		return t.Name
 	}
 	return strings.ToUpper(t.Phrase[:1]) + t.Phrase[1:]
+}
+
+// ScopeOf is the call's scope ([Tool.Scope]), "" for a tool that states none.
+func (t Tool) ScopeOf(args Args) string {
+	if t.Scope == nil {
+		return ""
+	}
+	return strings.TrimSpace(t.Scope(args))
+}
+
+// withScope is a label or a title with the call's scope after it, the one
+// spelling a step and a card share.
+func withScope(text, scope string) string {
+	if scope == "" {
+		return text
+	}
+	return text + ", " + scope
 }
 
 // Check reports what is wrong with a call's arguments, wrapping

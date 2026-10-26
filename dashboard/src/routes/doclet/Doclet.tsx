@@ -106,6 +106,7 @@ import type {
   QueryRefusal,
 } from "~/protocol/index.ts";
 import {
+  changeAuthor,
   Face,
   DocletBar,
   NewPageButton,
@@ -360,7 +361,7 @@ function LatestChange({ run, detail }: { run: Run; detail: PageDetail | null }) 
       <p className="knowledge-latest-who">
         <Face handle={by} who={who} />
         <span>
-          <b>{by ? who(by).name : "The engine"}</b> {runPhrase(run)}
+          <b>{changeAuthor(change, who)}</b> {runPhrase(run)}
         </span>
         <span className="spacer" />
         <time dateTime={change.at} title={`${relTime(change.at, now)}, ${fmtDateTime(change.at)}`}>
@@ -564,7 +565,7 @@ function WrittenRow({
       <span className="knowledge-tile-text">
         <span className="truncate">{change.title || "A page that is gone"}</span>
         <span className="knowledge-tile-meta truncate">
-          {by ? who(by).name : "The engine"} {runPhrase(run)}
+          {changeAuthor(change, who)} {runPhrase(run)}
         </span>
         {note && (
           <span className="knowledge-written-note clamp">

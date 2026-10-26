@@ -4690,6 +4690,11 @@ export interface TurnRow {
    *  question from its outcome: a turn can recover from a failed provider
    *  call and still end well. */
   failed: boolean;
+  /** Why it failed: the message and class of the record that ended it (the
+   *  turn's own completion first, then a failed phase or a failure event).
+   *  Absent for a turn that carried no failure. */
+  error?: string;
+  error_kind?: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
@@ -5485,7 +5490,7 @@ export interface BrandAnswer {
     adopted_at: string;
     /**
      * The newest version of the adopted kit, when it is newer than the
-     * adopted one: the "Review and adopt" banner. Answered only to a reader
+     * adopted one: the Brand page's draft notice. Answered only to a reader
      * who can see the kit or is an administrator.
      */
     newer_version?: number;

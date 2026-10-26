@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/live"
@@ -177,11 +178,19 @@ func (t *turn) stepStart(tool catalog.Tool, args map[string]any, req *wire.StepR
 // stepEnd closes a step in its final state: shown, recorded in the
 // transcript, counted and kept for the turn's audit record. status and bytes
 // are the route's answer, zero for a step that sent nothing.
+//
+// A STEP'S REFUSAL IS SHOWN IN THE PERSON'S WORDS ([cards.PersonRefusal]):
+// whatever the route or the assistant's own check said is the model's, and
+// the caller hands it to the model on its own channel.
 func (t *turn) stepEnd(ctx context.Context, step stepClock, state wire.StepState, summary string,
 	refusal *wire.Refusal, status, bytes int) {
 
 	ev := step.StepEvent
-	ev.State, ev.Summary, ev.Refusal = state, summary, refusal
+	ev.State, ev.Summary = state, summary
+	if refusal != nil {
+		shown := cards.PersonRefusal(*refusal, status)
+		ev.Refusal = &shown
+	}
 	ev.DurationMS = t.svc.now().Sub(step.started).Milliseconds()
 	t.emit(wire.Frame{Kind: wire.EventStep, Step: &ev})
 	t.mu.Lock()
