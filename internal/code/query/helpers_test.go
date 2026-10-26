@@ -1,11 +1,12 @@
 package query_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 
@@ -201,27 +202,32 @@ func unready(err error, why code.UnreadyReason) bool {
 	return errors.As(err, &u) && u.Reason == why
 }
 
-// recording is a query.Pool that records every Cmd it runs before running it
-// on the pool beneath.
+// recording is a query.Pool that records every Cmd it runs, and what each
+// was fed on its standard input, before running it on the pool beneath.
 type recording struct {
 	query.Pool
 	mu   sync.Mutex
-	cmds []gitproc.Cmd
-	// stdin is what each cat-file batch was fed, in order.
-	stdin []string
+	runs []run
+}
+
+// run is one Cmd a recording ran, and its whole standard input.
+type run struct {
+	cmd   gitproc.Cmd
+	stdin string
 }
 
 func (r *recording) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
-	r.mu.Lock()
 	c.Args = slices.Clone(c.Args)
-	r.cmds = append(r.cmds, c)
-	if c.Stdin != nil && len(c.Args) > 1 && c.Args[0] == "cat-file" {
-		b := new(strings.Builder)
-		if src, ok := c.Stdin.(interface{ String() string }); ok {
-			b.WriteString(src.String())
+	var in []byte
+	if c.Stdin != nil {
+		var err error
+		if in, err = io.ReadAll(c.Stdin); err != nil {
+			return gitproc.Result{}, err
 		}
-		r.stdin = append(r.stdin, b.String())
+		c.Stdin = bytes.NewReader(in)
 	}
+	r.mu.Lock()
+	r.runs = append(r.runs, run{cmd: c, stdin: string(in)})
 	r.mu.Unlock()
 	return r.Pool.Run(ctx, c)
 }
@@ -230,14 +236,38 @@ func (r *recording) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, err
 func (r *recording) ran() []gitproc.Cmd {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.Clone(r.cmds)
+	cmds := make([]gitproc.Cmd, len(r.runs))
+	for i, x := range r.runs {
+		cmds[i] = x.cmd
+	}
+	return cmds
 }
 
-// fed is every cat-file batch's input so far.
-func (r *recording) fed() []string {
+// fed is the input of every process recorded so far whose subcommand is sub.
+func (r *recording) fed(sub string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.Clone(r.stdin)
+	var out []string
+	for _, x := range r.runs {
+		if x.cmd.Args[0] == sub {
+			out = append(out, x.stdin)
+		}
+	}
+	return out
+}
+
+// since is every run recorded from the n-th on.
+func (r *recording) since(n int) []run {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.runs[min(n, len(r.runs)):])
+}
+
+// count is how many runs are recorded.
+func (r *recording) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.runs)
 }
 
 // counter is name's total over the series whose attributes include attrs.

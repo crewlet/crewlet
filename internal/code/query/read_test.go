@@ -31,10 +31,12 @@ import (
 // a read ran is held to its template: the kind's fixed options, whole ids at
 // their places, and `--disambiguate=` validated hex, the one option argument a
 // read builds. Each path was fed to cat-file's batch, `<id>:<path>`, where it
-// is a name like any other. This is what keeps diff-tree's, diff's and
-// rev-list's `--output` out — the writers gate argues their run-time
-// arguments in its allowance — so an argument a read adds is red here. A
-// landed-in read's ancestry checks are held too: whole ids, both sides.
+// is a name like any other, and a filtered stat's and a patch's files to
+// diff-pairs as the raw records diff-tree wrote. This is what keeps
+// diff-tree's, diff-pairs' and rev-list's `--output` out — the writers gate
+// argues their run-time arguments in its allowance — so an argument a read
+// adds is red here. A landed-in read's ancestry checks are held too: whole
+// ids, both sides.
 func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -76,10 +78,16 @@ func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 			t.Errorf("a read ran git %q, which no template of a read admits", c.Args)
 		}
 	}
-	fed := strings.Join(rec.fed(), "\x00")
+	fed := strings.Join(rec.fed("cat-file"), "\x00")
 	for _, p := range paths {
 		if !strings.Contains(fed, head+":"+p+"\x00") {
 			t.Errorf("no batch was fed %q as <id>:<path>", p)
+		}
+	}
+	pairs := strings.Join(rec.fed("diff-pairs"), "")
+	for _, p := range []string{"--output=x/f", "-r", "-M"} {
+		if !strings.Contains(pairs, "\x00"+p+"\x00") {
+			t.Errorf("diff-pairs was fed no raw record of %q", p)
 		}
 	}
 }
@@ -97,7 +105,8 @@ var templates = [][]string{
 	{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff", "--no-textconv", "-M", "<oid>", "<oid>"},
 	{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff", "--no-textconv", "<oid>", "<oid>"},
 	{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff", "--no-textconv", "-M", "<oid>", "<oid>"},
-	{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "<oid>", "<oid>"},
+	{"diff-pairs", "-z", "--numstat", "--no-ext-diff", "--no-textconv"},
+	{"diff-pairs", "-z", "-p", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "-U3"},
 	{"merge-base", "<oid>", "<oid>"},
 	{"merge-base", "--is-ancestor", "<oid>", "<oid>"},
 	{"rev-list", "--left-right", "--count", "<range>"},

@@ -55,17 +55,19 @@
 //
 // A read's argument lists carry fixed options and validated whole ids — and
 // `--disambiguate=` an abbreviation's validated digits, the one option
-// argument a read builds. A PATH reaches git only on `git cat-file
-// --batch-check -Z`'s standard input, which resolves `<id>:<path>` to the id
-// of the tree or file it names, so every later process is handed that id; a
-// path is never a pathspec (a diff's paths are filtered here, over git's whole
+// argument a read builds. A PATH reaches git only on a standard input: `git
+// cat-file --batch-check -Z`'s, which resolves `<id>:<path>` to the id of the
+// tree or file it names, so every later process is handed that id, and `git
+// diff-pairs -z`'s, which reads back the raw records diff-tree wrote, paths
+// and all, to count or patch the files a diff read asks for (diff.go). A path
+// is never a pathspec (a diff's paths are filtered here, over git's whole raw
 // answer), and no option can hide in one: `--output=x` is a file's name there
 // like any other. TestAPathReachesGitOnlyOnStandardInput holds every argument
-// list a read runs to its template. diff-tree, diff and rev-list each take
-// `--output`, which creates the file it names in the repository they run in:
-// the writers gate (cache.TestNothingButSyncWritesACache) argues each of this
-// package's run-time arguments — whole ids, and `-M` — in its allowance, and
-// the template test is what keeps an `--output` out.
+// list a read runs to its template. diff-tree, diff-pairs and rev-list each
+// take `--output`, which creates the file it names in the repository they run
+// in: the writers gate (cache.TestNothingButSyncWritesACache) argues each of
+// this package's run-time arguments — whole ids, and `-M` — in its allowance,
+// and the template test is what keeps an `--output` out.
 //
 // # The share: half the read lane, around a read's long git only
 //

@@ -466,14 +466,12 @@ var cacheWriters = []writerRow{
 		"the hook relay's private socket directory under TMPDIR, made at Start and removed at Stop: no " +
 			"path of the cache's", nil},
 	{"internal/code/query/diff.go", kindGit + " diff-tree",
-		"a seat's read of a diff — its stat, and the raw record of the one file a patch names — whose only " +
-			"arguments not spelled as literals are the two whole object ids a read resolved and `-M`; a " +
-			"path never reaches the command line (the stat is filtered after git answers), and " +
-			"query.TestAPathReachesGitOnlyOnStandardInput holds every argument list to its template, so no " +
-			"--output can be added unseen", nil},
-	{"internal/code/query/diff.go", kindGit + " diff",
-		"a seat's read of one file's patch: two whole blob ids from the stat, after fixed options; " +
-			"query.TestAPathReachesGitOnlyOnStandardInput holds the argument list to its template", nil},
+		"a seat's read of a diff — its stat's raw records, with their counts where the stat names no paths, " +
+			"and the raw record of the one file a patch names — whose only arguments not spelled as literals " +
+			"are the two whole object ids a read resolved and `-M`; a path never reaches the command line (the " +
+			"stat is filtered after git answers, and the records it admits reach diff-pairs on its standard " +
+			"input), and query.TestAPathReachesGitOnlyOnStandardInput holds every argument list to its " +
+			"template, so no --output can be added unseen", nil},
 	{"internal/code/query/compare.go", kindGit + " rev-list",
 		"a seat's comparison of two commits: `--left-right --count <base>...<head>` over two whole commit " +
 			"ids a read resolved; query.TestAPathReachesGitOnlyOnStandardInput holds the argument list to its " +
@@ -528,8 +526,9 @@ var gitReaders = map[string]gitReader{
 	"diff-tree": {writes: "--output", why: "compares two trees by id; --output, a diff option, creates the " +
 		"file it names in the directory git runs in (2.56.0: `diff-tree --output=f <a> <b>` exits 0 and " +
 		"leaves f behind)"},
-	"diff": {writes: "--output", why: "compares two blobs by id; --output creates the file it names in the " +
-		"directory git runs in (2.56.0: `diff --output=f <a> <b>` exits 0 and leaves f behind)"},
+	"diff-pairs": {writes: "--output", why: "diffs the pairs of blobs diff-tree's raw records on its standard " +
+		"input name, by id; --output, a diff option, creates the file it names in the directory git runs in " +
+		"(2.56.0: `diff-pairs -z --numstat --output=f` exits 0 and leaves f behind)"},
 }
 
 const uploadPackReads = "serves a fetch: its pack goes to the client, and the one file it writes in the " +

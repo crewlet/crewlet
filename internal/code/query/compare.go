@@ -63,7 +63,8 @@ func (r *read) compareRead(ctx context.Context, objs found) (code.GitAnswer, err
 		Compare: &code.CompareAnswer{Base: base.peeled, Head: head.peeled, MergeBase: mb, BaseIsAncestor: true,
 			HeadIsAncestor: true, Ahead: widest, Behind: widest, Files: []code.DiffFile{}, Total: widest,
 			Added: widest, Deleted: widest}}
-	st, err := r.stat(ctx, mb, head.peeled, nil, false, 0, r.room(envelope))
+	st, err := r.stat(ctx, mb, head.peeled, nil, false, 0, r.room(envelope),
+		"diff the merge base and head naming paths, or compare commits closer together")
 	if err != nil {
 		return code.GitAnswer{}, err
 	}

@@ -526,6 +526,11 @@ var allowedConfig = map[string]string{
 	// requires; pinned so a future default cannot store one no cache accepts.
 	// Written by the same index-pack as the .rev, never by pack-objects.
 	"pack.indexversion": "the receive configuration, and an engine write's index-pack in its scratch",
+	// How git writes a path in what it prints, and nothing else: off, a path
+	// is quoted only where a quote, a backslash or a control byte would break
+	// its line, rather than every byte past ASCII written as an octal escape.
+	"core.quotepath": "a seat's read of one file's patch (internal/code/query's diff-pairs): its header names " +
+		"a UTF-8 path as it is, as the stat beside it does",
 }
 
 // subcommand is what Args[0] must be.

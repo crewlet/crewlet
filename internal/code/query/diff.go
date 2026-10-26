@@ -5,47 +5,57 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// A DIFF'S STAT is ONE `git diff-tree -z -r --raw --numstat --no-ext-diff
-// --no-textconv [-M] <base> <head>`, both ids whole, and NO PATHSPEC: the
-// paths a stat is filtered by are judged here, over git's whole answer — a
-// path equal to an entry, or a directory above it — so no path ever reaches
-// git's command line. git writes every raw record (modes, ids, status and the
-// path, or a rename's two) before every numstat record (the lines added and
-// deleted, `-` for a binary file), in the same order; so the raw half decides
-// which files the page holds — each costed as its encoding with its counts at
-// their widest, so where a page ends never depends on a count it has not read
-// yet — and remembers of every other file only whether the filter admits it,
-// one flag a file, and the numstat half fills the page's counts and the
-// totals. Totals are over every file the filter admits, on every page.
+// A DIFF'S STAT is two halves: git's RAW RECORDS of base..head — `git
+// diff-tree -z -r --raw [-M] <base> <head>`, both ids whole and NO PATHSPEC, a
+// walk of the two trees that reads no file but a rename's candidates (-M) —
+// and the NUMSTAT of the files the stat admits, the lines each adds and
+// deletes, for which git diffs the text of every pair it counts: that half is
+// what a stat costs. The paths a stat is filtered by are judged here, over
+// git's whole raw answer — a path equal to an entry, or a directory above it,
+// on either side of a rename — so no path ever reaches git's command line,
+// and then ONLY THE FILES THE FILTER ADMITS ARE COUNTED: their raw records,
+// exactly as diff-tree wrote them, go to `git diff-pairs -z --numstat` on its
+// standard input (git 2.50's, which every git node's 2.55 floor carries),
+// which diffs those pairs and no other. So naming one directory of a diff of
+// thousands of files costs git that directory's diffs: measured over this
+// repository's 5 866 files changed between two commits (git 2.53, one core),
+// the whole raw+numstat took 0.80–0.97 s, the raw records alone 13 ms and
+// diff-pairs over internal/code/query's 18 files 5–6 ms. A stat naming no
+// paths admits every file, and its counts are the whole diff's numstat, which
+// one diff-tree writes after its raw records and in their order (`--raw
+// --numstat`): one process, as cheap as a stat of the whole can be.
 //
-// ONE FILE'S PATCH is the same diff-tree's raw half (no counts), read until the
-// file, then the file's hunks: `git diff --no-color --no-ext-diff
-// --no-textconv -U3 <old blob> <new blob>` where both sides hold a blob, its
-// header lines — which name the blobs' ids — replaced by ones naming the paths,
-// as git's own patch of the commits would name them. A file one side lacks
-// (added or deleted), or a submodule, has no blob pair for git to diff — the
-// empty blob is no object of a repository unless something put it there, and
-// nothing here may — so its hunk is written here, git's form exactly: the
-// blob's lines, each `+` or `-`, under one hunk header counted by a first read
-// of it, and `\ No newline at end of file` where git writes one. A page of a
-// patch is whole lines from a byte offset while their encoded text fits; a
-// line longer than a page is refused naming the narrowing (the file's own
+// The raw half decides which files the page holds — each costed as its
+// encoding with its counts at their widest, so where a page ends never depends
+// on a count not read yet — and the numstat half, its j-th record the j-th
+// file admitted, fills the page's counts and the totals, which are over every
+// file the filter admits, on every page. A filtered stat holds the records it
+// admitted until diff-pairs has read them: about 160 bytes a file at a
+// sixty-byte path, 16 MB for a filter admitting every file of a 100 000-file
+// diff.
+//
+// ONE FILE'S PATCH is the same raw records read until the file's, and that
+// one record handed to `git diff-pairs -z -p --full-index`: git's own patch of
+// the two commits for the one file — its header naming the paths, quoted only
+// where a quote, a backslash or a control byte would break the line
+// (core.quotePath off, so a UTF-8 path is written as it is, as the stat beside
+// it names it); `index` naming both blobs whole, so a patch is the same bytes
+// on every node whatever ids its objects share prefixes with, and a byte
+// cursor is sound anywhere; a file added or deleted against /dev/null, a
+// change of type as the deletion and the creation git prints for it, a
+// submodule's commits, and a binary pair's one line, which is how the answer
+// knows the pair is binary. One process, which streams nothing twice. A page
+// of a patch is whole lines from a byte offset while their encoded text fits;
+// a line longer than a page is refused naming the narrowing (the file's own
 // lines), never cut.
-//
-// THE PATCH'S HEADER quotes a path as git does where it holds a quote, a
-// backslash, a control byte or a byte that is not UTF-8 — C's escapes inside
-// double quotes — and leaves other UTF-8 as it is (git's core.quotePath off),
-// and its `index` line names both blobs whole.
 
 // diffRead answers a diff read: a page of its stat, or of one file's patch.
 func (r *read) diffRead(ctx context.Context, objs found, at cursor) (code.GitAnswer, error) {
@@ -68,7 +78,8 @@ func (r *read) diffRead(ctx context.Context, objs found, at cursor) (code.GitAns
 	envelope := code.GitAnswer{Kind: code.GitDiff, Next: widestCursor('f', 1),
 		Diff: &code.DiffAnswer{Base: base.peeled, Head: head.peeled, Files: []code.DiffFile{}, Total: widest,
 			Added: widest, Deleted: widest}}
-	st, err := r.stat(ctx, base.peeled, head.peeled, q.Paths, q.Renames, at.a, r.room(envelope))
+	st, err := r.stat(ctx, base.peeled, head.peeled, q.Paths, q.Renames, at.a, r.room(envelope),
+		"name paths, or diff commits closer together")
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
@@ -89,9 +100,13 @@ type statPage struct {
 }
 
 // stat is the page of base..head's stat that starts at the start-th file paths
-// admits, whose files may take left bytes.
-func (r *read) stat(ctx context.Context, base, head string, paths []string, renames bool, start, left int) (statPage, error) {
-	p := &statParser{filter: paths, start: start, left: left, slots: map[int]int{}}
+// admits, whose files may take left bytes, and the totals over every file
+// paths admits. narrowing is what a stat naming no paths, whose one diff-tree
+// the deadline ended, tells its asker to do instead — naming paths among it,
+// since a stat that names them counts the files they admit and no other.
+func (r *read) stat(ctx context.Context, base, head string, paths []string, renames bool, start, left int,
+	narrowing string) (statPage, error) {
+	p := &statParser{filter: paths, start: start, left: left, keep: len(paths) > 0}
 	recs := newRecords(0, gitproc.MaxLine+code.MaxGitPathBytes, p.record)
 	tail := []string{base, head}
 	if renames {
@@ -101,11 +116,28 @@ func (r *read) stat(ctx context.Context, base, head string, paths []string, rena
 	if err != nil {
 		return statPage{}, err
 	}
-	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff",
-			"--no-textconv"}, tail...),
-		Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
-	})
+	var res gitproc.Result
+	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in %s: %s", code.ErrSliceTooLarge, base, head,
+		deadline, narrowing)
+	if p.keep {
+		// A FILTERED STAT'S WALK, its raw records alone: the numstat is
+		// diff-pairs', of the files the filter admits (count). No path
+		// narrows the walk itself, which reads the two trees whatever the
+		// filter, so a walk the deadline ended is refused naming the commits.
+		narrow = fmt.Errorf("%w: the walk of the diff of %s and %s did not finish in %s: diff commits closer "+
+			"together", code.ErrSliceTooLarge, base, head, deadline)
+		res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
+			Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff",
+				"--no-textconv"}, tail...),
+			Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
+		})
+	} else {
+		res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
+			Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff",
+				"--no-textconv"}, tail...),
+			Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
+		})
+	}
 	switch {
 	case p.tooLarge != nil && res.Damage == nil:
 		return statPage{}, p.tooLarge
@@ -113,48 +145,87 @@ func (r *read) stat(ctx context.Context, base, head string, paths []string, rena
 		err = recs.close()
 	}
 	if err == nil {
-		err = p.end()
+		// Where the stat names no paths, the one process wrote both halves.
+		err = p.end(!p.keep)
 	}
-	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in %s: diff commits closer together",
-		code.ErrSliceTooLarge, base, head, deadline)
 	if err := r.failed(ctx, "diff", res, err, narrow); err != nil {
 		return statPage{}, err
+	}
+	if p.keep {
+		if err := r.count(ctx, p, base, head); err != nil {
+			return statPage{}, err
+		}
 	}
 	return statPage{files: p.files, total: p.matched, added: p.added, deleted: p.deleted, next: p.next}, nil
 }
 
-// statParser reads diff-tree's raw records, then its numstat records.
+// count is a filtered stat's numstat half: the lines of every file p
+// admitted, counted by ONE diff-pairs over their raw records — and nothing
+// counted where p admitted none, or where the page's cursor is past them all,
+// which the read refuses without its totals.
+func (r *read) count(ctx context.Context, p *statParser, base, head string) error {
+	if p.matched == 0 || (p.start > 0 && p.start >= p.matched) {
+		return nil
+	}
+	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
+	if err != nil {
+		return err
+	}
+	recs := newRecords(0, gitproc.MaxLine+code.MaxGitPathBytes, p.record)
+	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
+		Dir: r.synced.Dir, Args: []string{"diff-pairs", "-z", "--numstat", "--no-ext-diff", "--no-textconv"},
+		Config: r.s.o.Cache.ServeConfig(), Stdin: &p.pairs, Stdout: recs, Class: gitproc.ClassRead,
+		Deadline: deadline,
+	})
+	if err == nil {
+		err = recs.close()
+	}
+	if err == nil {
+		err = p.end(true)
+	}
+	narrow := fmt.Errorf("%w: counting the lines of the %d files the paths admit in the diff of %s and %s did "+
+		"not finish in %s: name fewer paths, or diff commits closer together", code.ErrSliceTooLarge, p.matched,
+		base, head, deadline)
+	return r.failed(ctx, "count of a diff's lines", res, err, narrow)
+}
+
+// statParser reads diff-tree's raw records, then the numstat records of the
+// files they admit — diff-tree's own after them, or diff-pairs'.
 type statParser struct {
 	filter      []string
 	start, left int
+	// keep is whether the admitted records are kept for diff-pairs (pairs):
+	// a filtered stat's, whose numstat is of them alone.
+	keep  bool
+	pairs bytes.Buffer
 
-	// The raw half: the entry being read, and the paths it still needs.
-	numstat bool
-	entry   rawEntry
-	need    int
-	// admitted is, for every raw entry, whether the filter admits it;
-	// matched how many it admitted; slots each page entry's place in files.
-	admitted []bool
+	// The raw half: the entry being read and the paths it still needs; how
+	// many entries the filter admitted, and the page's — the admitted from
+	// start on, while they fit.
+	entry    rawEntry
+	need     int
 	matched  int
 	files    []code.DiffFile
-	slots    map[int]int
 	full     bool
 	next     cursor
+	tooLarge error
 
-	// The numstat half: the entry it is at, a rename's counts while its
-	// two paths are read, and the totals.
+	// The numstat half: whether it has begun, the record it is at, a
+	// rename's counts while its two paths are read, and the totals.
+	numstat        bool
 	j              int
 	nsNeed         int
 	nsAdded, nsDel int
 	nsBinary       bool
 	added, deleted int
-
-	tooLarge error
 }
 
 // rawEntry is one raw record: ":<old mode> <new mode> <old id> <new id> <status>",
 // then its path, or a rename's two.
 type rawEntry struct {
+	// head is the record's header as git wrote it, which diff-pairs reads
+	// back: its status spelled git's way (a rename's score zero-padded).
+	head                           string
 	oldMode, newMode, oldID, newID string
 	status                         byte
 	score                          int
@@ -163,7 +234,7 @@ type rawEntry struct {
 
 func (p *statParser) record(rec []byte, long bool) error {
 	if long {
-		return fmt.Errorf("query: diff-tree answered a record of %d bytes or more, past any path", len(rec))
+		return fmt.Errorf("query: git answered a diff's record of %d bytes or more, past any path", len(rec))
 	}
 	switch {
 	case p.need > 0:
@@ -189,7 +260,7 @@ func (p *statParser) record(rec []byte, long bool) error {
 		p.numstat = true
 		parts := strings.SplitN(string(rec), "\t", 3)
 		if len(parts) != 3 {
-			return fmt.Errorf("query: diff-tree answered %q, which is no numstat record", truncated(rec))
+			return fmt.Errorf("query: git answered %q, which is no numstat record", truncated(rec))
 		}
 		var err error
 		p.nsBinary = parts[0] == "-" && parts[1] == "-"
@@ -198,7 +269,7 @@ func (p *statParser) record(rec []byte, long bool) error {
 				p.nsDel, err = strconv.Atoi(parts[1])
 			}
 			if err != nil {
-				return fmt.Errorf("query: diff-tree answered %q, whose counts are none", truncated(rec))
+				return fmt.Errorf("query: git answered %q, whose counts are none", truncated(rec))
 			}
 		}
 		if parts[2] == "" {
@@ -216,7 +287,7 @@ func parseRaw(rec []byte) (rawEntry, int, error) {
 	if len(f) != 5 || !gitref.ValidOID(f[2]) || !gitref.ValidOID(f[3]) || f[4] == "" {
 		return rawEntry{}, 0, fmt.Errorf("query: diff-tree answered %q, which is no raw record", truncated(rec))
 	}
-	e := rawEntry{oldMode: f[0], newMode: f[1], oldID: f[2], newID: f[3], status: f[4][0]}
+	e := rawEntry{head: string(rec), oldMode: f[0], newMode: f[1], oldID: f[2], newID: f[3], status: f[4][0]}
 	if len(f[4]) > 1 {
 		score, err := strconv.Atoi(f[4][1:])
 		if err != nil {
@@ -228,6 +299,21 @@ func parseRaw(rec []byte) (rawEntry, int, error) {
 		return e, 2, nil
 	}
 	return e, 1, nil
+}
+
+// raw is the record as diff-tree wrote it under -z — its header, then each
+// path, every one ended by a NUL — which is what diff-pairs reads.
+func (e rawEntry) raw() []byte {
+	n := len(e.head) + 1
+	for _, p := range e.paths {
+		n += len(p) + 1
+	}
+	b := make([]byte, 0, n)
+	b = append(append(b, e.head...), 0)
+	for _, p := range e.paths {
+		b = append(append(b, p...), 0)
+	}
+	return b
 }
 
 // file is the entry as the answer carries it.
@@ -270,17 +356,19 @@ func admits(filter, paths []string) bool {
 	return false
 }
 
-// took places a raw entry whose paths are read: on the page where the filter
-// admits it and the page has room — costed with its counts and binary flag at
-// their widest, which the numstat half has not given yet.
+// took places a raw entry whose paths are read, where the filter admits it:
+// kept for diff-pairs on a filtered stat, and on the page where the page has
+// room — costed with its counts and binary flag at their widest, which the
+// numstat half has not given yet.
 func (p *statParser) took() {
-	ok := admits(p.filter, p.entry.paths)
-	p.admitted = append(p.admitted, ok)
-	if !ok {
+	if !admits(p.filter, p.entry.paths) {
 		return
 	}
 	m := p.matched
 	p.matched++
+	if p.keep {
+		p.pairs.Write(p.entry.raw())
+	}
 	if m < p.start || p.full {
 		return
 	}
@@ -293,7 +381,6 @@ func (p *statParser) took() {
 	}
 	switch {
 	case cost <= p.left:
-		p.slots[len(p.admitted)-1] = len(p.files)
 		p.files, p.left = append(p.files, f), p.left-cost
 	case len(p.files) == 0 && p.tooLarge == nil:
 		p.tooLarge = fmt.Errorf("%w: file %d of the diff encodes to %d bytes, past the %d one answer holds",
@@ -304,21 +391,20 @@ func (p *statParser) took() {
 	}
 }
 
-// counted applies one numstat record to the entry it is of.
+// counted applies one numstat record to the admitted file it is of: the j-th
+// record the j-th file admitted — on a stat naming no paths every file, and on
+// a filtered one every file diff-pairs was handed, in the order handed.
 func (p *statParser) counted() error {
 	j := p.j
 	p.j++
-	if j >= len(p.admitted) {
-		return fmt.Errorf("query: diff-tree answered more numstat records than raw ones (%d)", len(p.admitted))
-	}
-	if !p.admitted[j] {
-		return nil
+	if j >= p.matched {
+		return fmt.Errorf("query: git answered more numstat records than the %d files the diff admits", p.matched)
 	}
 	if !p.nsBinary {
 		p.added += p.nsAdded
 		p.deleted += p.nsDel
 	}
-	if slot, ok := p.slots[j]; ok {
+	if slot := j - p.start; slot >= 0 && slot < len(p.files) {
 		f := &p.files[slot]
 		f.Added, f.Deleted, f.Binary = p.nsAdded, p.nsDel, p.nsBinary
 		if p.nsBinary {
@@ -328,10 +414,16 @@ func (p *statParser) counted() error {
 	return nil
 }
 
-// end checks the halves agree.
-func (p *statParser) end() error {
-	if p.need > 0 || p.nsNeed > 0 || p.j != len(p.admitted) {
-		return fmt.Errorf("query: diff-tree answered %d raw records and %d numstat ones", len(p.admitted), p.j)
+// end checks git's records ended where a record does — no raw record still
+// waiting on its paths — and, once the numstat half is read (counted), that
+// it counted every admitted file, once.
+func (p *statParser) end(counted bool) error {
+	switch {
+	case p.need > 0:
+		return errors.New("query: git's raw records ended before the paths of the last of them")
+	case counted && (p.nsNeed > 0 || p.j != p.matched):
+		return fmt.Errorf("query: git answered %d numstat records for the %d files the diff admits", p.j,
+			p.matched)
 	}
 	return nil
 }
@@ -361,7 +453,7 @@ func (r *read) patchRead(ctx context.Context, base, head, file string, renames b
 			return w
 		}()}, Total: widest, Added: widest, Deleted: widest, Patch: "x"}}
 	pg := &patchPage{from: at.a, left: r.room(envelope) + 1}
-	if err := r.writePatch(ctx, e, pg); err != nil {
+	if err := r.patch(ctx, base, head, e, pg); err != nil {
 		return code.GitAnswer{}, err
 	}
 	pg.finish()
@@ -433,255 +525,39 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 	return rawEntry{}, false, nil
 }
 
-// writePatch writes e's patch to pg: its header, then its hunks.
-func (r *read) writePatch(ctx context.Context, e rawEntry, pg *patchPage) error {
-	f := e.file()
-	oldPath, newPath := e.paths[0], e.paths[len(e.paths)-1]
-	var h strings.Builder
-	fmt.Fprintf(&h, "diff --git %s %s\n", quoted("a/", oldPath), quoted("b/", newPath))
-	oldID, newID := e.oldID, e.newID
-	switch {
-	case f.OldMode == "":
-		fmt.Fprintf(&h, "new file mode %s\n", f.NewMode)
-	case f.NewMode == "":
-		fmt.Fprintf(&h, "deleted file mode %s\n", f.OldMode)
-	case f.OldMode != f.NewMode:
-		fmt.Fprintf(&h, "old mode %s\nnew mode %s\n", f.OldMode, f.NewMode)
-	}
-	if e.status == 'R' || e.status == 'C' {
-		verb := "rename"
-		if e.status == 'C' {
-			verb = "copy"
-		}
-		fmt.Fprintf(&h, "similarity index %d%%\n%s from %s\n%s to %s\n", e.score, verb, quoted("", oldPath), verb,
-			quoted("", newPath))
-	}
-	if oldID != newID {
-		fmt.Fprintf(&h, "index %s..%s", oldID, newID)
-		if f.OldMode == f.NewMode {
-			fmt.Fprintf(&h, " %s", f.NewMode)
-		}
-		h.WriteByte('\n')
-	}
-	pg.feed([]byte(h.String()))
-	if oldID == newID {
-		return nil // a rename or a mode alone: no hunk
-	}
-	from, to := quoted("a/", oldPath), quoted("b/", newPath)
-	if f.OldMode == "" {
-		from = "/dev/null"
-	}
-	if f.NewMode == "" {
-		to = "/dev/null"
-	}
-	switch {
-	case f.OldMode == "160000" || f.NewMode == "160000":
-		writeSubmodule(pg, from, to, f)
-		return nil
-	case f.OldMode == "" || f.NewMode == "":
-		return r.writeWhole(ctx, pg, from, to, f)
-	}
-	return r.writePair(ctx, pg, from, to, oldID, newID)
-}
+// patchConfig is what a patch's diff-pairs adds to the cache's
+// configuration: core.quotePath off, so its header names a UTF-8 path as it
+// is, as the stat's path does, rather than as octal escapes of its bytes.
+var patchConfig = gitproc.KV{Key: "core.quotePath", Value: "false"}
 
-// writeSubmodule writes a submodule's hunk, git's form: the commits it names,
-// one line each side.
-func writeSubmodule(pg *patchPage, from, to string, f code.DiffFile) {
-	var b strings.Builder
-	fmt.Fprintf(&b, "--- %s\n+++ %s\n", from, to)
-	switch {
-	case f.OldOID == "":
-		fmt.Fprintf(&b, "@@ -0,0 +1 @@\n+Subproject commit %s\n", f.NewOID)
-	case f.NewOID == "":
-		fmt.Fprintf(&b, "@@ -1 +0,0 @@\n-Subproject commit %s\n", f.OldOID)
-	default:
-		fmt.Fprintf(&b, "@@ -1 +1 @@\n-Subproject commit %s\n+Subproject commit %s\n", f.OldOID, f.NewOID)
-	}
-	pg.feed([]byte(b.String()))
-}
-
-// writeWhole writes the hunk of a file one side lacks: its one blob's lines,
-// each `+` (added) or `-` (deleted) — a first read counting them for the hunk's
-// header, git's form, and a second writing them.
-func (r *read) writeWhole(ctx context.Context, pg *patchPage, from, to string, f code.DiffFile) error {
-	blob, sign := f.NewOID, byte('+')
-	if f.NewMode == "" {
-		blob, sign = f.OldOID, '-'
-	}
-	// A PAGE CUTTER WITH NO WINDOW only counts: its window's line, zero,
-	// is no line of any file.
-	count := &blobPage{line: 1, done: true}
-	if err := r.streamBlob(ctx, blob, count); err != nil {
-		return err
-	}
-	switch {
-	case count.binary:
-		pg.binary = true
-		pg.feed([]byte(fmt.Sprintf("Binary files %s and %s differ\n", from, to)))
-		return nil
-	case count.bytes == 0:
-		return nil // an empty file: git prints no hunk for one
-	}
-	n := count.lines()
-	hunk := fmt.Sprintf("@@ -0,0 +1,%d @@\n", n)
-	if n == 1 {
-		hunk = "@@ -0,0 +1 @@\n"
-	}
-	if sign == '-' {
-		hunk = fmt.Sprintf("@@ -1,%d +0,0 @@\n", n)
-		if n == 1 {
-			hunk = "@@ -1 +0,0 @@\n"
-		}
-	}
-	pg.feed([]byte(fmt.Sprintf("--- %s\n+++ %s\n%s", from, to, hunk)))
-	lw := &prefixed{sign: sign, to: pg, start: true}
-	if err := r.streamBlob(ctx, blob, lw); err != nil {
-		return err
-	}
-	if count.last != '\n' {
-		pg.feed([]byte("\n\\ No newline at end of file\n"))
-	}
-	return nil
-}
-
-// streamBlob streams blob into w with one `git cat-file blob`.
-func (r *read) streamBlob(ctx context.Context, blob string, w io.Writer) error {
+// patch writes e's patch to pg: git's own, of the one record e, from ONE
+// diff-pairs handed it on its standard input.
+func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pg *patchPage) error {
 	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
 	if err != nil {
 		return err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: []string{"cat-file", "blob", blob}, Config: r.s.o.Cache.ServeConfig(),
-		Stdout: w, Class: gitproc.ClassRead, Deadline: deadline,
+		Dir: r.synced.Dir, Args: []string{"diff-pairs", "-z", "-p", "--full-index", "--no-color", "--no-ext-diff",
+			"--no-textconv", "-U3"},
+		Config: append(r.s.o.Cache.ServeConfig(), patchConfig), Stdin: bytes.NewReader(e.raw()), Stdout: pg,
+		Class: gitproc.ClassRead, Deadline: deadline,
 	})
-	if errors.Is(err, errStop) {
-		err = nil
-	}
-	if bp, ok := w.(*blobPage); ok && err == nil {
-		bp.finish()
-	}
-	narrow := fmt.Errorf("%w: reading %s did not finish in %s: read its lines instead", code.ErrSliceTooLarge,
-		blob, deadline)
-	return r.failed(ctx, "read of a file", res, err, narrow)
-}
-
-// writePair writes the hunks of a file both sides hold, as git diffs its two
-// blobs: git's own header lines — which name the blobs — dropped, its `---`
-// and `+++` lines and a binary pair's line written naming the paths.
-func (r *read) writePair(ctx context.Context, pg *patchPage, from, to, oldID, newID string) error {
-	w := &gitPatch{to: pg, from: from, dest: to}
-	deadline, err := r.bound(ctx, gitproc.ReadDeadline)
-	if err != nil {
-		return err
-	}
-	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: append([]string{"diff", "--no-color", "--no-ext-diff", "--no-textconv",
-			"-U3"}, oldID, newID),
-		Config: r.s.o.Cache.ServeConfig(), Stdout: w, Class: gitproc.ClassRead, Deadline: deadline,
-	})
-	if err == nil {
-		err = w.close()
-	}
-	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in %s: read the file's lines instead",
-		code.ErrSliceTooLarge, oldID, newID, deadline)
-	return r.failed(ctx, "diff of a file", res, err, narrow)
-}
-
-// gitPatch passes git's patch of two blobs on to a page: its header lines
-// translated — the blobs' names to the paths — and its hunks as they are.
-type gitPatch struct {
-	to         *patchPage
-	from, dest string
-	inHunks    bool
-	line       []byte
-}
-
-// gitHeaderMax bounds one of git's header lines as held: each names two blob
-// ids at most.
-const gitHeaderMax = 512
-
-func (g *gitPatch) Write(p []byte) (int, error) {
-	n := len(p)
-	for len(p) > 0 && !g.inHunks {
-		i := bytes.IndexByte(p, '\n')
-		if i < 0 {
-			if len(g.line)+len(p) > gitHeaderMax {
-				return n, fmt.Errorf("query: git's patch began with a line past %d bytes", gitHeaderMax)
-			}
-			g.line = append(g.line, p...)
-			return n, nil
-		}
-		g.line = append(g.line, p[:i]...)
-		p = p[i+1:]
-		g.header(g.line)
-		g.line = g.line[:0]
-	}
-	if len(p) > 0 {
-		g.to.feed(p)
-	}
-	return n, nil
-}
-
-// header handles one of git's header lines.
-func (g *gitPatch) header(line []byte) {
-	switch {
-	case bytes.HasPrefix(line, []byte("--- ")):
-		g.to.feed([]byte("--- " + g.from + "\n"))
-	case bytes.HasPrefix(line, []byte("+++ ")):
-		g.to.feed([]byte("+++ " + g.dest + "\n"))
-	case bytes.HasPrefix(line, []byte("Binary files ")):
-		g.to.binary = true
-		g.to.feed([]byte("Binary files " + g.from + " and " + g.dest + " differ\n"))
-	case bytes.HasPrefix(line, []byte("@@")):
-		g.inHunks = true
-		g.to.feed(append(line, '\n'))
-	}
-	// Every other header line — `diff --git`, `index` — names the blobs,
-	// and the patch's own header has said it of the paths.
-}
-
-// close reports git's patch ending inside a header line.
-func (g *gitPatch) close() error {
-	if len(g.line) > 0 {
-		return errors.New("query: git's patch ended inside a header line")
-	}
-	return nil
-}
-
-// prefixed writes a blob's lines to a page, each opened with sign.
-type prefixed struct {
-	sign  byte
-	to    *patchPage
-	start bool
-}
-
-func (w *prefixed) Write(p []byte) (int, error) {
-	n := len(p)
-	for len(p) > 0 {
-		if w.start {
-			w.to.feed([]byte{w.sign})
-			w.start = false
-		}
-		i := bytes.IndexByte(p, '\n')
-		if i < 0 {
-			w.to.feed(p)
-			break
-		}
-		w.to.feed(p[:i+1])
-		p, w.start = p[i+1:], true
-	}
-	return n, nil
+	narrow := fmt.Errorf("%w: the patch of %q in the diff of %s and %s did not finish in %s: read the file's "+
+		"lines instead", code.ErrSliceTooLarge, e.paths[len(e.paths)-1], base, head, deadline)
+	return r.failed(ctx, "patch of a file", res, err, narrow)
 }
 
 // patchPage cuts one page of a patch — whole lines from the byte from, while
-// their encoded text costs at most left — out of the patch as it is written,
+// their encoded text costs at most left — out of git's patch as it is written,
 // and counts the lines added and deleted over all of it.
 type patchPage struct {
 	from, left int
-	// off is the patch's bytes so far; hunks whether a hunk has begun, past
-	// which a line opening `+` or `-` is one added or deleted (before it,
-	// they are the `---` and `+++` lines); sawFrom whether a line began at
-	// from, which a cursor must name.
+	// off is the patch's bytes so far; hunks whether the file's hunks have
+	// begun, past which a line opening `+` or `-` is one added or deleted
+	// (before them, they are the `---` and `+++` lines); sawFrom whether a
+	// line began at from, which a cursor must name; binary whether git called
+	// the pair binary.
 	off     int
 	hunks   bool
 	sawFrom bool
@@ -702,6 +578,13 @@ type patchPage struct {
 	over            bool
 
 	added, deleted int
+}
+
+// Write takes p, bytes of git's patch: a Cmd.Stdout that keeps no more than
+// the page.
+func (pg *patchPage) Write(p []byte) (int, error) {
+	pg.feed(p)
+	return len(p), nil
 }
 
 // feed takes p, bytes of the patch.
@@ -725,14 +608,21 @@ func (pg *patchPage) feed(p []byte) {
 	}
 }
 
-// begin opens a line whose first byte is c. A line opening `@` is a hunk's
-// header — no line of a hunk's body opens with it, every one opening with
-// a space, `+`, `-` or `\` — and only past one is `+` or `-` a line counted.
+// begin opens a line whose first byte is c, read by git's patch grammar: in a
+// file's hunks every line opens with a space, `+`, `-` or `\`, so a line
+// opening `d` there is the next file header's `diff --git` — the creation that
+// follows a deletion where a file changed its type — and only past a hunk's
+// `@@` header is `+` or `-` a line counted; and before the hunks the one line
+// opening `B` is `Binary files … differ`.
 func (pg *patchPage) begin(c byte) {
 	pg.atStart = true
 	switch {
+	case c == 'd':
+		pg.hunks = false
 	case c == '@':
 		pg.hunks = true
+	case !pg.hunks && c == 'B':
+		pg.binary = true
 	case pg.hunks && c == '+':
 		pg.added++
 	case pg.hunks && c == '-':
@@ -797,72 +687,4 @@ func (pg *patchPage) finish() {
 	if pg.off > pg.lineAt {
 		pg.settle()
 	}
-}
-
-// quoted is prefix and p as git's patch header names a path: as they are, or
-// — where p holds a quote, a backslash, a control byte or a byte that is not
-// UTF-8 — inside double quotes with C's escapes, as git's quote_c_style
-// writes them (with core.quotePath off, so other UTF-8 stays as it is).
-func quoted(prefix, p string) string {
-	needs := false
-	for i := 0; i < len(p); {
-		c := p[i]
-		if c < 0x20 || c == 0x7f || c == '"' || c == '\\' {
-			needs = true
-			break
-		}
-		r, n := utf8.DecodeRuneInString(p[i:])
-		if r == utf8.RuneError && n == 1 {
-			needs = true
-			break
-		}
-		i += n
-	}
-	if !needs {
-		return prefix + p
-	}
-	var b strings.Builder
-	b.WriteByte('"')
-	b.WriteString(prefix)
-	for i := 0; i < len(p); {
-		c := p[i]
-		switch c {
-		case '\a':
-			b.WriteString(`\a`)
-		case '\b':
-			b.WriteString(`\b`)
-		case '\t':
-			b.WriteString(`\t`)
-		case '\n':
-			b.WriteString(`\n`)
-		case '\v':
-			b.WriteString(`\v`)
-		case '\f':
-			b.WriteString(`\f`)
-		case '\r':
-			b.WriteString(`\r`)
-		case '"':
-			b.WriteString(`\"`)
-		case '\\':
-			b.WriteString(`\\`)
-		default:
-			if c < 0x20 || c == 0x7f {
-				fmt.Fprintf(&b, `\%03o`, c)
-				i++
-				continue
-			}
-			r, n := utf8.DecodeRuneInString(p[i:])
-			if r == utf8.RuneError && n == 1 {
-				fmt.Fprintf(&b, `\%03o`, c)
-				i++
-				continue
-			}
-			b.WriteString(p[i : i+n])
-			i += n
-			continue
-		}
-		i++
-	}
-	b.WriteByte('"')
-	return b.String()
 }

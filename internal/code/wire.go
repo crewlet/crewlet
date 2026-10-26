@@ -722,7 +722,8 @@ type DiffQuery struct {
 	Head string `json:"head"`
 	// Paths filters the stat to files equal to one of them or under one as
 	// a directory, judged by the git node over git's whole answer — never
-	// handed to git — at most MaxDiffPaths.
+	// handed to git — at most MaxDiffPaths. Only the files they admit are
+	// counted, so naming paths is what narrows a stat of a wide diff.
 	Paths []string `json:"paths,omitempty"`
 	// File asks for one file's patch instead of the stat: its path at Head,
 	// or at Base for a file Head deleted. FileB64 is the same path as exact
