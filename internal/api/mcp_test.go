@@ -68,11 +68,9 @@ func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	// as that seat on every call and opens no session for a surface that
 	// names none.
 	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
-	url := bridge.Open(&mcpbridge.Session{
-		RunID: "run-1", Handle: "dev", Role: "Dev",
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
-			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat}),
-	})
+	url := bridge.Open(mcpbridge.SeatSession("run-1", "dev", "Dev",
+		tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat}), nil))
 	if url == "" {
 		t.Fatal("no endpoint was minted")
 	}
