@@ -140,6 +140,13 @@ func (m meaning) class() tools.Refusal {
 	return ""
 }
 
+// brandAdoption is why the brand's refusals are no writer's refusal a tool or
+// the person's write surface answers: adopting a brand is an administrator's
+// gesture on the brand routes, which answer it themselves (422
+// `brand_contrast`, `policy_refused`).
+const brandAdoption = "an administrator adopting a brand on the brand routes, " +
+	"never a tool's call or the write surface's"
+
 // classRow is what one declared error of a domain is, as a writer's refusal:
 // what it means to its caller, or — `why` set — the reason it is not a refusal
 // at all.
@@ -179,6 +186,24 @@ var domainErrors = map[string]map[string]classRow{
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 		"QuotaExceeded": {err: &artifactsdomain.QuotaExceeded{}, means: companyQuota},
 		"VersionMoved":  {err: &artifactsdomain.VersionMoved{}, means: staleRead},
+
+		// A FOLDER that is not there, a name its place holds, the folders
+		// the company or one folder holds at their bound, and a destination
+		// that cannot take the folder or a path naming several: what lands
+		// instead is another destination, or the one folder named by its id.
+		"ErrFolderNotFound":  {err: artifactsdomain.ErrFolderNotFound, means: absent},
+		"ErrFolderNameTaken": {err: artifactsdomain.ErrFolderNameTaken, means: taken},
+		"ErrFolderLimit":     {err: artifactsdomain.ErrFolderLimit, means: objectState},
+		"ErrFolderCycle":     {err: artifactsdomain.ErrFolderCycle, means: malformed},
+		"ErrFolderDepth":     {err: artifactsdomain.ErrFolderDepth, means: malformed},
+		"FolderAmbiguous":    {err: &artifactsdomain.FolderAmbiguous{}, means: malformed},
+
+		// THE BRAND'S, which an administrator meets adopting one on the brand
+		// routes and which no tool and no write surface makes.
+		"ErrBrandContrast":   {err: artifactsdomain.ErrBrandContrast, why: brandAdoption},
+		"ErrBrandIncomplete": {err: artifactsdomain.ErrBrandIncomplete, why: brandAdoption},
+		"BrandContrast":      {err: &artifactsdomain.BrandContrast{}, why: brandAdoption},
+		"BrandIncomplete":    {err: &artifactsdomain.BrandIncomplete{}, why: brandAdoption},
 	},
 	artifactdata.Domain{}.Name(): {
 		"ErrBadCursor":         {err: artifactdata.ErrBadCursor, means: malformed},

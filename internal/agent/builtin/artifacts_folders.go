@@ -160,7 +160,7 @@ func (d ArtifactDeps) resolveFolder(ctx context.Context, c artifactCaller, tool,
 			r := folderNotFound(tool, ref, nearestFolders(visible, ref))
 			return artifactsdomain.Folder{}, "", nil, &r
 		}
-		r := refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %q names %d folders you "+
+		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %q names %d folders you "+
 			"can see:\n%s\nPass the one you mean by its id.", tool, clip(ref), len(lines),
 			strings.Join(lines, "\n")))
 		return artifactsdomain.Folder{}, "", nil, &r
@@ -351,7 +351,7 @@ func folderWriteFailure(ctx context.Context, tool string, c artifactCaller, err 
 			"at most %d deep, counting the top level. File in a shallower folder.", tool,
 			artifacts.MaxFolderDepth))
 	case errors.Is(err, artifactsdomain.ErrFolderLimit):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: the "+
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: the "+
 			"company, or that folder, already holds as many folders as it may (%d in all, %d in "+
 			"one folder). File into a folder that exists.", tool, artifacts.MaxFolders,
 			artifacts.MaxFolderChildren))

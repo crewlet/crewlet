@@ -130,7 +130,7 @@ var (
 )
 
 // FolderAmbiguous is a folder path that names more than one folder the caller
-// can see (409 `folder_ambiguous`): every candidate, so the caller can choose
+// can see (422 `folder_ambiguous`): every candidate, so the caller can choose
 // one by id.
 type FolderAmbiguous struct {
 	Path       string

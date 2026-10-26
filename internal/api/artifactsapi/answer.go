@@ -279,9 +279,9 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 	case errors.Is(err, artifactsdomain.ErrFolderNameTaken):
 		fail(http.StatusConflict, httpjson.CodeFolderNameTaken)
 	case errors.Is(err, artifactsdomain.ErrFolderCycle):
-		fail(http.StatusConflict, httpjson.CodeFolderCycle)
+		failClient(httpjson.CodeFolderCycle)
 	case errors.Is(err, artifactsdomain.ErrFolderDepth):
-		fail(http.StatusConflict, httpjson.CodeFolderDepth)
+		failClient(httpjson.CodeFolderDepth)
 	case errors.Is(err, artifactsdomain.ErrFolderLimit):
 		fail(http.StatusConflict, httpjson.CodeFolderLimit)
 	case errors.As(err, &ambiguous):
@@ -290,7 +290,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 			candidates[i] = c.ID
 		}
 		detail["candidates"] = candidates
-		fail(http.StatusConflict, httpjson.CodeFolderAmbiguous)
+		failClient(httpjson.CodeFolderAmbiguous)
 	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
 		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
 		fail(http.StatusForbidden, httpjson.CodeForbidden)
