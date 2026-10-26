@@ -153,7 +153,7 @@ func readOne(ctx context.Context, read proposal.Read, req exec.Request) (any, er
 		return nil, refusedRead(resp)
 	}
 	if resp.Truncated {
-		return nil, fmt.Errorf("%w: the answer is larger than one step reads", ErrPreviewRead)
+		return nil, fmt.Errorf("%w: the answer is larger than a change's preview reads", ErrPreviewRead)
 	}
 	return cards.Decode(resp.Body)
 }

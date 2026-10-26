@@ -272,6 +272,8 @@ func (a *Approver) moved(ctx context.Context, read exec.Grant, p assistantdomain
 // reader sends reads through one grant.
 func (a *Approver) reader(g exec.Grant) proposal.Read {
 	return func(ctx context.Context, r exec.Request) (exec.Response, error) {
+		// THE PREVIEW'S BOUND, since this re-reads what a preview read.
+		r.ReadLimit = exec.PreviewMaxResponseBytes
 		return a.d.Dispatcher.Do(ctx, g, r)
 	}
 }

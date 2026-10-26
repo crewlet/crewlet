@@ -21,6 +21,7 @@
  * the vocabulary below has no way to name one.
  */
 
+import type { AssistantActionArgs } from "~/contract/assistant.ts";
 import type { ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import type { PageActionParse } from "~/app/assistant/context.ts";
 import type { AssistantDraftSpec } from "~/app/assistant/draft.ts";
@@ -29,6 +30,7 @@ import {
   allUnits,
   locate,
   seatWithHandle,
+  unitIdOf,
   unitWithKey,
   type Draft,
   type Placement,
@@ -230,6 +232,136 @@ function intentOf(change: Raw, draft: Draft, keys: KeySource): Intent | string {
     default:
       return `"${String(change.op)}" is not a change the builder makes.`;
   }
+}
+
+/** A name, a handle or a key, as [text] holds one. */
+const NAME: AssistantActionArgs = { type: "string", minLength: 1, maxLength: MAX_TEXT };
+
+/** One operation's shape: its `op`, pinned, and the members it carries. */
+function op(
+  name: string,
+  description: string,
+  members: Record<string, AssistantActionArgs>,
+  required: readonly string[],
+): AssistantActionArgs {
+  return {
+    type: "object",
+    description,
+    additionalProperties: false,
+    required: ["op", ...required],
+    properties: { op: { type: "string", const: name }, ...members },
+  };
+}
+
+const SEAT = { ...NAME, description: "The seat's handle." };
+const UNIT = { ...NAME, description: "The unit's key." };
+
+/**
+ * The operations [intentOf] reads, each with exactly the members it reads, so
+ * the model is told the vocabulary rather than guessing it. A remove, a rename
+ * or a move names one seat or one unit, which the builder's own parse decides.
+ */
+const ORG_OPS: AssistantActionArgs = {
+  type: "object",
+  description:
+    "Changes to the org chart draft, applied in order through the builder. Seats by " +
+    "handle, units by key. Nothing is saved until the person saves the draft.",
+  additionalProperties: false,
+  required: ["ops"],
+  properties: {
+    ops: {
+      type: "array",
+      minItems: 1,
+      maxItems: ORG_DRAFT_MAX_OPS,
+      items: {
+        oneOf: [
+          op(
+            "add_seat",
+            "Add a seat. `in` is the unit's key, or leave it out for the company.",
+            { in: UNIT, data: { type: "object", description: "The seat, with name and handle." } },
+            ["data"],
+          ),
+          op(
+            "add_unit",
+            "Add a unit. `in` is the parent unit's key, or leave it out for the company.",
+            { in: UNIT, data: { type: "object", description: "The unit, with name and id." } },
+            ["data"],
+          ),
+          op("remove", "Remove one seat or one unit.", { seat: SEAT, unit: UNIT }, []),
+          op("rename", "Rename one seat or one unit.", { seat: SEAT, unit: UNIT, name: NAME }, [
+            "name",
+          ]),
+          op(
+            "move",
+            "Move one seat or unit into the unit `to`, or to the company.",
+            { seat: SEAT, unit: UNIT, to: UNIT },
+            [],
+          ),
+          op(
+            "set_lead",
+            "Set a unit's lead to a seat's handle, or null to clear it.",
+            { unit: UNIT, lead: { type: ["string", "null"], maxLength: MAX_TEXT } },
+            ["unit"],
+          ),
+          op(
+            "update",
+            "Set fields of one seat or unit, each by its path; a field with no value is removed.",
+            {
+              seat: SEAT,
+              unit: UNIT,
+              set: {
+                type: "array",
+                minItems: 1,
+                maxItems: 32,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["path"],
+                  properties: {
+                    path: { type: "array", minItems: 1, maxItems: MAX_PATH, items: NAME },
+                    value: { description: "The field's new value." },
+                  },
+                },
+              },
+            },
+            ["set"],
+          ),
+        ],
+      },
+    },
+  },
+};
+
+/** A handle no seat of the draft holds, for an example that adds one. */
+function freshHandle(draft: Draft): string {
+  for (let n = 1; ; n++) {
+    const handle = n === 1 ? "technical-writer" : `technical-writer-${n}`;
+    if (!seatWithHandle(draft, handle)) return handle;
+  }
+}
+
+/**
+ * What `org.draft.apply_ops` takes on this draft: [ORG_OPS], with an example
+ * written against the draft itself (its first unit, a handle it does not
+ * hold), so the example is one the builder takes as it stands.
+ */
+export function orgOpsArgs(draft: Draft): AssistantActionArgs {
+  const first = allUnits(draft).next();
+  const unit = first.done ? undefined : unitIdOf(first.value.unit);
+  return {
+    ...ORG_OPS,
+    examples: [
+      {
+        ops: [
+          {
+            op: "add_seat",
+            ...(unit ? { in: unit } : {}),
+            data: { name: "Technical Writer", handle: freshHandle(draft) },
+          },
+        ],
+      },
+    ],
+  };
 }
 
 /**

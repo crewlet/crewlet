@@ -45,6 +45,7 @@ let shown: string | null;
 /** A screen whose one action sets `blocked`, and puts it back while nothing moved it since. */
 const spec: PageActionSpec<string> = {
   scope: "Worklet list filters (not saved)",
+  args: { type: "object" },
   parse: (raw) =>
     raw && typeof raw === "object" && typeof (raw as { blocked?: unknown }).blocked === "string"
       ? { ok: true, value: (raw as { blocked: string }).blocked }

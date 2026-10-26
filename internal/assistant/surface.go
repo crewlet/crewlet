@@ -269,11 +269,10 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 	immediate := false
 	if tool.Kind == catalog.KindPageAction {
 		scope = wire.ScopePage
-		var accepts []string
-		if s.t.page != nil {
-			accepts, pageRevision = s.t.page.Accepts, s.t.page.SourceRevision
+		action, err := catalog.PageActionFor(args, s.t.page)
+		if err == nil {
+			pageRevision = s.t.page.RevisionFor(action.ID)
 		}
-		action, err := catalog.PageActionFor(args, accepts)
 		if err == nil && action.ID == catalog.DraftSet {
 			err = s.t.draftChange(ctx, args)
 		}
@@ -286,7 +285,10 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
 	step := s.t.stepStart(tool, args, nil, "")
+	// A PREVIEW'S READ is decoded and diffed, never handed to the model, so
+	// it reads to the preview's bound rather than a step's.
 	read := func(ctx context.Context, r exec.Request) (exec.Response, error) {
+		r.ReadLimit = exec.PreviewMaxResponseBytes
 		return s.t.svc.dispatcher.Do(ctx, s.t.read, r)
 	}
 	preview, err := tool.Preview(ctx, read, s.t.svc.now(), args)

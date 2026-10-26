@@ -84,7 +84,8 @@ func (d *Dispatcher) Bind(h http.Handler) error {
 func (d *Dispatcher) Delegations() *Delegations { return d.delegations }
 
 // Do sends r through the API's handler as the person g was derived for, and
-// answers what the chain answered, read to at most [exec.MaxResponseBytes].
+// answers what the chain answered, read to at most [exec.MaxResponseBytes], or
+// [exec.PreviewMaxResponseBytes] for a preview's read ([exec.Request.ReadLimit]).
 //
 // An error is a request that could not be sent at all: a grant these
 // delegations did not mint, a handler not yet bound, a request that is not
@@ -145,7 +146,7 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 		req.Header.Set("If-None-Match", r.IfNoneMatch)
 	}
 
-	out := newCapture()
+	out := newCapture(r.Bound())
 	if err := serve(reqCtx, h, out, req); err != nil {
 		return exec.Response{}, err
 	}
@@ -181,16 +182,17 @@ func serve(ctx context.Context, h http.Handler, w http.ResponseWriter, r *http.R
 	return nil
 }
 
-// capture is an in-memory [http.ResponseWriter] that keeps at most
-// [exec.MaxResponseBytes] of the body and says when it cut one.
+// capture is an in-memory [http.ResponseWriter] that keeps at most limit
+// bytes of the body and says when it cut one.
 type capture struct {
 	header    http.Header
 	status    int
 	body      bytes.Buffer
+	limit     int
 	truncated bool
 }
 
-func newCapture() *capture { return &capture{header: http.Header{}} }
+func newCapture(limit int) *capture { return &capture{header: http.Header{}, limit: limit} }
 
 func (c *capture) Header() http.Header { return c.header }
 
@@ -204,7 +206,7 @@ func (c *capture) WriteHeader(status int) {
 // told its answer failed because the reader stops listening early.
 func (c *capture) Write(p []byte) (int, error) {
 	c.WriteHeader(http.StatusOK)
-	if room := exec.MaxResponseBytes - c.body.Len(); len(p) > room {
+	if room := c.limit - c.body.Len(); len(p) > room {
 		c.body.Write(p[:max(room, 0)])
 		c.truncated = true
 		return len(p), nil

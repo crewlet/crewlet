@@ -77,6 +77,18 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// A WRITE WHOSE BODY IS THE OBJECT AS READ (a seat's ceiling, sent
+		// back as the seat) sends the tool's own request with that body.
+		if body, reads := objectBodies[tool.Name]; reads {
+			var got map[string]any
+			if err := json.Unmarshal(p.Request.Body, &got); err != nil {
+				t.Fatalf("%s previews a body that is not JSON: %v", tool.Name, err)
+			}
+			if !reflect.DeepEqual(got, body) {
+				t.Errorf("%s previews the body %v, want %v", tool.Name, got, body)
+			}
+			want.Body = p.Request.Body
+		}
 		if !reflect.DeepEqual(p.Request, want) {
 			t.Errorf("%s previews %+v and the tool sends %+v", tool.Name, p.Request, want)
 		}
@@ -122,6 +134,16 @@ var completedArgs = map[string]map[string]any{
 	"update_company_principles": {"mission": "Help friends share costs fairly.",
 		"vision": "Settling up takes seconds.", "policies": []any{"Miles is the final " +
 			"authority.", "Money is an integer number of cents."}},
+}
+
+// objectBodies are the bodies of the writes that send the object as the
+// preview read it, changed: set_token_budget's seat as [assistanttest.World]
+// holds it, with only the one window's ceiling moved and the history line.
+var objectBodies = map[string]map[string]any{
+	"set_token_budget": {"handle": "qa", "name": "QA Engineer", "goal": "Review the tests.",
+		"token_budget": map[string]any{"day": float64(1500000)},
+		catalog.SummaryKey: "Raise QA Engineer's daily token budget from 1,000,000 tokens " +
+			"to 1,500,000 tokens"},
 }
 
 // A CHANGE PREPARED AGAINST AN OLD VERSION IS STALE, and a revision that moved

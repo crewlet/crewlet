@@ -63,6 +63,7 @@ test("the screen's gate holds Approve, and says why, before anything is pressed"
   setFramePage({ screen: "me", title: "My work", path: ["me"], params: {}, query: {} });
   const spec: PageActionSpec<unknown> = {
     scope: "Worklet list filters",
+    args: { type: "object" },
     parse: (raw) => ({ ok: true, value: raw }),
     preview: () => [{ field: "Assignee", next: "Cleared", current: "Jane" }],
     blocked: () =>

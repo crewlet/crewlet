@@ -51,6 +51,8 @@ export interface AssistantBusEvents {
   "assistant.context.invalidate": {
     reason: AssistantInvalidateReason;
     revision: string;
+    /** Each page action's own revision now, by id ([actionRevision]). */
+    revisions: Readonly<Record<string, string>>;
   };
   "assistant.navigation.open": {
     path: string[];

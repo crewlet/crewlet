@@ -3,7 +3,9 @@ package wire
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -45,9 +47,30 @@ type PageContext struct {
 	SourceRevision string `json:"source_revision"`
 	// Accepts are the page actions the screen has mounted now.
 	Accepts []string `json:"accepts"`
+	// ActionArgs are the arguments each accepted action takes on this
+	// screen now, as the screen declares them ([ActionArgs]), by action id.
+	// Every accepted action declares them, but `draft.set` may go without:
+	// its arguments are the open draft's editable fields.
+	ActionArgs map[string]*ActionArgs `json:"action_args,omitempty"`
+	// ActionRevisions are each accepted action's own revision: what the
+	// screen holds that the action depends on, so a change prepared against
+	// it goes stale only when THAT moves, never because the person opened a
+	// peek or another editor beside it. An action without one is bound to
+	// SourceRevision.
+	ActionRevisions map[string]string `json:"action_revisions,omitempty"`
 	// Draft is the draft the person has open on the screen, or absent
 	// where the screen edits nothing.
 	Draft *PageDraft `json:"draft,omitempty"`
+}
+
+// RevisionFor is the revision a change by action is prepared against: the
+// action's own ([PageContext.ActionRevisions]), or the page's where the screen
+// states none for it.
+func (p PageContext) RevisionFor(action string) string {
+	if r, ok := p.ActionRevisions[action]; ok {
+		return r
+	}
+	return p.SourceRevision
 }
 
 // PageDraft is what is open in a screen's editor: which draft, where the
@@ -250,6 +273,28 @@ func (p PageContext) Validate() error {
 		if !ValidActionID(a) {
 			return fmt.Errorf("%w: page context accepts %q, which is not a page action id",
 				ErrInvalid, a)
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(p.ActionArgs)) {
+		switch {
+		case !slices.Contains(p.Accepts, id):
+			return fmt.Errorf("%w: page context declares arguments for %q, which it does not "+
+				"accept", ErrInvalid, id)
+		case p.ActionArgs[id] == nil:
+			return fmt.Errorf("%w: page context declares no schema for %q", ErrInvalid, id)
+		}
+		if err := p.ActionArgs[id].Validate(); err != nil {
+			return fmt.Errorf("%w (action %s)", err, id)
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(p.ActionRevisions)) {
+		switch {
+		case !slices.Contains(p.Accepts, id):
+			return fmt.Errorf("%w: page context states a revision for %q, which it does not "+
+				"accept", ErrInvalid, id)
+		case p.ActionRevisions[id] == "" || !plain(p.ActionRevisions[id], pageIDMaxBytes):
+			return fmt.Errorf("%w: page context revision for %q is not plain text of at most "+
+				"%d bytes", ErrInvalid, id, pageIDMaxBytes)
 		}
 	}
 	if p.Draft != nil {

@@ -1,0 +1,595 @@
+{
+  "spend.range.set": {
+    "type": "object",
+    "description": "The page's own settings to change, by name; leave out what stays.",
+    "additionalProperties": false,
+    "properties": {
+      "window": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Window. One of 7d, 30d, 90d, or a custom window written <from>/<to> in ISO 8601 UTC. null clears it.",
+        "maxLength": 200
+      }
+    },
+    "examples": [
+      {
+        "window": null
+      }
+    ]
+  },
+  "spend.group.set": {
+    "type": "object",
+    "description": "The page's own settings to change, by name; leave out what stays.",
+    "additionalProperties": false,
+    "properties": {
+      "group": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Split by. null clears it.",
+        "maxLength": 200,
+        "enum": [
+          "phase",
+          "model",
+          "provider",
+          "seat",
+          "unit",
+          "worker"
+        ]
+      }
+    },
+    "examples": [
+      {
+        "group": "phase"
+      }
+    ]
+  },
+  "work.filter.apply": {
+    "type": "object",
+    "description": "The page's own settings to change, by name; leave out what stays.",
+    "additionalProperties": false,
+    "properties": {
+      "q": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Text. null clears it.",
+        "maxLength": 200
+      },
+      "status": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Status. null clears it.",
+        "maxLength": 200
+      },
+      "type": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Type. null clears it.",
+        "maxLength": 200
+      },
+      "priority": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Priority. null clears it.",
+        "maxLength": 200
+      },
+      "assignee": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Assignee. null clears it.",
+        "maxLength": 200
+      },
+      "tag": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Labels. null clears it.",
+        "maxLength": 200
+      },
+      "unit": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Unit. null clears it.",
+        "maxLength": 200
+      },
+      "due": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Due. null clears it.",
+        "maxLength": 200
+      },
+      "blocked": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Blocked. null clears it.",
+        "maxLength": 200
+      },
+      "removed": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Removed items. null clears it.",
+        "maxLength": 200
+      },
+      "group": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Column. null clears it.",
+        "maxLength": 200
+      }
+    },
+    "patternProperties": {
+      "^f\\.[a-z0-9][a-z0-9_-]{0,63}$": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Field. null clears it.",
+        "maxLength": 200
+      }
+    },
+    "examples": [
+      {
+        "q": null
+      }
+    ]
+  },
+  "work.arrange.set": {
+    "type": "object",
+    "description": "The page's own settings to change, by name; leave out what stays.",
+    "additionalProperties": false,
+    "properties": {
+      "shape": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Shape. null clears it.",
+        "maxLength": 200
+      },
+      "group_by": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Group by. null clears it.",
+        "maxLength": 200
+      },
+      "group_by2": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Then group by. null clears it.",
+        "maxLength": 200
+      },
+      "sort": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Sort. null clears it.",
+        "maxLength": 200
+      },
+      "hide": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Display. null clears it.",
+        "maxLength": 200
+      },
+      "card_hide": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Display. null clears it.",
+        "maxLength": 200
+      }
+    },
+    "patternProperties": {
+      "^cols\\.[a-z0-9][a-z0-9_-]{0,63}$": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Columns. null clears it.",
+        "maxLength": 200
+      }
+    },
+    "examples": [
+      {
+        "shape": null
+      }
+    ]
+  },
+  "home.feed.set": {
+    "type": "object",
+    "description": "The page's own settings to change, by name; leave out what stays.",
+    "additionalProperties": false,
+    "properties": {
+      "feed": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Feed. null clears it.",
+        "maxLength": 200,
+        "enum": [
+          "all",
+          "runs"
+        ]
+      }
+    },
+    "examples": [
+      {
+        "feed": "all"
+      }
+    ]
+  },
+  "work.filters.clear": {
+    "type": [
+      "object",
+      "null"
+    ],
+    "description": "Takes no settings: send {} and the page clears what it holds.",
+    "additionalProperties": false,
+    "properties": {},
+    "examples": [
+      {}
+    ]
+  },
+  "budgets.ceiling.prefill": {
+    "type": "object",
+    "description": "Opens one ceiling's editor with a value filled in, for the person to save. To make the change itself, propose set_token_budget instead.",
+    "additionalProperties": false,
+    "required": [
+      "period",
+      "ceiling"
+    ],
+    "properties": {
+      "seat": {
+        "type": "string",
+        "enum": [
+          "engineer",
+          "qa"
+        ],
+        "description": "The seat's handle. Leave it out for the company's own ceiling."
+      },
+      "period": {
+        "type": "string",
+        "enum": [
+          "day",
+          "week",
+          "month"
+        ],
+        "description": "The window the ceiling is for."
+      },
+      "ceiling": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 32,
+        "description": "The ceiling as the field takes it: 1500000, 1.5M or 40M. null for none."
+      }
+    },
+    "examples": [
+      {
+        "seat": "engineer",
+        "period": "day",
+        "ceiling": "1.5M"
+      },
+      {
+        "period": "month",
+        "ceiling": "120M"
+      }
+    ]
+  },
+  "org.draft.apply_ops": {
+    "type": "object",
+    "description": "Changes to the org chart draft, applied in order through the builder. Seats by handle, units by key. Nothing is saved until the person saves the draft.",
+    "additionalProperties": false,
+    "required": [
+      "ops"
+    ],
+    "properties": {
+      "ops": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "items": {
+          "oneOf": [
+            {
+              "type": "object",
+              "description": "Add a seat. `in` is the unit's key, or leave it out for the company.",
+              "additionalProperties": false,
+              "required": [
+                "op",
+                "data"
+              ],
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "add_seat"
+                },
+                "in": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The unit's key."
+                },
+                "data": {
+                  "type": "object",
+                  "description": "The seat, with name and handle."
+                }
+              }
+            },
+            {
+              "type": "object",
+              "description": "Add a unit. `in` is the parent unit's key, or leave it out for the company.",
+              "additionalProperties": false,
+              "required": [
+                "op",
+                "data"
+              ],
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "add_unit"
+                },
+                "in": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The unit's key."
+                },
+                "data": {
+                  "type": "object",
+                  "description": "The unit, with name and id."
+                }
+              }
+            },
+            {
+              "type": "object",
+              "description": "Remove one seat or one unit.",
+              "additionalProperties": false,
+              "required": [
+                "op"
+              ],
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "remove"
+                },
+                "seat": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The seat's handle."
+                },
+                "unit": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The unit's key."
+                }
+              }
+            },
+            {
+              "type": "object",
+              "description": "Rename one seat or one unit.",
+              "additionalProperties": false,
+              "required": [
+                "op",
+                "name"
+              ],
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "rename"
+                },
+                "seat": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The seat's handle."
+                },
+                "unit": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The unit's key."
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                }
+              }
+            },
+            {
+              "type": "object",
+              "description": "Move one seat or unit into the unit `to`, or to the company.",
+              "additionalProperties": false,
+              "required": [
+                "op"
+              ],
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "move"
+                },
+                "seat": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The seat's handle."
+                },
+                "unit": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The unit's key."
+                },
+                "to": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The unit's key."
+                }
+              }
+            },
+            {
+              "type": "object",
+              "description": "Set a unit's lead to a seat's handle, or null to clear it.",
+              "additionalProperties": false,
+              "required": [
+                "op",
+                "unit"
+              ],
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "set_lead"
+                },
+                "unit": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The unit's key."
+                },
+                "lead": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 200
+                }
+              }
+            },
+            {
+              "type": "object",
+              "description": "Set fields of one seat or unit, each by its path; a field with no value is removed.",
+              "additionalProperties": false,
+              "required": [
+                "op",
+                "set"
+              ],
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "const": "update"
+                },
+                "seat": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The seat's handle."
+                },
+                "unit": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The unit's key."
+                },
+                "set": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "value": {
+                        "description": "The field's new value."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "examples": [
+      {
+        "ops": [
+          {
+            "op": "add_seat",
+            "in": "engineering",
+            "data": {
+              "name": "Technical Writer",
+              "handle": "technical-writer"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "draft.set": {
+    "type": "object",
+    "description": "Values for the open draft's editable fields, by path.",
+    "additionalProperties": false,
+    "required": [
+      "values"
+    ],
+    "properties": {
+      "values": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ceiling": {
+            "type": "string",
+            "description": "PM · Daily token ceiling. Type 40M or 2.5M; empty means no limit."
+          }
+        }
+      }
+    },
+    "examples": [
+      {
+        "values": {
+          "ceiling": "2M"
+        }
+      }
+    ]
+  }
+}

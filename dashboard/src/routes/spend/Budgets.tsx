@@ -75,7 +75,11 @@ import {
 } from "~/components/budgetWrite.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import type { PageActionSpec } from "~/app/assistant/context.ts";
-import { parseCeilingPrefill, type CeilingProposal } from "./assistantActions.ts";
+import {
+  ceilingPrefillArgs,
+  parseCeilingPrefill,
+  type CeilingProposal,
+} from "./assistantActions.ts";
 import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
@@ -323,6 +327,11 @@ export function Budgets() {
     actions: {
       "budgets.ceiling.prefill": {
         scope: "A ceiling on this screen, filled in for you to save (not saved)",
+        args: ceilingPrefillArgs(handles),
+        // NOTHING BEYOND THE SCREEN: the parser checks the seat and the window
+        // against the screen as it is when the person approves, and opening an
+        // editor is not a change to what another editor or a peek holds.
+        tracks: [],
         parse: (raw) => parseCeilingPrefill(raw, handles),
         preview: (p) => [
           {

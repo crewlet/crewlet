@@ -25,8 +25,9 @@
  * `blocked`; the screen decides it, never the model.
  */
 
+import type { AssistantActionArgs } from "~/contract/assistant.ts";
 import { parseHash, type Navigator } from "../router.tsx";
-import { parseWindow, windowLabel, windowParam, type Offer } from "~/lib/range.ts";
+import { parseWindow, TODAY, windowLabel, windowParam, type Offer } from "~/lib/range.ts";
 import type { PageActionId, PageActionParse, PageActionSpec } from "./context.ts";
 
 /** How a screen writes a key: a filter replaces the history entry, a section pushes one. */
@@ -40,6 +41,14 @@ export interface UrlActionKey {
   history: UrlKeyHistory;
   /** Refuse a value the screen would not take, in a sentence; null where it takes it. */
   check?: (value: string) => string | null;
+  /**
+   * Every value the key takes, where the screen can name them all (a
+   * choice, a tab, a window of a fixed offer): what the assistant is told it
+   * may write, beside `check`, which stays the rule.
+   */
+  values?: readonly string[];
+  /** How a value is written, said to the assistant where `values` cannot list them. */
+  hint?: string;
   /** The value, in the screen's own words. Unset: the value as written. */
   words?: (value: string) => string;
   /**
@@ -79,7 +88,8 @@ const MAX_KEYS = 16;
 /** The longest value a key takes, in UTF-16 units; a filter value is a few words. */
 const MAX_VALUE = 200;
 /** A family member's own part: a slug, as `f.<slug>` and `cols.<shape>` spell one. */
-const MEMBER = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const MEMBER_SOURCE = "[a-z0-9][a-z0-9_-]{0,63}";
+const MEMBER = new RegExp(`^${MEMBER_SOURCE}$`);
 
 /** The key a patch names, or null where the screen offers none by that name. */
 function keyOf(keys: Readonly<Record<string, UrlActionKey>>, name: string): UrlActionKey | null {
@@ -170,6 +180,68 @@ function parsePreset(raw: unknown, preset: () => UrlPatch): PageActionParse<UrlP
   return { ok: true, value: patch };
 }
 
+/** A family's member pattern as the engine reads it: `f.` then a member slug. */
+function familyPattern(family: string): string {
+  return `^${family.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${MEMBER_SOURCE}$`;
+}
+
+/** What one key takes, as the action's arguments state it. */
+function keyArgs(key: UrlActionKey): AssistantActionArgs {
+  const words = [key.label];
+  if (key.hint) words.push(key.hint);
+  words.push("null clears it");
+  return {
+    type: ["string", "null"],
+    description: words.join(". ") + ".",
+    maxLength: MAX_VALUE,
+    ...(key.values && key.values.length > 0 ? { enum: [...key.values] } : {}),
+  };
+}
+
+/** An example patch: the first key with a value it takes, and a cleared one beside it. */
+function urlExamples(keys: Readonly<Record<string, UrlActionKey>>): unknown[] {
+  const names = Object.keys(keys).filter((n) => !n.endsWith("."));
+  const valued = names.find((n) => (keys[n]!.values?.length ?? 0) > 0);
+  if (valued !== undefined) return [{ [valued]: keys[valued]!.values![0]! }];
+  return names.length > 0 ? [{ [names[0]!]: null }] : [];
+}
+
+/**
+ * The arguments a URL action takes, from the very keys its parser reads: an
+ * object of those keys and nothing else, each text or null (clear it), with
+ * the values a key takes where it can list them; a family (`f.`) by the
+ * pattern its members are named by. An action with a preset takes nothing.
+ */
+export function urlArgs(
+  keys: Readonly<Record<string, UrlActionKey>>,
+  preset = false,
+): AssistantActionArgs {
+  if (preset) {
+    return {
+      type: ["object", "null"],
+      description: "Takes no settings: send {} and the page clears what it holds.",
+      additionalProperties: false,
+      properties: {},
+      examples: [{}],
+    };
+  }
+  const properties: Record<string, AssistantActionArgs> = {};
+  const patternProperties: Record<string, AssistantActionArgs> = {};
+  for (const [name, key] of Object.entries(keys)) {
+    if (name.endsWith(".")) patternProperties[familyPattern(name)] = keyArgs(key);
+    else properties[name] = keyArgs(key);
+  }
+  const examples = urlExamples(keys);
+  return {
+    type: "object",
+    description: "The page's own settings to change, by name; leave out what stays.",
+    additionalProperties: false,
+    properties,
+    ...(Object.keys(patternProperties).length > 0 ? { patternProperties } : {}),
+    ...(examples.length > 0 ? { examples } : {}),
+  };
+}
+
 /**
  * A page action that writes address keys, by `id`, ready to spread into a
  * screen's `useAssistantContext` actions.
@@ -187,6 +259,11 @@ export function urlAction(
   };
   const spec: PageActionSpec<UrlPatch> = {
     scope: options.scope,
+    args: urlArgs(keys, options.preset !== undefined),
+    // A VIEW CHANGE IS A CHANGE TO THE ADDRESS, and it tracks the address:
+    // a filter the person changed since is theirs. Neither the peek beside
+    // it nor a draft open on the page is what it edits.
+    tracks: ["query"],
     parse: (raw) => (options.preset ? parsePreset(raw, options.preset) : parseUrlPatch(raw, keys)),
     preview: (patch) => {
       const { query } = liveQuery();
@@ -226,10 +303,18 @@ export function urlAction(
  * show. A section, as `useTimeRange` writes it.
  */
 export function windowKey(offer: Offer, now: () => number): UrlActionKey {
+  const named: string[] = [...offer.ranges, ...(offer.today ? [TODAY] : [])];
   return {
     label: "Window",
     history: "section",
     fallback: offer.fallback,
+    // A FIXED OFFER IS LISTED WHOLE; one that also takes a custom window
+    // says how one is written, and `check` stays the rule either way.
+    ...(offer.custom
+      ? {
+          hint: `One of ${named.join(", ")}, or a custom window written <from>/<to> in ISO 8601 UTC`,
+        }
+      : { values: named }),
     check: (value) =>
       windowParam(parseWindow(value, offer, now())) === value
         ? null
@@ -251,6 +336,7 @@ export function choiceKey(
   return {
     label,
     history,
+    values: options.map((o) => o.value),
     ...(fallback === undefined ? {} : { fallback }),
     check: (value) =>
       options.some((o) => o.value === value) ? null : `${label} has no "${value}" option.`,
