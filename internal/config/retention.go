@@ -268,10 +268,25 @@ const (
 	// the softest term in the day: a JUDGEMENT on an ESTIMATE of git traffic
 	// no deployment has reported yet, while every byte of ratio above it is
 	// taken from the other logs on every volume whose logs are scaled into
-	// their share. The reading that would say otherwise is the code log's
-	// crewlet.statelog.barrier.applied, and a company that knows its git
-	// clients read far less sets stream.code_log_max_bytes before its first
-	// boot.
+	// their share.
+	//
+	// SO TWO THIRDS HOLDS UNTIL PRODUCTION BARRIER COUNTS EXIST, and the
+	// count is the code log's crewlet.statelog.barrier.applied (its stream,
+	// CREWLET_CODE_LOG), which any one data node counts whole, since every
+	// data node applies every barrier. A HALF SUFFICES UNDER ABOUT 11 700
+	// BARRIERS A DAY: beside the reference company's 4.0 MB of pushes, 2.1 MB
+	// of barriers make half the mutation log's 12.1 MB day, so a code log at
+	// half that log's ceiling fills no sooner under a blocked trim. The
+	// reference company's own git clients append more than that with no CI at
+	// all (13 800), so a half is for a company whose people and CI fetch
+	// less. One whose pushes or tracker writes are far from the reference
+	// company's compares the two logs' crewlet.statelog.log.bytes_per_day
+	// instead, which count every record each log takes, whatever a later
+	// release adds to the code log included: a half suffices while the code
+	// log's is at most half the mutation log's. Either sets the code log at
+	// half the mutation log's ceiling — stream.code_log_max_bytes before its
+	// first boot, and `crewlet retention set-capacity` once the stream
+	// exists, since a stream keeps the ceiling it was created with.
 	DerivedCodeLogNumerator   = 2
 	DerivedCodeLogDenominator = 3
 

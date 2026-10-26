@@ -469,7 +469,9 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 // package's doc ("What a day costs the log, measured") and TrackerLogMaxBytes's
 // reason, and the reasons that size the code log's share of the broker against
 // this day (config's DerivedCodeLogNumerator and its prose in
-// docs/guides/replication.md, code's CodeLogMaxBytes and GitReadsShare). Each
+// docs/guides/replication.md, code's CodeLogMaxBytes and GitReadsShare), the
+// count of barriers a day under which a code log at half this log's ceiling
+// suffices among them — the production reading the share is lowered on. Each
 // figure is computed here from the published costs, the corpus's rates, the
 // published barriers, the code log's day, code.BarrierRecordBytes and
 // config.DefaultMinAge, and rounded as the pages round it; the few the pages
@@ -496,6 +498,16 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	gitMost := gitLeast + float64(referenceCIReads*code.BarrierRecordBytes)
 	codeLeast, codeMost := (pushes+gitLeast)/day, (pushes+gitMost)/day
 	share := float64(config.DerivedCodeLogNumerator) / config.DerivedCodeLogDenominator
+	// THE BARRIERS UNDER WHICH HALF SUFFICES: the count a day that, beside the
+	// reference company's pushes, makes the code log's day half this one's, so
+	// a code log at half the mutation log's ceiling fills no sooner under a
+	// blocked trim. It is the production reading two thirds is lowered on
+	// (DerivedCodeLogNumerator), and the pages print it to the nearest
+	// hundred, beside the reads the reference company's git clients make with
+	// no CI at all.
+	halfBarriers := day/2 - pushes
+	halfCount := halfBarriers / code.BarrierRecordBytes
+	leastReads := int64(referencePushReads + referencePeopleReads)
 	// A TENTH OF THE CODE LOG'S CEILING is what its census lets git's barriers
 	// hold over min_age ([code.GitReadsShare]).
 	tenth := func(ceiling float64) float64 { return ceiling / code.GitReadsShare }
@@ -527,6 +539,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"and seven tenths at its most", codeMost, 0.65, 0.75},
 		{"two thirds is taken past the middle of that range, never past its top",
 			(share - codeLeast) / (codeMost - codeLeast), 0.5, 1},
+		{"half suffices under fewer barriers than the reference company's git clients " +
+			"append with no CI, and under some", halfCount / float64(leastReads), 0, 1},
 		{"git's barriers over min_age are under a thirtieth of the tenth of the derived ceiling",
 			window * gitMost / tenth(code.CodeLogMaxBytes), 0, 1.0 / 30},
 		{"and about a third of the tenth of the 1 GiB floor",
@@ -540,6 +554,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 
 	mb := func(bytes float64, places int) string { return fmt.Sprintf("%.*f", places, bytes/1e6) }
 	count := func(rate float64) string { return spaced(int64(math.Round(rate))) }
+	hundreds := func(rate float64) string { return spaced(int64(math.Round(rate/100) * 100)) }
 	kib := func(n int) string { return fmt.Sprintf("%d KiB", n>>10) }
 	tasks, comments := referenceTasksADay*whole.create, referenceCommentsADay*whole.comment
 	edits, turns := referenceEditsADay*whole.edit, referenceTurnsADay*whole.turn
@@ -638,6 +653,10 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("So the code log takes %.2f–%.2f of the mutation log's day — %.2f on its push "+
 				"records alone (%.2f of the tracker's records)", codeLeast, codeMost, pushes/day,
 				pushes/records),
+			fmt.Sprintf("A HALF SUFFICES UNDER ABOUT %s BARRIERS A DAY: beside the reference company's "+
+				"%s MB of pushes, %s MB of barriers make half the mutation log's %s MB day",
+				hundreds(halfCount), mb(pushes, 1), mb(halfBarriers, 1), mb(day, 1)),
+			fmt.Sprintf("with no CI at all (%s)", spaced(leastReads)),
 		},
 		"internal/code/limits.go": {
 			fmt.Sprintf("against the tracker's measured %s MB of records and %s MB of barriers",
@@ -656,6 +675,13 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				"clients' reads append (%d bytes a read) take about half to seven tenths of what its "+
 				"tracker writes and its seats' reads take a day, and the ratio is taken past the "+
 				"middle of that range", spaced(codePushRecordBytes), code.BarrierRecordBytes),
+			fmt.Sprintf("Beside the reference company's %s pushes a day, **half the mutation log's "+
+				"ceiling suffices under about %s barriers a day**: its pushes' %s MB and those "+
+				"barriers' %s MB are half the %s MB a day its tracker writes and its seats' reads "+
+				"take", spaced(referencePushesADay), hundreds(halfCount), mb(pushes, 1),
+				mb(halfBarriers, 1), mb(day, 1)),
+			fmt.Sprintf("with no CI at all — %s, three reads a push and thirty people fetching every "+
+				"three minutes of a working day", spaced(leastReads)),
 		},
 	} {
 		page := prose(t, file)
