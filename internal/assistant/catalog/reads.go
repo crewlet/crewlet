@@ -100,7 +100,10 @@ func readTools() []Tool {
 				return get("GET /worklet/search", nil,
 					query(a).str("q", "q").num("limit", "limit", 10).values())
 			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Matching tasks", Rows: "hits",
+			// A SEARCH THAT COULD NOT RUN SAYS WHY in its own `note` (an index
+			// still building), as search_knowledge's does, rather than reading
+			// to the model as "nothing matched".
+			Cards: one(cards.Spec{Note: "note", Table: &cards.Table{Title: "Matching tasks", Rows: "hits",
 				Brief: []string{"title", "status", "assignee"},
 				Columns: []cards.Column{col("key", "Key", "key", tText),
 					prose("title", "Title", "title"), col("status", "Status", "status", tLabel),

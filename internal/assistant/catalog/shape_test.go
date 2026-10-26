@@ -364,21 +364,26 @@ func TestNoReadEverDrawsAnEmptyCard(t *testing.T) {
 func TestAnEmptySearchSaysWhatItAskedAndWhy(t *testing.T) {
 	t.Parallel()
 	b := provenance.NewBoundary()
-	tool, _ := catalog.Lookup("search_knowledge")
 	const note = "this node is still indexing what it has projected"
 	args := catalog.Args{"q": "company mission"}
+	// BOTH SEARCHES answer a building index the same way (internal/api/
+	// queries' knowledgeSearch and workSearch): no hits, and a note saying why.
+	for _, name := range []string{"search_knowledge", "search_work"} {
+		tool, _ := catalog.Lookup(name)
+		res, err := catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(
+			`{"available":false,"reason":"building","note":"` + note + `","hits":[]}`)},
+			b, evals.Epoch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.Empty || len(res.Cards) != 0 || !strings.Contains(res.Model, "company mission") ||
+			!strings.Contains(res.Model, note) {
+			t.Errorf("an empty %s shaped as %d cards, model %.400s", name, len(res.Cards),
+				res.Model)
+		}
+	}
+	tool, _ := catalog.Lookup("search_knowledge")
 	res, err := catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(
-		`{"available":false,"reason":"building","note":"` + note + `","hits":[]}`)},
-		b, evals.Epoch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !res.Empty || len(res.Cards) != 0 || !strings.Contains(res.Model, "company mission") ||
-		!strings.Contains(res.Model, note) {
-		t.Errorf("an empty knowledge search shaped as %d cards, model %.400s", len(res.Cards),
-			res.Model)
-	}
-	res, err = catalog.Shape(tool, args, exec.Response{Status: 200, Body: []byte(
 		`{"available":true,"hits":[{"id":"p1","title":"Our mission","container":"FAIR",` +
 			`"snippet":"share costs fairly"}]}`)}, b, evals.Epoch)
 	if err != nil {
