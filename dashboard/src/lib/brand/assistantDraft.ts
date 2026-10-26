@@ -53,25 +53,34 @@ export const BRAND_ASSISTANT_HELP =
   "person's files in this conversation, never as markup; uploaded font files are theirs to " +
   "add. You make no images here: asked for assets, say that you can propose colours, type " +
   "and voice, and offer an SVG starting point for a logo only if they ask. The page checks " +
-  "the colours' contrast. Saving and adopting stay the person's.";
+  "the colours' contrast. Saving and publishing stay the person's.";
 
 /**
- * The Brand page's button that continues a draft's setup: one constant, read
- * by the button and by the help that names it, so renaming the button never
- * leaves the assistant pointing at one the page no longer shows.
+ * The Brand page's button that opens a standing draft's setup, by whether the
+ * draft is ready to publish: "Finish draft" while it lacks what publishing
+ * needs, "Edit draft" once it has it. One place, read by the button and by
+ * the help that names it, so renaming the button never leaves the assistant
+ * pointing at one the page no longer shows.
  */
-export const BRAND_CONTINUE_DRAFT_LABEL = "Continue setting up";
+export function brandDraftLabel(ready: boolean): string {
+  return ready ? "Edit draft" : "Finish draft";
+}
 
 /**
  * The Brand page's word to the assistant about a draft a setup left, which
  * the page shows and does not edit: its values are read here, and changed
- * only in the setup that holds it.
+ * only in the setup that holds it, which the button [brandDraftLabel] names
+ * for the same readiness opens.
  */
-export const BRAND_STANDING_DRAFT_HELP =
-  "This is the company's brand draft, saved and not adopted. This page shows it and does not " +
-  "edit it, so you cannot change it here. To change its name, tagline, colours, typefaces or " +
-  `voice, tell the person to choose ${BRAND_CONTINUE_DRAFT_LABEL} on this page, which opens ` +
-  "the setup where you can propose those changes. Adopting it stays an administrator's.";
+export function brandStandingDraftHelp(ready: boolean): string {
+  return (
+    "This is the company's brand draft, saved and not published. This page shows it and does " +
+    "not edit it, so you cannot change it here. To change its name, tagline, colours, " +
+    `typefaces or voice, tell the person to choose ${brandDraftLabel(ready)} on this page, ` +
+    "which opens the setup where you can propose those changes. Publishing it stays an " +
+    "administrator's."
+  );
+}
 
 /** The logo types the brand format admits, as a file reference names them. */
 const LOGO_TYPES: readonly string[] = ["image/svg+xml", "image/png", "image/webp"];

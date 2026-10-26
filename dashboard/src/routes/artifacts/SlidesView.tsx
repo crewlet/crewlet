@@ -49,7 +49,7 @@ import {
   useSlideKeys,
   useToast,
   type SlideGridSection,
-  useMediaMatch,
+  useScreenBelow,
 } from "@crewlethq/ui";
 import type {
   ArtifactDeck,
@@ -503,7 +503,7 @@ function DeckEditor({
   const position = slides.findIndex((s) => s.id === current.id);
   // ON A PHONE THE STRIP IS A ROW UNDER THE STAGE, where the next slide is a
   // swipe away, rather than a column of full-width slides under the notes.
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useScreenBelow(PHONE_BREAKPOINT);
 
   const change = onChange;
   const edit: SlideRenderContext["edit"] = editable

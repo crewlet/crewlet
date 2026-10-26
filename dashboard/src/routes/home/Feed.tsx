@@ -19,7 +19,7 @@
 
 import { useServicesRun } from "~/lib/services.ts";
 import { useCallback, useMemo, useState } from "react";
-import { Button, Card, SegmentedControl, useMediaMatch } from "@crewlethq/ui";
+import { Button, Card, SegmentedControl, useScreenBelow } from "@crewlethq/ui";
 import {
   CircleCheckGlyph,
   CalendarClockGlyph,
@@ -74,7 +74,7 @@ export function Feed({ now }: { now: number }) {
     [filter.kinds],
   );
   const live = useQuery("company_feed", params, { pollMs: 30_000 });
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useScreenBelow(PHONE_BREAKPOINT);
 
   // The older pages, the head they were paged from, and where they stopped —
   // all reset by a filter change, which is a different feed.

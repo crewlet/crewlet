@@ -14,7 +14,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { AppShell, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { ADVANCE_MS, Inbox } from "./Inbox.tsx";
 import { Router } from "~/app/router.tsx";
@@ -24,6 +24,7 @@ import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
+import { installScreen } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
@@ -191,11 +192,14 @@ function mount({
   viewer = JANE,
   agents = [],
   services,
+  shell = false,
 }: {
   answers?: Record<string, Answer>;
   viewer?: Record<string, unknown>;
   agents?: Record<string, unknown>[];
   services?: Record<string, string>;
+  /** Inside the kit's shell, whose content column is the screen's width. */
+  shell?: boolean;
 } = {}) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
@@ -218,9 +222,7 @@ function mount({
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
           <FrameReadings>
-            <Router>
-              <Inbox />
-            </Router>
+            <Router>{shell ? <AppShell>{<Inbox />}</AppShell> : <Inbox />}</Router>
           </FrameReadings>
         </ClientContext.Provider>
       </LayerHost>
@@ -456,6 +458,30 @@ describe("the list", () => {
     expect(current).toHaveLength(1);
     expect(current[0]!.textContent).toContain("something about r-2");
     expect(list.querySelectorAll(".crewlet-inbox-row--selected")).toHaveLength(1);
+  });
+
+  test("beside an assistant that leaves the screen a phone's width, the inbox is one pane with Back", async () => {
+    // A wide window (the setup stub answers no width query) and a 443px
+    // screen: what a 1375px window leaves beside a 640px assistant.
+    const narrow = installScreen(443);
+    try {
+      location.hash = "#/inbox";
+      mount({
+        shell: true,
+        answers: { work_inbox: inboxes({ unread: [notice("r-1"), notice("r-2")] }) },
+      });
+      await settle();
+      // The list alone: no row is opened beside it, so no pane is drawn.
+      expect(screen.getByRole("navigation", { name: "Inbox" })).toBeTruthy();
+      expect(document.querySelector(".crewlet-reading-pane")).toBeNull();
+      location.hash = "#/inbox?row=r-2";
+      await settle();
+      // The open row in the list's place, with its way back.
+      expect(screen.queryByRole("navigation", { name: "Inbox" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Back to the inbox" })).toBeTruthy();
+    } finally {
+      narrow.restore();
+    }
   });
 
   test("j and k step through the rows, opening each in the pane", async () => {

@@ -1112,8 +1112,12 @@ const (
 	// 341 KiB, still under two seconds on that link. One vocabulary for seat
 	// states and the plain sentence for each failure kind, which the frame's
 	// shared seat words carry into the entry, took it to 341.1 KiB. 342 KiB,
+	// still under two seconds on that link. uilet 0.66.0 and choosing screen
+	// shapes by the screen's width took it to 345.6 KiB, the one sheet (the
+	// 0.64.1 alignment and spacing pass across every component family, the
+	// stacking grid and the screen width hooks) 115.5 KiB of it. 346 KiB,
 	// still under two seconds on that link.
-	initialBudget = 342 << 10
+	initialBudget = 346 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1217,16 +1221,25 @@ const (
 	// seat states, the plain sentence for each failure kind with the engine's
 	// message behind a disclosure, the assistant's credit in every history and
 	// the org chart's reveal of a new seat took it to 4513.6 KiB. 4514 KiB,
-	// which still refuses a doubled baseline. Saying which revision each node
-	// runs, a refusal included, took it to 4519.6 KiB: the one rule a node's
-	// standing is read by (the sidebar's Nodes figure counts by it, so it is
-	// in the frame), its words beside the Settings screens that say them, the
-	// Nodes screen's Running panel and Lag fact, the Configuration screen's
-	// revision states, the after-save strip and the ceiling and charter
-	// followers settling on a refusal rather than "applying…", and the tab's
-	// last push kept through a dropped socket. 4520 KiB, which still refuses
-	// a doubled baseline.
-	treeBudget = 4<<20 + 424<<10
+	// which still refuses a doubled baseline. uilet 0.66.0 (the 0.64.1
+	// alignment and spacing pass across every component family, the stacking
+	// grid and the screen width hooks, a card title registered once,
+	// ProposalCard's danger tone and details, the thread's jumps and
+	// near-future times) and choosing screen shapes by the screen's width took
+	// it to 4545.4 KiB. 4546 KiB, which still refuses a doubled baseline.
+	// Drawing a brand draft in its own cards with one next step, who last
+	// changed it and a confirmed discard, in the Brand page's chunk less the
+	// kit view's copy of the cards, which now shares the page's board, took it
+	// to 4547.1 KiB. 4548 KiB, which still refuses a doubled baseline. Saying
+	// which revision each node runs, a refusal included, took it to 4553.1
+	// KiB: the one rule a node's standing is read by (the sidebar's Nodes
+	// figure counts by it, so it is in the frame), its words beside the
+	// Settings screens that say them, the Nodes screen's Running panel and
+	// Lag fact, the Configuration screen's revision states, the after-save
+	// strip and the ceiling and charter followers settling on a refusal
+	// rather than "applying…", and the tab's last push kept through a
+	// dropped socket. 4554 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 458<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

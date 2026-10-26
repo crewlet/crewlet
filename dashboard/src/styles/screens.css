@@ -3933,12 +3933,15 @@ a.knowledge-reader-how:hover {
    at the foot of the directory. No part draws a frame inside a frame: rows are
    divided by hairlines. */
 
-/* On a phone the detail is the whole page, and this is its way back. */
+/* Where the directory and the detail are one pane (under 640px of the
+   screen's width: a phone, or a desktop beside the assistant), the detail is
+   the whole screen and this is its way back. The kit's `ListDetail` folds at
+   the same width of its own. */
 .int-back {
   display: none;
   align-self: flex-start;
 }
-@media (width < 640px) {
+@container page (width < 640px) {
   .int-back {
     display: inline-flex;
   }
@@ -8955,14 +8958,24 @@ a.live-row:focus-visible {
   max-height: 16lh;
 }
 
-/* ONE PANE UNDER THE PHONE WIDTH, with Back. A human teammate answering an
-   ask from their phone is this product's second named reader: the list, then
-   the open row in the list's place. The page scrolls as any other there. */
-@media (width < 640px) {
+/* ONE PANE UNDER 640px OF THE SCREEN'S WIDTH, with Back: on a phone, and
+   beside an assistant the reader opened, where a desktop window can leave the
+   screen a phone's room and a pane beside a 260px list was drawn 130px wide.
+   A human teammate answering an ask from their phone is this product's second
+   named reader: the list, then the open row in the list's place. The screen's
+   JavaScript asks the same width (`useScreenBelow`, Inbox.tsx). */
+@container page (width < 640px) {
   .inbox-panes {
     grid-template-columns: minmax(0, 1fr);
   }
-  /* AND THE PHONE'S 16px GUTTER: a row's own 8px inside 8px of list. */
+  .inbox-list {
+    border-right: none;
+  }
+}
+/* ON A PHONE THE PAGE SCROLLS AS ANY OTHER, with the phone's 16px gutter: a
+   row's own 8px inside 8px of list. Beside the assistant on a desktop the
+   screen still fills the window and the one pane keeps its own scroller. */
+@media (width < 640px) {
   .inbox-callout {
     margin-inline: var(--spacing-4);
   }
@@ -8972,7 +8985,6 @@ a.live-row:focus-visible {
   .inbox-list,
   .inbox-pane {
     overflow: visible;
-    border-right: none;
   }
 }
 
