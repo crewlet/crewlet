@@ -3,14 +3,22 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // heardInbox is what one node's sockets were handed: every movement, and the
@@ -433,80 +441,313 @@ func TestAFollowerMovesToAnotherServerWhenItsServerStopsServing(t *testing.T) {
 		})
 }
 
+// heldBy is how many batches, and how many movements between them, r keeps of
+// source now.
+func heldBy(r *inboxRelay, source string) (batches, moves int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.streams[source]
+	return len(s.ring), s.moves
+}
+
+// switchedVerdict is a copy verdict per domain that a case switches, as
+// [localEstate.outOfService] reads one.
+type switchedVerdict struct {
+	mu  sync.Mutex
+	out map[string]bool
+}
+
+func (v *switchedVerdict) set(source string, out bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.out == nil {
+		v.out = map[string]bool{}
+	}
+	v.out[source] = out
+}
+
+func (v *switchedVerdict) faulted(_ context.Context, domains ...string) []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	var held []string
+	for _, d := range domains {
+		if v.out[d] {
+			held = append(held, d)
+		}
+	}
+	return held
+}
+
 // A SERVER SAYS WHAT A FOLLOWER CANNOT PLACE ITSELF IN, rather than answering
 // as though nothing were missing: a ring that no longer reaches back to the
-// follower's last batch is a GAP, and a server back in service after its copy
-// was out is another EPOCH, because what its applier announced meanwhile is no
-// sequence anybody can trust to be whole. Each is a re-read on the follower's
-// side; answered as an ordinary "nothing new", either is movements lost
-// without a trace. Both are one source's: another source's batches never fill
-// its ring, and its return to service leaves the other's epoch alone.
+// follower's last batch is a GAP — the bound on the movements it keeps
+// evicted what came after it, or a batch was wider than that bound and never
+// kept at all — and a server back in service after its copy was out is
+// another EPOCH, because what its applier announced meanwhile is no sequence
+// anybody can trust to be whole, so it keeps none of it. Each is a re-read on
+// the follower's side; answered as an ordinary "nothing new", either is
+// movements lost without a trace. Both are one source's: another source's
+// batches never fill its ring, and its return to service leaves the other's
+// epoch alone. On a bubble's clock, so the followers' round trip never runs
+// out under the case.
 //
-// Mutation: drop the eviction check and the first case answers no gap; keep
-// the epoch across a return to service and the second answers the old one;
-// share one ring or one epoch across sources and the last two cases fail.
+// Mutation: drop the bound on movements and the first case answers no gap;
+// keep the newest batch however wide, and the wide case holds it; keep the
+// epoch, or the ring, across a return to service and the epoch case fails;
+// share one ring or one epoch across sources and the other source's cases
+// fail.
 func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 	t.Parallel()
-	var mu sync.Mutex
-	out := map[string]bool{}
-	faulted := func(_ context.Context, domains ...string) []string {
-		mu.Lock()
-		defer mu.Unlock()
-		var held []string
-		for _, d := range domains {
-			if out[d] {
-				held = append(held, d)
+	synctest.Test(t, func(t *testing.T) {
+		var verdict switchedVerdict
+		r := newInboxRelay("a", nil, nil, []string{trackerName, codeName}, verdict.faulted,
+			nil, nil, nil)
+		ctx := t.Context()
+
+		first, _ := r.answerNow(ctx, relayAsk{Source: trackerName})
+		code, _ := r.answerNow(ctx, relayAsk{Source: codeName})
+		r.record([]inbox.Movement{moving(codeName, "ana")})
+		for range inboxRelayMoves + 5 {
+			r.record([]inbox.Movement{moving(trackerName, "ana")})
+		}
+		if batches, moves := heldBy(r, trackerName); batches != inboxRelayMoves ||
+			moves != inboxRelayMoves {
+			t.Errorf("a ring past its bound holds %d batches of %d movements, want %d of %d",
+				batches, moves, inboxRelayMoves, inboxRelayMoves)
+		}
+		got, _ := r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch, After: 1})
+		if !got.Gap || len(got.Batches) != 0 {
+			t.Errorf("a follower behind the ring was answered %+v, want a gap", got)
+		}
+		got, _ = r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
+			After: got.Head - 2})
+		if got.Gap || len(got.Batches) != 2 || got.Batches[0].Seq != got.Head-1 {
+			t.Errorf("a follower the ring still reaches was answered %d batches (gap %v), "+
+				"want the two after it", len(got.Batches), got.Gap)
+		}
+		// THE OTHER SOURCE'S RING STILL REACHES BACK to its one batch: the
+		// tracker's thousands did not evict it.
+		if got, _ := r.answerNow(ctx, relayAsk{Source: codeName, Epoch: code.Epoch}); got.Gap ||
+			len(got.Batches) != 1 || got.Batches[0].Moved[0].Source != codeName {
+			t.Errorf("the code host's follower was answered %+v, want its one batch", got)
+		}
+
+		// A BATCH WIDER THAN THE BOUND is never kept, and takes the ring with
+		// it: a follower behind it re-reads, and nothing is held for it.
+		wide := make([]inbox.Movement, inboxRelayMoves+1)
+		for i := range wide {
+			wide[i] = moving(trackerName, fmt.Sprintf("seat-%d", i))
+		}
+		r.record(wide)
+		if batches, moves := heldBy(r, trackerName); batches != 0 || moves != 0 {
+			t.Errorf("a batch wider than the bound left %d batches of %d movements held",
+				batches, moves)
+		}
+		if wideGot, _ := r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
+			After: got.Head}); !wideGot.Gap || len(wideGot.Batches) != 0 {
+			t.Errorf("a follower behind a batch too wide to keep was answered %+v, want a gap",
+				wideGot)
+		}
+
+		r.record([]inbox.Movement{moving(trackerName, "bo")})
+		verdict.set(trackerName, true)
+		if got, _ = r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
+			After: got.Head}); !got.Unserved {
+			t.Fatalf("a server whose copy is out of service answered %+v, want unserved", got)
+		}
+		verdict.set(trackerName, false)
+		got, _ = r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
+			After: got.Head})
+		if got.Epoch == first.Epoch {
+			t.Errorf("a server back in service kept its epoch %q, so a follower would "+
+				"read on as though its own applier had announced everything meanwhile",
+				got.Epoch)
+		}
+		if batches, _ := heldBy(r, trackerName); batches != 0 {
+			t.Errorf("a server back in service still holds %d batches its old epoch "+
+				"numbered, which no follower is ever served again", batches)
+		}
+		if again, _ := r.answerNow(ctx, relayAsk{Source: codeName}); again.Epoch != code.Epoch {
+			t.Errorf("the tracker's return to service moved the code host's epoch %q to "+
+				"%q, a re-read for a source whose copy never left service",
+				code.Epoch, again.Epoch)
+		}
+	})
+}
+
+// A SERVER KEEPS ONLY WHAT A FOLLOWER CAN STILL ASK FOR.
+//
+// No follower is served a batch recorded before the last answer it took: one
+// new to a server is answered where the stream stands, and one that moves
+// starts over. So a batch is worth keeping only while a follower answered
+// before it may still ask — for a round trip after that answer, or after the
+// batch itself while an ask waits for it — and a ring kept by count holds a
+// thousand batches of every source on every data node, each a whole apply
+// transaction wide, for followers that do not exist: with no copy out of
+// service anywhere, nobody asks. Here, on a bubble's clock: a stream nobody
+// asks keeps nothing; a follower just answered is kept what is recorded for a
+// round trip and no longer, so one slower than that is answered a gap; the
+// ring lets go of what nobody may ask for any more at the next answer or the
+// next batch, whichever comes first; and an ask held open past a round trip
+// still finds the batch that wakes it.
+//
+// Mutation: keep a batch whether or not anybody may ask for it, and the
+// unasked stream holds one; never hold at an answer, and the follower just
+// answered loses its batch to a gap; never expire at an answer, and the slow
+// follower is served instead of re-reading; never expire at a batch, and the
+// ring keeps what nobody asked for once its followers stop; drop the count of
+// waiting asks, and the ask held open is answered a gap rather than its batch.
+func TestAServerKeepsOnlyWhatAFollowerCanStillAskFor(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		var verdict switchedVerdict
+		r := newInboxRelay("a", nil, nil, []string{trackerName}, verdict.faulted, nil, nil, nil)
+		ctx := t.Context()
+		nothingHeld := func(when string) {
+			t.Helper()
+			if batches, moves := heldBy(r, trackerName); batches != 0 || moves != 0 {
+				t.Fatalf("%s, the stream holds %d batches of %d movements", when, batches, moves)
 			}
 		}
-		return held
-	}
-	setOut := func(source string, held bool) {
-		mu.Lock()
-		out[source] = held
-		mu.Unlock()
-	}
-	r := newInboxRelay("a", nil, nil, []string{trackerName, codeName}, faulted, nil, nil, nil)
-	ctx := t.Context()
 
-	first, _ := r.answerNow(ctx, relayAsk{Source: trackerName})
-	code, _ := r.answerNow(ctx, relayAsk{Source: codeName})
-	r.record([]inbox.Movement{moving(codeName, "ana")})
-	for range inboxRelayRing + 5 {
-		r.record([]inbox.Movement{moving(trackerName, "ana")})
-	}
-	got, _ := r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch, After: 1})
-	if !got.Gap || len(got.Batches) != 0 {
-		t.Errorf("a follower behind the ring was answered %+v, want a gap", got)
-	}
-	got, _ = r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch, After: got.Head - 2})
-	if got.Gap || len(got.Batches) != 2 {
-		t.Errorf("a follower the ring still reaches was answered %d batches (gap %v), "+
-			"want the two after it", len(got.Batches), got.Gap)
-	}
-	// THE OTHER SOURCE'S RING STILL REACHES BACK to its one batch: the
-	// tracker's thousand did not evict it.
-	if got, _ := r.answerNow(ctx, relayAsk{Source: codeName, Epoch: code.Epoch}); got.Gap ||
-		len(got.Batches) != 1 || got.Batches[0].Moved[0].Source != codeName {
-		t.Errorf("the code host's follower was answered %+v, want its one batch", got)
-	}
+		// NOBODY ASKS: every batch is numbered and none is kept, and the
+		// first follower is answered where the stream stands.
+		for range 10 {
+			r.record([]inbox.Movement{moving(trackerName, "ana")})
+		}
+		nothingHeld("with nobody asking")
+		first, _ := r.answerNow(ctx, relayAsk{Source: trackerName})
+		if first.Head != 10 || len(first.Batches) != 0 || first.Gap {
+			t.Fatalf("a follower new to the server was answered %+v, want where the "+
+				"stream stands, at 10, and nothing before it", first)
+		}
 
-	setOut(trackerName, true)
-	if got, _ = r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
-		After: got.Head}); !got.Unserved {
-		t.Fatalf("a server whose copy is out of service answered %+v, want unserved", got)
-	}
-	setOut(trackerName, false)
-	got, _ = r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch, After: got.Head})
-	if got.Epoch == first.Epoch {
-		t.Errorf("a server back in service kept its epoch %q, so a follower would "+
-			"read on as though its own applier had announced everything meanwhile",
-			got.Epoch)
-	}
-	if again, _ := r.answerNow(ctx, relayAsk{Source: codeName}); again.Epoch != code.Epoch {
-		t.Errorf("the tracker's return to service moved the code host's epoch %q to "+
-			"%q, a re-read for a source whose copy never left service",
-			code.Epoch, again.Epoch)
-	}
+		// A FOLLOWER JUST ANSWERED is kept what is recorded before it asks
+		// again.
+		time.Sleep(inboxRelayHold / 2)
+		r.record([]inbox.Movement{moving(trackerName, "bo")})
+		got, _ := r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
+			After: first.Head})
+		if got.Gap || len(got.Batches) != 1 || got.Batches[0].Moved[0].Handle != "bo" {
+			t.Fatalf("a follower asking within a round trip of its answer was answered "+
+				"%+v, want bo's batch", got)
+		}
+
+		// AND FOR NO LONGER: one that asks more than a round trip after its
+		// answer is answered a gap, the ring letting go of what it held for
+		// it at that answer.
+		r.record([]inbox.Movement{moving(trackerName, "cy")})
+		time.Sleep(inboxRelayHold)
+		late, _ := r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
+			After: got.Head})
+		if !late.Gap || len(late.Batches) != 0 {
+			t.Fatalf("a follower asking %s after its answer was answered %+v, want a gap",
+				inboxRelayHold, late)
+		}
+		nothingHeld("answering a round trip past the last answer")
+
+		// OR AT THE NEXT BATCH, where the followers stopped asking: one
+		// recorded a round trip after the last answer finds nobody who may
+		// ask for it or for what came before it.
+		r.record([]inbox.Movement{moving(trackerName, "dee")})
+		time.Sleep(inboxRelayHold)
+		r.record([]inbox.Movement{moving(trackerName, "eve")})
+		nothingHeld("recording a round trip past the last answer")
+
+		// AN ASK HELD OPEN past a round trip still finds the batch that wakes
+		// it: it counts as asking for as long as it waits. The follower is
+		// placed where the stream stands first, as a gap places it.
+		placed, _ := r.answerNow(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
+			After: late.Head})
+		done := make(chan relayAnswer, 1)
+		go func() {
+			done <- r.answer(ctx, relayAsk{Source: trackerName, Epoch: first.Epoch,
+				After: placed.Head}, inboxRelayWait)
+		}()
+		time.Sleep(inboxRelayHold + time.Second)
+		synctest.Wait()
+		r.record([]inbox.Movement{moving(trackerName, "fay")})
+		woken := <-done
+		if woken.Gap || len(woken.Batches) != 1 || woken.Batches[0].Moved[0].Handle != "fay" {
+			t.Fatalf("an ask held open %s was answered %+v, want the batch that woke it",
+				inboxRelayHold+time.Second, woken)
+		}
+	})
+}
+
+// A BATCH NOBODY CAN ASK FOR IS NEVER COPIED.
+//
+// Every data node records every committed batch of every source, and in the
+// normal state — no copy out of service anywhere — nobody follows any of
+// them, so what a batch costs there is what the relay costs the whole fleet:
+// it is numbered and nothing is allocated. Nor is a batch too wide to keep
+// copied, however recently a follower asked, only to be let go of at once.
+//
+// NOT PARALLEL, because an allocation count is the whole process's, and over
+// a hundred runs, which testing.AllocsPerRun divides and rounds down.
+//
+// Mutation: copy a batch whether or not anybody may ask for it, or copy one
+// wider than the bound before letting it go, and a run allocates.
+func TestABatchNobodyCanAskForIsNeverCopied(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var verdict switchedVerdict
+		r := newInboxRelay("a", nil, nil, []string{trackerName}, verdict.faulted, nil, nil, nil)
+		batch := benchMovements(100, 0)
+		if allocs := testing.AllocsPerRun(100, func() { r.record(batch) }); allocs != 0 {
+			t.Errorf("recording a batch nobody follows allocated %v times, want none", allocs)
+		}
+		r.answerNow(t.Context(), relayAsk{Source: trackerName})
+		wide := benchMovements(inboxRelayMoves+1, 0)
+		if allocs := testing.AllocsPerRun(100, func() { r.record(wide) }); allocs != 0 {
+			t.Errorf("recording a batch too wide to keep allocated %v times, want none", allocs)
+		}
+		if batches, moves := heldBy(r, trackerName); batches != 0 || moves != 0 {
+			t.Errorf("after a batch too wide to keep, the stream holds %d batches of %d "+
+				"movements", batches, moves)
+		}
+	})
+}
+
+// THE WIDEST ANSWER A SERVER CAN GIVE FITS ONE REPLY.
+//
+// An answer carries every batch the follower has not taken, and a reply the
+// broker refuses as too large is no answer at all: the follower hears nothing,
+// moves to the next server and asks it the same, so a server holding more than
+// one reply carries could never be followed. The bound on the movements a
+// stream keeps is what holds an answer to one reply — here every movement at
+// the longest handle a seat may have, with a subject and a reason as long,
+// and as many notices as one transaction can write.
+//
+// Mutation: raise inboxRelayMoves tenfold, and the answer outgrows the reply.
+func TestTheWidestRelayAnswerFitsOneReply(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		var verdict switchedVerdict
+		r := newInboxRelay("a", nil, nil, []string{trackerName}, verdict.faulted, nil, nil, nil)
+		first, _ := r.answerNow(t.Context(), relayAsk{Source: trackerName})
+		long := strings.Repeat("x", iam.MaxLogin)
+		for i := range inboxRelayMoves {
+			r.record([]inbox.Movement{{Source: trackerName,
+				Handle:      fmt.Sprintf("%0*d", iam.MaxLogin, i),
+				UnreadDelta: statelog.ApplyTxRowBudget, Subject: long, Reason: long}})
+		}
+		got, _ := r.answerNow(t.Context(), relayAsk{Source: trackerName, Epoch: first.Epoch,
+			After: first.Head})
+		if len(got.Batches) != inboxRelayMoves {
+			t.Fatalf("the full ring answered %d batches, want all %d", len(got.Batches),
+				inboxRelayMoves)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) > queue.MaxPayloadBytes {
+			t.Fatalf("the widest answer is %d bytes, past the %d one reply carries",
+				len(raw), queue.MaxPayloadBytes)
+		}
+		t.Logf("the widest answer is %d bytes of the %d one reply carries",
+			len(raw), queue.MaxPayloadBytes)
+	})
 }
 
 // A NODE NOBODY LISTENS ON RELAYS NOTHING. A data node that serves no API has
@@ -527,5 +768,68 @@ func TestANodeNobodyListensOnRelaysNothing(t *testing.T) {
 	if b.relaying(trackerName) {
 		t.Fatal("a node with nothing listening for its inbox movements is " +
 			"relaying a peer's")
+	}
+}
+
+// benchMovements is one batch of width movements as an applier's decode hands
+// them over: a fresh handle and subject string per movement, the source and
+// reason its constants.
+func benchMovements(width, batch int) []inbox.Movement {
+	out := make([]inbox.Movement, width)
+	for i := range out {
+		out[i] = inbox.Movement{Source: trackerName,
+			Handle:      fmt.Sprintf("seat-%07d", batch*width+i),
+			UnreadDelta: 1, Subject: uuid.NewString(), Reason: "assignee"}
+	}
+	return out
+}
+
+// BenchmarkRecordingAnInboxBatch is what the relay costs a data node per
+// committed batch of one source, and what it holds of that source: UNFOLLOWED,
+// with nobody asking — every data node of a fleet with no copy out of service
+// — and FOLLOWED for the whole run, at a transaction that moved 1, 100 and
+// 1 000 inboxes. ring-B is the heap a full ring holds, measured once before
+// the timed loop over batches as an applier hands them over; ns/op, B/op and
+// allocs/op are one batch recorded into that full ring, which keeps it and
+// lets go of the oldest.
+//
+//	go test -run '^$' -bench BenchmarkRecordingAnInboxBatch -benchtime 200x -count 1 ./internal/engine/
+func BenchmarkRecordingAnInboxBatch(b *testing.B) {
+	for _, c := range []struct {
+		name     string
+		width    int
+		followed bool
+	}{
+		{"unfollowed/width=1", 1, false},
+		{"followed/width=1", 1, true},
+		{"followed/width=100", 100, true},
+		{"followed/width=1000", 1000, true},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			r := newInboxRelay("a", nil, nil, []string{trackerName}, nil, nil, nil, nil)
+			if c.followed {
+				// A FOLLOWER FOR THE WHOLE RUN, as though it had just been
+				// answered: what a ring past its round trip would have
+				// let go of is not what is measured here.
+				r.streams[trackerName].heldUntil = time.Now().Add(time.Hour)
+			}
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			for i := range inboxRelayMoves/c.width + 1 {
+				r.record(benchMovements(c.width, i))
+			}
+			runtime.GC()
+			runtime.ReadMemStats(&after)
+			held := float64(after.HeapAlloc) - float64(before.HeapAlloc)
+			batch := benchMovements(c.width, -1)
+			b.ReportAllocs()
+			for b.Loop() {
+				r.record(batch)
+			}
+			// REPORTED AFTER THE LOOP, whose first turn resets the timer and
+			// with it every metric a benchmark reported.
+			b.ReportMetric(held, "ring-B")
+		})
 	}
 }

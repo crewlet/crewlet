@@ -51,11 +51,11 @@ func (e *Engine) SetOnInboxGap(fn func(source string)) {
 // inboxMoved is what a domain's applier calls after a committed batch that
 // moved somebody's inbox.
 //
-// KEPT FOR THIS NODE'S RELAY FOLLOWERS whatever its copy's state — a server
-// answers a follower only while its copy of the source serves
-// ([inboxRelay.answerNow]) — and handed to this node's own sockets only for
-// the sources they are not being relayed from a peer: one source of each
-// domain's movements at a time.
+// NUMBERED FOR PEERS' RELAY FOLLOWERS whatever this node's copy's state — kept
+// while a follower may still ask for it ([inboxRelay.record]), and answered
+// only while this node's copy of the source serves ([inboxRelay.answerNow]) —
+// and handed to this node's own sockets only for the sources they are not
+// being relayed from a peer: one source of each domain's movements at a time.
 func (e *Engine) inboxMoved(moved []inbox.Movement) {
 	if relay := e.inboxRelay.Load(); relay != nil {
 		moved = relay.record(moved)

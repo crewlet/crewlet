@@ -55,21 +55,40 @@ import (
 //
 // # A follower reads ONE server, by that server's own sequence
 //
-// Every data node keeps, per source, the last [inboxRelayRing] batches its
-// applier announced, numbered by a sequence of that source's own under an
-// EPOCH it draws at boot and draws again whenever its copy of that domain
-// comes back into service. A follower of a source asks one server for
-// everything after the last batch of it it took, and the server answers as
-// soon as it holds one (or at the end of [inboxRelayWait]). Positions on the
-// domain's log would have let a follower switch servers without a re-read,
-// and are not what a batch has: a batch is whatever one node's applier
-// committed together, retained records reprocessed out of order included, so
-// two nodes' batches never line up. A sequence of the server's own is exact
-// for the one thing it is used for — "after the last one I took" — and
-// anything it cannot answer is DETECTED rather than lost: another epoch, a
-// sequence the ring no longer reaches, or another server, each of which is a
-// re-read. One sequence PER SOURCE, so a domain whose applier is busy never
-// evicts another's batches from a ring its follower still reads.
+// Every data node numbers, per source, the batches its applier announced, by
+// a sequence of that source's own under an EPOCH it draws at boot and draws
+// again whenever its copy of that domain comes back into service. A follower
+// of a source asks one server for everything after the last batch of it it
+// took, and the server answers as soon as it holds one (or at the end of
+// [inboxRelayWait]). Positions on the domain's log would have let a follower
+// switch servers without a re-read, and are not what a batch has: a batch is
+// whatever one node's applier committed together, retained records
+// reprocessed out of order included, so two nodes' batches never line up. A
+// sequence of the server's own is exact for the one thing it is used for —
+// "after the last one I took" — and anything it cannot answer is DETECTED
+// rather than lost: another epoch, a sequence the server no longer holds, or
+// another server, each of which is a re-read. One sequence PER SOURCE, so a
+// domain whose applier is busy never evicts another's batches from what its
+// follower still reads.
+//
+// # A server keeps only what a follower can still ask for
+//
+// A follower new to a server is answered where that server's stream stands
+// and nothing before it, and one that moves to another server starts over
+// there ([inboxRelay.followSource]). So NO FOLLOWER IS EVER SERVED A BATCH
+// RECORDED BEFORE THE LAST ANSWER IT TOOK, and all a server has to keep of a
+// source is what a follower answered earlier has not taken yet: the batches
+// recorded since that answer, for one round trip after it, by when the
+// follower has asked again ([inboxRelayHold]) — and, while an ask is held
+// open, the batches that wake it. Never more than [inboxRelayMoves]
+// movements of a source, however recently somebody asked. A RING KEPT BY
+// COUNT is the obvious shape and the wrong one: a thousand batches of every
+// source on every data node, each a whole apply transaction's movements
+// however wide, for followers that do not exist in the normal state — with
+// no copy of the source out of service anywhere nobody asks, and a server
+// keeps none of it. A follower slower than a round trip, or behind a burst
+// wider than the bound, is answered a gap and re-reads, as one behind a
+// server back in service is.
 //
 // # One server per node, on one subject, whatever the domains
 //
@@ -96,18 +115,54 @@ func inboxRelaySubject(node string) string {
 	return topics.InboxRelayPrefix + coord.DocumentKey(node)
 }
 
-// inboxRelayRing is how many announced batches a server keeps of each source
-// for its followers.
+// inboxRelayHold is how long a server keeps a batch of a source after the
+// last moment a follower that has not taken it was answered: one ask's ROUND
+// TRIP after the stream's latest answer — or after the batch itself, while an
+// ask of the source is held open for it.
 //
-// A THOUSAND AND TWENTY-FOUR, and what it has to hold is what a server's
-// applier commits between a follower's two asks: a follower asks again the
-// moment an answer lands, so that is one round trip and the follower's own
-// hand-off to its sockets — well under a second, in which an applier that
-// commits a batch a millisecond fills fewer than this. And a ring that did
-// overflow is a DETECTED gap, answered with a re-read, never a lost movement.
-// Each batch is identifiers and a count per seat ([inbox.Movement]), so the
-// ring is tens of kilobytes on a busy node, per source.
-const inboxRelayRing = 1024
+// [statelog.ReadBudget], TWO SECONDS. A follower asks again the moment an
+// answer lands, once it has handed the answer's batches to sockets that never
+// block ([Engine.SetOnInboxMoved]), so between an answer leaving and the next
+// ask arriving lie two transits and that hand-off: what the budget the
+// estate's own reads give a peer to answer in bounds, and exactly what the
+// follower's own ask allows beyond the server's wait ([inboxRelay.ask]). A
+// follower slower than that is answered a gap and re-reads, never a lost
+// movement.
+const inboxRelayHold = statelog.ReadBudget
+
+// inboxRelayMoves is the most movements a server keeps of one source, however
+// recently a follower asked.
+//
+// [statelog.ApplyTxRowBudget], FOUR THOUSAND. A batch is one apply
+// transaction's movements ([inbox.Batch]), each at least one notice row that
+// transaction wrote or deleted, and the row budget closes a transaction at
+// the first record boundary past it — so the bound holds a whole
+// transaction's movements, but for one whose last record alone is wider than
+// the budget. It is also about what an applier commits in [inboxRelayHold] at
+// the measured drain rate of some two thousand rows a second (statelog's
+// budgets.go). A batch wider than the bound is never kept, and every follower
+// that has not taken it re-reads — for a transaction that moved thousands of
+// inboxes at once, what their screens would do anyway. And it is what keeps
+// an ANSWER inside one reply, since an answer carries every batch the
+// follower has not taken and a reply the broker refuses is no answer at all:
+// the widest the bound allows — four thousand batches of one movement at the
+// longest handle, with a subject and a reason as long — is 1.1 MiB of JSON, a
+// seventh of [queue.MaxPayloadBytes] (TestTheWidestRelayAnswerFitsOneReply).
+//
+// WHAT IT HOLDS, measured once (BenchmarkRecordingAnInboxBatch, -benchtime
+// 200x -count 1, two E-cores of an Intel Core Ultra 7 265U, Go 1.27.2): a
+// full ring held 795 KiB at one movement a batch, 574 KiB at a hundred and
+// 539 KiB at a thousand — the slot, the movement and its handle and subject,
+// about 200 bytes a movement at the narrowest batch and 140 at the widest —
+// and recorded a batch into it in 156 ns, 3.6 µs and 41 µs, with one
+// allocation, its own copy. That is PER SOURCE, and only on the data node its
+// followers ask — the first live one by name whose own copy of the source
+// serves — while some node's copy of that source is out of service, and a
+// ring fills to the bound only where its source commits that many movements
+// within [inboxRelayHold]. Every other data node, and every node of a fleet
+// with no copy out of service, holds nothing, and records a batch in 73 ns
+// with no allocation.
+const inboxRelayMoves = statelog.ApplyTxRowBudget
 
 // inboxRelayWait is how long a server holds a follower's ask open when it has
 // nothing newer of its source to answer with.
@@ -132,6 +187,13 @@ const inboxRelayRetry = servingRecheck
 type relayedBatch struct {
 	Seq   uint64           `json:"seq"`
 	Moved []inbox.Movement `json:"moved"`
+}
+
+// heldBatch is a batch as its server keeps it: with the instant from which no
+// follower that has not taken it can still ask for it.
+type heldBatch struct {
+	relayedBatch
+	until time.Time
 }
 
 // relayAsk is what a follower sends: the source it follows, and the epoch and
@@ -163,8 +225,9 @@ type relayQueue interface {
 }
 
 // relayStream is one source's half of a data node's relay: the batches its
-// applier announced, numbered under an epoch of the source's own, and whether
-// this node's sockets hear that source from a peer now.
+// applier announced, numbered under an epoch of the source's own, those of
+// them a follower may still ask for, and whether this node's sockets hear
+// that source from a peer now.
 type relayStream struct {
 	source string
 
@@ -179,9 +242,21 @@ type relayStream struct {
 	// node's copy of the source comes back into service.
 	epoch string
 	seq   uint64
-	ring  []relayedBatch
-	// moved is closed and replaced by every append, so an ask waiting for a
-	// batch wakes the instant one lands.
+	// ring is the batches a follower may still ask for, oldest first: a run
+	// of consecutive sequences ending at seq, or none at all
+	// ([relayStream.keep]), carrying moves movements between them.
+	ring  []heldBatch
+	moves int
+	// heldUntil is the instant until which a follower that has not taken a
+	// batch recorded now may still ask for it: [inboxRelayHold] past the
+	// stream's latest answer, or past now while an ask waits. It never moves
+	// back, so the ring's batches expire oldest first.
+	heldUntil time.Time
+	// waiting is how many asks are held open on this stream now.
+	waiting int
+	// moved is closed by the next batch, so an ask waiting for one wakes the
+	// instant it lands. Made by the first ask that waits, and nil while none
+	// does, so a batch nobody waits for costs no channel.
 	moved chan struct{}
 	// outOfService is whether this node last answered a follower that its
 	// copy of the source is out of service — what tells the next answer it
@@ -219,7 +294,7 @@ type inboxRelay struct {
 	deliver   func([]inbox.Movement)
 	gap       func(source string)
 
-	// mu guards every stream's ring.
+	// mu guards every stream's state but relaying.
 	mu sync.Mutex
 }
 
@@ -233,42 +308,43 @@ func newInboxRelay(self string, q relayQueue, roster func(context.Context) ([]st
 		streams: make(map[string]*relayStream, len(sources)), faulted: faulted,
 		listening: listening, deliver: deliver, gap: gap}
 	for _, source := range sources {
-		r.streams[source] = &relayStream{source: source, epoch: rand.Text(),
-			moved: make(chan struct{})}
+		r.streams[source] = &relayStream{source: source, epoch: rand.Text()}
 	}
 	return r
 }
 
-// record keeps one committed batch's movements for this node's followers, each
-// under its own source's stream, and returns the ones this node's own sockets
-// hear now: every movement of a source they are not being relayed from a
-// peer. A movement of a source this node keeps no stream of is no domain the
-// relay judges, and is heard as it is.
+// record numbers one committed batch's movements for this node's followers,
+// each source's in its own stream ([relayStream.keep]), and returns the ones
+// this node's own sockets hear now: every movement of a source they are not
+// being relayed from a peer. A movement of a source this node keeps no stream
+// of is no domain the relay judges, and is heard as it is.
+//
+// moved ITSELF where nothing is withheld, which is every batch while this
+// node's copies all serve: a stream that keeps a batch keeps a copy of its
+// own, so the caller's slice goes on to the sockets untouched, and a batch
+// nobody follows costs no allocation here at all.
 func (r *inboxRelay) record(moved []inbox.Movement) []inbox.Movement {
-	var order []string
-	bySource := map[string][]inbox.Movement{}
-	for _, m := range moved {
-		if _, seen := bySource[m.Source]; !seen {
-			order = append(order, m.Source)
-		}
-		bySource[m.Source] = append(bySource[m.Source], m)
-	}
+	now := time.Now()
+	withheld := false
 	r.mu.Lock()
-	for _, source := range order {
-		s := r.streams[source]
-		if s == nil {
+	for _, source := range r.sources {
+		n := 0
+		for _, m := range moved {
+			if m.Source == source {
+				n++
+			}
+		}
+		if n == 0 {
 			continue
 		}
-		s.seq++
-		s.ring = append(s.ring, relayedBatch{Seq: s.seq, Moved: bySource[source]})
-		if over := len(s.ring) - inboxRelayRing; over > 0 {
-			s.ring = slices.Delete(s.ring, 0, over)
-		}
-		close(s.moved)
-		s.moved = make(chan struct{})
+		s := r.streams[source]
+		s.keep(now, moved, n)
+		withheld = withheld || s.relaying.Load()
 	}
 	r.mu.Unlock()
-
+	if !withheld {
+		return moved
+	}
 	heard := make([]inbox.Movement, 0, len(moved))
 	for _, m := range moved {
 		if s := r.streams[m.Source]; s == nil || !s.relaying.Load() {
@@ -276,6 +352,100 @@ func (r *inboxRelay) record(moved []inbox.Movement) []inbox.Movement {
 		}
 	}
 	return heard
+}
+
+// keep numbers the next batch of this stream's source — the n movements of
+// moved that name it — keeps it while a follower that has not taken it may
+// still ask for it, within [inboxRelayMoves], and wakes every ask waiting for
+// one. Called under [inboxRelay.mu].
+func (s *relayStream) keep(now time.Time, moved []inbox.Movement, n int) {
+	s.seq++
+	s.expire(now)
+	if s.waiting > 0 {
+		// AN ASK IS WAITING FOR THIS VERY BATCH, and the waiter it wakes
+		// takes it at once: kept a round trip all the same, so a waiter
+		// the scheduler is slow to run still finds it, and so does any
+		// other follower between two of its asks.
+		s.hold(now)
+	}
+	switch {
+	case !s.heldUntil.After(now):
+		// NOBODY CAN ASK FOR IT: no follower was answered within a round
+		// trip and none is waiting — the normal state, with no copy of
+		// the source out of service anywhere. The ring is empty already:
+		// every batch in it was held no longer than this one would be.
+	case n > inboxRelayMoves:
+		// WIDER THAN THE RING MAY HOLD. Every follower that has not taken
+		// it is answered a gap and re-reads, so nothing before it is of
+		// use to anybody either.
+		s.drop()
+	default:
+		// A COPY OF ITS OWN, exactly as wide as the batch, since the
+		// caller's slice goes on to the sockets.
+		batch := make([]inbox.Movement, 0, n)
+		for _, m := range moved {
+			if m.Source == s.source {
+				batch = append(batch, m)
+			}
+		}
+		s.ring = append(s.ring, heldBatch{
+			relayedBatch: relayedBatch{Seq: s.seq, Moved: batch}, until: s.heldUntil})
+		s.moves += n
+		over := 0
+		for s.moves > inboxRelayMoves {
+			s.moves -= len(s.ring[over].Moved)
+			over++
+		}
+		s.trim(over)
+	}
+	if s.moved != nil {
+		close(s.moved)
+		s.moved = nil
+	}
+}
+
+// hold keeps what this stream records from now on for one more round trip.
+func (s *relayStream) hold(now time.Time) {
+	if until := now.Add(inboxRelayHold); until.After(s.heldUntil) {
+		s.heldUntil = until
+	}
+}
+
+// expire lets go of every batch no follower can still ask for — the oldest
+// first, since heldUntil never moves back.
+func (s *relayStream) expire(now time.Time) {
+	gone := 0
+	for gone < len(s.ring) && !s.ring[gone].until.After(now) {
+		s.moves -= len(s.ring[gone].Moved)
+		gone++
+	}
+	s.trim(gone)
+}
+
+// trim lets go of the ring's n oldest batches: ZEROED before the slice moves
+// past them, so the array the ring goes on using keeps none of their
+// movements alive, and the array let go of with the last batch, so an empty
+// ring holds none.
+func (s *relayStream) trim(n int) {
+	if n == 0 {
+		return
+	}
+	clear(s.ring[:n])
+	s.ring = s.ring[n:]
+	if len(s.ring) == 0 {
+		s.ring = nil
+	}
+}
+
+// drop lets go of every batch.
+func (s *relayStream) drop() {
+	s.ring, s.moves = nil, 0
+}
+
+// reaches reports whether the ring holds every batch after the follower's
+// last, after — one at or behind seq.
+func (s *relayStream) reaches(after uint64) bool {
+	return after+uint64(len(s.ring)) >= s.seq
 }
 
 // answer is what this node answers one follower's ask, holding it open up to
@@ -288,15 +458,39 @@ func (r *inboxRelay) answer(ctx context.Context, ask relayAsk, wait time.Duratio
 		if waitOn == nil {
 			return out
 		}
-		select {
-		case <-waitOn:
-		case <-deadline.C:
-			out, _ = r.answerNow(ctx, ask)
-			return out
-		case <-ctx.Done():
+		if !r.await(ctx, r.streams[ask.Source], waitOn, deadline.C) {
+			if ctx.Err() == nil {
+				out, _ = r.answerNow(ctx, ask)
+			}
 			return out
 		}
 	}
+}
+
+// await waits for the stream's next batch, the deadline or ctx, COUNTED among
+// the stream's waiting asks while it does ([relayStream.keep] keeps a batch
+// recorded meanwhile, whenever the ask's last answer was), and reports
+// whether a batch woke it. Counted only once [inboxRelay.answerNow] has
+// handed it the channel, and nothing falls between: that answer held what is
+// recorded for a round trip anyway.
+func (r *inboxRelay) await(ctx context.Context, s *relayStream, moved <-chan struct{},
+	deadline <-chan time.Time) bool {
+
+	r.mu.Lock()
+	s.waiting++
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		s.waiting--
+		r.mu.Unlock()
+	}()
+	select {
+	case <-moved:
+		return true
+	case <-deadline:
+	case <-ctx.Done():
+	}
+	return false
 }
 
 // answerNow is the answer as this node's stream of the ask's source stands,
@@ -326,27 +520,43 @@ func (r *inboxRelay) answerNow(ctx context.Context, ask relayAsk) (relayAnswer, 
 		// source while its copy was out of service, or did not announce
 		// at all, is no sequence a follower can trust to be whole — so it
 		// is another epoch, which every follower of it meets as a re-read.
+		// And nothing the ring holds is of use to anybody: every batch in
+		// it is the old epoch's, which no follower is served again.
 		s.outOfService = false
 		s.epoch = rand.Text()
+		s.drop()
 	}
+	now := time.Now()
+	s.expire(now)
+	// THIS FOLLOWER ASKS AGAIN within a round trip of the answer, for
+	// whatever is recorded meanwhile — whichever of the cases below it is,
+	// since each leaves it placed on this stream.
+	s.hold(now)
 	out := relayAnswer{Source: s.source, Epoch: s.epoch, Head: s.seq}
 	switch {
 	case ask.Epoch != s.epoch:
 		// A FOLLOWER NEW TO THIS SERVER, or one whose epoch this node no
 		// longer serves: where it stands, and nothing it could not place.
 		return out, nil
-	case ask.After > s.seq || (len(s.ring) > 0 && s.ring[0].Seq > ask.After+1):
+	case ask.After > s.seq || !s.reaches(ask.After):
 		// A FOLLOWER THIS RING NO LONGER REACHES BACK TO — the batches
-		// after its last were evicted — or one claiming a batch this
-		// epoch never numbered: it re-reads and starts again from here.
+		// after its last expired, were evicted, or were too wide to keep —
+		// or one claiming a batch this epoch never numbered: it re-reads
+		// and starts again from here.
 		out.Gap = true
 		return out, nil
-	}
-	for i, b := range s.ring {
-		if b.Seq > ask.After {
-			out.Batches = slices.Clone(s.ring[i:])
-			return out, nil
+	case ask.After < s.seq:
+		// THE RING IS CONSECUTIVE, so the follower's next batch is at a
+		// known offset from its end.
+		held := s.ring[len(s.ring)-int(s.seq-ask.After):]
+		out.Batches = make([]relayedBatch, len(held))
+		for i, b := range held {
+			out.Batches[i] = b.relayedBatch
 		}
+		return out, nil
+	}
+	if s.moved == nil {
+		s.moved = make(chan struct{})
 	}
 	return out, s.moved
 }

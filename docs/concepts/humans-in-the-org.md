@@ -512,7 +512,13 @@ sequenceDiagram
   switch — onto a peer, from one peer to another, back to its own applier —
   sends every watched inbox one frame naming the domain that switched and
   counting nothing, because what moved during the switch is not replayed: the
-  dashboard reads the inbox again, as it does on any frame.
+  dashboard reads the inbox again, as it does on any frame. So does falling
+  behind the peer: it keeps a domain's movements for the nodes that follow it
+  for one round trip (two seconds) past its latest answer to them, and never
+  more than one transaction's worth — 4 000 — so a node that asks again later
+  than that, or one transaction that moved more inboxes than that at once, is
+  a re-read too. A fleet with no copy out of service relays nothing and keeps
+  nothing for it.
 - **The dashboard watches your own seat** as soon as its socket opens, and
   again on every reconnect: the rail's inbox badge, the Inbox screen and My
   work re-ask within half a second of the frame. The frame carries identifiers

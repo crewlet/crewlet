@@ -219,10 +219,10 @@ type Engine struct {
 	onInboxGap atomic.Pointer[func(string)]
 
 	// inboxRelay is this data node's inbox relay — the batches its appliers
-	// announced, for a peer whose copy of their domain is out of service,
-	// and the followers that hear a peer's while this node's own copy of a
-	// domain is — and stopInboxRelayFn ends both. Nil on a node without
-	// `data`. See inboxrelay.go.
+	// announced that a peer whose copy of their domain is out of service may
+	// still ask for, and the followers that hear a peer's while this node's
+	// own copy of a domain is — and stopInboxRelayFn ends both. Nil on a
+	// node without `data`. See inboxrelay.go.
 	inboxRelay       atomic.Pointer[inboxRelay]
 	stopInboxRelayFn func(context.Context)
 
