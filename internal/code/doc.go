@@ -807,13 +807,17 @@
 // most ONE page pays, since the whole cluster lies in its range; either way
 // the snapshot is no page longer, and its walk passes each tombstone once
 // (four counts of twenty, one run). Page 1's choice between a delta and the
-// full answer costs, at its dearest — a delta from below every row of that
-// repository, counted one row past the full answer deep before the full
-// answer is served — 8.5–10.8 ms, a sixth of one page of what it then
-// serves, and after a push a handful of index entries; the arm holds no
-// retired pack, and a repository holding them pays one more bounded count of
-// them beside it, once a floor, which the arm does not price.
-// Measuring the page's rows costs 0.08–0.09 µs a ref and no allocation, where
-// encoding each one to measure it cost 0.78–0.83 µs and three
-// (BenchmarkServeASnapshotPage).
+// full answer reads the most for a delta from below every row of that
+// repository beside [MaxFullRetirements] retirements, the most a full answer
+// serves: it counts every one, then the delta's refs one row past the full
+// answer's own rows deep when asked as a git node's cache asks, from one
+// position for both floors, and past those retirements too when the full
+// answer's are asked from below the delta's floor, every one of them between
+// the two — the deepest any ask reads. Measured in one run beside the
+// interleaved page (ten iterations, one count, on two cores), the two cost
+// 7.3 and 8.3 ms against the page's 44.6 ms, a sixth and under a fifth of
+// what is then served; after a push the choice reads a handful of index
+// entries. Measuring the page's rows costs 0.08–0.09 µs a ref and no
+// allocation, where encoding each one to measure it cost 0.78–0.83 µs and
+// three (BenchmarkServeASnapshotPage).
 package code
