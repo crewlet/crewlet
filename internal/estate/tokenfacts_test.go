@@ -57,7 +57,7 @@ func (b *tappedBroker) messages() [][]byte {
 func (f *fleet) routerOver(t *testing.T, self string, q Asker) *Router {
 	t.Helper()
 	r, err := NewRouter(RouterOptions{Queue: q, Self: self, Placement: f.placement,
-		Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
+		Git: f.git, Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)
 	}
