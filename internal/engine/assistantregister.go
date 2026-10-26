@@ -34,13 +34,15 @@ import (
 // A STRICT, IDENTITY-CLAIMING DOMAIN, so it states its own generation record
 // and the node gate's writer: the trim counts nodes on this log, so one the
 // gate could not write would keep an evicted node counted here for ever. It
-// declares a BARRIER, as every identity-claiming log does: nothing in this
-// release reads the log at `linearizable` (a person reads their own
-// conversation through the node their own writes waited on, and an approval is
-// arbitrated at the broker rather than read), but the barrier costs nothing
-// until a read asks for it, and it is the ordinary record the reserve and the
-// eviction machinery are proved against on every identity log, this one
-// included. And no wake feed: no record on it wakes a seat.
+// declares a BARRIER, as every identity-claiming log does. A person never reads
+// the log at `linearizable` (they read their own conversation through the node
+// their own writes waited on, and an approval is arbitrated at the broker
+// rather than read); the object collector does, before it judges a file's
+// object (assistantdomain.ObjectEstate), and only when it has one to judge, so
+// a log nobody wrote to gets no barrier at boot. The barrier is also the
+// ordinary record the reserve and the eviction machinery are proved against on
+// every identity log, this one included. And no wake feed: no record on it
+// wakes a seat.
 func assistantRegistrations() []registration {
 	return []registration{{
 		Domain: assistantdomain.Domain{},

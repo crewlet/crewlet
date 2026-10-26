@@ -491,18 +491,37 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		t.Fatal("the tracker domain is not running")
 	}
 
-	// THE OBJECT COLLECTOR FINISHES ITS FIRST PASS AND STOPS: each pass pins
-	// the tracker's estate with a barrier of its own, and its first runs as
-	// the node boots — so left running, a pin lands between the two staged
-	// below and moves where they land. Stopping it mid-pass is not enough:
-	// a barrier's publish outlives the read that asked for it.
+	// THE OBJECT COLLECTOR FINISHES ITS FIRST PASS AND STOPS: a pass that
+	// has an object to judge pins the tracker's estate with a barrier of
+	// its own, and its first runs as the node boots, so left running, a pin
+	// could land between the two staged below and move where they land.
+	// Stopping it mid-pass is not enough: a barrier's publish outlives the
+	// read that asked for it.
 	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
 		_, found, err := ObjectCollection(t.Context(), e.backends.Fleet)
 		return err == nil && found
 	})
 	e.stopObjectCollector()
 
-	// Settle: whatever the boot wrote to the tracker's log is applied.
+	body, err := worklet.EncodeBarrier(statelog.Envelope{
+		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
+		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: running.runner.Committed().Generation,
+		Scope: statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
+	})
+	if err != nil {
+		t.Fatalf("encode a barrier: %v", err)
+	}
+	// THE NODE HAS APPLIED HISTORY of its own before it falls behind: one
+	// barrier it applies, so its tracker rows hold a checkpoint, as every
+	// node that has been away does. Stated here rather than left to the
+	// collector's first pass, which writes no barrier when it has nothing
+	// to judge.
+	if _, _, err := log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind,
+		"", nil, running.signer.Seal(body)); err != nil {
+		t.Fatalf("append the node's own barrier: %v", err)
+	}
+
+	// Settle: whatever was written to the tracker's log is applied.
 	waitUntil(t, 20*time.Second, "the node to catch up on its own log", func() bool {
 		_, end, err := log.Bounds(t.Context())
 		return err == nil && running.runner.Committed().Seq == end
@@ -525,14 +544,6 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		info, err := cons.Info(t.Context())
 		return err == nil && info.NumWaiting == 0
 	})
-	body, err := worklet.EncodeBarrier(statelog.Envelope{
-		V: statelog.BarrierVersion, Kind: statelog.BarrierKind,
-		Subject: statelog.Subject{Kind: statelog.BarrierKind}, Gen: at.Generation,
-		Scope: statelog.ScopeSet{Paths: []string{statelog.BarrierScope}},
-	})
-	if err != nil {
-		t.Fatalf("encode a barrier: %v", err)
-	}
 	for range 2 {
 		if last, _, err = log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind,
 			"", nil, running.signer.Seal(body)); err != nil {
