@@ -23,11 +23,11 @@ import (
 // snapshot pays (every page walks its share), and CLUSTERED, every one sorting
 // before the first live ref, which is the worst ONE page pays (a clean-up of
 // one prefix: the first page walks the whole cluster). Its `decide` arm
-// prices page 1's choice between a full answer and a delta (deltaOutweighs)
-// at its dearest: a delta from below every row of the interleaved
-// repository, which the count reads one row past the full answer deep — a
-// repository holding no retired pack, so the count's third term, the
-// retirements, is one seek of an empty range. Its
+// prices the count of a delta's refs and packs that page 1's choice between
+// a full answer and a delta reads (deltaOutweighs) at its dearest: a delta
+// from below every row of the interleaved repository, which the count reads
+// one row past the full answer deep — a repository holding no retired pack,
+// so no retirement weighs on either side. Its
 // `measure` sub-benchmarks price the measure alone over the same page, computed
 // (rowbytes.go) against the encoding it replaced, which every row of every
 // page on the serving node used to pay.
@@ -101,7 +101,7 @@ func BenchmarkServeASnapshotPage(b *testing.B) {
 					if err != nil {
 						return err
 					}
-					full, err := deltaOutweighs(ctx, tx, "repo-a", 0, v)
+					full, err := deltaOutweighs(ctx, tx, "repo-a", 0, 0, v.ref.Refs+v.ref.LivePacks, 0)
 					if err == nil && !full {
 						err = fmt.Errorf("a delta of every row was not answered in full")
 					}

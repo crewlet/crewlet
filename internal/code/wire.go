@@ -78,10 +78,13 @@ type StateQuery struct {
 	// compaction retired from one no row accounts for. Served only when the
 	// reader can serve all of them (Snapshot: on this generation, at or past
 	// the repository's retired mark, and no more of them than the full
-	// answer's rows), and the answer's RetiredFrom says whether it did.
-	// Ignored by a delta, whose retirements are always those above its own
-	// Since; zero asks for none. READ ON THE FIRST PAGE ONLY, as Since is: a
-	// later page carries the floor it decided in its cursor.
+	// answer's rows), and the answer's RetiredFrom says whether it did. A
+	// delta's retirements are always those above its own Since, but page 1
+	// weighs it against the full answer with what each would serve, so asked
+	// from Since itself — the position the caller holds — the retirements
+	// both carry cancel rather than counting against the delta alone. Zero
+	// asks for none. READ ON THE FIRST PAGE ONLY, as Since is: a later page
+	// carries the floor it decided in its cursor.
 	RetiredSince statelog.Position `json:"retired_since,omitzero"`
 }
 

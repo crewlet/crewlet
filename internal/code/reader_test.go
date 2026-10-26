@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -163,17 +164,23 @@ func TestASnapshotIsFullAfterTombstonesAreSwept(t *testing.T) {
 // push's change, is still a delta. And the comparison is of every row each
 // answer carries, PACKS INCLUDED: a delta's packs are only those added since
 // it, a full answer's every pack, so a repository with many packs keeps its
-// delta past a clean-up a repository with few would not. RETIREMENTS count on
-// the delta's side: a delta carries every pack retired above its floor, which
-// the full answer it stands in for serves only when they fit beside its own
-// rows, so a delta from below more retirements than that is answered in full.
+// delta past a clean-up a repository with few would not. RETIREMENTS are
+// weighed LIKE WITH LIKE: a delta carries every pack retired above its floor,
+// and the full answer it stands in for those above its caller's RetiredSince
+// when it can serve every one, so each side is weighed with the retirements
+// it would carry — those both would carry cancel, and those only one would
+// carry weigh on its side alone.
 //
 // Mutation: drop the count, and the delta from below the clean-up is a delta
 // of sixty tombstones beside a full answer of forty refs; compare the refs
 // alone, and the repository of many packs is answered in full — 343 rows — for
 // a delta of 63, under a fifth of its size; leave the retirements out of the
 // count, and a delta of a ref, a pack and two retirements stands in for a full
-// answer of three rows.
+// answer of three rows that serves none of them; count them on the delta's
+// side alone, and the delta asked from its own floor is replaced by a full
+// answer carrying them again beside its rows; leave out those the full answer
+// would serve from below the delta's floor, and a delta of 63 rows is replaced
+// by a full answer of 63.
 func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 	t.Parallel()
 	const made, deleted = 100, 60
@@ -227,6 +234,52 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 		}
 	})
 
+	// THE FULL ANSWER IS WEIGHED WITH EVERY RETIREMENT IT WOULD SERVE, those
+	// the delta does not carry too: asked for them from below the delta's
+	// floor, the full answer standing in for the delta of the clean-up's 63
+	// rows carries its own 43 and every retirement between the two floors, so
+	// the delta is answered in full only while those are fewer than the 20
+	// rows it carries past the full answer's own — and a tie is a delta.
+	//
+	// Mutation: leave the full answer's retirements out of the weighing when
+	// its caller asked them from another floor than the delta's, and the delta
+	// of 63 rows is replaced by a full answer of 63.
+	t.Run("retirements below the delta's floor", func(t *testing.T) {
+		t.Parallel()
+		n, id, before, _ := cleanedUp(t, 0)
+		below := before
+		below.Seq--
+		ask := func() []code.RepoSnapshot {
+			t.Helper()
+			pages, err := snapshotFrom(t, n.reader,
+				code.StateQuery{RepoID: id, Since: before, Fresh: stale, RetiredSince: below})
+			if err != nil {
+				t.Fatalf("the snapshot from %v asking for the retirements above %v: %v", before, below, err)
+			}
+			return pages
+		}
+		// Retired AT the delta's floor: above the caller's RetiredSince, so
+		// the full answer's, and not above Since, so never the delta's.
+		var between []string
+		for i := range 20 {
+			between = append(between, fmt.Sprintf("between-%02d", i))
+		}
+		n.seedRetiredPacks(id, before.Packed(), harnessAt, between[:19]...)
+		pages := ask()
+		if !pages[0].Full || pages[0].RetiredFrom != below || len(retiredOf(pages)) != 19 {
+			t.Fatalf("a delta of 63 rows beside a full answer of 43 and the 19 retirements between the "+
+				"floors = full %v serving %d from %v, want the full answer serving all 19 from %v",
+				pages[0].Full, len(retiredOf(pages)), pages[0].RetiredFrom, below)
+		}
+		n.seedRetiredPacks(id, before.Packed(), harnessAt, between[19])
+		pages = ask()
+		if pages[0].Full || pages[0].RetiredFrom != before || len(retiredOf(pages)) != 0 {
+			t.Fatalf("a delta of 63 rows beside a full answer of 43 and the 20 retirements between the "+
+				"floors = full %v serving %d from %v, want the delta, which carries none of them, from %v",
+				pages[0].Full, len(retiredOf(pages)), pages[0].RetiredFrom, before)
+		}
+	})
+
 	t.Run("many packs", func(t *testing.T) {
 		t.Parallel()
 		// Three hundred seeded packs, and one for each of the three pushes.
@@ -247,6 +300,16 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 		}
 	})
 
+	// THE RETIREMENTS ARE WEIGHED LIKE WITH LIKE: where the full answer
+	// would serve the same retirements — its caller asked from the delta's
+	// own floor, the position a git node's cache holds — they sit on both
+	// sides and cancel; only those the full answer would not serve count
+	// against the delta alone.
+	//
+	// Mutation: count the retirements on the delta's side alone, and the
+	// delta asked from its own floor is answered in full — the full answer
+	// then carrying those retirements AND its own rows, more than the delta
+	// it replaced.
 	t.Run("many retirements", func(t *testing.T) {
 		t.Parallel()
 		// A full answer of one ref and two packs; a delta from after the
@@ -255,15 +318,49 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 		id := seededRepo(t, n, "app")
 		since := n.push(id, entry("p1", set("refs/heads/main", code.ZeroOID, oidOf("c1")))).Position
 		retiring := n.push(id, entry("p2", set("refs/heads/main", oidOf("c1"), oidOf("c2")))).Position
+		ask := func(retiredSince statelog.Position) []code.RepoSnapshot {
+			t.Helper()
+			pages, err := snapshotFrom(t, n.reader,
+				code.StateQuery{RepoID: id, Since: since, Fresh: stale, RetiredSince: retiredSince})
+			if err != nil {
+				t.Fatalf("the snapshot from %v asking for the retirements above %v: %v", since, retiredSince, err)
+			}
+			return pages
+		}
+
+		// ASKED FOR NONE, the full answer serves no retirement, so the
+		// delta's retirements count on its side alone.
 		n.seedRetiredPacks(id, retiring.Packed(), harnessAt, "retired-1")
-		if pages := snapshot(t, n.reader, id, since); pages[0].Full {
+		if pages := ask(statelog.Position{}); pages[0].Full {
 			t.Fatal("a delta of a ref, a pack and a retirement — three rows, the full answer's three — " +
 				"was answered in full")
 		}
 		n.seedRetiredPacks(id, retiring.Packed(), harnessAt, "retired-2")
-		if pages := snapshot(t, n.reader, id, since); !pages[0].Full {
+		if pages := ask(statelog.Position{}); !pages[0].Full {
 			t.Fatalf("a delta of a ref, a pack and two retirements beside a full answer of three rows "+
-				"was answered as a delta serving %v", retiredOf(pages))
+				"that serves none was answered as a delta serving %v", retiredOf(pages))
+		}
+
+		// ASKED FROM ITS OWN FLOOR, the full answer would serve the same
+		// two: the delta of a ref and a pack beside three rows is kept.
+		pages := ask(since)
+		if pages[0].Full || pages[0].RetiredFrom != since {
+			t.Fatalf("a delta of a ref, a pack and two retirements, asked from its own floor, beside a full "+
+				"answer of three rows and the same two retirements = full %v from %v, want a delta from %v",
+				pages[0].Full, pages[0].RetiredFrom, since)
+		}
+		if got, want := retiredOf(pages), retiredBy(retiring, "retired-1", "retired-2"); !slices.Equal(got, want) {
+			t.Fatalf("the delta serves the retirements %v, want %v", got, want)
+		}
+
+		// PAST WHAT A FULL ANSWER SERVES, it serves none and they count on
+		// the delta's side alone again: answered in full, serving none.
+		n.seedRetiredPacks(id, retiring.Packed(), harnessAt, "retired-3", "retired-4")
+		pages = ask(since)
+		if !pages[0].Full || !pages[0].RetiredFrom.IsZero() || len(retiredOf(pages)) != 0 {
+			t.Fatalf("a delta of a ref, a pack and four retirements beside a full answer of three rows that "+
+				"cannot serve them = full %v serving %v from %v, want a full answer serving none",
+				pages[0].Full, retiredOf(pages), pages[0].RetiredFrom)
 		}
 	})
 }

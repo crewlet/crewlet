@@ -509,6 +509,12 @@
 //     caller's [StateQuery.RetiredSince] when it can serve every one — and
 //     the mark is the one past which a delta is no longer complete, so a
 //     delta from below it is answered in full, as below the tombstone mark.
+//     Page 1 weighs a delta against the full answer with the retirements
+//     each would serve, so those both would serve — every one, when the
+//     caller asks from the delta's own floor, the position it holds — cancel,
+//     and a delta is never replaced by a full answer carrying them again
+//     beside every row; only those the full answer cannot serve weigh against
+//     the delta alone.
 //
 // # A compaction merges packs, decided alone
 //
@@ -803,8 +809,8 @@
 // repository, counted one row past the full answer deep before the full
 // answer is served — 8.5–10.8 ms, a sixth of one page of what it then
 // serves, and after a push a handful of index entries; the arm holds no
-// retired pack, so its count of retirements is one seek of an empty range,
-// and a repository holding them pays that count too, held to the same depth.
+// retired pack, and a repository holding them pays one more bounded count of
+// them beside it, once a floor, which the arm does not price.
 // Measuring the page's rows costs 0.08–0.09 µs a ref and no allocation, where
 // encoding each one to measure it cost 0.78–0.83 µs and three
 // (BenchmarkServeASnapshotPage).
