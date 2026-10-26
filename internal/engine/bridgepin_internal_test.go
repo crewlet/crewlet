@@ -141,7 +141,9 @@ func (b bridgedRun) row(t *testing.T, turnID string) sandbox.PendingRun {
 // asked before every call the box makes: once a person's pause asks the seat's
 // running work to stop, a call is refused rather than made — through the real
 // launcher and the real bridge, because the fence is one field of wiring in
-// LaunchExecutor and nothing else can show it was set.
+// LaunchExecutor and nothing else can show it was set. The refused call is on
+// the run's record in its place, failed and never started, so a reader of the
+// run sees the box asked after the stop and was turned away.
 //
 // Mutation: drop the Fence from the session LaunchExecutor opens, and the
 // stopped seat's call runs.
@@ -173,8 +175,15 @@ func TestALaunchedRunsCallsStopWhenAPersonStopsItsSeat(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("a call ran on a seat a person had asked to stop")
 	}
-	if calls := run.row(t, "t-fenced").BridgeCalls; len(calls) != 1 {
-		t.Errorf("the run recorded %d calls, want the one made before the stop", len(calls))
+	calls := run.row(t, "t-fenced").BridgeCalls
+	if len(calls) != 2 {
+		t.Fatalf("the run recorded %d calls, want the one made before the stop and the one refused after it", len(calls))
+	}
+	if made := calls[0]; made.Failed || made.StartedAt.IsZero() {
+		t.Errorf("the call before the stop is recorded %+v, want it run", made)
+	}
+	if refused := calls[1]; refused.Name != "read_page" || !refused.Failed || !refused.StartedAt.IsZero() {
+		t.Errorf("the call after the stop is recorded %+v, want it refused and never started", refused)
 	}
 }
 
