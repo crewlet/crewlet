@@ -120,6 +120,11 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 		out.holdPack()
 	}
 	defer out.End()
+	// ITS USE OF THE REPOSITORY, counted however the answer ends: its bytes,
+	// and a clone where it was one, served to its end (Server.served). The
+	// fetch itself was counted at its advertisement.
+	var use cache.Use
+	defer func() { s.served(adm, out, use) }()
 	// A DAMAGED CACHE IS REBUILT AND THE FETCH RETRIED, over the same request
 	// (repairing) — never for `not our ref`, which a want the repository never
 	// served prints exactly as a lost pack does. Upload-pack is read like
@@ -148,6 +153,9 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 		if rerr := out.release(); err == nil {
 			err = rerr
 		}
+	}
+	if err == nil && n.clone() {
+		use.Clones = 1
 	}
 	s.finishFetch(w, r, adm.name, n.recorded(), synced.Kind, start, out, err)
 }

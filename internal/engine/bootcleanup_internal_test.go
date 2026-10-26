@@ -211,6 +211,51 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	}
 }
 
+// A FAILED BOOT WITHDRAWS ITS CODE HOST'S STATUS ANSWERER TOO. The code host is
+// built inside the native start, and its status answerer registered beside it
+// (codestatus.go), so a boot that dies after the native start — the embedding
+// model resolving to nothing, as above — must leave no node answering the
+// fleet's code status for a host its own unwind has stopped: an answerer left
+// behind would tell every asker of a cache that is gone. The same company
+// hosting code, on a node whose roles are every role.
+//
+// Mutation: withdraw nothing in native.stopCodeHost, and the answerer is left
+// registered.
+func TestAFailedBootWithdrawsItsCodeHostsStatus(t *testing.T) {
+	t.Parallel()
+	b := testBootstrap(t)
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	SeedStore(t, &b)
+	cfg, err := config.ParseCompany([]byte(bootCleanupCompany + "code:\n  native: true\n"))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	RequireNodeGit(t, &b, cfg)
+	back, err := OpenBackends(t.Context(), &b, cfg, nil)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	real, ok := back.Queue.(*jetstream.Queue)
+	if !ok {
+		t.Fatalf("the stream is %T, not the JetStream backend this case needs", back.Queue)
+	}
+	watched := &servedQueue{Queue: real, served: map[string]int{}, withdrawn: map[string]int{}}
+	borrowed := *back
+	borrowed.Queue = watched
+
+	if _, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: &borrowed}); err == nil {
+		t.Fatal("a company whose embedding model resolves to nothing built an engine anyway — this case " +
+			"needs a boot that fails AFTER the native start built the code host")
+	}
+	served, withdrawn := watched.tallies()
+	if served[topics.CodeStatus] != 1 || withdrawn[topics.CodeStatus] != 1 {
+		t.Fatalf("the boot failed after building the code host, and its status answerer was registered %d "+
+			"time(s) and withdrawn %d, want once each", served[topics.CodeStatus], withdrawn[topics.CodeStatus])
+	}
+}
+
 // THE EARLIEST FAILURE REACHES THE TEARDOWN WITH NOTHING STARTED AT ALL.
 //
 // A keyring that will not open is refused before the admission handshake,

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -70,11 +71,14 @@ type pushRecord struct {
 }
 
 // audit records one push: its operator_acted record through Options.Audit, its
-// code_push line, and its duration under its outcome.
+// code_push line, its duration under its outcome, and the push in its
+// repository's heat — counted here because this is the one place every push
+// reaches exactly once, whatever became of it.
 func (s *Server) audit(ctx context.Context, adm admission, rec pushRecord) {
 	if rec.pushID == "" {
 		rec.pushID = uuid.Must(uuid.NewV7()).String()
 	}
+	s.o.Cache.Heat().Add(adm.repo.ID, adm.name, cache.Use{Pushes: 1})
 	position := ""
 	if !rec.position.IsZero() {
 		position = rec.position.String()

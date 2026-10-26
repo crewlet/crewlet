@@ -24,6 +24,23 @@ const (
 
 	// CodeLogWildcard is the subject space the stream is created with.
 	CodeLogWildcard = CodeLogPrefix + ".>"
+
+	// CodeStatus is where a question about the fleet's git nodes is
+	// scattered: every node serving the code host answers it with its own
+	// status — its cache against its budget, the repositories it holds and
+	// the ones it served most (internal/code/host, Server.Status) — and the
+	// asker merges what came back.
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a status read is the ephemeral
+	// request and reply of [queue.EventQueue.Ask], and a durable copy would be
+	// a record of every time somebody looked. And OUTSIDE the code log's
+	// subject space, which its stream is created over ([CodeLogWildcard]): a
+	// stream captures whatever is published under its subjects, a request
+	// included, and would answer an asker with its own acknowledgement. NOT
+	// SIGNED (internal/signedask): a node answers it about itself and carries
+	// nothing out for the asker, so a forged question gets an answer nobody
+	// needed and moves nothing.
+	CodeStatus = "crewlet.code.status"
 )
 
 // The object kinds are NOT constants here, for the reason the tracker's are

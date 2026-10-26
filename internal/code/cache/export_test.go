@@ -417,6 +417,10 @@ func Total(c *Cache) int64 { return c.total() }
 // SetMaxBytes sets the cache's budget. Between syncs, with nothing running.
 func SetMaxBytes(c *Cache, n int64) { c.maxBytes = n }
 
+// NewHeat is a Heat counting on now from its first reading, as Open builds the
+// cache's own.
+func NewHeat(now func() time.Time) *Heat { return newHeat(newHeatClock(now)) }
+
 // BuffersOut is the copy buffers the node's download slots hold now, and the
 // most they have held at once.
 func BuffersOut(c *Cache) (now, most int64) { return c.fetches.out.Load(), c.fetches.most.Load() }

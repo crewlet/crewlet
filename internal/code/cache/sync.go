@@ -545,7 +545,7 @@ func (c *Cache) run(e *entry, r *round) {
 		return !requeued(w) && w.escalate != "" && w.failedOn == inc && err == nil && r.rebuild == ""
 	}
 	asks := func(w *waiter) bool { return repairs(w) && w.request }
-	if r.did.repaired() && r.did.reinstalled == 0 && r.did.restored == 0 && c.metrics != nil &&
+	if r.did.repaired() && r.did.reinstalled == 0 && r.did.restored == 0 &&
 		slices.ContainsFunc(r.waiters, repairs) {
 		// COUNTED BY WHAT IT DID, never by its mark: an in-place round that
 		// only dropped is a derived file's repair. One that put a pack in —
@@ -553,7 +553,7 @@ func (c *Cache) run(e *entry, r *round) {
 		// its apply, whoever waited on it. And counted BEFORE anybody is
 		// answered, so a caller that reads the count once it has its answer
 		// finds it there.
-		c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(RebuildDerived)})
+		c.rebuilt(RebuildDerived)
 	}
 	for _, w := range r.waiters {
 		if requeued(w) {
@@ -1368,8 +1368,8 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// (requested), so a full round already running when the request asked —
 	// a report's repair round — may be the one that repairs it, and the
 	// round the request waits on finds nothing to do.
-	if ins.replaced+ins.restored > 0 && c.metrics != nil {
-		c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(RebuildStored)})
+	if ins.replaced+ins.restored > 0 {
+		c.rebuilt(RebuildStored)
 	}
 	if err != nil {
 		return res, err
@@ -1495,8 +1495,8 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		e.mu.Unlock()
 		// A pack's in-place read (RebuildStored), a request's or a round's
 		// own, is counted by what its round did (Cache.run), not by its mark.
-		if reason != "" && reason != RebuildStored && c.metrics != nil {
-			c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(reason)})
+		if reason != "" && reason != RebuildStored {
+			c.rebuilt(reason)
 		}
 		if reason == RebuildShape {
 			// A log recreated or gone back is logged once, where it is

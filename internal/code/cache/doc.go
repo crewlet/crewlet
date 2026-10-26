@@ -207,6 +207,32 @@
 // eviction is decided under the cache's lock and its directory moved into
 // trash/ after it, so no sync on the node waits on a rename.
 //
+// # What each repository costs the node is counted, and decides nothing
+//
+// The cache keeps each repository's HEAT ([Heat], heat.go): what this node
+// served of it over the last hour and the last day ([HeatHour], [HeatDay]) —
+// the git processes that read it here (every one opens with an advertisement
+// of upload-pack, counted as its fetch), the clones among them (a transfer
+// offering nothing the client holds, so it is sent each want's whole
+// history), the pushes it received whatever became of each, and the bytes git
+// wrote its clients — counted by the host as it answers (internal/code/host).
+// Beside it, over the same windows, what the cache spent on its own account:
+// the copies its budget evicted, and every repair it counted under
+// crewlet.code.cache.rebuilds — one place counts a repair into both
+// (Cache.rebuilt), so the two never disagree. [Cache.Status], [Cache.Copy] and
+// [Heat.Hot] read it back, and the host's status answers the fleet with them.
+//
+// IT DECIDES NOTHING: the budget evicts by last use and the maintainer by what a
+// copy holds, and neither reads it — it is reported, for a person or a granted
+// seat to judge, and the health tools built on it set no thresholds. IN
+// MEMORY: it describes one process, which no other node has to agree on, and
+// a restarted node's status says since when it counts ([Status.Since]). Each
+// window is heatBuckets buckets of a twenty-fourth of it, counted from the
+// cache's opening on the monotonic clock, so a count is short of its window by
+// at most a twenty-fourth and an NTP step moves nothing; a repository nothing
+// used within the day is dropped. Not a metric, since a repository's id is no
+// closed set: the status reports the [HotRepos] hottest of each window.
+//
 // # Derived files
 //
 // A DERIVED FILE is one the cache writes from what an incarnation already

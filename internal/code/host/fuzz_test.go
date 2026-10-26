@@ -290,6 +290,9 @@ func FuzzNegotiation(f *testing.F) {
 	f.Add([]byte(string(pktString("command=ls-refs\n"))+delimPkt+string(pktString("peel\n"))+flushPkt), true)
 	f.Add([]byte(string(pktString("want "+oidA+" multi_ack_detailed side-band-64k\n"))+flushPkt+
 		string(pktString("done\n"))), false)
+	f.Add([]byte(v2+string(pktString("want "+oidA+"\n"))+string(pktString("have "+oidB+"\n"))+flushPkt), true)
+	f.Add([]byte(string(pktString("want "+oidA+"\n"))+flushPkt+string(pktString("have "+oidB+"\n"))+
+		string(pktString("want "+oidB+"\n"))+string(pktString("done\n"))), false)
 	f.Add([]byte(string(pktString("want "+gitref.ZeroOID+"\n"))+flushPkt), false)
 	f.Add([]byte(v2+string(pktString("want "+strings.ToUpper(oidA)+"x\n"))+flushPkt), true)
 	f.Fuzz(func(t *testing.T, raw []byte, v2 bool) {

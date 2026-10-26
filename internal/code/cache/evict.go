@@ -232,6 +232,7 @@ func (c *Cache) evict(e *entry) bool {
 	e.mu.Unlock()
 	c.mu.Unlock()
 	c.trash(gone)
+	c.churned(churned{evictions: 1})
 	c.log.Info("code_cache_evicted", "repo", e.id, "bytes", bytes, "reason", "budget", "idle_for", idle)
 	return true
 }

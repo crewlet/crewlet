@@ -71,6 +71,24 @@ func TestTheCodePathRefusesWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
+// THE CODE STATUS SUBJECT IS OUTSIDE THE CODE LOG'S STREAM. A stream captures
+// whatever is published under the subjects it is created with, a request
+// included, and acknowledges it to the request's reply mailbox: a status
+// question inside the log's space would be stored as a record no applier has
+// a kind for, and answered by the stream's acknowledgement before any git
+// node spoke. The name is written out once, since a constant-only assertion
+// would pass with every constant renamed.
+func TestTheCodeStatusSubjectIsOutsideTheCodeLog(t *testing.T) {
+	t.Parallel()
+	if topics.CodeStatus != "crewlet.code.status" {
+		t.Fatalf("the code status subject is %q", topics.CodeStatus)
+	}
+	if topics.Match(topics.CodeLogWildcard, topics.CodeStatus) {
+		t.Fatalf("the code log's stream, over %q, captures the status question %q",
+			topics.CodeLogWildcard, topics.CodeStatus)
+	}
+}
+
 // THE CODE WILDCARD COVERS THE GRAMMAR IT IS CREATED FOR.
 func TestTheCodeWildcardCoversItsOwnGrammar(t *testing.T) {
 	t.Parallel()

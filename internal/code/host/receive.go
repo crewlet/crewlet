@@ -219,6 +219,9 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	// on the rebuilt one, from the refusals that needed no object.
 	out := newSink(w, "application/x-git-receive-pack-result", s.now)
 	defer out.End()
+	// ITS BYTES, however the answer ends (Server.served): the push itself is
+	// counted where it is recorded (audit).
+	defer func() { s.served(adm, out, cache.Use{}) }()
 	var rcv received
 	runErr := s.repairing(ctx, r, adm.name, &synced, asAlternate,
 		func() bool { return rcv.answered || rcv.claimed || rcv.ended || out.Started() },

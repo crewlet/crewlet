@@ -83,6 +83,14 @@ type Cache struct {
 	// a push's scratch is written by its client's receive-pack, so only the
 	// disk knows.
 	scratchBytes atomic.Int64
+	// clock is where the heat's windows and the cache's own are counted
+	// from, the instant Open made it (heat.go); heat is what the node served
+	// of each repository, which the host counts into; and churn is what the
+	// cache spent on its own account — evictions and repairs — over the same
+	// windows, for its status.
+	clock heatClock
+	heat  *Heat
+	churn cacheChurn
 	// maint is the whole-repository work in flight against the node's
 	// memory — the maintenance runs, the round's indexes, Verify's checks —
 	// and the budget it is held to, and maintMemory what the runs beside the
@@ -223,6 +231,8 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 	if c.log == nil {
 		c.log = log
 	}
+	c.clock = newHeatClock(c.now)
+	c.heat = newHeat(c.clock)
 	// Under the boot's values (a trace, the logger's attributes), never
 	// its cancellation: a boot's context ends with the boot.
 	c.life, c.cancel = context.WithCancel(context.WithoutCancel(ctx))

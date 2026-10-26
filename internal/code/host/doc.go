@@ -282,6 +282,24 @@
 // the credential that asked, with no limiter of the host's own beside the
 // share.
 //
+// # What a request served is counted where its answer ends
+//
+// Each request adds its use of its repository to the cache's heat
+// (cache.Heat), ONCE, however its answer ends (Server.served): an
+// advertisement of upload-pack served is a FETCH — every git process that
+// reads a repository opens with one, so a fetch of many negotiation rounds is
+// one, and one that finds its client up to date is one too; a fetch transfer
+// served to its end that offered no `have` is a CLONE (negotiation.clone): a
+// fresh clone of any shape, and a partial clone's fetch of what it lacks, which
+// git asks for the same way — so the blame above counts two hundred and one of
+// each, all light; a PUSH is counted where it is recorded (audit), the one
+// place every push reaches exactly once, refused at its advertisement or
+// answered after its run; and every answer adds the bytes git's process wrote
+// its client (sink.Sent). [Server.Status] reads it back — the node's cache, the
+// hottest repositories of the hour and the day with their copies in service,
+// and one repository asked about by id — and the engine answers its peers
+// with it on topics.CodeStatus; this package imports no queue.
+//
 // # The hook relay cannot end the process
 //
 // The relay's accept loop and its connections run outside net/http's

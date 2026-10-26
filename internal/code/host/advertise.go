@@ -77,6 +77,12 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 
 	out := newSink(w, "application/x-"+svc+"-advertisement", s.now)
 	defer out.End()
+	// ITS USE OF THE REPOSITORY, counted however the answer ends: a fetch's
+	// advertisement served is the fetch (Server.served), and a push is
+	// counted where it is recorded, so a push's advertisement adds only its
+	// bytes.
+	var use cache.Use
+	defer func() { s.served(adm, out, use) }()
 	w.Header().Set("Cache-Control", "no-cache")
 	if push {
 		s.advertisePush(ctx, w, r, adm, &synced, out)
@@ -99,6 +105,9 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 		})
 		return gerr
 	})
+	if err == nil {
+		use.Fetches = 1
+	}
 	s.finishFetch(w, r, adm.name, commandAdvertise, synced.Kind, start, out, err)
 }
 

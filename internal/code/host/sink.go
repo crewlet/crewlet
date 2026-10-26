@@ -38,6 +38,11 @@ type sink struct {
 	// hold, while a fetch's answer has not started, is what it holds of
 	// it (holdPack); nil for any other answer, and once it has started.
 	hold *preamble
+	// sent is every byte of the answer the client was written — the service
+	// prefix, what was held and released, and everything after — as the
+	// paced writer took it: what the repository's heat counts as bytes out
+	// (Server.served). Nothing held and dropped by a run done again counts.
+	sent int64
 }
 
 // preamble is what a fetch's sink holds of an upload-pack answer before its
@@ -105,7 +110,15 @@ func (s *sink) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
-	return s.out.Write(p)
+	return s.emit(p)
+}
+
+// emit writes p to the client and counts what the paced writer took of it;
+// s.mu is held and the response has started.
+func (s *sink) emit(p []byte) (int, error) {
+	n, err := s.out.Write(p)
+	s.sent += int64(n)
+	return n, err
 }
 
 // release starts a held answer with what it holds: the run's answer stands —
@@ -135,7 +148,7 @@ func (s *sink) startLocked() error {
 		s.onStart()
 	}
 	if len(s.prefix) > 0 {
-		if _, err := s.out.Write(s.prefix); err != nil {
+		if _, err := s.emit(s.prefix); err != nil {
 			return err
 		}
 	}
@@ -143,7 +156,7 @@ func (s *sink) startLocked() error {
 		held := s.hold.held
 		s.hold = nil
 		if len(held) > 0 {
-			if _, err := s.out.Write(held); err != nil {
+			if _, err := s.emit(held); err != nil {
 				return err
 			}
 		}
@@ -157,6 +170,13 @@ func (s *sink) Started() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.out != nil
+}
+
+// Sent is how many bytes of the answer the client has been written.
+func (s *sink) Sent() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sent
 }
 
 // End ends a started response under what is left of its pace, so the

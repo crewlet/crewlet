@@ -1146,11 +1146,22 @@ func (c *Cache) promote(e *entry, old, inc *incarnation, reason RebuildReason, t
 	e.current = inc
 	e.mu.Unlock()
 	c.trash(gone)
+	c.rebuilt(reason)
+	c.log.Warn("code_cache_rebuilt", "repo", e.id, "reason", string(reason), "incarnation", inc.n, "took", took)
+	c.setGauges()
+}
+
+// rebuilt counts one repair of a copy, for reason: crewlet.code.cache.rebuilds
+// under that reason, and the status's windows ([Cache.Status]). THE ONE PLACE
+// A REPAIR IS COUNTED — a whole rebuild as it is promoted, an in-place round
+// by what it did — so the counter and the windows a person reads beside it
+// can never disagree about how many there were, and a node with no recorder
+// still counts what its status reports.
+func (c *Cache) rebuilt(reason RebuildReason) {
+	c.churned(churned{rebuilds: 1})
 	if c.metrics != nil {
 		c.metrics.Add(metrics.CodeCacheRebuilds, 1, metrics.Attrs{"reason": string(reason)})
 	}
-	c.log.Warn("code_cache_rebuilt", "repo", e.id, "reason", string(reason), "incarnation", inc.n, "took", took)
-	c.setGauges()
 }
 
 // failedRebuild records a rebuild of inc that failed with err; e.mu is held.

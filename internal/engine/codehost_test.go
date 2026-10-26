@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -318,6 +319,78 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 		acted.Outcome != types.AuditApplied || acted.Repo != "web" ||
 		acted.OperatorID != iam.TokenLogin("ops") {
 		t.Fatalf("the push was audited as %+v, want the founder's applied git_push to web", acted)
+	}
+}
+
+// A GIT NODE ANSWERS THE FLEET'S CODE STATUS, on the broker, as a peer asks it:
+// a question on topics.CodeStatus naming a repository is answered by the node
+// serving the code host with its host's own status — the node, its cache, and
+// the repository's heat and copy in service, as the person's clone and push
+// through the engine's host left them. The wire is the question's and the
+// answer's own (version, repo, status). A question at a version this build
+// does not speak is answered by nobody, which its asker reads as a node that
+// did not answer, never as a guess at its fields.
+//
+// Mutation: register no answerer beside the host (buildCodeHost), and the
+// question is answered by nobody.
+func TestAGitNodeAnswersTheFleetsCodeStatus(t *testing.T) {
+	t.Parallel()
+	b := gitNodeBootstrap(t, nil)
+	e, err := newGitNode(t, b, gitCompany)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	url := serveWeb(t, b, e)
+	founder := codetest.PersonWithToken(t, opsToken)
+	dir := founder.Clone(url)
+	founder.Commit(dir, map[string]string{"README.md": "# web\n"}, "first")
+	if pushed := founder.Push(t.Context(), dir, url, "HEAD:refs/heads/main"); !pushed.OK("refs/heads/main") {
+		t.Fatalf("the founder's push did not land:\n%s", pushed)
+	}
+	h, _ := e.CodeHost()
+	seam, _ := engine.OperatorCode(e)
+	repo, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadRepo, Repo: "web",
+		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("ops"), Seat: "founder"},
+		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+	if err != nil || repo.Repo == nil {
+		t.Fatalf("the repository's detail: %+v, %v", repo.Repo, err)
+	}
+	id := repo.Repo.ID
+
+	ask := func(question string, within time.Duration) [][]byte {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), within)
+		defer cancel()
+		replies, err := e.Backends().Queue.Ask(ctx, topics.CodeStatus, []byte(question), 1)
+		if err != nil {
+			t.Fatalf("ask %s: %v", question, err)
+		}
+		return replies
+	}
+	replies := ask(`{"version":1,"repo":"`+id+`"}`, 10*time.Second)
+	if len(replies) != 1 {
+		t.Fatalf("a code status question was answered %d times, want once, by the git node", len(replies))
+	}
+	var answer struct {
+		Version int             `json:"version"`
+		Status  host.CodeStatus `json:"status"`
+	}
+	if err := json.Unmarshal(replies[0], &answer); err != nil {
+		t.Fatalf("the answer %s: %v", replies[0], err)
+	}
+	st := answer.Status
+	if answer.Version != 1 || st.Node != h.Status("").Node || st.Cache.Warm != 1 || st.Cache.Budget <= 0 {
+		t.Fatalf("the answer is version %d from node %q with cache %+v, want version 1 from %q, its one "+
+			"warm repository and its budget", answer.Version, st.Node, st.Cache, h.Status("").Node)
+	}
+	if st.Repo == nil || st.Repo.ID != id || st.Repo.Day.Pushes != 1 || st.Repo.Day.Fetches != 1 ||
+		st.Repo.Copy == nil {
+		t.Fatalf("the repository asked about is answered %+v, want web's heat — the founder's one clone of it "+
+			"empty and one push — and its copy in service", st.Repo)
+	}
+
+	if replies := ask(`{"version":2}`, time.Second); len(replies) != 0 {
+		t.Fatalf("a question at a version this build does not speak was answered: %s", replies)
 	}
 }
 

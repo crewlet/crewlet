@@ -19,7 +19,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -194,9 +196,10 @@ func (e *Engine) gitHook() ([]string, error) {
 
 // buildCodeHost builds this node's code host for the runtime being started —
 // the cache's directory, the git pool, the cache's budget, the cache, the git
-// reads and the host, in the order each needs the last — and starts it,
-// answering the host, the git reads, the cache they serve from and the budget
-// it sized that cache to. Called by
+// reads and the host, in the order each needs the last — starts it, and makes
+// this node an answerer of the host's status (codestatus.go), answering the
+// host, the git reads, the cache they serve from, the budget it sized that
+// cache to and what withdraws the status answerer. Called by
 // startNative only where [Engine.hostsGit]. An error fails the boot, or the
 // apply that reached [Engine.startNativeFor], which is retried like every
 // start of the runtime: a company that asked for native code on a node that
@@ -306,19 +309,30 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: start the code host: %w", err)
 	}
-	return codeHostParts{host: h, reads: reads, cache: c, size: size}, nil
+
+	// 9. ITS STATUS, answered for the fleet (codestatus.go) from the moment
+	// the host serves, and withdrawn before it stops ([native.stopCodeHost]):
+	// under the host's lifetime rather than this call's, as the host runs.
+	withdraw, err := e.serveCodeStatus(context.WithoutCancel(ctx), h)
+	if err != nil {
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: serve the code host's status on %s: %w", topics.CodeStatus, err)
+	}
+	return codeHostParts{host: h, reads: reads, cache: c, size: size, withdrawStatus: withdraw}, nil
 }
 
 // codeHostParts is what [Engine.buildCodeHost] built: the host, the git reads
 // beside it over the same cache and pool, the cache they serve from — which
 // the host stops with itself, and which the engine holds only to READ, for
 // what no request asks (the alarm reading's code half, [Engine.codeReading])
-// — and the budget it sized that cache to.
+// — the budget it sized that cache to, and what withdraws the host's status
+// answerer ([Engine.serveCodeStatus]).
 type codeHostParts struct {
-	host  *host.Server
-	reads *query.Server
-	cache *cache.Cache
-	size  codeCacheSize
+	host           *host.Server
+	reads          *query.Server
+	cache          *cache.Cache
+	size           codeCacheSize
+	withdrawStatus queue.Unsubscribe
 }
 
 // codeReading fills the reading's code half from this node's git cache: how
@@ -612,11 +626,23 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // until the last of that work ends, so no other process can open the directory
 // while something of this one still writes in it, and waiting for it again
 // changes nothing.
+//
+// THE STATUS ANSWERER FIRST, inside the same one stop: a node that has decided
+// to stop serving git stops answering for its host before the host and the
+// cache its answers read stop, so no peer is told of a cache that is going. Its
+// withdrawal waits only for answers already in flight, each read from memory.
 func (n *native) stopCodeHost(ctx context.Context) {
 	if n == nil || n.codeHost == nil {
 		return
 	}
-	n.codeHostStop.stop(ctx, n.codeHost.Stop)
+	n.codeHostStop.stop(ctx, func(ctx context.Context) {
+		if n.withdrawCodeStatus != nil {
+			if err := n.withdrawCodeStatus(ctx); err != nil {
+				log.WarnContext(ctx, "code_status_answerer_not_withdrawn", "error", err)
+			}
+		}
+		n.codeHost.Stop(ctx)
+	})
 }
 
 // boundedStop runs a stop ONCE, its wait bounded by budget, however many
