@@ -62,7 +62,7 @@ func budgetWrite() Tool {
 		Name: "set_token_budget", Act: string(act), Kind: KindWrite,
 		Phrase: "change a token budget",
 		Description: "Propose setting or removing one token ceiling: a seat's or the " +
-			"company's, for one window (day, week or month). Name the seat by its handle, or " +
+			"company's, for one window (day, week or month). Name the seat by its handle or name, or " +
 			"leave seat out for the company's own ceiling; give tokens as a whole number, or " +
 			"clear: true to remove that window's ceiling. Read the current ceilings with " +
 			"list_budgets first. The person sees the ceiling now and the new one, and approves " +
@@ -71,13 +71,14 @@ func budgetWrite() Tool {
 			"budgets.ceiling.prefill only fills the editor in for the person to save " +
 			"themselves, when they ask for that.",
 		schema: object([]string{"window"}, map[string]*schema{
-			"seat": text("The seat's handle, as list_budgets or list_agents names it. "+
+			"seat": text("The seat's handle or name, as list_budgets or list_agents names it. "+
 				"Leave it out for the company's own ceiling.", nameBytes),
 			"window": oneOf("The window the ceiling is for.", budgetWindows...),
 			"tokens": {kind: "integer", description: "The new ceiling, a whole number of " +
 				"tokens (1.5M is 1500000).", min: 1, max: maxCeiling, hasMin: true, hasMax: true},
 			"clear": flag("Remove this window's ceiling instead of setting one."),
 		}),
+		Names:  map[string]Directory{"seat": DirSeat},
 		Routes: []string{seatWriteRoute, companyWriteRoute},
 		Tier:   DeriveTier(act, false),
 		// OFFERED TO AN ADMINISTRATOR, whose every ceiling it reaches. A lead
