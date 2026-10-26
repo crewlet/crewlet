@@ -39,7 +39,8 @@ import (
 //
 // Every write on this surface is the same two steps, and they are separate
 // functions because a DRY RUN is the first without the second. [Service.prepare]
-// reads the active revision, checks what the caller said it was building on,
+// reads the fleet's revision ([Service.current]), checks what the caller said
+// it was building on,
 // opens the stored document, builds the proposed one from it, validates it
 // and derives what an answer reports: its warnings and its hierarchy.
 // Nothing is stored. [Service.commit] seals, stores and activates exactly the
@@ -86,11 +87,46 @@ type RacedError struct {
 	// Stored is the inert revision this write left behind, empty when the
 	// race was detected before anything was stored.
 	Stored string
+	// Node is the node that stored it ([Options.Node]), set exactly when
+	// Stored is: a revision that lost its activation is a row of that node's
+	// history and no other's, so it is diffed and reverted there alone
+	// ([KeptRevision]).
+	Node string
 }
 
 func (e *RacedError) Error() string {
 	return fmt.Sprintf("configapi: the active revision advanced from %q to %q", e.Base, e.Current)
 }
+
+// ActivationUnknownError reports a write that was STORED and whose activation
+// this node cannot account for: the coordination store did not answer it
+// ([coord.ErrUnavailable]), and a publish whose acknowledgement was lost may
+// still have moved the pointer.
+//
+// Its own error, apart from a pointer that could not be read before anything
+// was stored, because the two send an operator opposite ways: that one wrote
+// nothing and is sent again; this one may be the company already, and sent
+// again it makes a second revision and a second epoch over a write the operator
+// was told never happened.
+type ActivationUnknownError struct {
+	// Base is the revision the write was built on, empty when it was built on
+	// nothing.
+	Base string
+	// Stored is the revision the write stored.
+	Stored string
+	// Node is the node that stored it ([Options.Node]), whose history alone
+	// holds Stored until an activation names it: a revision the pointer does
+	// not name is no other node's to diff or revert, and answers 404 there.
+	Node string
+	Err  error
+}
+
+func (e *ActivationUnknownError) Error() string {
+	return fmt.Sprintf("configapi: revision %s was stored on node %s and its activation "+
+		"was not answered: %v", e.Stored, e.Node, e.Err)
+}
+
+func (e *ActivationUnknownError) Unwrap() error { return e.Err }
 
 // DocumentError reports a submitted document this build could not read: it
 // is not YAML or JSON, or its shape is not a company's. Distinct from a
@@ -169,12 +205,13 @@ type ApplyRequest struct {
 	// for the party — or the engine's own name for a write a timer made.
 	By iam.Actor
 
-	// Expect is the revision the caller built this edit on. Empty is
-	// unconditional, which is what a first import and a script that owns
-	// the config outright both want. When set and stale the write is
-	// refused with a [RacedError] BEFORE anything is stored, so a caller
-	// working from a list it read a minute ago does not silently overwrite
-	// what happened since.
+	// Expect is the revision the caller built this edit on. Empty states no
+	// precondition, which is what a script that owns the config outright
+	// wants: the edit is built on the fleet's revision as this call reads
+	// it, and still lands only while the pointer names that. When set and
+	// stale the write is refused with a [RacedError] BEFORE anything is
+	// stored, so a caller working from a list it read a minute ago does not
+	// silently overwrite what happened since.
 	//
 	// EITHER SPELLING. A bare revision id is what a programmatic caller
 	// holds; a quoted entity-tag, a comma-separated list of them, or `*` is
@@ -264,9 +301,12 @@ type draft struct {
 // Only [Service.prepare] makes one, so a revision cannot be stored that was
 // not read, built, validated and checked for a control plane first.
 type prepared struct {
-	// base is the active revision the write was built on, empty when
-	// nothing was active.
-	base     string
+	// base is the fleet's revision the write was built on, zero when
+	// nothing was configured, and pointed whether the fleet's pointer named
+	// it: what the compare-and-set expects is the base when it did, and no
+	// pointer at all when it did not.
+	base     store.Revision
+	pointed  bool
 	document []byte
 	warnings []config.Warning
 	// held are the warnings the active revision already carries, by
@@ -288,8 +328,9 @@ type prepared struct {
 //   - Whether the CREDENTIAL may change a managed document at all
 //     (managed.go), before anything is read: it is a question about who
 //     is asking and never about what they sent.
-//   - The active revision, and what the caller built on. A stale base is
-//     refused before any work, because nothing built on it can be kept.
+//   - The fleet's revision ([Service.current]), and what the caller built on.
+//     A stale base is refused before any work, because nothing built on it
+//     can be kept.
 //   - The stored document, opened and held to no rule: it is the merge base
 //     and the prior masks are restored from, and a revision this build
 //     would refuse must stay replaceable by the write that corrects it.
@@ -314,10 +355,11 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 			return nil, err
 		}
 	}
-	active, found, err := s.configs.Active(ctx)
+	cur, found, err := s.current(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("configapi: read the active revision: %w", err)
+		return nil, err
 	}
+	active := cur.revision
 	switch {
 	case d.requireActive && !found:
 		return nil, ErrNoActiveRevision
@@ -370,10 +412,11 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	}
 	p := &prepared{
 		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
-		source: cmp.Or(d.source, revisionSource), held: heldWarnings(b.prior),
+		source: cmp.Or(d.source, revisionSource), pointed: cur.pointed,
+		held: heldWarnings(b.prior),
 	}
 	if found {
-		p.base = active.ID
+		p.base = active
 	}
 	return p, nil
 }
@@ -383,14 +426,20 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 // Stored FIRST, then pointed at: a crash between the two leaves a revision
 // nothing points at, which is inert and recoverable with `crewlet config
 // activate <id>`, where the other order would point the fleet at a revision no
-// node can read.
+// node can read. Its base is kept first where this node holds no row for it — a
+// fleet revision the reconciler has not ticked onto yet — because the parent is
+// a row of this node's history ([store.Configs.InsertOn]).
 //
-// STORED AS HISTORY, and made this node's active revision only once the fleet
-// has taken it. Until the compare-and-set lands nobody has accepted the write,
-// and a revision marked active locally is a claim this node acts on without
-// asking: it serves it from GET /config, and offers it to the whole fleet at
-// its next start whenever it is newer than the pointer. A loser stored that
-// way was published one restart after its 409, over the write that won.
+// STORED AS HISTORY, AND ONLY THAT. The pointer is the company, and what this
+// node boots on is the reconciler's to move once its engine has applied the
+// revision. A write that marked itself this node's own when the pointer moved
+// raced the reconciler: one that had read the pointer a moment before walked it
+// back, so a read after the write answered the revision before it, and the
+// write's own `If-Match` was refused.
+//
+// THE COMPARE-AND-SET NAMES WHAT THE WRITE WAS BUILT ON: the base, while the
+// pointer still names it; no pointer at all, when it read none. Never
+// unconditional, so a write cannot land over one it never saw.
 //
 // The plane is there: [Service.prepare] refused the write otherwise, and a
 // prepared write comes from nowhere else.
@@ -408,16 +457,16 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
 	}
 	at := s.now()
-	id, err := s.configs.Insert(ctx, store.Revision{
-		ParentID: p.base, Source: p.source, CreatedBy: by.Name,
+	id, err := s.configs.InsertOn(ctx, p.base, store.Revision{
+		ParentID: p.base.ID, Source: p.source, CreatedBy: by.Name,
 		CreatedByKind: by.Kind, OperatorID: by.OperatorID,
 		Summary: summary, Payload: payload, CreatedAt: at,
 	})
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: store the config: %w", err)
 	}
-	published, err := s.plane.Activate(ctx, coord.ActivationRequest{
-		RevisionID: id, Summary: summary, Payload: payload, At: at, Expect: p.base,
+	request := coord.ActivationRequest{
+		RevisionID: id, Summary: summary, Payload: payload, At: at,
 		// THE ORIGIN RIDES THE POINTER, so every node that adopts this
 		// revision records who wrote it, through which credential, from
 		// where and when — rather than itself, from `fleet`, at the
@@ -426,55 +475,59 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 			Author: by.Name, AuthorKind: by.Kind, OperatorID: by.OperatorID,
 			Source: p.source, CreatedAt: at,
 		},
-		// A WRITE BUILT ON NOTHING SAYS SO. Every write here names what it
-		// was built on as the activation's expectation, and a write with no
-		// base was built on an empty store: on a node that has not caught up
-		// with its fleet that is not "the first company", it is a company
-		// nobody has seen replacing the one the fleet is running. The
-		// create-only compare-and-set refuses it; on a genuinely
-		// unconfigured fleet there is no pointer and it lands.
-		ExpectAbsent: p.base == "",
-	})
+	}
+	if p.pointed {
+		request.Expect = p.base.ID
+	} else {
+		// A WRITE BUILT WITH NO POINTER SAYS SO, whatever this node knew
+		// the company to be: on a node that has not caught up with its
+		// fleet, "no pointer as far as I know" is not "the first company",
+		// and a write that replaced the one the fleet is running would
+		// rename it and orphan every seat's memory. The create-only
+		// compare-and-set refuses it; on a fleet that genuinely has no
+		// pointer it lands.
+		request.ExpectAbsent = true
+	}
+	published, err := s.plane.Activate(ctx, request)
 	if errors.Is(err, coord.ErrActivationRaced) {
 		// THE REVISION IS KEPT, not unwound: stored, valid and inert, so
 		// the operator's work survives as history they can revert to,
-		// while this node goes on serving what it served, and its
-		// reconciler adopts whichever revision won.
+		// while the fleet goes on running whichever revision won.
 		log.InfoContext(ctx, "config_activation_raced",
-			"revision", id, "expected", p.base, "by", by.Name,
+			"revision", id, "expected", p.base.ID, "by", by.Name,
 			"operator", by.OperatorID)
-		raced := &RacedError{Base: p.base, Stored: id}
+		raced := &RacedError{Base: p.base.ID, Stored: id, Node: s.node}
 		if current, _, terr := s.plane.Target(ctx); terr == nil {
 			raced.Current = current.RevisionID
 		}
 		return Applied{}, raced
 	}
+	if errors.Is(err, coord.ErrUnavailable) {
+		log.WarnContext(ctx, "config_activation_unknown", "revision", id,
+			"expected", p.base.ID, "by", by.Name, "operator", by.OperatorID, "error", err)
+		return Applied{}, &ActivationUnknownError{Base: p.base.ID, Stored: id, Node: s.node,
+			Err: err}
+	}
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: activate the config: %w", err)
 	}
-	// THE FLEET TOOK IT, so it is this node's company too. Best effort: the
-	// activation has landed and cannot be taken back, so a failure here is
-	// not the write's failure, and the reconciler makes the fleet's target
-	// this node's active revision when it applies the epoch.
-	//
-	// AT THE POINTER'S INSTANT, which may be later than the one asked for
-	// (see [coord.ActivationAt]): the local copy's `activated_at` is the
-	// instant this node's config history shows and the one its reconciler
-	// holds the pointer against, and at the instant it asked for the
-	// reconciler would read the fleet's own activation as a re-activation
-	// this node had not applied.
-	if _, aerr := s.configs.Activate(ctx, id, published.At); aerr != nil {
-		log.WarnContext(ctx, "config_revision_not_marked_active",
-			"revision", id, "epoch", published.Epoch, "error", aerr,
-			"detail", "the fleet is running this revision; this node marks "+
-				"it active when its reconciler applies the epoch")
+	// THE HISTORY SHOWS THE ACTIVATION, at the pointer's instant, which may
+	// be later than the one asked for ([coord.ActivationAt]); the retention
+	// sweep dates the row by it. Best effort: the activation has landed and
+	// cannot be taken back, and the reconciler records the same instant
+	// when its tick meets the pointer.
+	if nerr := s.configs.NoteActivation(ctx, id, published.At); nerr != nil {
+		log.WarnContext(ctx, "config_activation_not_noted",
+			"revision", id, "epoch", published.Epoch, "error", nerr,
+			"detail", "the fleet is running this revision; this node's history "+
+				"shows the activation once its reconciler meets the pointer")
 	}
 	s.nudge(ctx, id, summary, p.source, by)
 	log.InfoContext(ctx, "config_revision_written",
 		"revision", id, "epoch", published.Epoch, "by", by.Name,
 		"operator", by.OperatorID, "summary", summary)
 	return Applied{
-		RevisionID: id, Epoch: published.Epoch, Parent: p.base,
+		RevisionID: id, Epoch: published.Epoch, Parent: p.base.ID,
 		Warnings: p.warnings, Derived: p.derived,
 	}, nil
 }
@@ -710,9 +763,23 @@ func onlyUnknownField(_ *config.Company, err error) error {
 // A NEW revision rather than a re-pointed old one, for the same reason revert
 // writes one: the history stays append-only, so "the credentials were
 // reloaded at 04:12" is a fact somebody can find later.
-func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor) (Applied, error) {
+//
+// EXPECT IS THE REVISION THE CALLER DECIDED ON, in either spelling
+// [ApplyRequest.Expect] takes, and empty for none — `POST /config/reload`,
+// which takes no `If-Match`, and the engine's own reload after a pass sealed a
+// credential, both of which mean "whatever the fleet runs". A `/setup`
+// rotation is the caller that sends one: it wrote through the `${VAR}` the
+// revision it read holds, and a reload of a document a write in between
+// changed — a literal in that slot, or a pointer at another name — would
+// republish a company that never reads the value it just sealed and answer
+// that the rotation landed. Held as every write's is: refused [RacedError] in
+// [Service.prepare] when the pointer has moved, and the compare-and-set
+// expects it.
+func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor,
+	expect string) (Applied, error) {
+
 	prepared, err := s.prepare(ctx, draft{
-		requireActive: true, by: by,
+		expect: expect, requireActive: true, by: by,
 		// NOT A CHANGE TO THE COMPANY, so a managed document does not
 		// refuse it: the bytes below are the active revision's own, and
 		// what a reload exists for is the credential rotation a person

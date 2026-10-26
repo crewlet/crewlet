@@ -412,12 +412,12 @@ apply it. So a restart never reverts a change you made live, however stale the
 file on disk is.
 
 When you do want the file to win, that is a different flag:
-`crewlet run -import-company company.yaml` makes it the active revision over
+`crewlet run -import-company company.yaml` makes it the company over
 whatever the fleet is running. And to change a **running** fleet with no
 restart at all, use `crewlet config import company.yaml` — it goes through the
 node's API and every node converges on it.
 
-A running node always serves the store, not the file.
+A running node never goes back to the file: it runs what its fleet activated.
 
 **Or two steps** — import once, then run:
 
@@ -425,6 +425,13 @@ A running node always serves the store, not the file.
 crewlet config import company.yaml
 crewlet run                             # boots from the store
 ```
+
+With the engine stopped, the import is what this node boots on, and its start
+publishes it to the fleet: as the first company where the fleet has none, and
+otherwise only while the fleet still runs the revision the import was built
+on, so a change made on a node that has fallen behind is never published over
+what the fleet moved on to ([`crewlet config
+import`](../reference/cli.md#crewlet-config-import)).
 
 Both flags default to files in the working directory — `crewlet.yaml` and
 `company.yaml` — so a node whose files are named that way needs neither.
@@ -815,7 +822,7 @@ Automating a deployment means driving `crewlet` and the REST API:
 
 ```bash
 crewlet validate                       # check both tiers in CI
-crewlet config import company.yaml     # store and activate the company
+crewlet config import company.yaml     # store the company; the run publishes it
 crewlet run                            # start the node
 ```
 

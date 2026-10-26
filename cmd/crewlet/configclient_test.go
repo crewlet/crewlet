@@ -105,7 +105,12 @@ func TestARefusalOfALargeCompanyKeepsItsDetail(t *testing.T) {
 // diff` and `crewlet config activate` open that store directly: the commands
 // the refusal used to suggest refused on the very node that had answered. A
 // write refused before it stored anything names no revision, and the old
-// message sent the operator to activate an empty id.
+// message sent the operator to activate an empty id. And a revision that lost
+// its activation is in the history of the node that stored it alone: the
+// message names that node, because -api naming an address several nodes share
+// sends the revert to one that answers 404.
+//
+// Mutation: hand lostRace no node, and the stored case does not name it.
 func TestAnImportThatLostARaceSaysWhatWorksAgainstARunningNode(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -113,8 +118,11 @@ func TestAnImportThatLostARaceSaysWhatWorksAgainstARunningNode(t *testing.T) {
 		want, deny []string
 	}{
 		"stored": {
-			body: `{"error": "revision_advanced", "current_revision_id": "rev-won", "stored_revision_id": "rev-kept"}`,
-			want: []string{"rev-kept", "rev-won", "/config/revisions/rev-kept/diff", "/config/revisions/rev-kept/revert"},
+			body: `{"error": "revision_advanced", "current_revision_id": "rev-won", ` +
+				`"stored_revision_id": "rev-kept", "node": "core-1"}`,
+			want: []string{"rev-kept", "rev-won", "/config/revisions/rev-kept/diff",
+				"/config/revisions/rev-kept/revert", "node core-1, which alone holds it",
+				"by its own address"},
 			deny: []string{"crewlet config activate", "crewlet config diff"},
 		},
 		"nothing stored": {
@@ -137,6 +145,60 @@ func TestAnImportThatLostARaceSaysWhatWorksAgainstARunningNode(t *testing.T) {
 			if strings.Contains(err.Error(), deny) {
 				t.Errorf("%s: %q says %q", name, err, deny)
 			}
+		}
+	}
+}
+
+// A NODE THAT COULD NOT READ THE FLEET'S POINTER SAYS NOTHING WAS WRITTEN AND
+// TO TRY AGAIN. Every write is built on the pointer, so a coordination store
+// between leaders refuses it with 503 unavailable; printed as the bare code it
+// read as a node that is down. Mutation: drop the case and the reason is lost.
+func TestAnImportRefusedWhileTheFleetCannotBeReadSaysToRetry(t *testing.T) {
+	t.Parallel()
+	client := answering(t, http.StatusServiceUnavailable, []byte(`{"error": "unavailable", `+
+		`"message": "The engine cannot serve this right now.", `+
+		`"reason": "the fleet's activation could not be read from the coordination store"}`))
+	_, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import")
+	if err == nil {
+		t.Fatal("a refused import was reported as a write")
+	}
+	for _, want := range []string{"nothing was written", "coordination store", "run this import again"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+}
+
+// AN IMPORT THE NODE STORED AND COULD NOT ACTIVATE IS NEVER SAID TO HAVE
+// WRITTEN NOTHING. The revision is stored before the pointer moves, and a
+// publish whose answer was lost may have moved it: told "nothing was written",
+// an operator runs the import again and makes a second revision over one the
+// fleet may run already. So it names the stored revision and how to tell
+// whether it is live — and on which node: the stored revision is in the
+// history of the node that answered alone until an activation names it, so
+// with -api naming an address several nodes share, a revert sent there reaches
+// one that answers 404. Mutations: drop the unknown-outcome case and the 503 is
+// read as one that wrote nothing; hand unansweredImport no node, and the
+// message does not say where the revision is.
+func TestAnImportStoredAndNotAnsweredNamesTheRevisionAndHowToLook(t *testing.T) {
+	t.Parallel()
+	client := answering(t, http.StatusServiceUnavailable, []byte(`{"error": "unavailable", `+
+		`"message": "Can't answer right now.", "outcome": "unknown", `+
+		`"stored_revision_id": "rev-stored", "your_base": "rev-base", "node": "core-1"}`))
+	_, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import")
+	if err == nil {
+		t.Fatal("an import whose outcome is unknown was reported as a write")
+	}
+	for _, want := range []string{"revision rev-stored", "could not tell whether the fleet " +
+		"activated it", "/config/revisions/rev-stored/revert", "/config names the live revision",
+		"node core-1, which alone holds it", "by its own address"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+	for _, deny := range []string{"nothing was written", "run this import again"} {
+		if strings.Contains(err.Error(), deny) {
+			t.Errorf("%q says %q of a write that may have landed", err, deny)
 		}
 	}
 }

@@ -914,6 +914,25 @@ func (d *DB) Path() string {
 	return d.path
 }
 
+// Scratch reports whether this handle's file is DISCARDED at every open: a
+// node's own database opened with [Options.Scratch], which nothing written
+// here outlives. It is how the handle was opened, and stays so after
+// [DB.Close]; false on a nil handle and on every handle [OpenNode] did not
+// open — a replicated estate is never discarded.
+//
+// THE HANDLE'S OWN ANSWER, because it is the one reading that cannot disagree
+// with what the open did: a caller that needs to know whether what it writes
+// here survives a restart — the reconciler, which tells the fleet what this
+// node would boot on — reads it here rather than deciding it again from Tier A,
+// where a second reading is how one of them comes to believe a node keeps what
+// it writes.
+func (d *DB) Scratch() bool {
+	if d == nil {
+		return false
+	}
+	return d.opened.Scratch
+}
+
 // EmbeddingDim reports the configured vector width, or 0 when no embedding
 // model is configured. See Options.EmbeddingDim for why this is not in the
 // schema.

@@ -24,8 +24,14 @@ import "time"
 // every node would be a record per row for a value nobody changed. The
 // activation's instant is the fleet's: stamped once by the node that
 // activated, carried on the pointer every node reads ([coord.Activation.At]),
-// and kept as a node's active revision's `activated_at`, so a boot reads the
-// same instant the reconcile applied.
+// and kept as the boot row's `served_at` ([store.Revision.ServedAt]) once this
+// node has applied it, so a boot reads the same instant the reconcile applied.
+// NOT the row's `activated_at`, which is the fleet's LATEST activation of the
+// revision — raised by a re-activation this node refused, without an apply —
+// so a boot that stamped with it would carry an activation the reconcile never
+// applied, which is the confusion the two columns exist to keep apart. (An
+// offline change not yet published boots with none: no activation has
+// stamped it, and the first apply of the one that publishes it does.)
 //
 // # An instant rather than a counter
 //

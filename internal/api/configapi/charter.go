@@ -178,7 +178,7 @@ func (s *Service) getCharter(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 		return
 	case err != nil:
-		if !refuseUnreadable(w, err) {
+		if !RefuseUnreadable(w, err) {
 			s.fail(w, "read the active revision", err)
 		}
 		return
@@ -270,16 +270,17 @@ type charterWrite struct {
 // the caller tries again; any other error is the caller's to answer.
 func (s *Service) writeCharter(w http.ResponseWriter, r *http.Request, c charterWrite) (done bool, err error) {
 	ctx := r.Context()
-	active, found, err := s.configs.Active(ctx)
+	cur, found, err := s.current(ctx)
 	if err != nil {
-		return false, fmt.Errorf("configapi: read the active revision: %w", err)
+		return false, err
 	}
 	if !found {
 		return false, ErrNoActiveRevision
 	}
+	active := cur.revision
 	prior, err := s.open(active)
 	if err != nil {
-		if refuseUnreadable(w, err) {
+		if RefuseUnreadable(w, err) {
 			return true, nil
 		}
 		return false, fmt.Errorf("configapi: open the active revision: %w", err)

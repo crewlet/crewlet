@@ -74,8 +74,9 @@ type Company struct {
 
 	// ActivatedAt is the instant the revision this epoch was applied from
 	// was activated — the activation pointer's own ([coord.Activation.At]),
-	// or a boot's reading of the active revision's `activated_at` — in UTC,
-	// stamped ONCE, as the company is built ([stampActivation]).
+	// or a boot's reading of the boot row's `served_at`
+	// ([store.Revision.ServedAt]) — in UTC, stamped ONCE, as the company is
+	// built ([stampActivation]).
 	//
 	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED: one handed to [New] in code
 	// rather than read from a store. `crewlet run` never boots on one — it

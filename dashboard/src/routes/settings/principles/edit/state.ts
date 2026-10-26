@@ -7,12 +7,13 @@
  * may be open at once, and closing one never touches another.
  *
  * A SAVED PART IS SHOWN AS SAVED until the page has it. A save answers with
- * the epoch its revision activates at, and the org projection this page reads
- * arrives only once this node has applied it, a moment later. Between the two
- * the card would show the words the person just replaced, which reads as a
- * save that did not take. So a save leaves a [Landed] value the card shows
- * until the projection agrees, moves on to something else, or this node
- * reports the epoch applied.
+ * the revision it stored and the epoch it activates at, and the org
+ * projection this page reads arrives only once this node has applied it, a
+ * moment later. Between the two the card would show the words the person
+ * just replaced, which reads as a save that did not take. So a save leaves a
+ * [Landed] value the card shows until the projection agrees, moves on to
+ * something else, or this node is done with the revision ([landedView]) — and
+ * says so in place of the saved words when this node refused it.
  *
  * NOTHING HERE IS KEPT IN STORAGE. A draft is the company's policies in the
  * person's words, and storage outlives the session and is offered to whoever
@@ -21,6 +22,8 @@
  * first instead.
  */
 
+import type { EngineHealth } from "~/contract/health.ts";
+import { nodeStanding, type ActivatedRevision } from "~/lib/nodeStanding.ts";
 import { samePart, type CharterPart, type PartProblems, type PartValue } from "./charter.ts";
 
 /** How a part came to be edited, which decides where the focus lands. */
@@ -69,8 +72,12 @@ export interface Session {
 /** A part just saved, shown as saved until the page reads it back. */
 export interface Landed {
   readonly value: PartValue;
-  /** The epoch the revision activates at, or null when the save was settled by a read. */
-  readonly epoch: number | null;
+  /**
+   * The revision the save stored and the epoch it activates at, from its
+   * answer; null when the save was settled by a read, or is a colleague's
+   * words taken over, which name neither.
+   */
+  readonly activated: ActivatedRevision | null;
   /** What the page showed for the part when the save landed. */
   readonly shownWas: PartValue;
 }
@@ -103,7 +110,7 @@ export type Action =
       readonly type: "saved";
       readonly part: CharterPart;
       readonly value: PartValue;
-      readonly epoch: number | null;
+      readonly activated: ActivatedRevision | null;
       readonly shownWas: PartValue;
     }
   | { readonly type: "conflict"; readonly part: CharterPart; readonly theirs: PartValue }
@@ -180,7 +187,11 @@ export function reducer(state: EditingState, action: Action): EditingState {
         sessions,
         landed: {
           ...state.landed,
-          [action.part]: { value: action.value, epoch: action.epoch, shownWas: action.shownWas },
+          [action.part]: {
+            value: action.value,
+            activated: action.activated,
+            shownWas: action.shownWas,
+          },
         },
       };
     }
@@ -204,7 +215,11 @@ export function reducer(state: EditingState, action: Action): EditingState {
         sessions,
         landed: {
           ...state.landed,
-          [action.part]: { value: session.phase.theirs, epoch: null, shownWas: action.shownWas },
+          [action.part]: {
+            value: session.phase.theirs,
+            activated: null,
+            shownWas: action.shownWas,
+          },
         },
       };
     }
@@ -246,14 +261,48 @@ export function isDirty(session: Session | undefined): boolean {
   return session !== undefined && !samePart(effective(session), session.base);
 }
 
+/** Where a landed save stands for the card that shows it ([landedView]). */
+export type LandedView = "applying" | "refused" | "settled";
+
 /**
- * Whether the page has caught up with a landed save: it reads the saved
- * words, it reads something newer than what it showed when the save landed
- * (a colleague's later change), or this node has applied the save's epoch,
- * after which the projection is the answer whatever it says.
+ * Where a landed save stands for the card that shows it:
+ *
+ * - `settled`: the page has caught up with it — it reads the saved words, it
+ *   reads something newer than what it showed when the save landed (a
+ *   colleague's later change), or this node has applied the save's revision
+ *   or passed it for a later one, after which the projection is the answer
+ *   whatever it says;
+ * - `refused`: this node's attempt at the save's revision failed, so the
+ *   projection it serves is the part as it was, and stays so — the card
+ *   draws it, and says the save was refused here;
+ * - `applying`: nothing says yet, and the card goes on drawing the saved
+ *   words.
+ *
+ * BY WHERE THIS NODE STANDS ON THE REVISION (`nodeStanding`), never by its
+ * applied epoch alone: a refusal leaves that where it was, so a refused save
+ * drew the saved words, said to be shown "as soon as this node applies" it,
+ * for as long as the page stayed open.
+ *
+ * `health` is this node's LAST push (`useLastHealth`), null only before the
+ * tab has had one, when the save is still where it landed: applying. Never
+ * the live slice, which a dropped socket clears — read as a standing, that
+ * put the saved words back over a refusal until the socket returned.
  */
-export function hasSettled(landed: Landed, shown: PartValue, appliedEpoch: number): boolean {
-  if (samePart(shown, landed.value)) return true;
-  if (!samePart(shown, landed.shownWas)) return true;
-  return landed.epoch !== null && appliedEpoch >= landed.epoch;
+export function landedView(
+  landed: Landed,
+  shown: PartValue,
+  health: Pick<EngineHealth, "applied_epoch" | "config_attempt"> | null,
+): LandedView {
+  if (samePart(shown, landed.value)) return "settled";
+  if (!samePart(shown, landed.shownWas)) return "settled";
+  if (landed.activated === null || health === null) return "applying";
+  switch (nodeStanding(health, landed.activated).kind) {
+    case "applied":
+    case "passed":
+      return "settled";
+    case "refused":
+      return "refused";
+    case "applying":
+      return "applying";
+  }
 }

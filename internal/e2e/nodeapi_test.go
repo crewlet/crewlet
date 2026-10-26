@@ -131,7 +131,7 @@ func wireAPI(
 	cipher := e.Cipher()
 	// THE RECONCILER, because the health surface reports this node's config
 	// posture and its applied epoch, and the reconciler is what knows both.
-	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
+	reconciler, err := e.NewReconciler(ctx, engine.ReconcilerOptions{
 		Store: backends.Store, Fleet: backends.Fleet, Queue: backends.Queue,
 		NodeID: nodeID,
 	})
@@ -146,6 +146,7 @@ func wireAPI(
 		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
 		Holders:        configapi.DirectoryHolders(e.IAM()),
 		CompanyWriters: boot.API.Auth.CompanyWriters,
+		Node:           nodeID,
 	})
 	if err != nil {
 		return fail("config surface", err)
@@ -169,7 +170,6 @@ func wireAPI(
 		return fail("integration status", err)
 	}
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company: company,
 		Config:  configSurface,
 		Secrets: fleetsecrets.New(backends.Fleet, cipher),
 		Resolve: e.LookupSecret,

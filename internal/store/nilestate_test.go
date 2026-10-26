@@ -166,6 +166,13 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 				t.Errorf("ReplicatedFile() = %q, want no file", got)
 			}
 		},
+		// False is "keeps what is written here", which a handle that never
+		// opened a file cannot contradict: nothing was discarded either.
+		"Scratch": func(t *testing.T) {
+			if d.Scratch() {
+				t.Error("Scratch() = true on a handle that is not open, want false")
+			}
+		},
 		"EmbeddingDim": func(t *testing.T) {
 			if got := d.EmbeddingDim(); got != 0 {
 				t.Errorf("EmbeddingDim() = %d, want no configured width", got)

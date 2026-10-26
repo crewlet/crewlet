@@ -1071,7 +1071,16 @@ describe("the page header", () => {
   test("while a screen publishes the fleet answer the column draws it and asks none", async () => {
     const answer: FleetAnswer = {
       nodes: [
-        { id: "n1", roles: [], broker: "member", seats: 1, config_epoch: 3 },
+        {
+          id: "n1",
+          roles: [],
+          broker: "member",
+          seats: 1,
+          config_epoch: 3,
+          config_status: "ok",
+          config_revision_id: "r3",
+          config_serving_revision_id: "r3",
+        },
         { id: "n2", roles: [], broker: "member", seats: 1, config_epoch: 2 },
       ],
       seats: [],
@@ -1080,6 +1089,7 @@ describe("the page header", () => {
       unmanned_roles: [],
       this_node: "n1",
       target_epoch: 3,
+      activation: { epoch: 3, revision_id: "r3", at: "", summary: "" },
     };
     function Publishing() {
       usePublishFleet(answer);

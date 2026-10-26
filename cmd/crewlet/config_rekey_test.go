@@ -72,8 +72,8 @@ func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
 	if !strings.Contains(out, "k2") || !strings.Contains(out, "k1") {
 		t.Errorf("the output does not say what moved where: %q", out)
 	}
-	// AND WHAT RE-SEALS A RUNNING FLEET: a reload stores the active document
-	// again under the node's active key. PUT /config, which this used to
+	// AND WHAT RE-SEALS A RUNNING FLEET: a reload stores the fleet's
+	// document again under the node's active key. PUT /config, which this used to
 	// name, stores whatever document it is sent.
 	if !strings.Contains(out, "POST /config/reload") || strings.Contains(out, "PUT /config") {
 		t.Errorf("the output does not name the running fleet's re-seal: %q", out)
@@ -143,7 +143,7 @@ func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
 }
 
 // plantPlaintextRevision stores the fixture company's settings as an UNSEALED
-// active revision, directly in the store dir holds.
+// revision this node boots on, directly in the store dir holds.
 //
 // No command writes one — every node holds a keyring and every write path
 // seals — so a plaintext revision is one something else wrote into the store,
@@ -161,9 +161,9 @@ func plantPlaintextRevision(t *testing.T, dir string) string {
 	return plantPlaintext(t, dir, document)
 }
 
-// plantPlaintext stores document UNSEALED as the active revision of the store
-// dir holds, and returns its id. See [plantPlaintextRevision] for why a test
-// has to plant one.
+// plantPlaintext stores document UNSEALED as the revision the store dir holds
+// boots on — an offline offer built on nothing — and returns its id. See
+// [plantPlaintextRevision] for why a test has to plant one.
 func plantPlaintext(t *testing.T, dir string, document []byte) string {
 	t.Helper()
 	if secrets.Sealed(document) {
@@ -173,7 +173,7 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 	// state log applies is opened beside it.
 	db := storetest.OpenNode(t, filepath.Join(dir, "index.db"), store.Options{})
 	defer func() { _ = db.Close() }()
-	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := db.Configs().Offer(t.Context(), store.Offer{}, store.Revision{
 		Source: "file", CreatedBy: "not-a-node", CreatedByKind: iam.ActorSystem,
 		Summary: "written without a seal", Payload: document,
 	})
@@ -187,7 +187,7 @@ func plantPlaintext(t *testing.T, dir string, document []byte) string {
 // refusal names the import that brings its document back sealed: nothing
 // vouches for who wrote a plaintext payload.
 //
-// AND THE IMPORT IT NAMES WORKS. The import opened the active revision to ask
+// AND THE IMPORT IT NAMES WORKS. The import opened the company it knows to ask
 // whether the file already matched it, and met the same refusal — naming
 // itself — so the remedy every reader gave was a loop. The document imported
 // here is byte for byte the planted one, so an import that compared against
@@ -249,9 +249,8 @@ func TestEveryConfigCommandWithoutAKeyringNamesTheRemedy(t *testing.T) {
 	}
 }
 
-// activeKeyOf reads which key sealed the active revision, via `config
-// revisions` plus the export path — the only reader a test has that does not
-// reach into the store directly.
+// activeKeyOf reads which key sealed the company this node knows, through the
+// commands' own resolution of it ([revisionOrKnown]).
 func activeKeyOf(t *testing.T, cfg string) (string, bool) {
 	t.Helper()
 	ctx := t.Context()
@@ -260,9 +259,9 @@ func activeKeyOf(t *testing.T, cfg string) (string, bool) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer closeStore()
-	rev, err := revisionOrActive(ctx, cs, "")
+	rev, err := revisionOrKnown(ctx, cs, "")
 	if err != nil {
-		t.Fatalf("active revision: %v", err)
+		t.Fatalf("the company this node knows: %v", err)
 	}
 	return secrets.EnvelopeKeyIDOf(rev.Payload)
 }

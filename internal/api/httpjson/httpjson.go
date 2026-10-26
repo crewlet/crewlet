@@ -1810,6 +1810,14 @@ const (
 // establish: `outcome: "unknown"` and the `op_id` a retry must send back, and
 // `unvouched: true` where this node's operation ledger cannot vouch for it.
 //
+// A route whose writes carry no operation id passes none, and the key is left
+// out rather than written empty, since an empty op_id is one a client would
+// send back. The config surface is that route: its writes are compare-and-sets
+// on the revision they were built on, and its detail names the revision the
+// write stored, which is what a client looks for to learn whether it landed,
+// and the node whose history alone holds it, which is where a client that
+// finds it did not land sends the revert.
+//
 // # Why it is not [UnavailableWith] with a map a route fills in
 //
 // A write that MAY HAVE LANDED and a write the node REFUSED are both 503s, and
@@ -1835,7 +1843,10 @@ func UnknownOutcome(w http.ResponseWriter, retryAfterSeconds int, opID string,
 	body := make(Detail, len(detail)+3)
 	maps.Copy(body, detail)
 	body[keyOutcome] = OutcomeUnknown
-	body[keyOpID] = opID
+	delete(body, keyOpID)
+	if opID != "" {
+		body[keyOpID] = opID
+	}
 	delete(body, keyUnvouched)
 	if unvouched {
 		body[keyUnvouched] = true

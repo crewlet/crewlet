@@ -55,14 +55,18 @@ describe("savePart", () => {
   test("writes the charter as it is now with only this part replaced, on the tag it read", async () => {
     const t = scripted({
       reads: [at(CHARTER, '"t1"')],
-      writes: [{ kind: "saved", epoch: 7 }],
+      writes: [{ kind: "saved", activated: { revisionId: "r7", epoch: 7 } }],
     });
     const outcome = await savePart(
       { part: "mission", base: "Ship it", draft: "  Ship it well\n" },
       signal,
       t,
     );
-    expect(outcome).toEqual({ kind: "saved", epoch: 7, summary: "Changed the mission" });
+    expect(outcome).toEqual({
+      kind: "saved",
+      activated: { revisionId: "r7", epoch: 7 },
+      summary: "Changed the mission",
+    });
     expect(t.written).toEqual([
       {
         charter: { ...CHARTER, mission: "Ship it well" },
@@ -78,7 +82,7 @@ describe("savePart", () => {
     const theirs = { ...CHARTER, vision: "A colleague's vision" };
     const t = scripted({
       reads: [at(theirs, '"t2"')],
-      writes: [{ kind: "saved", epoch: 8 }],
+      writes: [{ kind: "saved", activated: { revisionId: "r8", epoch: 8 } }],
     });
     await savePart({ part: "mission", base: "Ship it", draft: "New mission" }, signal, t);
     expect(t.written[0]!.charter).toEqual({ ...theirs, mission: "New mission" });
@@ -111,7 +115,7 @@ describe("savePart", () => {
       reads: [at(CHARTER, '"t1"')],
       writes: [
         { kind: "moved", charter: moved, etag: '"t2"' },
-        { kind: "saved", epoch: 9 },
+        { kind: "saved", activated: { revisionId: "r9", epoch: 9 } },
       ],
     });
     const outcome = await savePart(
@@ -166,7 +170,7 @@ describe("savePart", () => {
       });
       expect(
         await savePart({ part: "mission", base: "Ship it", draft: "Mine" }, signal, t),
-      ).toEqual({ kind: "saved", epoch: null, summary: "Changed the mission" });
+      ).toEqual({ kind: "saved", activated: null, summary: "Changed the mission" });
       expect(t.write).toHaveBeenCalledTimes(1);
     });
 
@@ -270,9 +274,12 @@ describe("the charter's route", () => {
     const calls = stub(() =>
       json({ charter: CHARTER, changed: true, revision_id: "r9", epoch: 12 }, 200),
     );
+    // THE REVISION BESIDE ITS EPOCH, which is what the page follows this
+    // node's apply of the save by. Mutation: drop the revision and a refusal
+    // of this save cannot be told from an apply still running.
     expect(await writeCharter(CHARTER, '"charter-1"', "Changed the mission", signal)).toEqual({
       kind: "saved",
-      epoch: 12,
+      activated: { revisionId: "r9", epoch: 12 },
     });
     const { url, init } = calls[0]!;
     expect(url).toContain(CHARTER_ROUTE);

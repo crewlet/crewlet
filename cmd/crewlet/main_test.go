@@ -743,7 +743,7 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		t.Fatalf("node identity: %v", err)
 	}
-	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
+	reconciler, err := e.NewReconciler(t.Context(), engine.ReconcilerOptions{
 		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
 		Queue: e.Backends().Queue, NodeID: nodeID,
 	})

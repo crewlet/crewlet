@@ -129,12 +129,12 @@ import { deriveChanges } from "./model/changes.ts";
 import { seatsWithoutContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
-import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
+import { AfterSaveStrip, shortRevision } from "./AfterSaveStrip.tsx";
 import { CreateCompany, managedModelSentence, NextSteps } from "./CreateCompany.tsx";
 import { clearSavedRevision, recordSavedRevision, useSavedRevision } from "./savedRevision.ts";
 import { configTransport } from "~/protocol/configWrite.ts";
 import { browserClock, randomKeys, sessionDraftStorage } from "./runtime.ts";
-import { useSave, type SaveEvents } from "./useSave.ts";
+import { useSave, type Landed, type SaveEvents } from "./useSave.ts";
 import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
@@ -331,19 +331,27 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boole
   if (code === "unreadable_body") return { kind: "unserved" };
   if (answer.status === 404) {
     if (code !== "no_active_revision") return { kind: "unserved" };
-    // A NODE THAT HAS NOT CAUGHT UP IS NEVER OFFERED CREATE MODE. Its store
-    // holds no revision while the fleet runs a company, and a create from
-    // here would be refused at best. Until the snapshot has arrived, the
-    // answer is not known either way.
+    // A NODE THAT CANNOT SAY WHAT THE COMPANY IS IS NEVER OFFERED CREATE
+    // MODE. `GET /config` answers the fleet's pointer, or with none the
+    // company this node knows, so a 404 beside an org snapshot that names a
+    // company is a node whose two answers have not met yet — one still
+    // starting — and a create from here would be refused at best. Until the
+    // snapshot has arrived, the answer is not known either way.
     if (!org.known) return { kind: "loading" };
     return org.name ? { kind: "behind" } : { kind: "create" };
   }
   if (answer.status === 0) {
     return { kind: "unreachable", detail: text(body.detail) };
   }
+  // A 503 `unavailable` says why in `reason` (the fleet's pointer could not
+  // be read), not `detail`: without it the screen printed the bare code.
   return {
     kind: "failed",
-    detail: text(body.detail) || code || `The engine answered with status ${answer.status}.`,
+    detail:
+      text(body.detail) ||
+      text(body.reason) ||
+      code ||
+      `The engine answered with status ${answer.status}.`,
   };
 }
 
@@ -542,6 +550,28 @@ interface Arrival {
    * the address once answered, as `add=` is, so a reload asks nothing twice.
    */
   readonly project: string;
+}
+
+/**
+ * What the toast says about a save that landed.
+ *
+ * A SAVE FOUND BENEATH A LATER REVISION IS NOT THE ONE BEING APPLIED. Settling
+ * a lost answer walks back from the active revision
+ * (`writes.settleUnknownWrite`), and finds the write as readily below a
+ * revision somebody built on it since as at the top; every node then applies
+ * that later revision, the save's changes with it. Told the save was being
+ * applied, the operator read that beside the strip mounted for the same save,
+ * which reads the fleet's activation and says the later revision has been
+ * activated since.
+ */
+function landedSentence(landed: Landed): string {
+  if (landed.activeRevisionId !== landed.revisionId) {
+    const later = `Revision ${shortRevision(landed.activeRevisionId)}, built on it, is active now.`;
+    return landed.resumed ? `Your last save was stored. ${later}` : `Saved. ${later}`;
+  }
+  return landed.resumed
+    ? "Your last save was stored and is being applied."
+    : "Saved. The engine is applying it.";
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,11 +1439,7 @@ function BuilderScreen({
       // THE TOAST IS THE ANNOUNCEMENT: its host is a polite live region of
       // its own, so saying the same sentence through the Builder's region as
       // well had a screen reader read it twice.
-      toast.ok(
-        landed.resumed
-          ? "Your last save was stored and is being applied."
-          : "Saved. The engine is applying it.",
-      );
+      toast.ok(landedSentence(landed));
       load(!landed.resumed);
     },
     onConflict: ({ reason, currentRevisionId }) => {

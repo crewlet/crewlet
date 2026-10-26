@@ -1679,13 +1679,20 @@ One row per config write, per node, each holding the whole document.
 **every node**, not under the fleet singleton: each node owns its own copy, so
 a singleton would tidy the node holding the duty and let the table grow for
 ever on every other — which looks exactly like a sweep that works, to whoever
-checks the node it ran on. It keeps everything inside **400 days**, plus the
-**active revision and its whole parent chain whatever their age**. The chain
-is kept by id rather than by date because a revert re-activates an older
-revision and `crewlet config diff` walks it, so a swept ancestor turns both
-into an error naming a row that used to exist — and a company that has not
-changed its configuration for a year has an active revision older than any
-horizon worth setting.
+checks the node it ran on. It keeps everything created or activated inside
+**400 days** — a row is dated by the later of the two, its activation being the
+fleet's latest one this node knows of, so an old revision the fleet re-activated
+yesterday stays, on a node that refused that re-activation too — plus, **whatever their age**, the
+revision this node boots on, the fleet's revision as it last saw it, and the
+whole parent chain behind each. Those are two rows, not one, on a node that
+refused the fleet's revision and runs the one before (see [what a node's own
+store keeps](../concepts/control-plane.md#a-nodes-own-store-keeps-three-facts-apart)):
+the first is what it starts on, the second what it restores when the fleet's
+pointer is gone. The chains are kept by id rather than by date because a
+revert re-activates an older revision and `crewlet config diff` walks it, so
+a swept ancestor turns both into an error naming a row that used to exist —
+and a company that has not changed its configuration for a year boots on a
+revision older than any horizon worth setting.
 
 Four hundred days is an annual cycle plus five weeks. The gestures that reach
 furthest back into configuration history are annual — a reorganisation
