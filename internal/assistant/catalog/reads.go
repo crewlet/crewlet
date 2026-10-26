@@ -315,7 +315,8 @@ func readTools() []Tool {
 						fact("To do", "task_counts.todo", tNumber),
 						fact("Active", "task_counts.active", tNumber),
 						fact("Done", "task_counts.done", tNumber)},
-					Open: &cards.Open{Screen: "project", Params: map[string]string{"key": "key"}}}},
+					Open: &cards.Open{Screen: "project", Params: map[string]string{"key": "key"},
+						Label: "Open the project"}}},
 			},
 			Label: func(map[string]any) string { return "Listing projects" },
 			Names: map[string]Directory{"key": DirProject},
@@ -431,7 +432,10 @@ func readTools() []Tool {
 						fact("Last turn", "live.last_turn.outcome", tLabel),
 						fact("Last ended", "live.last_turn.ended_at", tDatetime),
 						fact("Last error", "live.last_error.message", tText)},
-					Open: &cards.Open{Screen: "seat", Params: map[string]string{"handle": "handle"}}}},
+					// LABELLED, NOT BY ITS HANDLE: the first parameter's value
+					// was the link's text, a handle the person does not know.
+					Open: &cards.Open{Screen: "seat", Params: map[string]string{"handle": "handle"},
+						Label: "Open the seat"}}},
 				"activity": {Table: &cards.Table{Title: "Turns per seat", Rows: "seats",
 					Brief: []string{"role", "turns", "failed", "tokens"},
 					Columns: []cards.Column{col("handle", "Handle", "handle", tText),
@@ -560,7 +564,8 @@ func readTools() []Tool {
 		{
 			Name: "get_spend", Phrase: "read token spend",
 			Description: "Token spend over a window of company days, by agent, by model or by " +
-				"phase.",
+				"phase. By agent also lists each person's own assistant use, marked as a " +
+				"person's: say so, and leave it out when ranking the agents.",
 			schema: object(nil, map[string]*schema{
 				"days":   positive("The window in company days. Default 7.", 90),
 				"by":     oneOf("How to break it down. Default agent.", "agent", "model", "phase"),
@@ -573,8 +578,15 @@ func readTools() []Tool {
 			},
 			Variant: by("by", "agent"),
 			Cards: map[string]cards.Spec{
+				// THE SEAT BY ITS NAME OFF ITS HANDLE, not the name the
+				// usage rows recorded (which can be empty, and stale after a
+				// rename), and A PERSON'S OWN USE MARKED: what the assistant
+				// spent for a person is on this list beside the agents, and
+				// was ranked as one.
 				"agent": spendTable("Spend by agent", "by_agent",
-					col("role", "Seat", "role", tText), col("handle", "Handle", "handle", tText)),
+					seat("seat", "Seat", "handle"),
+					col("person", "A person's own use", "person", tText),
+					col("handle", "Handle", "handle", tText)),
 				"model": spendTable("Spend by model", "by_model", col("model", "Model", "model", tText)),
 				"phase": spendTable("Spend by phase", "by_phase", col("phase", "Phase", "phase", tLabel)),
 			},
@@ -726,8 +738,10 @@ func readTools() []Tool {
 				Items: &cards.Items{Path: "comments", Kind: wire.ResourcePage, ID: "id",
 					Label: "body", Fact: "author", Prose: true,
 					Noun: wire.Noun{One: "comment", Many: "comments"}},
+				// THE LINK SAYS WHERE IT GOES: labelled by the title, it
+				// drew the page's title twice, once as the card's heading.
 				Open: &cards.Open{Screen: "page", Params: map[string]string{"id": "id"},
-					LabelFrom: "title"}}}),
+					Label: "Open the page"}}}),
 			Label: func(map[string]any) string { return "Reading a page" },
 		},
 		{
@@ -796,7 +810,7 @@ func readTools() []Tool {
 					fact("Status", "status", tLabel), {Label: "Version", Path: "head_number", Type: tNumber, Detail: true},
 					fact("Shares", "share_count", tNumber), fact("Updated", "updated_at", tDatetime)},
 				Open: &cards.Open{Screen: "artifact", Params: map[string]string{"id": "id"},
-					LabelFrom: "title"}}}),
+					Label: "Open the artifact"}}}),
 			Label: func(map[string]any) string { return "Reading an artifact" },
 		},
 		{
