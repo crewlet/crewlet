@@ -87,16 +87,25 @@
 // A read this node cannot answer for a reason about THE NODE is
 // code.ErrGitUnready, which the asker may take to another git node: its copy
 // not brought to the read's need within statelog.ReadBudget (a cold copy,
-// whose download goes on after the read stops waiting) or a sync that failed
-// here (syncing); its share or its read lane full past their waits (share); a
-// seat's read on a node holding no chart yet (no_chart) or confirmed behind
-// the company's configuration (behind_config), where the grant is not judged
-// at all — "this node cannot judge" is never "not permitted"; and a read of a
-// repository this node holds no copy of, which it was not asked to fill
-// (not_held). Every other
-// refusal is about the read or the repository, and is the answer anywhere: a
-// read the deadline ended is code.ErrSliceTooLarge naming the narrowing, since
-// another node would take as long.
+// whose download goes on after the read stops waiting), or a sync that failed
+// on what every node's copy is filled from — the code log, the object store,
+// the rows, a repair the cache will not repeat (syncing); its share or its
+// read lane full past their waits (share); a seat's read on a node holding no
+// chart yet (no_chart) or confirmed behind the company's configuration
+// (behind_config), where the grant is not judged at all — "this node cannot
+// judge" is never "not permitted"; a failure of the node's own, a sync its
+// disk or its stopping cache failed, or a short check of what the read names
+// that ran its whole bound (node_failed); and a read of a repository this
+// node holds no copy of, which it was not asked to fill (not_held). WHICH OF
+// THEM IT IS DECIDES WHO FILLS: a walk lets one node at a time fill a copy it
+// does not hold (code.GitQuery.Home), and moves that on to the next node only
+// past a node that is bringing no copy up for the read — behind_config and
+// node_failed — never past one filling, repairing or seconds from its chart,
+// nor past one at its share, which holds its copy and is only busy
+// (code.UnreadyReason.PassesFill). Every other refusal is about the read or
+// the repository, and is the answer anywhere: a read the deadline ended is
+// code.ErrSliceTooLarge naming the narrowing, since another node would take as
+// long.
 //
 // DAMAGE IS THE CACHE'S TO REPAIR, AND NO ANSWER: no process here names a
 // gitproc.Repairer, so the cache's observer acts on what each reports at once

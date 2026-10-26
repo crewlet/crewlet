@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -271,15 +272,22 @@ const (
 	// from the chart ([op.judgesGrant]) is answered `behind_config` by such a
 	// node even when it is asked last, told to answer anyway — the Detail
 	// then says it decides no grant ([decidesNoGrant]) — so the last resort
-	// meets the refusal again and the walk ends unserved.
+	// meets the refusal again and the walk ends unserved. So is a SEAT'S git
+	// read on such a git node, whose git half judges no seat
+	// (code.UnreadyBehindConfig, [reply.Unready]): the posture is the
+	// node's, so every asker remembers it for the node's data operations as
+	// well, while the git walk, which takes no lag gate, moves on from it as
+	// from any git node that ran nothing — and lets the next one fill a copy
+	// ([Router.routeGit]).
 	unservedBehindConfig unservedReason = "behind_config"
 
 	// unservedBehind: this node could not reach the caller's floor within
 	// the read budget — or, for a git read ([GitCopy]), its git half could
 	// not answer inside its budget for a reason about the node
 	// (code.ErrGitUnready: its copy still syncing, its share full, no chart
-	// or no configuration to judge a seat by, or no copy held and no fill
-	// asked of it), which another git node may answer.
+	// to judge a seat by, a failure of its own, or no copy held and no fill
+	// asked of it), which another git node may answer; the reply's
+	// [reply.Unready] then says which.
 	unservedBehind unservedReason = "behind"
 
 	// unservedOutOfService: this data node's copy of the operation's domain
@@ -328,6 +336,16 @@ type reply struct {
 	// why. Nothing was executed, so every class may move on.
 	Unserved unservedReason `json:"unserved,omitempty"`
 	Detail   string         `json:"detail,omitempty"`
+
+	// Unready is, for a GIT operation the node's git half could not answer
+	// (code.ErrGitUnready, answered `behind`, or `behind_config` for that
+	// reason), the reason it gave — which the walk reads to know whether
+	// the one node it lets fill a copy is still that one
+	// (code.UnreadyReason.PassesFill), since `behind` alone says the node
+	// ran nothing and not whether a copy is coming there. Empty on every
+	// other reply, and from a build that sends none: the walk then keeps its
+	// filler, as it did before the reason crossed ([Router.routeGit]).
+	Unready code.UnreadyReason `json:"unready,omitempty"`
 
 	// Result is the operation's answer, and Err its failure. At most one.
 	Result json.RawMessage `json:"result,omitempty"`
@@ -623,13 +641,15 @@ func (o op[A, R]) keyedBy(key func(A) string) op[A, R] {
 // [suspectFor] and one that went silent last of all, no sticky node, and this
 // node at its place, in process, where it is a git node ([Router.routeGit]).
 //
-// home stamps each attempt's arguments with whether the node asked is the
-// walk's EFFECTIVE HOME — the first node of the order once its demotions are
-// applied — the one node of the walk that may FILL a copy it does not hold:
-// every other git node holding none answers at once that it holds none, so a
-// read of a repository nobody holds costs the fleet one download rather than
-// one a git node. The walk calls it on every attempt, over whatever the caller
-// set, so no caller chooses it.
+// home stamps each attempt's arguments with whether the node asked is the one
+// node of the walk that may FILL a copy it does not hold: the walk's
+// EFFECTIVE HOME — the first node of the order once its demotions are applied
+// — and in its place the next node only where that one said no copy serving
+// the read is coming there ([Router.routeGit]). Every other git node holding
+// none answers at once that it holds none, so a read of a repository nobody
+// holds costs the fleet one download at a time rather than one a git node.
+// The walk calls it on every attempt, over whatever the caller set, so no
+// caller chooses it.
 //
 // The operation must be defined on [GitCopy], which it reads instead of a
 // domain's copy: no copy verdict holds it back, no floor is waited for at

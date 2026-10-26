@@ -384,11 +384,13 @@
 // burst of seat reads never takes the half a person's push scans wait in. A
 // git node judges the asker's grant from its own chart as a reader of the rows
 // does, and one that cannot answer for a reason about ITSELF — a copy still
-// syncing, its share full, no chart yet, its configuration behind, or no copy
-// at all where the read is not its walk's effective home's ([GitQuery.Home]) —
-// says [ErrGitUnready], which another git node may answer. Which git node a
-// read is asked of first is the estate router's: the repository's HOME, the
-// first of its rendezvous order over the live git nodes (ADR-0059).
+// syncing, its share full, no chart yet, its configuration behind, a failure
+// of its own, or no copy at all where the read is not its walk's filler's
+// ([GitQuery.Home]) — says [ErrGitUnready], which another git node may
+// answer, with a reason that tells the walk whether it may let the next node
+// fill a copy instead ([UnreadyReason.PassesFill]). Which git node a read is
+// asked of first is the estate router's: the repository's HOME, the first of
+// its rendezvous order over the live git nodes (ADR-0059).
 //
 // # A change's class is lexed, and a directive is code
 //

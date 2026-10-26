@@ -7,19 +7,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -436,6 +440,79 @@ func TestAColdRepositoryAnswersUnreadyAndKeepsSyncing(t *testing.T) {
 	if got := objects.gets.Load(); got != int64(packs) {
 		t.Errorf("the repository's %d packs were read %d times, want once each: the round the first read "+
 			"began went on", packs, got)
+	}
+}
+
+// failingCache answers every sync of repo with err, as a cache whose sync
+// failed answers it.
+type failingCache struct {
+	query.Cache
+	repo string
+	err  error
+}
+
+func (c failingCache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error) {
+	if repoID == c.repo {
+		return cache.Synced{}, c.err
+	}
+	return c.Cache.Sync(ctx, repoID, fresh)
+}
+
+// wedgedPool runs every git process on the pool beneath but the object check,
+// which it answers as a process its deadline ended.
+type wedgedPool struct{ query.Pool }
+
+func (p wedgedPool) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	if len(c.Args) > 1 && c.Args[0] == "cat-file" && c.Args[1] == "--batch-check" {
+		return gitproc.Result{Exit: -1}, fmt.Errorf("gitproc: git cat-file ran past its %v deadline and was "+
+			"killed: %w", c.Deadline, gitproc.ErrDeadline)
+	}
+	return p.Pool.Run(ctx, c)
+}
+
+// ONLY A FAILURE OF THE NODE'S OWN LETS ANOTHER NODE FILL. A sync that failed
+// on what every git node's copy is filled from — the code log, the object
+// store, a pack the store lacks or holds damaged, a bundle that is not its
+// row's, rows this build cannot install, a repair the cache refuses to repeat
+// because a whole read of them did not end the damage — is answered
+// `syncing`, which keeps the walk's one fill where it is: another node's fill
+// would meet the same failure, a download for nothing, and every git node's at
+// once against a store that throttles. A sync that failed for a reason of the
+// node's own — its cache stopping, its disk refusing a write — and a short
+// check over its copy that ran its whole bound are answered `node_failed`,
+// which lets the walk have the next node fill: kept, the walk's filler stayed
+// on a node that would serve the read no sooner for being asked.
+//
+// Mutations: answer every failed sync `syncing` — the node's own rows red;
+// let a refused repair pass the fill — its row red.
+func TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	node := x.f.Nodes()[0]
+	pack := code.PackRow{PackID: "019a0c2e-0000-7000-8000-000000000001"}
+	for name, tc := range map[string]struct {
+		err  error
+		want code.UnreadyReason
+	}{
+		"the code log":                   {fmt.Errorf("%w: no quorum", cache.ErrLogRead), code.UnreadySyncing},
+		"the object store":               {fmt.Errorf("%w: SlowDown", cache.ErrStoreRead), code.UnreadySyncing},
+		"a pack the store lacks":         {&cache.ErrPackMissing{Repo: repo, Pack: pack, Err: objstore.ErrNotFound}, code.UnreadySyncing},
+		"a bundle that is not its row's": {&cache.ErrCorruptPack{Repo: repo, Pack: pack, Err: code.ErrBadBundle}, code.UnreadySyncing},
+		"rows this build cannot install": {fmt.Errorf("%w: a ref", cache.ErrBadSnapshot), code.UnreadySyncing},
+		"a repair it will not repeat":    {fmt.Errorf("%w: rebuilt an hour ago", cache.ErrRebuildRefused), code.UnreadySyncing},
+		"its cache stopping":             {cache.ErrStopped, code.UnreadyNodeFailed},
+		"its disk":                       {&os.PathError{Op: "write", Path: "pack", Err: syscall.ENOSPC}, code.UnreadyNodeFailed},
+	} {
+		s := x.server(0, query.Options{Cache: failingCache{Cache: node.Cache(), repo: repo, err: tc.err}})
+		if _, err := s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head})); !unready(err, tc.want) {
+			t.Errorf("a sync that failed on %s = %v, want ErrGitUnready{%s}", name, err, tc.want)
+		}
+	}
+	s := x.server(0, query.Options{Git: wedgedPool{Pool: node.Pool()}})
+	if _, err := s.Read(t.Context(), treeQ(repo, code.TreeQuery{Rev: head})); !unready(err, code.UnreadyNodeFailed) {
+		t.Errorf("a read whose object check ran its whole bound = %v, want ErrGitUnready{node_failed}", err)
 	}
 }
 

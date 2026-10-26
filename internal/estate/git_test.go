@@ -29,8 +29,10 @@ type fakeGit struct {
 	mu    sync.Mutex
 	asked []code.GitQuery
 	// unready answers every read code.ErrGitUnready for this reason, where
-	// set.
-	unready code.UnreadyReason
+	// set — a SEAT'S read alone where seatsOnly is, as a node behind its
+	// configuration judges no seat and serves a person.
+	unready   code.UnreadyReason
+	seatsOnly bool
 	// held is the repositories it holds a copy of, where it is set — a read
 	// not stamped home of any other is not_held, as the query server answers
 	// it — and nil for a node holding every repository.
@@ -42,7 +44,7 @@ func (g *fakeGit) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, erro
 	defer g.mu.Unlock()
 	g.asked = append(g.asked, q)
 	switch {
-	case g.unready != "":
+	case g.unready != "" && (!g.seatsOnly || q.Asker.Kind == code.PrincipalAgent):
 		return code.GitAnswer{}, &code.ErrGitUnready{Reason: g.unready,
 			Detail: fmt.Sprintf("%s is %s for repository %s", g.name, g.unready, q.RepoID)}
 	case g.held != nil && !g.held[q.RepoID] && !q.Home:
@@ -372,6 +374,152 @@ func TestOnlyTheEffectiveHomeIsAskedToFill(t *testing.T) {
 	}
 }
 
+// seatTreeOf is a seat's read of repo's root at a commit: one a node behind
+// the company's configuration judges no grant for.
+func seatTreeOf(repo string) code.GitQuery {
+	q := treeOf(repo)
+	q.Asker = code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}
+	return q
+}
+
+// stamped is every node whose half has been asked a read stamped home.
+func stamped(halves map[string]*fakeGit) []string {
+	var out []string
+	for name, g := range halves {
+		if slices.ContainsFunc(g.reads(), func(q code.GitQuery) bool { return q.Home }) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A HOME THAT JUDGES NO SEAT HANDS THE FILL TO ITS RUNNER-UP (ADR-0059). A
+// home confirmed behind the company's configuration — shed, or stuck because
+// its apply failed while a peer applied, and live in the git placement all the
+// while — refuses every seat's read `behind_config` before it syncs anything,
+// for as long as it stays behind. Its runner-up and the third node hold no
+// copy. A walk that kept the fill on its first node asked them unstamped, both
+// answered `not_held`, and every seat read of the repository was answered by
+// nobody until the home recovered. The fill moves on instead: the runner-up is
+// stamped, fills, and serves; the next seat read asks the home first again —
+// it is not demoted — and the runner-up again; a person's read, which judges
+// no chart, is the home's; the third node is never asked to fill. And the
+// asker remembers the home's posture for its data operations, as it would had
+// a data operation told it.
+//
+// Mutation: keep the stamp on the walk's first node alone — the runner-up is
+// asked unstamped and the seat read is unserved, red.
+func TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	holders := []string{"git-a", "git-b", "git-c"}
+	halves := f.gitNodes(t, holders)
+	repo := repoID(23)
+	order := rendezvous.Order(repo, holders)
+	home, runnerUp, third := halves[order[0]], halves[order[1]], halves[order[2]]
+	home.set(func(g *fakeGit) { g.unready, g.seatsOnly = code.UnreadyBehindConfig, true })
+	for _, g := range []*fakeGit{runnerUp, third} {
+		g.set(func(g *fakeGit) { g.held = map[string]bool{} })
+	}
+
+	for i := range 2 {
+		a, err := f.client.Code().GitRead(t.Context(), seatTreeOf(repo))
+		if err != nil || a.Rev != order[1] {
+			t.Fatalf("seat read %d, its home behind the configuration and nobody else holding a copy = (%s, %v), "+
+				"want the runner-up %s to fill and answer", i, a.Rev, err, order[1])
+		}
+		if got := len(home.reads()); got != i+1 {
+			t.Errorf("after seat read %d the home was asked %d reads, want it asked first every time: it is "+
+				"not demoted", i, got)
+		}
+	}
+	for _, q := range runnerUp.reads() {
+		if !q.Home {
+			t.Errorf("the runner-up was asked %+v unstamped: the walk let nobody fill", q)
+		}
+	}
+	if got := third.reads(); len(got) != 0 {
+		t.Errorf("the third node was asked %+v, want nothing: the runner-up served", got)
+	}
+
+	a, err := f.client.Code().GitRead(t.Context(), treeOf(repo))
+	if err != nil || a.Rev != order[0] {
+		t.Errorf("a person's read of the same repository = (%s, %v), want the home's: it judges no chart",
+			a.Rev, err)
+	}
+	if got, want := stamped(halves), slices.Sorted(slices.Values(order[:2])); !slices.Equal(got, want) {
+		t.Errorf("the nodes asked to fill are %v, want the home and its runner-up %v alone", got, want)
+	}
+	if !f.client.remembersBehind(opTasks.spec, order[0]) {
+		t.Errorf("the asker does not remember %s behind the company's configuration for its data operations", order[0])
+	}
+}
+
+// THE FILL MOVES ON ONLY PAST A NODE BRINGING NO COPY UP. For every reason a
+// home may give for not answering, and for a home that runs no code host, over
+// a runner-up and a third node that hold no copy: where no copy serving the
+// read is coming on the home — behind the configuration (a seat's read), a
+// failure of its own, no code host — its runner-up is stamped, fills and
+// serves; where one may be — the home syncing, at its share, its chart
+// moments away — the runner-up and the third are asked unstamped, start
+// nothing, and the read is unserved: a second download beside the home's
+// would double the fill a walk exists to make once. A reason a newer build
+// gives, which this one does not know, keeps the fill where it is.
+//
+// Mutations: let `syncing` pass the fill — its row served, red; keep the fill
+// past a home with no code host — that row unserved, red.
+func TestTheFillMovesOnlyPastANodeBringingNoCopyUp(t *testing.T) {
+	t.Parallel()
+	cases := map[string]code.UnreadyReason{"no code host": "", "an unknown reason": "drowsy"}
+	for _, why := range code.UnreadyReasons() {
+		cases[string(why)] = why
+	}
+	for name, why := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			holders := []string{"git-a", "git-b", "git-c"}
+			repo := repoID(29)
+			order := rendezvous.Order(repo, holders)
+			var idle []string
+			if name == "no code host" {
+				idle = order[:1]
+			}
+			halves := f.gitNodes(t, holders, idle...)
+			if why != "" {
+				halves[order[0]].set(func(g *fakeGit) { g.unready = why })
+			}
+			for _, n := range order[1:] {
+				halves[n].set(func(g *fakeGit) { g.held = map[string]bool{} })
+			}
+			passes := name == "no code host" || why.PassesFill()
+
+			a, err := f.client.Code().GitRead(t.Context(), seatTreeOf(repo))
+			switch {
+			case passes && (err != nil || a.Rev != order[1]):
+				t.Fatalf("a read whose home is %s = (%s, %v), want its runner-up %s to fill and answer", name,
+					a.Rev, err, order[1])
+			case !passes && !errors.As(err, new(*ErrUnserved)):
+				t.Fatalf("a read whose home is %s = (%s, %v), want it unserved, nobody filling beside the home",
+					name, a.Rev, err)
+			}
+			var want []string
+			switch {
+			case name == "no code host":
+				want = []string{order[1]} // the home has no half to record a stamp
+			case passes:
+				want = slices.Sorted(slices.Values(order[:2]))
+			default:
+				want = []string{order[0]}
+			}
+			if got := stamped(halves); !slices.Equal(got, want) {
+				t.Errorf("a home that is %s: the nodes asked to fill are %v, want %v", name, got, want)
+			}
+		})
+	}
+}
+
 // A NODE WITH NO CODE HOST RUNS NO GIT READ: a git node whose company has not
 // built its code host answers `no_backend` — never silence, which its asker
 // would read as a node gone — so the walk asks the repository's runner-up and
@@ -473,7 +621,10 @@ func TestAGitReadIsNeverAskedOnTheSharedLane(t *testing.T) {
 // on without demoting it, and a walk nobody served is ErrUnserved, never a
 // code.ErrGitUnready a caller could take for the repository's own answer. The
 // error type is registered all the same, as every error of the code package
-// is, for the reason the list is complete at all.
+// is, for the reason the list is complete at all. What crosses is its REASON,
+// beside the `behind` (reply.Unready), which the walk reads to know who may
+// fill a copy; and a seat's read refused for the node's configuration says so
+// as `behind_config`, the node's posture, as every operation says it.
 func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -485,9 +636,18 @@ func TestTheWireCarriesNoUnreadyGitError(t *testing.T) {
 	}
 	rep := askSignedOn(t, f.start(t), laneGitReads.subject("git-a"),
 		request{Op: opCodeGitRead.spec.name, Args: args, From: "agent-9"})
-	if rep.Unserved != unservedBehind || rep.Err != nil || !strings.Contains(rep.Detail, "git-a is syncing") {
-		t.Fatalf("a git node whose copy is syncing answered %+v, want `behind` naming why, and no error", rep)
+	if rep.Unserved != unservedBehind || rep.Err != nil || !strings.Contains(rep.Detail, "git-a is syncing") ||
+		rep.Unready != code.UnreadySyncing {
+		t.Fatalf("a git node whose copy is syncing answered %+v, want `behind` naming why, its reason beside "+
+			"it, and no error", rep)
 	}
+	halves["git-a"].set(func(g *fakeGit) { g.unready = code.UnreadyBehindConfig })
+	rep = askSignedOn(t, f.start(t), laneGitReads.subject("git-a"),
+		request{Op: opCodeGitRead.spec.name, Args: args, From: "agent-9"})
+	if rep.Unserved != unservedBehindConfig || rep.Err != nil || rep.Unready != code.UnreadyBehindConfig {
+		t.Fatalf("a git node behind its configuration answered %+v, want `behind_config` with its reason", rep)
+	}
+	halves["git-a"].set(func(g *fakeGit) { g.unready = code.UnreadySyncing })
 	for name, r := range map[string]*Router{
 		"a node that holds nothing": f.client,
 		"the git node, in process":  f.gitRouter(t, "git-a", gitHalf{node: halves["git-a"]}),

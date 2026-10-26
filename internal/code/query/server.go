@@ -119,7 +119,11 @@ func New(o Options) (*Server, error) {
 //     where the asker holds none, the wait bounded by statelog.ReadBudget: a
 //     copy that cannot be brought there in time — a cold one downloading the
 //     repository, which goes on after the read stops waiting — or a sync that
-//     failed here is unready (syncing).
+//     failed on what every node's copy is filled from (the code log, the
+//     object store, the rows, a repair the cache would not repeat) is
+//     unready, syncing; one that failed for a reason of the node's own is
+//     unready, node_failed, which lets the walk have the next node fill
+//     (everyFillMeets).
 //  5. A deleted or purging repository answers code.ErrRepoNotFound with the
 //     domain's own sentence for it; the asker's grant is judged from the
 //     repository's row and this node's chart (code.GrantOf), and a read below
@@ -334,13 +338,45 @@ func (r *read) sync(ctx context.Context, fresh statelog.Freshness) error {
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
 			"the read's need within %s; the sync goes on, and another git node answers meanwhile",
 			r.s.o.NodeID, r.q.RepoID, wait))
+	case everyFillMeets(err):
+		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s could not sync repository %s: %v — what every "+
+			"git node's copy is filled from, so a git node holding a copy answers meanwhile",
+			r.s.o.NodeID, r.q.RepoID, err))
 	default:
-		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s could not sync repository %s: %v; another git "+
-			"node answers meanwhile", r.s.o.NodeID, r.q.RepoID, err))
+		return r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s could not sync repository %s: %v; another "+
+			"git node answers, and fills a copy where none holds one", r.s.o.NodeID, r.q.RepoID, err))
 	}
 	r.synced.Release()
 	r.synced, r.linear = s, fresh.Level == statelog.ReadLinearizable
 	return nil
+}
+
+// everyFillMeets reports whether a sync failed on what EVERY git node's copy
+// of a repository is filled from: the code log its rows are read from
+// (cache.ErrLogRead), the object store its packs are (cache.ErrStoreRead, a
+// pack the store does not hold or holds damaged, a bundle that is not the one
+// its row describes), rows this build cannot install (cache.ErrBadSnapshot),
+// or a repair the cache refuses to repeat (cache.ErrRebuildRefused) — refused
+// because a whole read of the repository from the store and the rows did not
+// end the damage, so the damage is theirs, and refused AT ONCE precisely so
+// that no other node pays a whole download to meet it again. Such a read is
+// answered syncing, which keeps the walk's filler where it is
+// (code.UnreadyReason.PassesFill): another node's fill would only meet the
+// same, a download for a failure — against an object store that throttles,
+// every git node's at once — while a node already holding a copy answers
+// around it. An object store THIS node alone cannot reach looks the same from
+// here and keeps its filler too, deliberately: a herd of fills against a store
+// that is failing costs the fleet more than one node's repositories waiting
+// for its operator. Every other failure — the node's disk refusing a write,
+// its cache stopping — is the node's own (code.UnreadyNodeFailed), and the
+// walk lets the next node fill.
+func everyFillMeets(err error) bool {
+	var (
+		missing *cache.ErrPackMissing
+		corrupt *cache.ErrCorruptPack
+	)
+	return errors.Is(err, cache.ErrLogRead) || errors.Is(err, cache.ErrStoreRead) || errors.As(err, &missing) ||
+		errors.As(err, &corrupt) || errors.Is(err, cache.ErrBadSnapshot) || errors.Is(err, cache.ErrRebuildRefused)
 }
 
 // grant answers a repository the read may not be served from (step 4): one
@@ -433,8 +469,9 @@ func (r *read) bound(ctx context.Context, limit time.Duration) (time.Duration, e
 // nothing here names a gitproc.Repairer, so the cache's observer acts on a
 // report at once); unready, share, for a read lane busy past gitproc.SlotWait;
 // and for a run its deadline ended, slice when the read can be narrowed —
-// another node would take as long — and unready otherwise, a short process no
-// healthy node takes that long over.
+// another node would take as long — and unready otherwise, node_failed: a
+// short process no healthy node takes that long over, so this node is not
+// one to wait for, and the walk lets the next node fill a copy.
 func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err error, slice error) error {
 	if res.Damage != nil {
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s met damage the node is "+
@@ -450,7 +487,11 @@ func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err 
 			"answers meanwhile", r.s.o.NodeID, gitproc.SlotWait))
 	case errors.Is(err, gitproc.ErrDeadline) && slice != nil:
 		return slice
-	case errors.Is(err, gitproc.ErrDeadline), errors.Is(err, gitproc.ErrRepoShape):
+	case errors.Is(err, gitproc.ErrDeadline):
+		return r.unready(code.UnreadyNodeFailed, fmt.Sprintf("%s's %s over repository %s ran its whole bound, "+
+			"which no healthy git node takes over it: %v; another git node answers", r.s.o.NodeID, what,
+			r.q.RepoID, err))
+	case errors.Is(err, gitproc.ErrRepoShape):
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s did not complete: %v; "+
 			"another git node answers meanwhile", r.s.o.NodeID, what, r.q.RepoID, err))
 	}

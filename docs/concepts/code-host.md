@@ -1302,14 +1302,17 @@ from such an answer:
 
 | Unready | What it means |
 |---|---|
-| `syncing` | the node's copy could not be brought to what the read needs within two seconds — a copy downloading the repository, whose download goes on after the read stops waiting — or a sync failed there, or a git process over the copy reported damage, which the cache is repairing |
-| `share` | the node's seats' git work holds its whole share of the read lane (below), and none came free within two seconds |
+| `syncing` | the node is bringing its copy up: it could not be brought to what the read needs within two seconds — a copy downloading the repository, whose download goes on after the read stops waiting — or a git process over the copy reported damage, which the cache is repairing, or a sync failed on what every git node's copy is filled from (the code log, the object store, the repository's rows, or a repair the cache will not repeat because reading them whole did not end the damage), which another node's download would only meet again |
+| `share` | the node holds its copy and is busy: its seats' git work holds its whole share of the read lane (below) and none came free within two seconds, or its read lane stayed busy for ten |
 | `no_chart` | a seat's read on a node holding no chart yet — at boot, before its first apply — which cannot judge a seat, as opposed to judging it has no access |
 | `behind_config` | a seat's read on a node confirmed behind the company's configuration (shed or stuck), which judges no seat's grant from the chart the fleet replaced |
+| `node_failed` | the node failed the read for a reason of its own — its sync of the repository failed with nothing the code log, the object store or the rows said (its disk refusing a write, its cache stopping), or one of the short checks of what the read names ran its whole bound, which no healthy node takes over a few object ids |
 | `not_held` | the node holds no copy of the repository and the read did not name it the one node of its walk that may fill one ([The home git node](#the-home-git-node)), so it started nothing |
 
 A person's read reads no chart, so neither `no_chart` nor `behind_config`
-applies to one.
+applies to one. Which of them a node gives decides more than the sentence: it
+tells the read's walk whether a copy is coming on that node, and so whether
+the next node may fill one ([The home git node](#the-home-git-node)).
 
 **Fresh enough by construction.** A read is answered from the copy as it
 stands, or brought to the reader's floor where it holds one; an object the copy
@@ -1359,15 +1362,44 @@ read waiting on its copy's sync never holds a slot the node answers its other
 estate requests through, and each is a signed estate request like any other.
 
 **One node fills a copy.** A git node that holds no copy of the repository
-starts a download of one only for the read that names it its walk's home —
-the first node of the order once those demotions are applied — and answers
-every other `not_held` at once, having started nothing, because a download
-once begun runs on after the read that started it stops waiting. So a read of
-a repository no git node holds costs the fleet one download, by its home,
-never one by every git node the read was asked of. When a home dies, its
-runner-up becomes the first node every walk asks and fills the one copy; a
-read in the seconds that takes is answered unavailable, as it would be by a
-cold home, and the copy serves every read after.
+starts a download of one only for the read that names it the one node of its
+walk that may fill — the home, the first node of the order once those
+demotions are applied — and answers every other `not_held` at once, having
+started nothing, because a download once begun runs on after the read that
+started it stops waiting. So a read of a repository no git node holds costs
+the fleet one download, by its home, never one by every git node the read was
+asked of. When a home dies, its runner-up becomes the first node every walk
+asks and fills the one copy; a read in the seconds that takes is answered
+unavailable, as it would be by a cold home, and the copy serves every read
+after.
+
+**The fill moves on past a home that will serve no copy.** A home that says
+no copy for the read is coming there hands the fill to the next node of the
+same walk, which starts a download of one and serves the repository's reads
+from it: a home behind the company's configuration, for a seat's read
+(`behind_config`) — however long a stuck node stays stuck — a home whose own
+sync failed for a reason of its own (`node_failed`), and a home with no code
+host. Kept on the home, a repository it alone held stayed unreadable to every
+seat for as long as the home stayed stuck, since the nodes after it hold none
+and fill nothing for a read not theirs. The home is not demoted for it: a
+person's read, which judges no chart, and the next walk still ask it first. A
+home that is bringing its copy up keeps the fill — still downloading or
+repairing it, its chart moments away at boot, or failing on the object store,
+the code log or damage a whole rebuild did not end, which another node's
+download would only meet again — so one walk never starts two downloads where
+one is coming.
+
+**A busy home keeps its repository's fill too.** A home at its share holds its
+copy and is only busy, and the share is the node's, spent by every repository
+it serves: handing the fill on for it would answer a fleet busy everywhere with
+a download of every repository read on each busy node, each evicting a warm
+copy to make the room, and add no capacity anywhere. So one repository's seat
+reads are served by the git nodes that hold a copy of it — its home, and any
+node a person's fetch, a push or an earlier fill has warmed — and a repository
+read harder than half of those nodes' read lanes is answered unavailable for
+the rest: give its git nodes more cores and a wider `git.max_processes`, which
+widens the share with the lane, or let a second git node hold a copy, as a
+person's fetch through it does.
 
 ## Which push landed a commit
 

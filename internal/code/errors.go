@@ -148,6 +148,10 @@ var (
 // copy now is the right node a moment later. Every other refusal of a read is about the
 // request or the repository (ErrNotPermitted, ErrObjectNotFound, …) and is the
 // answer wherever it is asked.
+//
+// ITS REASON CROSSES THE WIRE, because the walk acts on it: whether the one
+// node a walk lets fill a copy ([GitQuery.Home]) is still the one depends on
+// why that node did not answer ([UnreadyReason.PassesFill]).
 type ErrGitUnready struct {
 	// Reason is which of [UnreadyReasons] holds.
 	Reason UnreadyReason
@@ -164,16 +168,21 @@ func (e *ErrGitUnready) Error() string {
 type UnreadyReason string
 
 const (
-	// UnreadySyncing: the node's copy of the repository could not be
-	// brought to what the read needs inside its budget — a cold copy
-	// downloading the repository, which goes on under the cache's lifetime
-	// after the read stops waiting, or a sync that failed here — or a git
-	// process over the copy reported damage, which the cache repairs while
-	// another node answers.
+	// UnreadySyncing: the node is BRINGING ITS COPY UP and another node
+	// answers meanwhile — the copy could not be brought to what the read
+	// needs inside its budget (a cold copy downloading the repository, which
+	// goes on under the cache's lifetime after the read stops waiting), a
+	// git process over the copy reported damage the cache is repairing, or
+	// a sync failed on what EVERY node's fill of the repository reads — the
+	// code log, the object store, the repository's rows, or a repair the
+	// cache refuses to repeat because a whole read of them did not end the
+	// damage — which another node's fill would only meet again, and which a
+	// node already holding a copy may still answer around.
 	UnreadySyncing UnreadyReason = "syncing"
 	// UnreadyShare: the node's git capacity for seats' reads is spent — its
 	// seat git-work share ([GitShare]) held past [GitShareWait], or its read
-	// lane busy past gitproc.SlotWait.
+	// lane busy past gitproc.SlotWait. The node holds its copy, synced, and
+	// is only busy.
 	UnreadyShare UnreadyReason = "share"
 	// UnreadyNoChart: the read is a seat's, and the node holds no chart to
 	// judge a seat's grant by (no epoch installed yet: at boot, or before a
@@ -191,15 +200,57 @@ const (
 	// next node, rather than every node the walk reaches downloading the
 	// repository for a read one node answers.
 	UnreadyNotHeld UnreadyReason = "not_held"
+	// UnreadyNodeFailed: the node failed the read FOR A REASON OF ITS OWN,
+	// and nothing here is bringing a copy up for it — its sync of the
+	// repository failed on nothing the code log, the object store or the
+	// rows said (its disk refusing a write, its cache stopping), or one of
+	// the short checks of what the read names ran its whole bound, which no
+	// healthy node takes over a few ids. Another git node's fill may serve
+	// the read.
+	UnreadyNodeFailed UnreadyReason = "node_failed"
 )
 
 // UnreadyReasons is the closed set.
 func UnreadyReasons() []UnreadyReason {
-	return []UnreadyReason{UnreadySyncing, UnreadyShare, UnreadyNoChart, UnreadyBehindConfig, UnreadyNotHeld}
+	return []UnreadyReason{UnreadySyncing, UnreadyShare, UnreadyNoChart, UnreadyBehindConfig, UnreadyNotHeld,
+		UnreadyNodeFailed}
 }
 
 // Valid reports a reason this build knows.
 func (r UnreadyReason) Valid() bool { return slices.Contains(UnreadyReasons(), r) }
+
+// PassesFill reports whether a walk that met r at the node it let fill a copy
+// ([GitQuery.Home], ADR-0059) lets the NEXT node of its order fill one
+// instead. True where no copy that serves the read is coming on that node and
+// another node's fill may serve it: behind_config, which judges no seat until
+// the node's apply succeeds — however long a stuck node takes — and
+// node_failed, a failure of the node's own; and not_held, a node that fills
+// nothing (never the walk's filler, which is stamped home, so it moves
+// nothing). False where the node is bringing the copy up, or will in a moment:
+// syncing — filling, repairing, or failing on what any node's fill would meet,
+// so a second fill would only double the download — and no_chart, a node
+// between its boot and its first epoch, seconds from judging the read itself.
+//
+// AND FALSE FOR share, a node that holds its copy and is only busy: the share
+// is the NODE'S, spent by every repository it serves, so a home at its share
+// says nothing about the repository the walk asks for — passing the fill for
+// it would answer a fleet busy everywhere with a download of every repository
+// read on each busy node, each evicting a warm one to make the room, and add
+// no capacity anywhere. So one repository's seat reads are served by the git
+// nodes holding a copy of it: its home, and any node a person's fetch, a push
+// or an earlier fill has warmed — a ceiling ADR-0059 states.
+//
+// AN UNKNOWN REASON PASSES NOTHING — a newer build's, read by this one — so
+// the walk keeps its filler where it was, as every walk did before the
+// reason crossed the wire: an older asker never starts a second download for
+// a reason it cannot read.
+func (r UnreadyReason) PassesFill() bool {
+	switch r {
+	case UnreadyBehindConfig, UnreadyNodeFailed, UnreadyNotHeld:
+		return true
+	}
+	return false
+}
 
 // TooWideError is a push whose entry can reach Bytes in its record, past the
 // Room one push's entry may take ([EntryRoom]) — [ErrInvalidProposal] by

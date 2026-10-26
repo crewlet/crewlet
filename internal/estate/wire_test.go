@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -396,6 +397,11 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 		"a copy out of service": {
 			value: reply{Node: "data-a", Request: "r-1", Unserved: unservedOutOfService, Detail: "wrong"},
 			want:  `{"node":"data-a","request":"r-1","unserved":"out_of_service","detail":"wrong"}`,
+		},
+		"a git node that cannot answer": {
+			value: reply{Node: "git-a", Request: "r-5", Unserved: unservedBehind, Detail: "syncing",
+				Unready: code.UnreadySyncing},
+			want: `{"node":"git-a","request":"r-5","unserved":"behind","detail":"syncing","unready":"syncing"}`,
 		},
 	} {
 		raw, err := json.Marshal(tc.value)

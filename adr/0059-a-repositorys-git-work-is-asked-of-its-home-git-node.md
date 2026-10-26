@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/estate`
-- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
+- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`, `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`, `internal/code.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`, `internal/code/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
 - **Measured:** `BenchmarkCodeRead` (`internal/code/query`), once over a 32 MB history of 14 080 commits under a 10 000-file tree on git 2.56.0: every kind a warm home answers in 3–231 ms, more than an order of magnitude inside its 10 s read deadline, and a node holding no copy, asked as the home, syncs the repository whole and answers in 118 ms from the in-process store, 604 ms from the S3 fake answering every request 100 ms late and 1.1 s at 200 ms — so the 17 s attempt a router gives a git read is a sum of whole budgets, never a figure a healthy home approaches
 - **Cost-when-tried:** not tried here: before this record no seat read a repository server-side at all. The cost it avoids is the one the cold sync measures — 1.4 s for a repository of two hundred pushes and 13.4–13.8 s for one of two thousand against an object store answering every request 100 ms late — paid on whichever git node a read landed on, and on every one of them over time
 - **Tag-status:** unreleased
@@ -21,16 +21,25 @@ ownership: no lease and no epoch, and two nodes that both believe they are home 
 read.
 
 A git node that cannot answer inside its budget for a reason about ITSELF — its copy still syncing, its share
-of the read lane full, no chart or a configuration behind the fleet's to judge a seat by — answers `behind`
-and is not demoted, so its askers move on and come back once it is warm. ONE node a walk FILLS a copy: the
-walk stamps the attempt it makes of its effective home (its first node after the demotions,
-`code.GitQuery.Home`), and every other git node that holds no copy answers at once that it holds none
-(`not_held`) having started nothing — so a read of a repository nobody holds costs the fleet one download,
-never one a git node. Such an operation names the git half rather than a domain's copy (`GitCopy`), so no
-copy verdict, no dispatch floor and no lag gate holds it back: its floor travels in its arguments and is the
-cache's sync level. It is answered on a lane of its own, which a git node registers from boot and answers
-`no_backend` on until its code host is built, and every request on it is a signed estate request like any
-other.
+of the read lane full, no chart or a configuration behind the fleet's to judge a seat by, a failure of its
+own — answers `behind` with that reason beside it (`behind_config` where it is the node's configuration, the
+node's posture as every operation says it) and is not demoted, so its askers move on and come back once it
+is warm. ONE node a walk FILLS a copy at a time: the walk stamps the attempt it makes of its effective home
+(its first node after the demotions, `code.GitQuery.Home`), and every other git node that holds no copy
+answers at once that it holds none (`not_held`) having started nothing — so a read of a repository nobody
+holds costs the fleet one download, never one a git node. The fill moves on to the next node of the same
+walk only past a node bringing no copy up for the read — behind its configuration for a seat's read, a
+failure of its own, no code host (`code.UnreadyReason.PassesFill`) — and never past one that may be
+filling: a home kept as the walk's one filler while it served no seat left a repository it alone held
+unreadable to every seat for as long as it stayed stuck. Nor past a home at its share, which holds its copy
+and is only busy: the share is the NODE'S, spent by every repository it serves, and passed on for it the
+fill would answer a fleet busy everywhere with a download on each busy node and no capacity added. So one
+repository's seat reads are served by the git nodes that hold a copy of it — its home, and any node a
+person's fetch, a push or an earlier fill has warmed — and are bounded by those nodes' shares. Such an
+operation names the git half rather than a domain's copy (`GitCopy`), so no copy verdict, no dispatch floor
+and no lag gate holds it back: its floor travels in its arguments and is the cache's sync level. It is
+answered on a lane of its own, which a git node registers from boot and answers `no_backend` on until its
+code host is built, and every request on it is a signed estate request like any other.
 
 ## Why the obvious alternative is wrong
 

@@ -265,13 +265,18 @@
 // boot or at the first apply that hosts code) — on a lane of its own
 // ([laneGitReads]) a git node registers from boot. The home is a preference,
 // never ownership: no lease, no epoch. A git node that cannot answer inside
-// its budget — its copy still syncing, its share full — answers `behind` and
-// is not demoted, so its askers come back once it is warm; and ONE node a
-// walk FILLS a copy: the walk stamps its effective home's attempt
-// (code.GitQuery.Home), and every other git node holding no copy answers at
-// once that it holds none, so a repository nobody holds costs the fleet one
-// download rather than one a git node. Every git request is a signed estate
-// request like any other.
+// its budget — its copy still syncing, its share full — answers `behind`,
+// its reason beside it ([reply.Unready]), and is not demoted, so its askers
+// come back once it is warm; and ONE node a walk FILLS a copy at a time: the
+// walk stamps its effective home's attempt (code.GitQuery.Home), and every
+// other git node holding no copy answers at once that it holds none, so a
+// repository nobody holds costs the fleet one download rather than one a git
+// node. The fill moves to the next node of the walk only past one bringing no
+// copy up for the read — behind its configuration for a seat, failing on its
+// own, no code host — so a home that will not serve a read for a reason that
+// lasts never leaves its repository unreadable ([Router.routeGit]); a home at
+// its share keeps it, since the share is the node's and not the repository's.
+// Every git request is a signed estate request like any other.
 //
 // [Router.Home] names that home itself, for work that is a repository's home's
 // own rather than a read the walk routes: the first node of the same

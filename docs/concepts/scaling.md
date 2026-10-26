@@ -185,12 +185,21 @@ nodes rather than of whichever node asks it: the repository's home first, the
 first of its rendezvous order over the live git nodes, then its runner-up
 ([The home git node](code-host.md#the-home-git-node)). So the reads of one
 repository meet on one git node's cache wherever they come from, with no
-balancer to configure, and only the walk's home ever starts a download of a
-repository it holds no copy of: a home's death costs the fleet one download of
-each repository read meanwhile, by its runner-up, rather than one on every git
-node a read reached. On each git node those reads hold at most half its read
+balancer to configure, and one node a walk at a time starts a download of a
+repository it holds no copy of — the home, or its runner-up where the home
+says no copy is coming there (behind the company's configuration for a seat,
+or failing on its own): a home's death, or a home stuck behind a revision,
+costs the fleet one download of each repository read meanwhile, by its
+runner-up, rather than one on every git node a read reached — or a repository
+nobody can read until the home recovers. On each git node those reads hold at most half its read
 lane, so the other half stays the one a person's push scans in
 ([Server-side reads](code-host.md#server-side-reads)).
+And one repository's seat reads are served by the git nodes that hold a copy
+of it, which bounds them by those nodes' shares: a home at its share sends the
+rest on to them rather than starting another copy, because the share is the
+node's, spent by every repository it serves, and a fleet busy everywhere would
+answer every such read with a download
+([The home git node](code-host.md#the-home-git-node)).
 
 **What a request on a cold node costs.** A request on a node that holds no copy
 of its repository — one that just joined, or whose budget evicted it — waits for

@@ -663,10 +663,13 @@ type GitQuery struct {
 	// Opaque to the asker, and refused [ErrBadCursor] where it is not one the
 	// kind issues.
 	Cursor string `json:"cursor,omitempty"`
-	// Home is set on the one attempt of a walk asked of its EFFECTIVE HOME —
-	// the first git node of the repository's order once the walk's demotions
-	// are applied (ADR-0059) — and on no other: the one node a walk lets FILL
-	// a copy it does not hold. A git node holding no copy of the repository
+	// Home is set on the attempt a walk makes of the ONE node it lets FILL a
+	// copy it does not hold (ADR-0059): its EFFECTIVE HOME — the first git
+	// node of the repository's order once the walk's demotions are applied —
+	// and, only where that node answered that no copy serving the read is
+	// coming there ([UnreadyReason.PassesFill]: behind its configuration, a
+	// failure of its own, no code host), the next node of the order in its
+	// place; never two at once. A git node holding no copy of the repository
 	// answers a read without it [ErrGitUnready]{[UnreadyNotHeld]} at once,
 	// having started nothing, because a cold round runs on under the cache's
 	// own lifetime after its read stops waiting: with every node free to
