@@ -79,3 +79,10 @@ func (p Placement) Valid() bool {
 // what decides whether a run can reach the operator's subscription login, and
 // what an operator has to think about before enabling it on a shared host.
 func (p Placement) OnEngineHost() bool { return p == Direct || p == Container }
+
+// SharesHostNetwork reports whether a box in this cell is on the engine host's
+// own network, so that it dials the engine on the host's loopback and its
+// calls arrive from there. Only `direct` is: a container has a loopback of its
+// own and reaches the host through its runtime's gateway ([EngineAddress]),
+// and a remote box reaches it from another machine.
+func (p Placement) SharesHostNetwork() bool { return p == Direct }

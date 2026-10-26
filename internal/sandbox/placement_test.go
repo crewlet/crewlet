@@ -291,3 +291,18 @@ func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
 		t.Fatalf("reconnected to %q, want %q", box.ID(), res.SandboxID)
 	}
 }
+
+// ONLY A DIRECT BOX DIALS THE ENGINE FROM THE HOST'S LOOPBACK. A session held
+// to loopback ([mcpbridge.Session.Loopback]) refuses every call that arrives
+// from anywhere else, and a container's calls reach the engine through its
+// runtime's gateway: a containerised deep-work run held to loopback had every
+// tool call refused on a Linux host. Being on the engine host is not the same
+// fact as being on its network.
+func TestOnlyADirectBoxSharesTheEngineHostsNetwork(t *testing.T) {
+	t.Parallel()
+	for _, p := range Placements {
+		if got, want := p.SharesHostNetwork(), p == Direct; got != want {
+			t.Errorf("%s.SharesHostNetwork() = %v, want %v", p, got, want)
+		}
+	}
+}

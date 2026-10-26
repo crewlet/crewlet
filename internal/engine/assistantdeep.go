@@ -289,7 +289,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	endpoint := d.e.bridge.Open(ctx, &mcpbridge.Session{
 		RunID: r.ID, Launch: uuid.NewString(), Handle: "assistant",
 		Role: "Dashboard Assistant deep work", Surface: r.Surface, Caller: assistantRunAs{},
-		TTL: r.Timeout + deepGrace, Loopback: placement.OnEngineHost() && d.e.bridge.LoopbackBase(),
+		TTL: r.Timeout + deepGrace, Loopback: placement.SharesHostNetwork() && d.e.bridge.LoopbackBase(),
 	})
 	if endpoint == "" {
 		return assistant.DeepOutcome{}, fmt.Errorf("the tool bridge opened no session for "+
