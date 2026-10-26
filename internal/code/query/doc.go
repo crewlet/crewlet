@@ -130,26 +130,36 @@
 //
 // # Measured
 //
-// BenchmarkCodeRead over gittest.History's 32 MB composition (about 2 800
-// files and 13 000 commits, pushed a session at a time, plus a 3 MB file of
-// 60 000 lines), five reads of each kind (-benchtime 5x, one count), git
-// 2.56.0 on four cores of a Core Ultra 7 265U, the copy warm on the node that
-// took the pushes: the root's listing 5.2 ms (the slowest of five 5.7), the
-// whole tree's first page 5.1 ms (6.1), the 3 MB file's first page 9.7 ms
-// (10.3) and its fiftieth 10.0 ms (10.4) — each streams the whole file to
-// count its lines — the stat of one session's pushes 5.3 ms (6.0), one file's
-// patch from it 8.4 ms (9.2), and a comparison of the history's middle with its
-// tip 75 ms (75), its two walks over half the history's commits; and the root's listing
-// on a node emptied first, which syncs the repository whole from the
-// in-process store before it answers, 104 ms (111), never unready. So every
-// warm kind is two orders of magnitude inside gitproc.ReadDeadline, the
-// comparison's walk is what grows with a history, and code.GitShareWait keeps
-// its two-second floor.
+// BenchmarkCodeRead over gittest.History's 32 MB composition — 44 files of one
+// directory, every one rewritten in each of its 64 sessions, 14 080 commits
+// pushed a session at a time — under a tree of 10 000 files of forty lines, a
+// hundred to a directory, beside a 3 MB file of 60 000 lines (67 packs in
+// all), five reads of each kind (-benchtime 5x, one count), git 2.56.0 on two
+// E-cores of a Core Ultra 7 265U, the copy warm on the node that took the
+// pushes, each the p50 and, in brackets, the slowest of five: the root's
+// listing 3.1 ms (3.4); the whole tree's first page 26 ms (26) and a page nine
+// tenths of the way through it 25 ms (26) — each lists the whole tree for its
+// Total and looks up the size of every file in it, so a listing costs its
+// tree, whatever page it is; the 3 MB file's first page 7.0 ms (7.4) and its
+// fiftieth 7.2 ms (8.0) — each streams the whole file to count its lines; the
+// stat of one session's pushes 4.1 ms (4.6); the stat of an edit across all
+// 10 000 files 227 ms (231), and of the same edit filtered to one directory of
+// a hundred 21 ms (22) — the walk of the two trees, and diff-pairs counting
+// that directory's files alone; one file's patch from that edit 15 ms (15);
+// and a comparison of the history's middle with its tip 13 ms (14), its two
+// walks over half the history's commits. The root's listing on a node emptied
+// first, which downloads the repository's 67 packs before it answers, took
+// 118 ms (191) from the in-process store, never unready. So every warm
+// kind is more than an order of magnitude inside gitproc.ReadDeadline; what
+// grows is a listing with its tree, a stat with the files it counts and a
+// comparison with the history it walks; and code.GitShareWait keeps its
+// two-second floor.
 //
-// BenchmarkLandedIn over the same composition (14 080 commits) with a branch
-// moved through it 2 000 times by pushes, the commit asked about landed 1 000
-// moves ago, five reads of each arm on the same machine, the copy of a node
-// that read the repository whole and so wrote its commit-graph at once: a
+// BenchmarkLandedIn over gittest.History's same 32 MB composition (14 080
+// commits, nothing on top) with a branch moved through it 2 000 times by
+// pushes, the commit asked about landed 1 000 moves ago, five reads of each
+// arm, git 2.56.0 on four cores of the same Core Ultra 7 265U, the copy of a
+// node that read the repository whole and so wrote its commit-graph at once: a
 // landed-in read of a branch never forced takes 32 ms and 11 checks, one
 // forced three times since 56 ms and 17, and one forced 66 times 284 ms and
 // all MaxLandedProbes, answered with how far it reached — 2.6 to 4.4 ms a

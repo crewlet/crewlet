@@ -1,9 +1,9 @@
 package query_test
 
 import (
+	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -19,39 +19,45 @@ import (
 
 // BenchmarkCodeRead is a seat's read by object id, timed whole through a git
 // node's query server — its sync at the copy as it stands, the check of what
-// it names, its unit of the share and its kind's git — over gittest.History's
-// composition pushed a session at a time, as a repository of that history
-// comes to a host:
+// it names, its unit of the share and its kind's git — over a repository that
+// came to a host as one does: gittest.History pushed a session at a time, then
+// a push of a 3 MB file of lines, a push adding a WIDE TREE of small files of
+// lines under src/, a hundred to a directory, and a push editing one line in
+// wideEdits of them, spread over every directory:
 //
-//   - history=32MB is about 2 800 files in sixty directories and 13 000
-//     commits; history=1GB, about 85 000 files and 400 000 commits, runs only
-//     under CREWLET_BENCH_LARGE.
-//   - kind is the read: the root's listing, the whole tree's first page
-//     (recursive), a file's first page and its fiftieth (a 3 MB file of
-//     lines added on top), the stat of one session's pushes — what a
-//     pull request of that size diffs — one file's patch from it, and a
-//     comparison of the history's middle with its tip.
+//   - history=32MB is gittest.History's 32 MB composition — 44 files of one
+//     directory, every one rewritten in every session, over 14 080 commits —
+//     under the 10 000-file tree, every file of which the edit changes;
+//     history=1GB — 1 421 files in thirty directories over 455 680 commits —
+//     under the 100 000-file tree, every tenth file of which the edit
+//     changes, runs only under CREWLET_BENCH_LARGE.
+//   - kind is the read: the root's listing; the whole tree's listing at its
+//     first page and at a page nine tenths of the way through it (recursive:
+//     git lists the whole tree for its Total on every page, and looks up the
+//     size of every file in it); a file's first page and its fiftieth; the
+//     stat of one session's pushes — what a pull request of that size diffs;
+//     the stat of the wide edit, whole and filtered to one of its
+//     directories, and one file's patch from it; and a comparison of the
+//     history's middle with its tip.
 //   - cache=warm reads the node that took the pushes, its copy current;
 //     cache=cold reads a git node emptied before every iteration, whose first
 //     read waits statelog.ReadBudget on the download and answers what it can.
 //
 // Each warm arm reports the p50, p95 and p99 of one read; the cold arm the
-// time to its answer and the share of answers unready. The figures decide
+// time to its answer and the share of answers unready, and fails a read
+// answered past statelog.ReadBudget and its margin. The figures decide
 // code.GitShareWait — max(2 s, the slowest warm kind's p95 rounded up to a
 // second), under gitproc.ReadDeadline/4 — and confirm the read deadline's
 // terms (a warm read well inside gitproc.ReadDeadline, a cold one answered
 // inside statelog.ReadBudget and its margin).
 func BenchmarkCodeRead(b *testing.B) {
 	codetest.Quiet(b)
-	for _, size := range []struct {
-		name  string
-		bytes int64
-	}{{"32MB", 32 << 20}, {"1GB", 1 << 30}} {
+	for _, size := range readSizes {
 		b.Run("history="+size.name, func(b *testing.B) {
-			if size.name == "1GB" {
-				gittest.Large(b, "a 1 GB history fast-imported and pushed a session at a time")
+			if size.large {
+				gittest.Large(b, "a 1 GB history under a 100 000-file tree, fast-imported and pushed a session at a time")
 			}
-			r := newReadRig(b, size.bytes)
+			r := newReadRig(b, newReadSource(b, size))
 			for _, k := range r.kinds(b) {
 				b.Run("kind="+k.name+"/cache=warm", func(b *testing.B) { r.warm(b, k.q) })
 			}
@@ -60,46 +66,163 @@ func BenchmarkCodeRead(b *testing.B) {
 	}
 }
 
-// readRig is BenchmarkCodeRead's fixture: a fleet of two git nodes holding a
-// history, its commits, and a query server over the first node.
-type readRig struct {
-	f       *codetest.SoloFleet
-	repo    string
-	commits []string
-	tip     string
-	s       *query.Server
+// readSize is one history= arm: a gittest.History of about history bytes
+// under a wide tree of files files.
+type readSize struct {
+	name    string
+	history int64
+	files   int
+	// large arms run only under gittest.LargeEnv.
+	large bool
 }
 
-// bigLines is the lines of the file a page-50 read pages through: about
-// 3 MB, so its fiftieth 56 KiB page is near its end.
-const bigLines = 60_000
+// readSizes are the history= arms, their trees as wide as
+// internal/code/host's tree fixture's: its 10 000 files, and the 100 000 of
+// its large arm.
+var readSizes = []readSize{
+	{name: "32MB", history: 32 << 20, files: 10_000},
+	{name: "1GB", history: 1 << 30, files: 100_000, large: true},
+}
 
-func newReadRig(b *testing.B, size int64) *readRig {
+const (
+	// bigLines is the lines of the file a page-50 read pages through: about
+	// 3 MB, so its fiftieth 56 KiB page is near its end.
+	bigLines = 60_000
+	// wideDirFiles is how many files a directory of the wide tree holds: a
+	// hundred, as internal/code/host's tree fixture's directories do.
+	wideDirFiles = 100
+	// wideLines is how many lines a file of the wide tree holds: forty, about
+	// two kilobytes, a source file's size.
+	wideLines = 40
+	// wideEdits is how many files the wide edit changes, spread over every
+	// directory: ten thousand — a formatter run over the whole 10 000-file
+	// tree, and the same count of the 100 000-file one, so both arms' whole
+	// stats price one diff of that width while the filtered one prices the
+	// directory it names.
+	wideEdits = 10_000
+	// readIdent is every commit the rig makes on top of its history: the
+	// committer gittest.History's own commits name.
+	readIdent = "Crewlet Bench <bench@example.com>"
+)
+
+// widePath is the path of the wide tree's f-th file.
+func widePath(f int) string { return fmt.Sprintf("%s/f%06d.txt", wideDir(f/wideDirFiles), f) }
+
+// wideDir is the path of the wide tree's d-th directory.
+func wideDir(d int) string { return fmt.Sprintf("src/w%04d", d) }
+
+// wideFile is the wide tree's f-th file, before the edit or after it: the
+// edit rewrites its middle line.
+func wideFile(f int, edited bool) string {
+	var b strings.Builder
+	for i := range wideLines {
+		if edited && i == wideLines/2 {
+			fmt.Fprintf(&b, "%06d %02d the quick brown fox was edited\n", f, i)
+			continue
+		}
+		fmt.Fprintf(&b, "%06d %02d the quick brown fox jumps over the lazy dog\n", f, i)
+	}
+	return b.String()
+}
+
+// readSource is the repository every rig of one history= arm pushes: a
+// gittest.History, and the three commits on top of it.
+type readSource struct {
+	dir string
+	// commits is the history's, oldest first.
+	commits []string
+	// big, wide and edit are the commits on top of it: big.txt, the wide
+	// tree, and the edit across it — edit the repository's tip.
+	big, wide, edit string
+	files           int
+}
+
+// newReadSource fast-imports size's history and the three commits on top of
+// it into a repository the engine's way.
+func newReadSource(b *testing.B, size readSize) *readSource {
+	b.Helper()
+	c := gittest.NewClient(b)
+	src, commits := gittest.History(b, c, size.history)
+	gittest.FastImport(b, c, src, readTops(commits, size.files))
+	tops := strings.Fields(c.Run(b, src, "rev-list", "--reverse", commits[len(commits)-1]+"..main"))
+	if len(tops) != 3 {
+		b.Fatalf("the history took %d commits on top, want big.txt, the wide tree and its edit", len(tops))
+	}
+	return &readSource{dir: src, commits: commits, big: tops[0], wide: tops[1], edit: tops[2], files: size.files}
+}
+
+// readTops is the fast-import stream of the three commits on top of a
+// History of commits: big.txt, the wide tree of files files, and the edit of
+// wideEdits of them — each dated a second after the one before it, as a
+// History's own commits are, so no walk by date reads the history as skewed
+// (gittest.After).
+func readTops(commits []string, files int) func(*bufio.Writer) error {
+	return func(w *bufio.Writer) error {
+		commit := func(n int, msg string) {
+			fmt.Fprintf(w, "commit refs/heads/main\ncommitter %s %s\ndata %d\n%s", readIdent,
+				strings.TrimPrefix(gittest.After(commits, n), "@"), len(msg), msg)
+			if n == 0 {
+				// A session's first commit names where main is: fast-import
+				// starts every session with no branch of its own.
+				_, _ = w.WriteString("from refs/heads/main^0\n")
+			}
+		}
+		file := func(path, content string) {
+			fmt.Fprintf(w, "M 100644 inline %s\ndata %d\n%s\n", path, len(content), content)
+		}
+		commit(0, "big\n")
+		var big strings.Builder
+		for i := range bigLines {
+			fmt.Fprintf(&big, "%06d the quick brown fox jumps over the lazy dog\n", i)
+		}
+		file("big.txt", big.String())
+		_ = w.WriteByte('\n')
+		commit(1, "a wide tree\n")
+		for f := range files {
+			file(widePath(f), wideFile(f, false))
+		}
+		_ = w.WriteByte('\n')
+		commit(2, "an edit across the wide tree\n")
+		for f := 0; f < files; f += max(1, files/wideEdits) {
+			file(widePath(f), wideFile(f, true))
+		}
+		// bufio's error is sticky: the last write reports any before it.
+		return w.WriteByte('\n')
+	}
+}
+
+// readRig is BenchmarkCodeRead's fixture: a fleet of two git nodes holding a
+// source's repository, and a query server over the first node.
+type readRig struct {
+	f    *codetest.SoloFleet
+	src  *readSource
+	repo string
+	s    *query.Server
+}
+
+// readCacheBytes is every rig's git node's cache budget: room for the
+// largest repository an arm builds, the gigabyte history under the 100 000-file
+// tree, twice over, so no figure is of a repository the budget evicted
+// between iterations — internal/code/host's benchmarks' budget.
+const readCacheBytes = 4 << 30
+
+// newReadRig is a fleet holding src's repository, pushed as a host takes one:
+// the history a session at a time, then each commit on top of it.
+func newReadRig(b *testing.B, src *readSource) *readRig {
 	b.Helper()
 	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, People: []string{"ceo"},
-		SyncAlways: true})
+		CacheMaxBytes: readCacheBytes, SyncAlways: true})
 	f.Declare(b, code.Declared{Name: codetest.RepoName, Settings: codetest.Settings()})
 	p := codetest.NewPerson(b, f, "ceo")
-	src, commits := gittest.History(b, p.Git(), size)
 	url := f.Nodes()[0].URL() + "/git/" + codetest.RepoName
+	pushes := make([]string, 0, gittest.HistorySessions+3)
 	for s := 1; s <= gittest.HistorySessions; s++ {
-		if res := p.Push(b.Context(), src, url, commits[s*len(commits)/gittest.HistorySessions-1]+
-			":refs/heads/main"); res.Err != nil {
+		pushes = append(pushes, src.commits[s*len(src.commits)/gittest.HistorySessions-1])
+	}
+	for _, commit := range append(pushes, src.big, src.wide, src.edit) {
+		if res := p.Push(b.Context(), src.dir, url, commit+":refs/heads/main"); res.Err != nil {
 			b.Fatalf("git push: %s", res)
 		}
-	}
-	work := filepath.Join(b.TempDir(), "work")
-	p.Git().Run(b, "", "clone", "--quiet", src, work)
-	if err := os.RemoveAll(src); err != nil {
-		b.Fatal(err)
-	}
-	var big strings.Builder
-	for i := range bigLines {
-		fmt.Fprintf(&big, "%06d the quick brown fox jumps over the lazy dog\n", i)
-	}
-	tip := p.Commit(work, map[string]string{"big.txt": big.String()}, "big")
-	if res := p.Push(b.Context(), work, url, "main"); res.Err != nil {
-		b.Fatalf("git push: %s", res)
 	}
 	rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
 	if err != nil {
@@ -112,8 +235,9 @@ func newReadRig(b *testing.B, size int64) *readRig {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Logf("the pools run git %s; %d commits in %d packs", n.Pool().Version(), len(commits)+1, len(rows.Packs))
-	return &readRig{f: f, repo: rows.Repo.ID, commits: commits, tip: tip, s: s}
+	b.Logf("the pools run git %s; %d commits in %d packs, a tree of %d files", n.Pool().Version(),
+		len(src.commits)+3, len(rows.Packs), src.files)
+	return &readRig{f: f, src: src, repo: rows.Repo.ID, s: s}
 }
 
 // kind is one warm arm's read.
@@ -122,8 +246,7 @@ type kind struct {
 	q    code.GitQuery
 }
 
-// kinds is every warm arm's read, its cursors and paths read off the history
-// first.
+// kinds is every warm arm's read, its cursors read off the repository first.
 func (r *readRig) kinds(b *testing.B) []kind {
 	b.Helper()
 	ctx := b.Context()
@@ -137,21 +260,31 @@ func (r *readRig) kinds(b *testing.B) []kind {
 		}
 		return q
 	}
-	session := r.commits[len(r.commits)-len(r.commits)/gittest.HistorySessions-1]
-	last := r.commits[len(r.commits)-1]
-	stat, err := r.s.Read(ctx, diffQ(r.repo, code.DiffQuery{Base: session, Head: last}))
-	if err != nil || len(stat.Diff.Files) == 0 {
-		b.Fatalf("the session's stat: %v", err)
+	tip, commits := r.src.edit, r.src.commits
+	whole := treeQ(r.repo, code.TreeQuery{Rev: tip, Recursive: true})
+	listing, err := r.s.Read(ctx, whole)
+	if err != nil || listing.Next == "" {
+		b.Fatalf("the whole tree's first page: %v (next %q), want a listing of pages", err, listing.Next)
 	}
-	file := slices.MaxFunc(stat.Diff.Files, func(a, c code.DiffFile) int { return a.Added - c.Added }).Path
+	// A CURSOR IS A POSITION IN THE LISTING (e:<entry>), the same on every
+	// node: a page nine tenths of the way through it is asked as one.
+	late := whole
+	late.Cursor = fmt.Sprintf("e:%d", listing.Tree.Total*9/10)
+	session := commits[len(commits)-len(commits)/gittest.HistorySessions-1]
+	last := commits[len(commits)-1]
 	return []kind{
-		{"tree-root", treeQ(r.repo, code.TreeQuery{Rev: r.tip})},
-		{"tree-recursive", treeQ(r.repo, code.TreeQuery{Rev: r.tip, Recursive: true})},
-		{"blob-first-page", blobQ(r.repo, code.BlobQuery{Rev: r.tip, Path: "big.txt"})},
-		{"blob-page-50", page(blobQ(r.repo, code.BlobQuery{Rev: r.tip, Path: "big.txt"}), 50)},
+		{"tree-root", treeQ(r.repo, code.TreeQuery{Rev: tip})},
+		{"tree-recursive", whole},
+		{"tree-recursive-late", late},
+		{"blob-first-page", blobQ(r.repo, code.BlobQuery{Rev: tip, Path: "big.txt"})},
+		{"blob-page-50", page(blobQ(r.repo, code.BlobQuery{Rev: tip, Path: "big.txt"}), 50)},
 		{"diff-stat", diffQ(r.repo, code.DiffQuery{Base: session, Head: last})},
-		{"diff-one-file", diffQ(r.repo, code.DiffQuery{Base: session, Head: last, File: file})},
-		{"compare", compareQ(r.repo, r.commits[len(r.commits)/2], last)},
+		{"diff-stat-wide", diffQ(r.repo, code.DiffQuery{Base: r.src.wide, Head: tip})},
+		{"diff-stat-wide-dir", diffQ(r.repo, code.DiffQuery{Base: r.src.wide, Head: tip,
+			Paths: []string{wideDir(0)}})},
+		{"diff-one-file", diffQ(r.repo, code.DiffQuery{Base: r.src.wide, Head: tip,
+			File: widePath(r.src.files / 2)})},
+		{"compare", compareQ(r.repo, commits[len(commits)/2], last)},
 	}
 }
 
@@ -191,7 +324,7 @@ func (r *readRig) cold(b *testing.B) {
 		}
 		b.StartTimer()
 		start := time.Now()
-		_, err = s.Read(b.Context(), treeQ(r.repo, code.TreeQuery{Rev: r.tip}))
+		_, err = s.Read(b.Context(), treeQ(r.repo, code.TreeQuery{Rev: r.src.edit}))
 		took = append(took, time.Since(start))
 		switch {
 		case unready(err, code.UnreadySyncing):

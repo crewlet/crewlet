@@ -742,8 +742,9 @@ whose fixture takes minutes and gigabytes — in `internal/code/cache` a cold
 sync of 2 000 pushes, repositories of 10 000 packs, a 5 GB index, a gigabyte
 split into hundreds of packs; in `internal/code/host` a gigabyte history, a
 hundred thousand refs and a 100 000-file tree; in `internal/code/query` a
-gigabyte history read by object id; in `internal/jsapi` streams of a million
-and of three million subjects — skip unless `CREWLET_BENCH_LARGE=1`.
+gigabyte history under a 100 000-file tree read by object id; in
+`internal/jsapi` streams of a million and of three million subjects — skip
+unless `CREWLET_BENCH_LARGE=1`.
 
 A code host figure is the pool's git's as much as the engine's, so `make bench`
 runs the node pin — the git the engine image builds — first on `PATH`, as every

@@ -618,14 +618,14 @@ const ScrubCooldown = time.Hour
 // 32 (M3-decisions M3-O22's provisional value, which the measure keeps): the
 // largest of {8, 16, 32, 64} at which a lookup that misses — every run
 // searched — costs under 1% of a warm tree read, the answer it decorates:
-// BenchmarkCodeRead's warm p50 listing is 5.2 ms (the query package's
-// Measured section), so 52 µs. BenchmarkProvenance's lookup arm, over four
-// million commits — 96 MB of commit records, past the last-level cache at
-// every run count — missed in 0.54 µs at one run, 3.7 at 8, 15.5 at 32 and
-// 29.8 at 64. The large model's 18 million pushes, some 54 million commits,
-// make each run's binary search about four steps deeper, every one a miss
-// to memory at about 100 ns: some 27 µs at 32 runs and 55 µs at 64, the
-// first under the bound and the second past it — an extrapolation of the
+// BenchmarkCodeRead's warm p50 listing of a root is 3.1 ms (the query
+// package's Measured section), so 31 µs. BenchmarkProvenance's lookup arm,
+// over four million commits — 96 MB of commit records, past the last-level
+// cache at every run count — missed in 0.54 µs at one run, 3.7 at 8, 15.5 at
+// 32 and 29.8 at 64. The large model's 18 million pushes, some 54 million
+// commits, make each run's binary search about four steps deeper, every one
+// a miss to memory at about 100 ns: some 27 µs at 32 runs and 55 µs at 64,
+// the first under the bound and the second past it — an extrapolation of the
 // measured arm, not a measure of that index. Geometric merging keeps
 // O(log n) runs — about 25 for that index — so the bound is reached only
 // while the backfill lags a burst of deltas.

@@ -759,13 +759,18 @@ const (
 	// (2.5 s), so a read waiting behind one other read of the slowest kind
 	// still gets its unit while a saturated node gives its askers up well
 	// inside what one read may take. MEASURED by internal/code/query's
-	// BenchmarkCodeRead over its 32 MB history (five reads of each kind,
-	// -benchtime 5x, one count, git 2.56.0 on four cores of a Core Ultra 7
-	// 265U): every warm kind answered in 5–10 ms but the comparison of the
-	// history's middle with its tip, 75 ms — so the slowest p95 rounds up to
-	// one second and the floor holds. Its 1 GB arm (CREWLET_BENCH_LARGE, a
-	// hundred times the commits a comparison walks) is the one that can move
-	// it. Declared here, beside the share that waits it ([GitShare.Take]),
+	// BenchmarkCodeRead over its 32 MB history — gittest.History's 44 files
+	// and 14 080 commits — under a 10 000-file tree (five reads of each kind,
+	// -benchtime 5x, one count, git 2.56.0 on two E-cores of a Core Ultra 7
+	// 265U): the slowest warm kind is the stat of an edit across all 10 000
+	// files, 231 ms at its p95, beside 26 ms for the whole tree's listing at
+	// any of its pages, 22 ms for that edit's stat filtered to one directory
+	// and 14 ms for a comparison over half the history's commits — so the
+	// slowest p95 rounds up to one second and the floor holds. Its 1 GB arm
+	// (CREWLET_BENCH_LARGE: 455 680 commits, thirty-two times the commits a
+	// comparison walks, under a 100 000-file tree, ten times the files a
+	// listing lists) is the one that can move it.
+	// Declared here, beside the share that waits it ([GitShare.Take]),
 	// because everything that bounds a git read's whole attempt reads it from
 	// the package every party to a read imports.
 	GitShareWait = 2 * time.Second

@@ -1447,7 +1447,7 @@ store in the process, 4.2 ms) and 1.8% of one whose pack comes from a store
 answering in 30 ms (68 ms). The index holds about 64 bytes for each commit a
 push introduced — about 190 bytes for a push of three commits — inside the
 cache's budget. A lookup that misses, every run searched, is 15.5 µs at 32
-runs over four million commits, under 1% of a warm tree listing (5.2 ms). The
+runs over four million commits, under 1% of a warm tree listing (3.1 ms). The
 backfill reads the data node's push rows in pages of about 7 500 pushes — the
 4 MB a page answers at most — each about 115 ms of the data node's read and
 150 ms in all, so a history of 18 million pushes, a large company's monorepo

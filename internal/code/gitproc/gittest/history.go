@@ -20,13 +20,13 @@ import (
 // Every commit changes historyFilesPerCommit files of one directory of
 // historyDirFiles: a commit object, the root tree, its directory's tree and
 // four blobs, so commits are a seventh of the objects and trees two sevenths,
-// and a gigabyte of history is about 400 000 commits — the hundreds of
-// thousands a source repository of that size has. Each file's versions are a
-// chain of deltas: a session writes every version of each file in turn
-// (fast-import deltas a blob against the one before it in the stream), each
-// rewriting a historyWindow of the file with seeded random bytes, then the
-// session's commits, every file's version v before any file's v+1. The count
-// of files is what the size scales.
+// and a gigabyte of history is 455 680 commits over 1 421 files (32 MB is
+// 14 080 over 44) — the hundreds of thousands a source repository of that
+// size has. Each file's versions are a chain of deltas: a session writes
+// every version of each file in turn (fast-import deltas a blob against the
+// one before it in the stream), each rewriting a historyWindow of the file
+// with seeded random bytes, then the session's commits, every file's version
+// v before any file's v+1. The count of files is what the size scales.
 const (
 	// HistorySessions is how many fast-import sessions a History is
 	// written in — and so how many pushes a benchmark that pushes it a
