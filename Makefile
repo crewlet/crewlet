@@ -230,7 +230,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy image-context coding-image schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer assistant-fixtures \
+.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer assistant-fixtures \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
@@ -744,31 +744,6 @@ snapshot: ## rehearse a release locally (needs goreleaser and docker)
 	} >&2
 	goreleaser check
 	goreleaser release --snapshot --clean --skip=sign
-
-# THE CONTAINER SANDBOX'S REFERENCE IMAGE (images/coding), built for this
-# host's platform under CODING_IMAGE, the tag `providers.sandbox.local.image`
-# names on a single-host install (docs/concepts/code-sandbox.md, "Local
-# sandboxes"). It is then smoke-tested from inside, as a uid it has no account
-# for, which is how the engine runs a box on a rootful runtime. No ENTRYPOINT
-# is checked too: the engine appends the box's own command, and an entrypoint
-# would wrap it. CONTAINER_RUNTIME picks podman instead of docker.
-#
-# .github/workflows/coding-image.yml runs this target on each platform's own
-# runner, so a change here is a change to that job.
-CODING_IMAGE ?= crewlet-coding:dev
-CONTAINER_RUNTIME ?= docker
-
-coding-image: ## build and smoke-test the container sandbox's reference image as CODING_IMAGE (ci: coding image)
-	@command -v $(CONTAINER_RUNTIME) >/dev/null 2>&1 || { \
-	  echo "$(CONTAINER_RUNTIME) is not on PATH: install Docker or Podman, or set CONTAINER_RUNTIME."; \
-	  exit 1; } >&2
-	$(CONTAINER_RUNTIME) build -t $(CODING_IMAGE) images/coding
-	@entrypoint=$$($(CONTAINER_RUNTIME) image inspect --format '{{json .Config.Entrypoint}}' $(CODING_IMAGE)); \
-	case "$$entrypoint" in \
-	  null|"[]") ;; \
-	  *) echo "$(CODING_IMAGE) has an ENTRYPOINT ($$entrypoint), which would wrap the command the engine starts every box with" >&2; exit 1;; \
-	esac
-	$(CONTAINER_RUNTIME) run --rm -i --user 4242:4242 -e HOME=/tmp/smoke $(CODING_IMAGE) sh -s < images/coding/smoke.sh
 
 # THE BUILD CONTEXT OF THE IMAGE OF MAIN, which .github/workflows/main-image.yml
 # pushes as ghcr.io/crewlet/crewlet:main. A release's image is goreleaser's

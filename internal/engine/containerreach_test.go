@@ -70,7 +70,7 @@ providers:
   llm:
     default: {model: sonnet}
   sandbox:
-    local: {` + map[bool]string{true: "image: crewlet-coding:dev", false: ""}[cell == "container"] + `}
+    local: {` + map[bool]string{true: "image: example.com/coding:1", false: ""}[cell == "container"] + `}
     default_run_in: ` + cell + `
 roles:
   - name: Engineer
