@@ -328,16 +328,42 @@ func leavesObject(c Command) bool {
 // history's share and the tombstones, whose sweep must keep the room the
 // committer kept for a deletion's tombstone or a record it formed would
 // remove its deletions. So it has every row a record leaves when no
-// tombstone is due: 3 996 behind a one-command push, and behind a maximal
-// forced push, which makes a thousand drops, nearly two thousand, so a
-// repository force-pushing in bulk keeps pace. A fixed share would have
-// fallen behind it — MaxRecordRows/8, five hundred a record, against a
-// thousand drops a record for as long as such pushes come — as a fixed
-// share of the tombstones once did (HorizonDeletesPerRecord); and a share
-// bounds no lane time a full budget does not, since a record touches
-// MaxRecordRows at most either way, and deleting a drop moves one index
-// entry, its key's, where the tombstones a sweep may take as many of move
-// three.
+// tombstone is due: 3 996 behind a one-command push, and 1 997 behind one
+// push of MaxCommandsPerPush forced updates, which writes a thousand drops.
+// A fixed share would have fallen behind that push — MaxRecordRows/8, five
+// hundred a record, against its thousand — as a fixed share of the
+// tombstones once did (HorizonDeletesPerRecord); and a share bounds no lane
+// time a full budget does not, since a record touches MaxRecordRows at most
+// either way, and deleting a drop moves one index entry, its key's, where
+// the tombstones a sweep may take as many of move three.
+//
+// # Where it falls behind, and how it catches up
+//
+// It keeps pace — forgets at least as many drops as its record writes, so
+// the drops past the grace do not grow — wherever what the record leaves is
+// at least that: behind a record of up to some 1 330 forced updates (one
+// push of MaxCommandsPerPush always) while no tombstone is due, and behind
+// any record of deletions the committer forms while their tombstones are
+// not yet due. Elsewhere it falls behind by the difference. Behind the
+// committer's fullest record of forced updates — 1 965 in two pushes,
+// counted two rows each — it has 65 rows for their 1 965 drops, some 1 900
+// short. Behind deletions whose tombstones come due in turn, the sweep takes
+// a row for each first: 996 rows are left for the thousand drops of one
+// maximal push of them, four short, and 64 for the 1 310 of the committer's
+// fullest record of them, 1 246 short. And up to 64 fewer while the push
+// history is expiring too. No reservation in the committer's bound closes
+// that for deletions: a deletion's lifetime is four row operations — its
+// tombstone written and swept, its drop written and forgotten — and one
+// push of MaxCommandsPerPush of them would need 4 002 rows of a record's
+// 4 000.
+//
+// WHAT IT FALLS SHORT BY WAITS for a record of the repository with room —
+// up to MaxRecordRows-4 (3 996) a record behind a one-command push — so the
+// drops past the grace grow for as long as the repository's records stay
+// full of forced updates or deletions, and drain, oldest first, once they
+// are not. A drop forgotten late costs its row on every data node; one
+// forgotten early would cost the object it keeps, which is why nothing
+// forgets one inside its grace.
 //
 // BY THE INSTANT, which the key leads with, so the read seeks the expired
 // rows and stops at the first inside the grace or at its limit, whatever

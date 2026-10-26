@@ -1852,7 +1852,8 @@ records that apply to it, never by a sweep: a push row expires **181 days**
 after its push, the same half year as the [usage history](#old-data-is-not-cold-data),
 a deleted ref's tombstone after **48 hours**, or sooner, oldest first, once
 the repository holds 100 000 of them, and the record of the object a forced
-push or a deletion left after **14 days** (see
+push or a deletion left after **14 days**, by the repository's next push
+whose record has room for it (see
 [ref tombstones and ref drops](../concepts/code-host.md#retention-and-history)). A
 [change](../concepts/code-host.md#changes) and its revisions have no horizon of
 their own: they are kept as long as their repository is, and its purge removes

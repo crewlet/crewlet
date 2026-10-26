@@ -246,17 +246,80 @@ func TestTheRefDropsTakeWhatTheTombstonesLeave(t *testing.T) {
 	e.countersMatchRows("repo-a")
 }
 
-// THE DROPS' EXPIRY KEEPS PACE WITH BULK FORCING: a repository whose every
-// push force-moves a thousand branches — a mirror pushed with --force, a
-// tool rewriting its branches — holds, once each push is past the grace of
-// the one two before it, only the drops of the last two: each record forgets
-// the thousand that came due with what its rows leave, nearly two thousand. A
-// fixed share of MaxRecordRows/8, five hundred a record, fell behind it by
-// five hundred a record for as long as such pushes come.
+// BEHIND DELETIONS WHOSE TOMBSTONES COME DUE IN TURN, THE EXPIRY HAS WHAT THE
+// SWEEP LEAVES: at a repository whose older deletions' tombstones are due as
+// fast as it makes new ones — one deleting refs in bulk, steadily — a
+// record's sweep takes a row for each first, so the expiry has 996 rows for
+// the thousand drops of one maximal push of deletions and 64 for the 1 310 of
+// the committer's fullest record of them: four and 1 246 short of what the
+// record writes, as expireRefDrops' doc and doc.go say. Every row of the
+// record's budget is touched either way.
+//
+// Mutation: forget the drops before the sweep, and each record forgets as
+// many as its whole budget holds, the tombstones' room with them.
+func TestTheRefDropExpiryHasWhatTheSweepLeavesBehindDeletions(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		pushes      []PushEntry
+		room, short int
+	}{
+		{"one maximal push", []PushEntry{pushEntry("deleting", func() []Command {
+			var cmds []Command
+			for c := range MaxCommandsPerPush {
+				cmds = append(cmds, move(fmt.Sprintf("refs/heads/r%06d", c), oid("repo-a"), ZeroOID))
+			}
+			return cmds
+		}()...)}, 996, 4},
+		{"the committer's fullest record", fullest(t, "deleting", 0, func(p, c int) Command {
+			return move(fmt.Sprintf("refs/heads/r%06d", p*MaxCommandsPerPush+c), oid("repo-a"), ZeroOID)
+		}), 64, 1_246},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := openApplyEstate(t)
+			e.apply(create(t, "repo-a", "a"))
+			deletions := 0
+			for _, p := range tc.pushes {
+				deletions += len(p.Commands)
+			}
+			// THE REFS IT DELETES, as many older tombstones due — past
+			// RefTombstoneHorizon — and more drops past their grace than one
+			// record can forget.
+			e.seed("repo-a", 0, deletions, 0)
+			e.seedTombstones("repo-a", deletions, time.Unix(0, 0))
+			e.seedDrops("repo-a", 1, time.Unix(0, 0), MaxRecordRows)
+			if touched := e.applyCounting(pushOf(t, "repo-a", tc.pushes...)); touched != MaxRecordRows {
+				t.Fatalf("the record touched %d rows, want its whole budget of %d", touched, MaxRecordRows)
+			}
+			left := e.num(`SELECT COUNT(*) FROM code_ref_drops WHERE repo_id = 'repo-a' AND at < ?`,
+				store.EncodeTime(applyClock.Add(-PruneGrace)))
+			if forgotten := MaxRecordRows - int(left); forgotten != tc.room || deletions-forgotten != tc.short {
+				t.Fatalf("a record of %d deletions forgot %d drops past their grace, %d short of the drops it "+
+					"wrote; want %d, %d short — the sweep's row for each due tombstone first, then the drops",
+					deletions, forgotten, deletions-forgotten, tc.room, tc.short)
+			}
+			if stones := e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = 'repo-a' AND target = ''`); stones != int64(deletions) {
+				t.Fatalf("the repository holds %d tombstones, want the record's own %d: every older one was due",
+					stones, deletions)
+			}
+		})
+	}
+}
+
+// THE DROPS' EXPIRY KEEPS PACE WITH ONE BULK FORCED PUSH A RECORD: a
+// repository whose every record carries one push force-moving a thousand
+// branches — a mirror pushed with --force, a tool rewriting its branches —
+// holds, once each push is past the grace of the one two before it, only the
+// drops of the last two: each record forgets the thousand that came due with
+// what its rows leave, 1 997. A fixed share of MaxRecordRows/8, five hundred a
+// record, fell behind it by five hundred a record for as long as such pushes
+// come. Two such pushes sharing a record are another shape, which the expiry
+// falls behind (TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom).
 //
 // Mutation: cap the expiry at MaxRecordRows/8, and the drops grow by five
 // hundred a round.
-func TestTheRefDropExpiryKeepsPaceWithBulkForcing(t *testing.T) {
+func TestTheRefDropExpiryKeepsPaceWithOneBulkForcedPushARecord(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
 	e.apply(create(t, "repo-a", "a"))
@@ -283,5 +346,110 @@ func TestTheRefDropExpiryKeepsPaceWithBulkForcing(t *testing.T) {
 			t.Fatalf("after round %d the repository holds %d drops, want %d: the last two rounds', every "+
 				"older one forgotten by the record it came due under", round, got, want)
 		}
+	}
+}
+
+// THE DROPS' EXPIRY FALLS BEHIND A RECORD FULL OF FORCED UPDATES, AND THE
+// BACKLOG DRAINS AS LATER RECORDS LEAVE ROOM: the committer's fullest record
+// of forced updates — 1 965 in two pushes, each counted two rows — writes as
+// many drops and leaves their expiry the 65 rows its own leave of
+// MaxRecordRows, so once such records come past the grace of the ones before
+// them, the drops past it grow by 1 900 a record. They are only late: a
+// one-command push forgets MaxRecordRows-4 of them, oldest first, and the
+// pushes after it the rest, down to exactly the drops still inside their
+// grace, none of which is forgotten.
+//
+// Mutation: cap the expiry at MaxRecordRows/8, and the first one-command push
+// forgets five hundred rather than 3 996; forget drops only behind a record
+// that writes some, and the backlog never drains.
+func TestTheRefDropBacklogDrainsAsTheRecordsLeaveRoom(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	e.apply(create(t, "repo-a", "a"))
+	tip := func(round, p, c int) string { return oid(fmt.Sprint(round, "-", p, "-", c)) }
+	ref := func(p, c int) string { return fmt.Sprintf("refs/heads/p%d-%04d", p, c) }
+	// THE COMMITTER'S FULLEST RECORD OF FORCED UPDATES, one round of it:
+	// every branch moved off the tip the round before left it at.
+	record := func(round int) []PushEntry {
+		return fullest(t, "force", round, func(p, c int) Command {
+			return forced(ref(p, c), tip(round-1, p, c), tip(round, p, c))
+		})
+	}
+	var made []PushEntry
+	drops := 0
+	for p, push := range record(1) {
+		var creates []Command
+		for c := range push.Commands {
+			creates = append(creates, move(ref(p, c), ZeroOID, tip(0, p, c)))
+		}
+		made = append(made, pushEntry(fmt.Sprint("make-", p), creates...))
+		drops += len(push.Commands)
+	}
+	// ITS SHAPE, as expireRefDrops' doc and doc.go state it: what it writes —
+	// a ref and a drop a forced update, a pack and a push row a push, and the
+	// counters — and what that leaves its expiry.
+	room := MaxRecordRows - (2*drops + 2*len(made) + 1)
+	if drops != 1_965 || room != 65 {
+		t.Fatalf("the committer's fullest record of forced updates carries %d of them and leaves its "+
+			"expiry %d rows — expireRefDrops' doc and doc.go say 1 965 and 65", drops, room)
+	}
+	at := applyClock
+	e.apply(pushOf(t, "repo-a", made...).at(at))
+
+	pastGrace := func(now time.Time) int64 {
+		return e.num(`SELECT COUNT(*) FROM code_ref_drops WHERE repo_id = 'repo-a' AND at < ?`,
+			store.EncodeTime(now.Add(-PruneGrace)))
+	}
+	// HALF THE GRACE AND AN HOUR A ROUND: a round's drops are past their
+	// grace two rounds on, and not one.
+	step := PruneGrace/2 + time.Hour
+	const rounds = 5
+	var backlog int64
+	for round := 1; round <= rounds; round++ {
+		at = at.Add(step)
+		due := backlog
+		if round > 2 {
+			due += int64(drops)
+		}
+		forgotten := min(due, int64(room))
+		touched := e.applyCounting(pushOf(t, "repo-a", record(round)...).at(at))
+		if want := MaxRecordRows - room + int(forgotten); touched != want {
+			t.Fatalf("round %d touched %d rows, want %d: its own %d and the %d drops past their grace "+
+				"its rows left room for", round, touched, want, MaxRecordRows-room, forgotten)
+		}
+		backlog = due - forgotten
+		if got := pastGrace(at); got != backlog {
+			t.Fatalf("after round %d the repository holds %d drops past their grace, want %d: %d "+
+				"short a record once the rounds come due", round, got, backlog, drops-room)
+		}
+	}
+	if want := int64((rounds - 2) * (drops - room)); backlog != want {
+		t.Fatalf("the premise: %d drops past their grace after %d rounds, want %d", backlog, rounds, want)
+	}
+
+	// THE DRAIN, an hour after the last round: one-command pushes, each of
+	// four rows of its own — its ref, its pack, its push row and the counters
+	// — forgetting the oldest drops past their grace with the rest of its
+	// budget, until none is left.
+	at = at.Add(time.Hour)
+	for i := 0; backlog > 0; i++ {
+		forgotten := min(backlog, MaxRecordRows-4)
+		touched := e.applyCounting(pushOf(t, "repo-a", pushEntry(fmt.Sprint("drain-", i),
+			move(fmt.Sprintf("refs/heads/drain-%d", i), ZeroOID, oid(fmt.Sprint("drain-", i))))).at(at))
+		if want := 4 + int(forgotten); touched != want {
+			t.Fatalf("drain push %d touched %d rows, want %d: its own four and %d of the %d drops past "+
+				"their grace", i, touched, want, forgotten, backlog)
+		}
+		backlog -= forgotten
+		if got := pastGrace(at); got != backlog {
+			t.Fatalf("after drain push %d the repository holds %d drops past their grace, want %d",
+				i, got, backlog)
+		}
+	}
+	// WHAT IS LEFT IS EXACTLY THE DROPS INSIDE THEIR GRACE: the last two
+	// rounds', every one.
+	if got := e.num(`SELECT COUNT(*) FROM code_ref_drops WHERE repo_id = 'repo-a'`); got != int64(2*drops) {
+		t.Fatalf("the drained repository holds %d drops, want the last two rounds' %d, each inside its grace",
+			got, 2*drops)
 	}
 }

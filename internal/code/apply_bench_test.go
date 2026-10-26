@@ -166,10 +166,10 @@ func (e *estate) applyTimed(b *testing.B, a *Applier, r built, rows int) {
 // commands of one kind: pushes of MaxCommandsPerPush commands, each with its
 // pack, and a last push of whatever room the record's row bound leaves —
 // held, by [rowBound] and [recordRows] themselves, to fill the bound exactly,
-// so a shape priced here is one the committer admits and the largest of its
-// kind. command is the c-th command of push p.
-func fullest(b *testing.B, prefix string, i int, command func(p, c int) Command) []PushEntry {
-	b.Helper()
+// so a shape priced or applied here is one the committer admits and the
+// largest of its kind. command is the c-th command of push p.
+func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command) []PushEntry {
+	tb.Helper()
 	var entries []PushEntry
 	var rows int
 	for p := 0; ; p++ {
@@ -188,7 +188,7 @@ func fullest(b *testing.B, prefix string, i int, command func(p, c int) Command)
 		rows += rowBound(Proposal{Commands: e.Commands, Pack: e.Pack})
 	}
 	if recordRows(rows) != MaxRecordRows {
-		b.Fatalf("the fullest record of %s bounds %d rows, not MaxRecordRows (%d)", prefix,
+		tb.Fatalf("the fullest record of %s bounds %d rows, not MaxRecordRows (%d)", prefix,
 			recordRows(rows), MaxRecordRows)
 	}
 	return entries

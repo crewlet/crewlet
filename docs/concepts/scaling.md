@@ -320,7 +320,8 @@ commit says which range it does not hold rather than naming a push.
 whole estate, and the code host's rows with it. A person's push of one commit
 leaves a push row of about 395 bytes, kept 181 days, and its pack's row of
 about 357, kept as long as the repository is; a forced update or a deletion
-leaves a row more, naming the object it left, kept 14 days
+leaves a row more, naming the object it left, kept 14 days, and longer while
+the repository's pushes fill their records with such updates
 ([ref drops](code-host.md#retention-and-history)); the code log, which keeps only
 the trim's window of records, takes 1 332 bytes for a push in a record of its
 own and about 740 for each of a burst group commit holds together. So:

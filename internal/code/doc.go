@@ -199,7 +199,8 @@
 // a year for as long as its repositories live. A forced update or a deletion
 // leaves one row more, its ref drop, a commit id and a ref without the
 // history row's commands, kept [PruneGrace] — two weeks of such commands,
-// against the history's half year of every push.
+// against the history's half year of every push — and longer while the
+// repository's records are full of them (the REF DROPS horizon below).
 //
 // THE PUSH ON THE LOG (BenchmarkPushLogBytes, the same figure every count):
 // the code log's growth over the records the committer forms for that same
@@ -437,17 +438,24 @@
 //     never every deletion);
 //   - REF DROPS, [PruneGrace] (14 days, git's own gc.pruneExpire): a forced
 //     update or a deletion records the object it moved its ref off
-//     (code_ref_drops, one row an object, its record's position and broker
-//     instant), because no ref names that object any more and dropping a
-//     repository's unreachable objects must keep what such a push left for
-//     the grace — history force-pushed away or deleted stays fetchable by
-//     its id. A push record forgets its repository's drops past the grace,
-//     oldest first by instant, with whatever its rows leave of
-//     [MaxRecordRows] once the tombstones have had theirs: as many as that,
-//     for the tombstones' own reason — a fixed share falls behind a
-//     repository that forces or deletes in bulk — and after them, since a
-//     drop forgotten late costs a row where a tombstone's room taken costs
-//     every git node a full read. The drops are the record's own rows, so
+//     (code_ref_drops, one row an object, keyed by its record's broker
+//     instant and position), because no ref names that object any more and
+//     dropping a repository's unreachable objects must keep what such a push
+//     left for the grace — history force-pushed away or deleted stays
+//     fetchable by its id. A push record forgets its repository's drops past
+//     the grace, oldest first by instant, with whatever its rows leave of
+//     [MaxRecordRows] once the tombstones have had theirs: after them, since
+//     a drop forgotten late costs a row where a tombstone's room taken costs
+//     every git node a full read, and no fixed share, which falls behind even
+//     one push of [MaxCommandsPerPush] forced updates. That keeps pace with
+//     one such push a record, and with deletions while their tombstones are
+//     not yet due; it falls behind a record the committer fills with them —
+//     some 1 900 drops a record of forced updates, up to 1 246 a record of
+//     deletions whose tombstones come due in turn, four behind one push of a
+//     thousand of those — and what it falls behind by waits for records with
+//     room, up to MaxRecordRows-4 a record, so the drops past the grace grow
+//     while a repository's records stay full of them and drain once they do
+//     not ([Applier.expireRefDrops]). The drops are the record's own rows, so
 //     the committer counts them in its bound: a forced update two rows, a
 //     deletion three;
 //   - A PURGE, in bounded parts: a repository deleted longer ago than its

@@ -446,12 +446,19 @@ repository, never by a sweep:
   kept **14 days**, git's own `gc.pruneExpire` default, because dropping a
   repository's unreachable objects keeps what such a push left for that
   long: history force-pushed away or deleted stays fetchable by its id for
-  two weeks after the push. The repository's next push after that forgets
-  the row, with whatever room forgetting its tombstones leaves its record. A
-  fast-forward or a create leaves nothing behind and records nothing. The
-  committer counts these rows in the record it forms, so a record holds one
-  push of a thousand forced updates or deletions where it holds three of a
-  thousand fast-forwards.
+  two weeks after the push. The repository's later pushes forget the rows
+  past that, oldest first, with whatever room each push's record leaves once
+  its tombstones are forgotten. That is room for at least as many as the
+  push records, except behind the busiest records: two pushes of forced
+  updates sharing one record (about 1 900 short), or a thousand deletions or
+  more while older deletions' tombstones are being forgotten too (from four
+  short, for one push of a thousand, to about 1 250). What a push could not
+  forget waits for pushes with room, up to about 4 000 rows a push, so the
+  rows past two weeks pile up while a repository's pushes stay that busy and
+  go once they do not. A fast-forward or a create leaves nothing behind and
+  records nothing. The committer counts these rows in the record it forms,
+  so a record holds one push of a thousand forced updates or deletions where
+  it holds three of a thousand fast-forwards.
 - **A purge** — below.
 
 A pack a compaction retires is kept a day as a retired row, which the
