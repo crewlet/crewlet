@@ -545,6 +545,64 @@ func TestAStopWaitsForASilentHostAndNeverWritesItsSpendOff(t *testing.T) {
 	}
 }
 
+// A STOP OF A RELAUNCH BEFORE IT ATTACHES ITS BOX READS NO JOB AND LEAVES THE
+// BOX TO ITS HOST. The resumed turn's relaunch has reset the row on another node
+// — a new job, its charge not yet made — and the row still names the previous
+// job's box, on the host of the node that launched that job, until the launch
+// attaches a box of its own. A stop decided in that window found the previous
+// job's command still on the row and read that finished, collected and charged
+// job back off the box, charging it a second time as this one's; and with the
+// row naming this node as the box's host, it killed an id this node does not
+// have and never told the host that has it.
+//
+// Mutation: keep the previous job's command on the reset row, and the stop
+// asks the box's host to read the finished job; name the relaunch's node on the
+// reset row, and the stop kills the box here and tells its host nothing.
+func TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	spies := watchStops(rig)
+	asks := &boxAsks{result: Result{Text: "the previous job, done", InputTokens: 9000}}
+	told := &nudges{}
+	rig.onNode(t, "node-b", asks, told)
+	prior := rig.launchedBy("t1", "node-a")
+	// THE PREVIOUS JOB, COLLECTED AND CHARGED; its turn resumed here and is
+	// relaunching.
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1",
+		CompletionTail(prior.LaunchID), rigLease); err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	relaunch, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+		TurnID: "t1", AgentHandle: "swe", AgentID: sweID, Role: "SWE", CodingAgent: "claude-code",
+		TraceID: "tr-1", CreatedAt: rig.now, LaunchNode: "node-b",
+	}, rigLease)
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+
+	rig.stop(t)
+	rig.fireRetries()
+
+	if got := asks.reads(); len(got) != 0 {
+		t.Fatalf("the stop asked the box's host %v, for a job the relaunch has not started", got)
+	}
+	if rig.accountant.asked() != 0 || len(rig.phases()) != 0 {
+		t.Fatal("the stop charged or published the previous job's spend again")
+	}
+	if slices.Contains(rig.provider.KilledIDs(), prior.SandboxID) {
+		t.Fatalf("killed %s from a node that is not its host", prior.SandboxID)
+	}
+	if sent := told.all(); len(sent) != 1 || sent[0].Why != NudgeReleased || sent[0].LaunchID != relaunch.LaunchID {
+		t.Fatalf("told the box's host %+v; want it told once its box is left to it", sent)
+	}
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stopped relaunch's record is still there")
+	}
+	if len(rig.stopAnnouncements()) != 1 || len(spies.endedRuns()) == 0 {
+		t.Fatal("the stop was not announced, or its session not closed")
+	}
+}
+
 // claimBeforeDecide claims a run's completion the moment a stop decides on it,
 // as a completion processed on the seat's control topic can.
 type claimBeforeDecide struct {

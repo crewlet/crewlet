@@ -154,12 +154,19 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // refused it, that lease's epoch. Neither is a row that is gone.
 //
 // Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
-// row's, and so does the box reference — its id, its cell and its CLI, as one —
-// until the launch attaches a box of its own ([CoordStore.AttachSandbox]). The
-// reset row hands that box to the launch as [PendingRun.Prior], which decides
-// whether the new job continues in it or reclaims it through its own cell
-// first; the row naming it meanwhile is what lets recovery reclaim it if the
-// launching node dies before deciding.
+// row's, and so does the box reference — its id, its cell, its CLI and its
+// host ([PendingRun.LaunchNode]), as one — until the launch attaches a box of
+// its own ([CoordStore.AttachSandbox]). The reset row hands that box to the
+// launch as [PendingRun.Prior], which decides whether the new job continues in
+// it or reclaims it through its own cell first; the row naming it meanwhile is
+// what lets recovery reclaim it if the launching node dies before deciding, and
+// it is reclaimed where it is: a box on another node's host, by that host.
+//
+// WHAT WAS THE PREVIOUS JOB'S AND NOT ITS BOX'S GOES: its command and its
+// session. The row names the new job from here, and a reader that found the
+// previous job's command on it — a person's stop, before this launch attaches
+// one of its own — read that finished job back off the box and charged it a
+// second time, as this job's.
 //
 // A RESET THE ROW REFUSES IS NEVER A LAUNCH THAT WENT AHEAD: a newer lease
 // owns the run (the epoch reported), or its ending is decided — an error
@@ -187,10 +194,17 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The turn's cap is the turn's, the same on every launch of it —
 		// written anyway, so the row says what this launch was told.
 		existing.Deadline = run.Deadline
-		// THIS job's node, which may not be the previous job's — and so
+		// THE BOX'S HOST STAYS WITH THE BOX: the row still names the
+		// previous job's box, which is on the host of the node that
+		// launched that job, and the attach that names this job's box names
+		// this node with it. A row with no box names this job's node. And
 		// no verdict about the previous job's node is this job's.
-		existing.LaunchNode = run.LaunchNode
+		if existing.SandboxID == "" {
+			existing.LaunchNode = run.LaunchNode
+		}
 		existing.LaunchNodeGone = time.Time{}
+		// AND THE PREVIOUS JOB'S COMMAND AND SESSION ARE NOT THIS JOB'S.
+		existing.CommandID, existing.SessionID = "", ""
 		// A hold was on the previous job's resume, which is over.
 		existing.HeldFor, existing.HeldUntil = "", time.Time{}
 		if fence.Fenced() {
@@ -796,9 +810,13 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		}
 		run.SandboxID = box.SandboxID
 		run.CommandID = box.CommandID
-		// The box's cell moves with the box — see [BoxRef.Placement].
+		// The box's cell moves with the box — see [BoxRef.Placement] — and
+		// so does its host ([BoxRef.Node]).
 		if box.Placement != "" {
 			run.Placement = box.Placement
+		}
+		if box.Node != "" {
+			run.LaunchNode = box.Node
 		}
 		run.CodingAgent = box.CodingAgent
 		run.SessionID = box.SessionID

@@ -335,26 +335,51 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 	// launch that erased it would re-clone the work instead — and one that
 	// did not tell the launch which box it was would leave the launch no
 	// way to reclaim it when the next job runs elsewhere.
+	//
+	// AND WHOSE HOST IT IS ON, with it: a box in a local cell is a process
+	// tree on the host of the node that launched the job it was made for, so
+	// the relaunch may continue in it only there — and until this launch
+	// attaches a box of its own, the row's box is still that one, reclaimed by
+	// that host. What was the previous JOB's and not its box's — its command,
+	// its session — is not the relaunch's: a reader that found it would read
+	// the finished job back as this one.
 	first := run("t1")
-	first.Placement = "direct"
+	first.Placement, first.LaunchNode = "direct", "node-a"
 	mustLaunched(t, s, first)
 	if err := s.AttachSandbox(t.Context(), "t1",
-		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", CodingAgent: "claude-code"},
+		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1", SessionID: "s-1", CodingAgent: "claude-code"},
 		sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	opened, err := s.BeginLaunch(t.Context(), run("t1"), sandbox.Fence{})
+	next := run("t1")
+	next.LaunchNode = "node-b"
+	opened, err := s.BeginLaunch(t.Context(), next, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
 
-	if got := mustGet(t, s, "t1"); got.SandboxID != "box-9" || got.Placement != "direct" {
-		t.Errorf("a second launch erased the attached box or its cell: %+v", got)
+	got := mustGet(t, s, "t1")
+	if got.SandboxID != "box-9" || got.Placement != "direct" || got.LaunchNode != "node-a" {
+		t.Errorf("a second launch erased the attached box, its cell or its host: box %q in %q on %q",
+			got.SandboxID, got.Placement, got.LaunchNode)
+	}
+	if got.CommandID != "" || got.SessionID != "" {
+		t.Errorf("the relaunch's row still names the previous job: command %q, session %q",
+			got.CommandID, got.SessionID)
 	}
 	want := sandbox.PriorBox{SandboxID: "box-9", Placement: "direct",
-		CodingAgent: "claude-code", Status: sandbox.StatusRunning}
+		CodingAgent: "claude-code", Status: sandbox.StatusRunning, LaunchNode: "node-a"}
 	if opened.Prior != want {
 		t.Errorf("the relaunch was handed %+v as the box it found, want %+v", opened.Prior, want)
+	}
+	// THE ATTACH THAT NAMES THIS JOB'S BOX NAMES ITS HOST WITH IT.
+	if err := s.AttachSandbox(t.Context(), "t1",
+		sandbox.BoxRef{SandboxID: "box-10", Placement: "direct", Node: "node-b", CodingAgent: "claude-code"},
+		sandbox.Fence{}); err != nil {
+		t.Fatalf("attach the relaunch's box: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); got.SandboxID != "box-10" || got.LaunchNode != "node-b" {
+		t.Errorf("the relaunch's box %q is named on %q, want box-10 on node-b", got.SandboxID, got.LaunchNode)
 	}
 }
 

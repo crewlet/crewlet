@@ -282,6 +282,47 @@ func TestARelaunchAwayFromTheBoxsHostStartsFresh(t *testing.T) {
 	}
 }
 
+// A RELAUNCH ON THE BOX'S OWN HOST CONTINUES IN IT: the node that launched the
+// previous job is the one node that can reach its direct box, so a relaunch
+// there keeps the checkout — the expensive half of a run — rather than
+// cloning, installing and setting up again from the pushed branch. Its twin
+// above is the relaunch on any other node, which starts fresh.
+//
+// Mutation: drop the previous job's node from the box the relaunch is handed
+// (coordstore.go's resetLaunch), and every relaunch on a real node starts
+// fresh.
+func TestARelaunchOnTheBoxsHostContinuesInIt(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	told := &nudges{}
+	rig.onNode(t, "node-a", &boxAsks{}, told)
+	prior := rig.launchedBy("t1", "node-a")
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1",
+		CompletionTail(prior.LaunchID), rigLease); err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	req := launchReq("t1")
+	req.Spec.Placement = Direct
+
+	res, err := rig.coordinator.Launch(t.Context(), rig.manager, req)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if !res.Reused || res.SandboxID != prior.SandboxID {
+		t.Fatalf("the relaunch on its box's host ran in %s (reused=%v), want it to continue in %s",
+			res.SandboxID, res.Reused, prior.SandboxID)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Errorf("killed %v; the relaunch continues in its box", killed)
+	}
+	if sent := told.all(); len(sent) != 0 {
+		t.Errorf("told %+v; no host is left a box", sent)
+	}
+	if got := rig.get("t1"); got.LaunchNode != "node-a" || got.SandboxID != prior.SandboxID {
+		t.Errorf("the row names %s's box %s; want node-a's %s", got.LaunchNode, got.SandboxID, prior.SandboxID)
+	}
+}
+
 // A LAUNCH RECORDS ITS OWN NODE AS THE BOX'S HOST, and its box records the turn
 // it was made for — which is how that host tells, later, whether a run still
 // names it.

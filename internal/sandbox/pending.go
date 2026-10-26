@@ -1068,14 +1068,18 @@ type PendingRun struct {
 	// relaunches included.
 	Deadline time.Time `json:"deadline,omitzero"`
 
-	// LaunchNode is the node that launched the job this row holds.
+	// LaunchNode is the node that launched the job this row's box was
+	// attached for: the node whose host the box is on.
 	//
 	// ON THE ROW because a `direct` or `container` box is a process tree on
 	// that node's own host: whichever node holds the seat, and whichever
 	// serves the job's tool bridge session (the seat's holder, reached
 	// through any node of the fleet), the box itself is that node's to
 	// reach. Written by every launch, relaunches included, since a relaunch
-	// may land on another node.
+	// may land on another node — WITH THE BOX ([BoxRef.Node]): a relaunch
+	// still naming the previous job's box names that box's host, until it
+	// attaches its own, so every reclaim of the box the row names goes to
+	// the host it is on.
 	//
 	// IT NAMES WHO DRIVES THE BOX of such a run: that node's own waiter
 	// polls it, keeps it alive and reaps its pause, and reclaims it once no
@@ -1987,6 +1991,13 @@ type BoxRef struct {
 	// wrong provider. Empty keeps the cell the row already names, which is
 	// what an attach that is not a launch's means.
 	Placement string
+
+	// Node is the node whose host the box is on ([PendingRun.LaunchNode]):
+	// the node attaching it, for a launch's attach, written with the box for
+	// the reason its cell is — a relaunch on another node keeps the previous
+	// box's host on the row until this write names a box of its own. Empty
+	// keeps the node the row already names.
+	Node string
 
 	CodingAgent string
 	SessionID   string

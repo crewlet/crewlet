@@ -351,7 +351,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// The turn's cap, for the poll — see [PendingRun.Deadline].
 		Deadline: req.Turn.Deadline,
 		// Whose host a local box is on — see [PendingRun.LaunchNode]. This
-		// node's, always: the box is made here.
+		// node's: the box is made here. A relaunch whose row still names the
+		// previous job's box keeps that box's host until the attach below
+		// names this node with this job's box ([BoxRef.Node]).
 		LaunchNode: c.node,
 		// The round carried on, whose earlier calls the row keeps — see
 		// [PendingRun.Continues].
@@ -414,7 +416,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// in the same write: a relaunch may run in another cell than the job
 	// before it, and the row is how every later reader reaches the box.
 	if err = store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
-		SandboxID: box.ID(), Placement: string(req.Spec.Placement),
+		SandboxID: box.ID(), Placement: string(req.Spec.Placement), Node: c.node,
 		CodingAgent: req.Spec.CodingAgent, PauseTTLSec: req.Spec.PauseTTLSec,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
@@ -458,7 +460,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// completion marker nothing is ever going to write.
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
-		Placement:   string(req.Spec.Placement),
+		Placement: string(req.Spec.Placement), Node: c.node,
 		CodingAgent: req.Spec.CodingAgent, SessionID: handle.SessionID,
 		PauseTTLSec: req.Spec.PauseTTLSec,
 	}, fence); err != nil {
