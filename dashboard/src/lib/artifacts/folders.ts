@@ -113,6 +113,11 @@ export function indexFolders(folders: readonly ArtifactFolderItem[]): FolderInde
     if (list) list.push(folder);
     else kids.set(parent, [folder]);
   }
+  // ONE COLLATOR FOR EVERY SORT OF THE INDEX, taken before them: asked for in
+  // the comparator, the cache derived its key again on every comparison of
+  // every sort, which was most of what a sort cost.
+  const order = collator(undefined, NAME_ORDER);
+  const byName = (a: ArtifactFolderItem, b: ArtifactFolderItem) => order.compare(a.name, b.name);
   for (const list of kids.values()) list.sort(byName);
 
   const trail = (id: string): ArtifactFolderItem[] => {
@@ -169,13 +174,11 @@ export function indexFolders(folders: readonly ArtifactFolderItem[]): FolderInde
   };
 }
 
-/** How siblings are ordered: by the reader's own collation, case apart and numbers by value. */
+/**
+ * How siblings are ordered — A to Z, as the engine orders them, by the
+ * reader's own collation, case apart and numbers by value.
+ */
 const NAME_ORDER: Intl.CollatorOptions = { sensitivity: "base", numeric: true };
-
-/** Siblings A to Z, as the engine orders them, by the reader's own collation. */
-function byName(a: ArtifactFolderItem, b: ArtifactFolderItem): number {
-  return collator(undefined, NAME_ORDER).compare(a.name, b.name);
-}
 
 /**
  * A listing's `folder_path` (`Marketing/Q4/`) in words (`Marketing › Q4`), or

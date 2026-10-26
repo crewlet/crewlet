@@ -15,7 +15,9 @@
  *
  * A COLLATOR IS THE SAME COST IN A SORT. `localeCompare` handed a locale or
  * options builds an `Intl.Collator` on every comparison, and a sort makes
- * n log n of them, where one built here orders a whole list.
+ * n log n of them, where one built here orders a whole list. A sort takes it
+ * once, before it starts: asked for inside the comparator, even a kept one
+ * costs its key on every comparison.
  *
  * ONE CACHE, NOT ONE PER MODULE. `format.ts`'s wall clock and `range.ts`'s
  * clocks each kept a map of their own beside a dozen sites that kept nothing;

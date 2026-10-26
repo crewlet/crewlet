@@ -6,8 +6,9 @@
  * will take.
  */
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { ArtifactFolderItem } from "~/protocol/index.ts";
+import { collator } from "../formatters.ts";
 import {
   artifactPlace,
   destinations,
@@ -19,6 +20,10 @@ import {
   takenBy,
   visibilityWords,
 } from "./folders.ts";
+
+// THE FORMATTER CACHE, WATCHED RATHER THAN REPLACED: every ask is still
+// answered by it, and a case can count them.
+vi.mock("../formatters.ts", { spy: true });
 
 function folder(
   over: Partial<ArtifactFolderItem> & { id: string; name: string },
@@ -82,6 +87,23 @@ describe("indexFolders", () => {
     const orphan = indexFolders([folder({ id: "x", name: "Stray", parent: "gone", depth: 2 })]);
     expect(orphan.children("")).toEqual([]);
     expect(orphan.get("x")?.name).toBe("Stray");
+  });
+
+  // ONE COLLATOR AN INDEX, taken before its sorts. Asked for in the
+  // comparator, the cache derived its key on every comparison, n log n times
+  // a sort, which was most of what the sort cost.
+  test("an index asks for its collator once, however many folders it sorts", () => {
+    // A permutation of 0..199 (7919 is prime), so the sort has work to do.
+    const many = Array.from({ length: 200 }, (_, n) =>
+      folder({ id: `f${n}`, name: `Folder ${(n * 7919) % 200}` }),
+    );
+    vi.mocked(collator).mockClear();
+    const names = indexFolders(many)
+      .children("")
+      .map((f) => f.name);
+    expect(names.slice(0, 3)).toEqual(["Folder 0", "Folder 1", "Folder 2"]);
+    expect(names.at(-1)).toBe("Folder 199");
+    expect(collator).toHaveBeenCalledTimes(1);
   });
 
   test("a loop in an answer taken mid-move ends the trail rather than spinning", () => {
