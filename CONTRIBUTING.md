@@ -735,8 +735,9 @@ each, on one idle machine, and read the two outputs with
 
 The packages run one at a time (`-p 1`) and without the race detector, and the
 output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
-— the real-bucket arms of `internal/objstore/s3obj`, `internal/code/cache` and
-`internal/code/host` skip unless `CREWLET_BENCH_S3_BUCKET` names a bucket
+— the real-bucket arms of `internal/objstore/s3obj`, `internal/code/cache`,
+`internal/code/host` and `internal/code/query` skip unless
+`CREWLET_BENCH_S3_BUCKET` names a bucket
 (`internal/objstore/s3obj`'s doc lists the variables that do), and the arms
 whose fixture takes minutes and gigabytes — in `internal/code/cache` a cold
 sync of 2 000 pushes, repositories of 10 000 packs, a 5 GB index, a gigabyte

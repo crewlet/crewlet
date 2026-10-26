@@ -14,6 +14,10 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/memobj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj"
+	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -31,6 +35,14 @@ import (
 //     history=1GB — 1 421 files in thirty directories over 455 680 commits —
 //     under the 100 000-file tree, every tenth file of which the edit
 //     changes, runs only under CREWLET_BENCH_LARGE.
+//   - objects is the store the fleet keeps the repository's packs in, which
+//     a cold node's download reads (readStores): the in-memory twin (mem);
+//     the S3 fake behind the production backend at 100 and 200 ms to each
+//     request's first byte, S3's own range, and 80 MB/s a connection
+//     (s3fake/firstbyte=…); and the bucket CREWLET_BENCH_S3_* names (real),
+//     which skips when none is named. The warm kinds run over mem alone: a
+//     warm read reads no object — its copy is the node's own files, current
+//     — so under another store they would time the same files again.
 //   - kind is the read: the root's listing; the whole tree's listing at its
 //     first page and at a page nine tenths of the way through it (recursive:
 //     git lists the whole tree for its Total on every page, and looks up the
@@ -49,7 +61,7 @@ import (
 // code.GitShareWait — max(2 s, the slowest warm kind's p95 rounded up to a
 // second), under gitproc.ReadDeadline/4 — and confirm the read deadline's
 // terms (a warm read well inside gitproc.ReadDeadline, a cold one answered
-// inside statelog.ReadBudget and its margin).
+// inside statelog.ReadBudget and its margin from every store).
 func BenchmarkCodeRead(b *testing.B) {
 	codetest.Quiet(b)
 	for _, size := range readSizes {
@@ -57,13 +69,66 @@ func BenchmarkCodeRead(b *testing.B) {
 			if size.large {
 				gittest.Large(b, "a 1 GB history under a 100 000-file tree, fast-imported and pushed a session at a time")
 			}
-			r := newReadRig(b, newReadSource(b, size))
-			for _, k := range r.kinds(b) {
-				b.Run("kind="+k.name+"/cache=warm", func(b *testing.B) { r.warm(b, k.q) })
+			src := newReadSource(b, size)
+			for _, store := range readStores {
+				b.Run("objects="+store.name, func(b *testing.B) {
+					r := newReadRig(b, src, store.open(b))
+					if store.warm {
+						for _, k := range r.kinds(b) {
+							b.Run("kind="+k.name+"/cache=warm", func(b *testing.B) { r.warm(b, k.q) })
+						}
+					}
+					b.Run("kind=tree-root/cache=cold", func(b *testing.B) { r.cold(b) })
+				})
 			}
-			b.Run("kind=tree-root/cache=cold", func(b *testing.B) { r.cold(b) })
 		})
 	}
+}
+
+// readStore is one objects= arm: the store a rig's fleet keeps the
+// repository's packs in.
+type readStore struct {
+	name string
+	// open is the arm's store, or a skip of the arm.
+	open func(b *testing.B) objstore.Backend
+	// warm is whether the arm times the warm kinds as well as the cold one.
+	warm bool
+}
+
+// readStores are the objects= arms: S3's documented 100–200 ms to a
+// request's first byte is both ends of the fake's.
+var readStores = []readStore{
+	{name: "mem", open: func(*testing.B) objstore.Backend { return memobj.New() }, warm: true},
+	{name: "s3fake/firstbyte=100ms", open: func(b *testing.B) objstore.Backend {
+		return readS3Fake(b, 100*time.Millisecond)
+	}},
+	{name: "s3fake/firstbyte=200ms", open: func(b *testing.B) objstore.Backend {
+		return readS3Fake(b, 200*time.Millisecond)
+	}},
+	{name: "real", open: s3fake.RealBackend},
+}
+
+// readConnBytes is the most a second the S3 fake sends one connection: 80
+// MB/s, the low end of what one S3 connection carries, as
+// internal/code/host's benchmarks take it.
+const readConnBytes = 80_000_000
+
+// readS3Fake is the S3 fake behind the production backend, answering each
+// request firstByte after it arrives — on loopback the fake answers in
+// microseconds, and a figure taken there would price the SDK rather than the
+// bucket — and sending each connection readConnBytes a second.
+func readS3Fake(b *testing.B, firstByte time.Duration) objstore.Backend {
+	b.Helper()
+	srv := s3fake.Start(b, "files")
+	srv.Latency, srv.ConnBytesPerSecond = firstByte, readConnBytes
+	backend, err := s3obj.Open(b.Context(), s3obj.Config{
+		Endpoint: srv.URL, Region: "us-east-1", Bucket: "files", Prefix: "acme/",
+		PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret",
+	})
+	if err != nil {
+		b.Fatalf("opening the S3 fake: %v", err)
+	}
+	return backend
 }
 
 // readSize is one history= arm: a gittest.History of about history bytes
@@ -206,12 +271,13 @@ type readRig struct {
 // between iterations — internal/code/host's benchmarks' budget.
 const readCacheBytes = 4 << 30
 
-// newReadRig is a fleet holding src's repository, pushed as a host takes one:
-// the history a session at a time, then each commit on top of it.
-func newReadRig(b *testing.B, src *readSource) *readRig {
+// newReadRig is a fleet over objects holding src's repository, pushed as a
+// host takes one: the history a session at a time, then each commit on top of
+// it.
+func newReadRig(b *testing.B, src *readSource, objects objstore.Backend) *readRig {
 	b.Helper()
-	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, People: []string{"ceo"},
-		CacheMaxBytes: readCacheBytes, SyncAlways: true})
+	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}, Objects: objects,
+		People: []string{"ceo"}, CacheMaxBytes: readCacheBytes, SyncAlways: true})
 	f.Declare(b, code.Declared{Name: codetest.RepoName, Settings: codetest.Settings()})
 	p := codetest.NewPerson(b, f, "ceo")
 	url := f.Nodes()[0].URL() + "/git/" + codetest.RepoName

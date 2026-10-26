@@ -149,7 +149,11 @@
 // and a comparison of the history's middle with its tip 13 ms (14), its two
 // walks over half the history's commits. The root's listing on a node emptied
 // first, which downloads the repository's 67 packs before it answers, took
-// 118 ms (191) from the in-process store, never unready. So every warm
+// 118 ms (191) from the in-process store, and from the S3 fake — the fake's
+// figures, not a bucket's: every request answered 100 ms after it arrived, 80
+// MB/s a connection — 604 ms (638), and 1 095 ms (1 118) at 200 ms: five
+// waves of the cache's FetchConcurrency GETs, each paying the first byte.
+// None was unready: each answered inside statelog.ReadBudget. So every warm
 // kind is more than an order of magnitude inside gitproc.ReadDeadline; what
 // grows is a listing with its tree, a stat with the files it counts and a
 // comparison with the history it walks; and code.GitShareWait keeps its

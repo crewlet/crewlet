@@ -354,10 +354,14 @@
 //
 // # Measuring a real bucket
 //
-// BenchmarkBackend's `bucket=real` arm — and internal/code/cache's
-// BenchmarkColdSync's, a git node's first sync of a repository from the
-// bucket — runs only when CREWLET_BENCH_S3_BUCKET names a bucket, and
-// otherwise skips, saying so under `go test -v` (which `make bench` passes).
+// BenchmarkBackend's `bucket=real` arm — and every code host benchmark's arm
+// over the bucket: internal/code/cache's BenchmarkColdSync, a git node's first
+// sync of a repository from it; internal/code/host's BenchmarkPushSmall and
+// BenchmarkCloneCold, a push stored in it and a first clone on a node that
+// reads it cold; and internal/code/query's BenchmarkCodeRead, a seat's first
+// read on such a node — runs only when CREWLET_BENCH_S3_BUCKET names a bucket,
+// and otherwise skips, saying so under `go test -v` (which `make bench`
+// passes).
 // No real bucket's figures are recorded here: none has been measured. The
 // variables are read by s3fake.RealBucket — the one parser of them, which
 // every benchmark that measures a real bucket calls, so each reads them
