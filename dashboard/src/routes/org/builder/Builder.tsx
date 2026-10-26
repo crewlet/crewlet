@@ -60,7 +60,7 @@ import {
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import type { PageActionSpec } from "~/app/assistant/context.ts";
-import { orgDraftSpec, parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
+import { orgDraftSpec, orgOpsArgs, parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useFillScreen } from "~/app/fill.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
@@ -1033,6 +1033,7 @@ function BuilderScreen({
     actions: {
       "org.draft.apply_ops": {
         scope: "This org chart draft (not saved)",
+        args: orgOpsArgs(state.draft),
         parse: (raw) => parseOrgOps(raw, state, keys),
         preview: (change) =>
           change.words.map((words, i) => ({

@@ -10,7 +10,7 @@ import (
 )
 
 // A GENERIC REQUEST IS NAMED FOR THE RESOURCE IT REACHES, never for its route
-// pattern: "Role · engineer", "Agents", "Configuration", where the pattern
+// pattern: "Seat · engineer", "Agents", "Company configuration", where the pattern
 // "GET /config/roles/{id}" is how the mux spells it and nothing a person
 // calls it. The card a read draws, the step it runs as and the step a change
 // is prepared in are all titled by [RequestTitle], so the three never name one
@@ -30,7 +30,9 @@ import (
 //     one above it too (`/tokens/breakdown` is "Tokens breakdown", where
 //     "Breakdown" alone says nothing);
 //   - the values the call filled in follow, so two reads of one route are
-//     told apart (`Role · engineer`, `File · ENG › docs/plan.md`).
+//     told apart (`Seat · engineer`, `File · ENG › docs/plan.md`);
+//   - a route family whose path says it wrong is named as a person calls it
+//     ([resources]): a `/config/roles/{id}` is a seat.
 
 // titleValueBytes bounds one path value in a title: a handle, a key or a short
 // path reads whole, and a value the model wrote longer than a line is cut
@@ -79,6 +81,11 @@ func RequestTitle(pattern string, path map[string]string) string {
 	case len(literals) > 1 && len(values) == 0 && literals[len(literals)-2] == last-1:
 		// A FIXED RESOURCE BENEATH ANOTHER: the one above names it.
 		noun = cards.Humanise(segments[last-1]) + " " + lowerFirst(noun)
+	}
+	// WHAT A PERSON CALLS IT, where the path says it wrong: a
+	// `/config/roles/{id}` is a seat ([resources]).
+	if r, ok := resourceAt(template); ok {
+		noun = capitalised(r.Noun)
 	}
 	if len(values) == 0 {
 		return noun

@@ -425,6 +425,54 @@ func TestARefusedWriteFailsInTheEnginesWords(t *testing.T) {
 	}
 }
 
+// NO ROUTE DETAIL REACHES A PERSON. A write the route refuses with its own
+// account of the request (a tool's name, config keys in backticks, the values to
+// send instead) settles with a card whose failure is the engine's sentence for
+// the kind of refusal and the turn's next step, and that account goes to the
+// model alone, as the write's answer the resumed turn reads. Mutation: show the
+// route's detail or hint on the card, or keep the answer from the turn, and
+// this fails.
+func TestNoRouteDetailReachesAPerson(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	detail := "write_page refused that: `container`: COMPANY is not a space this company " +
+		"declares (`knowledge.root_space`); write in one of: FAIR, HOME, TS"
+	body, _ := json.Marshal(map[string]any{"error": "invalid_input",
+		"message": "One of the values was not accepted.", "detail": detail,
+		"hint": "use PUT /config to declare the space"})
+	f.API.AnswerNext(exec.Response{Status: http.StatusUnprocessableEntity, Body: body})
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, nil)
+	got, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada), approvaltest.Approve(p))
+	if err != nil || got.Proposal.State != wire.ProposalFailed {
+		t.Fatalf("a refused write answered %v, %v", got.Proposal.State, err)
+	}
+	r := f.Turns.Resumed()
+	if len(r) != 1 || r[0].Failure == nil || r[0].Card.Proposal == nil ||
+		r[0].Card.Proposal.Failure == nil {
+		t.Fatalf("the turn was handed %+v, want the failure and its card", r)
+	}
+	shown := r[0].Card.Proposal.Failure.Refusal
+	for _, words := range []string{shown.Message, shown.Hint, r[0].Failure.Refusal.Message} {
+		for _, internal := range []string{"write_page", "`", "knowledge.", "PUT /config", "COMPANY"} {
+			if strings.Contains(words, internal) {
+				t.Errorf("a person reads %q, which carries %q", words, internal)
+			}
+		}
+	}
+	if shown.Code != "invalid_input" || shown.Message == "" || shown.Hint == "" {
+		t.Errorf("the card's failure is %+v, want the code with the engine's sentence and next step",
+			shown)
+	}
+	encoded, _ := json.Marshal(r[0].Card)
+	if strings.Contains(string(encoded), "FAIR, HOME, TS") {
+		t.Errorf("the card as the drawer is sent it carries the route's detail: %s", encoded)
+	}
+	if !strings.Contains(string(r[0].Answer), "FAIR, HOME, TS") {
+		t.Errorf("the turn was handed the answer %s, want the route's whole account", r[0].Answer)
+	}
+}
+
 // AN APPLIED WRITE HANDS THE TURN ITS RECEIPT and the position open screens
 // raise their read floor to.
 func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
@@ -444,7 +492,10 @@ func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
 		// receipt, so the card says which task landed rather than
 		// "Applied".
 		t.Errorf("the receipt is %+v", r.Receipt)
-	case r.Invalidate == nil || r.Invalidate.Domain != "CREWLET_TRACKER_LOG":
+	case r.Invalidate == nil || r.Invalidate.Domain != "tracker" ||
+		r.Invalidate.Position != "CREWLET_TRACKER_LOG@1:42":
+		// NAMED BY THE DOMAIN, the key a screen's read floors are kept
+		// under: the stream's name raised no floor on any screen.
 		t.Errorf("the invalidation is %+v", r.Invalidate)
 	case r.Card.Proposal.State != wire.ProposalApplied || r.ClientReported:
 		t.Errorf("the card is %s and client-reported %v", r.Card.Proposal.State, r.ClientReported)
@@ -453,6 +504,32 @@ func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
 	}
 	if x := f.Grants.Execs(); len(x) != 1 || x[0].Request.Path != p.Path || x[0].Proposal != p.ID {
 		t.Errorf("the exec grant was not derived for the stored request: %+v", x)
+	}
+}
+
+// A WRITE THAT LANDED WITHOUT NAMING A POSITION STILL MOVES THE SCREENS: a
+// route outside the act surface (a brand adopted, a seat changed through the
+// configuration) answers no position, and the page behind the drawer kept
+// drawing what it held before the write until it was reloaded. The turn is
+// handed an invalidation all the same, with no floor to wait for.
+//
+// Mutation: emit an invalidation only for an answer that names a position,
+// and this turn is handed none.
+func TestAWriteWithNoPositionStillInvalidatesTheScreens(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, nil)
+	f.API.AnswerNext(exec.Response{Status: http.StatusOK, Body: []byte(`{"version":4}`)})
+	if _, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada),
+		approvaltest.Approve(p)); err != nil {
+		t.Fatal(err)
+	}
+	r := f.Turns.Resumed()[0]
+	if r.State != wire.ProposalApplied || r.Invalidate == nil ||
+		*r.Invalidate != (wire.Invalidate{}) {
+		t.Fatalf("the resumed turn is %s with invalidation %+v, want applied with an "+
+			"invalidation naming no position", r.State, r.Invalidate)
 	}
 }
 
@@ -729,14 +806,18 @@ func TestARacedCreateIsRefusedAsStale(t *testing.T) {
 				t.Fatalf("the turn was handed %+v, want code %s", r, c.code)
 			}
 			refusal := r[0].Failure.Refusal
-			if c.hint != refusal.Hint && c.hint != "" {
-				t.Errorf("the unconditional refusal's hint is %q, want the route's", refusal.Hint)
+			// THE ROUTE'S OWN WORDS ARE THE MODEL'S, handed over as the
+			// write's answer; the card's failure is the person's, naming no
+			// header and no path.
+			if c.hint != "" && !strings.Contains(string(r[0].Answer), c.hint) {
+				t.Errorf("the turn was handed the answer %s, want the route's own hint %q",
+					r[0].Answer, c.hint)
 			}
-			if c.code == approval.CodeStale && (strings.Contains(refusal.Message, "If-") ||
-				strings.Contains(refusal.Hint, "If-") || !strings.Contains(refusal.Message,
-				"Nothing changed")) {
-				t.Errorf("the stale write reads %q / %q, not in the proposal's terms",
-					refusal.Message, refusal.Hint)
+			for _, shown := range []string{refusal.Message, refusal.Hint} {
+				if strings.Contains(shown, "If-") || strings.Contains(shown, "/config") {
+					t.Errorf("the failed write reads %q / %q, not in the person's terms",
+						refusal.Message, refusal.Hint)
+				}
 			}
 		})
 	}

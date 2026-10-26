@@ -1,0 +1,112 @@
+package cards
+
+import (
+	"net/http"
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/assistant/wire"
+)
+
+// A REFUSAL A PERSON READS IS THE ENGINE'S OWN SENTENCE, chosen by what kind of
+// refusal it is, never the route's account of the request.
+//
+// The route's `detail` and `hint`, and every error the assistant's own checks
+// raise about a call, are written for whoever corrects the request: they name
+// tools ("write_page refused that"), fields and config keys in backticks
+// (`knowledge.root_space`), routes ("PUT /config/units/{id}") and the values
+// to send instead. That is exactly what the model needs, and it reads all of
+// it ([wire.Refusal.ForModel]). A person reading the same words in the drawer
+// learns nothing they can act on, and is shown the engine's internals. So the
+// sentence a person reads is decided here, once, from the refusal's code and
+// the status it came with, and every place a refusal leaves the engine for a
+// person (a step's line, a read's error card, a failed proposal's strip) goes
+// through [PersonRefusal]. What to do next is the assistant's to say in plain
+// words, from the detail it was handed, which the prompt asks of it.
+//
+// THE GRANTS STAY: they are closed-set names the dashboard turns into "You
+// need Worklet access", the one fact about a refusal a person acts on alone.
+
+// The sentences a person reads, by kind of refusal. Each is whole on its own,
+// says nothing about what changed (a failed proposal's card adds "Nothing
+// changed." itself), and names no tool, field, route or value.
+const (
+	refusedAccess    = "You do not have the access this needs."
+	refusedSignedOut = "Your session has ended. Sign in again, then ask once more."
+	refusedStepUp    = "This needs you to confirm it is you first."
+	refusedMissing   = "The record this needs could not be found."
+	refusedExists    = "That already exists."
+	refusedConflict  = "Another change landed at the same moment."
+	refusedTooLarge  = "It is larger than the engine accepts."
+	refusedBusy      = "The engine is busy. Try again in a moment."
+	refusedValue     = "One of its values was not accepted."
+	refusedUnsent    = "The assistant asked for it in a form the engine does not accept, " +
+		"so it was not sent."
+	refusedUnread  = "What this would change could not be read."
+	refusedDeep    = "Deep work is not available right now."
+	refusedGeneric = "The engine did not accept it."
+)
+
+// Codes the assistant raises itself, before or instead of a route's answer.
+// They are the turn's own (internal/assistant), named here because this is
+// where their sentence is chosen.
+const (
+	// CodeInvalidCall is a call refused as the model wrote it, before
+	// anything was sent.
+	CodeInvalidCall = "invalid_input"
+	// CodePreviewUnreadable is a change whose preview could not read the
+	// object it changes.
+	CodePreviewUnreadable = "preview_unreadable"
+	// CodeDeepUnavailable is a deep run that could not start.
+	CodeDeepUnavailable = "deep_work_unavailable"
+)
+
+// RefusalResumes is the hint a failed proposal's card carries: the turn is
+// handed the route's whole refusal, so the assistant says what to change.
+const RefusalResumes = "The assistant has the details and will suggest a change that can apply."
+
+// PersonRefusal is r as a person reads it: its code and grants, and the
+// engine's own sentence for its kind ([personSentence]) in place of the route's
+// or the model's words. status is the route's answer, zero for a call refused
+// before anything was sent. The detail is left behind: it is the model's.
+func PersonRefusal(r wire.Refusal, status int) wire.Refusal {
+	return wire.Refusal{Code: r.Code, Message: personSentence(r.Code, status),
+		Grants: slices.Clone(r.Grants)}
+}
+
+// personSentence is the sentence for a refusal of code at status: the code
+// where it says more than its status (a 409 that is an existing record rather
+// than a race), else the status's class.
+func personSentence(code string, status int) string {
+	switch code {
+	case "step_up_required":
+		return refusedStepUp
+	case "exists", "not_creatable":
+		return refusedExists
+	case "body_too_large":
+		return refusedTooLarge
+	case CodePreviewUnreadable:
+		return refusedUnread
+	case CodeDeepUnavailable:
+		return refusedDeep
+	}
+	switch {
+	case status == 0 && code == CodeInvalidCall:
+		return refusedUnsent
+	case status == http.StatusUnauthorized:
+		return refusedSignedOut
+	case status == http.StatusForbidden:
+		return refusedAccess
+	case status == http.StatusNotFound, status == http.StatusGone:
+		return refusedMissing
+	case status == http.StatusConflict, status == http.StatusPreconditionFailed:
+		return refusedConflict
+	case status == http.StatusRequestEntityTooLarge:
+		return refusedTooLarge
+	case status == http.StatusTooManyRequests, status == http.StatusServiceUnavailable:
+		return refusedBusy
+	case status == http.StatusBadRequest, status == http.StatusUnprocessableEntity,
+		status == http.StatusPreconditionRequired, status == http.StatusUnsupportedMediaType:
+		return refusedValue
+	}
+	return refusedGeneric
+}

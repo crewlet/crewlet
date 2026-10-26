@@ -92,8 +92,9 @@ from `crewlet config export`, which writes every one of them.
 
 To check a document without writing it, send the same request with
 `?dry_run=true`. Nothing is stored or activated, no summary is needed, and the
-answer is `200 {"valid": true, "base_revision_id", "warnings", "derived"}`, or
-the refusal the write would get:
+answer is `200 {"valid": true, "base_revision_id", "warnings", "derived"}`, each
+warning marked `"introduced"` when this write brings it rather than the active
+revision already carrying it, or the refusal the write would get:
 
 ```bash
 curl -X PUT "$CREWLET_URL/config?dry_run=true" \

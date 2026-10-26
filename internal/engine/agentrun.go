@@ -80,22 +80,24 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		return fmt.Errorf("box mode needs a tool bridge the box can dial, and this "+
 			"engine has none: set %s to a URL a sandbox can reach", mcpbridge.BaseURLVar)
 	}
-	// A BRIDGE NOTHING SERVES IS REFUSED BY NAME, because the two settings
+	// A BRIDGE NOTHING REACHES IS REFUSED BY NAME, because the two settings
 	// it takes are different fixes: an unset base URL is one variable, and
-	// a base URL on a node that binds no listener (api.port 0) is a second
-	// one the first message would send an operator past.
-	if !e.bridge.Mounted() {
-		return fmt.Errorf("box mode needs this node to serve its tool bridge, and "+
-			"it serves none: %s is set but this node binds no HTTP listener; set "+
-			"api.port on this node and point %s at that listener as a sandbox "+
-			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
+	// a base URL on a node that serves the API with no listener (api.port 0)
+	// is a second one the first message would send an operator past.
+	if !e.bridge.Reachable() {
+		return fmt.Errorf("box mode needs a node serving its tool bridge, and "+
+			"nothing here reaches it: %s is set but this node serves the API "+
+			"with api.port 0, so it binds no listener for the bridge's route; set "+
+			"api.port and point %s at the nodes that serve the API as a sandbox "+
+			"reaches them", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
 	}
 	// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, before Open, for the
 	// reason the two refusals above are: Open refuses it too — every bridged
-	// call acts as the surface's seat, so a surface with none could decide
-	// nothing — and its empty answer would otherwise be reported below as a
-	// missing bridge URL, sending an operator to a variable that is set.
-	if req.Surface == nil || req.Surface.Turn().Handle() == "" {
+	// call acts as the surface's seat, and the token names it, so a surface
+	// with none could decide nothing — and its empty answer would otherwise
+	// be reported below as a missing bridge URL, sending an operator to a
+	// variable that is set.
+	if _, err := mcpbridge.SeatOf(req.Surface); err != nil {
 		return fmt.Errorf("the box-mode executor's tool surface is bound to no " +
 			"seat, so a bridged call would have nobody to act as; this is an " +
 			"assembly fault in the runner, not a setting")

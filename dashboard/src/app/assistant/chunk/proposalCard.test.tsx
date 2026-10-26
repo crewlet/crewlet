@@ -63,6 +63,7 @@ test("the screen's gate holds Approve, and says why, before anything is pressed"
   setFramePage({ screen: "me", title: "My work", path: ["me"], params: {}, query: {} });
   const spec: PageActionSpec<unknown> = {
     scope: "Worklet list filters",
+    args: { type: "object" },
     parse: (raw) => ({ ok: true, value: raw }),
     preview: () => [{ field: "Assignee", next: "Cleared", current: "Jane" }],
     blocked: () =>
@@ -129,39 +130,45 @@ test("an unconfirmed change never says nothing changed", () => {
   expect(document.body.textContent ?? "").not.toContain("Nothing changed.");
 });
 
-test("a change that removes fields leads with them, above every row", () => {
+test("what a change takes away leads the card, above every row", () => {
   draw({
     scope: "server",
     tool: "propose_api_change",
-    title: "Change through the API",
-    removes: ["Project", "Space"],
+    title: "Remove seat QA Engineer",
+    summary: "This removes seat QA Engineer from unit Product and Engineering.",
+    note: "The previous version stays in the configuration history, so this can be reverted.",
+    risk: "destructive",
     changes: [
-      { kind: "fact", field: "request", label: "Request", to: "PUT /config/units/core" },
-      {
-        kind: "added",
-        field: "roles.analyst.name",
-        label: "Roles › analyst › name",
-        to: "Data Analyst",
-      },
+      { kind: "removed", field: "roles.qa.name", label: "QA Engineer › Name", from: "QA Engineer" },
     ],
-    approve_label: "Approve and send",
+    approve_label: "Approve and remove",
   });
-  const warning = screen.getByText(
-    "This also removes Project and Space. Approve only if you asked for that.",
+  const summary = screen.getByText(
+    "This removes seat QA Engineer from unit Product and Engineering.",
   );
-  const firstRow = screen.getByText("PUT /config/units/core");
-  expect(warning.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const firstRow = screen.getByText("QA Engineer › Name");
+  expect(summary.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  screen.getByText(
+    "The previous version stays in the configuration history, so this can be reverted.",
+  );
 });
 
 test("a change that removes nothing says nothing about removing", () => {
   draw({
     scope: "server",
     tool: "propose_api_change",
-    title: "Change through the API",
-    changes: [{ kind: "fact", field: "request", label: "Request", to: "PUT /config/units/core" }],
-    approve_label: "Approve and send",
+    title: "Add seat Technical Writer",
+    changes: [
+      {
+        kind: "added",
+        field: "roles.tw.name",
+        label: "Technical Writer › Name",
+        to: "Technical Writer",
+      },
+    ],
+    approve_label: "Approve and add",
   });
-  expect(screen.queryByText(/This also removes/)).toBeNull();
+  expect(screen.queryByText(/removes/)).toBeNull();
 });
 
 // A VALUE IS DRAWN AS WHAT IT IS (changeValue.tsx): a list as a list, never
@@ -173,12 +180,12 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   draw({
     scope: "server",
     tool: "propose_api_change",
-    title: "Change through the API",
+    title: "Change unit Product and Engineering",
     changes: [
       {
         kind: "added",
         field: "roles.qa.responsibilities",
-        label: "Roles › qa › responsibilities",
+        label: "QA Engineer › Responsibilities",
         to: "Review the tests, Approve or send back",
         items: ["Review the tests", "Approve or send back"],
       },
@@ -188,7 +195,7 @@ test("a list, a page of text, a body and a colour each read as what they are", (
         label: "Page",
         to: "# Proposed team\n\n## Roles\n\n- **Product Manager**: owns the brief\n- [a link](https://example.com)",
       },
-      { kind: "fact", field: "request.body", label: "Request body", to: '{\n  "name": "QA"\n}' },
+      { kind: "added", field: "settings", label: "Settings", to: '{\n  "name": "QA"\n}' },
       {
         kind: "changed",
         field: "colors.ground",
@@ -201,7 +208,7 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   const rows = [...document.querySelectorAll(".crewlet-change-list__row")];
   const row = (label: string) => rows.find((r) => r.querySelector("dt")?.textContent === label)!;
 
-  const list = row("Roles › qa › responsibilities");
+  const list = row("QA Engineer › Responsibilities");
   expect(list.classList.contains("crewlet-change-list__row--block")).toBe(true);
   expect([...list.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
     "Review the tests",
@@ -218,7 +225,7 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   expect(page.querySelectorAll("li")).toHaveLength(2);
   expect(page.querySelector("a")).toBeNull();
 
-  const body = row("Request body");
+  const body = row("Settings");
   expect(body.classList.contains("crewlet-change-list__row--block")).toBe(true);
   expect(body.querySelector("pre, code")?.textContent).toContain('"name": "QA"');
 
@@ -226,4 +233,73 @@ test("a list, a page of text, a body and a colour each read as what they are", (
   expect(colour.querySelectorAll(".crewlet-color-chip")).toHaveLength(2);
   expect(colour.querySelector("ins")?.textContent).toContain("#14102B");
   expect(colour.classList.contains("crewlet-change-list__row--block")).toBe(false);
+});
+
+// A COMPANY CHANGE STILL WAITING IS NOT "SAVED": the subtitle says where it
+// lands in words true at its state. Mutation: say "Saved" on a pending card.
+test("a pending company change does not say it is saved", () => {
+  draw({ scope: "server", state: "proposed", title: "Add seat Technical Writer" });
+  expect(screen.queryByText("Saved for the company")).toBeNull();
+  screen.getByText("For the company, once approved");
+});
+
+// THE EXACT REQUEST IS AN ADMINISTRATOR'S: the engine sends it to them alone,
+// and the card draws it after every other row. Mutation: drop the technical
+// rows, or draw a request the engine did not send.
+test("the technical details are drawn when the engine sends them, and only then", () => {
+  draw({
+    scope: "server",
+    tool: "propose_api_change",
+    title: "Add seat Technical Writer",
+    changes: [
+      { kind: "added", field: "roles.tw.name", label: "Technical Writer › Name", to: "TW" },
+    ],
+    technical: { method: "PUT", path: "/config/units/core", body: '{\n  "id": "core"\n}' },
+  });
+  screen.getByText("PUT /config/units/core");
+  cleanup();
+  draw({
+    scope: "server",
+    tool: "propose_api_change",
+    title: "Add seat Technical Writer",
+    changes: [
+      { kind: "added", field: "roles.tw.name", label: "Technical Writer › Name", to: "TW" },
+    ],
+  });
+  expect(screen.queryByText(/technical details/)).toBeNull();
+});
+
+// A PAGE'S BODY IS DRAWN AS A LINE DIFF, as the page's History draws it: its
+// headings and bullets stay lines, and an unchanged line ("suffices.") is never
+// shown as removed and added again. Mutation: draw a multi-line text change as
+// a word diff.
+test("a change to a page's body reads as a line diff, like its History", () => {
+  const before = "# Plan\n\nOne owner suffices.\n- Ship it";
+  const after = "# Plan\n\n## TL;DR\n- One owner\n\nOne owner suffices.\n- Ship it";
+  draw({
+    scope: "server",
+    tool: "edit_page",
+    title: "Edit page",
+    changes: [
+      {
+        kind: "text",
+        field: "content",
+        label: "Page",
+        from: before,
+        to: after,
+        words: [
+          { op: "same", text: "# Plan\n\n" },
+          { op: "added", text: "## TL;DR\n- One owner\n\n" },
+          { op: "same", text: "One owner suffices.\n- Ship it" },
+        ],
+      },
+    ],
+  });
+  const diff = screen.getByRole("group", { name: "Page" });
+  const removed = diff.querySelectorAll(".crewlet-diff-view__line--remove");
+  const added = [...diff.querySelectorAll(".crewlet-diff-view__line--add")].map(
+    (line) => line.querySelector(".crewlet-diff-view__text")?.textContent,
+  );
+  expect(removed).toHaveLength(0);
+  expect(added.map((text) => text?.trim())).toEqual(["## TL;DR", "- One owner", ""]);
 });

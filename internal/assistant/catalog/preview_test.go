@@ -77,6 +77,18 @@ func TestEveryWriteIsPreviewedFromTheObjectAsItIsNow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// A WRITE WHOSE BODY IS THE OBJECT AS READ (a seat's ceiling, sent
+		// back as the seat) sends the tool's own request with that body.
+		if body, reads := objectBodies[tool.Name]; reads {
+			var got map[string]any
+			if err := json.Unmarshal(p.Request.Body, &got); err != nil {
+				t.Fatalf("%s previews a body that is not JSON: %v", tool.Name, err)
+			}
+			if !reflect.DeepEqual(got, body) {
+				t.Errorf("%s previews the body %v, want %v", tool.Name, got, body)
+			}
+			want.Body = p.Request.Body
+		}
 		if !reflect.DeepEqual(p.Request, want) {
 			t.Errorf("%s previews %+v and the tool sends %+v", tool.Name, p.Request, want)
 		}
@@ -122,6 +134,16 @@ var completedArgs = map[string]map[string]any{
 	"update_company_principles": {"mission": "Help friends share costs fairly.",
 		"vision": "Settling up takes seconds.", "policies": []any{"Miles is the final " +
 			"authority.", "Money is an integer number of cents."}},
+}
+
+// objectBodies are the bodies of the writes that send the object as the
+// preview read it, changed: set_token_budget's seat as [assistanttest.World]
+// holds it, with only the one window's ceiling moved and the history line.
+var objectBodies = map[string]map[string]any{
+	"set_token_budget": {"handle": "qa", "name": "QA Engineer", "goal": "Review the tests.",
+		"token_budget": map[string]any{"day": float64(1500000)},
+		catalog.SummaryKey: "Raise QA Engineer's daily token budget from 1,000,000 tokens " +
+			"to 1,500,000 tokens"},
 }
 
 // A CHANGE PREPARED AGAINST AN OLD VERSION IS STALE, and a revision that moved
@@ -213,7 +235,9 @@ func TestATaskCardShowsWhatTheWriteCarries(t *testing.T) {
 		rows["assignee"] != "Backend engineer (engineer)" {
 		t.Errorf("the card reads due %q and assignee %q", rows["due"], rows["assignee"])
 	}
-	if p.Note != "Backend engineer (engineer) starts on the new task once this is approved." {
+	// THE WORLD HOLDS NO LIVE STATE FOR engineer, so the card promises only
+	// the assignment (TestTheHandoverNoteSaysWhatTheSeatsStateSupports).
+	if p.Note != "Backend engineer (engineer) is assigned the new task once this is approved." {
 		t.Errorf("the note reads %q", p.Note)
 	}
 	var body struct {
@@ -350,5 +374,47 @@ func TestAPrinciplesChangeIsADiffOfTheStoredPrinciples(t *testing.T) {
 	if _, err := tool.Preview(t.Context(), reader(world), wednesday,
 		map[string]any{"mission": "M."}); !errors.Is(err, catalog.ErrInvalidArguments) {
 		t.Errorf("a change that changes nothing answered %v", err)
+	}
+}
+
+// THE HANDOVER NOTE PROMISES ONLY WHAT THE SEAT'S LIVE STATE SUPPORTS: an agent
+// taking work picks it up, a stopped one is said to wait and for what, one
+// whose last turn failed is flagged, and one whose state cannot be read is
+// only said to be assigned. "Starts on the work once this is approved" was
+// once printed for a seat that could not onboard. Mutation: drop the live read
+// and every agent "picks the work up".
+func TestTheHandoverNoteSaysWhatTheSeatsStateSupports(t *testing.T) {
+	t.Parallel()
+	create, _ := catalog.Lookup("create_task")
+	const assigned = "Backend engineer (engineer) is assigned the new task once this is approved."
+	for name, tc := range map[string]struct {
+		live any
+		want string
+	}{
+		"taking work": {map[string]any{"activity": "idle"},
+			assigned + " It picks the work up on its next turn."},
+		"last turn failed": {map[string]any{"activity": "idle",
+			"last_turn": map[string]any{"outcome": "failed"}},
+			assigned + " Its last turn failed, so check it before relying on it to start."},
+		"paused": {map[string]any{"activity": "stopped", "stopped_reason": "paused"},
+			assigned + " Backend engineer (engineer) is paused, so it does not start until " +
+				"somebody resumes it."},
+		"out of budget": {map[string]any{"activity": "stopped", "stopped_reason": "budget"},
+			assigned + " Backend engineer (engineer) has used its token budget, so it does " +
+				"not start until the budget resets or is raised."},
+		"stopped for a reason this build does not know": {map[string]any{"activity": "stopped",
+			"stopped_reason": "eclipse"}, assigned + " Backend engineer (engineer) cannot take " +
+			"work right now, so it does not start until it can."},
+		"unreadable": {nil, assigned},
+	} {
+		world := assistanttest.World()
+		if tc.live != nil {
+			world["/agents/engineer"] = map[string]any{"handle": "engineer", "live": tc.live}
+		}
+		p, err := create.Preview(t.Context(), reader(world), wednesday,
+			map[string]any{"title": "File the report", "assignee": "engineer"})
+		if err != nil || p.Note != tc.want {
+			t.Errorf("%s: the note reads %q (%v), want %q", name, p.Note, err, tc.want)
+		}
 	}
 }

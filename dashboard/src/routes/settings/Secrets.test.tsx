@@ -631,7 +631,23 @@ describe("the credentials table", () => {
           (h) => h.textContent?.trim(),
         ),
         hidden: grid.parentElement?.querySelector(".crewlet-data-grid__foot")?.textContent ?? "",
+        stacked: grid.hasAttribute("data-stacked"),
       };
+    }
+
+    // The narrowest the grid still draws as columns. Squeezed past it, the
+    // kit's DataGrid stacks its rows into cards, which hide nothing, so the
+    // full give-way set is read one step before the grid stacks.
+    async function squeezedToColumns() {
+      let last = await drawn(486);
+      for (let width = 476; width > 0; width -= 10) {
+        cleanup();
+        const at = await drawn(width);
+        if (at.stacked) break;
+        last = at;
+      }
+      cleanup();
+      return last;
     }
 
     test("beside a peek it gives way whole facts, and never cuts the name", async () => {
@@ -646,11 +662,18 @@ describe("the credentials table", () => {
       expect(at.hidden).not.toContain("Hidden to fit");
     });
 
-    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed to
-    // nothing, every column that can give way does — and each is a fact the
-    // credential's own peek draws. What reads it never gives way.
-    test("every column it can give way is one the credential's peek carries", async () => {
+    test("squeezed past its columns it stacks into card rows and hides nothing", async () => {
       const at = await drawn(160);
+      expect(at.stacked).toBe(true);
+      expect(at.hidden).not.toContain("Hidden to fit");
+    });
+
+    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed as far
+    // as it still draws columns, every column that can give way does, and
+    // each is a fact the credential's own peek draws. What reads it never
+    // gives way.
+    test("every column it can give way is one the credential's peek carries", async () => {
+      const at = await squeezedToColumns();
       const hidden = at.hidden.replace(/^.*Hidden to fit:\s*/, "").split(/,\s*|\s+and\s+/);
       expect(hidden.sort()).toEqual(["Key id", "Set by", "Source", "Updated"]);
       expect(at.heads).toContain("Read by");

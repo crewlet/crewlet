@@ -64,14 +64,15 @@ func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	// The app first: mounting the route is what lets the bridge open a
 	// session at all.
 	a := newApp(t, api.Options{Bridge: bridge})
-	// BOUND TO A SEAT'S TURN, as every executor surface is: the bridge acts
-	// as that seat on every call and opens no session for a surface that
-	// names none.
+	// BOUND TO AN AGENT SEAT'S TURN, as every executor surface is: the
+	// bridge acts as that seat on every call, its token names the seat, and
+	// it opens no session for a surface that names none.
 	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
 	url := bridge.Open(t.Context(), &mcpbridge.Session{
 		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Dev",
 		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
-			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat}),
+			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat,
+				Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{seat}}}),
 	})
 	if url == "" {
 		t.Fatal("no endpoint was minted")

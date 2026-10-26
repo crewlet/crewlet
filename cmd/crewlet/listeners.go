@@ -25,24 +25,21 @@ type nodeListeners struct {
 // serves them the boot surface, or binds nothing when api.port is 0, which is
 // the hard off switch for every one of them.
 //
-// bridge says whether this node will have a box-mode tool bridge, which is
-// what decides whether a node without the ingress role binds api.public at all
-// ([api.PublicListener]), and whether its boot surface tells a call to the
-// bridge to come back ([api.NewBoot]). The artifact origin is bound by
-// [api.ArtifactsListener]'s rule: on an ingress node whose file sets a port for
-// it. A failed bind of any of them closes what was bound and fails the boot,
+// api.public is bound by [api.PublicListener]'s rule and the artifact origin by
+// [api.ArtifactsListener]'s: each on an ingress node whose file sets a port
+// for it. A failed bind of any of them closes what was bound and fails the boot,
 // naming the address, before anything slow has run.
 //
 // THE NODE ID IS THE ONE THE ENGINE WILL RUN UNDER, resolved by the same rule,
 // so /health names the node by the name its peers will know it by from its
 // first answer.
-func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string, bridge bool,
+func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string,
 	bind bindFunc, log *slog.Logger,
 ) (*nodeListeners, error) {
 	if boot.API.Port == 0 {
 		return nil, nil
 	}
-	surface, err := api.NewBoot(boot, nodeID, bridge)
+	surface, err := api.NewBoot(boot, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +49,7 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string, b
 	}
 	l := &nodeListeners{api: server, boot: surface}
 	publicAddr := ""
-	if api.PublicListener(boot, nodeID, bridge) {
+	if api.PublicListener(boot, nodeID) {
 		l.public, publicAddr, err = listenAPI(ctx, bind, boot.API.Public.Addr(), surface.Public(), log)
 		if err != nil {
 			l.close(context.WithoutCancel(ctx), log)

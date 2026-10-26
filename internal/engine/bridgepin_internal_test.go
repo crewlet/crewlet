@@ -83,7 +83,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		names = append(names, tool.Name())
 	}
 	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: turnID, Seat: seat}, seat: seat,
+		engine: e, turn: &turnctx.Turn{RunID: turnID, Seat: seat, Org: c.Org}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.E2B,
 	}
 	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{

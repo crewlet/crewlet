@@ -347,7 +347,7 @@ func TestABoxModeExecutorStartsWithoutWhatItsEnvironmentLacks(t *testing.T) {
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
+		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: c.Org}, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.E2B,
 	}
 	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{

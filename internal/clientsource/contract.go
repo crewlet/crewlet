@@ -228,6 +228,8 @@ var contract = []Entry{
 	{"MAX_LOGIN", ReadScalar, "internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
 	{"CREDENTIAL_CLASSES", ReadLiteral,
 		"internal/api/iamapi.TestTheDashboardChecksALoginByTheEnginesGrammar"},
+	{"ASSIST_CREDENTIAL_PREFIX", ReadScalar,
+		"internal/api/iamapi.TestTheDashboardKnowsTheAssistantsCredentialClass"},
 	{"TOKEN_DEFAULT_DAYS", ReadScalar,
 		"internal/api/iamapi.TestTheDashboardMintsWithinTheEnginesTokenLifetimes"},
 	{"TOKEN_MAX_DAYS", ReadScalar,
@@ -292,6 +294,7 @@ var contract = []Entry{
 	{"AssistantCardKind", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantProposalState", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantProposalScope", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
+	{"AssistantProposalRisk", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantChangeKind", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantWordOp", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
 	{"AssistantColumnType", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
@@ -348,11 +351,13 @@ var contract = []Entry{
 	{"AssistantWord", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantReceipt", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantPageActionRef", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
+	{"AssistantTechnicalRequest", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantFailure", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantOpenInAppCard", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantErrorCard", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantNoticeCard", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantPageContext", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
+	{"AssistantActionArgs", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantResource", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantResourceRef", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantPageDraft", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
@@ -393,6 +398,9 @@ var contract = []Entry{
 	{"AssistantFileStored", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	// assistant.ts (page actions)
 	{"ASSISTANT_PAGE_ACTIONS", ReadLiteral, "internal/assistant/catalog.TestEveryPageActionIsTheDashboardsToo"},
+
+	// failures.ts
+	{"ProviderErrorKind", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryErrorKind"},
 
 	// stops.ts
 	{"StopReason", ReadUnion, "internal/providers/llm.TestTheDashboardKnowsEveryStopReason"},

@@ -740,6 +740,11 @@ async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
 /** A text stream being read: the next chunk, or null once the engine ended it. */
 export interface TextStream {
   next: () => Promise<string | null>;
+  /**
+   * The engine answered `204 No Content`: there is nothing to read and
+   * nothing will follow, the event-stream answer that says not to dial again.
+   */
+  noContent: boolean;
 }
 
 /**
@@ -798,6 +803,12 @@ async function stream(
     clearTimeout(timer);
   }
   answeredAt = Date.now();
+  // NO CONTENT IS AN ANSWER, not an unreadable one: a browser hands a 204
+  // no body, and reading it as a failure would dial it again.
+  if (response.status === 204) {
+    release();
+    return { next: async () => null, noContent: true };
+  }
   if (!response.ok || response.body === null) {
     let body: Record<string, unknown>;
     try {
@@ -828,6 +839,7 @@ async function stream(
   );
   const decoder = new TextDecoder();
   return {
+    noContent: false,
     async next() {
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try {

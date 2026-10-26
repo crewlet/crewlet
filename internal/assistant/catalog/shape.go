@@ -52,20 +52,32 @@ func (r Result) Failed() bool { return r.Refusal != nil }
 //     The model is handed the call's own arguments, that nothing matched
 //     and the answer's own reason where it gave one ([cards.EmptySummary]).
 //     THE ONE PLACE this is decided, for every read the catalogue holds.
+//     THE CARD'S TITLE CARRIES THE CALL'S SCOPE ([Tool.Scope]), so two reads
+//     of one tool with different arguments are two different cards to the
+//     person and to the model, and a seat column is drawn by the seat's
+//     name where o says it ([cards.Options]).
 //  5. The model's summary is the card's, every row or item whole, and is
 //     fenced under the turn's boundary when the tool reads text a person or
 //     an agent wrote (ADR-0040), or has every fence marker in it defused
 //     when it does not, so no field of any answer can open or close a fence.
-func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now time.Time) (Result, error) {
+func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now time.Time,
+	o cards.Options) (Result, error) {
 	if !cards.Permitted(resp.Status) {
 		refusal := exec.RefusalOf(resp)
 		refusal.Message = redact.Secrets(refusal.Message)
-		model, err := json.Marshal(map[string]any{"refused": refusal})
+		refusal.Hint = redact.Secrets(refusal.Hint)
+		refusal.Detail = redact.Secrets(refusal.Detail)
+		// THE MODEL READS THE ROUTE'S WHOLE ACCOUNT, the person the engine's
+		// sentence for its kind (cards.PersonRefusal).
+		model, err := json.Marshal(map[string]any{"refused": map[string]any{
+			"code": refusal.Code, "message": refusal.ForModel(), "hint": refusal.Hint,
+			"grants": refusal.Grants,
+		}})
 		if err != nil {
 			return Result{}, fmt.Errorf("catalog: encode a refusal: %w", err)
 		}
-		return Result{Cards: []wire.Card{cards.Error(refusal, t.Phrase,
-			cards.Retryable(resp.Status))}, Model: provenance.Neutralise(b, string(model)),
+		return Result{Cards: []wire.Card{cards.Error(cards.PersonRefusal(refusal, resp.Status),
+			t.Phrase, cards.Retryable(resp.Status))}, Model: provenance.Neutralise(b, string(model)),
 			Refusal: &refusal}, nil
 	}
 	if resp.Truncated {
@@ -82,7 +94,7 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	if err != nil {
 		return Result{}, err
 	}
-	built, err := cards.Build(spec, body, now)
+	built, err := cards.BuildWith(scoped(spec, t.ScopeOf(args)), body, now, o)
 	if err != nil {
 		return Result{}, fmt.Errorf("catalog: card %s's answer: %w", t.Name, err)
 	}
@@ -101,11 +113,23 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 		}
 		return Result{Model: model, Trust: trust, Empty: true}, nil
 	}
-	model, err := fitModel(t, trust, built.Card, b)
+	model, err := fitModel(t, trust, built, b)
 	if err != nil {
 		return Result{}, err
 	}
 	return Result{Cards: built.Cards(), Model: model, Trust: trust}, nil
+}
+
+// scoped is spec with its table's title carrying scope, the one spelling a
+// step's label shares ([withScope]). An entity names its own record.
+func scoped(spec cards.Spec, scope string) cards.Spec {
+	if spec.Table == nil || scope == "" {
+		return spec
+	}
+	table := *spec.Table
+	table.Title = withScope(table.Title, scope)
+	spec.Table = &table
+	return spec
 }
 
 // modelText is a summary as the model reads it: fenced whole, with the
@@ -251,10 +275,10 @@ const fenceBytes = 2 << 10
 // [cards.ModelBytes] with the fence included: the summary is built to the
 // bound less the fence's guess, and built again smaller by what the result
 // went past it, whole rows still, until it fits.
-func fitModel(t Tool, trust provenance.Trust, card wire.Card, b provenance.Boundary) (string, error) {
+func fitModel(t Tool, trust provenance.Trust, built cards.Built, b provenance.Boundary) (string, error) {
 	budget := cards.ModelBytes - fenceBytes
 	for budget > 0 {
-		summary, err := cards.Summary(card, budget)
+		summary, err := cards.SummaryOf(built, budget)
 		if err != nil {
 			return "", fmt.Errorf("catalog: summarise %s's answer: %w", t.Name, err)
 		}

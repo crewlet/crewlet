@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -654,7 +655,7 @@ func TestAMoveCrossesNodesInOneShortWindowOnEachSide(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = q.Stop(context.Background()) })
 		h, err := New(Options{Queue: q, Wire: wireFor(t, fleetRing), Node: name,
-			AskBudget: 300 * time.Millisecond, Now: time.Now})
+			AskBudget: eventfan.FleetReadBudget, Now: time.Now})
 		if err != nil {
 			t.Fatal(err)
 		}

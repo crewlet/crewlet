@@ -55,9 +55,9 @@ describe("the bus", () => {
       throw new Error("screen fault");
     });
     const b = on("assistant.context.invalidate", () => heard.push("b"));
-    expect(() => emit("assistant.context.invalidate", { reason: "data", revision: "r" })).toThrow(
-      "screen fault",
-    );
+    expect(() =>
+      emit("assistant.context.invalidate", { reason: "data", revision: "r", revisions: {} }),
+    ).toThrow("screen fault");
     a();
     b();
     expect(heard).toEqual(["b"]);
