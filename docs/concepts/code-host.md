@@ -885,10 +885,11 @@ failing on one damaged copy cost one repair. How depends on the damage:
   asked for once: the download that failed holds the next one off — ten
   minutes, then twice as long each time up to a day
   (`code_cache_pack_reinstall_failed`) — and until it has passed, a request
-  or sync that meets the pack's damage takes no forced read of the copy and
-  no rebuild, since each would ask the store for that very pack again. It is
-  answered 503 at once — with the store's own refusal of the pack wherever a
-  rebuild would have come next, and that the copy is still damaged otherwise
+  or sync that meets the pack's damage takes no rebuild, since that would ask
+  the store for that very pack again, and no forced read of the copy but the
+  hourly one above, which leaves the pack as it stands. It is answered 503 —
+  with the store's own refusal of the pack wherever a rebuild would have come
+  next, and that the copy is still damaged otherwise
   — and the first to meet the damage once the hold has passed asks the store
   once more. A pushed pack is no
   repair: it replaces nothing a failing request read, so a repository pushed
