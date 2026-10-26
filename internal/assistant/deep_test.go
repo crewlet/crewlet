@@ -3,6 +3,7 @@ package assistant_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -384,15 +386,25 @@ func TestAStopKillsTheRun(t *testing.T) {
 
 // A RUN'S CREWLET CALLS ARE CAPPED by its steps: the deep company's twenty,
 // and the twenty-first is refused without being sent. Mutation: drop the cap
-// and twenty-one requests are sent.
+// and twenty-one requests are sent. Each call reads another task, since one
+// read made twice in a run is answered from the first (the surface's memo).
 func TestARunsCrewletCallsAreCapped(t *testing.T) {
 	t.Parallel()
 	var calls []llm.ToolCall
+	tasks := map[string]exec.Response{}
 	for i := range 21 {
-		calls = append(calls, readCall("b"+string(rune('a'+i))))
+		key := fmt.Sprintf("ENG-%d", i+1)
+		call := readCall("b" + string(rune('a'+i)))
+		call.Arguments = map[string]any{"item": key}
+		calls = append(calls, call)
+		tasks["GET /worklet/"+key] = assistanttest.Task(key, "Rotate keys", "Rotate the keys.")
 	}
 	script := evals.NewDeepScript(evals.DeepRunScript{Calls: calls, Report: "Read it all."})
-	f := deepRig(t, script, startDeep("Read everything"), evals.Say("Done."))
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Company: deepCompany(t), Deep: script, Handler: assistanttest.Routes(tasks),
+		Acts:   []string{"create_work_item"},
+		Tools:  []catalog.Tool{getTask(t), assistanttest.Tool(t, "create_task")},
+		Rounds: []evals.Round{startDeep("Read everything"), evals.Say("Done.")}})
 	accepted, err := f.Ask("cap", "Read everything", nil)
 	if err != nil {
 		t.Fatal(err)

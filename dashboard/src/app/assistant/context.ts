@@ -49,6 +49,7 @@ import {
   ASSISTANT_PAGE_ACTIONS,
   ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS,
   ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES,
+  type AssistantActionArgs,
   type AssistantDraftFileRef,
   type AssistantPageContext,
   type AssistantPageDraft,
@@ -132,6 +133,23 @@ export type PageActionParse<P> = { ok: true; value: P } | { ok: false; reason: s
 export interface PageActionSpec<P> {
   /** What the action touches, as the person reads it: "Worklet list filters (not saved)". */
   scope: string;
+  /**
+   * What the action takes, as the screen takes it NOW: built from the same
+   * declaration `parse` reads (the keys a URL action writes, the seats a
+   * screen draws), so the two cannot disagree. Sent in the page context's
+   * `action_args`; the model reads it, and the engine holds every proposal to
+   * it before a card is drawn, so a call the screen could only refuse never
+   * reaches the person.
+   */
+  args: AssistantActionArgs;
+  /**
+   * What a change by this action depends on, beyond the screen and its path:
+   * the address's query, the selection, the screen's data. All three where
+   * unset. A change goes stale only when one of these moves, so an action
+   * that re-checks what it edits when it applies (a ceiling for its editor)
+   * tracks less, and is not refused because the person opened a peek beside it.
+   */
+  tracks?: readonly PageRevisionPart[];
   /** Turn what the model proposed into a typed value, or refuse it. */
   parse(raw: unknown): PageActionParse<P>;
   /** Each field the action changes: its name, the new value and the current one. */
@@ -149,6 +167,12 @@ export interface PageActionSpec<P> {
    */
   undo?(value: P): () => boolean;
 }
+
+/** A part of the page a change's revision may track (see [PageActionSpec.tracks]). */
+export type PageRevisionPart = "query" | "selection" | "data";
+
+/** Every part, which an action that names none tracks. */
+const ALL_PARTS: readonly PageRevisionPart[] = ["query", "selection", "data"];
 
 /**
  * A page action's id: one of the contract's (`ASSISTANT_PAGE_ACTIONS`), which
@@ -307,19 +331,32 @@ export function hashOf(text: string): string {
 
 /**
  * A stable, bounded name for what the page shows now: the same page with the
- * same data is the same revision, and any change to its address, its
- * selection or its data is another one.
+ * same data is the same revision, and any change to the parts it tracks is
+ * another one. The page's own revision tracks every part; an action's tracks
+ * what it depends on ([PageActionSpec.tracks]).
  */
-function revisionOf(page: FramePage, reg: AssistantPageRegistration | null): string {
+function revisionOf(
+  page: FramePage,
+  reg: AssistantPageRegistration | null,
+  tracks: readonly PageRevisionPart[] = ALL_PARTS,
+): string {
   const parts = [
     page.screen,
     page.path.join("/"),
-    Object.entries(page.query)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${k}=${v}`)
-      .join("&"),
-    reg?.selection ? `${reg.selection.kind}:${reg.selection.id}` : "",
-    reg?.dataVersion ?? "",
+    tracks.includes("query")
+      ? Object.entries(page.query)
+          // THE PEEK IS THE SELECTION'S, not the view's: an action that
+          // tracks the address and not the selection is not moved by the
+          // person opening a row beside it.
+          .filter(([k]) => k !== "peek" || tracks.includes("selection"))
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => `${k}=${v}`)
+          .join("&")
+      : "",
+    tracks.includes("selection") && reg?.selection
+      ? `${reg.selection.kind}:${reg.selection.id}`
+      : "",
+    tracks.includes("data") ? (reg?.dataVersion ?? "") : "",
   ].join("\u0000");
   return `${page.screen}@${hashOf(parts)}`;
 }
@@ -346,6 +383,16 @@ export function buildPageContext(
   const accepts = Object.keys(reg?.actions ?? {})
     .filter(isPageActionId)
     .slice(0, ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS);
+  // WHAT EACH TAKES AND WHAT EACH DEPENDS ON, by its id: the engine holds a
+  // proposal to the first and binds it to the second.
+  const actionArgs: Record<string, AssistantActionArgs> = {};
+  const actionRevisions: Record<string, string> = {};
+  for (const id of accepts) {
+    const spec = reg?.actions?.[id];
+    if (!spec) continue;
+    actionArgs[id] = spec.args;
+    actionRevisions[id] = revisionOf(page, reg, spec.tracks ?? ALL_PARTS);
+  }
   const context: AssistantPageContext = {
     screen: SCREEN.test(page.screen) ? page.screen : "unknown",
     title: title(page.title),
@@ -355,6 +402,7 @@ export function buildPageContext(
     selection,
     source_revision: revisionOf(page, reg),
     accepts,
+    ...(accepts.length === 0 ? {} : { action_args: actionArgs, action_revisions: actionRevisions }),
   };
   if (reg?.draft) context.draft = { ...reg.draft, fields: [...reg.draft.fields] };
   // OVER ITS BYTE BUDGET, it sheds what matters least first: the query (the
@@ -376,6 +424,7 @@ export function buildPageContext(
 /** Rebuild the snapshot and tell every listener, and the bus when it moved. */
 function publish(reason: AssistantInvalidateReason | null): void {
   const before = snapshot?.context.source_revision ?? null;
+  const beforeActions = JSON.stringify(snapshot?.context.action_revisions ?? {});
   snapshot = frame
     ? {
         key: `${frame.screen}:${frame.path.join("/")}`,
@@ -385,8 +434,13 @@ function publish(reason: AssistantInvalidateReason | null): void {
     : null;
   for (const listener of listeners) listener();
   const after = snapshot?.context.source_revision ?? null;
-  if (reason !== null && after !== null && after !== before) {
-    emit("assistant.context.invalidate", { reason, revision: after });
+  const revisions = snapshot?.context.action_revisions ?? {};
+  if (
+    reason !== null &&
+    after !== null &&
+    (after !== before || JSON.stringify(revisions) !== beforeActions)
+  ) {
+    emit("assistant.context.invalidate", { reason, revision: after, revisions: { ...revisions } });
   }
 }
 
@@ -466,6 +520,16 @@ export function registerPage(next: AssistantPageRegistration): () => void {
   };
 }
 
+/**
+ * The revision a change by `action` is judged against now: the action's own,
+ * or the page's where the page does not take it. What a claim reports and
+ * what the screen compares before applying.
+ */
+export function actionRevision(action: string): string {
+  const context = snapshot?.context;
+  return context?.action_revisions?.[action] ?? context?.source_revision ?? "";
+}
+
 /** The page as the drawer reads it now, or null where the frame has published none. */
 export function pageSnapshot(): PageSnapshot | null {
   return snapshot;
@@ -530,14 +594,15 @@ export function applyPageAction(
   ): AssistantBusEvents["assistant.action.result"] => ({
     correlation_id: request.correlation_id,
     outcome,
-    revision: snapshot?.context.source_revision ?? "",
+    revision: actionRevision(request.action),
     ...extra,
   });
   const spec = isPageActionId(request.action) ? registration?.actions?.[request.action] : undefined;
   if (!spec) return result("no_handler", { reason: "This page does not take that change." });
   // A FRESH REVISION, read at the moment of applying: what the page shows
-  // now, never what it showed when the change was prepared or approved.
-  if (request.source_revision !== (snapshot?.context.source_revision ?? "")) {
+  // now, never what it showed when the change was prepared or approved, and
+  // only of what this action depends on.
+  if (request.source_revision !== actionRevision(request.action)) {
     return result("stale", { reason: "The page changed since this was prepared." });
   }
   const parsed = spec.parse(request.payload);

@@ -4038,10 +4038,32 @@ action's result. An approved change shows its outcome on its card; a pure
 view change the screen declared needs no approval (D11) shows a receipt in
 the thread, with Undo while the page still shows what the change made of it.
 
+**The page behind the drawer reads every change the assistant applied.** Each
+server write an approval lands is followed on the turn's stream by a
+`context.invalidate` action naming the domain and the position its record
+landed at, where the route answered one, and arriving all the same where it
+did not (a brand adopted, a seat changed through the configuration). The tab
+raises its read floor for that domain, exactly as a press of its own would,
+and asks every live question again, quietly: each `useQuery` and each
+`useRest` read (`protocol/session.ts`'s `EVERY_QUESTION`). No table maps
+routes to the screens they move, so none can drift.
+
 **What each screen offers** is one id per change, the same list the engine's
 catalogue holds, each parsed, gated and applied by the screen's own code over
 the vocabulary its own controls offer (`app/assistant/urlAction.ts` builds the
-ones that are address keys). Pure view changes apply at once: Home's window
+ones that are address keys). **Each declares what it takes** (`args`, sent as
+the page context's `action_args`), built from the declaration its parser
+reads: `urlArgs` from the same keys, the Budgets ceiling from the seats and
+windows it draws, the org builder's operations from the vocabulary its parser
+reads, and `draft.set` from the open draft's editable fields. The engine holds
+every proposal to it before a card is drawn, and
+`app/assistant/actionArgs.test.ts` feeds every declaration's examples and
+listed values through the real parser. **Each also states what it depends
+on** (`tracks`: the address, the selection, the data), and its own revision
+(`action_revisions`) is what a proposal is bound to and a claim reports: a
+view change tracks the address without the peek, `draft.set` the draft, and
+the Budgets ceiling only the screen, since its parser checks the seat and the
+window again when it applies. Pure view changes apply at once: Home's window
 and feed (`home.range.set`, `home.feed.set`), the work list's filters, Clear
 and arrangement (`work.filter.apply`, `work.filters.clear`, `work.arrange.set`,
 never widening the person `#/me` is about), a project's lens

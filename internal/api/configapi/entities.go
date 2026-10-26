@@ -2,6 +2,8 @@ package configapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // The config's addressable collections — what the dashboard's Config room
@@ -474,7 +476,7 @@ func (s *Service) Entity(ctx context.Context, kind, id string) (any, error) {
 func (s *Service) getEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		company, revision, err := s.documentOf(r.Context())
+		company, _, err := s.documentOf(r.Context())
 		switch {
 		case errors.Is(err, ErrNoActiveRevision):
 			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoActiveRevision,
@@ -501,10 +503,17 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 				})
 			return
 		}
-		// THE DOCUMENT'S TAG, because an entity is a slice of it: the
-		// entity changes when the revision does, and a caller who holds
-		// this tag can send it straight back as If-Match on the write.
-		if serveConditional(w, r, revision) {
+		// THE ENTITY'S OWN TAG ([entityTag]), which a caller sends straight
+		// back as If-Match on the write: a precondition on what they read,
+		// not on the whole document.
+		tag, err := entityTag(kind, entity)
+		if err != nil {
+			s.fail(w, "tag the entity", err)
+			return
+		}
+		w.Header().Set("ETag", tag)
+		if matchesTag(r.Header.Get("If-None-Match"), tag) {
+			w.WriteHeader(http.StatusNotModified)
 			return
 		}
 		writeJSON(w, http.StatusOK, entity)
@@ -546,112 +555,210 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		if !ok {
 			return
 		}
-
-		active, found, err := s.configs.Active(r.Context())
-		if err != nil {
-			s.fail(w, "read the active revision", err)
-			return
-		}
-		if !found {
-			// Nothing to splice into. Refused rather than treated as an
-			// empty company: creating the first revision through an entity
-			// route would build a company out of one provider or server.
-			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
-				map[string]string{
-					"hint": "this node has no active company revision to edit: " +
-						"import one with `crewlet config import`",
-				})
-			return
-		}
-		// A SEAT OR A UNIT IS WRITTEN BY ITS LEAD as well as by an
-		// admin, and decided as a read of it is: where it sits,
-		// BEFORE the id is looked up or the body decoded, so an id outside
-		// the caller's subtree and one the revision does not hold are
-		// refused in the same bytes. Building first answered a body with
-		// another handle 400 naming where the seat sits, a well-formed one
-		// admission's 403 naming its unit, and a missing id 404.
-		if inOrgChart(kind) {
-			var company *config.Company
-			if company, err = s.open(active); err != nil {
-				s.fail(w, "open the active revision", err)
-				return
-			}
-			if !s.mayReach(w, r, authz.ActionOrgWrite, company, kind, id) {
-				return
-			}
-		}
-		create, ok := s.entityPrecondition(w, r, active, found)
+		expected, create, ok := entityPrecondition(w, r)
 		if !ok {
 			return
 		}
-		d, err := entityDraft(kind, id, sent, active.ID, create)
-		if err != nil {
-			// A create of a kind that has none is the caller's request to
-			// correct, answered like every other entity refusal.
-			s.refuseEntity(w, kind, id, err)
+		principal, ok := principalOf(w, r)
+		if !ok {
 			return
 		}
-		if d.principal, ok = principalOf(w, r); !ok {
-			return
+		write := entityWrite{kind: kind, id: id, sent: sent, summary: summary,
+			dryRun: dryRun, create: create, expected: expected, principal: principal,
+			by: attributionOf(r)}
+		var raced error
+		for range entityAttempts {
+			done, writeErr := s.writeEntity(w, r, write)
+			var lost *RacedError
+			if errors.As(writeErr, &lost) {
+				raced = writeErr
+				continue
+			}
+			if done {
+				return
+			}
 		}
-		d.addressedCheck = dryRun && inOrgChart(kind)
-		d.by = attributionOf(r)
-		prepared, err := s.prepare(r.Context(), d)
-		if err != nil {
-			s.refuseEntity(w, kind, id, err)
-			return
-		}
-		if dryRun {
-			writeChecked(w, prepared)
-			return
-		}
-		// The same rule the whole-document write has, and for the same
-		// reason, asked as late: a per-entity write can say more, so the
-		// hint does.
-		if !requireSummary(w, summary, "this write needs an audit summary: "+
-			"the X-Summary header, or a top-level _summary key in the body. "+
-			"Name what changed about "+kind+"/"+id) {
-			return
-		}
-		applied, err := s.commit(r.Context(), prepared, summary)
-		if err != nil {
-			s.refuseApply(w, err)
-			return
-		}
-		writeApplied(w, applied)
+		s.refuseApply(w, raced)
 	}
 }
 
-// entityPrecondition reads an entity write's condition, and reports whether
-// it is a create.
+// entityAttempts is how many times an entity write is tried when the company
+// document moves under it for a reason that is not the entity: the charter's
+// count ([charterAttempts]), for the charter's reason. The precondition is
+// the entity's, so a revision another writer activated between this write's
+// read and its compare-and-set (a seat added beside the one edited, a
+// credential sealed) is no conflict the caller can resolve, and each attempt
+// judges the precondition again against the revision active then.
+const entityAttempts = charterAttempts
+
+// entityWrite is one entity write, as every attempt makes it.
+type entityWrite struct {
+	kind, id  string
+	sent      submitted
+	summary   string
+	dryRun    bool
+	create    bool
+	expected  string
+	principal *iam.Principal
+	by        iam.Actor
+}
+
+// writeEntity makes one attempt: it reads the revision active now, decides
+// the caller's reach and the entity's precondition against it, and writes onto
+// it. done reports that the request has been answered; a [*RacedError] is a
+// revision that moved meanwhile, which the caller tries again.
+func (s *Service) writeEntity(w http.ResponseWriter, r *http.Request, e entityWrite) (done bool, err error) {
+	ctx := r.Context()
+	active, found, err := s.configs.Active(ctx)
+	if err != nil {
+		s.fail(w, "read the active revision", err)
+		return true, nil
+	}
+	if !found {
+		// Nothing to splice into. Refused rather than treated as an empty
+		// company: creating the first revision through an entity route
+		// would build a company out of one provider or server.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
+			map[string]string{
+				"hint": "this node has no active company revision to edit: " +
+					"import one with `crewlet config import`",
+			})
+		return true, nil
+	}
+	company, err := s.open(active)
+	if err != nil {
+		if !refuseUnreadable(w, err) {
+			s.fail(w, "open the active revision", err)
+		}
+		return true, nil
+	}
+	// A SEAT OR A UNIT IS WRITTEN BY ITS LEAD as well as by an admin, and
+	// decided as a read of it is: where it sits, BEFORE the id is looked up
+	// or the body decoded, so an id outside the caller's subtree and one the
+	// revision does not hold are refused in the same bytes.
+	if inOrgChart(e.kind) && !s.mayReach(w, r, authz.ActionOrgWrite, company, e.kind, e.id) {
+		return true, nil
+	}
+	// THE PRECONDITION IS THE ENTITY'S, judged against what GET serves for
+	// it now (redacted, as the caller read it). An entity the revision does
+	// not hold is left to the draft, which refuses it in its own words.
+	if e.expected != "" && !e.create {
+		if current, held := entityKinds[e.kind].find(company.Redact(), e.id); held {
+			tag, tagErr := entityTag(e.kind, current)
+			if tagErr != nil {
+				s.fail(w, "tag the entity", tagErr)
+				return true, nil
+			}
+			if !matchesTag(e.expected, tag) {
+				// 412, the answer RFC 9110 gives a failed If-Match, with the
+				// entity as it stands, so a caller can show the change beside
+				// what replaced it and resend with this tag to keep theirs.
+				w.Header().Set("ETag", tag)
+				httpjson.FailWithFields(w, http.StatusPreconditionFailed,
+					httpjson.CodeVersionMoved, httpjson.Detail{
+						"current": current, "etag": tag,
+						"hint": e.kind + "/" + e.id + " changed after you read it; " +
+							"read it again and make the change on top of it",
+					})
+				return true, nil
+			}
+		}
+	}
+	d, err := entityDraft(e.kind, e.id, e.sent, active.ID, e.create)
+	if err != nil {
+		// A create of a kind that has none is the caller's request to
+		// correct, answered like every other entity refusal.
+		s.refuseEntity(w, e.kind, e.id, err)
+		return true, nil
+	}
+	d.principal = e.principal
+	d.addressedCheck = e.dryRun && inOrgChart(e.kind)
+	d.by = e.by
+	prepared, err := s.prepare(ctx, d)
+	var lost *RacedError
+	switch {
+	case errors.As(err, &lost):
+		return false, err
+	case err != nil:
+		s.refuseEntity(w, e.kind, e.id, err)
+		return true, nil
+	}
+	if e.dryRun {
+		writeChecked(w, prepared)
+		return true, nil
+	}
+	// The same rule the whole-document write has, and for the same reason,
+	// asked as late: a per-entity write can say more, so the hint does.
+	if !requireSummary(w, e.summary, "this write needs an audit summary: "+
+		"the X-Summary header, or a top-level _summary key in the body. "+
+		"Name what changed about "+e.kind+"/"+e.id) {
+		return true, nil
+	}
+	applied, err := s.commit(ctx, prepared, e.summary)
+	switch {
+	case errors.As(err, &lost):
+		return false, err
+	case err != nil:
+		s.refuseApply(w, err)
+		return true, nil
+	}
+	writeApplied(w, applied)
+	return true, nil
+}
+
+// entityTag is the strong entity-tag of one entity: a digest of what GET
+// serves for it, redacted, prefixed with its kind.
+//
+// THE ENTITY, NOT THE REVISION, as the charter's tag is ([charterTag]): the
+// precondition a caller editing one seat holds is "this seat is still what I
+// read", and a revision that moved because a colleague added another seat,
+// sealed a credential or changed a ceiling elsewhere is no conflict about
+// anything they sent. Tagged with the document's revision, every such write
+// was refused 409 revision_advanced, and the Dashboard Assistant's proposal
+// of one seat's budget went stale when an unrelated seat was added.
+func entityTag(kind string, entity any) (string, error) {
+	encoded, err := json.Marshal(entity)
+	if err != nil {
+		return "", fmt.Errorf("configapi: encode %s for its tag: %w", kind, err)
+	}
+	sum := sha256.Sum256(encoded)
+	return `"` + kind + "-" + hex.EncodeToString(sum[:16]) + `"`, nil
+}
+
+// entityPrecondition reads an entity write's condition: the tag an edit was
+// read at (If-Match, the entity's own [entityTag], or `*` for whatever it
+// holds now), or a create (`If-None-Match: *`).
 //
 // `If-None-Match: *` AT AN ENTITY'S ADDRESS IS ABOUT THE ENTITY (RFC 9110
 // §13.1.2: "only if there is no current representation" of the TARGET
 // resource). Handed to the document's own precondition it was read as "only
-// if no company is configured" — a condition that can never hold on an entity
-// route, which needs a company to splice into — so the one request that says
-// "add this" was refused 412 `already_configured`, a sentence about something
-// the caller never asked. It is the create-only write here.
-//
-// NOT BESIDE `If-Match`. That tag names the DOCUMENT's revision, and at an
-// address that has no representation yet the two conditions describe two
-// different resources; the create already lands on the revision active at the
-// commit, compare-and-set, and is validated whole against it.
-func (s *Service) entityPrecondition(w http.ResponseWriter, r *http.Request, active store.Revision, found bool) (create, ok bool) {
-	if strings.TrimSpace(r.Header.Get("If-None-Match")) != "*" {
-		_, ok := s.checkPrecondition(w, r, active, found)
-		return false, ok
-	}
-	if strings.TrimSpace(r.Header.Get("If-Match")) != "" {
+// if no company is configured", a condition that can never hold on an entity
+// route, which needs a company to splice into. It is the create-only write
+// here, and never beside If-Match: at an address with no representation yet
+// the two conditions describe two different resources. Any other
+// If-None-Match is no condition this route takes.
+func entityPrecondition(w http.ResponseWriter, r *http.Request) (expected string, create, ok bool) {
+	expected = strings.TrimSpace(r.Header.Get("If-Match"))
+	switch none := strings.TrimSpace(r.Header.Get("If-None-Match")); {
+	case none == "":
+		return expected, false, true
+	case none != "*":
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadIfMatch,
+			map[string]string{
+				"hint": "an entity write takes If-Match with the ETag its GET answered, " +
+					"or If-None-Match: * to create one",
+			})
+		return "", false, false
+	case expected != "":
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConflictingPreconditions,
 			map[string]string{
 				"hint": "If-None-Match: * asks for a create and If-Match names the " +
-					"revision an edit was read from; send one. A create is checked " +
+					"version an edit was read at; send one. A create is checked " +
 					"against the revision active when it lands",
 			})
-		return false, false
+		return "", false, false
 	}
-	return true, true
+	return "", true, true
 }
 
 // howToAdd is how a member of kind is added, the one sentence both a plain PUT

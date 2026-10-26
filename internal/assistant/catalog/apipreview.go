@@ -326,7 +326,7 @@ func readRepresentation(ctx context.Context, read proposal.Read, reader Route,
 	case !cards.Permitted(resp.Status):
 		return representation{}, refusedRead(resp)
 	case resp.Truncated:
-		return representation{}, fmt.Errorf("%w: %s is larger than one step reads, so the "+
+		return representation{}, fmt.Errorf("%w: %s is larger than a change's preview reads, so the "+
 			"change could not be shown against it", ErrPreviewRead, reader.Pattern)
 	}
 	doc, err := cards.Decode(resp.Body)

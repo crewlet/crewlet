@@ -517,7 +517,43 @@ export interface AssistantPageContext {
   selection: AssistantResourceRef | null;
   source_revision: string;
   accepts: string[];
+  /**
+   * What each accepted action takes on this screen now, by action id: every
+   * accepted action but `draft.set`, whose arguments are the open draft's
+   * editable fields. The engine holds a proposal to it before any card.
+   */
+  action_args?: Record<string, AssistantActionArgs>;
+  /** Each accepted action's own revision: what it depends on, so it goes stale only when that moves. */
+  action_revisions?: Record<string, string>;
   draft?: AssistantPageDraft;
+}
+
+/** A JSON type an action's argument takes. */
+type AssistantArgType = "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
+
+/**
+ * A page action's arguments as the screen declares them: a closed subset of
+ * JSON Schema (`internal/assistant/wire.ActionArgs`), built from the same
+ * declaration the screen's parser reads, so the two cannot disagree. The
+ * engine refuses a keyword outside this subset.
+ */
+export interface AssistantActionArgs {
+  type?: AssistantArgType | AssistantArgType[];
+  description?: string;
+  enum?: string[];
+  const?: string;
+  minLength?: number;
+  maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
+  items?: AssistantActionArgs;
+  properties?: Record<string, AssistantActionArgs>;
+  required?: string[];
+  patternProperties?: Record<string, AssistantActionArgs>;
+  additionalProperties?: boolean;
+  oneOf?: AssistantActionArgs[];
+  /** Whole values the screen takes; top level only, each held to the schema itself. */
+  examples?: unknown[];
 }
 
 /** Where an open draft's values live: in the page until saved, or saved. */
