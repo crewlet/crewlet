@@ -74,9 +74,8 @@ import (
 // listener (api.public), whose routes are the ones outside parties call,
 // exactly as [partition] answers there; on api.port of an ingress node with
 // api.public set, the 404 naming that listener for a route outside parties
-// call; and on a node without the ingress role, everything but its probes and
-// its tool bridge, which its guard refuses with a 401 or its mux with a 404
-// once it serves. So a socket says nothing more while it starts than it does
+// call; and on a node without the ingress role, everything but its probes,
+// which its mux refuses with a 404 once it serves. So a socket says nothing more while it starts than it does
 // afterwards, and no caller is sent back to wait for a route that will never
 // be there. And nothing here asks for a credential, since nothing is served:
 // there is nothing a caller could be refused that it would otherwise read.
@@ -137,10 +136,8 @@ type Boot struct {
 
 // NewBoot is the boot surface of the node bootstrap describes, answering as
 // nodeID — the name its engine will run under, resolved the way the engine
-// resolves it. bridge says whether this node will have a box-mode tool
-// bridge, as for [PublicListener]: on a node without the ingress role it is
-// the one route besides the probes that the node will serve.
-func NewBoot(bootstrap *config.Bootstrap, nodeID string, bridge bool) (*Boot, error) {
+// resolves it.
+func NewBoot(bootstrap *config.Bootstrap, nodeID string) (*Boot, error) {
 	switch {
 	case bootstrap == nil:
 		return nil, errors.New("api: the boot surface needs the node's Tier A")
@@ -150,7 +147,6 @@ func NewBoot(bootstrap *config.Bootstrap, nodeID string, bridge bool) (*Boot, er
 	b := &Boot{node: nodeID}
 	profile := bootstrap.Profile(nodeID)
 	ingress, public := profile.RunsIngress(), bootstrap.API.Public.Enabled()
-	bridged := !ingress && servesBridge(profile.RunsSeats(), bridge)
 	// THE BROWSER POSTURE the node will answer in: the full surface's CORS
 	// layer on an ingress node, and none on the probe surface, which has none.
 	posture := func(h http.Handler) http.Handler { return h }
@@ -159,18 +155,14 @@ func NewBoot(bootstrap *config.Bootstrap, nodeID string, bridge bool) (*Boot, er
 	}
 	// WHAT api.port WILL SERVE once the node does. An ingress node serves
 	// every route there — but the ones outside parties call, when api.public
-	// is set ([partition]). A node without the role serves its probes, and
-	// its tool bridge beside them when it has one and no api.public to serve
-	// it on ([Probes]); every other path is the mux's own 404 or 405, which
-	// says no more than the guard's 401 or the mux's 404 do once it serves.
+	// is set ([partition]). A node without the role serves its probes
+	// ([Probes]); every other path is the mux's own 404 or 405, which says no
+	// more than the mux's 404 does once it serves.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", b.serveHealth)
 	mux.HandleFunc("GET /ready", b.serveReady)
-	switch {
-	case ingress:
+	if ingress {
 		mux.HandleFunc("/", b.refuse)
-	case bridged && !public:
-		mux.HandleFunc(mcpbridge.PathPrefix, b.refuse)
 	}
 	served := posture(httpjson.Mux(mux))
 	b.api = servedOn(bootstrap, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -183,22 +175,13 @@ func NewBoot(bootstrap *config.Bootstrap, nodeID string, bridge bool) (*Boot, er
 		}
 		served.ServeHTTP(w, r)
 	}))
-	// AND WHAT THE PUBLIC LISTENER WILL SERVE: every route outside parties
-	// call on an ingress node, the tool bridge alone on one without
-	// ([BridgeOnly]) — a listener [PublicListener] binds for nothing else.
-	// Anything else is the mux's own 404, what [partition] answers there on
-	// an ingress node, byte for byte. (Behind the bridge's listener a guarded
-	// path meets the guard's 401 once the node serves; a 404 before then says
-	// no more than that does.)
-	servesThere := auth.Public
-	if !ingress {
-		servesThere = func(path string) bool {
-			return bridged && public && strings.HasPrefix(path, mcpbridge.PathPrefix)
-		}
-	}
+	// AND WHAT THE PUBLIC LISTENER WILL SERVE, which only an ingress node
+	// binds ([PublicListener]): every route outside parties call. Anything
+	// else is the mux's own 404, what [partition] answers there, byte for
+	// byte.
 	refused := posture(http.HandlerFunc(b.refuse))
 	b.public = servedOn(bootstrap, true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !servesThere(r.URL.Path) {
+		if !ingress || !auth.Public(r.URL.Path) {
 			httpjson.NoRoute(w, r)
 			return
 		}
@@ -335,21 +318,20 @@ func loggedRoute(path string) string {
 }
 
 // PublicListener reports whether a node binds a listener on api.public: one
-// with the ingress role, for the routes outside parties call, and one without
-// it only where it serves its box-mode tool bridge, which bridge says it
-// has. api.port 0 is the hard off switch for both, as everywhere.
+// with the ingress role, for the routes outside parties call. api.port 0 is the
+// hard off switch for it, as everywhere.
+//
+// NEVER A NODE WITHOUT THE ROLE, its box-mode seats included: a box's call
+// reaches the fleet's bridge on any node that serves the API, which relays it
+// to the seat's holder over the broker (internal/api/mcpbridge), so a node
+// that serves no API has no route a box needs it to serve.
 //
 // ONE PREDICATE for the two moments that need it — `crewlet run` binding the
-// listener before there is an engine, and [EngineProbeOptions] deciding which
-// surface serves the bridge once there is one — so a node never binds a
-// public listener it then serves nothing on, nor serves a bridge on one it
-// never bound.
-func PublicListener(bootstrap *config.Bootstrap, nodeID string, bridge bool) bool {
-	if bootstrap.API.Port == 0 || !bootstrap.API.Public.Enabled() {
-		return false
-	}
-	profile := bootstrap.Profile(nodeID)
-	return profile.RunsIngress() || servesBridge(profile.RunsSeats(), bridge)
+// listener before there is an engine, and serving it once there is one — so a
+// node never binds a public listener it then serves nothing on.
+func PublicListener(bootstrap *config.Bootstrap, nodeID string) bool {
+	return bootstrap.API.Port != 0 && bootstrap.API.Public.Enabled() &&
+		bootstrap.Profile(nodeID).RunsIngress()
 }
 
 // ArtifactsListener reports whether a node binds a listener on api.artifacts:
@@ -363,12 +345,4 @@ func PublicListener(bootstrap *config.Bootstrap, nodeID string, bridge bool) boo
 func ArtifactsListener(bootstrap *config.Bootstrap, nodeID string) bool {
 	return bootstrap.API.Port != 0 && bootstrap.API.Artifacts.Enabled() &&
 		bootstrap.Profile(nodeID).RunsIngress()
-}
-
-// servesBridge reports whether a node without the ingress role mounts its
-// box-mode tool bridge: it must run seats, since only a node running a seat
-// opens a session, and it must have a bridge, which needs
-// [mcpbridge.BaseURLVar] set ([mcpbridge.Configured]).
-func servesBridge(runsSeats, bridge bool) bool {
-	return bridge && runsSeats
 }

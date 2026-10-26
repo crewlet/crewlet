@@ -75,7 +75,7 @@ executor into a sandbox box — a real shell, a real editor, a real checkout —
 with the seat's tools reaching it over an MCP bridge, as a detached run that
 outlives the turn. It needs more than a sign-in: a CLI with a coding-agent runner
 (`claude-code` or `opencode`), a `providers.sandbox` catalogue to place the run
-in, and `CREWLET_MCP_BRIDGE_URL` set to something a box can dial. `crewlet llm
+in, and `CREWLET_MCP_BRIDGE_URL` set to the API's address as a box can dial it. `crewlet llm
 doctor` checks all three. Host mode stays the default and is the better answer
 when you want every step to be the turn's own — its rounds capped, a person's
 note reaching it between runs, no sandbox needed. See

@@ -282,7 +282,7 @@ func engineCode(body []byte) string {
 // given the code the body carried.
 //
 // Only a node with the ingress role mounts the REST surface. A node without
-// it binds api.port for its probes and tool bridge alone ([api.Probes]), and its
+// it binds api.port for its probes alone ([api.Probes]), and its
 // router answers every other path with the engine's own `no_route`
 // ([httpjson.CodeNoRoute]) — so that code is a Crewlet node missing a role,
 // and a 404 carrying no code of the engine's is not a node's API at all: a

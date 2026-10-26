@@ -1233,7 +1233,20 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 // compared for equality by the lease renewal and never rendered in a
 // width-constrained slot.
 func NewIncarnation(nodeID string) string {
-	return nodeID + ":" + uuid.NewString()
+	return nodeID + incarnationSep + uuid.NewString()
+}
+
+// incarnationSep joins a node's id to an incarnation's own suffix. No node id
+// holds it ([nodeIDPattern]), so the cut at its first occurrence is exact.
+const incarnationSep = ":"
+
+// IncarnationNode is the node an incarnation belongs to: the stable id
+// [NewIncarnation] wrote before the incarnation's own suffix, which is what a
+// peer addresses the node by. ONE CUT, beside the one join, for every reader
+// that holds a lease's owner and needs its node.
+func IncarnationNode(owner string) string {
+	node, _, _ := strings.Cut(owner, incarnationSep)
+	return node
 }
 
 // ---- store ----------------------------------------------------------- //

@@ -239,7 +239,7 @@ func TestAConfigClientWithNoCapSendsNothing(t *testing.T) {
 //
 // The route answers no 404 of its own. So the engine router's `no_route` is a
 // Crewlet node without the ingress role — one that binds api.port for its probes
-// and tool bridge alone — and a 404 carrying no engine code is something that is not a
+// alone — and a 404 carrying no engine code is something that is not a
 // node's API at all. Each is named for what it is: a node missing a role is
 // never called "not a Crewlet node", and a proxy is never sent looking for a
 // role.

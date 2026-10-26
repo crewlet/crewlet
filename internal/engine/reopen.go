@@ -33,12 +33,12 @@ import (
 // under the same job, from the spend the row already holds; and it is fenced
 // on the seat as THIS node holds it now.
 //
-// # What it cannot reach
+// # How the box reaches it here
 //
-// The box dials the address it was launched with. A node restarted at that
-// address serves the run again from here; a run taken over by a PEER is served
-// on the peer while its box still dials the node that launched it — see
-// [mcpbridge.Bridge.resolve] for what that node answers.
+// The box dials the fleet's bridge address, whichever node answers it, and
+// the node it reaches relays the call to this one by the seat's lease
+// ([mcpbridge.Bridge.Join]) — so a run this node took over from a peer is
+// served here as surely as one it launched.
 //
 // NEVER AN ERROR to the recovery that calls it: the seat is this node's
 // whatever becomes of one run's bridge, and the run is still collected when it
@@ -67,9 +67,9 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	case e.bridge == nil:
 		refuse("this node serves no tool bridge: " + mcpbridge.BaseURLVar + " is unset here")
 		return
-	case !e.bridge.Mounted():
-		refuse("this node serves no tool bridge: " + mcpbridge.BaseURLVar + " is set but " +
-			"this node binds no HTTP listener (api.port)")
+	case !e.bridge.Reachable():
+		refuse("nothing reaches this node's tool bridge: " + mcpbridge.BaseURLVar + " is set but " +
+			"this node serves the API with api.port 0, so it binds no listener for the bridge's route")
 		return
 	}
 	rt := e.sandbox.Load()
