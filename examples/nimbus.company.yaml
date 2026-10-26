@@ -1096,16 +1096,15 @@ units:
               # same — Go 1.21 or later here: the engine installs nothing
               # into a template, and E2B's prebuilt per-agent one is built
               # for the coding agent rather than for this seat's repos.
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker server in the box: the seat's own tools,
-                # the work item's included, reach the run over its tool
-                # bridge (docs/concepts/code-sandbox.md, "The tool bridge").
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               # This seat's own PAT, injected into the box run env — the
               # engine-wide git-auth step (and the coding agent, per that
               # step's brief) uses it. Explicit per seat, so MRs land under
@@ -1113,7 +1112,7 @@ units:
               # nothing about GitLab.
               env:
                 GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
-              # Per-role provisioning (crewlet.sandbox.setup): each step
+              # Per-seat provisioning (role.sandbox.setup): each step
               # declares files to write, commands to run (a non-zero exit
               # fails the box acquisition), env to merge into the run env,
               # and a `brief` paragraph telling the coding agent what the
@@ -1199,16 +1198,15 @@ units:
             # an MR as Agent Frontend SWE's own GitLab identity
             # (${GITLAB_TOKEN_FE}).
             sandbox:
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker server in the box: the seat's own tools,
-                # the work item's included, reach the run over its tool
-                # bridge (docs/concepts/code-sandbox.md, "The tool bridge").
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               env:
                 GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
@@ -1290,16 +1288,15 @@ units:
             # framework story in the Phase-2 repo and opens an MR as Agent
             # AI Systems Engineer's own GitLab identity (${GITLAB_TOKEN_AI}).
             sandbox:
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker server in the box: the seat's own tools,
-                # the work item's included, reach the run over its tool
-                # bridge (docs/concepts/code-sandbox.md, "The tool bridge").
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               env:
                 GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
