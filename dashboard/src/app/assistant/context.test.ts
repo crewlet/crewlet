@@ -134,6 +134,7 @@ describe("the registry", () => {
 describe("a page of several components", () => {
   const noop: PageActionSpec<unknown> = {
     scope: "x",
+    args: { type: "object" },
     parse: (raw) => ({ ok: true, value: raw }),
     preview: () => [],
     blocked: () => null,
@@ -175,6 +176,7 @@ describe("applying a page action", () => {
   const applied: string[] = [];
   const spec: PageActionSpec<string> = {
     scope: "Worklet list filters (not saved)",
+    args: { type: "object" },
     parse: (raw) =>
       typeof raw === "string" ? { ok: true, value: raw } : { ok: false, reason: "Not a status." },
     preview: (v) => [{ field: "Status", next: v, current: null }],
@@ -228,4 +230,90 @@ test("the page chip names the Worklet lens and its scope, and the last two crumb
     crumbsFor(["settings", "spend"], {}),
   );
   expect(spend?.title).toBe("Settings › Token spend");
+});
+
+/**
+ * A CHANGE GOES STALE ONLY WHEN WHAT IT DEPENDS ON MOVES.
+ *
+ * The QA run's first Budgets prefill was refused stale at its claim: the page's
+ * revision covers the whole page (its query, the peek, every open draft), so a
+ * peek opened beside the table, or any ceiling editor opening, moved it under a
+ * change that edits neither. Each action's revision tracks only what it states
+ * (`tracks`), and the page context carries it per action, so the engine binds
+ * the proposal to that and the claim reports that. Mutation: compute an
+ * action's revision from every part and the prefill moves with the peek.
+ */
+describe("an action's own revision", () => {
+  const spec = (tracks?: PageActionSpec<unknown>["tracks"]): PageActionSpec<unknown> => ({
+    scope: "x",
+    args: { type: "object" },
+    ...(tracks === undefined ? {} : { tracks }),
+    parse: (raw) => ({ ok: true, value: raw }),
+    preview: () => [],
+    blocked: () => null,
+    apply: () => {},
+  });
+  const BUDGETS: FramePage = {
+    screen: "budgets",
+    title: "Company › Budgets",
+    path: ["company", "budgets"],
+    params: {},
+    query: {},
+  };
+
+  test("a prefill is not moved by a peek or an editor beside it, and the page is", () => {
+    setFramePage(BUDGETS);
+    registerPage({
+      actions: { "budgets.ceiling.prefill": spec([]), "spend.range.set": spec(["query"]) },
+    });
+    const at = () => pageSnapshot()!.context;
+    const before = at();
+    expect(before.action_revisions?.["budgets.ceiling.prefill"]).toBeDefined();
+    expect(before.action_args?.["budgets.ceiling.prefill"]).toEqual({ type: "object" });
+
+    // THE PERSON OPENS A SEAT'S PEEK, then a ceiling editor registers its draft.
+    setFramePage({ ...BUDGETS, query: { peek: "seat:qa" } });
+    registerPage({ dataVersion: "draft:1" });
+    const after = at();
+    expect(after.source_revision).not.toBe(before.source_revision);
+    expect(after.action_revisions?.["budgets.ceiling.prefill"]).toBe(
+      before.action_revisions?.["budgets.ceiling.prefill"],
+    );
+    // AN ADDRESS ACTION IS NOT MOVED BY THE PEEK EITHER, which is the selection's.
+    expect(after.action_revisions?.["spend.range.set"]).toBe(
+      before.action_revisions?.["spend.range.set"],
+    );
+
+    // A CHANGE TO WHAT IT TRACKS MOVES IT.
+    setFramePage({ ...BUDGETS, query: { peek: "seat:qa", window: "7d" } });
+    expect(at().action_revisions?.["spend.range.set"]).not.toBe(
+      before.action_revisions?.["spend.range.set"],
+    );
+  });
+
+  test("the screen judges a change against its action's revision, and says it moved", () => {
+    setFramePage(BUDGETS);
+    registerPage({ actions: { "budgets.ceiling.prefill": spec([]) } });
+    const prepared = pageSnapshot()!.context.action_revisions!["budgets.ceiling.prefill"]!;
+    const heard: Record<string, string>[] = [];
+    const off = on("assistant.context.invalidate", ({ revisions }) => heard.push({ ...revisions }));
+    setFramePage({ ...BUDGETS, query: { peek: "seat:qa" } });
+    off();
+    expect(heard.at(-1)?.["budgets.ceiling.prefill"]).toBe(prepared);
+    expect(
+      applyPageAction({
+        correlation_id: "c",
+        action: "budgets.ceiling.prefill",
+        payload: {},
+        source_revision: prepared,
+      }).outcome,
+    ).toBe("applied");
+  });
+
+  test("an action that states nothing tracks the whole page, as before", () => {
+    setFramePage(PAGE);
+    registerPage({ actions: { "work.filter.apply": spec() } });
+    const context = pageSnapshot()!.context;
+    expect(context.action_revisions?.["work.filter.apply"]).toBe(context.source_revision);
+  });
 });

@@ -172,7 +172,7 @@ func writeTools() []Tool {
 			out[i].Tier = TierConsequential
 		}
 	}
-	out = append(out, principlesWrite())
+	out = append(out, principlesWrite(), budgetWrite())
 	return append(out, shareTools()...)
 }
 

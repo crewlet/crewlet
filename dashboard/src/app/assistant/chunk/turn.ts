@@ -228,7 +228,7 @@ export type TurnEvent =
       refusal: DecisionRefusal;
       unknown: boolean;
     }
-  | { type: "page_moved"; revision: string }
+  | { type: "page_moved"; revision: string; revisions: Readonly<Record<string, string>> }
   | { type: "action_local"; actionId: string; local: ActionLocal }
   | { type: "transcript"; transcript: AssistantTranscript }
   | { type: "reset" };
@@ -612,11 +612,16 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
           let moved = false;
           for (const card of turn.cards) {
             const proposal = proposalOf(card);
+            // EACH AGAINST ITS ACTION'S OWN REVISION, where the page states
+            // one: a change goes stale only when what it depends on moved.
+            const now =
+              (proposal?.page_action && event.revisions[proposal.page_action.name]) ||
+              event.revision;
             if (
               proposal?.scope === "page" &&
               proposal.state === "proposed" &&
               proposal.source_revision !== undefined &&
-              proposal.source_revision !== event.revision
+              proposal.source_revision !== now
             ) {
               proposals[proposal.proposal_id] = {
                 failure: proposals[proposal.proposal_id]?.failure ?? null,

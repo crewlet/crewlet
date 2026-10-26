@@ -214,7 +214,13 @@ export function Drawer({
 
   // A PAGE CHANGE PREPARED AGAINST THE SCREEN UNDER THE PANEL is stale once
   // that screen moves; the screen says so on the bus.
-  useEffect(() => onBus("assistant.context.invalidate", ({ revision }) => pageMoved(revision)), []);
+  useEffect(
+    () =>
+      onBus("assistant.context.invalidate", ({ revision, revisions }) =>
+        pageMoved(revision, revisions),
+      ),
+    [],
+  );
 
   // THE PAGE GOES WITH THE NEXT QUESTION until the reader removes it, and a
   // removal lasts until they open ANOTHER page, which attaches itself.

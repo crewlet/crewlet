@@ -195,10 +195,10 @@ func TestAnAgentSeatIsAddedThroughTheGenericChange(t *testing.T) {
 	again := req
 	resp, err = fx.disp.Do(t.Context(), fx.derive(t, approvedFor(again, authz.ActionOrgWrite)),
 		again)
-	if err != nil || resp.Status != http.StatusConflict ||
-		exec.RefusalOf(resp).Code != string(httpjson.CodeRevisionAdvanced) {
-		t.Errorf("a change prepared against the old unit answered %d %s, %v, want 409 %s",
-			resp.Status, resp.Body, err, httpjson.CodeRevisionAdvanced)
+	if err != nil || resp.Status != http.StatusPreconditionFailed ||
+		exec.RefusalOf(resp).Code != string(httpjson.CodeVersionMoved) {
+		t.Errorf("a change prepared against the old unit answered %d %s, %v, want 412 %s",
+			resp.Status, resp.Body, err, httpjson.CodeVersionMoved)
 	}
 	if now, err := catalog.Revision(t.Context(), readOver(fx, read), p.SourceRevision); err != nil ||
 		now == p.SourceRevision {
