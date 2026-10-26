@@ -3,6 +3,7 @@ package configapi_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -557,5 +558,63 @@ func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	}
 	if got := s.writes(); got != oneWrite {
 		t.Errorf("an entity write counted %+v, want one of each", got)
+	}
+}
+
+// A DRY RUN MARKS THE WARNINGS ITS WRITE INTRODUCES. A company whose people's
+// seats already have no chat contact is warned about each of them on every
+// check; a write adding an agent seat introduces none of those, and a write
+// adding a person's seat with no contact introduces exactly that one, even
+// though it moves every seat after it down the list. Mutation: compare by
+// path, or mark every warning introduced, and this fails.
+func TestADryRunMarksTheWarningsItIntroduces(t *testing.T) {
+	t.Parallel()
+	s := newCountedSurface(t)
+	s.seed(t, heldDoc)
+	introduced := func(body string) map[string]bool {
+		t.Helper()
+		res := s.do(t, http.MethodPatch, "/config?dry_run=true", body, nil)
+		if res.Code != http.StatusOK {
+			t.Fatalf("dry run = %d, want 200: %s", res.Code, res.Body)
+		}
+		var answer struct {
+			Warnings []struct {
+				config.Warning
+				Introduced *bool `json:"introduced"`
+			} `json:"warnings"`
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &answer); err != nil {
+			t.Fatalf("decode: %v (%s)", err, res.Body)
+		}
+		out := map[string]bool{}
+		for _, w := range answer.Warnings {
+			if w.Introduced == nil {
+				t.Fatalf("warning %+v says nothing about whether the write introduces it", w)
+			}
+			if w.Seat != "" {
+				out[w.Seat] = *w.Introduced
+			}
+		}
+		return out
+	}
+	held := map[string]bool{"jane": false, "sam": false, "ana": false}
+
+	got := introduced(`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},
+		{"name": "Writer", "handle": "writer", "llm": "zulu"},
+		{"name": "Jane Doe", "handle": "jane", "kind": "human"},
+		{"name": "Sam Lee", "handle": "sam", "kind": "human"}]}`)
+	if !maps.Equal(got, held) {
+		t.Errorf("adding an agent seat marks %v, want every held warning not introduced: %v",
+			got, held)
+	}
+
+	got = introduced(`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},
+		{"name": "Rae Kim", "handle": "rae", "kind": "human"},
+		{"name": "Jane Doe", "handle": "jane", "kind": "human"},
+		{"name": "Sam Lee", "handle": "sam", "kind": "human"}]}`)
+	want := maps.Clone(held)
+	want["rae"] = true
+	if !maps.Equal(got, want) {
+		t.Errorf("adding a person's seat with no contact marks %v, want %v", got, want)
 	}
 }

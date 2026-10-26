@@ -60,12 +60,19 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	if !cards.Permitted(resp.Status) {
 		refusal := exec.RefusalOf(resp)
 		refusal.Message = redact.Secrets(refusal.Message)
-		model, err := json.Marshal(map[string]any{"refused": refusal})
+		refusal.Hint = redact.Secrets(refusal.Hint)
+		refusal.Detail = redact.Secrets(refusal.Detail)
+		// THE MODEL READS THE ROUTE'S WHOLE ACCOUNT, the person the engine's
+		// sentence for its kind (cards.PersonRefusal).
+		model, err := json.Marshal(map[string]any{"refused": map[string]any{
+			"code": refusal.Code, "message": refusal.ForModel(), "hint": refusal.Hint,
+			"grants": refusal.Grants,
+		}})
 		if err != nil {
 			return Result{}, fmt.Errorf("catalog: encode a refusal: %w", err)
 		}
-		return Result{Cards: []wire.Card{cards.Error(refusal, t.Phrase,
-			cards.Retryable(resp.Status))}, Model: provenance.Neutralise(b, string(model)),
+		return Result{Cards: []wire.Card{cards.Error(cards.PersonRefusal(refusal, resp.Status),
+			t.Phrase, cards.Retryable(resp.Status))}, Model: provenance.Neutralise(b, string(model)),
 			Refusal: &refusal}, nil
 	}
 	if resp.Truncated {

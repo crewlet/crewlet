@@ -612,6 +612,7 @@ export function Drawer({
                   undo: undoAction,
                 }}
                 retryDisabledReason={disabledReason}
+                technical={admin}
                 onRetry={(text) => ask(text)}
                 onReconnect={reconnect}
               />

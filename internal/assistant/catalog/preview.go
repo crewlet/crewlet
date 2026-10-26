@@ -51,7 +51,7 @@ type PreviewRefusal struct {
 }
 
 func (e *PreviewRefusal) Error() string {
-	return fmt.Sprintf("%v: %s (%s)", ErrPreviewRead, e.Refusal.Message, e.Refusal.Code)
+	return fmt.Sprintf("%v: %s (%s)", ErrPreviewRead, e.Refusal.ForModel(), e.Refusal.Code)
 }
 
 // Is makes a refusal [ErrPreviewRead].

@@ -21,6 +21,11 @@ type screen struct {
 	app     iam.Grant
 	// label is the link's text when nothing names it.
 	label string
+	// noun is what one record of a record screen is, for the link's text
+	// when nothing names it ("Open seat"): a seat's handle or a turn's id
+	// is how the address spells it, and "pm" or a UUID on a button names
+	// nothing a person knows.
+	noun string
 	// id, where set, is the grammar this screen's `{id}` is held to in place
 	// of a uuid: a task is named by its key as well as its id.
 	id *regexp.Regexp
@@ -51,20 +56,20 @@ var links = map[string]screen{
 	"org-chart":        {address: "#/company/org", label: "Org chart"},
 	"principles":       {address: "#/company/principles", label: "Principles"},
 	"roster":           {address: "#/company/org/roster", label: "Roster"},
-	"teams":            {address: "#/company/org/teams/{unit}"},
-	"seat":             {address: "#/company/org/seats/{handle}"},
+	"teams":            {address: "#/company/org/teams/{unit}", noun: "team"},
+	"seat":             {address: "#/company/org/seats/{handle}", noun: "seat"},
 	"budgets":          {address: "#/company/budgets", label: "Budgets"},
 	"schedules":        {address: "#/company/schedules", label: "Schedules"},
 	"integrations":     {address: "#/company/integrations", app: iam.GrantAdmin, label: "Integrations"},
 	"live":             {address: "#/live", label: "Now running"},
 	"turns":            {address: "#/live/turns", label: "Turns"},
-	"turn":             {address: "#/live/turns/{id}"},
-	"runs":             {address: "#/live/runs/{turn_id}"},
+	"turn":             {address: "#/live/turns/{id}", noun: "turn"},
+	"runs":             {address: "#/live/runs/{turn_id}", noun: "coding run"},
 	"doclet":           {address: "#/doclet", app: iam.GrantDoclet, label: "Doclet"},
 	"container":        {address: "#/doclet/{CONTAINER}", app: iam.GrantDoclet},
-	"page":             {address: "#/doclet/pages/{id}", app: iam.GrantDoclet},
+	"page":             {address: "#/doclet/pages/{id}", app: iam.GrantDoclet, noun: "page"},
 	"artifacts":        {address: "#/artifacts", label: "Artifacts"},
-	"artifact":         {address: "#/artifacts/{id}"},
+	"artifact":         {address: "#/artifacts/{id}", noun: "artifact"},
 	"spend":            {address: "#/settings/spend", label: "Token spend"},
 	"spend-tasks":      {address: "#/settings/spend/tasks", app: iam.GrantWorklet, label: "Expensive tasks"},
 	"nodes":            {address: "#/settings/nodes", app: iam.GrantAdmin, label: "Nodes"},
@@ -162,7 +167,10 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 	}
 	switch {
 	case label != "":
+	case s.noun != "":
+		label = "Open " + s.noun
 	case first != "":
+		// A KEY A PERSON KNOWS ("FAIR-10", "ENG", "HOME") names its record.
 		label = first
 	default:
 		label = s.label

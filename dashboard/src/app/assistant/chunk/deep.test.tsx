@@ -119,9 +119,7 @@ test("a running deep run draws its goal, limits and activity, and the chip says 
     "12 percent of the run's budget",
   ]);
   const activity = within(card).getByRole("list", { name: "Latest activity" });
-  expect(activity.querySelectorAll("code")[1]!.textContent).toBe(
-    "[tool] Bash: rsvg-convert logo.svg -o logo.png",
-  );
+  expect(activity.querySelectorAll("code")[1]!.textContent).toBe("Ran a command");
   expect(container.querySelector(".crewlet-run-chip")!.textContent).toContain("Deep work");
 });
 

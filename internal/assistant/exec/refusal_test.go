@@ -21,10 +21,11 @@ func answered(write func(http.ResponseWriter)) exec.Response {
 	return exec.Response{Status: rec.Code, Header: rec.Header(), Body: rec.Body.Bytes()}
 }
 
-// A REFUSAL READS AS THE API SAID IT: the code, the route's own sentence where
-// it gave one, and the grants that would have admitted the person; a body that
-// is not the envelope is a refusal by its status alone. Mutation: read the
-// message before the detail, or drop the grants, and a row fails.
+// A REFUSAL READS AS THE API SAID IT, ON TWO CHANNELS: the code, the sentence
+// the envelope says to a person, the grants that would have admitted them, and
+// the route's own account of this request as the detail only the model reads;
+// a body that is not the envelope is a refusal by its status alone. Mutation:
+// read the detail into the message, or drop the grants, and a row fails.
 func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 	t.Parallel()
 	deny := func(reason authz.Reason, grants ...iam.Grant) exec.Response {
@@ -54,8 +55,8 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 		{"a 409 with its own sentence and hint", answered(func(w http.ResponseWriter) {
 			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeProposalStale,
 				map[string]string{"detail": "the task moved to version 9", "hint": "ask again"})
-		}), wire.Refusal{Code: "proposal_stale", Message: httpjson.Sentence("the task moved to version 9"),
-			Hint: httpjson.Sentence("ask again")}},
+		}), wire.Refusal{Code: "proposal_stale", Message: httpjson.CodeProposalStale.Message(),
+			Hint: httpjson.Sentence("ask again"), Detail: httpjson.Sentence("the task moved to version 9")}},
 		{"a body that is not the envelope",
 			exec.Response{Status: http.StatusBadGateway, Body: []byte("<html>bad gateway</html>")},
 			wire.Refusal{Code: "http_502", Message: http.StatusText(http.StatusBadGateway)}},
@@ -65,11 +66,15 @@ func TestARefusalReadsAsTheAPISaidIt(t *testing.T) {
 	for _, tc := range cases {
 		got := exec.RefusalOf(tc.resp)
 		if got.Code != tc.want.Code || got.Message != tc.want.Message || got.Hint != tc.want.Hint ||
-			!slices.Equal(got.Grants, tc.want.Grants) {
+			got.Detail != tc.want.Detail || !slices.Equal(got.Grants, tc.want.Grants) {
 			t.Errorf("%s read as %+v, want %+v", tc.name, got, tc.want)
 		}
 		if got.Message == "" {
 			t.Errorf("%s reads as a refusal with no sentence", tc.name)
+		}
+		if want := tc.want.Detail; want != "" && got.ForModel() != want {
+			t.Errorf("%s reads to the model as %q, want the route's own %q", tc.name,
+				got.ForModel(), want)
 		}
 	}
 }

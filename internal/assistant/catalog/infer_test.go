@@ -123,7 +123,7 @@ func TestAGenericReadIsCardedAsTheThingItReads(t *testing.T) {
 		title string
 		check func(t *testing.T, card wire.Card)
 	}{
-		{route: "GET /config", kind: wire.CardEntity, title: "Configuration",
+		{route: "GET /config", kind: wire.CardEntity, title: "Company configuration",
 			check: func(t *testing.T, card wire.Card) {
 				e := card.Entity
 				if !slices.ContainsFunc(e.Facts, func(f wire.Fact) bool { return f.Label == "Name" }) {
@@ -139,7 +139,7 @@ func TestAGenericReadIsCardedAsTheThingItReads(t *testing.T) {
 				}
 			}},
 		{route: "GET /config/roles/{id}", path: map[string]any{"id": handle},
-			kind: wire.CardEntity, title: "Role · " + handle,
+			kind: wire.CardEntity, title: "Seat · " + handle,
 			check: func(t *testing.T, card wire.Card) {
 				if len(card.Entity.Facts) == 0 {
 					t.Error("the role is drawn with no facts")
@@ -227,11 +227,11 @@ func TestAGenericRequestIsTitledByWhatItReaches(t *testing.T) {
 		path    map[string]string
 		want    string
 	}{
-		{"GET /config", nil, "Configuration"},
+		{"GET /config", nil, "Company configuration"},
 		{"GET /agents", nil, "Agents"},
 		{"HEAD /agents", nil, "Agents"},
-		{"GET /config/roles/{id}", map[string]string{"id": "engineer"}, "Role · engineer"},
-		{"PUT /config/roles/{id}", map[string]string{"id": "crewlet-swe"}, "Role · crewlet-swe"},
+		{"GET /config/roles/{id}", map[string]string{"id": "engineer"}, "Seat · engineer"},
+		{"PUT /config/roles/{id}", map[string]string{"id": "crewlet-swe"}, "Seat · crewlet-swe"},
 		{"GET /agents/{id}/memory", map[string]string{"id": "ceo"}, "Memory · ceo"},
 		{"GET /mcp-servers", nil, "MCP servers"},
 		{"GET /tokens/breakdown", nil, "Tokens breakdown"},

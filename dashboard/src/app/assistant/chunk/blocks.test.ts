@@ -144,7 +144,7 @@ describe("the run chip says the turn's state in words", () => {
     );
   });
 
-  test("a turn that failed on a refused step says Not permitted rather than failed", () => {
+  test("a turn that failed on an access refusal says Not permitted rather than failed", () => {
     const refused = {
       ...base,
       phase: "failed" as const,
@@ -156,10 +156,36 @@ describe("the run chip says the turn's state in words", () => {
           label: "File a task",
           state: "refused" as const,
           started_at: "2026-10-24T09:41:01Z",
+          refusal: {
+            code: "unauthorized",
+            message: "You do not have the access this needs.",
+            grants: ["worklet"],
+          },
         },
       ],
     };
     expect(runChipOf(refused, at)).toMatchObject({ state: "refused", title: "Not permitted" });
+  });
+
+  // A VALUE THE ENGINE DID NOT ACCEPT IS NOT A PERMISSION PROBLEM, and is never
+  // drawn as one. Mutation: say Not permitted for every refused step.
+  test("a turn that failed on a refused value never says Not permitted", () => {
+    const refused = {
+      ...base,
+      phase: "failed" as const,
+      steps: [
+        {
+          step_id: "s",
+          index: 2,
+          tool: "propose_page_change",
+          label: "Preparing a change to this screen",
+          state: "refused" as const,
+          started_at: "2026-10-24T09:41:01Z",
+          refusal: { code: "invalid_input", message: "One of its values was not accepted." },
+        },
+      ],
+    };
+    expect(runChipOf(refused, at).title).toBe("Could not finish step 2");
   });
 });
 

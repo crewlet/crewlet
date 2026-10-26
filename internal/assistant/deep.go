@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -177,7 +178,15 @@ func (s *surface) deep(ctx context.Context, tool catalog.Tool, args map[string]a
 // continueDeep continues the run a parked turn waited on, with decision (the
 // engine's own words for what became of its proposal) as its next message.
 func (t *turn) continueDeep(ctx context.Context, keep parkedDeep, decision string) (toolloop.ToolResult, error) {
-	step := stepClock{started: t.svc.now(), StepEvent: wire.StepEvent{
+	// ON THE TASK'S CLOCK, NOT THIS RUN'S: the card measures its time from the
+	// task's start ([wire.DeepProgress.StartedAt]), so a step whose duration
+	// counted from the continuation drew "6s" of a task that had already run
+	// for half a minute.
+	started := keep.StartedAt
+	if started.IsZero() {
+		started = t.svc.now()
+	}
+	step := stepClock{started: started, StepEvent: wire.StepEvent{
 		StepID: assistantdomain.StepID(t.id, keep.Step), TurnID: t.id, Index: keep.Step,
 		Tool: catalog.StartDeepWorkTool, Label: keep.Label, State: wire.StepRunning}}
 	step.StartedAt = keep.StartedAt
@@ -332,13 +341,10 @@ func deepCause(o DeepOutcome) error {
 func (t *turn) deepRefused(ctx context.Context, dc deepCall, err error) toolloop.ToolResult {
 	message := redact.Secrets(err.Error())
 	t.stepEnd(ctx, dc.step, wire.StepRefused, "Not started", &wire.Refusal{
-		Code: codeDeepUnavailable, Message: message}, 0, 0)
+		Code: cards.CodeDeepUnavailable, Message: message}, 0, 0)
 	return failed(mcp.Classify(mcp.RefusalUnavailable, err), "Deep work did not start: "+
 		message+". Answer what you can without it, and tell the person why.")
 }
-
-// codeDeepUnavailable is the refusal a deep step shows when no run started.
-const codeDeepUnavailable = "deep_work_unavailable"
 
 // deepEnding is how a run that did not park ended, as its step shows it.
 func deepEnding(o DeepOutcome, files int) (wire.DeepState, wire.StepState, string, string) {
@@ -381,9 +387,12 @@ func deepAnswer(b provenance.Boundary, o DeepOutcome, files []wire.FileRef, note
 	case DeepEndTokens:
 		out.WriteString("Deep work reached its token limit before it finished.")
 	default:
-		out.WriteString("Deep work ended before it finished: " + redact.Secrets(o.Reason))
+		out.WriteString("Deep work ended before it finished: " + withoutPaths(redact.Secrets(o.Reason)))
 	}
-	if report := strings.TrimSpace(redact.Secrets(o.Report)); report != "" {
+	// NO HOST PATH REACHES THE MODEL, so none can reach its answer: a run
+	// that names where it wrote a file is cut to the file's name, which is
+	// the name the delivered files below carry.
+	if report := strings.TrimSpace(withoutPaths(redact.Secrets(o.Report))); report != "" {
 		if len(report) > ModelResultBytes {
 			report = textcut.Within(report, ModelResultBytes)
 		}
@@ -547,8 +556,10 @@ func (r *deepRun) observe(p DeepProgress) {
 	}
 	r.progress.State = wire.DeepRunning
 	for _, line := range p.Lines {
-		if line = strings.TrimSpace(redact.Secrets(line)); line != "" {
-			r.progress.Activity = append(r.progress.Activity, textcut.Within(line, lineMaxBytes))
+		// IN THE PERSON'S WORDS ([personLine]): no host path, no tool's
+		// own name, and no call to Crewlet the nested steps already list.
+		if shown, ok := personLine(redact.Secrets(line)); ok {
+			r.progress.Activity = append(r.progress.Activity, textcut.Within(shown, lineMaxBytes))
 		}
 	}
 	if n := len(r.progress.Activity); n > wire.DeepActivityLines {
@@ -629,7 +640,14 @@ func (r *deepRun) show(now bool) {
 func (r *deepRun) end(state wire.DeepState, stepState wire.StepState, summary, reason string) {
 	r.mu.Lock()
 	r.stopped = true
-	r.progress.State, r.progress.Reason = state, reason
+	r.progress.State, r.progress.Reason = state, withoutPaths(reason)
+	if state == wire.DeepFinished {
+		// A FINISHED RUN'S LAST LINES ARE ITS REPORT, which the person
+		// reads once, in the assistant's answer and the files it carded:
+		// left on the card as well, it was a second long summary, cut
+		// mid-line.
+		r.progress.Activity = nil
+	}
 	progress := r.progress
 	progress.Activity = slices.Clone(progress.Activity)
 	r.mu.Unlock()

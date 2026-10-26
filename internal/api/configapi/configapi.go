@@ -822,7 +822,8 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeChecked answers a dry run: the write is valid, what it was checked
-// against, and what it would produce. Nothing was stored.
+// against, and what it would produce, each warning marked with whether this
+// write introduces it ([checkedWarnings]). Nothing was stored.
 //
 // base_revision_id is the revision the check was built on, and empty when
 // nothing was active. A client comparing it with the revision its draft was
@@ -831,7 +832,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 func writeChecked(w http.ResponseWriter, p *prepared) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"valid": true, "base_revision_id": p.base,
-		"warnings": p.warnings, "derived": p.derived,
+		"warnings": checkedWarnings(p), "derived": p.derived,
 	})
 }
 

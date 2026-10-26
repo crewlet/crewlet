@@ -8,26 +8,26 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
-// RefusalOf is a refused answer as a step, a card or a proposal shows it: the
-// API's own code, the sentence it said (the route's `detail` where it gave one,
-// which says what happened to this request, else the code's own sentence), the
-// route's `hint` where it gave one, and the permissions that would have
-// admitted the person.
+// RefusalOf is a refused answer as the engine reads it: the API's own code,
+// the sentence the envelope says to a person (`message`), the route's `hint`
+// where it gave one, the permissions that would have admitted the person, and
+// the route's `detail` (what happened to this request, in the terms of the
+// request) as [wire.Refusal.Detail], which only the model reads.
 //
 // READ THROUGH internal/api/httpjson's decoder, the one reader of the envelope,
 // so the keys are spelled where they are written. An answer that is not the
 // envelope (a body some handler wrote by hand, or none) is a refusal by its
 // status alone: `http_<status>` and the status's own text.
+//
+// What a person is shown of it is decided once, by
+// internal/assistant/cards.PersonRefusal, at each place a refusal leaves the
+// engine for a person.
 func RefusalOf(resp Response) wire.Refusal {
 	refused, ok := httpjson.Decode(resp.Body)
 	if !ok {
 		return wire.Refusal{Code: fmt.Sprintf("http_%d", resp.Status),
 			Message: http.StatusText(resp.Status)}
 	}
-	message := refused.Message
-	if refused.Detail != "" {
-		message = refused.Detail
-	}
-	return wire.Refusal{Code: string(refused.Code), Message: message, Hint: refused.Hint,
-		Grants: refused.Grants}
+	return wire.Refusal{Code: string(refused.Code), Message: refused.Message,
+		Hint: refused.Hint, Grants: refused.Grants, Detail: refused.Detail}
 }

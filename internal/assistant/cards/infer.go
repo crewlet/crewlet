@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
@@ -158,14 +159,21 @@ func entityOf(record map[string]any, title string) (Spec, any, bool) {
 	doc := map[string]any{}
 	if len(in.facts) > 0 {
 		facts := map[string]any{}
+		named := slices.ContainsFunc(identity[:3], func(k string) bool { return text(record[k]) != "" })
 		for i, f := range in.facts {
 			key := "f" + strconv.Itoa(i)
 			facts[key] = f.value
 			typ := wire.ColumnText
-			if _, isNumber := f.value.(json.Number); isNumber {
+			switch {
+			case isNumberValue(f.value):
 				typ = wire.ColumnNumber
+			case isInstant(f.value):
+				typ = wire.ColumnDatetime
 			}
-			e.Facts = append(e.Facts, Fact{Label: FieldLabel(f.path), Path: "facts." + key, Type: typ})
+			// A BOOKKEEPING FACT (an epoch, a hash, a cursor, a page's
+			// completeness) stays for the model and the drawer leaves it out.
+			e.Facts = append(e.Facts, Fact{Label: FieldLabel(f.path), Path: "facts." + key, Type: typ,
+				Detail: Bookkeeping(lastKey(f.path), []any{f.value}, named)})
 		}
 		doc["facts"] = facts
 	}
@@ -258,6 +266,12 @@ func (in *inferred) items() []any {
 				continue
 			}
 			label, fact := knownFields(record)
+			if label == "" {
+				// A RECORD THAT NAMES ITSELF BY NOTHING (a point of a series:
+				// a day and its tokens) is read by its own values, never as
+				// "Entry 1" with nothing beside it.
+				label, fact = valueFields(record)
+			}
 			id := recordID(record, at)
 			if several {
 				id, fact = l.path+"/"+id, FieldLabel(l.path)
@@ -316,6 +330,8 @@ func lastKey(path string) string {
 func records(list []any, path, title string, doc any) (Spec, any, bool) {
 	counts := map[string]int{}
 	numeric := map[string]bool{}
+	instant := map[string]bool{}
+	samples := map[string][]any{}
 	for _, row := range list[:min(len(list), inferSample)] {
 		record, ok := row.(map[string]any)
 		if !ok {
@@ -326,20 +342,35 @@ func records(list []any, path, title string, doc any) (Spec, any, bool) {
 				continue
 			}
 			if counts[k] == 0 {
-				numeric[k] = true
+				numeric[k], instant[k] = true, true
 			}
 			counts[k]++
+			samples[k] = append(samples[k], v)
 			if _, isNumber := v.(json.Number); !isNumber && v != nil {
 				numeric[k] = false
 			}
+			if v != nil && !isInstant(v) {
+				instant[k] = false
+			}
 		}
 	}
+	named := slices.ContainsFunc(identity[:3], func(k string) bool { return counts[k] > 0 })
 	if len(counts) == 0 {
 		return Spec{}, nil, false
+	}
+	internal := map[string]bool{}
+	for k := range counts {
+		internal[k] = Bookkeeping(k, samples[k], named)
 	}
 	keys := slices.SortedFunc(maps.Keys(counts), func(a, b string) int {
 		ia, ib := rank(a), rank(b)
 		switch {
+		case internal[a] != internal[b]:
+			// BOOKKEEPING LAST, so it is never what the drawer draws.
+			if internal[a] {
+				return 1
+			}
+			return -1
 		case ia != ib:
 			return ia - ib
 		case counts[a] != counts[b]:
@@ -351,12 +382,20 @@ func records(list []any, path, title string, doc any) (Spec, any, bool) {
 	t := &Table{Title: title, Rows: path}
 	for _, k := range keys {
 		c := Column{Key: k, Label: FieldLabel(k), Path: k, Type: wire.ColumnText, Prose: true}
-		if numeric[k] {
+		switch {
+		case numeric[k]:
 			c.Type, c.Prose = wire.ColumnNumber, false
+		case instant[k]:
+			c.Type, c.Prose = wire.ColumnDatetime, false
 		}
 		t.Columns = append(t.Columns, c)
+		if !internal[k] && len(t.Brief) < MaxBrief {
+			t.Brief = append(t.Brief, k)
+		}
 	}
-	t.Brief = keys[:min(len(keys), MaxBrief)]
+	if len(t.Brief) == 0 {
+		t.Brief = keys[:1]
+	}
 	return Spec{Table: t}, doc, true
 }
 
@@ -405,4 +444,121 @@ func FieldLabel(path string) string {
 		keys[i] = words(k)
 	}
 	return capitalise(strings.Join(keys, " › "))
+}
+
+// isInstant reports a value that is an RFC 3339 instant, which a card draws on
+// the company's clock rather than as the API spells it.
+func isInstant(v any) bool {
+	s, ok := v.(string)
+	if !ok || len(s) < len("2006-01-02T15:04:05Z") {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339Nano, s)
+	return err == nil && !at.IsZero()
+}
+
+func isNumberValue(v any) bool { _, ok := v.(json.Number); return ok }
+
+// bookkeepingKeys are the field names (or their endings) an answer carries
+// for the engine's and its clients' own bookkeeping, which a person does not
+// read: a revision's epoch, a log position, a digest, a page's cursor and
+// whether the page is complete.
+var bookkeepingKeys = []string{"epoch", "seq", "position", "etag", "digest", "hash", "sha",
+	"cursor", "next", "next_cursor", "page_token", "complete", "truncated", "has_more",
+	"revision_id"}
+
+// Bookkeeping reports a field of an answer a person is not shown in the
+// drawer: one whose name says it is bookkeeping ([bookkeepingKeys], as the
+// name or its last word), or whose values are all digests, opaque cursors
+// or, beside a field the record is named by, ids. It stays in the card's
+// downloads and in what the model reads. ONE RULE for every inferred table's
+// columns and every inferred record's facts.
+func Bookkeeping(key string, values []any, named bool) bool {
+	lower := strings.ToLower(key)
+	for _, k := range bookkeepingKeys {
+		if lower == k || strings.HasSuffix(lower, "_"+k) || strings.HasSuffix(lower, " "+k) {
+			return true
+		}
+	}
+	if len(values) == 0 {
+		return false
+	}
+	for _, v := range values {
+		s, ok := v.(string)
+		if !ok {
+			return false
+		}
+		if id := named && lower == "id" && uuidLike(s); !opaque(s) && !id {
+			return false
+		}
+	}
+	return true
+}
+
+// opaque reports a value no person reads: a hex digest of 32 or more
+// characters, or a token of 24 or more characters with no space that mixes
+// letters and digits as a base64 cursor does.
+func opaque(s string) bool {
+	if len(s) < 24 || strings.ContainsAny(s, " \t\n") {
+		return false
+	}
+	hex := true
+	letters, digits := false, false
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			digits = true
+		case r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+			letters = true
+		case r >= 'g' && r <= 'z', r >= 'G' && r <= 'Z':
+			letters, hex = true, false
+		case r == '+' || r == '/' || r == '=' || r == '_' || r == '-':
+			hex = false
+		default:
+			return false
+		}
+	}
+	if hex {
+		return len(s) >= 32
+	}
+	return letters && digits && !strings.Contains(s, "-") || strings.HasSuffix(s, "=")
+}
+
+// uuidLike reports a value spelled as a UUID.
+func uuidLike(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, r := range s {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if r != '-' {
+				return false
+			}
+			continue
+		}
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// valueFields are a record's first instant or text value, as an entry's
+// label, and its first number beside it as "<field>: <value>": what a point
+// of a series is read by.
+func valueFields(record map[string]any) (label, fact string) {
+	keys := slices.Sorted(maps.Keys(record))
+	for _, k := range keys {
+		if v := record[k]; plain(v) && !isNumberValue(v) && text(v) != "" &&
+			!Bookkeeping(k, []any{v}, false) {
+			label = text(v)
+			break
+		}
+	}
+	for _, k := range keys {
+		if v := record[k]; isNumberValue(v) && !Bookkeeping(k, []any{v}, false) {
+			return label, FieldLabel(k) + ": " + text(v)
+		}
+	}
+	return label, ""
 }
