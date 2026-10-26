@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
@@ -84,3 +86,31 @@ func TestAParkedTurnResumedAtItsEndAnswersNoContent(t *testing.T) {
 		t.Fatalf("a resume one frame short = %+v, want the done frame alone", rest)
 	}
 }
+
+// A PARKED TURN STATES THE STEPS IT TOOK wherever its end is told from the
+// record: once the frame log is gone, the stream answers from the transcript,
+// and its `done` counts the steps the segment took rather than zero, which the
+// drawer's run chip prefers over the steps it drew ("4 steps" vanished after a
+// reconnect).
+//
+// Mutation: drop the step count from the park record and the done says 0.
+func TestAParkedTurnsEndToldFromTheRecordCountsItsSteps(t *testing.T) {
+	t.Parallel()
+	s, accepted, drawn := parkedSite(t)
+	steps := evals.Last(drawn, wire.EventDone).Done.Steps
+	if steps != 2 {
+		t.Fatalf("the live done counts %d steps, want 2", steps)
+	}
+	s.rig.Clock.Advance(pastRetention)
+	if open := transcriptOf(t, s).OpenTurn; open == nil || open.AfterSeq != 0 {
+		t.Fatalf("the open turn after the log expired = %+v, want it read from the start", open)
+	}
+	told := frames(t, s.stream(t, accepted, ""))
+	done := evals.Last(told, wire.EventDone)
+	if done == nil || done.Done.State != wire.TurnWaitingForApproval || done.Done.Steps != steps {
+		t.Fatalf("the done told from the record = %+v, want waiting with %d steps", done, steps)
+	}
+}
+
+// pastRetention is past the time an ended segment's frames are kept.
+const pastRetention = live.EndedRetention + time.Second
