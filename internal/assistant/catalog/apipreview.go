@@ -454,7 +454,7 @@ func diff(c *changes, field string, before, after any) {
 		addedLeaves(c, field, after, false)
 		return
 	}
-	if row, ok := proposal.Value(field, cards.FieldLabel(field), scalar(before), scalar(after)); ok {
+	if row, ok := valueRow(field, before, after); ok {
 		*c = append(*c, row)
 	}
 }
@@ -468,8 +468,7 @@ func diffList(c *changes, field string, before, after []any) {
 	was, wasKeyed := keyed(before)
 	is, isKeyed := keyed(after)
 	if !wasKeyed || !isKeyed {
-		if row, ok := proposal.Value(field, cards.FieldLabel(field), scalar(before),
-			scalar(after)); ok {
+		if row, ok := valueRow(field, before, after); ok {
 			*c = append(*c, row)
 		}
 		return
@@ -569,7 +568,45 @@ func leaves(c *changes, field string, v any, row func(field, label, value string
 	if value == "" || field == "" {
 		return
 	}
-	*c = append(*c, row(field, cards.FieldLabel(field), value))
+	line := row(field, cards.FieldLabel(field), value)
+	// A LIST OF PLAIN VALUES IS DRAWN AS A LIST: its items ride beside the
+	// joined line, on the side the row holds.
+	if items, ok := plainItems(v); ok {
+		if line.Kind == wire.ChangeRemoved {
+			line.FromItems = items
+		} else {
+			line.Items = items
+		}
+	}
+	*c = append(*c, line)
+}
+
+// plainItems is v as the items of a list of plain values, each as one line of
+// a card, and whether v is one: a list holding a record or a list is not.
+func plainItems(v any) ([]string, bool) {
+	list, ok := v.([]any)
+	if !ok || slices.ContainsFunc(list, func(e any) bool { return isRecord(e) || isList(e) }) {
+		return nil, false
+	}
+	items := make([]string, 0, len(list))
+	for _, e := range list {
+		if item := scalar(e); item != "" {
+			items = append(items, item)
+		}
+	}
+	return items, true
+}
+
+// valueRow is the row for one field moving from before to after: a list of
+// plain values on either side as a list ([proposal.List]), any other value as
+// one line.
+func valueRow(field string, before, after any) (wire.Change, bool) {
+	was, wasList := plainItems(before)
+	is, isList := plainItems(after)
+	if (wasList || before == nil) && (isList || after == nil) && (wasList || isList) {
+		return proposal.List(field, cards.FieldLabel(field), was, is)
+	}
+	return proposal.Value(field, cards.FieldLabel(field), scalar(before), scalar(after))
 }
 
 // bounded is c with at most [diffRows] field rows past the request's, the rest

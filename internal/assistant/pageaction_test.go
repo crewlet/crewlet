@@ -3,6 +3,7 @@ package assistant_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -372,5 +373,38 @@ func TestADecisionNeverAttachesAPageTheQuestionLeftOut(t *testing.T) {
 	f.Follow(accepted.TurnID, resumed.AfterSeq)
 	if prompts := f.Model.Prompts(); strings.Contains(prompts, "brand-setup") {
 		t.Fatalf("a decision attached a screen the question left out:\n%s", prompts)
+	}
+}
+
+// A DRAFT CHANGE'S CARD SAYS THE SCREEN'S OWN WORDS.
+//
+// Each row of a draft.set card is named by the label the screen declared for
+// that field ("Voice", never "voice.summary" or "Voice.summary"), and a list
+// field's value is drawn as its items, whether the model sent a list or the
+// list's text one item per line. The labels are stored with the card, so the
+// card says them after the screen has closed. Mutation: label the rows from
+// the payload's paths, or join a list into one line.
+func TestADraftChangeIsNamedByTheScreensLabels(t *testing.T) {
+	t.Parallel()
+	f, _ := draftRig(t, nil, map[string]any{
+		"voice.summary": "Plain and warm.",
+		"voice.avoid":   "Jargon\nExclamation marks",
+	})
+	proposals := f.Store.Proposals()
+	if len(proposals) != 1 || proposals[0].Card.Proposal == nil {
+		t.Fatalf("the draft change was recorded as %+v, want one proposal card", proposals)
+	}
+	rows := map[string]wire.Change{}
+	for _, c := range proposals[0].Card.Proposal.Changes {
+		if strings.Contains(c.Label, ".") {
+			t.Errorf("a row is labelled with a raw path: %q", c.Label)
+		}
+		rows[c.Label] = c
+	}
+	if rows["Voice"].To != "Plain and warm." {
+		t.Errorf("the voice row reads %+v, want the screen's label and the value", rows["Voice"])
+	}
+	if got := rows["Avoid"].Items; !slices.Equal(got, []string{"Jargon", "Exclamation marks"}) {
+		t.Errorf("the list field's items are %q, want each line its own item", got)
 	}
 }

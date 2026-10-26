@@ -254,6 +254,10 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		return s.t.svc.dispatcher.Do(ctx, s.t.read, r)
 	}
 	preview, err := tool.Preview(ctx, read, s.t.svc.now(), args)
+	if err == nil && tool.Kind == catalog.KindPageAction && s.t.page != nil &&
+		catalog.Args(args).String("action") == catalog.DraftSet {
+		preview.Changes = draftRows(preview.Changes, s.t.page.Draft)
+	}
 	var drafted assistantdomain.NewProposal
 	if err == nil {
 		drafted, err = s.t.draft(tool, scope, preview, pageRevision)

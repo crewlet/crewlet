@@ -28,7 +28,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { modules, parse, walk, type Module, type Node } from "~/test/source.ts";
+import { modules, parse, stringValue, walk, type Module, type Node } from "~/test/source.ts";
 
 /** The hooks whose call says a module guards unsaved work. */
 const GUARD_HOOKS = new Set(["useLeaveGuard", "useUnloadGuard"]);
@@ -229,5 +229,68 @@ describe("the draft gate", () => {
       expect(r?.declares, `${path} declares a draft; take it off the list`).toBe(false);
       expect(why).toMatch(/^(modal|signed out|saved per change|not an editor): /);
     }
+  });
+});
+
+/**
+ * A DRAFT FIELD'S LABEL IS THE PERSON'S WORDS, NEVER ITS PATH.
+ *
+ * A card row is named by its field's label, and a label that is the path
+ * ("colors.dark_ground"), or any dotted key in it, puts a raw path in front
+ * of the person. Every object literal that declares a draft field (a `path`
+ * beside a `label`) is read, and the constant parts of its label are held to
+ * that. Mutation: label a field with its path.
+ */
+function rawLabels(module: Module): string[] {
+  const out: string[] = [];
+  walk(parse(module.text, module.lang === "tsx" ? "tsx" : "ts"), (node) => {
+    if (node.type !== "ObjectExpression") return;
+    const props = new Map<string, Node>();
+    for (const p of node.properties as Node[]) {
+      if (p.type !== "Property") continue;
+      const key = p.key as Node;
+      const name = key.type === "Identifier" ? String(key.name) : stringValue(key);
+      if (name) props.set(name, p.value as Node);
+    }
+    const label = props.get("label");
+    const path = props.get("path");
+    if (!label || !path) return;
+    const pathText = stringValue(path);
+    const parts =
+      label.type === "TemplateLiteral"
+        ? (label.quasis as Node[]).map((q) => String((q.value as { raw: string }).raw))
+        : [stringValue(label) ?? ""];
+    const whole = stringValue(label);
+    if (
+      parts.some((part) => /[a-z0-9_]\.[a-z]/i.test(part)) ||
+      (whole !== null && whole === pathText)
+    ) {
+      out.push(`${module.path}: ${whole ?? parts.join("…")}`);
+    }
+  });
+  return out;
+}
+
+describe("a draft field's label", () => {
+  test("is never a raw path", () => {
+    const probe: Module = {
+      path: "routes/probe/Probe.ts",
+      lang: "ts",
+      text:
+        'const a = { path: "colors.primary", label: "colors.primary" };\n' +
+        'const b = { path: "colors.ground", label: `${"Dark"} colors.ground` };\n' +
+        'const c = { path: "colors.text", label: "Text colour" };',
+    };
+    expect(rawLabels(probe)).toEqual([
+      "routes/probe/Probe.ts: colors.primary",
+      "routes/probe/Probe.ts: … colors.ground",
+    ]);
+    const found = modules()
+      .filter((m) => (m.lang === "tsx" || m.lang === "ts") && !m.path.startsWith("test/"))
+      .filter((m) => !m.path.endsWith(".test.ts") && !m.path.endsWith(".test.tsx"))
+      .flatMap(rawLabels);
+    expect(found, "a draft field labelled with a path: give it the words the screen shows").toEqual(
+      [],
+    );
   });
 });

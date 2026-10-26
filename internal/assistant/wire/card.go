@@ -199,6 +199,12 @@ type Change struct {
 	// value after, for fact, changed, added and text.
 	From string `json:"from,omitempty"`
 	To   string `json:"to,omitempty"`
+	// Items is To as a list, one entry per item, where the value is a list of
+	// plain values (a seat's responsibilities, a voice's rules); FromItems is
+	// From as one. To and From still hold the list as one line, for a reader
+	// that draws one.
+	Items     []string `json:"items,omitempty"`
+	FromItems []string `json:"from_items,omitempty"`
 	// Words is a text change as runs of words.
 	Words []Word `json:"words,omitempty"`
 	// New marks an added field on a record that already exists.

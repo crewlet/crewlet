@@ -334,7 +334,15 @@ function written<D>(
   }
   const next = field.write!(draft, typed);
   if (next instanceof DraftRefusal) return next.reason;
-  return { next, row: { field: field.label, next: show(field.read(next)), current } };
+  const row: PageActionRow = { field: field.label, next: show(field.read(next)), current };
+  // A LIST IS DRAWN AS ITS ITEMS, unless the screen summarises it ("412 words").
+  if (list && !field.summary) {
+    const was = field.read(now);
+    const is = field.read(next);
+    if (typeof was !== "string") row.currentItems = was;
+    if (typeof is !== "string") row.items = is;
+  }
+  return { next, row };
 }
 
 /**

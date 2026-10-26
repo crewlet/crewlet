@@ -153,6 +153,30 @@ func Value(field, label, from, to string) (wire.Change, bool) {
 	return Changed(field, label, from, to), true
 }
 
+// List is the row for a list of plain values moving from from to to: the
+// items ride beside the joined line ([wire.Change.Items]), so a card draws a
+// list as a list rather than one comma-joined line, and never as a word diff,
+// which would read a list's order as prose. Equal lists are no change.
+func List(field, label string, from, to []string) (wire.Change, bool) {
+	if slices.Equal(from, to) {
+		return wire.Change{}, false
+	}
+	was, is := strings.Join(from, ", "), strings.Join(to, ", ")
+	switch {
+	case len(from) == 0:
+		row := Added(field, label, is, false)
+		row.Items = to
+		return row, true
+	case len(to) == 0:
+		row := Removed(field, label, was)
+		row.FromItems = from
+		return row, true
+	}
+	row := Changed(field, label, was, is)
+	row.FromItems, row.Items = from, to
+	return row, true
+}
+
 // long reports a value shown as a text.
 func long(s string) bool {
 	return utf8.RuneCountInString(s) > LongTextRunes || strings.ContainsRune(s, '\n')

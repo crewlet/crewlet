@@ -399,17 +399,6 @@ func (c company) valueShown(v string) string {
 	return v
 }
 
-// fieldLabel is a payload key as a row's label: "due_before" reads "Due
-// before". The engine names no screen's fields; the screen's own labels are
-// the card's while it is open, and this is what a stored card says after.
-func fieldLabel(key string) string {
-	words := strings.TrimSpace(strings.ReplaceAll(key, "_", " "))
-	if words == "" {
-		return key
-	}
-	return strings.ToUpper(words[:1]) + words[1:]
-}
-
 // dueOf shows a task's stored due date, an RFC 3339 instant, or "" for none.
 func (c company) dueOf(stored string, allDay bool) string {
 	at, err := time.Parse(time.RFC3339, stored)
@@ -862,7 +851,16 @@ func pageActionPreview(t Tool) proposal.Previewer {
 			payload = values
 		}
 		for _, k := range sortedKeys(payload) {
-			c.fact(k, fieldLabel(k), company.valueShown(cards.Text(payload[k])))
+			// NEVER A RAW PATH: a dotted key reads as its words, and a
+			// draft's own labels replace these where the turn's page
+			// declared them (assistant's draftRows).
+			row := proposal.Fact(k, cards.FieldLabel(k), company.valueShown(cards.Text(payload[k])))
+			if items, ok := plainItems(payload[k]); ok {
+				row.Items = items
+			}
+			if row.To != "" {
+				c = append(c, row)
+			}
 		}
 		label := "Apply"
 		if action.Confirm == wire.ConfirmApprove {

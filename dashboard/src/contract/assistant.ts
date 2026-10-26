@@ -440,6 +440,10 @@ interface AssistantChange {
   label: string;
   from?: string;
   to?: string;
+  /** `to` as a list, one entry per item, where the value is a list of plain values. */
+  items?: string[];
+  /** `from` as a list, likewise. */
+  from_items?: string[];
   words?: AssistantWord[];
   new?: boolean;
   note?: string;

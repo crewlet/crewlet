@@ -109,6 +109,10 @@ export interface PageActionRow {
   field: string;
   next: string;
   current: string | null;
+  /** `next` as its items, where the field is a list: the card draws a list as a list. */
+  items?: readonly string[];
+  /** `current` as its items, likewise. */
+  currentItems?: readonly string[];
   file?: AssistantDraftFileRef;
 }
 

@@ -182,7 +182,8 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 	_, _, change := generic(t, admin)
 	document := map[string]any{"name": "Acme", "mission": "Make every invoice add up.",
 		"turn_engine": map[string]any{"max_tool_rounds": 16, "temperature": 0.2},
-		"roles":       []any{map[string]any{"handle": "ceo", "name": "CEO"}}}
+		"roles":       []any{map[string]any{"handle": "ceo", "name": "CEO"}},
+		"labels":      []any{"billing", "core"}}
 	read := resource("/config", `"rev-7"`, document)
 	secret := "ghp_" + strings.Repeat("b", 36)
 	p, err := change.Preview(t.Context(), read, wednesday, map[string]any{
@@ -191,6 +192,7 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 			"roles": []any{map[string]any{"handle": "ceo", "name": "CEO"},
 				map[string]any{"handle": "crewlet-swe", "name": "crewlet-swe",
 					"responsibilities": []any{"Build", "Review"}}},
+			"labels":   []any{"billing", "growth"},
 			"_summary": "raise the cap with " + secret}})
 	if err != nil {
 		t.Fatal(err)
@@ -205,12 +207,22 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 		"turn_engine.temperature":            {wire.ChangeRemoved, "0.2", ""},
 		"roles.crewlet-swe.name":             {wire.ChangeAdded, "", "crewlet-swe"},
 		"roles.crewlet-swe.responsibilities": {wire.ChangeAdded, "", "Build, Review"},
+		"labels":                             {wire.ChangeChanged, "billing, core", "billing, growth"},
 		"_summary":                           {wire.ChangeAdded, "", "raise the cap with [REDACTED:github-token]"},
 	} {
 		c, ok := got[field]
 		if !ok || c.Kind != want.kind || c.From != want.from || c.To != want.to {
 			t.Errorf("row %s is %+v, want %+v", field, c, want)
 		}
+	}
+	// A LIST OF PLAIN VALUES IS DRAWN AS A LIST, never a word diff of its
+	// joined line: its items ride beside the line, on each side it has.
+	if c := got["roles.crewlet-swe.responsibilities"]; !slices.Equal(c.Items, []string{"Build", "Review"}) {
+		t.Errorf("an added list carries the items %q", c.Items)
+	}
+	if c := got["labels"]; !slices.Equal(c.FromItems, []string{"billing", "core"}) ||
+		!slices.Equal(c.Items, []string{"billing", "growth"}) {
+		t.Errorf("a changed list carries the items %q to %q", c.FromItems, c.Items)
 	}
 	for _, untouched := range []string{"name", "mission", "roles.ceo.name"} {
 		if _, ok := got[untouched]; ok {
