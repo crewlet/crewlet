@@ -52,11 +52,9 @@ func TestEveryAssistantToolResultIsFenced(t *testing.T) {
 			}
 			f.Follow(accepted.TurnID, 0)
 			var result llm.Message
-			for _, req := range f.Model.Requests() {
-				for _, m := range req.Messages {
-					if m.Role == llm.RoleTool {
-						result = m
-					}
+			for _, m := range f.Model.Seen() {
+				if m.Role == llm.RoleTool {
+					result = m
 				}
 			}
 			if result.Failed || !strings.Contains(result.Content, "[untrusted:") ||

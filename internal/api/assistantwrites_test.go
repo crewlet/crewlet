@@ -168,16 +168,18 @@ func TestInjectedTextNeverBecomesAWrite(t *testing.T) {
 		}) {
 			t.Fatal("the model was not given the standing instruction about fenced text")
 		}
-		for _, m := range req.Messages {
-			if !strings.Contains(m.Content, injection) {
-				continue
-			}
-			if m.Role != llm.RoleTool || !insideFence(m.Content, injection) {
-				t.Errorf("the injected text reached the model outside a fence, as %s:\n%s",
-					m.Role, m.Content)
-			}
-			fenced++
+	}
+	// EVERYTHING THE MODEL READ: each request's conversation and every answer
+	// its CLI was given over the tool session, where a read's text arrives.
+	for _, m := range rig.Model.Seen() {
+		if !strings.Contains(m.Content, injection) {
+			continue
 		}
+		if m.Role != llm.RoleTool || !insideFence(m.Content, injection) {
+			t.Errorf("the injected text reached the model outside a fence, as %s:\n%s",
+				m.Role, m.Content)
+		}
+		fenced++
 	}
 	if fenced == 0 {
 		t.Fatal("the injected text never reached the model, so the fence was not tested")

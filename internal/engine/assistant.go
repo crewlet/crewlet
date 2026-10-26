@@ -18,12 +18,17 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // THE DASHBOARD ASSISTANT'S ORCHESTRATOR, wired: the seams internal/assistant
 // declares, each satisfied by what this engine already runs. Its state log and
 // its two sides are assistantregister.go's; this file is the model chain a turn
 // runs on, the meter it charges and the records it writes.
+
+// AssistantToolSessions is where a turn serves its tools to the CLI its model
+// runs in: this process's one [toolsession.Host], the seats' own (ADR-0049).
+func AssistantToolSessions(e *Engine) *toolsession.Host { return e.sessions }
 
 // AssistantModels is the assistant's model chain off the company this node
 // runs NOW, per turn.

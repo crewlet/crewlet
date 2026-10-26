@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // Rig is one assistant: a real [assistant.Service] over this package's
@@ -32,6 +33,9 @@ type Rig struct {
 	Conversation uuid.UUID
 	// Files is the store the rig's service keeps files in, nil for none.
 	Files assistant.Files
+	// sessions is where the rig's turns serve their tools to the scripted
+	// model's CLI, removed by Close.
+	sessions *toolsession.Host
 }
 
 // RigOptions vary one rig.
@@ -123,14 +127,21 @@ func Assemble(o RigOptions) (*Rig, error) {
 	if o.Catalogue != nil {
 		offered = o.Catalogue
 	}
+	sessions, err := toolsession.NewHost()
+	if err != nil {
+		return nil, err
+	}
+	r.sessions = sessions
 	svc, err := assistant.New(assistant.Deps{
-		Node: node, Company: o.Company, Remote: o.Remote, Rate: o.Rate, Files: files, Deep: o.Deep,
+		Sessions: sessions,
+		Node:     node, Company: o.Company, Remote: o.Remote, Rate: o.Rate, Files: files, Deep: o.Deep,
 		Acts:   func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
 		Models: models, Budget: o.Budget, Catalogue: offered,
 		Transcripts: r.Store, Records: r.Store, Dispatcher: dispatcher, Revoker: revoker,
 		Audit: r.Audit, Metrics: Metrics{}, Now: clock.Now,
 	})
 	if err != nil {
+		_ = sessions.Close()
 		return nil, err
 	}
 	r.Svc = svc
@@ -145,7 +156,11 @@ func Assemble(o RigOptions) (*Rig, error) {
 func (r *Rig) Close(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	return r.Svc.Close(ctx)
+	err := r.Svc.Close(ctx)
+	if r.sessions != nil {
+		err = errors.Join(err, r.sessions.Close())
+	}
+	return err
 }
 
 // Grant is a fresh read grant for one question, valid for five minutes, with

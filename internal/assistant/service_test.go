@@ -64,11 +64,9 @@ func TestTheAssistantReachesToolsOnlyAsRequests(t *testing.T) {
 		t.Fatalf("done = %+v, want a completed turn of one step", done)
 	}
 	var tool llm.Message
-	for _, req := range f.Model.Requests() {
-		for _, msg := range req.Messages {
-			if msg.Role == llm.RoleTool {
-				tool = msg
-			}
+	for _, msg := range f.Model.Seen() {
+		if msg.Role == llm.RoleTool {
+			tool = msg
 		}
 	}
 	if tool.Role != llm.RoleTool || !strings.Contains(tool.Content, "[untrusted:") ||
@@ -461,11 +459,9 @@ func TestASearchThatFindsNothingDrawsNoCard(t *testing.T) {
 		t.Errorf("the turn's audit records %s, want the route pattern alone", audit)
 	}
 	var tool llm.Message
-	for _, req := range f.Model.Requests() {
-		for _, msg := range req.Messages {
-			if msg.Role == llm.RoleTool {
-				tool = msg
-			}
+	for _, msg := range f.Model.Seen() {
+		if msg.Role == llm.RoleTool {
+			tool = msg
 		}
 	}
 	if !strings.Contains(tool.Content, `\"empty\":true`) || !strings.Contains(tool.Content, "mission") {

@@ -478,6 +478,7 @@ func (t *turn) run(r loopRun) {
 	progress := &toolloop.Progress{}
 	res, err := toolloop.Run(ctx, toolloop.Config{
 		Provider: r.provider, ProviderKey: r.key, Surface: surface, Messages: r.messages,
+		Host: t.svc.sessions, ServerTitle: "Dashboard Assistant",
 		MaxRounds: r.steps + 1, AllowSuspend: true, Budget: r.meter,
 		Fence: t.fence, OnProgress: t.onProgress, Progress: progress,
 		// STREAMED, so a round's prose reaches the drawer while it is

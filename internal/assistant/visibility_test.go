@@ -55,11 +55,9 @@ func TestAVisibilityWriteIsNeverProposedWithoutItsAudience(t *testing.T) {
 		t.Fatalf("a share with no audience was proposed: %+v", got)
 	}
 	var result llm.Message
-	for _, req := range f.Model.Requests() {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool {
-				result = m
-			}
+	for _, m := range f.Model.Seen() {
+		if m.Role == llm.RoleTool {
+			result = m
 		}
 	}
 	if !result.Failed {

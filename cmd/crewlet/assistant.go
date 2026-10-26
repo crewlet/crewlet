@@ -77,6 +77,7 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 		Rate:        engine.AssistantTurnRate(e),
 		Files:       engine.AssistantFiles(e),
 		Deep:        engine.AssistantDeepWork(e, boot, host),
+		Sessions:    engine.AssistantToolSessions(e),
 	})
 	if err != nil {
 		return nil, err

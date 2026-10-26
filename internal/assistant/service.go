@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // Deps is what a [Service] is built from. Every field but Remote, Rate and Now is
@@ -72,6 +73,10 @@ type Deps struct {
 	// Deep runs deep work; nil is a node that offers none (ADR-0054).
 	Deep DeepWork
 
+	// Sessions is where a turn serves its tools to its model's CLI, as the
+	// one MCP server `crewlet` (ADR-0049): this process's tool-session host.
+	Sessions *toolsession.Host
+
 	// Now is injectable so a test pins every instant.
 	Now func() time.Time
 }
@@ -95,6 +100,7 @@ type Service struct {
 	rate        TurnRate
 	files       Files
 	deep        DeepWork
+	sessions    *toolsession.Host
 	now         func() time.Time
 	log         *slog.Logger
 
@@ -142,6 +148,7 @@ func New(d Deps) (*Service, error) {
 		"Transcripts": d.Transcripts == nil, "Records": d.Records == nil,
 		"Dispatcher": d.Dispatcher == nil, "Revoker": d.Revoker == nil,
 		"Audit": d.Audit == nil, "Metrics": d.Metrics == nil,
+		"Sessions": d.Sessions == nil,
 	} {
 		if absent {
 			missing = append(missing, name)
@@ -166,7 +173,7 @@ func New(d Deps) (*Service, error) {
 		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
 		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files, deep: d.Deep,
-		now: now,
+		sessions: d.Sessions, now: now,
 		log: logging.Get("assistant"),
 		hub: live.NewHub(now, config.Assistant{ProposalTTLSeconds: maxProposalTTLSeconds}.ProposalTTL(),
 			tap),

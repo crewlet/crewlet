@@ -89,11 +89,9 @@ func TestApprovingASupersededTurnsProposalShowsItWithoutTheLoop(t *testing.T) {
 	if err := f.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, req := range f.Model.Requests() {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool && strings.Contains(m.Content, "approved the change") {
-				t.Fatalf("the approval woke the superseded loop: the model read %q", m.Content)
-			}
+	for _, m := range f.Model.Seen() {
+		if m.Role == llm.RoleTool && strings.Contains(m.Content, "approved the change") {
+			t.Fatalf("the approval woke the superseded loop: the model read %q", m.Content)
 		}
 	}
 	if !f.Revoker.Revoked(f.Grant("approve").ID()) {

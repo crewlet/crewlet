@@ -149,7 +149,7 @@ claude-code:
       - "WebSearch"
   tools_off:
     args: [["--tools", ""], ["--strict-mcp-config"]]
-    refuses: ["--mcp-config", "--allowedTools", "--allowed-tools", "--plugin-dir", "--safe-mode"]
+    refuses: ["--mcp-config", "--allowedTools", "--allowed-tools", "--plugin-dir"]
     note: "--tools \"\" left the init event's built-in tool list empty and --strict-mcp-config loaded no server but the engine's crewlet server; measured on Claude Code 2.1.310"
   model_args: ["--model", "{model}"]
   # BOTH SYSTEM-PROMPT CHANNELS, each a FILE: a seat's system prompt carries

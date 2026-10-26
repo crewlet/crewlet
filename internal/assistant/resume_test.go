@@ -103,11 +103,9 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 		t.Errorf("the proposal card was not updated in place: %+v", card)
 	}
 	var tool llm.Message
-	for _, req := range f.Model.Requests() {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool {
-				tool = m
-			}
+	for _, m := range f.Model.Seen() {
+		if m.Role == llm.RoleTool {
+			tool = m
 		}
 	}
 	if !strings.Contains(tool.Content, "approved the change") ||

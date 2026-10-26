@@ -75,11 +75,9 @@ func TestAChangeThatCannotBePreparedIsNeverACard(t *testing.T) {
 	// THE ROUND AFTER THE CALL is the one that reads its result; the title
 	// call the finished turn makes after it carries no tool message.
 	result := ""
-	for _, req := range f.Model.Requests() {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool {
-				result = m.Content
-			}
+	for _, m := range f.Model.Seen() {
+		if m.Role == llm.RoleTool {
+			result = m.Content
 		}
 	}
 	if !strings.Contains(result, "Only the project's lead edits it.") ||

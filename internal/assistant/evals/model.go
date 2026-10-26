@@ -39,6 +39,9 @@ type Model struct {
 	// every call's answer by its id.
 	offered [][]llm.ToolDef
 	answers map[string]llmtest.Result
+	// seen is every message the model read, in order: each request's
+	// conversation, then the answers its calls were given over the session.
+	seen []llm.Message
 }
 
 // Round is one scripted model response: prose, tool calls, or an error.
@@ -85,6 +88,7 @@ func (m *Model) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	m.requests = append(m.requests, req)
 	at := len(m.requests) - 1
 	m.offered = append(m.offered, nil)
+	m.seen = append(m.seen, req.Messages...)
 	m.mu.Unlock()
 	if req.Tools == nil {
 		next, err := m.next(ctx, req)
@@ -114,7 +118,10 @@ func (m *Model) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 		results := c.Respond(ctx, r)
 		m.mu.Lock()
 		for i, res := range results {
-			m.answers[r.Calls[i].ID] = res
+			id := r.Calls[i].ID
+			m.answers[id] = res
+			m.seen = append(m.seen, llm.Message{Role: llm.RoleTool, ToolCallID: id,
+				Name: res.Name, Content: res.Output, Failed: res.Failed})
 		}
 		m.mu.Unlock()
 		if len(r.Calls) == 0 {
@@ -133,6 +140,17 @@ func (m *Model) OfferedAt(i int) []llm.ToolDef {
 		return nil
 	}
 	return slices.Clone(m.offered[i])
+}
+
+// Seen is every message the model read, in order: each request's
+// conversation as it was sent, then every answer its CLI was given over the
+// tool session as a tool message. What a suite scans for what reached the
+// model, since a run's answers travel over the session and never in a
+// request.
+func (m *Model) Seen() []llm.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.seen)
 }
 
 // Answer is what the call with id was answered over the tool session, and
@@ -186,6 +204,9 @@ func (m *Model) next(ctx context.Context, req llm.Request) (Round, error) {
 // them would: a JSON value that is not one object.
 func response(r Round) llmtest.Response {
 	out := llmtest.Response{Text: r.Text, Usage: llm.Usage{Input: r.Input, Output: r.Output}}
+	for _, d := range r.Deltas {
+		out.Streamed += d.Content
+	}
 	for _, call := range r.Calls {
 		args := "{}"
 		switch {

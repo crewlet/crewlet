@@ -82,15 +82,18 @@ func offered(t *testing.T, f *assistanttest.Rig) []string {
 	return names
 }
 
-// toolAnswer is the model's reading of a call, by its id: what its CLI was
-// answered over the tool session.
+// toolAnswer is the model's last reading of a call, by its id: the answer its
+// CLI was given over the tool session, or, for a call a turn parked on, the
+// answer the resumed run's conversation carries for it.
 func toolAnswer(f *assistanttest.Rig, id string) (llm.Message, bool) {
-	res, ok := f.Model.Answer(id)
-	if !ok {
-		return llm.Message{}, false
+	var out llm.Message
+	found := false
+	for _, m := range f.Model.Seen() {
+		if m.Role == llm.RoleTool && m.ToolCallID == id {
+			out, found = m, true
+		}
 	}
-	return llm.Message{Role: llm.RoleTool, ToolCallID: id, Name: res.Name, Content: res.Output,
-		Failed: res.Failed}, true
+	return out, found
 }
 
 // DEEP WORK IS OFFERED ONLY WHERE IT CAN RUN: a company that configures none,
@@ -336,11 +339,9 @@ func TestATasksEndCarriesTheRecordOfEveryChangeItProposed(t *testing.T) {
 func lastToolAnswer(f *assistanttest.Rig, id string) (llm.Message, bool) {
 	var out llm.Message
 	found := false
-	for _, req := range f.Model.Requests() {
-		for _, m := range req.Messages {
-			if m.Role == llm.RoleTool && m.ToolCallID == id {
-				out, found = m, true
-			}
+	for _, m := range f.Model.Seen() {
+		if m.Role == llm.RoleTool && m.ToolCallID == id {
+			out, found = m, true
 		}
 	}
 	return out, found

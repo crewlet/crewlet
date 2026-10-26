@@ -2065,15 +2065,8 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 			"nothing off; say what the CLI runs with instead, or remove it")
 		return
 	}
-	if p.WebDenial != nil {
-		if uncovered := p.WebDenial.mcpUncovered(p.MCP); len(uncovered) > 0 {
-			add("web_denial leaves %s in place, which a run with tools uses instead of "+
-				"what the denial replaces, so the web would stay on where a seat works: set "+
-				"web_denial.mcp to what that run uses with web denied", strings.Join(uncovered, " and "))
-		}
-		if p.WebDenial.MCP != nil && p.MCP == nil {
-			add("web_denial.mcp is set but the profile has no mcp block to replace it in")
-		}
+	if p.WebDenial != nil && p.WebDenial.MCP != nil && p.MCP == nil {
+		add("web_denial.mcp is set but the profile has no mcp block to replace it in")
 	}
 	switch {
 	case p.EffectiveWebTools() == WebToolsDenied && p.WebDenial == nil:

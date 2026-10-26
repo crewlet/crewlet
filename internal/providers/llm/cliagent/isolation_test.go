@@ -744,21 +744,37 @@ func TestDoctorReportsAFileReadAfterTheShellWasRefused(t *testing.T) {
 }
 
 // QUICK MODE'S ARGV IS PINNED WHOLE, beside deep work (ADR-0054): the
-// assistant's own model runs Claude Code with no tool of its own, no session
-// and no tool server, and deep work, which runs the same CLI with its harness
-// in a box, never reaches this argv. A flag added to it, or a tool given back,
-// is a change to what a quick answer can reach, made on purpose here or not at
-// all. Mutation: drop "--tools" "" and this fails beside the test above.
+// assistant's own model runs Claude Code with no tool of its own and no
+// session, and one tool server, the engine's `crewlet`, whose tools are the
+// person's own requests (ADR-0049); deep work, which runs the same CLI with
+// its harness in a box, never reaches this argv. A flag added to it, a tool
+// given back or another server allowed is a change to what a quick answer can
+// reach, made on purpose here or not at all. Mutation: drop "--tools" "", or
+// widen the allow list, and this fails beside the test above.
 func TestTheAssistantsQuickModeArgvIsUnchanged(t *testing.T) {
 	t.Parallel()
 	claude, err := cliprofile.Load("claude-code", map[string]any{"web_tools": "denied"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"-p", "--output-format", "json", "--no-session-persistence", "--safe-mode",
+	want := []string{"-p", "--output-format", "stream-json", "--verbose",
+		"--include-partial-messages", "--no-session-persistence", "--setting-sources", "",
 		"--strict-mcp-config", "--disable-slash-commands", "--tools", "", "--disallowedTools",
 		"Bash", "Read", "Write", "Edit", "NotebookEdit", "Agent", "WebFetch", "WebSearch"}
 	if !slices.Equal(claude.CompleteArgs, want) {
 		t.Fatalf("the assistant's quick-mode argv changed:\n got %q\nwant %q", claude.CompleteArgs, want)
+	}
+	m := claude.MCP
+	if m == nil || len(m.CompleteArgs) != 0 {
+		t.Fatalf("a run with tools does not run the argv above: %+v", m)
+	}
+	if want := []string{"--mcp-config", "{work}/crewlet-mcp.json"}; !slices.Equal(m.Args, want) {
+		t.Errorf("the run's server arguments changed:\n got %q\nwant %q", m.Args, want)
+	}
+	if want := []string{"--allowedTools", "mcp__crewlet__*"}; !slices.Equal(m.AllowArgs, want) {
+		t.Errorf("the run's allow list changed:\n got %q\nwant %q", m.AllowArgs, want)
+	}
+	if problem := claude.ToolsOffProblem(); problem != "" {
+		t.Errorf("the pinned argv leaves the CLI a tool of its own: %s", problem)
 	}
 }

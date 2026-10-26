@@ -274,3 +274,35 @@ func TestAWebDenialCoversARunWithTools(t *testing.T) {
 		t.Errorf("a denial that leaves a run with tools its own argv loaded: %v", err)
 	}
 }
+
+// NO TOOL OF ITS OWN STILL HOLDS WITH THE ENGINE'S SERVER IN THE RUN: the call's
+// own argv turns every built-in tool off, and the mcp block's allow list may
+// name only the engine's tools, so an override that allows anything else, or
+// brings an allow list into the call's own arguments, is not off.
+//
+// Mutation: drop mcpAllowProblem from ToolsOffProblem and the widened allow
+// list passes.
+func TestToolsOffAdmitsTheEnginesToolsAlone(t *testing.T) {
+	t.Parallel()
+	denied := map[string]any{"web_tools": "denied"}
+	claude, err := Load("claude-code", denied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problem := claude.ToolsOffProblem(); problem != "" {
+		t.Fatalf("the built-in denied argv is not off: %s", problem)
+	}
+	widened, err := Load("claude-code", map[string]any{"web_tools": "denied",
+		"mcp": map[string]any{"allow_args": []any{"--allowedTools", "mcp__crewlet__*", "Bash"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problem := widened.ToolsOffProblem(); !strings.Contains(problem, `"Bash"`) {
+		t.Errorf("an allow list naming Bash passed as off: %q", problem)
+	}
+	noMCP := claude.Clone()
+	noMCP.MCP = nil
+	if problem := noMCP.ToolsOffProblem(); !strings.Contains(problem, "no mcp block") {
+		t.Errorf("a profile the engine's tools cannot reach passed as off: %q", problem)
+	}
+}

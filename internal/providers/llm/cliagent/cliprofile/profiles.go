@@ -283,6 +283,17 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 	}
 	bad := merged.webOverrideConflicts(overrides)
 	if merged.EffectiveWebTools() == WebToolsDenied && merged.WebDenial != nil {
+		// A RUN WITH TOOLS IS DENIED THE WEB TOO, or the entry is refused:
+		// see [WebDenial]. Asked of the entry that denies, never of a
+		// profile that only carries a denial, so an operator's own mcp
+		// route on a seat that keeps its web is not refused for a stance
+		// it does not take.
+		if uncovered := merged.WebDenial.mcpUncovered(merged.MCP); len(uncovered) > 0 {
+			bad = append(bad, "web_tools is denied, but web_denial leaves "+
+				strings.Join(uncovered, " and ")+" in place, which a run with tools uses "+
+				"instead of what the denial replaces, so the web would stay on where a seat "+
+				"works: set web_denial.mcp to what that run uses with web denied")
+		}
 		merged = merged.withWebDenied()
 	}
 	bad = append(bad, merged.problems()...)
