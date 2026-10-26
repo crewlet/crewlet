@@ -506,7 +506,9 @@
 //     repository — and its ref drops, whose objects go with its packs. Until its sweep a retirement is what a cache holding the
 //     pack learns it from: a snapshot serves it in a RETIRED phase — a delta
 //     every retirement above its floor, a full answer those above its
-//     caller's [StateQuery.RetiredSince] when it can serve every one — and
+//     caller's [StateQuery.RetiredSince] when it can serve every one, at
+//     most [MaxFullRetirements] (a page, against a commit-graph every git
+//     node holding the repository would otherwise drop and rewrite) — and
 //     the mark is the one past which a delta is no longer complete, so a
 //     delta from below it is answered in full, as below the tombstone mark.
 //     Page 1 weighs a delta against the full answer with the retirements

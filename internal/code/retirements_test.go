@@ -123,15 +123,16 @@ func TestADeltaFromBelowTheRetiredMarkIsAnsweredFull(t *testing.T) {
 // retirements above the RetiredSince it is asked with, and says so in
 // RetiredFrom on every page, exactly when it can serve every one of them: a
 // position on this generation, at or past the repository's retired mark, with
-// no more retirements above it than the full answer has rows. Otherwise it
-// serves none and RetiredFrom is zero.
+// at most MaxFullRetirements above it — more than the full answer has rows
+// among them. Otherwise it serves none and RetiredFrom is zero.
 //
 // Mutation: serve retirements past page 1's position (a tail) → the late one
 // is served; read the floor inclusively → the one at Since is served; enter
 // the phase on a delta alone → the full answers serve none; honour a
 // RetiredSince below the mark or on another generation → the answer claims a
-// floor its own later pages refuse; honour one past the count → it claims a
-// floor and serves more retirements than it has rows.
+// floor its own later pages refuse; honour one past the bound → it claims a
+// floor and serves more than a page of retirements; bound them by the full
+// answer's rows → the twenty-six beside its sixteen rows are refused.
 func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -150,8 +151,9 @@ func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.
 	n.seedRetiredPacks(id, p2.Packed(), recent, "c2", "a2", "b2")
 	p3 := n.push(id, entry("p3", set("refs/heads/main", oidOf("c2"), oidOf("c3")))).Position
 	n.seedRetiredPacks(id, p3.Packed(), recent, "b3", "a3")
-	// ROOM FOR THEM: ten more packs, so a full answer's rows outnumber every
-	// retirement until the case adds more.
+	// ROOM FOR A DELTA: ten more packs, so the delta from Since — asked for
+	// no retirements, so its own weigh on its side alone — never outweighs
+	// the full answer's sixteen rows.
 	n.seedRefs(id, 0, 10)
 	code.SetPageLimits(n.reader, 2, code.MaxPageBytes)
 
@@ -248,13 +250,23 @@ func TestADeltaServesItsRetirementsAndAFullAnswerThoseAboveItsCaller(t *testing.
 	refused("from another generation", elsewhere)
 	refused("from nothing", statelog.Position{})
 
-	// OUTWEIGHED: twenty more retirements than the answer has room for.
-	var more []string
-	for i := range 20 {
-		more = append(more, fmt.Sprintf("more-%02d", i))
+	// BEYOND THE ANSWER'S OWN ROWS, within the bound: twenty more, so its
+	// sixteen rows stand beside twenty-six retirements, every one served.
+	numbered := func(from, to int) []string {
+		var out []string
+		for i := from; i < to; i++ {
+			out = append(out, fmt.Sprintf("more-%05d", i))
+		}
+		return out
 	}
-	n.seedRetiredPacks(id, late.Packed(), recent, more...)
-	refused("past the full answer's rows", since)
+	n.seedRetiredPacks(id, late.Packed(), recent, numbered(0, 20)...)
+	honoured("past the full answer's rows", since,
+		slices.Concat(want, retiredBy(late, append([]string{"late"}, numbered(0, 20)...)...)))
+
+	// PAST THE BOUND: one more retirement above Since than MaxFullRetirements.
+	above := len(want) + 1 + 20
+	n.seedRetiredPacks(id, late.Packed(), recent, numbered(20, 20+code.MaxFullRetirements+1-above)...)
+	refused("past MaxFullRetirements", since)
 }
 
 // A SWEEP UNDER A SNAPSHOT MOVES IT. A retire_sweep that raises the

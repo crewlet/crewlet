@@ -77,8 +77,8 @@ type StateQuery struct {
 	// snapshot's position], so a full round can tell a pack file a
 	// compaction retired from one no row accounts for. Served only when the
 	// reader can serve all of them (Snapshot: on this generation, at or past
-	// the repository's retired mark, and no more of them than the full
-	// answer's rows), and the answer's RetiredFrom says whether it did. A
+	// the repository's retired mark, and at most MaxFullRetirements of them),
+	// and the answer's RetiredFrom says whether it did. A
 	// delta's retirements are always those above its own Since, but page 1
 	// weighs it against the full answer with what each would serve, so asked
 	// from Since itself — the position the caller holds — the retirements

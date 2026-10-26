@@ -559,6 +559,48 @@ const (
 	// statelog.ApplyTxTimeBudget a purge part is sized to.
 	RetireSweepRows = MaxRecordRows - 1
 
+	// MaxFullRetirements is the most retirements a FULL snapshot serves beside
+	// its own rows — those above its caller's StateQuery.RetiredSince, every
+	// one or none — and so the point past which a delta's retirements weigh
+	// against the full answer on the delta's side alone (reader.go's choose):
+	// up to it the full answer would serve the same ones, and they cancel. So
+	// the largest answer the reader serves is a full snapshot of a full
+	// repository and one page.
+	//
+	// ONE PAGE OF ROWS, MaxSnapshotItems, because it weighs what a git node's
+	// cache holds for its round against what serving none costs every git
+	// node holding the repository:
+	//   - served, they are at most a page more of the answer — some 2.4 MB of
+	//     JSON at a retirement's 240 bytes or so, under MaxPageBytes — read
+	//     once on the data node and held about as large by the cache;
+	//   - not served, the cache treats every pack file no row names as one no
+	//     row accounts for and drops the repository's commit-graph with it —
+	//     rewritten from the whole history at 56 bytes an object of memory
+	//     (the cache's GraphBytesPerObject), and until then a walk that would
+	//     stop on its generation numbers walks by date (a push dated before
+	//     its parent: 6.9 s over a gigabyte, against 0.37 s with the graph,
+	//     docs/concepts/code-host.md) — and a graph of some 43 000 objects, a
+	//     repository of about fifteen megabytes, already holds the page's
+	//     memory;
+	//   - a page is some 8 800 pushes to ONE repository since a cache last
+	//     synced it (about 1.14 retirements a push, the geometric roll's
+	//     expectation), all inside the RetireGrace a retirement's row lives: a
+	//     cache further behind on so busy a repository takes the full answer
+	//     — no more rows than the repository holds — rather than every
+	//     retirement, so the catch-up of a cache two thousand compactions
+	//     behind, twenty thousand retirements beside a repository of fifty
+	//     packs, stays full.
+	//
+	// NOT the full answer's own rows, refs plus live packs, which it replaced:
+	// those say nothing of what a graph costs — a repository of five refs may
+	// be a monorepo — and compaction keeps the live packs few, so bounded by
+	// them a full answer served nothing to a cache a few dozen pushes behind
+	// on a repository of a few refs, nor to any cache after a compaction that
+	// retired more packs than the repository has refs and packs left, each
+	// such answer costing every git node its commit-graph to save a few dozen
+	// rows.
+	MaxFullRetirements = MaxSnapshotItems
+
 	// CommitterInbox is how many proposals one repository's committer holds
 	// queued on one node: SIXTEEN FULL RECORDS of the smallest pushes
 	// (MaxPushesPerRecord each), so a burst — a CI fan-out of tag pushes —

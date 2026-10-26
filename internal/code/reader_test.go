@@ -306,10 +306,17 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 	// sides and cancel; only those the full answer would not serve count
 	// against the delta alone.
 	//
-	// Mutation: count the retirements on the delta's side alone, and the
+	// WHAT A FULL ANSWER SERVES IS BOUNDED BY MaxFullRetirements, never by
+	// its own rows: a repository of few refs, whose compaction retires more
+	// packs than it has rows, still has its retirements served, and only
+	// past the bound does a full answer serve none.
+	//
+	// Mutations: count the retirements on the delta's side alone, and the
 	// delta asked from its own floor is answered in full — the full answer
 	// then carrying those retirements AND its own rows, more than the delta
-	// it replaced.
+	// it replaced; bound them by the full answer's rows, and the twenty a
+	// compaction retired beside three rows are served by no full answer and
+	// make the delta full.
 	t.Run("many retirements", func(t *testing.T) {
 		t.Parallel()
 		// A full answer of one ref and two packs; a delta from after the
@@ -353,14 +360,52 @@ func TestADeltaLargerThanTheFullAnswerIsAnsweredInFull(t *testing.T) {
 			t.Fatalf("the delta serves the retirements %v, want %v", got, want)
 		}
 
-		// PAST WHAT A FULL ANSWER SERVES, it serves none and they count on
-		// the delta's side alone again: answered in full, serving none.
-		n.seedRetiredPacks(id, retiring.Packed(), harnessAt, "retired-3", "retired-4")
+		// MORE THAN THE FULL ANSWER'S ROWS, as one compaction of a
+		// repository of few refs retires — twenty beside its three rows —
+		// and still within the bound: the delta asked from its own floor is
+		// kept, and a full answer asked from that floor serves every one.
+		seedNumbered := func(from, to int) {
+			t.Helper()
+			var packs []string
+			for i := from; i <= to; i++ {
+				packs = append(packs, fmt.Sprintf("retired-%05d", i))
+			}
+			n.seedRetiredPacks(id, retiring.Packed(), harnessAt, packs...)
+		}
+		seedNumbered(3, 20)
+		whole := func() []code.RepoSnapshot {
+			t.Helper()
+			pages, err := snapshotFrom(t, n.reader, code.StateQuery{RepoID: id, Fresh: stale, RetiredSince: since})
+			if err != nil || !pages[0].Full {
+				t.Fatalf("a full answer asking for the retirements above %v = %v (full %v)", since, err,
+					len(pages) > 0 && pages[0].Full)
+			}
+			return pages
+		}
+		pages = ask(since)
+		if pages[0].Full || pages[0].RetiredFrom != since || len(retiredOf(pages)) != 20 {
+			t.Fatalf("a delta of a ref, a pack and twenty retirements, asked from its own floor, beside a full "+
+				"answer of three rows that would serve the same twenty = full %v serving %d from %v, want a "+
+				"delta serving all twenty from %v", pages[0].Full, len(retiredOf(pages)), pages[0].RetiredFrom, since)
+		}
+		if pages := whole(); pages[0].RetiredFrom != since || len(retiredOf(pages)) != 20 {
+			t.Fatalf("a full answer of three rows asked for the twenty retirements above %v serves %d from %v, "+
+				"want all twenty: a bound of its own rows would serve none", since, len(retiredOf(pages)),
+				pages[0].RetiredFrom)
+		}
+
+		// PAST THE BOUND a full answer serves none, and they count on the
+		// delta's side alone again: answered in full, serving none.
+		seedNumbered(21, code.MaxFullRetirements+1)
 		pages = ask(since)
 		if !pages[0].Full || !pages[0].RetiredFrom.IsZero() || len(retiredOf(pages)) != 0 {
-			t.Fatalf("a delta of a ref, a pack and four retirements beside a full answer of three rows that "+
-				"cannot serve them = full %v serving %v from %v, want a full answer serving none",
-				pages[0].Full, retiredOf(pages), pages[0].RetiredFrom)
+			t.Fatalf("a delta of a ref, a pack and %d retirements beside a full answer of three rows that "+
+				"cannot serve them = full %v serving %d from %v, want a full answer serving none",
+				code.MaxFullRetirements+1, pages[0].Full, len(retiredOf(pages)), pages[0].RetiredFrom)
+		}
+		if pages := whole(); !pages[0].RetiredFrom.IsZero() || len(retiredOf(pages)) != 0 {
+			t.Fatalf("a full answer asked for %d retirements, past the bound, serves %d from %v, want none",
+				code.MaxFullRetirements+1, len(retiredOf(pages)), pages[0].RetiredFrom)
 		}
 	})
 }

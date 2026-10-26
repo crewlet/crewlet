@@ -439,12 +439,12 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 //
 // A FULL ANSWER SERVES ITS CALLER'S RETIREMENTS ONLY WHEN IT CAN SERVE EVERY
 // ONE: RetiredSince on this generation, at or past the retired mark for the
-// same reason, and no more retirements above it than the full answer's own
-// rows (refs plus live packs), so serving them at most doubles the answer.
-// Short of any of them it serves none rather than some, so a RetiredFrom it
-// answers always names a floor its retirements are COMPLETE above: a cache
-// handed none treats every file no row names as one no row accounts for,
-// which is correct and only dearer.
+// same reason, and at most [MaxFullRetirements] of them above it — one page,
+// whatever the repository's own rows, which say nothing of what serving none
+// costs ([MaxFullRetirements] says why). Short of any of them it serves none
+// rather than some, so a RetiredFrom it answers always names a floor its
+// retirements are COMPLETE above: a cache handed none treats every file no
+// row names as one no row accounts for, which is correct and only dearer.
 //
 // THEN THE TWO ANSWERS ARE WEIGHED LIKE WITH LIKE ([deltaOutweighs]): the
 // delta's refs, packs and retirements against the full answer's refs, packs
@@ -481,11 +481,11 @@ func choose(ctx context.Context, tx *sql.Tx, q StateQuery, at statelog.Position,
 		from   statelog.Position
 	)
 	if !same && onLog(q.RetiredSince, at) && q.RetiredSince.Packed() >= v.retiredThrough {
-		above, err := retiredAbove(ctx, tx, q.RepoID, q.RetiredSince, whole+1)
+		above, err := retiredAbove(ctx, tx, q.RepoID, q.RetiredSince, MaxFullRetirements+1)
 		if err != nil {
 			return false, statelog.Position{}, err
 		}
-		if above <= whole {
+		if above <= MaxFullRetirements {
 			served, from = above, q.RetiredSince
 		}
 	}
@@ -494,13 +494,13 @@ func choose(ctx context.Context, tx *sql.Tx, q StateQuery, at statelog.Position,
 	}
 	depth := whole + served + 1
 	if same {
-		depth = whole + 1
+		depth = max(MaxFullRetirements, whole) + 1
 	}
 	retired, err := retiredAbove(ctx, tx, q.RepoID, q.Since, depth)
 	if err != nil {
 		return false, statelog.Position{}, err
 	}
-	if same && retired <= whole {
+	if same && retired <= MaxFullRetirements {
 		served, from = retired, q.Since
 	}
 	full, err := deltaOutweighs(ctx, tx, q.RepoID, q.Since.Packed(), retired, whole, served)
@@ -549,8 +549,8 @@ func retiredAbove(ctx context.Context, tx *sql.Tx, repoID string, floor statelog
 // any of it. Answered here, NO DELTA IS EVER MORE ROWS THAN THE FULL ANSWER,
 // so by rows the largest answer the reader serves is what it was before
 // tombstones were bounded apart — a full snapshot of a full repository — and
-// the retirements a full answer serves beside its rows, at most as many again
-// ([choose]).
+// the retirements a full answer serves beside its rows, at most one page
+// ([MaxFullRetirements]).
 //
 // # Every row each answer carries, packs included
 //
