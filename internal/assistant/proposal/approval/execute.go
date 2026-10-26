@@ -51,6 +51,7 @@ func (a *Approver) execute(ctx context.Context, d decider, p assistantdomain.Pro
 		cancel()
 		a.d.Grants.Revoke(grant.ID())
 		out = outcomeOf(p.Tool, request, resp, sendErr)
+		out.invalidate = a.invalidation(out)
 	}
 	settleCtx, cancel := context.WithTimeout(ctx, SettleTimeout)
 	defer cancel()
@@ -173,10 +174,28 @@ func outcomeOf(tool string, request exec.Request, resp exec.Response, err error)
 		}
 	}
 	out.receipt = &wire.Receipt{Summary: summary, Position: out.position}
-	if stream, _, found := strings.Cut(out.position, "@"); found && stream != "" {
-		out.invalidate = &wire.Invalidate{Domain: stream, Position: out.position}
-	}
 	return out
+}
+
+// invalidation is what open screens are told of a write that landed, or nil
+// for one that did not.
+//
+// EVERY APPLIED WRITE, not only one whose answer named a position: a route
+// outside the act surface (a brand adopted, a seat changed through the
+// configuration) answers none, and the page behind the drawer read "No brand
+// yet" after the brand was adopted until it was reloaded. With no position
+// the screens read again without a floor to wait for. With one, its domain is
+// named BY ITS NAME (`tracker`), the key a screen's floors are kept under,
+// never by its stream (`CREWLET_TRACKER_LOG`), which no screen reads by.
+func (a *Approver) invalidation(out outcome) *wire.Invalidate {
+	if out.state != wire.ProposalApplied {
+		return nil
+	}
+	at := &wire.Invalidate{Position: out.position}
+	if stream, _, found := strings.Cut(out.position, "@"); found && stream != "" {
+		at.Domain = a.d.DomainOf(stream)
+	}
+	return at
 }
 
 // refusalOf is a refused write as the person and the model read it: the route's

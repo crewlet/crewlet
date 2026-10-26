@@ -6963,7 +6963,7 @@ written against; a version this engine does not speak is
 | `GET` | `/assistant/conversations/{id}` | | `200` the transcript: `{conversation, messages, steps, cards, open_turn, audit_reads}`. A card built from an app the caller no longer holds is replaced by a notice, and so is a message written after its turn read through one (each message records the apps its turn had read through); every step names its `turn_id` |
 | `DELETE` | `/assistant/conversations/{id}` | | `200 {outcome, position}`: the conversation is purged at once, a turn of it running here is stopped and every grant of its open turn is ended |
 | `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context, attachments?}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn. `attachments` names at most 4 files uploaded to this conversation, each once (`400 invalid_body` otherwise) |
-| `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, below |
+| `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, or `204` when the segment has ended and nothing follows `Last-Event-ID`, below |
 | `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, on whichever node of the fleet that is, a turn waiting on an approval is closed stopped and every proposal it waits on declined (under the request's `Idempotency-Key`, when sent), and a turn already over answers the state it ended in. `state` is what the turn truly reached: `stopped`, or what it came to first (`completed`, `waiting_for_approval`), and `running` while its runner has not yet recorded its end, which then arrives on the turn's stream |
 | `GET` | `/assistant/cards/{id}/export.csv` | | `200` the table card as CSV, from the snapshot the conversation stored, never a fresh read |
 | `GET` | `/assistant/cards/{id}/export.xlsx` | | `200` the same table as XLSX |
@@ -7033,7 +7033,11 @@ seconds.
 
 Send `Last-Event-ID` to resume: every frame after it is replayed. A client that
 falls 512 frames behind is disconnected rather than dropped from, and resumes
-the same way. Frames the running node no longer keeps (it keeps a turn's frames
+the same way. A resume after the last frame of a segment that has already ended
+(a turn waiting on an approval, reopened at the transcript's
+`open_turn.after_seq`) answers `204 No Content` with no body: the client holds
+the whole segment, its `done` included, and does not dial again until a
+decision hands it the next segment's `stream_url`. Frames the running node no longer keeps (it keeps a turn's frames
 two minutes after a segment ends) are answered with a `snapshot` of the turn as
 its transcript holds it, then how it ended.
 

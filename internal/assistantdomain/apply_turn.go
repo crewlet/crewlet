@@ -98,7 +98,7 @@ func applyParked(ctx context.Context, tx *sql.Tx, c applyContext, conversation, 
 	p TurnParked) (int, error) {
 
 	written, err := moveTurn(ctx, tx, c, conversation, turn,
-		[]wire.TurnState{wire.TurnRunning}, wire.TurnWaitingForApproval, "")
+		[]wire.TurnState{wire.TurnRunning}, wire.TurnWaitingForApproval, "steps = ?", p.Steps)
 	if err != nil || written == 0 {
 		return written, err
 	}
