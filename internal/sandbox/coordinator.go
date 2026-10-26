@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -671,6 +672,11 @@ type Coordinator struct {
 	// mu; see [Coordinator.waitOwed].
 	signals map[signal]uint64
 
+	// launchStops are the stops decided on this node's runs while they were
+	// still LAUNCHING, by turn id, for the frame launching each to take
+	// ([Coordinator.LaunchStopped]). Under mu.
+	launchStops map[string]launchStop
+
 	hold  SeatHold
 	admit Admission
 	after func(time.Duration, func()) func() bool
@@ -771,6 +777,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		holdDirty:    map[string]bool{},
 		holdGen:      map[string]uint64{},
 		signals:      map[signal]uint64{},
+		launchStops:  map[string]launchStop{},
 		hold:         opts.Hold,
 		admit:        opts.Admit,
 		after:        opts.After,
@@ -3095,6 +3102,7 @@ func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayA
 	}
 	c.reportStopped(ctx, decided)
 	c.clearAnswerAttempts(decided.AgentHandle, decided.TurnID)
+	c.noteLaunchStop(decided)
 	ending := *decided.Ending
 	if err := c.finishEnding(ctx, decided, mayAsk); err != nil {
 		if errors.Is(err, errAskAway) {
@@ -4064,6 +4072,9 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	c.releaseOwed(handle)
 	c.mu.Lock()
 	delete(c.runs, handle)
+	// AND A STOP OF ONE OF ITS LAUNCHES NO FRAME TOOK: the seat's turns run
+	// on its next holder from here.
+	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })
 	c.mu.Unlock()
 	// AND THE SEAT'S INBOX HOLD, which the release's detach has already
 	// dropped with the attachment: forgotten, never lifted — the seat's mail

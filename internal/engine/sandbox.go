@@ -1520,20 +1520,22 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 // stoppedAtPark is the stop a person's pause made of a launch whose park was
 // refused, or nil where no stop explains it.
 //
-// THE ROW FIRST, which says so for certain where the stop's ending is still on
-// it ([sandbox.PendingRun.Stop]) — and names who made it. A row already gone
-// was ended and deleted before the park came: a stop finishes in the time a
-// box takes to die, which is often less than a turn takes to unwind. Then the
-// seat's pause says it, as the turn's own fence would at its next round.
+// FROM THE STOP'S OWN DECISION, NEVER FROM THE PAUSE. A stop finishes in the
+// time a box takes to die, which is often less than a turn takes to unwind to
+// its park, and deletes the row as it goes; and the person can resume the seat
+// before the park comes. Read off the pause then, the refused park was taken
+// for a suspension with nowhere to go, nothing closed the turn, and its park
+// was its last record — parked for good while its run read stopped. So the
+// coordinator keeps the decision for this frame ([sandbox.Coordinator.LaunchStopped]),
+// and the row still says so where the stop's ending is on it — a stop another
+// node decided — naming who made it ([sandbox.PendingRun.Stop]).
 func (e *Engine) stoppedAtPark(ctx context.Context, rt *sandboxRuntime, turnID, handle string) error {
+	if stop, ok := rt.coordinator.LaunchStopped(turnID); ok {
+		return &stopError{pause: pauseOfStop(stop), handle: handle}
+	}
 	if run, found, err := rt.pending.Get(ctx, turnID); err == nil && found &&
 		run.Ending != nil && run.Stop != nil {
 		return &stopError{pause: pauseOfStop(*run.Stop), handle: handle}
-	}
-	// A handle the running company names no agent seat by has no pause to
-	// read, so no stop explains the refused park.
-	if seat, err := e.seatID(handle); err == nil {
-		return e.stopFor(seat, handle)
 	}
 	return nil
 }

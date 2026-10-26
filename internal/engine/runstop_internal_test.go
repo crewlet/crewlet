@@ -409,3 +409,74 @@ func TestALaunchAStopEndedMidwayIsReportedAsTheStop(t *testing.T) {
 		t.Fatalf("the turn's completion is stopped=%v failed=%v, want stopped", last.Stopped, last.Failed)
 	}
 }
+
+// A STOP THAT FINISHED BEFORE ITS TURN COULD PARK IS STILL THE TURN'S END ONCE
+// THE SEAT IS RESUMED. The stop ends a launching run in the time its box takes
+// to die and deletes the row; the person can resume the seat before the turn
+// unwinds to its park. The frame used to read the stop off the row, then off the
+// pause — both gone by then — so it took the refused park for a suspension with
+// nowhere to go, and the turn's last record was its park: parked for good,
+// beside a run announced stopped. The frame now asks the coordinator, which
+// kept the stop's decision for it.
+//
+// Mutation: answer the refused park from the row and the pause alone, and the
+// turn is never closed.
+func TestALaunchStoppedBeforeItsParkIsClosedAsStoppedOnceTheSeatIsResumed(t *testing.T) {
+	t.Parallel()
+	e, _ := spendingEngine(t)
+	q := e.backends.Queue.(*memory.Queue)
+	store := &parkStopsFirst{PendingStore: sandbox.NewCoordStore(e.backends.Fleet)}
+	rigRunsOn(t, e, store, halfwayPlay)
+	store.before = func() {
+		pause := janeStops()
+		e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
+		e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat})
+	}
+
+	res, err := e.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-1", RunID: "run-1", WorkSince: time.Now().UTC(),
+		Events: []*events.Event{taskWake("task-9", "ENG-9")},
+	})
+
+	if _, found, _ := e.sandbox.Load().pending.Get(t.Context(), "run-1"); found {
+		t.Fatal("the stop did not finish before the park, so this case raced nothing")
+	}
+	if !turn.Stopped(err) || res.Suspended {
+		t.Fatalf("runTurn = suspended %v, %v; want the turn stopped", res.Suspended, err)
+	}
+	if pause, ok := stopOf(err); !ok || pause.By != "jane" || pause.OperatorID != "pat:jane-token" {
+		t.Fatalf("the turn's stop names %+v, want Jane's", pause)
+	}
+	closedAsStopped(t, q, "run-1")
+}
+
+// A LAUNCH A STOP ENDED UNDER IT IS THE STOP ONCE THE SEAT IS RESUMED TOO: the
+// turn reads the decision the coordinator kept for it, never the pause, which
+// the person may have lifted before the launch unwound — read off the pause,
+// the stop was reported as a launch that broke.
+//
+// Mutation: ask the seat's fence rather than the coordinator, and the turn
+// fails rather than stops.
+func TestALaunchAStopEndedMidwayIsTheStopOnceTheSeatIsResumed(t *testing.T) {
+	t.Parallel()
+	e, _ := spendingEngine(t)
+	store := &attachStopsFirst{PendingStore: sandbox.NewCoordStore(e.backends.Fleet)}
+	rigRunsOn(t, e, store, halfwayPlay)
+	store.before = func() {
+		pause := janeStops()
+		e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
+		e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat})
+	}
+
+	_, err := e.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-1", RunID: "run-1", WorkSince: time.Now().UTC(),
+		Events: []*events.Event{taskWake("task-9", "ENG-9")},
+	})
+
+	if pause, ok := stopOf(err); !turn.Stopped(err) || !ok || pause.By != "jane" {
+		t.Fatalf("runTurn = %v, want the turn stopped by Jane, who stopped its launch", err)
+	}
+	if _, kept := e.sandbox.Load().coordinator.LaunchStopped("run-1"); kept {
+		t.Fatal("the launch's stop was left for nobody to take")
+	}
+}

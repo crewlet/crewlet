@@ -268,6 +268,13 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "the busy half of it",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
 	}},
+	"LaunchStopped": {{
+		// IT ENDS NOTHING: it hands the frame launching a run the stop
+		// decided on it — already ended by the stop's own ending — and
+		// forgets it.
+		name: "the launching frame taking the stop that ended its run",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.LaunchStopped("t1") },
+	}},
 	"HoldSeat": {{
 		name: "a delivery that reached a seat this node counts as held",
 		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldSeat(t.Context(), "swe") },

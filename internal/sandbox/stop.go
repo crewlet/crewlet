@@ -260,6 +260,51 @@ func (c *Coordinator) hostGivenUp(run PendingRun) bool {
 	return c.now().Sub(run.Ending.At) >= m.BoxTimeout()
 }
 
+// launchStop is a stop decided on a run of this node's while it was still
+// launching ([Coordinator.LaunchStopped]).
+type launchStop struct {
+	handle string
+	stop   RunStop
+}
+
+// noteLaunchStop keeps, for the frame launching it, the stop a run was decided
+// to end on while it was still LAUNCHING ([Coordinator.LaunchStopped]).
+func (c *Coordinator) noteLaunchStop(decided PendingRun) {
+	if decided.Stop == nil || decided.Status != StatusLaunching {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.launchStops[decided.TurnID] = launchStop{handle: decided.AgentHandle, stop: *decided.Stop}
+}
+
+// LaunchStopped TAKES the stop a person's pause decided on the turn's run while
+// it was still launching, reporting whether there was one: the frame launching
+// it asks when its launch or its park is refused under it.
+//
+// THE FRAME'S ANSWER CANNOT BE THE PAUSE, nor the row. The stop finishes in the
+// time a box takes to die — often less than the turn takes to unwind to its
+// park — and deletes the row as it goes, and the person may resume the seat
+// before the frame asks: read off the pause then, the stop was no stop, the
+// refused park was logged as a suspension with nowhere to go, and the turn's
+// last record was its park, so it read parked for good while its run read
+// stopped. So the decision is kept here, from the deciding write to the
+// frame's question, whatever the row and the pause say by then.
+//
+// IN THIS NODE'S MEMORY, because the two parties are this node's: a launching
+// run's stop is decided by the node holding its seat, which is the node running
+// the turn that launched it — a seat that moves takes its launching runs with it
+// as abandoned tails, never stops, and its new holder's frame launches its own.
+// Kept until the frame takes it, the turn's next launch on this node opens
+// ([Coordinator.Launch]), or the seat leaves this node ([Coordinator.ReleaseSeat]).
+func (c *Coordinator) LaunchStopped(turnID string) (RunStop, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.launchStops[turnID]
+	delete(c.launchStops, turnID)
+	return s.stop, ok
+}
+
 // stoppedResult is what a run a person stopped reports: what it said up to
 // then, never a success — it did not get to say it was done — and never a
 // question, which nothing will answer. Its phase record says who stopped it

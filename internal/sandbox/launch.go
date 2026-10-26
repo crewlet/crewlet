@@ -370,6 +370,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// return — see [Coordinator.Launch]. Every failure past this point
 	// gives it back through [Coordinator.abandon].
 	c.countRun(req.Turn.AgentHandle, StatusLaunching)
+	// A STOP OF THE TURN'S LAST LAUNCH IS NOT THIS ONE'S: this job is new.
+	c.mu.Lock()
+	delete(c.launchStops, req.Turn.TurnID)
+	c.mu.Unlock()
 	// THE TURN'S FENCE AGAIN, now that a stop can find the row — see
 	// [LaunchRequest.Fence]. Refused, the launch is over before any box
 	// exists, and the error is the fence's own, so the turn reads it as the

@@ -603,6 +603,57 @@ func TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost(t *testi
 	}
 }
 
+// A STOP OF A LAUNCH IS KEPT FOR THE FRAME LAUNCHING IT, AND ONLY FOR IT. The
+// stop deletes the row in the time a box takes to die, and the person may
+// resume the seat before the turn unwinds to its park, so the frame reads the
+// stop's own decision here: once, by the turn it ended. A running run's stop
+// is its parked turn's close and keeps nothing; a stop no frame took goes with
+// the seat when it leaves this node; and the turn's next launch is a new job.
+//
+// Mutation: keep nothing for a stopped launch, and its frame finds no stop;
+// keep a running run's stop, or keep one past its seat, and a later refused
+// park of the same turn is read as a stop it was not.
+func TestAStopOfALaunchIsKeptForTheFrameLaunchingIt(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	watchStops(rig)
+	rig.launching("t1")
+	rig.stop(t)
+
+	got, ok := rig.coordinator.LaunchStopped("t1")
+	if !ok || got != stopper {
+		t.Fatalf("the launch's frame read %+v (%v), want the stop that ended it", got, ok)
+	}
+	if _, again := rig.coordinator.LaunchStopped("t1"); again {
+		t.Fatal("the stop was kept after its frame took it")
+	}
+
+	// A RUNNING RUN'S STOP closes its parked turn itself, and keeps nothing.
+	rig.launch("t2")
+	rig.stop(t)
+	if _, kept := rig.coordinator.LaunchStopped("t2"); kept {
+		t.Fatal("a running run's stop was kept for a launching frame there is none of")
+	}
+
+	// A STOP NO FRAME TOOK goes with the seat.
+	rig.launching("t3")
+	rig.stop(t)
+	rig.coordinator.ReleaseSeat("swe")
+	if _, kept := rig.coordinator.LaunchStopped("t3"); kept {
+		t.Fatal("a launch's stop outlived its seat on this node")
+	}
+
+	// AND THE TURN'S NEXT LAUNCH IS A NEW JOB.
+	rig.launching("t4")
+	rig.stop(t)
+	if _, err := rig.coordinator.Launch(t.Context(), rig.manager, launchReq("t4")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if _, kept := rig.coordinator.LaunchStopped("t4"); kept {
+		t.Fatal("the turn's last launch's stop was read as its next one's")
+	}
+}
+
 // claimBeforeDecide claims a run's completion the moment a stop decides on it,
 // as a completion processed on the seat's control topic can.
 type claimBeforeDecide struct {

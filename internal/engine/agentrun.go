@@ -290,12 +290,20 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// A LAUNCH A PERSON'S STOP ENDED UNDER IT — its row's ending decided
 		// between the box and the job, so the attach was refused — is the
 		// stop, and the turn reports it as one rather than as a launch that
-		// broke: the fence names who stopped it.
-		if fenceErr := req.Fence(); turn.Stopped(fenceErr) {
+		// broke, naming who stopped it: as the coordinator kept the stop's
+		// decision for this frame, never as the seat's pause reads by now,
+		// which a person may have lifted since ([sandbox.Coordinator.LaunchStopped]).
+		// Taken whatever the launch answered, so a stop that came with its own
+		// fence's refusal is not kept for nobody.
+		decided, stopped := coordinator.LaunchStopped(l.turn.RunID)
+		switch {
+		case turn.Stopped(err):
+			return err
+		case stopped:
 			log.InfoContext(ctx, "executor_launch_stopped", "seat", handle, "turn_id", l.turn.RunID,
 				"error", err, "detail", "a person stopped the seat's running work while its "+
 					"executor was launching; the launch is ended and the turn stops")
-			return fenceErr
+			return &stopError{pause: pauseOfStop(decided), handle: handle}
 		}
 		return err
 	}
