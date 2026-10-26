@@ -313,6 +313,35 @@
 // nothing, and the walk asks the next data node. A person's read asks no
 // chart and is answered there.
 //
+// # Every read of the rows seeks a named index
+//
+// Every statement this package spells that reads a code table — a SELECT, and
+// the WHERE an UPDATE or a DELETE finds the rows it writes by — reaches each
+// table it reads by a SEARCH on an index the schema declares or on the primary
+// key, because every data node applies every record on the one write lane
+// every other domain's applier waits behind, and a scan there costs what the
+// largest repository holds, at every call. Only three things are read whole:
+// json_each, a statement's own list, which a batch is driven from (planner.go
+// says why); a subquery's or a common table expression's result, which is no
+// table; and a table whose rows something other than a repository bounds —
+// code_evictions, the trim's listing, one row a node an operator evicted. A
+// statement names the index it is written for where the planner would not
+// choose it (planner.go), and every index names its reader in its migration.
+//
+// IT IS A GATE, NOT A REVIEW. TestEveryCodeReadSeeksANamedIndex walks this
+// package's non-test source for every text that reads a code_* table — a
+// constant, an inline literal, a statement built of constants — and holds
+// each to a statement plan_test.go registers by its exact text, whose plan it
+// judges; a function that assembles a statement at run time registers the
+// statements it can build as shapes (planShapes), objstore's builders over
+// [PackReferences] and [RetiredPackReferences] among them; and
+// TestEveryCodeIndexServesARegisteredQuery holds every registered statement to
+// the index and the columns it seeks, and every index to a statement whose
+// plan uses it — or, while the commit that issues its read has not landed, to
+// the read its migration claims for it (claimedReads), which the gate judges
+// as it will judge that statement. So a new read lands with its plan
+// registered, or the build fails.
+//
 // # What a seat and a git node read
 //
 // A repository's REFS are listed by name under a prefix — its branches, its

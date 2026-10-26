@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -18,19 +19,23 @@ import (
 //
 // A trailing comment naming an index's reader is a CLAIM; the planner is the
 // only thing that knows whether the statement reaches the index. So this runs
-// EXPLAIN QUERY PLAN over every statement the package issues against the
-// tables a repository's history lives in — the guards, the applier's reads
-// and writes (the tombstones a push sweeps, oldest first, among them), the
-// lifecycle store's decides, the push decide's reads, the reader's pages in their
-// first and keyset forms — a snapshot's retired phase among them — and its
-// bounded counts, the purge's bounded count and its statements over a
-// repository's changes, a sweep's decide, apply and listing over the retired
-// packs, and the object store's statements over code_packs and
-// code_packs_retired — and holds each to the EXACT seek it names: the index
-// and every column of it the statement bounds. Seeking an index is not enough
-// — a lookup of one ref that sought repo_id alone read every ref its
-// repository holds (planner.go). The statements are the package's own
-// constants: there is no copy here to drift from what runs. An index no
+// EXPLAIN QUERY PLAN over every statement the package issues against its
+// tables — the guards, the applier's reads and writes (the tombstones a push
+// sweeps, oldest first, among them, and the fences it reads: an eviction's,
+// the activation's), the lifecycle store's decides, the push decide's reads,
+// the reader's pages in their first and keyset forms — a snapshot's retired
+// phase among them — and its bounded counts, the purge's bounded count and
+// its statements over a repository's changes, a sweep's decide, apply and
+// listing over the retired packs, the trim's listing of who was evicted from
+// the log, and every statement the object store builds over code_packs and
+// code_packs_retired ([planShapes]) — and holds each to the EXACT seek it
+// names: the index and every column of it the statement bounds. Seeking an
+// index is not enough — a lookup of one ref that sought repo_id alone read
+// every ref its repository holds (planner.go). The statements are the
+// package's own constants: there is no copy here to drift from what runs, and
+// TestEveryCodeReadSeeksANamedIndex holds the set to the package's source and
+// refuses a plan that reads any table by a scan, so this holds only what that
+// one cannot — which index, which columns, in which order. An index no
 // statement reads yet is held to the read its migration claims for it
 // ([claimedReads]), until a statement does.
 //
@@ -57,17 +62,17 @@ import (
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
-	covered := []string{"code_repos", "code_names", "code_refs", "code_packs",
-		"code_pushes", "code_protections", "code_packs_retired",
-		"code_changes", "code_change_authors", "code_revisions"}
-	// held plans one statement and answers the indexes its plan reaches.
+	// EVERY TABLE A RECORD REPRODUCES, from the inventory rather than a
+	// list of this test's own, so an index on a table a later change adds
+	// is held from the change that adds it. The log's machinery tables are
+	// not among them: their indexes serve the framework's statements, and
+	// this package spells none of those.
+	covered := ReproducibleTables
+	// held plans one statement and answers the indexes its plan reaches —
+	// whether it reads a table by a scan is the read gate's to judge, of a
+	// claim as of a registered statement (TestEveryCodeReadSeeksANamedIndex).
 	held := func(t *testing.T, name string, st statement) []string {
 		plan := explain(t, db, st.sql, st.args)
-		for _, table := range covered {
-			if scansHeap(plan, table) {
-				t.Errorf("%s reads %s with no index:\n%s", name, table, strings.Join(plan, "\n"))
-			}
-		}
 		if len(st.seeks) == 0 {
 			t.Fatalf("%s names no seek — every registered statement is held to one", name)
 		}
@@ -98,7 +103,7 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 		return indexesIn(plan)
 	}
 	used := map[string]bool{}
-	for name, st := range registeredStatements() {
+	for name, st := range everyStatement(t) {
 		t.Run(name, func(t *testing.T) {
 			for _, index := range held(t, name, st) {
 				used[index] = true
@@ -107,7 +112,7 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	}
 	claimed := map[string]bool{}
 	for index, st := range claimedReads() {
-		name := "the read claimed for " + index
+		name := claimName(index)
 		t.Run(name, func(t *testing.T) {
 			if !slices.Contains(held(t, name, st), index) {
 				t.Errorf("%s's claimed read reaches another index: the read its comment names "+
@@ -222,11 +227,39 @@ func TestTheLiveIndexesHoldTheLiveStates(t *testing.T) {
 
 // statement is one registered statement, arguments that make it plannable,
 // and the seeks its plan must contain — each an index and the columns of it the
-// statement bounds, as the plan prints them.
+// statement bounds, as the plan prints them, or for a table [scanOK] lets a
+// statement read whole, the scan.
 type statement struct {
 	sql   string
 	args  []any
 	seeks []string
+}
+
+// shape is a statement a BUILDER assembles at run time, which no constant
+// holds whole, as the builder spells it for one input: planned and held to
+// its seeks like any registered statement.
+type shape struct {
+	statement
+	// builder is what assembles it: one of this package's functions, named as
+	// the read gate names the function a statement is spelled in
+	// ("Reader.page", "page"), or a statement builder of
+	// objstore.ReferenceTable over one of [referenceTables]
+	// ("objstore.ReferenceTable.ObjectsAmong").
+	builder string
+}
+
+// everyStatement is every registered statement and every shape, by name —
+// what the plan tests explain — refusing a name the two registries share.
+func everyStatement(t *testing.T) map[string]statement {
+	t.Helper()
+	out := registeredStatements()
+	for name, sh := range planShapes() {
+		if _, taken := out[name]; taken {
+			t.Fatalf("%q names a registered statement and a shape: one name, one statement", name)
+		}
+		out[name] = sh.statement
+	}
+	return out
 }
 
 // sortingStatements is every registered statement whose plan may SORT what it
@@ -249,10 +282,14 @@ const (
 	changeKey     = "sqlite_autoindex_code_changes_1"
 	authorKey     = "sqlite_autoindex_code_change_authors_1"
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
+	activationKey = "sqlite_autoindex_code_activation_1"
+	evictionKey   = "sqlite_autoindex_code_evictions_1"
 )
 
-// registeredStatements is every statement this package issues against the
-// covered tables with a WHERE, by name.
+// registeredStatements is every statement this package spells against its
+// tables that reads one, by name — TestEveryCodeReadSeeksANamedIndex holds
+// the set to the package's source both ways, so a statement lands here or
+// fails there.
 func registeredStatements() map[string]statement {
 	keys := `["refs/heads/r000001","refs/heads/r000002"]`
 	// THE SWEEP'S DELETE AT ITS LARGEST: every tombstone a record's whole
@@ -366,28 +403,80 @@ func registeredStatements() map[string]statement {
 			[]string{changesNumberKey + " (repo_id=?)", authorKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all changes": {purgeAllChangesSQL, []any{"repo-1"},
 			[]string{"COVERING INDEX " + changesNumberKey + " (repo_id=?)"}},
+		// THE FENCES the applier and a writer read — a node's eviction
+		// window and the readmission that closes one, and the activation
+		// fence every config-managed record is held to — each a point read
+		// of its key.
+		"eviction":      {evictionSQL, []any{"node-1"}, []string{evictionKey + " (node_id=?)"}},
+		"readmit":       {readmitSQL, []any{1, 1, "node-1", 1}, []string{evictionKey + " (node_id=?)"}},
+		"guard company": {guardCompanySQL, []any{activationID}, []string{activationKey + " (id=?)"}},
+		"fence":         {fenceSQL, []any{activationID}, []string{activationKey + " (id=?)"}},
+		// THE TRIM'S LISTING of who was evicted from the log: every row, in
+		// its key's order — the one scan scanOK allows, bounded by the
+		// nodes the fleet has evicted rather than by anything a repository
+		// holds.
+		"evictions": {evictionsSQL, nil, []string{"SCAN code_evictions USING INDEX " + evictionKey}},
 	}
-	among, err := PackReferences.ObjectsAmong(3)
-	if err != nil {
-		panic(err)
+	return out
+}
+
+// referenceBuilders is every statement objstore.ReferenceTable builds over a
+// declaration, by its method's name — what the collector, its audit, a
+// backup and a store move read a declared table's rows by. The read gate
+// holds the list to the type's methods both ways, so a builder objstore adds
+// is one this package's shapes answer for.
+var referenceBuilders = map[string]func(objstore.ReferenceTable, int) (string, error){
+	"ObjectsAmong":         objstore.ReferenceTable.ObjectsAmong,
+	"ReferencesAfter":      objstore.ReferenceTable.ReferencesAfter,
+	"ReferencesAmong":      objstore.ReferenceTable.ReferencesAmong,
+	"DeferredRecordsAfter": objstore.ReferenceTable.DeferredRecordsAfter,
+}
+
+// referenceTables is every objstore.ReferenceTable this package declares, by
+// the variable that holds it — what objstore builds statements over. The
+// read gate holds the list to the package's source both ways.
+var referenceTables = map[string]objstore.ReferenceTable{
+	"PackReferences":        PackReferences,
+	"RetiredPackReferences": RetiredPackReferences,
+}
+
+// planShapes is every statement a builder assembles at run time, by name:
+// the statements no constant here spells whole, registered by what the
+// builder spells. Today they are objstore's, built over this package's
+// declarations — so whether each finds its rows by an index is this
+// package's schema's to answer: the collector's batch question of both
+// tables, and of the live one the audit's and a backup's walk, a backup's
+// question of the keys its log names and its walk of the records that log
+// deferred; a retired declaration's standing refuses the rest. One shape for
+// each builder each declaration's standing admits, keyed "<builder> <table>".
+//
+// AT A FEW KEYS AND A PAGE OF A HUNDRED, not at the callers' widths (the
+// collector's batch and a walk's page of 500 keys, a backup's deferred page
+// of statelog.ReprocessPage): the driver plans each of these statements
+// alike at every width measured — 1, 3, 500 and 1 000 — so a short argument
+// list asks the planner the callers' question.
+func planShapes() map[string]shape {
+	out := map[string]shape{}
+	reference := func(builder string, table objstore.ReferenceTable, n int, args []any, seeks ...string) {
+		sql, err := referenceBuilders[builder](table, n)
+		if err != nil {
+			panic(fmt.Sprintf("objstore builds no %s over %s: %v", builder, table.Table, err))
+		}
+		out[builder+" "+table.Table] = shape{statement{sql, args, seeks}, "objstore.ReferenceTable." + builder}
 	}
-	out["objects among"] = statement{among, []any{"k1", "k2", "k3"},
-		[]string{"code_packs_object_idx (object=?)"}}
-	after, err := PackReferences.ReferencesAfter(100)
-	if err != nil {
-		panic(err)
-	}
-	out["references after"] = statement{after, []any{""},
-		[]string{"code_packs_object_idx (object>?)"}}
-	// THE COLLECTOR'S ONE QUESTION OF THE RETIRED TABLE — the audit's and the
-	// backup's walk is refused for a retired declaration, so this is all of
-	// what the object store asks of it.
-	retired, err := RetiredPackReferences.ObjectsAmong(3)
-	if err != nil {
-		panic(err)
-	}
-	out["retired objects among"] = statement{retired, []any{"k1", "k2", "k3"},
-		[]string{"code_packs_retired_object_idx (object=?)"}}
+	keys := []any{"k1", "k2", "k3"}
+	reference("ObjectsAmong", PackReferences, 3, keys, "code_packs_object_idx (object=?)")
+	reference("ReferencesAfter", PackReferences, 100, []any{""}, "code_packs_object_idx (object>?)")
+	reference("ReferencesAmong", PackReferences, 3, keys, "code_packs_object_idx (object=?)")
+	// A PAGE OF THE DEFERRED RECORDS, a seek of the table's INTEGER PRIMARY
+	// KEY — which the driver prints as rowid=? whatever the comparison: its
+	// `position > ?` here and a `rowid = ?` print alike.
+	reference("DeferredRecordsAfter", PackReferences, 100, []any{0},
+		"SEARCH code_log_deferred USING INTEGER PRIMARY KEY (rowid=?)")
+	// THE COLLECTOR'S ONE QUESTION OF THE RETIRED TABLE — the audit's and a
+	// backup's walk, and a backup's question, are refused for a retired
+	// declaration, so this is all the object store asks of it.
+	reference("ObjectsAmong", RetiredPackReferences, 3, keys, "code_packs_retired_object_idx (object=?)")
 	return out
 }
 
@@ -405,8 +494,10 @@ func registeredStatements() map[string]statement {
 // and an index that neither a statement nor a claim reaches fails as it always
 // has. Each read is written in the claim's own terms — the live states as
 // [liveChanges] spells them, a listing newest first by the order its index
-// keeps — and is held to the exact seek, no heap scan and no sort, like any
-// registered statement.
+// keeps — and is held to the exact seek and no sort, like any registered
+// statement, and judged by the read gate as the statement that will issue it
+// will be: no table read by a scan. The gate's match against the source never
+// sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
 		"code_changes_open_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
@@ -431,6 +522,9 @@ func claimedReads() map[string]statement {
 			[]any{oid("head-1-1")}, []string{"code_revisions_head_idx (head_oid=?)"}},
 	}
 }
+
+// claimName is what the plan tests call the read claimed for an index.
+func claimName(index string) string { return "the read claimed for " + index }
 
 // retiredRepoIdx is code_packs_retired_repo_idx, (repo_id, retired_position,
 // pack_id, part): the order every statement over a repository's retired rows
@@ -606,19 +700,6 @@ func indexesIn(plan []string) []string {
 		found = append(found, strings.TrimSpace(name))
 	}
 	return found
-}
-
-// scansHeap reports a plan line that reads a whole table with no index — an
-// index SCAN walks in the index's order and a LIMIT stops it; a bare one reads
-// every row through the heap.
-func scansHeap(plan []string, table string) bool {
-	for _, line := range plan {
-		if (strings.HasPrefix(line, "SCAN "+table+" ") || line == "SCAN "+table) &&
-			!strings.Contains(line, "INDEX") && !strings.Contains(line, "PRIMARY KEY") {
-			return true
-		}
-	}
-	return false
 }
 
 // indexesOn is every index the schema declares on these tables.

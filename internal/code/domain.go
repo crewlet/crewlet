@@ -178,9 +178,7 @@ func (Domain) FeedGroup() string { return "" }
 func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
 	err := db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT node_id, at, by, from_position, readmitted_position
-			FROM code_evictions ORDER BY node_id`)
+		rows, err := tx.QueryContext(ctx, evictionsSQL)
 		if err != nil {
 			return err
 		}
@@ -210,3 +208,11 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 	}
 	return out, nil
 }
+
+// evictionsSQL is every eviction on this log, in node order: the whole of
+// code_evictions, which holds a row for each node ever evicted from the code
+// log — as many as the fleet has evicted, whatever its repositories hold —
+// so it is the one table a statement here reads by a scan (plan_test.go
+// registers it, and the read gate's scanOK states the bound).
+const evictionsSQL = `SELECT node_id, at, by, from_position, readmitted_position
+	FROM code_evictions ORDER BY node_id`
