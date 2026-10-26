@@ -80,6 +80,7 @@ import {
 import { ASSISTANT_INPUT_MAX_RUNES, type AssistantFileRef } from "~/contract/assistant.ts";
 import { questionFits } from "~/protocol/assistantWire.ts";
 import { relTime } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
 import { rereadViewer } from "~/lib/viewer.ts";
 import { keyRow, matchesRow, pressText } from "../../keymap.ts";
 import { on as onBus, emit } from "../bus.ts";
@@ -140,16 +141,6 @@ export interface DrawerProps {
 /** Send's words, with Stop named for what it ends: the answer, not the conversation. */
 const SEND_LABELS = { send: "Send", stop: "Stop answering" } as const;
 
-/** A clock for the run chip and the message feet: each second while a turn runs, each minute otherwise. */
-function useNow(fast: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), fast ? 1000 : 60_000);
-    return () => clearInterval(timer);
-  }, [fast]);
-  return now;
-}
-
 /**
  * One recent conversation, as the Conversations menu lists it: shown at the
  * moment the list is ordered by, so the times read down the menu in order.
@@ -181,7 +172,11 @@ export function Drawer({
   const [clearFailed, setClearFailed] = useState(false);
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const running = openTurn(view);
-  const now = useNow(running !== null);
+  // THE SHELL'S ONE CLOCK, as every relative time on screen reads it. The
+  // drawer kept its own, a minute apart once no turn ran, and did not re-read
+  // the time when it slowed: an answer that ended between two ticks read
+  // "in 1s" beside Copy, and the history "in 5s", for up to a minute.
+  const now = useNow();
   const attachments = useAttachments(view.id);
 
   // ON A PHONE THE PANEL IS THE WHOLE WINDOW, and its foot (the composer and
@@ -252,7 +247,7 @@ export function Drawer({
   const disabledReason = useMemo(() => {
     if (view.fault === "protocol_mismatch") return "Reload to keep asking";
     if (model !== null) return model.short;
-    if (view.stream === "reconnecting") return "Offline";
+    if (view.stream === "reconnecting") return "Reconnecting to the answer";
     if (waitSeconds > 0) return `You can ask again in ${waitSeconds} seconds`;
     return undefined;
   }, [view.fault, model, view.stream, waitSeconds]);
