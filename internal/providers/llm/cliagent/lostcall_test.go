@@ -180,3 +180,52 @@ func TestTwoEnvelopesAskingForDifferentCallsRunNeither(t *testing.T) {
 		t.Errorf("refused %q, want both calls on the record", got)
 	}
 }
+
+// A REPLY THAT RUNS A CALL SHOWS ONLY WHAT IT SAYS, never the call.
+//
+// The incident: a Dashboard Assistant turn asked to add a seat showed the
+// person "```", the model's own "Actually, let me respond in the required
+// format." and the raw envelope as its answer, while the call ran. Claude
+// Code in text mode typed the call as markup, a stray ``` after it, then the
+// envelope in a ```json fence. Paired blindly, the stray marker shifted the
+// fences, so the envelope was never read as one: the markup ran, and the rest
+// of the reply was taken for its prose. The case above held the call and not
+// the text. Each shape here runs its call and narrates the envelope's message
+// or nothing: no markup, no envelope, no fence.
+//
+// Mutation: pair fences blindly again (drop the info-string rule in
+// toolmarkup.Fences), and the incident and its variants narrate the envelope.
+func TestAReplyThatRunsACallShowsOnlyWhatItSays(t *testing.T) {
+	t.Parallel()
+	markup := "<invoke name=\"api_request\">\n<parameter name=\"route\">GET /config/units/{id}</parameter>\n" +
+		"<parameter name=\"path\">{\"id\": \"core\"}</parameter>\n</invoke>"
+	envelope := func(message string) string {
+		return "```json\n{\"message\": \"" + message + "\", \"tool_calls\": [{\"name\": \"api_request\", " +
+			"\"arguments\": {\"route\": \"GET /config/units/{id}\", \"path\": {\"id\": \"core\"}}}]}\n```"
+	}
+	correction := "\n```\n\nActually, let me respond in the required format.\n\n"
+	for _, tc := range []struct {
+		name, reply, says string
+	}{
+		{"the captured incident", reply(t, "captured-markup-stray-fence-correction.txt"), ""},
+		{"the incident on a unit", markup + correction + envelope(""), ""},
+		{"the incident with a message", markup + correction + envelope("Reading the unit first."),
+			"Reading the unit first."},
+		{"prose before the stray fence", "Let me look at the unit.\n" + markup + correction + envelope(""), ""},
+		{"a stray fence left open", markup + "\n```", ""},
+		{"a stray fence closed empty", markup + "\n```\n```", ""},
+		{"markup then the envelope", markup + "\n\n" + envelope(""), ""},
+		{"markup alone", markup, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := cliagent.ReadReply(tc.reply, genericTools)
+			if c.ProtocolError != "" || names(c.ToolCalls) != "api_request" {
+				t.Fatalf("read as %+v, want the api_request run", c)
+			}
+			if c.Content != tc.says {
+				t.Errorf("narrates %q, want %q", c.Content, tc.says)
+			}
+		})
+	}
+}

@@ -158,3 +158,23 @@ func FuzzRead(f *testing.F) {
 		}
 	})
 }
+
+// A MARKER WITH AN INFO STRING ONLY OPENS, so one stray ``` ends where the
+// next labelled fence begins instead of shifting every pair after it; a
+// marker followed by prose on its line closes, as a model writes one.
+func TestFencesPairAroundAStrayMarker(t *testing.T) {
+	t.Parallel()
+	body := func(text string, f Fence) string { return strings.TrimSpace(text[f.BodyStart:f.BodyEnd]) }
+	stray := "<invoke name=\"x\"></invoke>\n```\n\nActually, the format.\n\n```json\n{\"a\": 1}\n```"
+	fs := Fences(stray)
+	if len(fs) != 2 || fs[0].Closed || !fs[1].Closed || body(stray, fs[1]) != `{"a": 1}` {
+		t.Fatalf("Fences(stray) = %+v, want the stray marker open and the labelled fence holding the object", fs)
+	}
+	trailing := "```\ncode\n``` and then some prose"
+	if fs := Fences(trailing); len(fs) != 1 || !fs[0].Closed || body(trailing, fs[0]) != "code" {
+		t.Errorf("Fences(trailing) = %+v, want one closed fence holding the code", fs)
+	}
+	if got := Prose(stray[:strings.Index(stray, "\n```")+4], []Block{{Start: 0, End: 26}}); got != "" {
+		t.Errorf("Prose kept %q of a call and a stray fence, want nothing", got)
+	}
+}

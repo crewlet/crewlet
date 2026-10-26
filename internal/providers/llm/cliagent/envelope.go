@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/toolmarkup"
 )
 
 // Envelope is what a reply parses into: the prose the operator sees, and the
@@ -209,36 +210,25 @@ func envelopeCandidates(reply string) []string {
 	return out
 }
 
-// fencedBlocks returns the contents of every ``` fence, in order.
+// fencedBlocks returns the contents of every ``` fence, in order, as
+// [toolmarkup.Fences] finds them: the grammar that decides what is code in a
+// reply's prose decides where its fenced envelope is too, so a stray marker
+// cannot hide the envelope from one reader and its markup from the other.
 //
 // The info string is ignored rather than required to be "json": models label
 // these ```json, ```JSON, ```jsonc and sometimes not at all, and a fence whose
-// body is a JSON object is an envelope whatever the label says.
+// body is a JSON object is an envelope whatever the label says. An
+// unterminated fence is the common truncation shape, and its body is still a
+// candidate; an opening marker with no line after it holds nothing.
 func fencedBlocks(reply string) []string {
 	var out []string
-	rest := reply
-	for {
-		open := strings.Index(rest, "```")
-		if open < 0 {
-			return out
+	for _, f := range toolmarkup.Fences(reply) {
+		if f.BodyStart >= len(reply) {
+			continue
 		}
-		rest = rest[open+3:]
-		// Skip the info string: everything to the end of that line.
-		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-			rest = rest[nl+1:]
-		} else {
-			return out
-		}
-		end := strings.Index(rest, "```")
-		if end < 0 {
-			// An unterminated fence is the common truncation shape, and
-			// its body is still the best candidate in the reply.
-			out = append(out, strings.TrimSpace(rest))
-			return out
-		}
-		out = append(out, strings.TrimSpace(rest[:end]))
-		rest = rest[end+3:]
+		out = append(out, strings.TrimSpace(reply[f.BodyStart:f.BodyEnd]))
 	}
+	return out
 }
 
 // outermostObject returns the span from the first '{' to the last '}'.

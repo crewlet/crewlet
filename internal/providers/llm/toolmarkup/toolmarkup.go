@@ -373,12 +373,17 @@ func tagLabel(t tag) string {
 }
 
 // Prose is text with every block's span removed and the joins trimmed: what a
-// reply said around its calls.
+// reply says around its calls. A fence left with nothing in it is removed with
+// them: the stray ``` a model writes after a call it typed as markup (measured
+// on Claude Code in text mode) is no part of what it says, and shown, it is an
+// empty code block in the answer.
 func Prose(text string, blocks []Block) string {
 	var parts []string
 	keep := func(s string) {
-		if s = strings.TrimSpace(s); s != "" {
-			parts = append(parts, s)
+		for _, piece := range withoutEmptyFences(s) {
+			if piece = strings.TrimSpace(piece); piece != "" {
+				parts = append(parts, piece)
+			}
 		}
 	}
 	at := 0
@@ -393,28 +398,118 @@ func Prose(text string, blocks []Block) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// codeSpans are the spans of text that are code: every ``` fence, an
+// withoutEmptyFences is s cut around every fence whose body is blank.
+func withoutEmptyFences(s string) []string {
+	var pieces []string
+	at := 0
+	for _, f := range Fences(s) {
+		if strings.TrimSpace(s[f.BodyStart:f.BodyEnd]) != "" {
+			continue
+		}
+		pieces = append(pieces, s[at:f.Start])
+		at = f.End
+	}
+	return append(pieces, s[at:])
+}
+
+// Fence is one ``` fenced block of a text, its offsets into it.
+type Fence struct {
+	// Start and End are the whole fence, its markers included, End
+	// exclusive. A fence never closed ends where the next one opens, or at
+	// the end of the text.
+	Start, End int
+	// BodyStart and BodyEnd are its contents: from the line after the
+	// opening marker to the closing one.
+	BodyStart, BodyEnd int
+	// Closed says a closing marker ended it.
+	Closed bool
+}
+
+// Fences finds every ``` fenced block in text, in order.
+//
+// A MARKER WITH AN INFO STRING ONLY OPENS. "```json" can never close a fence
+// (CommonMark's own rule), so when one is met inside an open fence, the open
+// fence was a stray marker that was never closed: it ends there, and the
+// labelled one opens. Paired blindly instead, one stray marker shifts every
+// pair after it, and the fenced envelope a model writes after a stray ```
+// (measured on Claude Code in text mode, after a call typed as markup) was
+// read as prose between two fences, with the prose around it as the fence:
+// the reply's real answer was never a candidate, and its markup and envelope
+// reached the person as the answer.
+//
+// The info string is one word (a language name, ```json or ```xml): a marker
+// followed on its line by prose with spaces in it is a close with text
+// after it, as a model writes one, and closes.
+func Fences(text string) []Fence {
+	var out []Fence
+	at := 0
+	for {
+		open := strings.Index(text[at:], "```")
+		if open < 0 {
+			return out
+		}
+		open += at
+		nl := strings.IndexByte(text[open+3:], '\n')
+		if nl < 0 {
+			// An opening marker on the last line: everything after it is
+			// its label, and it holds nothing.
+			return append(out, Fence{Start: open, End: len(text), BodyStart: len(text), BodyEnd: len(text)})
+		}
+		body := open + 3 + nl + 1
+		end, closed := closingMarker(text, body)
+		switch {
+		case end < 0:
+			return append(out, Fence{Start: open, End: len(text), BodyStart: body, BodyEnd: len(text)})
+		case !closed:
+			out = append(out, Fence{Start: open, End: end, BodyStart: body, BodyEnd: end})
+			at = end
+		default:
+			out = append(out, Fence{Start: open, End: end + 3, BodyStart: body, BodyEnd: end, Closed: true})
+			at = end + 3
+		}
+	}
+}
+
+// closingMarker is the offset of the first marker at or after from, and
+// whether it closes the fence open before it rather than opening another;
+// -1 when there is none.
+func closingMarker(text string, from int) (int, bool) {
+	m := strings.Index(text[from:], "```")
+	if m < 0 {
+		return -1, false
+	}
+	m += from
+	return m, !isInfoString(text[m+3:])
+}
+
+// isInfoString reports whether rest, what follows a marker, starts with an
+// info string: one word on the marker's own line.
+func isInfoString(rest string) bool {
+	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+		rest = rest[:nl]
+	}
+	info := strings.TrimSpace(rest)
+	if info == "" {
+		return false
+	}
+	for i := 0; i < len(info); i++ {
+		if !isNameByte(info[i]) && strings.IndexByte("+#.", info[i]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// codeSpans are the spans of text that are code: every fence ([Fences]), an
 // unterminated one running to the end, and every inline `...` span on one
 // line outside them.
 func codeSpans(text string) [][2]int {
 	var spans [][2]int
 	at := 0
-	for {
-		open := strings.Index(text[at:], "```")
-		if open < 0 {
-			break
-		}
-		open += at
-		end := strings.Index(text[open+3:], "```")
-		if end < 0 {
-			spans = append(spans, inline(text[at:open], at)...)
-			spans = append(spans, [2]int{open, len(text)})
-			return spans
-		}
-		end += open + 3 + 3
-		spans = append(spans, inline(text[at:open], at)...)
-		spans = append(spans, [2]int{open, end})
-		at = end
+	for _, f := range Fences(text) {
+		spans = append(spans, inline(text[at:f.Start], at)...)
+		spans = append(spans, [2]int{f.Start, f.End})
+		at = f.End
 	}
 	return append(spans, inline(text[at:], at)...)
 }
