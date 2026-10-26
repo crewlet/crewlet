@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -332,13 +333,10 @@ func deepCause(o DeepOutcome) error {
 func (t *turn) deepRefused(ctx context.Context, dc deepCall, err error) toolloop.ToolResult {
 	message := redact.Secrets(err.Error())
 	t.stepEnd(ctx, dc.step, wire.StepRefused, "Not started", &wire.Refusal{
-		Code: codeDeepUnavailable, Message: message}, 0, 0)
+		Code: cards.CodeDeepUnavailable, Message: message}, 0, 0)
 	return failed(mcp.Classify(mcp.RefusalUnavailable, err), "Deep work did not start: "+
 		message+". Answer what you can without it, and tell the person why.")
 }
-
-// codeDeepUnavailable is the refusal a deep step shows when no run started.
-const codeDeepUnavailable = "deep_work_unavailable"
 
 // deepEnding is how a run that did not park ended, as its step shows it.
 func deepEnding(o DeepOutcome, files int) (wire.DeepState, wire.StepState, string, string) {

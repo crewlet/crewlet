@@ -20,11 +20,13 @@ import (
 // A generic change whose preview read the route refuses (here a 403), or
 // whose PATCH or DELETE finds nothing, never reached the person: no proposal
 // is recorded and no proposal card is drawn, so nothing reads as a proposal
-// the engine rejected. The step is refused with the route's own refusal on it,
-// the model is handed the same words as the step's result so it can prepare a
-// change that can apply, and the turn goes on. Mutation: draw the failed
-// preview as a card, or hand the model "tell the person it failed" in place of
-// the route's refusal, and this fails.
+// the engine rejected. The step is refused in the person's words (its code and
+// the engine's sentence for its kind, never the route's account, which names
+// what only the model corrects), the model is handed the route's own words as
+// the step's result so it can prepare a change that can apply, and the turn
+// goes on. Mutation: draw the failed preview as a card, show the route's words
+// on the step, or hand the model "tell the person it failed" in place of the
+// route's refusal, and this fails.
 func TestAChangeThatCannotBePreparedIsNeverACard(t *testing.T) {
 	t.Parallel()
 	table, err := catalog.NewRouteTable([]catalog.Route{
@@ -69,8 +71,9 @@ func TestAChangeThatCannotBePreparedIsNeverACard(t *testing.T) {
 		}
 	}
 	if step == nil || step.State != wire.StepRefused || step.Refusal == nil ||
-		step.Refusal.Code != "forbidden" || step.Refusal.Hint != "Ask the lead of ENG." {
-		t.Fatalf("the change's step reads %+v, want refused in the route's words", step)
+		step.Refusal.Code != "forbidden" || step.Refusal.Message == "" ||
+		strings.Contains(step.Refusal.Message, "lead") || step.Refusal.Hint != "" {
+		t.Fatalf("the change's step reads %+v, want refused in the person's words", step)
 	}
 	// THE ROUND AFTER THE CALL is the one that reads its result; the title
 	// call the finished turn makes after it carries no tool message.

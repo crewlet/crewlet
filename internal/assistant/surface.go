@@ -53,9 +53,6 @@ import (
 // revocation, never a refusal of the one request.
 var errGrantEnded = errors.New("assistant: the turn's grant was refused")
 
-// codeInvalidInput is the API's own code for a call refused as written.
-const codeInvalidInput = "invalid_input"
-
 // surface is one turn's tool surface.
 type surface struct {
 	t      *turn
@@ -175,7 +172,7 @@ func (s *surface) recordRefusal(ctx context.Context, tool catalog.Tool, args map
 
 	message := redact.Secrets(reason)
 	step := s.t.stepStart(tool, args, nil, "")
-	s.t.stepEnd(ctx, step, wire.StepRefused, summary, &wire.Refusal{Code: codeInvalidInput,
+	s.t.stepEnd(ctx, step, wire.StepRefused, summary, &wire.Refusal{Code: cards.CodeInvalidCall,
 		Message: message}, 0, 0)
 	return message
 }
@@ -338,6 +335,7 @@ func (s *surface) unprepared(ctx context.Context, step stepClock, tool catalog.T
 		refusal := refused.Refusal
 		refusal.Message = redact.Secrets(refusal.Message)
 		refusal.Hint = redact.Secrets(refusal.Hint)
+		refusal.Detail = redact.Secrets(refusal.Detail)
 		s.t.stepEnd(ctx, step, wire.StepRefused, "Not proposed", &refusal, refused.Status, 0)
 		return failed(routeClass(refused.Status, refusal.Code),
 			"The change could not be prepared, so nothing was proposed: "+
@@ -346,13 +344,13 @@ func (s *surface) unprepared(ctx context.Context, step stepClock, tool catalog.T
 		errors.Is(err, catalog.ErrInvalidArguments):
 		message := redact.Secrets(err.Error())
 		s.t.stepEnd(ctx, step, wire.StepRefused, "Not proposed", &wire.Refusal{
-			Code: codeInvalidInput, Message: message}, 0, 0)
+			Code: cards.CodeInvalidCall, Message: message}, 0, 0)
 		return failed(mcp.Classify(mcp.RefusalInvalid, err),
 			"The change could not be prepared: "+message), nil
 	case errors.Is(err, catalog.ErrPreviewRead):
 		message := redact.Secrets(err.Error())
 		s.t.stepEnd(ctx, step, wire.StepFailed, "Could not be prepared", &wire.Refusal{
-			Code: codePreviewUnreadable, Message: message}, 0, 0)
+			Code: cards.CodePreviewUnreadable, Message: message}, 0, 0)
 		return failed(mcp.Classify(mcp.RefusalUnavailable, err),
 			"The change could not be prepared, so nothing was proposed: "+message), nil
 	}
@@ -363,14 +361,10 @@ func (s *surface) unprepared(ctx context.Context, step stepClock, tool catalog.T
 		"The change could not be prepared. Tell the person it failed."), nil
 }
 
-// codePreviewUnreadable is the refusal a step shows for a change whose
-// preview could not read the object it changes.
-const codePreviewUnreadable = "preview_unreadable"
-
 // refusalSentence is a route's refusal as the model reads it: its words, its
 // code and the hint that says what to do instead.
 func refusalSentence(r wire.Refusal) string {
-	out := r.Message + " (" + r.Code + ")."
+	out := r.ForModel() + " (" + r.Code + ")."
 	if r.Hint != "" {
 		out += " " + r.Hint
 	}

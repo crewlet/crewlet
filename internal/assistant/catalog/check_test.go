@@ -121,7 +121,7 @@ func TestAChangeTheRouteWouldRefuseIsNeverACard(t *testing.T) {
 	var refused *catalog.PreviewRefusal
 	if !errors.As(err, &refused) || refused.Status != http.StatusBadRequest ||
 		refused.Refusal.Code != "validation_error" ||
-		!strings.Contains(refused.Refusal.Message, "tool_sources: unknown field") {
+		!strings.Contains(refused.Refusal.ForModel(), "tool_sources: unknown field") {
 		t.Fatalf("a body the route refuses previewed %v, want its refusal", err)
 	}
 

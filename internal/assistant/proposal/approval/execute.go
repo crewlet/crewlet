@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -151,7 +152,14 @@ func outcomeOf(tool string, request exec.Request, resp exec.Response, err error)
 	case err != nil, resp.Truncated, resp.Status >= 500, resp.Status == 0:
 		return outcome{state: wire.ProposalUnknown}
 	case resp.Status >= 400:
-		return refused(refusalOf(request, resp))
+		out := refused(refusalOf(request, resp))
+		// THE MODEL READS THE ROUTE'S WHOLE REFUSAL, fenced as the API's
+		// answer beside the resumed result, so it can say what to change;
+		// the card carries the person's sentence ([cards.PersonRefusal]).
+		if json.Valid(resp.Body) && len(bytes.TrimSpace(resp.Body)) > 0 {
+			out.answer = json.RawMessage(resp.Body)
+		}
+		return out
 	}
 	out := outcome{state: wire.ProposalApplied, outcome: "applied"}
 	summary := "Applied"
@@ -189,22 +197,30 @@ func outcomeOf(tool string, request exec.Request, resp exec.Response, err error)
 // stale before it was sent carries. A `428` is a route that takes the change
 // only with the version it was based on, which the preview's read did not
 // answer.
+//
+// EVERY OTHER REFUSAL IS THE ROUTE'S, and a person reads it as the engine's
+// sentence for its kind ([cards.PersonRefusal]) with the next step the
+// resumed turn takes: the route's own account names fields, tools and routes,
+// and it is the model's, which is handed the whole answer ([outcomeOf]).
 func refusalOf(request exec.Request, resp exec.Response) wire.Refusal {
-	route := exec.RefusalOf(resp)
 	switch {
 	case resp.Status == http.StatusPreconditionFailed && request.IfNoneMatch != "":
-		return wire.Refusal{Code: CodeStale, Message: "Something was created at " +
-			request.Path + " after this change was proposed, so it was not applied. " +
-			"Nothing changed.", Hint: "Read it again to see what is there now."}
+		return wire.Refusal{Code: CodeStale, Message: "What this change would have created " +
+			"was created by somebody else after it was proposed, so it was not applied.",
+			Hint: "Ask for it again to see what is there now."}
 	case resp.Status == http.StatusPreconditionFailed && request.IfMatch != "":
 		return wire.Refusal{Code: CodeStale, Message: "The record changed after this " +
-			"change was proposed, so it was not applied. Nothing changed.",
-			Hint: "Read it again to see it as it is now."}
+			"change was proposed, so it was not applied.",
+			Hint: "Ask for it again to see it as it is now."}
 	case resp.Status == http.StatusPreconditionRequired:
-		route.Message = "This change is taken only with the version it was based on, " +
-			"and the record's read answered none, so it was not applied. Nothing changed."
+		return wire.Refusal{Code: exec.RefusalOf(resp).Code, Message: "This change is taken only with the " +
+			"version it was based on, and that version could not be read, so it was not " +
+			"applied.", Hint: "Ask for it again."}
 	}
-	return route
+	route := exec.RefusalOf(resp)
+	shown := cards.PersonRefusal(route, resp.Status)
+	shown.Hint = cards.RefusalResumes
+	return shown
 }
 
 // receiptSummary is an applied write's receipt in a line, naming the task it
