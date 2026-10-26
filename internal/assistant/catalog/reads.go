@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -409,7 +410,10 @@ func readTools() []Tool {
 				if args.String("handle") == "" {
 					return exec.Request{}, errors.New("a seat's detail names the seat's handle")
 				}
-				return get("GET /agents/{id}", map[string]string{"id": args.String("handle")}, nil)
+				// THE SEAT ALONE: its call history is whole transcripts,
+				// past what a step reads, and a detail card reads none of it.
+				return get("GET /agents/{id}", map[string]string{"id": args.String("handle")},
+					url.Values{"history": {"false"}})
 			},
 			Variant: by("view", "detail"),
 			Cards: map[string]cards.Spec{
