@@ -1138,14 +1138,14 @@ func TestAForcedRoundThatMeetsALostPackHashesOnce(t *testing.T) {
 
 // A PACK A FULL ANSWER NAMED IS DECIDED BY A FULL READ. The log may answer a
 // delta in full — page 1 decides, where the delta would outweigh its full
-// answer or reach below its swept tombstones — and a full answer names packs
-// at or below the incarnation's position: one whose files the copy lost is
-// installed again from it. No delta from that position names such a pack, so
-// the read that decides its not-found is full. Asked as a delta, a pack the
-// store had lost as well was taken for a row gone from the log, and the round
-// converged the copy at the log's position without a pack its rows name:
-// every request over that pack's objects then failing on a copy that says it
-// is whole.
+// answer or reach below its swept tombstones or its swept retirements — and a
+// full answer names packs at or below the incarnation's position: one whose
+// files the copy lost is installed again from it. No delta from that position
+// names such a pack, so the read that decides its not-found is full. Asked as
+// a delta, a pack the store had lost as well was taken for a row gone from the
+// log, and the round converged the copy at the log's position without a pack
+// its rows name: every request over that pack's objects then failing on a copy
+// that says it is whole.
 //
 // The copy holds both pushes; the older one's files are removed from it and
 // its object from the store, and the log answers the round's delta in full,

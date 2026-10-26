@@ -1117,12 +1117,13 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			//
 			// A PACK A FULL ANSWER NAMED IS DECIDED BY A FULL READ. The log
 			// may answer a delta in full (page 1 decides: where the delta
-			// would outweigh it, or its floor is below the swept tombstones or
-			// on another generation), and a full answer names packs at or
-			// below the incarnation's position — one whose files the copy lost
-			// is installed again from it — which no delta from that position
-			// reaches: asked as one, the decision would take a lost pack for a
-			// row gone, and converge the copy without a pack its rows name.
+			// would outweigh it, or its floor is below the swept tombstones,
+			// below the swept retirements or on another generation), and a
+			// full answer names packs at or below the incarnation's position —
+			// one whose files the copy lost is installed again from it — which
+			// no delta from that position reaches: asked as one, the decision
+			// would take a lost pack for a row gone, and converge the copy
+			// without a pack its rows name.
 			//
 			// A DAMAGED answer is final at once, below: a purge or a
 			// retirement removes an object and never alters one, so bytes
