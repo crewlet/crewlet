@@ -8,8 +8,10 @@ import (
 
 	"github.com/nats-io/nats-server/v2/server"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -399,5 +401,92 @@ func TestADeadlineLessReadNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 					"asked again inside it — at none, two and four seconds", n, bound)
 			}
 		})
+	}
+}
+
+// A RECORD READ BY ITS POSITION ACROSS A LINK IS GIVEN ITS RECORD'S CROSSING,
+// and a subject's newest, which a writer waits on, is not.
+//
+// Both replies carry a whole record, base64-encoded, as large as the log's
+// largest: across a link — here a queue dialled to a broker of its own, an
+// external cluster's shape — a re-ask sent while the first reply is still
+// crossing puts the whole record on the link again, ahead of the node's lease
+// renewals, every two seconds until the first lands. So a read by position
+// is presumed lost only once its log's largest reply could have crossed at
+// the object store's floor — for this log's mebibyte, longer than any
+// caller's deadline here — and is asked once. The last-sequence read is the
+// write path's: every create asks it, and a request a member dropped across
+// an election has to be asked again in seconds, so it keeps the read term.
+func TestARecordReadAcrossALinkIsGivenItsRecordsCrossing(t *testing.T) {
+	t.Parallel()
+	spec := probeDomain()
+	spec.MaxMessageBytes = 1 << 20
+	ns, q := accountQueue(t, spec)
+	log, err := q.DomainLog(t.Context(), spec.Name)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	const subject = "crewlet.probe.log.task.a"
+	appendN(t, log, subject, 1)
+	if want := jsapi.Crossing(1<<20, objstore.MiBPace); log.crossing != want {
+		t.Fatalf("the log across a link gives a record read %v beyond the read term, want "+
+			"its largest message's crossing at the object store's floor, %v", log.crossing, want)
+	}
+
+	// Past two of the read term's re-asks, and well inside the crossing.
+	timing := q.provisioning()
+	wait := 2*(timing.ReadTerm+timing.ReAsk) + timing.ReadTerm/2
+	for _, c := range []struct {
+		name     string
+		read     func(context.Context) error
+		min, max int
+	}{
+		{"a record by its position", func(ctx context.Context) error {
+			_, _, _, _, err := log.At(ctx, 1)
+			return err
+		}, 1, 1},
+		// AT NONE, TWO AND FOUR SECONDS: the third half a second inside the
+		// wait, which a timer the load delays may miss.
+		{"a subject's newest record", func(ctx context.Context) error {
+			_, _, err := log.LastSeq(ctx, subject)
+			return err
+		}, 2, 3},
+	} {
+		held := jsapitest.Hold(t, ns, jsapitest.MsgGet(spec.Name))
+		ctx, cancel := context.WithTimeout(t.Context(), wait)
+		err := c.read(ctx)
+		cancel()
+		held.Release()
+		if !jsprovision.Unanswered(context.Background(), err) {
+			t.Errorf("%s nobody answered ended with %v, not as a read nobody answered", c.name, err)
+		}
+		if n := held.Count(); n < c.min || n > c.max {
+			t.Errorf("%s across a link was asked %d times in %v, want %d to %d", c.name, n, wait,
+				c.min, c.max)
+		}
+	}
+}
+
+// ONLY A CONNECTION TO THE NODE'S OWN MEMBER CROSSES NO LINK — the fact the
+// engine hands the object store as its AcrossLink, read here off how the
+// queue's connection was made — and a member's record read asks at the read
+// term, its reply crossing at most a cluster route.
+func TestOnlyAMembersOwnConnectionCrossesNoLink(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		q      *Queue
+		across bool
+	}{
+		{"a member's own client", &Queue{embedded: &embeddedServer{}}, false},
+		{"a leaf's client", &Queue{embedded: &embeddedServer{leaf: true}}, true},
+		{"a client of an external cluster", &Queue{}, true},
+	} {
+		if got := c.q.acrossLink(); got != c.across {
+			t.Errorf("%s: across a link = %v, want %v", c.name, got, c.across)
+		}
+	}
+	if got := (&Queue{embedded: &embeddedServer{}}).recordCrossing(nil); got != 0 {
+		t.Errorf("a member's record read is given %v beyond the read term, want none", got)
 	}
 }

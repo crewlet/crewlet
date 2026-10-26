@@ -12,9 +12,12 @@ import (
 // BenchmarkADomainLogReadOfItsLargestRecord is what reading back by sequence
 // ([DomainLog.At]) the largest record any log may hold costs on a member — a
 // record of [statelog.MaxTransportRecordBytes], the ceiling the code log
-// declares — which is the figure [DomainLog.At]'s term is judged against: the
-// reply has to be in before the one-second read term, or the read is asked
-// again with the first reply still crossing.
+// declares — which is the figure [DomainLog.At]'s term is judged against on a
+// member's own connection: the reply, the record base64-encoded inside its
+// JSON, a third larger, has to be in before the one-second read term, or the
+// read is asked again with the first reply still crossing. Across a link the
+// term is given the reply's crossing at the object store's floor instead
+// ([Queue.recordCrossing]), which no member's figure measures.
 func BenchmarkADomainLogReadOfItsLargestRecord(b *testing.B) {
 	q, err := Open(b.Context(), Config{})
 	if err != nil {

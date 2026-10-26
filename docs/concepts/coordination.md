@@ -157,7 +157,16 @@ election, and a leader cut off from its quorum stepping down ten seconds after
 it lost it, at a check made every ten — a group in any state answers, so a
 read still unanswered is asking a broker the node cannot reach. A read of a
 domain log, which a caller with no deadline used to ask for ever, is held to
-those thirty seconds.
+those thirty seconds. And a read whose answer is a whole stored message is
+not asked again while that message could still be crossing a link: an
+object's piece, read by a node whose connection to the broker crosses one —
+a leaf, or any node of an external cluster — waits for a piece to cross at
+the object store's floor first, and a state log's record read back by its
+position there waits for the log's largest record, which for a log of
+megabyte records outlasts the thirty seconds, so that read is asked once.
+The read a writer waits on for a subject's newest record keeps the
+two-second cadence, a request dropped across an election being the thing
+it must recover from in seconds.
 
 A **tombstone** the pass delivered is not taken as the key's answer either.
 The pass is served by whichever replica the broker placed its consumer on, so

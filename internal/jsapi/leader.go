@@ -184,16 +184,30 @@ func NewLeader(js jetstream.JetStream, stream string) (*Leader, error) {
 // asked again is a read whose reply could not have been on its way.
 func (l *Leader) Carrying(messageBytes int, pace time.Duration) *Leader {
 	c := *l
-	reply := base64.StdEncoding.EncodedLen(messageBytes) + replyOverhead
-	c.term = jsprovision.ReadTerm + time.Duration(float64(pace)*float64(reply)/mebibyte)
+	c.term = jsprovision.ReadTerm + Crossing(messageBytes, pace)
 	return &c
+}
+
+// Crossing is how long the reply to a message read — a `STREAM.MSG.GET`,
+// this package's or the client's own where a stream allows no direct get —
+// that carries a message of messageBytes takes to cross a link carrying a
+// mebibyte in as long as pace. The reply is JSON, the message base64-encoded
+// inside it beside its envelope ([replyOverhead]), so it is a third larger
+// than the message, and it is heard only once its last byte is in: the one
+// rule for how long such a reply is given before a read is presumed lost,
+// whoever reads ([Leader.Carrying], and a state log's read of a record by its
+// position).
+func Crossing(messageBytes int, pace time.Duration) time.Duration {
+	reply := base64.StdEncoding.EncodedLen(messageBytes) + replyOverhead
+	return time.Duration(float64(pace) * float64(reply) / mebibyte)
 }
 
 // replyOverhead is the most a message read's reply carries beside the
 // message's own data: the JSON envelope, the subject, the sequence, the time
 // and the headers, base64-encoded — a kibibyte, which every reply the engine
 // reads fits in with room to spare (a piece's headers are none; an object's
-// metadata, its own data, is a few hundred bytes).
+// metadata, its own data, is a few hundred bytes; a state log record's are the
+// few its append carried).
 const replyOverhead = 1 << 10
 
 // mebibyte is the unit a pace is stated in.
