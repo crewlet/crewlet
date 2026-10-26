@@ -996,9 +996,10 @@ func Scrubbed(c *Cache, repoID string) (at time.Time, found bool, base time.Time
 	return e.current.scrubbedAt, e.current.scrubFound, e.current.scrubBase
 }
 
-// ScrubFindings is the files scrubs found failing that repoID's repair mark
-// still holds, by their paths relative to the incarnation.
-func ScrubFindings(c *Cache, repoID string) []string {
+// Findings is the files a round's check or a scrub found failing that
+// repoID's repair mark still holds (repairMark.found), by their paths
+// relative to the incarnation, sorted.
+func Findings(c *Cache, repoID string) []string {
 	e := lookup(c, repoID)
 	if e == nil {
 		return nil

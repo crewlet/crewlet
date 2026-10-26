@@ -386,7 +386,7 @@ func TestAReportADeclarationKeepsItsFilesOnRecordsNoDrop(t *testing.T) {
 				t.Fatalf("the scrub pass after the index was damaged scrubbed %v, want %s", done, r.repo)
 			}
 			eventually(t, "the scrub's findings repaired", func() bool {
-				return cache.Settled(r.c, r.repo) && len(cache.ScrubFindings(r.c, r.repo)) == 0
+				return cache.Settled(r.c, r.repo) && len(cache.Findings(r.c, r.repo)) == 0
 			})
 			if after, err := os.Lstat(midx); err == nil && os.SameFile(before, after) {
 				t.Error("the index failing its trailer is still on disk: a declaration that keeps its files on a " +

@@ -45,9 +45,11 @@ type round struct {
 	// their rows, which the rebuild links in rather than downloads
 	// (seedRebuild). Fixed once the round runs.
 	whole []string
-	// found is what the round's check found failing and repaired in place
-	// (check.go), as sentences: a check among its callers names them first
-	// (waiter.found), since the copy it is handed no longer holds them.
+	// found is what the round repaired in place of what its check found
+	// failing, or an earlier round's check or a scrub did that still waited
+	// on the repair mark (check.go, recordCheck), as sentences, each once: a
+	// check among its callers names them first (waiter.found), since the copy
+	// it is handed no longer holds them.
 	found []string
 	// did is what the round's applies did, summed: what a request's
 	// in-place round answers its escalation by (applied.repaired).
@@ -728,8 +730,9 @@ type roundRepair struct {
 //     could fetch is named — none, or every one held off after a failed GET
 //     (repairMark.fetchable), which install leaves as it stands — and a
 //     forced round has already said what one would: the round that met d was
-//     itself forced (d.forced), or a forced round of the copy found nothing
-//     within ScrubCooldown with no repair written since (forcedLately).
+//     itself forced (d.forced), or a forced check of the copy ran within
+//     ScrubCooldown, what it found on the repair mark, with no repair written
+//     since (forcedLately).
 //  3. THE SCRUB, for a caller whose in-place round met the damage again, or
 //     that skipped it: handed back to Cache.run, which runs Cache.escalate for
 //     them once e.mu is let go — the scrub finds a pack body no index shows,
@@ -861,9 +864,9 @@ type damaged struct {
 	// packs is the packs a confirmed hint of the round's git named
 	// (confirmRound): the in-place repair fetches each again, one GET a pack
 	// (Failure.Packs). forced: the round that met the damage was itself a
-	// forced in-place round, which held every index file to its checksum
-	// (checked.forced) — so another finds nothing a pack's damage named by no
-	// hint needs.
+	// forced in-place round, one of whose applies held every index file to
+	// its checksum (checked.forced) and left what it found on the repair mark
+	// — so another finds nothing a pack's damage named by no hint needs.
 	packs  []string
 	forced bool
 	err    error
@@ -957,6 +960,31 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 	// epoch is the reread mark this round's convergence must still find: a
 	// mark made while it runs is about rows it may have read before it.
 	epoch := c.rereads.Load()
+	// forcedCheck is the round's FORCED check, once one of its applies has run
+	// one (checked.forced: every index file held to its trailer, the forces it
+	// took spent), and forcedOn its incarnation. Damage the round's own git
+	// meets after it is met by a forced round, whichever apply met it
+	// (damaged.forced) — and the check's VERDICT is the incarnation's as the
+	// round ENDS, whatever it ended with (incarnation.forcedAt): its install
+	// failing on a pack it adds, its refs' peel, or nothing at all. Recorded
+	// only past a round's install, it left the next request on a copy whose
+	// store refused a pushed pack a forced round of its own, every index file
+	// hashed again to find what the mark already held; recorded as the check
+	// ended, a request asked while the round still installed what that check
+	// found went to the scrub beside the round repairing it. The repairs the
+	// round writes after its check end that verdict as any later repair does
+	// (forcedLately reads incarnation.repairWrite against the check's end).
+	var (
+		forcedCheck checked
+		forcedOn    *incarnation
+	)
+	defer func() {
+		if forcedOn != nil {
+			e.mu.Lock()
+			forcedOn.forcedAt, forcedOn.forcedEnded = forcedCheck.at, forcedCheck.ended
+			e.mu.Unlock()
+		}
+	}()
 
 	e.mu.Lock()
 	inc := e.current
@@ -1080,21 +1108,22 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			// THE READ AFTER A NOT-FOUND DECIDES IT, and nothing is installed
 			// again to decide it. This read was made at the log's head after
 			// the store said the pack's object is not there. Still naming the
-			// pack at the same object, it names an object the store lost
-			// while a live row named it — the loss itself — and the round
-			// fails here. Applied again instead, it staged and fetched again
-			// every pack the not-found had cancelled in flight, asked the
-			// store once more for the pack it had just been told was not
-			// there and, on a forced round, held every index file to its
-			// checksum again — all to fail the same way, since no read makes
-			// the store hold an object. This read names the pack whenever its
-			// row is live: a full answer names every live pack, and this read
-			// is asked in full whenever the answer that named the pack was
-			// (below), while a delta from the incarnation's own position names
-			// every pack added above it, as one a delta named was. So a read
-			// that does not name it is the row gone from the log since —
-			// purged or retired, its object collected meanwhile — and the
-			// round goes on to what this read holds.
+			// pack at the same object, it names an object the store lost while
+			// a live row named it — the loss itself — and the round fails
+			// here. Applied again instead, it staged and fetched again every
+			// pack the not-found had cancelled in flight and asked the store
+			// once more for the pack it had just been told was not there — all
+			// to fail the same way, since no read makes the store hold an
+			// object (and, on a forced round, held every index file to its
+			// checksum again, until its check spent its forces as it ran:
+			// recordCheck). This read names the pack whenever its row is live:
+			// a full answer names every live pack, and this read is asked in
+			// full whenever the answer that named the pack was (below), while
+			// a delta from the incarnation's own position names every pack
+			// added above it, as one a delta named was. So a read that does
+			// not name it is the row gone from the log since — purged or
+			// retired, its object collected meanwhile — and the round goes on
+			// to what this read holds.
 			if p, ok := snap.packs[packKey{gone.Pack.PackID, gone.Pack.Part}]; ok && p.Object == gone.Pack.Object {
 				c.log.Warn("code_pack_missing", "repo", e.id, "pack_id", gone.Pack.PackID,
 					"object", gone.Pack.Object.String(), "damaged", false)
@@ -1110,7 +1139,17 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			e.mu.Unlock()
 		}
 		res, err = c.apply(ctx, e, inc, snap, epoch, marks, reader.by)
-		*found = append(*found, res.checked.findings(c.image)...)
+		if res.checked.forced {
+			forcedCheck, forcedOn = res.checked, inc
+		}
+		// Each finding once: one an apply could not act on waits on the
+		// repair mark, so the round's next apply repairs it — and names it —
+		// again.
+		for _, s := range res.checked.findings(c.image) {
+			if !slices.Contains(*found, s) {
+				*found = append(*found, s)
+			}
+		}
 		did.add(res)
 		var missing *ErrPackMissing
 		switch {
@@ -1185,7 +1224,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 				// a request's git (host's confirmed). With no classification,
 				// only a pack that is not its row's asks a repair at all.
 				h := &hinted{inc: inc, name: snap.repo.Name, full: snap.full, hints: hints, err: err,
-					classified: ok, damage: f, forced: res.checked.forced}
+					classified: ok, damage: f, forced: forcedOn != nil}
 				if snap.full {
 					h.rows = &snap
 				}
@@ -1196,7 +1235,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 				// full answer, the sweep left a shape the pool refuses:
 				// Cache.run makes the repair of it this round's answer.
 				return nil, "", &damaged{inc: inc, name: snap.repo.Name, reason: f.Reason, swept: snap.full,
-					drops: f.Drops, dropped: res.dropped, began: f.Began, forced: res.checked.forced, err: err}
+					drops: f.Drops, dropped: res.dropped, began: f.Began, forced: forcedOn != nil, err: err}
 			}
 			return nil, "", err
 		}
@@ -1274,7 +1313,6 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	var (
 		res       applied
 		found     []checkedFile
-		forces    int
 		reinstall []checkedFile
 	)
 	if snap.full {
@@ -1304,17 +1342,20 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// vouch, and the packs a confirmed hint named installed again — none
 		// of it under a check of the repository, whose release asks the round
 		// again.
-		forces, reinstall = c.requested(e, inc)
-		if res.checked, err = c.checkIndexes(ctx, e, inc, snap, forces > 0); err != nil {
+		forces, asked := c.requested(e, inc)
+		ck, err := c.checkIndexes(ctx, e, inc, snap, forces > 0)
+		if err != nil {
 			return res, fmt.Errorf("cache: sync %s: check: %w", e.id, err)
 		}
-		res.checked.damaged = append(res.checked.damaged, reinstall...)
-		// What a scrub found failing (scrub.go) is repaired with what the
-		// check found — a pack installed again, a derived file dropped — each
+		// THE CHECK HAS RUN, so its forces are spent and what it found is the
+		// repair mark's (recordCheck) whatever the round meets past here: the
+		// round repairs it with what earlier checks and scrubs found that
+		// still waits — a pack installed again, a derived file dropped — each
 		// only while it is still the file that failed (checked.still), and
-		// taken off the repair mark once the round has converged.
-		found = c.foundByScrub(e, inc)
-		res.checked.damaged = append(res.checked.damaged, found...)
+		// taken off the mark once acted on (settleFound, below).
+		res.checked, reinstall = ck, asked
+		found = c.recordCheck(e, inc, forces, ck.damaged)
+		res.checked.damaged = slices.Concat(found, reinstall)
 	}
 	// A pack the check or a scrub found damaged, or a full round found at the
 	// wrong size, is installed again by renaming over its files (install.go),
@@ -1368,28 +1409,15 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		if err = c.dropDamaged(e, inc, &res); err != nil {
 			return res, fmt.Errorf("cache: sync %s: drop derived files: %w", e.id, err)
 		}
-		// SETTLED ONCE ACTED ON, never only once the round converges: the
-		// check has held what it was forced to, each finding is installed
-		// again, dropped, held off or already replaced, and what the round
-		// fails at past here — its refs' peel meeting damage nothing above
-		// could fetch — undoes none of it. Left on the mark by a round that
-		// failed at the peel, a request's forces kept every later round of
-		// the copy full and FORCED — every index file hashed again, about a
-		// quarter of the copy's pack bytes, with nothing it could fetch —
-		// and never recorded the verdict that bounds the next (forcedAt).
+		// SETTLED ONCE ACTED ON, never only once the round converges: each
+		// finding is installed again, dropped, held off or already replaced,
+		// and what the round fails at past here — its refs' peel meeting
+		// damage nothing above could fetch — undoes none of it. A round that
+		// failed before this point — at its install, or at a drop — leaves
+		// them on the mark for the next; its check's forces it has spent
+		// already (recordCheck).
 		c.settleFound(e, inc, found, unrepaired)
-		c.settleRequested(e, inc, forces, reinstall, unrepaired)
-		if forces > 0 {
-			// A FORCED round that repaired nothing bounds the next one
-			// (forcedLately): its verdict holds for ScrubCooldown while no
-			// repair is written.
-			e.mu.Lock()
-			inc.forcedAt, inc.forcedEnded = time.Time{}, time.Time{}
-			if !res.repaired() {
-				inc.forcedAt, inc.forcedEnded = c.now(), time.Now()
-			}
-			e.mu.Unlock()
-		}
+		c.settleRequested(e, inc, reinstall, unrepaired)
 		// The sweep's pack half is DECIDED here and done once the refs are
 		// in; an index that may name a pack it will remove goes now, and so
 		// does whatever in objects/pack is no pack's file, so the round's

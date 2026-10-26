@@ -291,7 +291,13 @@
 // INSTALLED AGAIN WITH ONE GET, renamed over its files in the same incarnation
 // (install.go), never removed first: a git process that opened the pack reads
 // the files it opened, one that opens it afterwards the new ones, where a
-// removal made its objects missing for the whole download.
+// removal made its objects missing for the whole download. What the check
+// finds goes on the copy's REPAIR MARK as it ends (recordCheck), at the
+// identity each file failed at, and comes off once a round has installed or
+// dropped it — so a round that cannot act on it, its install failing on a
+// pack it adds or the finding's own download failing, leaves it to the next
+// round rather than to the next check, which skips a file damaged in place
+// after this process vouched for it.
 //
 // A file this process wrote or checked is VOUCHED for, in memory and never
 // persisted, by its IDENTITY: device and inode, size and modification time —
@@ -452,21 +458,28 @@
 //     files fail, that the copy lost (named by the rows at a position it had
 //     read) or holds at another size, or that a confirmed hint named (the
 //     [Failure]'s Packs) is fetched again over its files — one GET a pack,
-//     the same incarnation — at most once a [ScrubCooldown] while it repairs
-//     nothing: a forced round that found nothing, with no repair written
-//     since, is not run again for the failures of the hour after it that name
-//     no pack it could fetch — none, or only packs whose last download the
-//     store refused and whose next is held off — which go to the scrub's
-//     answer, so a damaged pack body a busy repository's requests keep
-//     failing on costs one read of every index file rather than one a
-//     request. A repair written into the copy while that runs answers
-//     the failure from the copy as it stands too, asked again before the
-//     scrub and before a rebuild. A round that found nothing has the copy's
-//     SCRUB run at once for its callers — ahead of every routine scrub on the
-//     node, which it stops — which finds a damaged pack body no index shows;
-//     a scrub begun after the failing process, or within [ScrubCooldown] with
-//     no repair written since, answers from its verdict, and what an earlier
-//     scrub found that still waits for its repair is answered by that repair.
+//     the same incarnation. Its check SPENDS what forced it once it has run,
+//     whatever the round meets after, what it found waiting on the copy's
+//     repair mark (above) — so a forced round whose install fails on a pack
+//     it adds, which the store does not hand over, leaves the rounds after it
+//     a finding to install and nothing to hash again. At most once a
+//     [ScrubCooldown] while nothing is written: a forced check with no repair
+//     written since it ended — its verdict recorded as its round ends,
+//     whatever that round met after it — is not run again for the failures
+//     of the hour after it that name no pack it could fetch — none, or only
+//     packs whose last download the store refused and whose next is held off
+//     — which go to the scrub's answer, so a damaged pack body a busy
+//     repository's requests keep failing on costs one read of every index
+//     file rather than one a request. A repair written into the copy while
+//     that runs answers the failure from the copy as it stands too, asked
+//     again before the scrub and before a rebuild. A round that found nothing
+//     has the copy's SCRUB run at once for its callers — ahead of every
+//     routine scrub on the node, which it stops — which finds a damaged pack
+//     body no index shows; a scrub begun after the failing process, or within
+//     [ScrubCooldown] with no repair written since, answers from its verdict,
+//     and what an earlier scrub found that still waits for its repair is
+//     answered by that repair — either beside what a round's check has found
+//     since that waits too, its pack none a rebuild past them links.
 //     Only when neither finds anything to fetch again is the repository read
 //     whole at the log's head into the NEXT incarnation, beside the one its
 //     readers hold, which replaces it once converged — seeded with every pack

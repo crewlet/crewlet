@@ -88,30 +88,39 @@ import (
 //     failing its trailer is dropped. A round that did any of it answers the
 //     request from the repaired copy (rebuilds{reason=stored}, or `derived`
 //     when it only dropped); a push the copy had not yet read, installed by
-//     the same round, repairs nothing. BOUNDED as step 3 is: a forced round of
-//     the copy that repaired nothing within ScrubCooldown, with no repair
-//     written since (incarnation.forcedAt — recorded once its check and its
-//     install have acted, even where the round then fails at its refs'
-//     peel), answers the next step 2 that names no pack it could fetch —
-//     none, or only packs whose download is held off after the store refused
-//     one (repairMark.fetchable), which the install leaves as they stand —
-//     since the same files would hash the same, and each forced round reads
-//     the rows whole and holds every reader of the repository while it
-//     hashes about a quarter of the copy's pack bytes (4–5 s warm and some
-//     39 s cold for the largest repository the defaults admit): a client
-//     polling a broken repository costs one forced round an hour, and its
-//     requests go straight to the scrub's verdict and the rebuild's
-//     refusals, which answer at once where they stand.
+//     the same round, repairs nothing. The forced check SPENDS the forces
+//     once it has run, whatever its round meets after, and what it found
+//     waits on the copy's repair mark (recordCheck) — so a round that fails
+//     past its check, at a pack it adds that the store will not hand over,
+//     leaves the rounds after it a finding to install and nothing to hash
+//     again. BOUNDED as step 3 is: a forced check of the copy within
+//     ScrubCooldown, with no repair written since it ended
+//     (incarnation.forcedAt — recorded as its round ends, whatever that
+//     round met after it: its install failing, its refs' peel), answers the
+//     next step 2 that names no pack it could fetch — none, or only packs
+//     whose download is held off after the store refused one
+//     (repairMark.fetchable), which the install leaves as they stand — since
+//     the same files would hash the same, and what they did not hash the same
+//     the repair mark already holds; and each forced round reads the rows
+//     whole and holds every reader of the repository while it hashes about a
+//     quarter of the copy's pack bytes (4–5 s warm and some 39 s cold for the
+//     largest repository the defaults admit): a client polling a broken
+//     repository costs one forced round an hour, and its requests go straight
+//     to the scrub's verdict and the rebuild's refusals, which answer at once
+//     where they stand.
 //  3. THE SCRUB, for the callers. A round that repaired nothing leaves damage
 //     in a pack BODY no git named, or in the rows: the copy's scrub runs at
 //     once for these callers (scrubFor), every pack hashed against its own
 //     trailer, outside the write lock with the copy answering; what it finds
 //     is installed again by the round it asks, which answers them — unless a
 //     scrub of the copy already said: one whose findings still wait for their
-//     repair, which is the answer (with the packs that scrub found whole);
-//     or one that found nothing and either began after every failure it is
-//     asked about, or ended within ScrubCooldown with no repair written
-//     since, whose verdict stands. It runs as soon as the scrub in flight
+//     repair, which is the answer (with the packs that scrub found whole); or
+//     one that found nothing and either began after every failure it is asked
+//     about, or ended within ScrubCooldown with no repair written since, whose
+//     verdict stands — beside either, what a round's check has found since
+//     that still waits for its repair, the answer too, its pack none the
+//     rebuild links (recordCheck). A check's finding alone answers nothing
+//     here: a check reads no pack body. It runs as soon as the scrub in flight
 //     lets go of the node's one scrub, ahead of every scrub the scrubber has
 //     due, and a routine scrub in flight is ended for it (scrub.go's
 //     scrubSlot).
@@ -477,16 +486,16 @@ func (c *Cache) repairRequest(ctx context.Context, failed Synced, f Failure) (Sy
 		return c.awaitRequest(ctx, e, w, failed)
 	}
 	if len(inc.repair.fetchable(f.Packs, c.now())) == 0 && c.forcedLately(inc) {
-		// STEP 2 IS BOUNDED as step 3 is: a forced round of this copy
-		// repaired nothing within ScrubCooldown, and no repair has been
-		// written since — another would hash the same files the same, read
-		// the rows whole and hold every reader of the repository while it
-		// hashed a quarter of the copy's bytes, for every request a client
-		// polling a broken repository makes. The scrub's verdict and the
-		// rebuild's refusals answer it, at once where they stand. A pack
-		// the request's hint named whose download is held off is no pack
-		// here: the forced round could not fetch it, and would learn
-		// nothing the last one did not.
+		// STEP 2 IS BOUNDED as step 3 is: a forced check of this copy ran
+		// within ScrubCooldown, and no repair has been written since it
+		// ended — another would hash the same files the same, what they did
+		// not the repair mark already holding, and read the rows whole and
+		// hold every reader of the repository while it hashed a quarter of
+		// the copy's bytes, for every request a client polling a broken
+		// repository makes. The scrub's verdict and the rebuild's refusals
+		// answer it, at once where they stand. A pack the request's hint
+		// named whose download is held off is no pack here: the forced round
+		// could not fetch it, and would learn nothing the last one did not.
 		e.mu.Unlock()
 		go c.escalate(e, inc, []*waiter{w})
 		return c.awaitRequest(ctx, e, w, failed)
@@ -557,9 +566,10 @@ func (c *Cache) awaitInPlace(ctx context.Context, e *entry, w *waiter, failed Sy
 	return s, nil
 }
 
-// forcedLately reports whether inc's last forced round repaired nothing within
-// ScrubCooldown, with no repair written into it since (incarnation.forcedAt);
-// e.mu is held.
+// forcedLately reports whether inc's last forced check ran within
+// ScrubCooldown with no repair written into it since it ended — its round's
+// own included (incarnation.forcedAt): what another would find, this one has
+// found, and what it found waits on the repair mark. e.mu is held.
 func (c *Cache) forcedLately(inc *incarnation) bool {
 	return !inc.forcedAt.IsZero() && c.now().Sub(inc.forcedAt) < ScrubCooldown &&
 		!inc.repairWrite.After(inc.forcedEnded)
@@ -587,10 +597,11 @@ func (c *Cache) asItStands(e *entry, inc *incarnation, w *waiter) {
 // failed request's (Cache.Rebuild) and a round's own (repairDamaged) — asked
 // inc's next full round to do (repairMark.forces and reinstall): nothing while
 // a check of the repository is admitted, whose release asks the round again.
-// Copied, not taken: the round settles them (settleRequested) only once its
-// check, its install and its drops have acted on them, so a round that fails
-// before then leaves them for the next — and one that fails after, at its
-// refs' peel, has done what they asked. e.mu is not held.
+// Copied, not taken: the forces are spent once the round's check has run
+// (recordCheck), whatever the round meets after, and the packs are taken off
+// (settleRequested) only once its install has acted on them, so a round that
+// fails before its check leaves both for the next, and one that fails at its
+// install leaves the packs. e.mu is not held.
 func (c *Cache) requested(e *entry, inc *incarnation) (int, []checkedFile) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -605,16 +616,15 @@ func (c *Cache) requested(e *entry, inc *incarnation) (int, []checkedFile) {
 	return inc.repair.forces, reinstall
 }
 
-// settleRequested takes off inc's repair mark the forces and the packs a full
-// round acted on: forces of them, and each pack still asked at the identity it
-// was asked at — a repair asked since keeps its own, and a pack in unrepaired,
-// whose download failed or is held off, stays asked.
-func (c *Cache) settleRequested(e *entry, inc *incarnation, forces int, reinstall []checkedFile,
+// settleRequested takes off inc's repair mark the packs a full round's install
+// acted on: each still asked at the identity it was asked at — a repair asked
+// since keeps its own, and a pack in unrepaired, whose download failed or is
+// held off, stays asked. The forces are the check's to spend (recordCheck).
+func (c *Cache) settleRequested(e *entry, inc *incarnation, reinstall []checkedFile,
 	unrepaired map[string]bool) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	inc.repair.forces = max(inc.repair.forces-forces, 0)
 	for _, f := range reinstall {
 		cs, _ := packOfRel(f.rel)
 		if unrepaired[cs] {

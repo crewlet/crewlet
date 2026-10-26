@@ -312,21 +312,28 @@ func (d *derivedDrops) merge(o derivedDrops) {
 	}
 }
 
-// repairMark is what reports and scrubs asked an incarnation's next full
-// round to do.
+// repairMark is what reports, checks and scrubs asked an incarnation's next
+// full round to do.
 type repairMark struct {
 	// drops is the derived parts reports named.
 	drops derivedDrops
-	// found is every file a scrub found failing its checksum, by its path
-	// relative to the incarnation, at the identity it failed at: the round
-	// reinstalls a pack, or drops a derived file, only while it still has
-	// that identity (checked.still).
+	// found is every file a round's check or a scrub found failing its
+	// checksum that waits for its repair, by its path relative to the
+	// incarnation, at the identity it failed at: the round reinstalls a pack,
+	// or drops a derived file, only while it still has that identity
+	// (checked.still), and takes it off once it has (settleFound). A check's
+	// go on as it ends (recordCheck), so a round that cannot act on them —
+	// its install failing on a pack it adds, a finding's own download
+	// failing — leaves them to the next, as a scrub's. checkedFile.scrubbed
+	// tells the two apart: only a SCRUB's findings stand for a scrub's answer
+	// (scrubWaits) — a check reads no pack body.
 	found map[string]checkedFile
 	// forces is how many in-place repairs of a pack's or an object's damage
 	// — a failed request's ([Cache.Rebuild]) or a round's own git's
 	// (repairDamaged) — asked the next full round to hold EVERY index file to
-	// its trailer, vouched or not; a round settles those its check and its
-	// install have acted on, whether or not it then converges.
+	// its trailer, vouched or not; that round's check spends them once it has
+	// run, whatever the round meets after (recordCheck), what it found going
+	// on found.
 	forces int
 	// reinstall is the packs a confirmed hint named ([Failure].Packs), by
 	// checksum, each at the identity of its .pack when it was asked: the
@@ -354,6 +361,20 @@ type fetchBackoff struct {
 // pending reports whether the mark asks anything at all.
 func (m repairMark) pending() bool {
 	return len(m.drops) > 0 || len(m.found) > 0 || m.forces > 0 || len(m.reinstall) > 0
+}
+
+// scrubWaits reports whether a finding a SCRUB made still waits for its
+// repair: what answers a repair's step 3 in that scrub's place (scrubFor) and
+// covers a report within ScrubCooldown of it (scrubAsked). A round's check's
+// finding is neither — a check reads index files alone, and the scrub is
+// asked for the pack bodies it never reads.
+func (m repairMark) scrubWaits() bool {
+	for _, f := range m.found {
+		if f.scrubbed {
+			return true
+		}
+	}
+	return false
 }
 
 // due reports whether the mark asks a full round anything it can do at now:

@@ -942,7 +942,7 @@ func TestAFileTheDiskCannotReadIsRepaired(t *testing.T) {
 					t.Fatalf("the used copy's scrub ran for %v", done)
 				}
 				eventually(t, "the scrub's findings repaired", func() bool {
-					return cache.Settled(c, h.repo) && len(cache.ScrubFindings(c, h.repo)) == 0
+					return cache.Settled(c, h.repo) && len(cache.Findings(c, h.repo)) == 0
 				})
 				s = w.sync(t, c, h.repo)
 			}

@@ -753,7 +753,12 @@ failing on one damaged copy cost one repair. How depends on the damage:
   over the same packs; a pack whose index fails is fetched again — one
   download, renamed over its files in the same copy, so a request already
   reading the pack is not cut off. What the node's current process wrote, or
-  has checked since, is not read again until it changes.
+  has checked since, is not read again until it changes. What a check finds
+  that its sync cannot put right there and then — the object store refusing
+  the download, or the sync failing on a newly pushed pack the store will
+  not hand over — waits for the next sync rather than the next check: an
+  index damaged where it lies after the node checked it looks to the node
+  just as it did, so only that finding says it needs repairing.
 - **Every byte, behind the serving.** Each copy a node uses is read whole
   again — every pack against its own checksum, and every index file — once
   after its first request when a previous run of the node left it (its packs,
@@ -806,10 +811,12 @@ failing on one damaged copy cost one repair. How depends on the damage:
   does, peeling the tags it sets — the copy is put right **in place first**,
   under that request or that sync. The node reads it whole again in the same
   directory, holding every index file to its checksum whatever it checked
-  before — at most once an hour while that finds nothing, or while the only
-  packs it could fetch again are ones the object store has just refused, so a
-  busy repository's requests failing on one damaged pack cost one such read,
-  not one each — and fetches again, one download each, every pack whose index
+  before — at most once an hour while nothing has been repaired in the copy
+  since, whether or not that read found anything and however its sync ended
+  (what it found waits for the next sync, as above), or while the only packs
+  it could fetch again are ones the object store has just refused, so a busy
+  repository's requests failing on one damaged pack cost one such read, not
+  one each — and fetches again, one download each, every pack whose index
   files fail, that the copy has lost or holds at another size, or that git
   named —
   git 2.55 and later name the pack of a corrupt object, which the node hashes

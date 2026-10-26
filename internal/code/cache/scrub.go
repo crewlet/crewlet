@@ -431,7 +431,10 @@ func (c *Cache) firstScrub(inc *incarnation) {
 // for the largest repository the defaults admit — to find the same files.
 // The repair is the answer to those reports; past the cooldown a report scrubs
 // again, at most once a ScrubCooldown, so damage that landed elsewhere in the
-// copy meanwhile is not left to the interval.
+// copy meanwhile is not left to the interval. Only the SCRUB's findings cover
+// a report (scrubWaits): what a round's check found since waits on the same
+// mark, but a check reads no pack body, so its finding says nothing of the
+// bytes a report may be about.
 func (c *Cache) scrubAsked(inc *incarnation) reportOutcome {
 	now := c.now()
 	recent := !inc.scrubbedAt.IsZero() && now.Sub(inc.scrubbedAt) < ScrubCooldown
@@ -440,7 +443,7 @@ func (c *Cache) scrubAsked(inc *incarnation) reportOutcome {
 		return reportQueued
 	case recent && !inc.scrubFound:
 		return reportCooldown
-	case recent && len(inc.repair.found) > 0:
+	case recent && inc.repair.scrubWaits():
 		return reportCovered
 	}
 	inc.scrubDue, inc.scrubAsked = scrubReport, now
@@ -519,13 +522,15 @@ func (c *Cache) runScrub(sctx context.Context, e *entry, inc *incarnation, trigg
 // answers what it found: its findings, on the repair mark already with a
 // repair round asked, and the packs it found whole. What another scrub of inc
 // already said answers instead, unread again: findings it made that still
-// wait for their repair, which is the answer, with the packs that scrub found
-// whole less the ones a waiting finding names (what a rebuild past their
-// repair links, seedRebuild); or, when it found nothing, its verdict, when it
-// began after every failure it is asked about (it read the bytes they failed
-// on) or ended within ScrubCooldown with no repair written into inc since
-// (the same bytes would be found whole again). Nothing at all for an
-// incarnation no longer current; ErrStopped when the cache stops.
+// wait for their repair, which is the answer; or, when it found nothing, its
+// verdict, when it began after every failure it is asked about (it read the
+// bytes they failed on) or ended within ScrubCooldown with no repair written
+// into inc since (the same bytes would be found whole again) — either one
+// with the packs that scrub found whole less every pack a finding still
+// waiting names (what a rebuild past their repair links, seedRebuild), and
+// beside it what a round's check found since that waits too (recordCheck).
+// Nothing at all for an incarnation no longer current; ErrStopped when the
+// cache stops.
 //
 // It takes no context: this scrub runs on the cache's lifetime, never a
 // caller's, since every caller of the round that asks it shares its answer
@@ -548,14 +553,22 @@ func (c *Cache) scrubFor(e *entry, inc *incarnation, began time.Time) (scrubbed,
 	case e.dead || e.current != inc || inc.retired:
 		e.mu.Unlock()
 		return scrubbed{}, nil
-	case len(inc.repair.found) > 0:
-		// THE PACKS THE LAST SCRUB FOUND WHOLE answer beside its findings,
-		// less every pack a finding still waiting names: what a rebuild past
-		// the findings' repair links rather than downloads (seedRebuild),
-		// exactly as when that scrub ran for the caller. Answered with no
-		// packs, the rebuild a round's caller asks once the findings' round
-		// still meets the damage (repairDamaged's step 4) downloaded every
-		// pack the repository holds.
+	case inc.repair.scrubWaits(), recent:
+		// WHAT THE LAST SCRUB SAID ANSWERS: its findings still waiting, or
+		// its verdict of nothing found — and BESIDE IT, WHAT A ROUND'S CHECK
+		// HAS FOUND SINCE that waits on the same mark, an index damaged in
+		// place after the scrub read it (recordCheck), whose repair is the
+		// answer as the scrub's findings' is. A check's finding alone answers
+		// nothing here: the scrub is asked for the pack bodies a check never
+		// reads. THE PACKS THE LAST SCRUB FOUND WHOLE answer with them, less
+		// every pack a finding still waiting names — the scrub's or a
+		// check's: what a rebuild past the findings' repair links rather
+		// than downloads (seedRebuild), exactly as when that scrub ran for
+		// the caller. Answered with no packs, the rebuild a round's caller
+		// asks once the findings' round still meets the damage
+		// (repairDamaged's step 4) downloaded every pack the repository
+		// holds; answered with a pack a check found damaged since, it linked
+		// that damage into the copy that replaced the damaged one.
 		var out scrubbed
 		for _, f := range inc.repair.found {
 			out.damaged = append(out.damaged, f)
@@ -570,10 +583,6 @@ func (c *Cache) scrubFor(e *entry, inc *incarnation, began time.Time) (scrubbed,
 		})
 		e.mu.Unlock()
 		return out, nil
-	case recent:
-		whole := slices.Clone(inc.scrubWhole)
-		e.mu.Unlock()
-		return scrubbed{whole: whole}, nil
 	}
 	// Every file, vouched or not: it answers whatever scrub of the copy was
 	// due, which is due again only if it is ended first.
@@ -747,30 +756,13 @@ func (c *Cache) scrubHold(ctx context.Context) (func(), error) {
 	}
 }
 
-// foundByScrub is what scrubs found failing on inc that its repair mark still
-// holds, for a full round to repair (sync.go apply) — none while a check of
-// the repository is admitted, whose release asks the round again. Copied, not
-// taken: the round settles what it repaired (settleFound) only once its
-// install and its drops have acted on them, so a round that fails before then
-// leaves them for the next. e.mu is not held.
-func (c *Cache) foundByScrub(e *entry, inc *incarnation) []checkedFile {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.verifying > 0 {
-		return nil
-	}
-	found := make([]checkedFile, 0, len(inc.repair.found))
-	for _, f := range inc.repair.found {
-		found = append(found, f)
-	}
-	slices.SortFunc(found, func(a, b checkedFile) int { return strings.Compare(a.rel, b.rel) })
-	return found
-}
-
-// settleFound takes off inc's repair mark every finding of found a full round
-// has repaired, or found already repaired — each still on the mark at
-// the identity it failed at; a newer finding about the same file stays, and
-// so does one of a pack in unrepaired, whose download failed or is held off.
+// settleFound takes off inc's repair mark every finding of found — a check's
+// or a scrub's, as the round's check answered them (recordCheck) — a full
+// round has repaired, or found already repaired, once its install and its
+// drops have acted on them: each still on the mark at the identity it failed
+// at; a newer finding about the same file stays, and so does one of a pack in
+// unrepaired, whose download failed or is held off. A round that fails before
+// then leaves them all for the next.
 func (c *Cache) settleFound(e *entry, inc *incarnation, found []checkedFile, unrepaired map[string]bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

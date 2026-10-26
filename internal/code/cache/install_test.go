@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A COLD SYNC DOWNLOADS SIXTEEN AT ONCE: on S3 a GET is bound by its first
@@ -1091,17 +1093,8 @@ func TestAForcedRoundThatMeetsALostPackHashesOnce(t *testing.T) {
 	thirdRead := errors.New("a round read its snapshot a third time")
 	w := newSyncWorld(t, onMemory)
 	h := w.measured(t)
-	var (
-		mu     sync.Mutex
-		hashed = map[string]int{}
-	)
-	c := w.open(t, func(o *cache.Options) {
-		cache.WhileHashing(o, func(path string) {
-			mu.Lock()
-			defer mu.Unlock()
-			hashed[filepath.Base(path)]++
-		})
-	})
+	var counted hashes
+	c := w.open(t, counted.on)
 	s := w.sync(t, c, h.repo)
 	_, lost := w.push(t, h.repo, "refs/heads/main", nil)
 	if err := w.store.Delete(t.Context(), lost.Object); err != nil {
@@ -1116,24 +1109,312 @@ func TestAForcedRoundThatMeetsALostPackHashesOnce(t *testing.T) {
 			return nil
 		}
 	})
-	mu.Lock()
-	clear(hashed)
-	mu.Unlock()
+	before := counted.now()
 	_, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing, Began: time.Now()})
 	var missing *cache.ErrPackMissing
 	if !errors.As(err, &missing) || missing.Pack.PackID != lost.PackID || missing.Damaged {
 		t.Fatalf("Rebuild: %v, want the forced round's *ErrPackMissing naming %s", err, lost.PackID)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(hashed) == 0 {
+	hashed := counted.now()
+	if maps.Equal(hashed, before) {
 		t.Fatal("the forced round hashed no file: the case tests nothing")
 	}
 	for name, n := range hashed {
-		if n != 1 {
-			t.Errorf("the forced round hashed %s %d times, want once", name, n)
+		if got := n - before[name]; got != 1 {
+			t.Errorf("the forced round hashed %s %d times, want once", name, got)
 		}
 	}
+}
+
+// hashes counts every file a cache's checks and scrubs hash, by its name
+// (cache.WhileHashing).
+type hashes struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+// on makes the cache Open builds count its hashes into h.
+func (h *hashes) on(o *cache.Options) {
+	cache.WhileHashing(o, func(path string) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.counts == nil {
+			h.counts = map[string]int{}
+		}
+		h.counts[filepath.Base(path)]++
+	})
+}
+
+// now is every file hashed so far, with how many times.
+func (h *hashes) now() map[string]int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return maps.Clone(h.counts)
+}
+
+// errPushRefused is the object store refusing a push's bundle (refusePush).
+var errPushRefused = errors.New("the object store refuses the push's bundle")
+
+// refusePush pushes once more to h's repository and has the object store
+// refuse that push's bundle (errPushRefused) — so a round that adds it fails
+// at its install — and hold every GET of h's newer pack until the round that
+// asked it has failed, so no round installs that pack again first. The
+// answer lets both go, as the case's cleanup does before the cache's Stop,
+// which waits for the round.
+func (w *syncWorld) refusePush(t *testing.T, h history) (release func()) {
+	t.Helper()
+	_, push := w.push(t, h.repo, "refs/heads/main", nil)
+	held := make(chan struct{})
+	release = sync.OnceFunc(func() {
+		w.objects.mu.Lock()
+		w.objects.fail, w.objects.hold = nil, nil
+		w.objects.mu.Unlock()
+		close(held)
+	})
+	t.Cleanup(release)
+	w.objects.mu.Lock()
+	defer w.objects.mu.Unlock()
+	w.objects.fail = func(k objstore.Key) error {
+		if k == push.Object {
+			return errPushRefused
+		}
+		return nil
+	}
+	w.objects.hold = func(k objstore.Key) <-chan struct{} {
+		if k == h.newer.Object {
+			return held
+		}
+		return nil
+	}
+	return release
+}
+
+// A FORCED ROUND THAT FAILS AT ITS INSTALL HAS SPENT ITS FORCES. A request's
+// repair in place holds every index file to its checksum, vouched or not, and
+// a round that then fails at its install — on a pack it ADDS, which the object
+// store will not hand over — has done all its forces asked: what its check
+// found waits on the repair mark for the rounds after it. Settled only once an
+// install had acted, the forces made every sync of the copy after it a forced
+// round of its own — every index file hashed again, about a quarter of the
+// copy's pack bytes, under the repository's write lock — for as long as the
+// store kept failing. And it is the FINDING the round leaves, not the forces:
+// an index damaged in place keeps its identity and the vouch an earlier check
+// gave it, which no check but a forced one reads past, so the round that can
+// install the pack at last knows of it only from the mark.
+//
+// The newer pack's index damaged in place, and a push the store refuses; the
+// newer pack's GET held until each round has failed, so no round installs it
+// again before the store answers (refusePush). The request's forced round
+// hashes each index file once and fails with the store's refusal; three syncs
+// while the store still refuses hash nothing; and once it answers, a sync
+// installs the damaged pack again from its finding, beside the push.
+//
+// Mutations: settle the forces only once an install has acted (each sync
+// hashes every index file again, forced); spend them and carry no finding (the
+// damaged index is never installed again).
+func TestAForcedRoundThatFailsAtItsInstallHasSpentItsForces(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	h := w.measured(t)
+	var counted hashes
+	c := w.open(t, counted.on)
+	s := w.sync(t, c, h.repo)
+	gittest.DamageInPlace(t, s.Dir, gittest.IdxTrailer, h.commits[3])
+	release := w.refusePush(t, h)
+	forced := func() uint64 {
+		return counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "forced"})
+	}
+	before := counted.now()
+
+	_, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing, Began: time.Now()})
+	if !errors.Is(err, errPushRefused) {
+		t.Fatalf("Rebuild: %v, want its forced round failing on the store's refusal of the push", err)
+	}
+	spent := counted.now()
+	for name, n := range spent {
+		if n-before[name] != 1 {
+			t.Errorf("the forced round hashed %s %d times, want once", name, n-before[name])
+		}
+	}
+	idx := filepath.Join("objects", "pack", "pack-"+h.newer.GitChecksum+".idx")
+	if got := cache.Findings(c, h.repo); !slices.Equal(got, []string{idx}) {
+		t.Errorf("the repair mark holds %v once the forced round failed, want its check's finding %s", got, idx)
+	}
+	forcedChecks := forced()
+	if forcedChecks == 0 {
+		t.Fatal("the request ran no forced round: the case tests nothing")
+	}
+
+	for i := range 3 {
+		if _, err := c.Sync(t.Context(), h.repo, linearizable); !errors.Is(err, errPushRefused) {
+			t.Fatalf("sync %d while the store refuses the push: %v, want its refusal", i, err)
+		}
+	}
+	if got := forced() - forcedChecks; got != 0 {
+		t.Errorf("three syncs after the forced round held %d index files to their trailers in forced rounds, "+
+			"want none: the forced round spent its forces", got)
+	}
+	if got := counted.now(); !maps.Equal(got, spent) {
+		t.Errorf("three syncs after the forced round hashed files to %v, want none past the forced round's %v",
+			got, spent)
+	}
+
+	release()
+	r, err := c.Sync(t.Context(), h.repo, linearizable)
+	if err != nil {
+		t.Fatalf("the sync once the store answers: %v", err)
+	}
+	defer r.Release()
+	lines := w.logs.lines(t, "code_cache_pack_reinstalled")
+	if len(lines) != 1 || lines[0]["pack_id"] != h.newer.PackID || lines[0]["found"] != "trailer" ||
+		lines[0]["trigger"] != "forced" {
+		t.Errorf("code_cache_pack_reinstalled = %v, want the damaged pack installed again as the forced check "+
+			"found it", lines)
+	}
+	if bad, err := cache.Unsound(r.Dir); err != nil || len(bad) != 0 {
+		t.Errorf("once the store answers, %v fail their trailers (%v): the forced check's finding was never "+
+			"acted on", bad, err)
+	}
+	if got := cache.Findings(c, h.repo); len(got) != 0 {
+		t.Errorf("the repair mark still holds %v once its pack is installed again", got)
+	}
+	if got := counted.now(); !maps.Equal(got, spent) {
+		t.Errorf("the sync once the store answers hashed files to %v, want none past the forced round's %v", got,
+			spent)
+	}
+	if _, err := runGit(t, w.pool, r.Dir, "", "rev-list", "--objects", h.commits[3]); err != nil {
+		t.Errorf("the repaired copy still fails: %v", err)
+	}
+	w.tmpEmpty(t)
+}
+
+// A FORCED ROUND WHOSE PACKS ARE RETIRED UNDER IT HASHES ONCE. The store's
+// not-found for a pack a round adds is decided by the log's head, read after
+// it (THE READ AFTER A NOT-FOUND DECIDES IT), and a head that no longer names
+// the pack — retired, its object collected, while the round downloaded — sends
+// the round on to apply what the head holds: a second apply of ONE round. A
+// forced round's check spent its forces in the first, so the second holds no
+// index file to its trailer again: the round hashes each once, where it hashed
+// every one twice. And the pack the copy lost — what the request's repair is
+// for — is put back by that second apply as the repair it is, so the request
+// is answered from the repaired copy, never escalated to the scrub.
+//
+// The copy lost its first push; two pushes it has not read are merged and
+// retired, their objects collected, once the round has its first answer; the
+// lost pack's GET is held until that answer's apply has failed, so the second
+// apply is what puts it back. A third read is failed, so a round that kept
+// asking fails the case rather than hangs it.
+//
+// Mutations: settle the forces only once an install has acted (the second
+// apply holds every index file to its trailer again); a lost pack counted only
+// by a forced round (the second apply's is no repair, and the request is
+// escalated to the scrub and a whole rebuild).
+func TestAForcedRoundWhosePacksAreRetiredUnderItHashesOnce(t *testing.T) {
+	t.Parallel()
+	thirdRead := errors.New("a round read its snapshot a third time")
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	lostTip, lost := w.push(t, repo, "refs/heads/main", nil)
+	kept, _ := w.push(t, repo, "refs/heads/main", nil)
+	var counted hashes
+	c := w.open(t, counted.on)
+	s := w.sync(t, c, repo)
+	for _, ext := range []string{".pack", ".idx", ".rev"} {
+		if err := os.Remove(filepath.Join(s.Dir, "objects", "pack", "pack-"+lost.GitChecksum+ext)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, first := w.push(t, repo, "refs/heads/main", nil)
+	tip, second := w.push(t, repo, "refs/heads/main", nil)
+	bare := gittest.Empty(t)
+	merged := w.storeBundle(t, gittest.Bundle(t, bare,
+		gittest.Pack(t, w.client, bare, w.repos[repo].work, tip, "^"+kept)), "")
+	var reads, answers atomic.Int32
+	w.log.set(func(f *fakeLog) {
+		f.hook = func(call fakeCall) error {
+			if call.Page == 1 && reads.Add(1) == 3 {
+				return thirdRead
+			}
+			return nil
+		}
+		// Once the round has its first answer, and before it downloads: the
+		// compaction applies, and its inputs' objects go.
+		f.after = func(call fakeCall, _ *code.RepoSnapshot) {
+			if call.Page != 1 || answers.Add(1) != 1 {
+				return
+			}
+			w.log.set(func(f *fakeLog) {
+				r := f.repos[repo]
+				r.packs = slices.DeleteFunc(r.packs, func(p code.PackRow) bool {
+					return p.PackID == first.PackID || p.PackID == second.PackID
+				})
+				f.seq++
+				row := merged
+				row.Added = f.at()
+				r.packs = append(r.packs, row)
+			})
+			for _, gone := range []code.PackRow{first, second} {
+				if err := w.store.Delete(t.Context(), gone.Object); err != nil {
+					t.Errorf("collecting the retired pack %s: %v", gone.PackID, err)
+				}
+			}
+		}
+	})
+	held := make(chan struct{})
+	t.Cleanup(func() { close(held) }) // before the cache's Stop, which waits for the round
+	w.objects.mu.Lock()
+	w.objects.hold = func(k objstore.Key) <-chan struct{} {
+		if k == lost.Object && answers.Load() == 1 {
+			return held
+		}
+		return nil
+	}
+	w.objects.mu.Unlock()
+	before := counted.now()
+	pages := len(w.log.firstPages(repo))
+
+	r, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing, Began: time.Now()})
+	if err != nil {
+		t.Fatalf("Rebuild: %v, want the forced round converged on the merged pack with the lost one put back",
+			err)
+	}
+	defer r.Release()
+	if n := cache.Incarnation(r); n != cache.Incarnation(s) {
+		t.Errorf("the repair answered incarnation %d, want %d repaired in place", n, cache.Incarnation(s))
+	}
+	var levels []string
+	for _, call := range w.log.firstPages(repo)[pages:] {
+		levels = append(levels, string(call.Level))
+	}
+	if fmt.Sprint(levels) != "[linearizable linearizable]" {
+		t.Errorf("the round read its snapshot at %v, want at the log's head, and there once more after the "+
+			"store's not-found", levels)
+	}
+	hashedNow := counted.now()
+	if maps.Equal(hashedNow, before) {
+		t.Fatal("the forced round hashed no file: the case tests nothing")
+	}
+	for name, n := range hashedNow {
+		if got := n - before[name]; got != 1 {
+			t.Errorf("the round hashed %s %d times, want once", name, got)
+		}
+	}
+	if got := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "request"}); got != 0 {
+		t.Errorf("the request's repair scrubbed %d files, want none: its round put the lost pack back", got)
+	}
+	if got := counter(w.rec, metrics.CodeCacheRebuilds, "reason", string(cache.RebuildStored)); got != 1 {
+		t.Errorf("rebuilds{reason=stored} = %d, want the one lost pack put back", got)
+	}
+	lines := w.logs.lines(t, "code_cache_pack_reinstalled")
+	if len(lines) != 1 || lines[0]["pack_id"] != lost.PackID || lines[0]["found"] != "absent" {
+		t.Errorf("code_cache_pack_reinstalled = %v, want the lost pack put back, found=absent", lines)
+	}
+	for _, oid := range []string{lostTip, tip} {
+		if _, err := runGit(t, w.pool, r.Dir, "", "cat-file", "-e", oid); err != nil {
+			t.Errorf("the repaired copy does not hold %s: %v", oid, err)
+		}
+	}
+	w.tmpEmpty(t)
 }
 
 // A PACK A FULL ANSWER NAMED IS DECIDED BY A FULL READ. The log may answer a

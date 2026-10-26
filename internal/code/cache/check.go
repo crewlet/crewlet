@@ -582,13 +582,16 @@ func vouchedRels(inc *incarnation) []string {
 // whose pack the install puts in again, or a derived file, which the round
 // drops (still) — and the bytes read. forced: the in-place round of a pack's
 // or an object's repair asked it (Cache.Rebuild, repairDamaged), so it held
-// every index file to its trailer whatever its vouch.
+// every index file to its trailer whatever its vouch. at and ended are when it
+// ended, on Options.Now's clock and as a time.Now() reading: a forced check's
+// verdict, which its round records once it ends (incarnation.forcedAt).
 type checked struct {
-	trigger checkTrigger
-	forced  bool
-	sound   int
-	damaged []checkedFile
-	bytes   int64
+	trigger   checkTrigger
+	forced    bool
+	sound     int
+	damaged   []checkedFile
+	bytes     int64
+	at, ended time.Time
 }
 
 // checkIndexes is step 2 of a full round (sync.go apply): every checkable file
@@ -717,7 +720,59 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 	e.mu.Lock()
 	inc.checkedOnce = true
 	e.mu.Unlock()
+	ck.at, ck.ended = c.now(), time.Now()
 	return ck, nil
+}
+
+// recordCheck is what a full round's check leaves on inc's repair mark once
+// it has run, whatever the round meets after it, and answers every finding
+// the mark holds that the round repairs; e.mu is not held. forces is how many
+// repairs' forces the check took (requested), and damaged what it found.
+//
+//   - ITS FORCES ARE SPENT. A forced check is asked to hold every index file
+//     to its trailer whatever its vouch, and once it has run, it has done
+//     that. Settled only once the round's install had acted, the forces
+//     outlived a round that failed there — on a pack it ADDS that the object
+//     store does not have or fails to hand over — so every later round of the
+//     copy was forced again, every index file hashed again under the
+//     repository's write lock, until an install succeeded; and a round the
+//     log's head sent on to a second apply after a pack's not-found
+//     (converge) held them all to their trailers a second time itself.
+//   - WHAT IT FOUND GOES ON THE MARK (repairMark.found), at the identity each
+//     file failed at, as a scrub's findings do, and comes off once a round
+//     has installed or dropped it (settleFound): a round that cannot act on a
+//     finding — its install failing on a pack it adds, the finding's own
+//     download failing — leaves it to the next. It is the FINDING that has
+//     to outlive the round, not the forces: an index file damaged in place
+//     keeps its identity and the vouch an earlier check gave it, which no
+//     check but a forced one reads past, so the round that can at last
+//     install its pack again knows of it only from the mark.
+//   - The round repairs every finding on the mark — this check's, and what an
+//     earlier round's check or a scrub found that still waits — but only this
+//     check's while a check of the repository is admitted (entry.verifying):
+//     a repair between that check's listing and its hashing would move a file
+//     it admitted, so the rest wait for its release, which asks the round
+//     again. This check's own are the round's to act on either way, as they
+//     always were.
+func (c *Cache) recordCheck(e *entry, inc *incarnation, forces int, damaged []checkedFile) []checkedFile {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	inc.repair.forces = max(inc.repair.forces-forces, 0)
+	for _, f := range damaged {
+		if inc.repair.found == nil {
+			inc.repair.found = map[string]checkedFile{}
+		}
+		inc.repair.found[f.rel] = f
+	}
+	if e.verifying > 0 {
+		return slices.Clone(damaged)
+	}
+	found := make([]checkedFile, 0, len(inc.repair.found))
+	for _, f := range inc.repair.found {
+		found = append(found, f)
+	}
+	slices.SortFunc(found, func(a, b checkedFile) int { return strings.Compare(a.rel, b.rel) })
+	return found
 }
 
 // countCheck counts one file a check hashed.
@@ -728,14 +783,16 @@ func (c *Cache) countCheck(kind fileKind, outcome checkOutcome, trigger checkTri
 	}
 }
 
-// still is what of ck's findings — its own, a scrub's (repairMark.found) and
-// a confirmed hint's (repairMark.reinstall) — the incarnation at dir still
-// holds at the identity each was found at: the packs to install again, by
-// checksum, each with its first finding, and the derived parts to drop, each
-// with what asked. A REPAIR ACTS ONLY ON THE FILE ITS FINDING NAMES: one
-// replaced or removed since its hash — rewritten by the maintainer, put right
-// by an earlier repair — is no finding any more, and its successor, which no
-// hash of this process read, is checked by the next round or the next scrub.
+// still is what of ck's findings — what a check or a scrub found that waits on
+// the repair mark (repairMark.found: the round's own check's among them, put
+// there by recordCheck) and a confirmed hint's (repairMark.reinstall) — the
+// incarnation at dir still holds at the identity each was found at: the packs
+// to install again, by checksum, each with its first finding, and the derived
+// parts to drop, each with what asked. A REPAIR ACTS ONLY ON THE FILE ITS
+// FINDING NAMES: one replaced or removed since its hash — rewritten by the
+// maintainer, put right by an earlier repair — is no finding any more, and its
+// successor, which no hash of this process read, is checked by the next round
+// or the next scrub.
 func (ck checked) still(im *image, dir string) (map[string]packFinding, derivedDrops) {
 	packs := map[string]packFinding{}
 	var drops derivedDrops

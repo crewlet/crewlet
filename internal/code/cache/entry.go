@@ -396,17 +396,19 @@ type incarnation struct {
 	// taken for repairs, a repository taking pushes answered every request's
 	// damage "as it stands" and never repaired it.
 	repairWrite time.Time
-	// forcedAt and forcedEnded are when its last FORCED round — the in-place
+	// forcedAt and forcedEnded are when its last FORCED check — the in-place
 	// repair of a request's pack or object damage or of a round's own, every
-	// index file held to its trailer — had acted on what it found having
-	// repaired nothing, on Options.Now's clock and as a time.Now() reading,
-	// whatever the round met after (its refs' peel failing on the damage
-	// again); zero when that round repaired something. A repair asked within
+	// index file held to its trailer — ended, on Options.Now's clock and as a
+	// time.Now() reading: recorded as that check's round ends, whatever the
+	// round met after it (its install failing on a pack it adds, its refs'
+	// peel failing on the damage again), since what the check found waits on
+	// the repair mark either way (recordCheck). A repair asked within
 	// ScrubCooldown of it that names no pack it can fetch, with no repair
-	// written since, is not given another (rebuild.go, repairDamaged): the
-	// same files would hash the same, and each forced round reads the rows
-	// whole and holds every reader of the repository while it hashes a
-	// quarter of the copy's bytes.
+	// written since it ended — the round's own repairs included, so a round
+	// that repaired something bounds nothing — is not given another
+	// (rebuild.go, repairDamaged): the same files would hash the same, and
+	// each forced round reads the rows whole and holds every reader of the
+	// repository while it hashes a quarter of the copy's bytes.
 	forcedAt, forcedEnded time.Time
 	// lastUsed is when a reader last took or released it, or made a push's
 	// scratch over it: set as the incarnation is made or read at boot, and

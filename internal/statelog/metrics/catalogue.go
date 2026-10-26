@@ -804,9 +804,10 @@ func Catalogue() []Instrument {
 				"node's own sync's — every index file held to its checksum " +
 				"whatever was checked before; `request`, the scrub that " +
 				"repair runs at once when it found nothing, when it is " +
-				"skipped (a forced round having found nothing within the " +
-				"hour, or every pack it named held off after the store " +
-				"refused it), or when the sync's own git met the damage " +
+				"skipped (a forced check having run within the hour with " +
+				"nothing repaired since, whatever it found and however its " +
+				"sync ended, or every pack it named held off after the " +
+				"store refused it), or when the sync's own git met the damage " +
 				"again past it, and a pack a " +
 				"git process named in words, confirmed against its row and " +
 				"fetched again). Any `damaged` is a disk losing data, or something " +

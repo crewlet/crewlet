@@ -82,7 +82,7 @@ func (sc *scrubbedCopy) used(t *testing.T) {
 func (sc *scrubbedCopy) repaired(t *testing.T) cache.Synced {
 	t.Helper()
 	eventually(t, "the scrub's findings repaired", func() bool {
-		return cache.Settled(sc.c, sc.h.repo) && len(cache.ScrubFindings(sc.c, sc.h.repo)) == 0
+		return cache.Settled(sc.c, sc.h.repo) && len(cache.Findings(sc.c, sc.h.repo)) == 0
 	})
 	return sc.w.sync(t, sc.c, sc.h.repo)
 }
@@ -419,7 +419,7 @@ func TestAStoredReportReinstallsThePackWithOneGet(t *testing.T) {
 		t.Fatalf("the scrub pass scrubbed %v, want %s", done, h.repo)
 	}
 	eventually(t, "the scrub's findings repaired", func() bool {
-		return cache.Settled(c, h.repo) && len(cache.ScrubFindings(c, h.repo)) == 0
+		return cache.Settled(c, h.repo) && len(cache.Findings(c, h.repo)) == 0
 	})
 	after := w.sync(t, c, h.repo)
 	if got := w.objects.total() - gets; got != 2 {
@@ -511,7 +511,7 @@ func TestACrashMakesTheScrubDue(t *testing.T) {
 		t.Fatalf("the crash's scrub pass scrubbed %v, want %s", done, h.repo)
 	}
 	eventually(t, "the scrub's findings repaired", func() bool {
-		return cache.Settled(c, h.repo) && len(cache.ScrubFindings(c, h.repo)) == 0
+		return cache.Settled(c, h.repo) && len(cache.Findings(c, h.repo)) == 0
 	})
 	after := w.sync(t, c, h.repo)
 	if lacks := cloneLacks(t, w, c, after.Dir, h.commits[3]); lacks != "" {
@@ -1049,7 +1049,7 @@ func TestARepairTheStoreCannotServeLeavesTheCopyServing(t *testing.T) {
 		t.Fatalf("the crash's scrub ran for %v", done)
 	}
 	eventually(t, "the repair round", func() bool { return cache.Quiet(c, h.repo) && opens() == 1 })
-	if found := cache.ScrubFindings(c, h.repo); len(found) != 1 {
+	if found := cache.Findings(c, h.repo); len(found) != 1 {
 		t.Fatalf("the scrub's findings are %v once the store refused the pack, want the reverse index kept", found)
 	}
 	if lines := w.logs.lines(t, "code_cache_pack_reinstall_failed"); len(lines) != 1 {
@@ -1090,7 +1090,7 @@ func TestARepairTheStoreCannotServeLeavesTheCopyServing(t *testing.T) {
 	clk.Add(cache.RebuildCooldown)
 	w.sync(t, c, h.repo).Release()
 	eventually(t, "the finding repaired", func() bool {
-		return cache.Settled(c, h.repo) && len(cache.ScrubFindings(c, h.repo)) == 0
+		return cache.Settled(c, h.repo) && len(cache.Findings(c, h.repo)) == 0
 	})
 	if got := opens(); got != 2 {
 		t.Errorf("the store was asked for the pack %d times in all, want twice", got)
@@ -1135,7 +1135,7 @@ func TestAScrubAnsweredFromItsFindingsNamesThePacksItFoundWhole(t *testing.T) {
 		t.Fatalf("the crash's scrub ran for %v", done)
 	}
 	eventually(t, "the repair round", func() bool { return cache.Quiet(c, h.repo) })
-	found := cache.ScrubFindings(c, h.repo)
+	found := cache.Findings(c, h.repo)
 	if len(found) != 1 {
 		t.Fatalf("the scrub's findings are %v once the store refused the pack, want the reverse index kept", found)
 	}
@@ -1154,6 +1154,59 @@ func TestAScrubAnsweredFromItsFindingsNamesThePacksItFoundWhole(t *testing.T) {
 	}
 	if got := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "request"}); got != checked {
 		t.Errorf("the repair's scrub hashed %d files, want none: its findings answer it", got-checked)
+	}
+}
+
+// A PACK A CHECK FOUND DAMAGED IS LINKED BY NO REBUILD. A repair's step 3 asks
+// the copy's scrub, and a scrub whose verdict stands — here one that found
+// nothing within the hour, nothing written since — answers unread, with the
+// packs it found whole for the rebuild past it to link (seedRebuild). But a
+// round's check may have found a pack's index damaged since — damage that
+// landed in place after the scrub read it — and left it on the repair mark,
+// its round having failed at its install before it could put the pack in
+// again (refusePush). That finding answers beside the verdict, its repair the
+// answer, and its pack is no pack the rebuild links: linked, the rebuild
+// carried the damaged index into the copy that replaced the damaged one.
+//
+// Mutations: answer the verdict's packs whole as it found them (the damaged
+// pack among them); answer the verdict without the check's finding.
+func TestAPackACheckFoundDamagedIsLinkedByNoRebuild(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	h := w.measured(t)
+	c := w.open(t, newClock().on)
+	s := w.sync(t, c, h.repo)
+	both := slices.Sorted(slices.Values([]string{h.older.GitChecksum, h.newer.GitChecksum}))
+	if damaged, whole, err := cache.ScrubFor(c, h.repo); err != nil || len(damaged) != 0 ||
+		!slices.Equal(whole, both) {
+		t.Fatalf("the sound copy's scrub answered %v damaged and %v whole (%v), want both packs whole", damaged,
+			whole, err)
+	}
+	gittest.DamageInPlace(t, s.Dir, gittest.IdxTrailer, h.commits[3])
+	w.refusePush(t, h)
+	if _, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing,
+		Began: time.Now()}); !errors.Is(err, errPushRefused) {
+		t.Fatalf("Rebuild: %v, want its forced round failing on the store's refusal of the push", err)
+	}
+	idx := filepath.Join("objects", "pack", "pack-"+h.newer.GitChecksum+".idx")
+	if got := cache.Findings(c, h.repo); !slices.Equal(got, []string{idx}) {
+		t.Errorf("the repair mark holds %v once the forced round failed, want its check's finding %s", got, idx)
+	}
+	checked := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "request"})
+
+	damaged, whole, err := cache.ScrubFor(c, h.repo)
+	if err != nil {
+		t.Fatalf("the repair's scrub: %v", err)
+	}
+	if !slices.Equal(damaged, []string{idx}) {
+		t.Errorf("the repair's scrub answered %v damaged, want the check's finding still waiting, %s", damaged, idx)
+	}
+	if want := []string{h.older.GitChecksum}; !slices.Equal(whole, want) {
+		t.Errorf("the repair's scrub answered %v whole, want %v: every pack its verdict found whole but the one "+
+			"the check found damaged since", whole, want)
+	}
+	if got := counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "request"}); got != checked {
+		t.Errorf("the repair's scrub hashed %d files, want none: its verdict stands", got-checked)
 	}
 }
 

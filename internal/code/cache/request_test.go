@@ -3,6 +3,7 @@ package cache_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -916,5 +917,66 @@ func TestAForcedRoundThatFoundNothingIsNotRepeatedForAnHour(t *testing.T) {
 	}
 	if forced() == beforeForced {
 		t.Error("a failure past the hour ran no forced round: the bound is for ever")
+	}
+}
+
+// A FORCED ROUND THAT FAILS AFTER ITS CHECK STILL BOUNDS THE NEXT. Its check
+// held every index file to its trailer and left what it found on the repair
+// mark, whatever the round met after it — here its install failing on a push
+// the object store will not hand over — so a forced round asked within
+// ScrubCooldown, with nothing written into the copy since, would hash the same
+// files the same and learn nothing the mark does not already hold: a failure
+// of the hour after it goes to the scrub's answer, as one after a forced round
+// that converged having repaired nothing does. Recorded only by a round that
+// got past its install, the verdict sent every request on a copy whose store
+// refused a push to a forced round of its own. Once the hour has passed, a
+// request is given one again. Both shapes of check: one that found nothing,
+// and one that found an index damaged in place — whose pack's GET the case
+// holds until the round has failed (refusePush), so no repair is written.
+//
+// Mutation: record the verdict only for a round that got past its install —
+// the request within the hour runs a forced round.
+func TestAForcedRoundThatFailsAfterItsCheckStillBoundsTheNext(t *testing.T) {
+	t.Parallel()
+	for _, damaged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("damaged=%t", damaged), func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			clk := newClock()
+			h := w.measured(t)
+			c := w.open(t, clk.on)
+			s := w.sync(t, c, h.repo)
+			if damaged {
+				gittest.DamageInPlace(t, s.Dir, gittest.IdxTrailer, h.commits[3])
+			}
+			w.refusePush(t, h)
+			forced := func() uint64 {
+				return counterOf(w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "forced"})
+			}
+			fail := func(what string) {
+				t.Helper()
+				_, err := c.Rebuild(t.Context(), s, cache.Failure{Reason: cache.RebuildMissing, Began: time.Now()})
+				if !errors.Is(err, errPushRefused) {
+					t.Fatalf("%s: %v, want the store's refusal of the push", what, err)
+				}
+			}
+
+			fail("the first request")
+			first := forced()
+			if first == 0 {
+				t.Fatal("the first request ran no forced round: the case tests nothing")
+			}
+			clk.Add(time.Minute)
+			fail("a request within the hour")
+			if got := forced() - first; got != 0 {
+				t.Errorf("a request within the hour of a forced round that failed at its install held %d index "+
+					"files to their trailers in a forced round, want none", got)
+			}
+			clk.Add(cache.ScrubCooldown)
+			fail("a request past the hour")
+			if forced() == first {
+				t.Error("a request past the hour ran no forced round: the bound is for ever")
+			}
+		})
 	}
 }
