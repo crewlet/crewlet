@@ -78,6 +78,11 @@
 // [Route]'s registry and actor are.
 package routing
 
+import (
+	"cmp"
+	"slices"
+)
+
 // Candidate is one handle a record concerns, and why.
 //
 // R is the domain's own reason type; see the package doc for why it is a
@@ -226,17 +231,29 @@ func (b *Builder[R]) claim(c Candidate[R]) {
 // fallback is a chain:
 //
 //  1. Drop the inbox-only candidates — they are a record, not a wake.
-//  2. Drop handles the company no longer employs. registry answers whether
+//  2. Drop the actor, except under a reason wakesActor says is news to them
+//     ([Candidate.Hears]). wakesActor is the domain's, because which of its
+//     reasons are news to the person who made the change is a fact about
+//     those reasons.
+//  3. Drop handles the company no longer employs. registry answers whether
 //     it still does, and a nil registry admits everybody: the honest answer
 //     for a deployment with no organization loaded yet. A departed handle
 //     keeps its notice row, written before anybody asked, and loses only its
 //     wake — a wake addressed to nobody is one nothing reports.
-//  3. Drop the actor, except under a reason wakesActor says is news to them
-//     ([Candidate.Hears]). wakesActor is the domain's, because which of its
-//     reasons are news to the person who made the change is a fact about
-//     those reasons.
-//  4. If no ordinary candidate survived, keep the LOWEST-RANKED surviving
-//     fallback and only that one.
+//  4. If no ordinary candidate survived, keep the LOWEST-RANKED fallback the
+//     company still employs, and only that one.
+//
+// THE REGISTRY IS ASKED ONLY ABOUT A HANDLE ROUTE COULD WAKE: never the
+// actor, never an inbox-only candidate, never a fallback while an ordinary
+// candidate survives, and the chain link by link in rank order, stopping at
+// the first link still employed. Steps 2 and 3 are both filters, so taking
+// the record's own step first changes no answer — it changes what the roster
+// is asked, and that is what a domain counts and pays for: the knowledge base
+// logs every handle the roster refused as a dropped recipient, which asked
+// first would count an actor who has since left, or a departed lead whose
+// copy nobody needed, from a change that reached everyone it should; and a
+// snapshot of hundreds of handles costs a lookup per would-be recipient
+// rather than per name.
 //
 // ONE NAME IS THE ACTOR. A person bound to a seat writes AS that seat — the
 // author iam.ActorFor records for them — so the handle their own gestures
@@ -245,34 +262,34 @@ func (b *Builder[R]) claim(c Candidate[R]) {
 func Route[R ~string](candidates []Candidate[R], registry func(string) bool,
 	actor string, wakesActor func(R) bool) []Candidate[R] {
 
+	employed := func(handle string) bool { return registry == nil || registry(handle) }
 	var ordinary, fallback []Candidate[R]
 	for _, c := range candidates {
-		if c.InboxOnly {
-			continue
-		}
-		if registry != nil && !registry(c.Handle) {
-			continue
-		}
-		if !c.Hears(actor, wakesActor) {
+		if c.InboxOnly || !c.Hears(actor, wakesActor) {
 			continue
 		}
 		if c.FallbackOnly {
+			// NOT ASKED ABOUT YET: a link is a question only once nobody
+			// ordinary survives, which the loop has not finished saying.
 			fallback = append(fallback, c)
 			continue
 		}
-		ordinary = append(ordinary, c)
+		if employed(c.Handle) {
+			ordinary = append(ordinary, c)
+		}
 	}
 	if len(ordinary) > 0 {
 		return ordinary
 	}
-	if len(fallback) == 0 {
-		return nil
-	}
-	best := fallback[0]
-	for _, c := range fallback[1:] {
-		if c.FallbackRank < best.FallbackRank {
-			best = c
+	// THE RANK DECIDES, never the place in the slice a caller assembled —
+	// stable, so two links a caller gave one rank keep the order it gave.
+	slices.SortStableFunc(fallback, func(a, b Candidate[R]) int {
+		return cmp.Compare(a.FallbackRank, b.FallbackRank)
+	})
+	for _, c := range fallback {
+		if employed(c.Handle) {
+			return []Candidate[R]{c}
 		}
 	}
-	return []Candidate[R]{best}
+	return nil
 }

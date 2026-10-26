@@ -298,10 +298,12 @@ func (k ChangeKind) mayFallBack() bool {
 // reason that reaches the person who made the change ([Reason.WakesActor]).
 //
 // Its four steps are [routing.Route]'s: drop the inbox-only candidates, drop
-// handles the company no longer employs, drop the actor except under
-// `unblocked`, and keep the lowest-ranked surviving fallback only when no
+// the actor except under `unblocked`, drop handles the company no longer
+// employs, and keep the lowest-ranked fallback still employed only when no
 // ordinary candidate survived — the step that is the whole reason the
-// fallback [Candidates] offers is a list.
+// fallback [Candidates] offers is a list. The registry is asked only about a
+// handle those steps could wake, never about the actor or about a chain
+// somebody ordinary made unnecessary.
 func Route(candidates []routing.Candidate[Reason], registry func(string) bool,
 	actor string) []routing.Candidate[Reason] {
 

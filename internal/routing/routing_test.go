@@ -158,6 +158,83 @@ func TestAFallbackReachesOnlyWhenNobodyOrdinarySurvives(t *testing.T) {
 	}
 }
 
+// THE ROSTER IS ASKED ONLY ABOUT A HANDLE ROUTE COULD WAKE.
+//
+// What a registry is asked is what a domain counts and pays for: the knowledge
+// base logs every handle its roster refused as a dropped recipient, and a code
+// change's snapshot names hundreds of handles, each a lookup. So the actor is
+// never asked — the record says who they are, and they are dropped whatever
+// the roster answers — nor an inbox-only candidate, which is never woken; a
+// fallback chain is not asked about while an ordinary candidate survives; and
+// when none does, the chain is asked link by link in RANK order, only until
+// one link is still employed. Asked first, the actor who has since left would
+// be counted as a recipient dropped from a change that reached everyone it
+// should, and so would a departed lead whose copy nobody needed.
+func TestTheRosterIsAskedOnlyAboutAHandleThatCouldBeWoken(t *testing.T) {
+	t.Parallel()
+	build := func(ordinary ...string) []routing.Candidate[reason] {
+		var b routing.Builder[reason]
+		b.AddAll(ordinary, watching, false)
+		b.InboxOnly("ida", unwatched)
+		b.Fallback(leadFallback, "unit-lead", "project-lead", "vp")
+		return b.Candidates()
+	}
+	var repair routing.Builder[reason]
+	repair.Add("ana", unblocked, false)
+
+	for _, c := range []struct {
+		name  string
+		cands []routing.Candidate[reason]
+		left  []string // the handles the roster no longer has
+		actor string
+		woke  []string
+		asked []string
+	}{
+		{"an ordinary survivor: neither the actor nor the chain is asked",
+			build("bo", "ana", "cy"), []string{"bo"}, "bo",
+			[]string{"ana", "cy"}, []string{"ana", "cy"}},
+		{"nobody ordinary: the chain is asked until a link is employed",
+			build("bo"), []string{"unit-lead"}, "bo",
+			[]string{"project-lead"}, []string{"unit-lead", "project-lead"}},
+		{"a departed ordinary candidate is asked, and then the chain",
+			build("gone"), []string{"gone"}, "bo",
+			[]string{"unit-lead"}, []string{"gone", "unit-lead"}},
+		{"a link that is the actor is passed over unasked",
+			build(), nil, "unit-lead",
+			[]string{"project-lead"}, []string{"project-lead"}},
+		{"every link gone: each is asked once, in rank order",
+			build(), []string{"unit-lead", "project-lead", "vp"}, "bo",
+			nil, []string{"unit-lead", "project-lead", "vp"}},
+		// THE RANK ORDERS THE ASKING, never the place in the slice a
+		// caller assembled.
+		{"in rank order, wherever a link sits", []routing.Candidate[reason]{
+			{Handle: "second", Reason: leadFallback, FallbackOnly: true, FallbackRank: 1},
+			{Handle: "first", Reason: leadFallback, FallbackOnly: true, FallbackRank: 0},
+		}, []string{"first"}, "bo",
+			[]string{"second"}, []string{"first", "second"}},
+		// AND THE ACTOR IS ASKED about where a reason wakes them, because
+		// there they are somebody Route could wake.
+		{"the actor under a reason that wakes them is a recipient like any",
+			repair.Candidates(), nil, "ana",
+			[]string{"ana"}, []string{"ana"}},
+	} {
+		var asked []string
+		registry := func(handle string) bool {
+			asked = append(asked, handle)
+			return !slices.Contains(c.left, handle)
+		}
+		got := handlesOf(routing.Route(c.cands, registry, c.actor, newsToTheActor))
+		if !slices.Equal(got, c.woke) {
+			t.Errorf("%s: woke %v, want %v", c.name, got, c.woke)
+		}
+		if !slices.Equal(asked, c.asked) {
+			t.Errorf("%s: the roster was asked about %v, want %v — only a "+
+				"handle Route could wake is a question worth asking", c.name,
+				asked, c.asked)
+		}
+	}
+}
+
 // A FALLBACK'S RANK IS ITS PLACE IN THE CHAIN, counted across every chain the
 // builder was offered. An empty link and a link an earlier reason already
 // named add nothing and keep their places, so the next lead is ranked by where
