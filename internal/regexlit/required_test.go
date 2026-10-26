@@ -1,7 +1,6 @@
 package regexlit
 
 import (
-	"fmt"
 	"maps"
 	"math/rand/v2"
 	"regexp"
@@ -11,6 +10,8 @@ import (
 	"testing"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/regexlit/regexlittest"
 )
 
 // gatePatterns are the expressions the tree's gates scan with, as they were
@@ -114,7 +115,7 @@ func TestRequiredAdmitsEveryMatch(t *testing.T) {
 	}
 	slices.Sort(patterns)
 	for range 1000 {
-		patterns = append(patterns, randomPattern(rng, 3))
+		patterns = append(patterns, vocabulary.Pattern(rng, 3))
 	}
 
 	matched, filtered, rejected := 0, 0, 0
@@ -134,7 +135,7 @@ func TestRequiredAdmitsEveryMatch(t *testing.T) {
 		for range 20 {
 			var b strings.Builder
 			b.WriteString(noise(rng))
-			generate(rng, parsed, &b)
+			regexlittest.Generate(rng, parsed, &b)
 			b.WriteString(noise(rng))
 			text := b.String()
 			if !re.MatchString(text) {
@@ -167,43 +168,6 @@ func TestRequiredAdmitsEveryMatch(t *testing.T) {
 		"%d non-matching texts skipped", len(patterns), filtered, matched, rejected)
 }
 
-// randomPattern writes an expression from the constructs the derivation has
-// a rule for, nested to depth.
-func randomPattern(rng *rand.Rand, depth int) string {
-	var b strings.Builder
-	switch rng.IntN(6) {
-	case 0:
-		b.WriteString("(?i)")
-	case 1:
-		b.WriteString("(?s)")
-	case 2:
-		b.WriteString("(?m)")
-	}
-	b.WriteString(sequence(rng, depth))
-	return b.String()
-}
-
-func sequence(rng *rand.Rand, depth int) string {
-	var b strings.Builder
-	for range 1 + rng.IntN(4) {
-		b.WriteString(atom(rng, depth))
-		switch rng.IntN(10) {
-		case 0:
-			b.WriteString("*")
-		case 1:
-			b.WriteString("+")
-		case 2:
-			b.WriteString("?")
-		case 3:
-			fmt.Fprintf(&b, "{%d}", rng.IntN(3))
-		case 4:
-			lo := rng.IntN(3)
-			fmt.Fprintf(&b, "{%d,%d}", lo, lo+rng.IntN(3))
-		}
-	}
-	return b.String()
-}
-
 // words are literal runs, each with a rune whose folding is the hard case: an
 // ASCII letter with a non-ASCII partner, a non-ASCII orbit that lowers
 // inconsistently, U+FFFD, and punctuation the gates write.
@@ -218,27 +182,10 @@ var classes = []string{
 	"[FS]", `[A-Za-z0-9_]`, ".", "[σς]",
 }
 
-func atom(rng *rand.Rand, depth int) string {
-	choice := rng.IntN(10)
-	if depth <= 0 && choice >= 6 {
-		choice = rng.IntN(6)
-	}
-	switch choice {
-	case 0, 1, 2:
-		return regexp.QuoteMeta(words[rng.IntN(len(words))])
-	case 3, 4:
-		return classes[rng.IntN(len(classes))]
-	case 5:
-		return []string{`\b`, `\B`, "^", "$"}[rng.IntN(4)]
-	case 6:
-		return "(" + sequence(rng, depth-1) + ")"
-	case 7:
-		return "(?i:" + sequence(rng, depth-1) + ")"
-	case 8:
-		return "(?:" + sequence(rng, depth-1) + "|" + sequence(rng, depth-1) + ")"
-	}
-	return "(?:" + sequence(rng, depth-1) + "|" + sequence(rng, depth-1) + "|" +
-		sequence(rng, depth-1) + ")"
+// vocabulary is what the generated patterns are written from: the words and
+// classes above, and a flag in three of every six.
+var vocabulary = regexlittest.Vocabulary{
+	Flags: []string{"(?i)", "(?s)", "(?m)", "", "", ""}, Words: words, Classes: classes,
 }
 
 // noise is context a match is embedded in: words, separators, a newline, the
@@ -250,82 +197,6 @@ func noise(rng *rand.Rand) string {
 		b.WriteString(pieces[rng.IntN(len(pieces))])
 	}
 	return b.String()
-}
-
-// generate writes a string re matches, choosing at random wherever re allows a
-// choice: a member of a folded rune's orbit, a rune of a class (or a byte that
-// is not UTF-8, where the class holds U+FFFD), a branch, a count.
-func generate(rng *rand.Rand, re *syntax.Regexp, b *strings.Builder) {
-	switch re.Op {
-	case syntax.OpLiteral:
-		for _, r := range re.Rune {
-			if re.Flags&syntax.FoldCase != 0 {
-				orbit := orbitOf(r)
-				r = orbit[rng.IntN(len(orbit))]
-			}
-			writeRune(rng, b, r)
-		}
-	case syntax.OpCharClass:
-		pairs := len(re.Rune) / 2
-		if pairs == 0 {
-			return
-		}
-		i := rng.IntN(pairs)
-		lo, hi := re.Rune[2*i], re.Rune[2*i+1]
-		span := int(min(hi-lo, 300))
-		writeRune(rng, b, lo+rune(rng.IntN(span+1)))
-	case syntax.OpAnyCharNotNL:
-		writeRune(rng, b, []rune{'q', 'ſ', '\U0000212A', utf8.RuneError}[rng.IntN(4)])
-	case syntax.OpAnyChar:
-		writeRune(rng, b, []rune{'q', '\n', 'ſ', utf8.RuneError}[rng.IntN(4)])
-	case syntax.OpCapture:
-		generate(rng, re.Sub[0], b)
-	case syntax.OpStar:
-		for range rng.IntN(3) {
-			generate(rng, re.Sub[0], b)
-		}
-	case syntax.OpPlus:
-		for range 1 + rng.IntN(2) {
-			generate(rng, re.Sub[0], b)
-		}
-	case syntax.OpQuest:
-		if rng.IntN(2) == 0 {
-			generate(rng, re.Sub[0], b)
-		}
-	case syntax.OpRepeat:
-		n := re.Min
-		if re.Max > re.Min {
-			n += rng.IntN(re.Max - re.Min + 1)
-		}
-		for range n {
-			generate(rng, re.Sub[0], b)
-		}
-	case syntax.OpConcat:
-		for _, sub := range re.Sub {
-			generate(rng, sub, b)
-		}
-	case syntax.OpAlternate:
-		generate(rng, re.Sub[rng.IntN(len(re.Sub))], b)
-	}
-}
-
-// writeRune writes r — and for U+FFFD, which a pattern matches against any
-// byte that is not UTF-8, sometimes such a byte instead.
-func writeRune(rng *rand.Rand, b *strings.Builder, r rune) {
-	if r == utf8.RuneError && rng.IntN(2) == 0 {
-		b.WriteByte(0xff)
-		return
-	}
-	b.WriteRune(r)
-}
-
-// orbitOf is every rune case-folded together with r, r included.
-func orbitOf(r rune) []rune {
-	out := []rune{r}
-	for m := unicode.SimpleFold(r); m != r; m = unicode.SimpleFold(m) {
-		out = append(out, m)
-	}
-	return out
 }
 
 // escapeByDefinition reports whether r, whose orbit is orbit, is an escape as
@@ -364,7 +235,7 @@ func TestTheFoldedComparisonIsSoundForEveryRune(t *testing.T) {
 	escaped := func(r rune) bool { return HasEscape(utf8.AppendRune(encoded[:0], r)) }
 	compared, refused := 0, 0
 	for r := rune(0); r <= unicode.MaxRune; r++ {
-		orbit := orbitOf(r)
+		orbit := regexlittest.Orbit(r)
 		switch is, want := escaped(r), escapeByDefinition(r, orbit); {
 		case is && !want:
 			t.Fatalf("HasEscape reports %q, which folds with no ASCII letter it "+
@@ -477,7 +348,7 @@ func TestTermsAreTheClausesPieces(t *testing.T) {
 	rng := rand.New(rand.NewPCG(20261026, 3))
 	patterns := slices.Sorted(maps.Keys(gatePatterns))
 	for range 1000 {
-		patterns = append(patterns, randomPattern(rng, 3))
+		patterns = append(patterns, vocabulary.Pattern(rng, 3))
 	}
 	plain, folded, compared := 0, 0, 0
 	for _, pattern := range patterns {
@@ -516,7 +387,7 @@ func TestTermsAreTheClausesPieces(t *testing.T) {
 			var b strings.Builder
 			b.WriteString(noise(rng))
 			if rng.IntN(4) > 0 {
-				generate(rng, parsed, &b)
+				regexlittest.Generate(rng, parsed, &b)
 			}
 			b.WriteString(noise(rng))
 			text := b.String()
@@ -594,7 +465,7 @@ func TestALineLocalPatternFindsTheSameMatchesLineByLine(t *testing.T) {
 	rng := rand.New(rand.NewPCG(20261008, 2))
 	local, compared := 0, 0
 	for range 1000 {
-		pattern := randomPattern(rng, 3)
+		pattern := vocabulary.Pattern(rng, 3)
 		re := regexp.MustCompile(pattern)
 		if !LineLocal(re) {
 			continue
@@ -608,7 +479,7 @@ func TestALineLocalPatternFindsTheSameMatchesLineByLine(t *testing.T) {
 			var b strings.Builder
 			for range 1 + rng.IntN(4) {
 				b.WriteString(noise(rng))
-				generate(rng, parsed, &b)
+				regexlittest.Generate(rng, parsed, &b)
 				b.WriteString([]string{"\n", " ", "\n\n", ""}[rng.IntN(4)])
 			}
 			text := b.String()
