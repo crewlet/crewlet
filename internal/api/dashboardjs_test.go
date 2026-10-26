@@ -1018,7 +1018,8 @@ func mustFetch(t *testing.T, a *api.App, url, wantType string) []byte {
 // The dashboard's size budget: ONE set of numbers, and this file is where
 // they live. dashboard/vite.config.ts's chunkSizeWarningLimit is derived from
 // lazyChunkBudget and names this test as its authority; the prose in
-// docs/reference/dashboard-design.md ("How it is built") quotes these values.
+// docs/reference/dashboard-design.md ("How it is built") quotes these values,
+// and TestTheDesignReferenceQuotesTheBudgets holds its table to them.
 //
 // Script and stylesheet sizes are what the engine SENDS a browser that asks
 // for gzip, read off its own answer (servedSize): the file compressed at
@@ -1227,6 +1228,103 @@ func TestTheDashboardFitsItsBudget(t *testing.T) {
 		t.Errorf("static/dashboard is %s, over its %s: every engine binary and image carries "+
 			"it, opened or not", kib(tree), kib(treeBudget))
 	}
+}
+
+// TestTheDesignReferenceQuotesTheBudgets holds the design reference's budget
+// table (docs/reference/dashboard-design.md, "The bundle has a budget") to the
+// four constants above: a row for each and none other, each quoting its
+// constant in the unit the row is written in.
+//
+// The page is where a reader sizing a deployment's first paint learns the
+// budget, and it drifted while nothing read it: the initial load stayed at
+// 316 KiB through four moves of its constant, to 324, and the tree at 4 MiB
+// after its constant moved to 4.25. A move of a constant now carries the page
+// with it, as the history beside each constant already asks.
+//
+// Mutation: move initialBudget and leave the page, and its row quotes the old
+// value; drop a row, and the table has three.
+func TestTheDesignReferenceQuotesTheBudgets(t *testing.T) {
+	t.Parallel()
+	page := filepath.Join(sourcetree.Root(t), "docs", "reference", "dashboard-design.md")
+	raw, err := os.ReadFile(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each row by the words its first cell opens with, and the budget it
+	// quotes in the unit the page writes it in.
+	want := []struct{ row, budget string }{
+		{"The initial load:", quotedBudget(initialBudget, 1<<10, "KiB")},
+		{"Each chunk fetched later:", quotedBudget(lazyChunkBudget, 1<<10, "KiB")},
+		{"Every font face", quotedBudget(fontBudget, 1000, "KB")},
+		{"The whole of `static/dashboard`", quotedBudget(treeBudget, 1<<20, "MiB")},
+	}
+	rows := budgetTable(t, string(raw))
+	if len(rows) != len(want) {
+		t.Errorf("%s: the budget table has %d rows, want one for each of the %d budgets",
+			page, len(rows), len(want))
+	}
+	for _, w := range want {
+		found := false
+		for _, r := range rows {
+			if !strings.HasPrefix(r[0], w.row) {
+				continue
+			}
+			found = true
+			if r[1] != w.budget {
+				t.Errorf("%s: the budget table quotes %q for %q, want its constant, %q",
+					page, r[1], w.row, w.budget)
+			}
+		}
+		if !found {
+			t.Errorf("%s: the budget table has no row opening %q", page, w.row)
+		}
+	}
+}
+
+// quotedBudget is a budget of n bytes as the design reference writes it: in
+// units of size bytes, the unit named.
+func quotedBudget(n, size int, unit string) string {
+	return fmt.Sprintf("%g %s", float64(n)/float64(size), unit)
+}
+
+// budgetTable is the rows of the design reference's table under "The bundle
+// has a budget", each as its four cells trimmed.
+func budgetTable(t *testing.T, page string) [][]string {
+	t.Helper()
+	const title = "**The bundle has a budget, measured as the engine sends it.**"
+	start := strings.Index(page, title)
+	if start < 0 {
+		t.Fatalf("the design reference has no paragraph %s", title)
+	}
+	var rows [][]string
+	inTable := false
+	for _, line := range strings.Split(page[start:], "\n") {
+		if !strings.HasPrefix(line, "|") {
+			if inTable {
+				break
+			}
+			continue
+		}
+		if !inTable {
+			inTable = true
+			continue // the header
+		}
+		if strings.HasPrefix(line, "|---") {
+			continue
+		}
+		cells := strings.Split(strings.Trim(line, "|"), "|")
+		if len(cells) != 4 {
+			t.Fatalf("the budget table's row %q has %d cells, want 4", line, len(cells))
+		}
+		for i := range cells {
+			cells[i] = strings.TrimSpace(cells[i])
+		}
+		rows = append(rows, cells)
+	}
+	if !inTable {
+		t.Fatalf("the design reference's paragraph %s is followed by no table", title)
+	}
+	return rows
 }
 
 // kib renders a byte count the way the budgets are written.
