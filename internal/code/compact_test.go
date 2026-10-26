@@ -265,11 +265,18 @@ func sorted(ids ...string) []string {
 
 // A COMPACTION IS REFUSED FOR WHAT ITS REPOSITORY IS: a deleted one is
 // repo_deleted, told — through the committer's own retention — when its
-// purge may begin, as a push to it is; an ARCHIVED one is compacted, since it
-// is still read and every cold sync of it pays for every pack it holds.
+// purge may begin, as a push to it is; one BEING PURGED, one PURGED to its
+// marker and an id no repository ever had are repo_deleted too, each in the
+// sentence of its own state (code.RepoGone), and none appends a record; an
+// ARCHIVED one is compacted, since it is still read and every cold sync of it
+// pays for every pack it holds.
 //
-// Mutation: refuse an archived repository's compaction as a push to it is
-// refused, and an archived repository is never compacted.
+// Mutations: refuse an archived repository's compaction as a push to it is
+// refused, and an archived repository is never compacted; drop the rule's
+// check of what the repository is, and a compaction is decided and applied
+// against one being purged, whose packs are still live between the purge's
+// parts, while one purged or never created is answered stale — as if a next
+// pass could plan again.
 func TestACompactionIsRefusedForWhatItsRepositoryIs(t *testing.T) {
 	t.Parallel()
 	const retention = 11 * 24 * time.Hour
@@ -315,6 +322,64 @@ func TestACompactionIsRefusedForWhatItsRepositoryIs(t *testing.T) {
 		res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
 		requireApplied(t, res, err)
 	})
+	const never = "0190f3c4-0000-7000-8000-00000000dead"
+	for name, tc := range map[string]struct {
+		// settle readies the node's rows and answers the repository a
+		// compaction then names, and the packs it retires.
+		settle func(t *testing.T, n *node) (string, []string)
+		says   string
+	}{
+		"purging": {func(t *testing.T, n *node) (string, []string) {
+			repo, ids := packedRepo(t, n, "web", 2)
+			n.deleteAt(repo, harnessAt.Add(-2*keep))
+			// ONE ROW PAST A PART, so the purge's first step is a part —
+			// its pushes first, its packs left live — and the repository
+			// is left purging.
+			n.seedRows(repo, code.PurgePartRows+1, 0, 0)
+			if res, err := n.store.PurgeStep(t.Context(), repo, keep); err != nil || res.Done {
+				t.Fatalf("PurgeStep = %+v, %v; want one part, the purge not done", res, err)
+			}
+			if row, found := n.repo("web"); !found || row.status != string(code.RepoStatusPurging) {
+				t.Fatalf("the premise: web is %+v (found %v), want it purging", row, found)
+			}
+			return repo, ids
+		}, "repository web is being purged"},
+		"purged": {func(t *testing.T, n *node) (string, []string) {
+			repo, ids := packedRepo(t, n, "web", 2)
+			n.deleteAt(repo, harnessAt.Add(-2*keep))
+			var p purged
+			if report, err := passOver(n.store, n.reader, &p).Pass(t.Context()); err != nil ||
+				!slices.Equal(report.Purged, []string{"web"}) {
+				t.Fatalf("Pass = %+v, %v; want web purged", report, err)
+			}
+			return repo, ids
+		}, "repository web was purged"},
+		"never created": {func(_ *testing.T, n *node) (string, []string) {
+			// ANOTHER REPOSITORY'S RECORD, so the log holds a position the
+			// compaction names as planned at, as every builder's does.
+			n.ensure("web", suiteSettings(), t1)
+			return never, sorted(uuid.Must(uuid.NewV7()).String(), uuid.Must(uuid.NewV7()).String())
+		}, "repository " + never + " does not exist"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n := newNode(t)
+			repo, ids := tc.settle(t, n)
+			c, _ := committerOn(t, n, n.pub)
+			before := n.end()
+			res, err := c.ProposeCompaction(t.Context(), compactionOf(n, repo, ids, 2, harnessAt))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Refusal != code.RefusalRepoDeleted || res.Outcome != "" ||
+				!strings.Contains(res.Detail, tc.says) {
+				t.Fatalf("the compaction answered %+v, want repo_deleted saying %q", res, tc.says)
+			}
+			if got := n.end(); got != before {
+				t.Fatalf("a refused compaction appended %d records, want none", got-before)
+			}
+		})
+	}
 }
 
 // A COMPACTION THAT INVENTS OBJECTS IS REFUSED BEFORE ITS RECORD: outputs that
