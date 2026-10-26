@@ -3,13 +3,16 @@
 package sandbox
 
 import (
+	"errors"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // The cases here hold the engine's host-side access to a local box's files to
@@ -21,13 +24,16 @@ import (
 // outside the box was read, written or made.
 
 // outsideTheBox is a directory on the engine host beside the box, holding one
-// file the box must never be able to have the engine read, and what it holds.
+// file, `beside`, which a case holds every access to leave unread and unchanged.
 func outsideTheBox(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "secret"), "an engine host file")
+	writeFile(t, filepath.Join(dir, "beside"), besideTheBox)
 	return dir
 }
+
+// besideTheBox is what the file beside the box holds.
+const besideTheBox = "a file beside the box"
 
 // outsideHolds is every name under dir, so a case can tell that an access
 // through a link made nothing there.
@@ -91,8 +97,8 @@ var localBoxes = map[string]struct {
 // beside the box is neither read nor written.
 //
 // Mutation: open the file or make the directory by its joined path rather
-// than through the home's root, and the write lands outside the box and the
-// read hands back the host file.
+// than through the home's root, and the accesses reach the directory beside
+// the box rather than being refused.
 func TestALocalBoxReachesItsFilesOnlyBeneathItsHome(t *testing.T) {
 	t.Parallel()
 	for cell, kind := range localBoxes {
@@ -121,30 +127,30 @@ func TestALocalBoxReachesItsFilesOnlyBeneathItsHome(t *testing.T) {
 				}
 				refused("WriteFile", box.WriteFile(ctx, in("brief.md"), []byte("the brief")))
 				refused("WriteFile into a directory it makes", box.WriteFile(ctx, in("tools/shim"), []byte("#!/bin/sh")))
-				got, err := box.ReadFile(ctx, in("secret"))
+				got, err := box.ReadFile(ctx, in("beside"))
 				refused("ReadFile", err)
-				if strings.Contains(string(got), "engine host") {
-					t.Errorf("ReadFile handed back the host file: %q", got)
+				if strings.Contains(string(got), besideTheBox) {
+					t.Errorf("ReadFile answered the content beside the box, not the refusal: %q", got)
 				}
-				r, err := box.OpenFile(ctx, in("secret"))
+				r, err := box.OpenFile(ctx, in("beside"))
 				if err == nil {
 					raw, _ := io.ReadAll(r)
 					_ = r.Close()
 					t.Errorf("OpenFile through the link was not refused, and read %q", raw)
 				}
 				refused("OpenFile", err)
-				tail, err := box.ReadTail(ctx, in("secret"), 64)
+				tail, err := box.ReadTail(ctx, in("beside"), 64)
 				refused("ReadTail", err)
-				if strings.Contains(string(tail.Data), "engine host") {
-					t.Errorf("ReadTail handed back the host file: %q", tail.Data)
+				if strings.Contains(string(tail.Data), besideTheBox) {
+					t.Errorf("ReadTail answered the content beside the box, not the refusal: %q", tail.Data)
 				}
 
 				if after := outsideHolds(t, outside); !slices.Equal(after, before) {
-					t.Errorf("the engine host beside the box now holds %v, want %v: an access went through the link",
-						after, before)
+					t.Errorf("the directory beside the box now holds %v, want %v: nothing outside the "+
+						"home is made", after, before)
 				}
-				if got := readFile(t, filepath.Join(outside, "secret")); got != "an engine host file" {
-					t.Errorf("the host file was rewritten to %q", got)
+				if got := readFile(t, filepath.Join(outside, "beside")); got != besideTheBox {
+					t.Errorf("the file beside the box now holds %q: nothing outside the home is written", got)
 				}
 			})
 		}
@@ -171,7 +177,7 @@ func TestADirectBoxMakesACommandsDirectoryOnlyBeneathItsHome(t *testing.T) {
 		t.Fatalf("Exec in a directory under the link = %v; want it refused as an escape", err)
 	}
 	if after := outsideHolds(t, outside); !slices.Equal(after, before) {
-		t.Errorf("the engine host beside the box now holds %v, want %v", after, before)
+		t.Errorf("the directory beside the box now holds %v, want %v", after, before)
 	}
 }
 
@@ -207,12 +213,13 @@ func TestALinkThatStaysInTheHomeIsFollowedWhereItLeads(t *testing.T) {
 }
 
 // A LOGIN IS WRITTEN BACK ONLY FROM INSIDE THE BOX. The teardown reads the
-// login the run left after the run had the home to itself; with the login's
-// directory made a link to files on the engine host, those files must not be
-// read as the run's refresh and copied over the shared login.
+// login the run left after the run had the home to itself, and only beneath the
+// home: a login directory that is a link out of it holds no login of the run's,
+// so the shared login keeps its seed and the files the link leads to are left
+// as they are.
 //
-// Mutation: read the box's copy by its joined path, and the host's files
-// become the shared login.
+// Mutation: read the box's copy by its joined path, and the shared login takes
+// the files beside the box.
 func TestATeardownWritesBackNoLoginReadFromOutsideTheBox(t *testing.T) {
 	t.Parallel()
 	dir, files := twoFileBox(t)
@@ -222,7 +229,7 @@ func TestATeardownWritesBackNoLoginReadFromOutsideTheBox(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	outside := t.TempDir()
-	putLogin(t, outside, signedIn("an engine host file"))
+	putLogin(t, outside, signedIn("beside the box"))
 	seededDir := filepath.Join(box.Home(), ".fake")
 	if err := os.RemoveAll(seededDir); err != nil {
 		t.Fatal(err)
@@ -236,8 +243,8 @@ func TestATeardownWritesBackNoLoginReadFromOutsideTheBox(t *testing.T) {
 	if got, want := sharedNow(t, dir), signedIn("seed"); !maps.Equal(got, want) {
 		t.Errorf("the shared login is %v, want the seed %v untouched", got, want)
 	}
-	if got := sharedNow(t, outside); !maps.Equal(got, signedIn("an engine host file")) {
-		t.Errorf("the engine host's files were changed: %v", got)
+	if got := sharedNow(t, outside); !maps.Equal(got, signedIn("beside the box")) {
+		t.Errorf("the files beside the box were changed: %v", got)
 	}
 }
 
@@ -267,7 +274,7 @@ func TestASeededLoginFileIsWrittenOnlyBeneathTheHome(t *testing.T) {
 		t.Fatal("a login file was written through a link out of the box")
 	}
 	if after := outsideHolds(t, outside); !slices.Equal(after, before) {
-		t.Errorf("the engine host beside the box now holds %v, want %v", after, before)
+		t.Errorf("the directory beside the box now holds %v, want %v", after, before)
 	}
 }
 
@@ -291,6 +298,104 @@ func TestTheMountProofWritesNothingThroughALinkTheContainerMade(t *testing.T) {
 		t.Errorf("error = %v; want the box refused as one the engine cannot manage", err)
 	}
 	if after := outsideHolds(t, outside); !slices.Equal(after, before) {
-		t.Errorf("the engine host beside the box now holds %v, want %v", after, before)
+		t.Errorf("the directory beside the box now holds %v, want %v", after, before)
 	}
+}
+
+// A DIRECTORY ON THE WAY THAT IS NOT ONE IS REFUSED AT ONCE. The root opens
+// every directory on a path as a directory, the one the file is in too, so
+// anything else the box put in its place — a named pipe where `.crewlet` was, or
+// a file — is refused before anything is opened, saying what it is: an open of
+// a pipe there waits for a writer, uncancellably, and every read, write and
+// teardown behind it waits too. Every access answers at once — the reads with
+// [ErrNotRegularFile] naming the path and what it is — and so does the
+// teardown's write-back with a pipe in place of the login's directory, leaving
+// the shared login as it was.
+//
+// Mutation: open the directory the file is in as root.Open does — as it is,
+// without O_DIRECTORY — and every access to a file under the pipe waits.
+func TestALocalBoxRefusesWhatIsNotADirectoryOnTheWayAtOnce(t *testing.T) {
+	t.Parallel()
+	kinds := map[string]func(t *testing.T, host string){
+		"a named pipe": func(t *testing.T, host string) {
+			if err := syscall.Mkfifo(host, 0o600); err != nil {
+				t.Fatalf("mkfifo: %v", err)
+			}
+		},
+		"a regular file": func(t *testing.T, host string) { writeFile(t, host, "not a directory") },
+	}
+	within := func(t *testing.T, what string, fn func() error) error {
+		t.Helper()
+		answered := make(chan error, 1)
+		go func() { answered <- fn() }()
+		select {
+		case err := <-answered:
+			return err
+		case <-time.After(10 * time.Second):
+			// A blocked open is never released, so the test binary is what
+			// ends it; the red case is the point.
+			t.Fatalf("%s has not answered in 10s", what)
+			return nil
+		}
+	}
+	for cell, kind := range localBoxes {
+		for what, create := range kinds {
+			t.Run(cell+"/"+what, func(t *testing.T) {
+				t.Parallel()
+				ctx := t.Context()
+				box := kind.fresh(t)
+				home := layoutOf(t, box).home()
+				if err := os.RemoveAll(filepath.Join(home, ".crewlet")); err != nil {
+					t.Fatal(err)
+				}
+				create(t, filepath.Join(home, ".crewlet"))
+				path := box.Home() + "/.crewlet/done"
+				reads := map[string]func() error{
+					"ReadFile": func() error { _, err := box.ReadFile(ctx, path); return err },
+					"ReadTail": func() error { _, err := box.ReadTail(ctx, path, 64); return err },
+					"OpenFile": func() error {
+						r, err := box.OpenFile(ctx, path)
+						if err == nil {
+							_, err = io.ReadAll(r)
+							_ = r.Close()
+						}
+						return err
+					},
+				}
+				for read, fn := range reads {
+					err := within(t, read, fn)
+					if !errors.Is(err, ErrNotRegularFile) || !strings.Contains(err.Error(), what) ||
+						!strings.Contains(err.Error(), "not a directory") {
+						t.Errorf("%s under %s = %v; want ErrNotRegularFile saying what is on the way", read, what, err)
+					}
+				}
+				if err := within(t, "WriteFile", func() error {
+					return box.WriteFile(ctx, path, []byte("x"))
+				}); err == nil {
+					t.Errorf("WriteFile under %s was not refused", what)
+				}
+			})
+		}
+	}
+
+	t.Run("the teardown's write-back", func(t *testing.T) {
+		t.Parallel()
+		dir, files := twoFileBox(t)
+		putLogin(t, dir, signedIn("seed"))
+		box, err := newDirect(t).Create(t.Context(), Spec{CredentialFiles: files})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		seededDir := filepath.Join(box.Home(), ".fake")
+		if err := os.RemoveAll(seededDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Mkfifo(seededDir, 0o600); err != nil {
+			t.Fatalf("mkfifo: %v", err)
+		}
+		_ = within(t, "Close", func() error { return box.Close(t.Context()) })
+		if got, want := sharedNow(t, dir), signedIn("seed"); !maps.Equal(got, want) {
+			t.Errorf("the shared login is %v, want the seed %v untouched", got, want)
+		}
+	})
 }

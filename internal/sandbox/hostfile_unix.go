@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 
@@ -38,6 +39,13 @@ import (
 // somewhere beneath itself, and refuses the rest ([os.Root]). A path checked
 // and then opened by name was two walks of whatever the names held at each
 // moment, and the box's side writes the names.
+//
+// AND EACH OF THEM IS OPENED AS A DIRECTORY, the last one too, so anything
+// else in its place — a named pipe where `.crewlet` was, a device, a file — is
+// refused at once rather than opened: the root opens the directories above the
+// last as directories, and the last as it is asked to, which a plain open of a
+// pipe there turned back into the wait above. Refused, it is named for what it
+// is ([notDirOnWay]).
 //
 // AND NOT THROUGH A LINK AT THE LAST ELEMENT, not even one inside the box:
 // the file is opened in the directory the root reached with O_NOFOLLOW, so a
@@ -73,8 +81,13 @@ func openWritableIn(root *os.Root, name string) (*os.File, error) {
 // descriptor.
 func openInAs(root *os.Root, name string, mode int, write bool) (*os.File, error) {
 	host := filepath.Join(root.Name(), name)
-	dir, err := root.Open(filepath.Dir(name))
+	dir, err := root.OpenFile(filepath.Dir(name), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NONBLOCK, 0)
 	if err != nil {
+		if errors.Is(err, unix.ENOTDIR) {
+			if refused := notDirOnWay(root, filepath.Dir(name), write); refused != nil {
+				return nil, refused
+			}
+		}
 		return nil, err
 	}
 	defer func() { _ = dir.Close() }()
@@ -129,6 +142,65 @@ func openInAs(root *os.Root, name string, mode int, write bool) (*os.File, error
 		return nil, &fs.PathError{Op: "open", Path: host, Err: err}
 	}
 	return os.NewFile(uintptr(fd), host), nil
+}
+
+// notDirOnWay is the refusal of a path whose way to its file holds something
+// other than a directory: the first such component of dir, named for what it
+// is, or nil where every component is a directory by now, or one cannot be
+// looked at — the open's own error then says why.
+//
+// Each component is looked at through the root, which follows a link only to
+// somewhere beneath itself, as the open did; a look opens nothing, so a pipe
+// there is not waited on.
+func notDirOnWay(root *os.Root, dir string, write bool) *NotRegularFileError {
+	way := ""
+	for _, part := range strings.Split(filepath.ToSlash(dir), "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		way = filepath.Join(way, part)
+		switch kind := kindIn(root, way); kind {
+		case "":
+			return nil
+		case "a directory":
+		default:
+			return &NotRegularFileError{Path: filepath.Join(root.Name(), way), Kind: kind,
+				Write: write, OnTheWay: true}
+		}
+	}
+	return nil
+}
+
+// kindIn names what name is beneath root ([modeKind]), or "" for a name that
+// cannot be looked at there.
+func kindIn(root *os.Root, name string) string {
+	info, err := root.Stat(name)
+	if err != nil {
+		return ""
+	}
+	return modeKind(info.Mode())
+}
+
+// modeKind names what a file mode describes, as a reader says it — a
+// directory included, which [fileKind] reads as "a directory" too.
+func modeKind(mode fs.FileMode) string {
+	switch mode.Type() {
+	case 0:
+		return "a regular file"
+	case fs.ModeDir:
+		return "a directory"
+	case fs.ModeNamedPipe:
+		return "a named pipe"
+	case fs.ModeDevice | fs.ModeCharDevice:
+		return "a character device"
+	case fs.ModeDevice:
+		return "a block device"
+	case fs.ModeSocket:
+		return "a socket"
+	case fs.ModeSymlink:
+		return kindSymlink
+	}
+	return "something other than a file"
 }
 
 // kindAt names what base is in the directory dirfd, without following a link

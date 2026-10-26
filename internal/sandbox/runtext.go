@@ -155,6 +155,10 @@ type NotRegularFileError struct {
 	Kind string
 	// Write is whether it was refused as a write rather than a read.
 	Write bool
+	// OnTheWay is whether Path is a component on the way to the file — one
+	// the file would be beneath — refused for not being a directory, rather
+	// than the file itself.
+	OnTheWay bool
 }
 
 // Reason is why the path was not read — or not written, for a write — as the
@@ -163,6 +167,9 @@ func (e *NotRegularFileError) Reason() string {
 	verb, done := "read", "read"
 	if e.Write {
 		verb, done = "written", "written"
+	}
+	if e.OnTheWay {
+		return "is " + e.Kind + ", not a directory, so nothing beneath it was " + done
 	}
 	if e.Kind == kindSymlink {
 		return "is a symbolic link, and a box's files are " + verb + " only where they lie, so it was not " + done
