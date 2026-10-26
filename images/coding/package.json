@@ -1,0 +1,10 @@
+{
+  "name": "crewlet-coding-image",
+  "private": true,
+  "description": "The coding CLIs the crewlet-coding image installs, pinned exactly and locked by integrity hash.",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.310",
+    "@opencode/cli": "2.1.4"
+  }
+}
