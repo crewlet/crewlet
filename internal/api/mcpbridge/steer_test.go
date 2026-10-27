@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -128,6 +129,22 @@ func newSteerFixture(t *testing.T, hold time.Duration) *steerFixture {
 // poll is one GET of the notes route, and how long it was held.
 func (f *steerFixture) poll(ctx context.Context, t *testing.T, url string) (*http.Response, []mcpbridge.SteerNote, time.Duration) {
 	t.Helper()
+	got := f.answer(ctx, t, url)
+	return got.res, got.notes, got.took
+}
+
+// polled is one poll's answer: the response, the notes of a 200, the error
+// code of a refusal, and how long the poll was held.
+type polled struct {
+	res     *http.Response
+	notes   []mcpbridge.SteerNote
+	refusal string
+	took    time.Duration
+}
+
+// answer is one GET of the notes route, read whole.
+func (f *steerFixture) answer(ctx context.Context, t *testing.T, url string) polled {
+	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -135,18 +152,17 @@ func (f *steerFixture) poll(ctx context.Context, t *testing.T, url string) (*htt
 	began := time.Now()
 	res, err := f.server.Client().Do(req)
 	if err != nil {
-		return nil, nil, time.Since(began)
+		return polled{took: time.Since(began)}
 	}
 	defer res.Body.Close()
 	var body struct {
 		Notes []mcpbridge.SteerNote `json:"notes"`
+		Error string                `json:"error"`
 	}
-	if res.StatusCode == http.StatusOK {
-		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-			t.Fatalf("decode the poll's answer: %v", err)
-		}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil && res.StatusCode == http.StatusOK {
+		t.Errorf("decode the poll's answer: %v", err)
 	}
-	return res, body.Notes, time.Since(began)
+	return polled{res: res, notes: body.Notes, refusal: body.Error, took: time.Since(began)}
 }
 
 // A TOKEN THE ROUTE CANNOT RESOLVE IS REFUSED, AND SAYS NOTHING MORE: a forged
@@ -215,40 +231,56 @@ func TestTheNotesRouteIsAbsentForASessionWithNoInbox(t *testing.T) {
 
 // A HELD POLL RETURNS AT ONCE ON A CHANGE, A CLOSE OR A SHUTDOWN — the note that
 // arrived, the run that ended, the node that is stopping — and never waits out
-// its hold for any of them. One that arrives after a shutdown is not held at all.
+// its hold for any of them. A POLL THE OPENING CAN NO LONGER HOLD IS TURNED AWAY
+// AS A FAILURE: a 503 with a Retry-After, the held one and every one that
+// arrives after it, never a 200 with nothing — which a poller whose next poll is
+// the answer to its last reads as "ask again now", and asked again at once for
+// as long as the stopping node served its route.
+//
+// Mutation: answer the shutdown or the ended opening with an empty 200, as the
+// route did, and the cases for them go red.
 func TestAHeldPollReturnsOnAChangeACloseOrShutdown(t *testing.T) {
 	t.Parallel()
 	const hold = time.Minute
-	for name, wake := range map[string]func(f *steerFixture){
-		"a note arrives": func(f *steerFixture) {
-			f.inbox.file(mcpbridge.SteerNote{Seq: 1, ID: "n-1", Inbox: "msg_1", Message: "use staging"})
+	for name, tc := range map[string]struct {
+		wake   func(f *steerFixture)
+		status int
+		code   string
+	}{
+		"a note arrives": {
+			wake: func(f *steerFixture) {
+				f.inbox.file(mcpbridge.SteerNote{Seq: 1, ID: "n-1", Inbox: "msg_1", Message: "use staging"})
+			},
+			status: http.StatusOK,
 		},
-		"the run ends":   func(f *steerFixture) { f.bridge.Close("run-1") },
-		"the node stops": func(f *steerFixture) { f.bridge.Shutdown() },
+		"the run ends": {
+			wake:   func(f *steerFixture) { f.bridge.Close("run-1") },
+			status: http.StatusServiceUnavailable, code: "unavailable",
+		},
+		"the node stops": {
+			wake:   func(f *steerFixture) { f.bridge.Shutdown() },
+			status: http.StatusServiceUnavailable, code: "draining",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f := newSteerFixture(t, hold)
-			type polled struct {
-				res   *http.Response
-				notes []mcpbridge.SteerNote
-				took  time.Duration
-			}
 			done := make(chan polled, 1)
-			go func() {
-				res, notes, took := f.poll(t.Context(), t, mcpbridge.SteerURL(f.url)+"/notes")
-				done <- polled{res, notes, took}
-			}()
+			go func() { done <- f.answer(t.Context(), t, mcpbridge.SteerURL(f.url)+"/notes") }()
 			time.Sleep(100 * time.Millisecond)
-			wake(f)
+			tc.wake(f)
 			select {
 			case got := <-done:
-				if got.res == nil || got.res.StatusCode != http.StatusOK {
-					t.Fatalf("the poll answered %v", got.res)
+				if got.res == nil || got.res.StatusCode != tc.status {
+					t.Fatalf("the poll answered %v, want %d", got.res, tc.status)
 				}
-				if name == "a note arrives" && (len(got.notes) != 1 || got.notes[0].ID != "n-1") {
-					t.Errorf("the poll answered %+v, want the note that arrived", got.notes)
+				if tc.status == http.StatusOK {
+					if len(got.notes) != 1 || got.notes[0].ID != "n-1" {
+						t.Errorf("the poll answered %+v, want the note that arrived", got.notes)
+					}
+					return
 				}
+				wantTurnedAway(t, got, tc.code)
 			case <-time.After(hold / 2):
 				t.Fatal("the poll waited out its hold")
 			}
@@ -257,13 +289,31 @@ func TestAHeldPollReturnsOnAChangeACloseOrShutdown(t *testing.T) {
 	t.Run("a poll after the shutdown", func(t *testing.T) {
 		t.Parallel()
 		f := newSteerFixture(t, hold)
+		f.inbox.file(mcpbridge.SteerNote{Seq: 1, ID: "n-1", Inbox: "msg_1", Message: "use staging"})
 		f.bridge.Shutdown()
 		f.bridge.Shutdown()
-		res, _, took := f.poll(t.Context(), t, mcpbridge.SteerURL(f.url)+"/notes")
-		if res == nil || res.StatusCode != http.StatusOK || took > hold/2 {
-			t.Errorf("a poll after the shutdown answered %v after %s", res, took)
+		got := f.answer(t.Context(), t, mcpbridge.SteerURL(f.url)+"/notes")
+		if got.res == nil || got.res.StatusCode != http.StatusServiceUnavailable || got.took > hold/2 {
+			t.Fatalf("a poll after the shutdown answered %v after %s, want a 503 at once", got.res, got.took)
 		}
+		if len(got.notes) != 0 {
+			t.Errorf("a stopping node handed a poll %+v", got.notes)
+		}
+		wantTurnedAway(t, got, "draining")
 	})
+}
+
+// wantTurnedAway fails the case unless a poll's answer is a refusal a poller
+// pauses on: code, and a Retry-After of whole seconds, at least one.
+func wantTurnedAway(t *testing.T, got polled, code string) {
+	t.Helper()
+	if got.refusal != code {
+		t.Errorf("the refusal's code is %q, want %q", got.refusal, code)
+	}
+	if after, err := strconv.Atoi(got.res.Header.Get("Retry-After")); err != nil || after < 1 {
+		t.Errorf("the refusal carries Retry-After %q, want whole seconds, at least one",
+			got.res.Header.Get("Retry-After"))
+	}
 }
 
 // A HELD POLL ENDS AT ITS HOLD, with nothing: a gateway between a box and the

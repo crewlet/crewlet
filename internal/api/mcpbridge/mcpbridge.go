@@ -364,7 +364,8 @@ type Bridge struct {
 	fleet   atomic.Pointer[fleet]
 
 	// shutdown is closed by [Bridge.Shutdown], once: every poll for notes
-	// held here returns at once, and one that arrives after does not wait.
+	// held here is let go at once, and every one that arrives after is
+	// turned away, each as a 503 a poller pauses on ([Bridge.pollNotes]).
 	shutdown     chan struct{}
 	shutdownOnce sync.Once
 

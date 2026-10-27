@@ -546,7 +546,11 @@ its review, whichever node resumes it:
   - **The notes route**, `/mcp/{token}/steer/notes?after=<seq>` and
     `/mcp/{token}/steer/read`, which a plugin inside the CLI polls: a poll is
     held for up to **ten seconds** while no note waits, and answered at once
-    when one arrives, the run ends or the node stops; a read names the notes
+    when one arrives. Once the node is stopping, or the session's opening has
+    ended, a held poll is let go and every later one turned away with a `503`
+    and a `Retry-After` — never an empty answer a poller would ask again at
+    once — and its notes wait on the record for the session's next opening, on
+    this node or the seat's next holder; a read names the notes
     (one to ten) the CLI put in front of its model, and is recorded read at the
     run's next step. Each note carries an id the CLI admits it under, unique to
     the note and the job, so a poller that admits it twice admits it once.

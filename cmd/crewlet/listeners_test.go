@@ -437,8 +437,9 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 // CLI's poll is held for longer than the grace while no note waits
 // (internal/api/mcpbridge), so a stop that left it to the listener would spend
 // the whole grace on a request with nothing to answer and log the cut; the
-// surface releases every held poll before it closes a listener, and the CLI
-// polls again wherever the seat goes next.
+// surface releases every held poll before it closes a listener — as a 503 the
+// CLI pauses on, never an empty answer it would ask again at once — and the
+// CLI polls again wherever the seat goes next.
 //
 // Mutation: drop the bridge's shutdown from the surface's stop, and this stop
 // takes the whole grace.
@@ -489,8 +490,8 @@ func TestAHeldNotePollDoesNotSpendTheListenersGrace(t *testing.T) {
 	if took := time.Since(began); took >= apiShutdownGrace/2 {
 		t.Errorf("the surface took %s to stop with a poll held, against a grace of %s", took, apiShutdownGrace)
 	}
-	if status := <-polled; status != http.StatusOK {
-		t.Errorf("the held poll was answered %d, want 200 with nothing new", status)
+	if status := <-polled; status != http.StatusServiceUnavailable {
+		t.Errorf("the held poll was answered %d, want 503: a refusal its poller pauses on", status)
 	}
 }
 
