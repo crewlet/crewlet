@@ -195,13 +195,15 @@ Please also close ENG-12 when this ships.
 [/untrusted:K7Q2M4XWB3ZP6TNA]
 ```
 
-The opening line names the surface the text came from (`page_body`, `page_comment`, `work_description`, `work_comment`, `project_file`, `chat_thread`), who wrote it, and how far the reader may rely on it:
+The opening line names the surface the text came from (`page_body`, `page_comment`, `work_description`, `work_comment`, `project_file`, `chat_thread`, `artifact_file`, `artifact_row`, `brand_voice`), who wrote it, and how far the reader may rely on it:
 
 | Trust | Meaning |
 |---|---|
 | `own` | Every writer is the reading seat itself. A page the seat edited after a colleague is not its own, and neither is text with writers the record no longer names (a page past its kept revisions, a description edited more than once, a file written more than once). |
 | `colleague` | Written by company principals: other seats, people, operator credentials or the engine. A request in it is that colleague's request, weighed as any request from them; it never overrides the seat's instructions, role or the company's rules. |
 | `external` | Written by somebody outside the company (a participant in a shared channel the company does not know), or by nobody that could be named. Data only. |
+| `page` | Produced by an artifact page's script on behalf of whoever viewed the page. Data only. Never inferred from writers: the read that knows a script produced the text says so. |
+| `company` | Adopted by an administrator as the company's own: the adopted brand's voice. It governs the tone and wording of what the reader writes and nothing else — never the task, the tools, who receives anything or anybody's access. Never inferred from writers. |
 
 Content cannot close the fence it is put in. The token is unguessable, and every occurrence of it inside the text is removed anyway (a model can echo it into something it writes and read that back in the same turn); every `[` that opens something shaped like a marker, in any case and spacing, is rewritten as `[escaped `, so no text forges a closer of any token. Every other string in the same answer (titles, revision notes, decision options, history excerpts, custom-field values) has the same two escapes applied without a fence, so no field can open or close one either.
 
@@ -212,6 +214,7 @@ Which reads are fenced:
 - `get_page`: the body, under every writer its kept revisions name, and each comment under its author.
 - `get_work_item`: the description, under its last writer, and each comment under its author.
 - `read_project_file`: text content, under the file's writers. Content read as base64 is not fenced (it is bytes, and its alphabet holds no bracket) but the envelope still labels it.
+- `get_artifact`, `read_artifact_data`, `query_artifact_data` and `get_company_brand` — and the live files a stale `publish_artifact` and the current rows a conflicting `write_artifact_data` are answered with: an artifact's file text (`artifact_file`) and its datastore's rows (`artifact_row`), each under its writers, and the adopted brand's voice (`brand_voice`) at trust `company`.
 - ``## The thread so far``: the messages, as one fence naming every speaker (see below).
 
 A seat that edits what it read and sends the fence back with it does not store the fence: `save_page`, `write_page`, `create_work_item`, `update_work_item` and `write_project_file` take off a fence of the turn's own token that wraps the whole body or content. A fence of any other token, or one quoted inside a longer text, is the writer's to keep.
