@@ -109,6 +109,9 @@ func ValueInWrongForm() Refusal {
 func TokenBudgetSpent(where Remedy) Refusal {
 	const back = " It comes back when the window resets, or as soon as the " +
 		"ceiling is raised."
+	if !where.valid() {
+		where = CompanyTokenBudget()
+	}
 	var whose string
 	switch where.Setting {
 	case SettingSeatTokenBudget:
@@ -117,7 +120,6 @@ func TokenBudgetSpent(where Remedy) Refusal {
 		whose = "Your own assistant token budget"
 	default:
 		whose = "The company's token budget"
-		where = CompanyTokenBudget()
 	}
 	return Refusal{person: whose + " for this window is spent, so nothing was " +
 		"sent." + back, remedy: where}

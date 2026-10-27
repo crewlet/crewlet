@@ -1,6 +1,10 @@
 package caveat
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/iam"
+)
 
 // # Where a person changes the limit that refused them (ADR-0060)
 //
@@ -64,18 +68,25 @@ func (r Remedy) IsZero() bool { return r == Remedy{} }
 // caused.
 func CompanyTokenBudget() Remedy { return Remedy{Setting: SettingCompanyTokenBudget} }
 
-// SeatTokenBudget is the remedy of a refusal the ceilings of the seat handle
-// caused.
-func SeatTokenBudget(handle string) Remedy {
-	return Remedy{Setting: SettingSeatTokenBudget, Seat: handle}
-}
+// NO SEAT CONSTRUCTOR. Nothing the engine refuses a person for is a seat's
+// ceiling: a seat's budget stop reaches a person as the live overlay of the
+// seat's row, which names a seat by its agent id alone so that a rename never
+// leaves a stale handle on a pushed row (livestate's OverlayRows), and a remedy
+// naming the handle copied there would be exactly that stale copy. The
+// dashboard composes a seat's remedy from the row's own current handle, in this
+// same vocabulary.
 
 // AssistantTokenBudget is the remedy of a refusal a person's own assistant
 // ceilings caused.
 func AssistantTokenBudget() Remedy { return Remedy{Setting: SettingAssistantTokenBudget} }
 
 // valid reports whether r is a remedy this build would write: a known
-// setting, carrying a seat exactly when the setting is a seat's.
+// setting, carrying a seat exactly when the setting is a seat's, and that seat
+// a handle the chart could hold ([iam.ValidSeatHandle]), since the dashboard
+// puts it in an address.
 func (r Remedy) valid() bool {
-	return r.Setting.Valid() && (r.Seat != "") == (r.Setting == SettingSeatTokenBudget)
+	if r.Setting == SettingSeatTokenBudget {
+		return iam.ValidSeatHandle(r.Seat)
+	}
+	return r.Setting.Valid() && r.Seat == ""
 }

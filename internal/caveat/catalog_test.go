@@ -73,7 +73,7 @@ var refusalSamples = map[string]caveat.Refusal{
 	"ArtifactTrashed":      caveat.ArtifactTrashed(),
 	"TokenBudgetSpent":     caveat.TokenBudgetSpent(caveat.CompanyTokenBudget()),
 	"TokenBudgetSpent (a seat's)": caveat.TokenBudgetSpent(
-		caveat.SeatTokenBudget("backend-engineer")),
+		caveat.Remedy{Setting: caveat.SettingSeatTokenBudget, Seat: "backend-engineer"}),
 	"TokenBudgetSpent (a person's assistant)": caveat.TokenBudgetSpent(
 		caveat.AssistantTokenBudget()),
 }
@@ -205,7 +205,7 @@ func TestARefusalCrossesToAPeerWithItsRemedy(t *testing.T) {
 	t.Parallel()
 	for _, words := range []caveat.Refusal{
 		caveat.QuestionRemoved(),
-		caveat.TokenBudgetSpent(caveat.SeatTokenBudget("backend-engineer")),
+		caveat.TokenBudgetSpent(caveat.Remedy{Setting: caveat.SettingSeatTokenBudget, Seat: "backend-engineer"}),
 		caveat.TokenBudgetSpent(caveat.AssistantTokenBudget()),
 	} {
 		raw, err := json.Marshal(words)
@@ -220,6 +220,7 @@ func TestARefusalCrossesToAPeerWithItsRemedy(t *testing.T) {
 		`{"person":"The budget is spent.","remedy":{"setting":"plan_quota"}}`,
 		`{"person":"The budget is spent.","remedy":{"setting":"seat_token_budget"}}`,
 		`{"person":"The budget is spent.","remedy":{"setting":"company_token_budget","seat":"pm"}}`,
+		`{"person":"The budget is spent.","remedy":{"setting":"seat_token_budget","seat":"../../settings"}}`,
 	} {
 		back, err := caveat.SaidFromPeer([]byte(raw))
 		if err != nil || back == nil || back.Words.Person() != "The budget is spent." ||
@@ -249,8 +250,10 @@ func TestEveryRemedyNamesAKnownSetting(t *testing.T) {
 				remedy.Setting, caveat.Settings())
 		}
 	}
-	if got := caveat.TokenBudgetSpent(caveat.Remedy{}).Remedy(); got != caveat.CompanyTokenBudget() {
-		t.Errorf("a spent budget naming no setting carried %+v, want the company's", got)
+	for _, bad := range []caveat.Remedy{{}, {Setting: caveat.SettingSeatTokenBudget, Seat: "Not A Handle"}} {
+		if got := caveat.TokenBudgetSpent(bad).Remedy(); got != caveat.CompanyTokenBudget() {
+			t.Errorf("a spent budget naming %+v carried %+v, want the company's", bad, got)
+		}
 	}
 }
 
