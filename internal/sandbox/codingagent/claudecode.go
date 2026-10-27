@@ -49,7 +49,12 @@ var ClaudeCodeCredentialEnv = []string{
 // 2.1.263 and 2.1.310 against a stub model API:
 //
 //   - a note handed back after a batch reaches the model after that batch's tool
-//     results, and stays in the conversation for the rest of the run;
+//     results, and stays in the conversation for the rest of the run — WHERE
+//     depends on the model: on 2.1.310 a system message for claude-opus-5-5 and
+//     claude-sonnet-5, and a system reminder at the end of the batch's last
+//     tool result for claude-sonnet-4-5, each headed "PostToolBatch hook
+//     additional context:" ([ClaudeCodeSteerInstruction] says so, and tells the
+//     model a note from what a tool produced by that alone);
 //   - a note handed back at Stop continues the turn, and the run's result is the
 //     answer the model gives after it;
 //   - the hook's `timeout` is in seconds, and at it the CLI cancels the call and
@@ -93,9 +98,10 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // Resumes says Claude Code continues a session it reported (`--resume`).
 func (ClaudeCode) Resumes() bool { return true }
 
-// ReadsNotes says Claude Code takes a person's notes between its steps, through
-// the hooks its settings file holds — see [ClaudeCode].
-func (ClaudeCode) ReadsNotes() bool { return true }
+// NoteInstruction is the standing instruction about notes a Claude Code run is
+// given: it takes a person's notes between its steps, through the hooks its
+// settings file holds — see [ClaudeCode].
+func (ClaudeCode) NoteInstruction() string { return ClaudeCodeSteerInstruction }
 
 // Command builds the headless `claude -p` invocation.
 //

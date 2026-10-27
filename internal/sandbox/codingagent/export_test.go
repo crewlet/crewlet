@@ -61,3 +61,10 @@ func OpenCodeCommandTimed(req sandbox.RunRequest, paths Paths, times OpenCodeTim
 // JSONStringify is how a run's script spells a server name it looks for in an
 // OpenCode answer.
 func JSONStringify(s string) string { return jsonStringify(s) }
+
+// ClaudeHookContext is what Claude Code puts after an event's name before a
+// hook's additional context, and ClaudeNoteEvents the events a run's notes are
+// taken at — what a test holds the instruction and the measured placements to.
+const ClaudeHookContext = claudeHookContext
+
+var ClaudeNoteEvents = []string{claudeEventToolBatch, claudeEventFinish}

@@ -160,13 +160,16 @@ type CLI interface {
 type resumer interface{ Resumes() bool }
 
 // noteReader is a CLI that takes a person's notes to its run's turn between its
-// own steps, where its launch wires it to them ([sandbox.RunRequest.Steer]).
+// own steps, where its launch wires it to them ([sandbox.RunRequest.Steer]),
+// and tells its model so: NoteInstruction is the standing instruction about
+// notes its runs are given ([ClaudeCodeSteerInstruction],
+// [OpenCodeSteerInstruction]) — the CLI's own, because where a note appears in
+// what the model reads is the CLI's to decide.
 //
 // OPTIONAL, as [resumer] is, because a CLI is taught to read notes in its own
 // way — hooks, a plugin — and one not taught yet must not be claimed to: the
-// standing instruction that tells a model notes arrive ([SteerInstruction]),
-// and the warning that a run never asked for any, both follow it.
-type noteReader interface{ ReadsNotes() bool }
+// instruction, and the warning that a run never asked for any, both follow it.
+type noteReader interface{ NoteInstruction() string }
 
 // Output is how the wrapper connects a CLI's standard streams in the box —
 // where its stdout lands, what its stdin reads — and how its result is read
@@ -255,9 +258,15 @@ func (r *Runner) Name() string { return r.cli.Name() }
 // ReadsNotes reports whether this runner's CLI takes a person's notes between
 // its steps — see [noteReader]. The coordinator asks it before it says a run
 // that succeeded never asked for its notes (internal/sandbox).
-func (r *Runner) ReadsNotes() bool {
-	reader, ok := r.cli.(noteReader)
-	return ok && reader.ReadsNotes()
+func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
+
+// noteInstruction is the standing instruction about notes this runner's CLI
+// gives its runs, or "" for a CLI that takes none — see [noteReader].
+func (r *Runner) noteInstruction() string {
+	if reader, ok := r.cli.(noteReader); ok {
+		return reader.NoteInstruction()
+	}
+	return ""
 }
 
 // Install prepares the box: the artefact directory and the ask shim.
@@ -351,7 +360,11 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
 	// system text from.
-	req.System = finalSystem(req.System, paths, req.Steer.Set() && r.ReadsNotes())
+	notes := ""
+	if req.Steer.Set() {
+		notes = r.noteInstruction()
+	}
+	req.System = finalSystem(req.System, paths, notes)
 	configPath, err := r.cli.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -414,7 +427,8 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 
 // finalSystem appends the report instruction, addressed at THIS box, to the
 // run's standing instructions — and, for a run whose CLI takes a person's notes
-// between its steps (notes), what a note is ([SteerInstruction]).
+// between its steps, notes: its CLI's instruction about what a note is and
+// where it appears ([noteReader]), "" for every other run.
 //
 // Composed here rather than at the launch because the findings path is a
 // property of the box the run lands in, which the caller does not know when it
@@ -423,14 +437,14 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 // such run works, whatever it was asked. The note instruction only where a note
 // can arrive: told to a run whose CLI takes none, or a run wired to none, it
 // would describe a channel that never opens.
-func finalSystem(system string, paths Paths, notes bool) string {
+func finalSystem(system string, paths Paths, notes string) string {
 	parts := make([]string, 0, 3)
 	if system = strings.TrimSpace(system); system != "" {
 		parts = append(parts, system)
 	}
 	parts = append(parts, strings.TrimSpace(FindingsInstruction(paths.Findings())))
-	if notes {
-		parts = append(parts, SteerInstruction)
+	if notes != "" {
+		parts = append(parts, notes)
 	}
 	return strings.Join(parts, "\n\n")
 }

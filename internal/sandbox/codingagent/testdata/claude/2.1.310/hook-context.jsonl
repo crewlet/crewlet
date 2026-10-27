@@ -1,0 +1,6 @@
+{"model": "claude-opus-5-5", "event": "PostToolBatch", "placement": "system", "content": "PostToolBatch hook additional context: ## A note from ada, sent while this turn was running\n\nNOTE-AT-BATCH"}
+{"model": "claude-opus-5-5", "event": "Stop", "placement": "user", "content": "<system-reminder>\nStop hook additional context: ## A note from bob, sent while this turn was running\n\nNOTE-AT-STOP\n</system-reminder>"}
+{"model": "claude-sonnet-5", "event": "PostToolBatch", "placement": "system", "content": "<system-reminder>\nPostToolBatch hook additional context: ## A note from ada, sent while this turn was running\n\nNOTE-AT-BATCH\n</system-reminder>"}
+{"model": "claude-sonnet-5", "event": "Stop", "placement": "user", "content": "<system-reminder>\nStop hook additional context: ## A note from bob, sent while this turn was running\n\nNOTE-AT-STOP\n</system-reminder>"}
+{"model": "claude-sonnet-4-5", "event": "PostToolBatch", "placement": "tool_result", "content": "Exit code 3\n\n<system-reminder>\nPostToolBatch hook additional context: ## A note from ada, sent while this turn was running\n\nNOTE-AT-BATCH\n</system-reminder>"}
+{"model": "claude-sonnet-4-5", "event": "Stop", "placement": "user", "content": "<system-reminder>\nStop hook additional context: ## A note from bob, sent while this turn was running\n\nNOTE-AT-STOP\n</system-reminder>"}

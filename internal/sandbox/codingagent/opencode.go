@@ -115,9 +115,10 @@ func (OpenCode) Name() string { return OpenCodeName }
 // is the whole of continuing it ([openCodeSessionFor]).
 func (OpenCode) Resumes() bool { return true }
 
-// ReadsNotes says OpenCode takes a person's notes between its steps, through the
-// plugin its configuration loads — see [OpenCode].
-func (OpenCode) ReadsNotes() bool { return true }
+// NoteInstruction is the standing instruction about notes an OpenCode run is
+// given: it takes a person's notes between its steps, through the plugin its
+// configuration loads — see [OpenCode].
+func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 
 // Command is the run: a short shell script, because OpenCode 2 has to be
 // driven through a server of the run's own rather than in one command.

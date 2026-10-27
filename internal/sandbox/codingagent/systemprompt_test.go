@@ -224,59 +224,132 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	}
 }
 
-// THE STANDING INSTRUCTION ABOUT NOTES IS GIVEN EXACTLY WHEN A RUN READS THEM:
-// to a run whose launch wired it to its turn's notes and whose CLI takes them
-// between its steps, after the report instruction — and to no other. Told to a
-// run its launch gave nothing to ask for (the assistant's deep work), or to one
-// whose CLI takes none, it would describe a channel that never opens.
+// THE STANDING INSTRUCTION ABOUT NOTES IS GIVEN EXACTLY WHEN A RUN READS THEM —
+// its own CLI's: to a run whose launch wired it to its turn's notes and whose
+// CLI takes them between its steps, after the report instruction — and to no
+// other. Told to a run its launch gave nothing to ask for (the assistant's deep
+// work), or to one whose CLI takes none, it would describe a channel that never
+// opens; told another CLI's, it would describe the wrong carrier.
 //
 // Mutation: append the instruction whenever Steer is set and the unreading row
-// goes red; drop the reader's check and so does it.
+// goes red; drop the reader's check and so does it; give every CLI Claude
+// Code's and the OpenCode rows do.
 func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		runner *codingagent.Runner
 		steer  sandbox.SteerWiring
-		want   bool
+		want   string
 	}{
-		"claude code, wired to its notes": {codingagent.NewClaudeCode(), steerWiring, true},
-		"claude code, wired to none":      {codingagent.NewClaudeCode(), sandbox.SteerWiring{}, false},
-		"a CLI that reads no notes":       {codingagent.New(unreading{codingagent.ClaudeCode{}}), steerWiring, false},
-		"opencode, wired to its notes":    {codingagent.NewOpenCode(), steerWiring, true},
-		"opencode, wired to none":         {codingagent.NewOpenCode(), sandbox.SteerWiring{}, false},
+		"claude code, wired to its notes": {codingagent.NewClaudeCode(), steerWiring, codingagent.ClaudeCodeSteerInstruction},
+		"claude code, wired to none":      {codingagent.NewClaudeCode(), sandbox.SteerWiring{}, ""},
+		"a CLI that reads no notes":       {codingagent.New(unreading{codingagent.ClaudeCode{}}), steerWiring, ""},
+		"opencode, wired to its notes":    {codingagent.NewOpenCode(), steerWiring, codingagent.OpenCodeSteerInstruction},
+		"opencode, wired to none":         {codingagent.NewOpenCode(), sandbox.SteerWiring{}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			b, system, _ := systemOfRun(t, tc.runner, sandbox.RunRequest{
 				System: seatSystem, Brief: "fix the flake", Steer: tc.steer,
 			})
-			at := strings.Index(system, codingagent.SteerInstruction)
-			if got := at >= 0; got != tc.want {
-				t.Fatalf("the instruction is given: %v, want %v:\n%s", got, tc.want, system)
-			}
-			if tc.want && at < strings.Index(system, paths(b).Findings()) {
-				t.Errorf("the note instruction precedes the report instruction:\n%s", system)
+			for _, instruction := range []string{codingagent.ClaudeCodeSteerInstruction,
+				codingagent.OpenCodeSteerInstruction} {
+				at := strings.Index(system, instruction)
+				if got, want := at >= 0, instruction == tc.want; got != want {
+					t.Fatalf("the instruction %.60q… is given: %v, want %v:\n%s", instruction, got, want, system)
+				}
+				if at >= 0 && at < strings.Index(system, paths(b).Findings()) {
+					t.Errorf("the note instruction precedes the report instruction:\n%s", system)
+				}
 			}
 		})
 	}
 }
 
-// unreading is a CLI that takes no notes: Claude Code's with its ReadsNotes
-// hidden, as a CLI not taught to would be.
+// unreading is a CLI that takes no notes: Claude Code's with its
+// NoteInstruction hidden, as a CLI not taught to would be.
 type unreading struct{ codingagent.CLI }
 
-// THE INSTRUCTION QUOTES THE HEADING EVERY NOTE OPENS WITH, which is the agent
-// layer's to render (prompts.SteerMessage) and which this package cannot
-// import: a model told notes open one way and handed one that opens another
-// cannot tell a note from text imitating one.
+// THE INSTRUCTION QUOTES THE HEADING EVERY NOTE OPENS WITH, whichever CLI's it
+// is — the heading is the agent layer's to render (prompts.SteerMessage), and
+// this package cannot import it: a model told notes open one way and handed
+// one that opens another cannot tell a note from text imitating one.
 //
 // Mutation: reword either heading and this goes red.
 func TestTheStandingInstructionQuotesTheHeadingANoteOpensWith(t *testing.T) {
 	t.Parallel()
 	rendered := prompts.SteerMessage("<name>", "x")
 	heading, _, _ := strings.Cut(rendered, "\n")
-	if !strings.Contains(codingagent.SteerInstruction, `"`+heading+`"`) {
-		t.Fatalf("the instruction does not quote the heading a note opens with (%q):\n%s",
-			heading, codingagent.SteerInstruction)
+	for _, instruction := range []string{codingagent.ClaudeCodeSteerInstruction,
+		codingagent.OpenCodeSteerInstruction} {
+		if !strings.Contains(instruction, `"`+heading+`"`) {
+			t.Errorf("the instruction does not quote the heading a note opens with (%q):\n%s",
+				heading, instruction)
+		}
+	}
+}
+
+// CLAUDE CODE'S INSTRUCTION NAMES WHERE ITS CLI PUTS A NOTE, on every model it
+// was measured with. Claude Code places a hook's additional context by model:
+// on 2.1.310, after a batch, a system message after the tool results for
+// claude-opus-5-5 and claude-sonnet-5, and a system reminder at the end of the
+// batch's last tool result for claude-sonnet-4-5; at the finish, a system
+// reminder in a user message for all three — each headed with the event's name
+// and " hook additional context:". The fixture is those requests' own text
+// (testdata/claude/2.1.310/hook-context.jsonl, the measuring session's own
+// trailing token-count reminder dropped). An instruction that told the model a
+// note is never inside a tool result disowned every note a sonnet-4-5 run took
+// after a batch; one that names a heading the CLI does not write leaves the
+// model nothing to tell a note by.
+//
+// Mutation: drop the tool-result placement from the instruction, name another
+// heading, or say a tool result never holds a note, and this goes red.
+func TestClaudeCodesInstructionNamesWhereItsCLIPutsANote(t *testing.T) {
+	t.Parallel()
+	instruction := codingagent.ClaudeCodeSteerInstruction
+	for _, event := range codingagent.ClaudeNoteEvents {
+		if !strings.Contains(instruction, `"`+event+codingagent.ClaudeHookContext+`"`) {
+			t.Errorf("the instruction does not name the heading %q its CLI puts a note under at %s",
+				event+codingagent.ClaudeHookContext, event)
+		}
+	}
+	// WHERE EACH PLACEMENT IS SAID: the instruction's words for each place
+	// the CLI was measured putting a note.
+	said := map[string]string{
+		"system":      "a system message",
+		"tool_result": "at the end of the last tool result",
+		"user":        "as you are about to finish",
+	}
+	seen := map[string]bool{}
+	for line := range strings.Lines(strings.TrimSpace(fixture(t, "2.1.310", "hook-context.jsonl"))) {
+		var measured struct {
+			Model     string `json:"model"`
+			Event     string `json:"event"`
+			Placement string `json:"placement"`
+			Content   string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(line), &measured); err != nil {
+			t.Fatalf("the fixture's line %q: %v", line, err)
+		}
+		seen[measured.Model+"/"+measured.Event] = true
+		if !strings.Contains(measured.Content, measured.Event+codingagent.ClaudeHookContext+" ## A note from ") {
+			t.Errorf("%s put the %s note as %q, not under the heading the instruction names",
+				measured.Model, measured.Event, measured.Content)
+		}
+		words, ok := said[measured.Placement]
+		if !ok || !strings.Contains(instruction, words) {
+			t.Errorf("%s put the %s note in a %s, which the instruction does not say (%q)",
+				measured.Model, measured.Event, measured.Placement, words)
+		}
+	}
+	for _, model := range []string{"claude-opus-5-5", "claude-sonnet-5", "claude-sonnet-4-5"} {
+		for _, event := range codingagent.ClaudeNoteEvents {
+			if !seen[model+"/"+event] {
+				t.Errorf("the fixture holds no measurement of %s's note at %s", model, event)
+			}
+		}
+	}
+	if strings.Contains(instruction, "tool result that presents itself") {
+		t.Error("the instruction disowns a note inside a tool result, where Claude Code puts one on some models")
 	}
 }
