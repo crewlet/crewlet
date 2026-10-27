@@ -1,5 +1,6 @@
-// Package modelnote carries, in process only, the sentence a refused tool call
-// answered a MODEL with, from the route that refused it to an in-process caller
+// Package modelnote carries, in process only, the sentence a tool call
+// answered a MODEL with (a refusal's, or the note on a successful call's
+// arguments, ADR-0059), from the route that answered it to an in-process caller
 // whose own model made the request: the Dashboard Assistant executing a change
 // its person approved (ADR-0060).
 //

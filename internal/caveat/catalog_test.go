@@ -58,6 +58,7 @@ var samples = map[string]caveat.Caveat{
 // fails for a constructor this table does not call.
 var refusalSamples = map[string]caveat.Refusal{
 	"TitleMissing":         caveat.TitleMissing(),
+	"ValueInWrongForm":     caveat.ValueInWrongForm(),
 	"TitleTooLong":         caveat.TitleTooLong(),
 	"DescriptionTooLong":   caveat.DescriptionTooLong(),
 	"CommentTooLong":       caveat.CommentTooLong(),

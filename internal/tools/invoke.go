@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
@@ -72,8 +73,11 @@ func Invoke(ctx context.Context, in Invocation) (res DetachedResult, refused boo
 		faults = CheckArgs(in.Name, in.Tool.Parameters(), in.Args.Map())
 	}
 	if misread(faults) {
+		// THE PERSON'S WORDS beside the model's (ADR-0060): a surface
+		// answering a person answers this, never the sentence above,
+		// which names arguments.
 		return DetachedResult{Result: Result{Output: misreadAnswer(in.Name, faults), Failed: true,
-			Cause: RefusalInvalid}}, true, nil
+			Cause: RefusalInvalid, PersonRefusal: caveat.ValueInWrongForm()}}, true, nil
 	}
 	res, err = call(ctx, in)
 	if err != nil {

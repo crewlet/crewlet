@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -282,6 +283,11 @@ func TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns(t *testing.T) {
 	if !got.Failed || !strings.Contains(got.Output, "comment_on_page did not run") ||
 		!strings.Contains(got.Output, "`body` is an object, and comment_on_page reads a string there") {
 		t.Errorf("a misread was answered %q", got.Output)
+	}
+	// AND A PERSON IS ANSWERED IN A PERSON'S WORDS (ADR-0060), never the
+	// sentence above, which names arguments.
+	if got.PersonRefusal != caveat.ValueInWrongForm() {
+		t.Errorf("a misread carries the person's words %q", got.PersonRefusal.Person())
 	}
 	if n := len(kb.keys()); n != 0 {
 		t.Errorf("a misread wrote %d comments", n)
