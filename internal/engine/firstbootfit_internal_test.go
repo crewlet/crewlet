@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -345,6 +346,180 @@ func TestThePagesPrintTheCeilingsAFirstBootCreates(t *testing.T) {
 	}
 }
 
+// THE HALF THE PAGES SET IS HALF THE MUTATION LOG CREATED BESIDE IT.
+//
+// A company whose code log takes at most half of what its mutation log takes a
+// day sets the code log at half the mutation log's ceiling, which then fills
+// no sooner under a blocked trim — and half of WHICH ceiling is the whole
+// instruction. A code log set at a figure comes off the logs' share whole and
+// is never scaled, while the mutation log is scaled with the other derived
+// logs into what it leaves. The pages said "half the mutation log's ceiling",
+// which config's vocabulary reads as its ask, a quarter of the free space: at
+// 100 GiB free that set the code log at 12½ GiB beside a mutation log created
+// at 7.7, above the derived two thirds (6.6 GiB) it was meant to lower, and
+// every other log shorter for it.
+//
+// So every figure of the instruction is computed here by the boot's own fit
+// and held on both pages that give it, docs/guides/replication.md and
+// config's DerivedCodeLogNumerator: the volume below which half the ask is
+// more than half of what the mutation log is created with, and the example of
+// it; the share of the table's mutation-log figure that creates the code log
+// at half the mutation log beside it — a little more than half, because the
+// room the code log gives back lengthens the mutation log too — and that it is
+// ONE share on every volume the table prints below the cap; the cap, half the
+// mutation log's clamped ask, which takes over where the half scales nothing;
+// and the example at 100 GiB.
+//
+// And an operator who follows the guide is held to the half on every volume
+// its table prints: the share and the cap the guide prints, of the figure it
+// prints for the volume, create the code log at no less than half the
+// mutation log a first boot creates beside it — under half it would fill
+// first, which is why the share is printed rounded UP — and at less than 0.52
+// of it, the most the rounding of the printed figures can add. Halving the ask
+// made it 1.6.
+//
+// Mutation: print the share as 50 % (half the table's figure, which creates
+// the code log at 0.47 of the mutation log) or as 60 %, or the cap as 48 GiB,
+// and the guide's code log is under half or past its rounding of it.
+func TestTheHalfThePagesSetIsHalfTheMutationLogCreatedBesideIt(t *testing.T) {
+	t.Parallel()
+	unset := config.Stream{}
+	trackerLog, codeLog := tracker.Domain{}.Name(), code.Domain{}.Name()
+	about := func(gibs float64) int64 { return int64(math.Round(gibs)) }
+	// CREATED: the code log and the mutation log a first boot on free
+	// creates, the code log set at set.
+	created := func(set, free int64) (codeBytes, mutation int64) {
+		fit := firstBootFit(t, config.Stream{CodeLogMaxBytes: set}, free, "")
+		return fit[codeLog].Bytes, fit[trackerLog].Bytes
+	}
+	// THE TABLE'S FIGURE: the mutation log a first boot creates beside a
+	// derived code log.
+	table := func(free int64) int64 { return firstBootFit(t, unset, free, "")[trackerLog].Bytes }
+	// HALF: the least code log a first boot creates at no less than half the
+	// mutation log beside it. Each byte more of it is a byte less for the
+	// derived logs, so the two sides cross once.
+	half := func(free int64) int64 {
+		lo, hi := config.CodeLogMaxBytesFloor, config.CodeLogMaxBytesCeiling
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			if c, m := created(mid, free); 2*c >= m {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		return lo
+	}
+	// ASK: what the mutation log asks for on a first boot on free.
+	ask := func(free int64) int64 { return firstBootAsks(t, unset, free, "")[trackerLog].Bytes }
+
+	const example = 100 * gib
+	clamp := ask(1 << 50)
+	limit := clamp / 2
+	halfAt := half(example)
+	_, besideHalf := created(halfAt, example)
+	// THE SHARE of the table's figure the half is, which the pages print
+	// rounded UP: a share printed under it sets a code log under half.
+	share := 100 * float64(halfAt) / float64(table(example))
+	percent := math.Ceil(share)
+	// WHERE HALF THE ASK IS MORE THAN HALF THE MUTATION LOG BESIDE IT: every
+	// first boot that scales the mutation log below its ask with the code log
+	// set at half of it.
+	halfAskLine := leastFree(t, func(free int64) bool {
+		_, m := created(ask(free)/2, free)
+		return m < ask(free)
+	}, false)
+	_, besideHalfAsk := created(ask(example)/2, example)
+
+	// THE OPERATOR READS THE GUIDE: the share of the table's figure it prints
+	// and the cap it prints.
+	guide := prose(t, "docs/guides/replication.md")
+	printedShare := regexp.MustCompile(`about (\d+) % of the mutation log's figure for your volume`).
+		FindStringSubmatch(guide)
+	printedCap := regexp.MustCompile(`and no more than (\S+) GiB, half the \S+ GiB it asks for at most`).
+		FindStringSubmatch(guide)
+	if printedShare == nil || printedCap == nil {
+		t.Fatalf("docs/guides/replication.md no longer says what share of the table's figure sets the "+
+			"code log at half the mutation log, or under what cap: share %q, cap %q", printedShare,
+			printedCap)
+	}
+	pagePercent, err := strconv.ParseFloat(printedShare[1], 64)
+	if err != nil {
+		t.Fatalf("docs/guides/replication.md prints the share as %q: %v", printedShare[1], err)
+	}
+	pageCap := gibValue(t, printedCap[1])
+
+	// ONE SHARE, UNDER THE CAP: the rule the pages print is the half on every
+	// volume the table prints, to a thousandth.
+	for _, row := range fitTable(t) {
+		rule := min(int64(float64(table(row.free))*share/100), limit)
+		if exact := half(row.free); math.Abs(float64(rule-exact)) > float64(exact)/1000 {
+			t.Errorf("on %d GiB free the half is %d bytes, and %.2f %% of the table's figure, under "+
+				"the %d-byte cap, is %d: the pages print one share, which is no longer the half there",
+				row.free/gib, exact, share, limit, rule)
+		}
+		// THE OPERATOR, from the page: its share of the figure it prints for
+		// the volume, under its cap.
+		cells := strings.Split(strings.Trim(row.line, "|"), "|")
+		figure := strings.TrimSuffix(strings.TrimSpace(cells[1]), " GiB")
+		if _, after, found := strings.Cut(figure, "→"); found {
+			figure = strings.TrimSpace(after)
+		}
+		set := min(int64(float64(gibValue(t, figure))*pagePercent/100), pageCap)
+		if set < config.CodeLogMaxBytesFloor {
+			t.Errorf("on %d GiB free the guide sets the code log at %d bytes, under the %d its field "+
+				"accepts", row.free/gib, set, config.CodeLogMaxBytesFloor)
+			continue
+		}
+		c, m := created(set, row.free)
+		if ratio := float64(c) / float64(m); ratio < 0.5 || ratio >= 0.52 {
+			t.Errorf("on %d GiB free a code log set as the guide says, %.0f %% of %s GiB under its "+
+				"%s GiB cap, is created at %d bytes beside a mutation log of %d: %.3f of it, not half",
+				row.free/gib, pagePercent, figure, printedCap[1], c, m, ratio)
+		}
+	}
+	// A MUTATION LOG YOU SET IS CREATED AT EXACTLY THAT, so the half is of it.
+	set := config.Stream{TrackerLogMaxBytes: 8 * gib, CodeLogMaxBytes: 4 * gib}
+	if fit := firstBootFit(t, set, example, ""); fit[trackerLog].Bytes != set.TrackerLogMaxBytes ||
+		fit[codeLog].Bytes != set.CodeLogMaxBytes {
+		t.Errorf("a first boot on %d bytes free with the mutation log set at %d and the code log at %d "+
+			"creates them at %d and %d", example, set.TrackerLogMaxBytes, set.CodeLogMaxBytes,
+			fit[trackerLog].Bytes, fit[codeLog].Bytes)
+	}
+
+	for file, wants := range map[string][]string{
+		"docs/guides/replication.md": {
+			fmt.Sprintf("so on any first boot below about %d GiB free, half the mutation log's ask is "+
+				"more than half of what that log is created with beside it — at 100 GiB free, %s GiB "+
+				"beside a mutation log of %s GiB", about(halfAskLine), gibText(ask(example)/2),
+				gibText(besideHalfAsk)),
+			fmt.Sprintf("about %.0f %% of the mutation log's figure for your volume", percent),
+			fmt.Sprintf("and no more than %s GiB, half the %s GiB it asks for at most (at 100 GiB free, "+
+				"%s GiB, beside which the mutation log is created at %s GiB rather than %s)",
+				gibText(limit), gibText(clamp), gibText(halfAt), gibText(besideHalf),
+				gibText(table(example))),
+		},
+		"internal/config/retention.go": {
+			fmt.Sprintf("so on a first boot below about %d GiB free half the mutation log's ask is more "+
+				"than half of what that log is created with beside it — at 100 GiB free, %s GiB beside "+
+				"a mutation log created at %s GiB", about(halfAskLine), gibText(ask(example)/2),
+				gibText(besideHalfAsk)),
+			fmt.Sprintf("Before the first boot the half is about %.0f %% of what the mutation log is "+
+				"created with beside a derived code log", percent),
+			fmt.Sprintf("and no more than %s GiB, half its %s GiB clamp: at 100 GiB free %s GiB, beside "+
+				"which the mutation log is created at %s GiB rather than %s", gibText(limit),
+				gibText(clamp), gibText(halfAt), gibText(besideHalf), gibText(table(example))),
+		},
+	} {
+		page := prose(t, file)
+		for _, want := range wants {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s does not say %q", file, want)
+			}
+		}
+	}
+}
+
 // fitRow is one row of replication.md's table of what the code log's
 // reservation costs: the volume it is for, whether it is the row of every
 // volume from there up, and the line as the guide writes it.
@@ -428,6 +603,32 @@ func gibText(b int64) string {
 		}
 	}
 	return strconv.FormatFloat(float64(b)/float64(gib), 'f', 1, 64)
+}
+
+// gibValue is a figure the pages print in gibibytes — [gibText]'s spelling, a
+// whole number and a vulgar fraction or a decimal — in bytes, as an operator
+// reading it would write it.
+func gibValue(t *testing.T, text string) int64 {
+	t.Helper()
+	whole, part := text, 0.0
+	for _, fraction := range []struct {
+		glyph string
+		value float64
+	}{{"½", 1.0 / 2}, {"⅓", 1.0 / 3}, {"⅔", 2.0 / 3}} {
+		if rest, found := strings.CutSuffix(text, fraction.glyph); found {
+			whole, part = rest, fraction.value
+			break
+		}
+	}
+	gibs := part
+	if whole != "" || part == 0 {
+		n, err := strconv.ParseFloat(whole, 64)
+		if err != nil {
+			t.Fatalf("the pages print %q, which is no figure in gibibytes", text)
+		}
+		gibs += n
+	}
+	return int64(gibs * float64(gib))
 }
 
 // numberWord is n as the pages write a count of logs.

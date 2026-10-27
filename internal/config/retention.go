@@ -283,10 +283,25 @@ const (
 	// company's compares the two logs' crewlet.statelog.log.bytes_per_day
 	// instead, which count every record each log takes, whatever a later
 	// release adds to the code log included: a half suffices while the code
-	// log's is at most half the mutation log's. Either sets the code log at
-	// half the mutation log's ceiling — stream.code_log_max_bytes before its
-	// first boot, and `crewlet retention set-capacity` once the stream
-	// exists, since a stream keeps the ceiling it was created with.
+	// log's is at most half the mutation log's.
+	//
+	// HALF IS OF THE CEILING THE MUTATION LOG IS CREATED WITH, never of its
+	// ask. A ceiling set in stream.code_log_max_bytes comes off the logs'
+	// share whole and is never scaled, while the derived ones are scaled
+	// together into what it leaves (the engine's fit), so on a first boot
+	// below about 596 GiB free half the mutation log's ask is more than half
+	// of what that log is created with beside it — at 100 GiB free, 12½ GiB
+	// beside a mutation log created at 7.7 GiB. Before the first boot the
+	// half is about 53 % of what the mutation log is created with beside a
+	// derived code log — a little more than half, because the room the code
+	// log gives back lengthens the mutation log too — and no more than
+	// 32 GiB, half its 64 GiB clamp: at 100 GiB free 5.2 GiB, beside which
+	// the mutation log is created at 10.4 GiB rather than 9.9
+	// (docs/guides/replication.md, "What the code log's reservation costs",
+	// has the other volumes). Once the streams exist it is half the ceiling
+	// the mutation log's stream holds, its crewlet.statelog.log.max_bytes,
+	// which `crewlet retention set-capacity` lowers the code log to, since a
+	// stream keeps the ceiling it was created with.
 	DerivedCodeLogNumerator   = 2
 	DerivedCodeLogDenominator = 3
 

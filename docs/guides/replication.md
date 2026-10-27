@@ -974,12 +974,29 @@ company whose pushes or tracker writes are far from the reference company's
 compares the two logs'
 [`crewlet.statelog.log.bytes_per_day`](../reference/metrics.md) instead
 (`domain` `code` and `tracker`), which count every record each log takes: a
-half suffices while the code log's is at most half the mutation log's. Either
-sets the code log at half the mutation log's ceiling:
-`stream.code_log_max_bytes` before the first boot, and once the streams exist
-a [`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling)
-call that lowers the code log to it — and, for the room it gives back, a
-second that raises the log you want longer.
+half suffices while the code log's is at most half the mutation log's.
+
+**The half is of the ceiling the mutation log is created with, never of what
+it asks for.** A ceiling you set comes off the logs' share whole and is never
+scaled, while the derived ones are scaled together into what it leaves, so on
+any first boot below about 596 GiB free, half the mutation log's ask is more
+than half of what that log is created with beside it — at 100 GiB free, 12½ GiB
+beside a mutation log of 7.7 GiB. Before the first boot, set
+`stream.code_log_max_bytes` from the table above: about 53 % of the mutation
+log's figure for your volume — a little more than half, because the room the
+code log gives back lengthens the mutation log too — and no more than 32 GiB,
+half the 64 GiB it asks for at most (at 100 GiB free, 5.2 GiB, beside which
+the mutation log is created at 10.4 GiB rather than 9.9). Where you set
+`stream.tracker_log_max_bytes`, the mutation log is created at exactly that,
+and the half is of it. Once the streams exist, the half is of the ceiling the
+mutation log holds —
+[`crewlet.statelog.log.max_bytes`](../reference/metrics.md) whose `domain` is
+`tracker`, its `max_bytes` in
+[`crewlet retention status`](retention.md#the-one-number-to-watch) — and a
+[`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling) call
+lowers the code log to it; a second raises the log you want longer with the
+room that gives back, and where that log is the mutation log, the half is of
+the ceiling you raise it to.
 
 **A stream that already exists keeps its ceiling.** Sizing decides what a
 missing stream is created with and nothing else: a booting node never rewrites
