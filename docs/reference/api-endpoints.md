@@ -3144,8 +3144,9 @@ repositories.
 
 `webhook_active` says whether the app will deliver events here. It is `false`
 when the webhook address is one GitHub cannot reach, which is what a local
-engine's `http://localhost:8200` is: the manifest then creates the app with its
-webhook switched off rather than pointed at an address that fails every
+engine's `http://localhost:8200` is: the manifest then carries no
+`hook_attributes` and no `default_events`, which is the only form GitHub
+accepts from an address it cannot reach, rather than a hook that fails every
 delivery. The app still works for everything the agent does on GitHub, which
 is outbound; see [Running locally, with no public
 address](../integrations/github.md#running-locally-with-no-public-address).
