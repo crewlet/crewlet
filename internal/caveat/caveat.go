@@ -160,8 +160,10 @@ var actions = map[Code]Action{
 	CodeMoveWaiting: ActionRequired,
 	// The items that go with it are split until the gesture is made again.
 	CodeSubtreeUnfinished: ActionRequired,
-	// The write landed; this node shows it once it catches up.
-	CodeDatastorePending: ActionNone,
+	// Its verdict is not known and can still be a refusal, which nothing
+	// shows a person who asked through the act route (an assistant's
+	// approved write): they look at the artifact to see it.
+	CodeDatastorePending: ActionRequired,
 	// The card is in the lane it was dropped into; only its order there
 	// differs, which the next drag sets.
 	CodeLaneChangedNotPlaced: ActionNone,

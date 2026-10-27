@@ -42,6 +42,8 @@ var samples = map[string]caveat.Caveat{
 		"ENG-1 moved to OPS, but only 2 of the 5 tasks under it followed."),
 	"MoveUnfinished (waiting on the trash)": caveat.MoveUnfinished(2, 5, true,
 		"ENG-1 moved to OPS, but ENG-4 is in the trash under it."),
+	"SubtreeUnfinished (a removal)": caveat.SubtreeUnfinished(false, 2, 5,
+		"ENG-1 is removed, but only 2 of the 5 tasks that go with it followed."),
 	"SubtreeUnfinished": caveat.SubtreeUnfinished(true, 2, 5,
 		"ENG-1 is restored, but only 2 of the 5 tasks that go with it followed."),
 	"DatastorePending": caveat.DatastorePending("The write is on the datastore's log."),
@@ -569,5 +571,33 @@ func TestAPersonsSurfaceReadsThePersonsWords(t *testing.T) {
 	}
 	if agents := caveat.Agents([]caveat.Caveat{gone}); !slices.Equal(agents, []string{gone.Agent()}) {
 		t.Errorf("a model was told %q, want the agent phrasing", agents)
+	}
+}
+
+// A PARTIAL OUTCOME CLAIMS NO MORE THAN IS KNOWN, AND ASKS ONLY WHAT A PERSON
+// CAN DO. A datastore write whose verdict is pending may still be refused, so
+// it is "sent", never "saved", and asks the person to look, since nothing else
+// tells them. A restored item leaves the trash, so its remedy is the rest in
+// the trash, never doing it again; a removal's names what is still reachable.
+func TestAPartialOutcomeAsksOnlyWhatAPersonCanDo(t *testing.T) {
+	t.Parallel()
+	pending := caveat.DatastorePending("on the log")
+	if strings.Contains(pending.Person(), "saved") || strings.Contains(pending.Person(), "server") ||
+		pending.Action() != caveat.ActionRequired {
+		t.Errorf("a pending verdict reads %q (%s): it overclaims, or asks nothing of "+
+			"a person nothing else tells", pending.Person(), pending.Action())
+	}
+	restored := caveat.SubtreeUnfinished(true, 2, 5, "restored part").Person()
+	removed := caveat.SubtreeUnfinished(false, 2, 5, "removed part").Person()
+	for what, words := range map[string]string{"a restore": restored, "a removal": removed} {
+		if strings.Contains(words, "again to finish") {
+			t.Errorf("%s asks the person to do it again: %q", what, words)
+		}
+	}
+	if !strings.Contains(restored, "restore them there") {
+		t.Errorf("a restore does not send the person to the rest in the trash: %q", restored)
+	}
+	if !strings.Contains(removed, "restore this one from the trash") {
+		t.Errorf("a removal names no remedy the person can reach: %q", removed)
 	}
 }

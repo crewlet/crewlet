@@ -153,21 +153,33 @@ func MoveUnfinished(followed, total int, waiting bool, agent string) Caveat {
 
 // SubtreeUnfinished is a removal (restored false) or a restore whose item
 // landed and of whose total items only followed came along.
+//
+// THE REMEDY IS ONE THE PERSON CAN REACH, by verb: a restored item leaves the
+// trash, so there is nothing of it to restore again, and the rest are restored
+// from the trash, one by one; a removed item's rest are still where they were,
+// and are removed the way it was, or brought back together by restoring it.
 func SubtreeUnfinished(restored bool, followed, total int, agent string) Caveat {
-	done := "removed"
 	if restored {
-		done = "restored"
+		return Caveat{code: CodeSubtreeUnfinished, agent: agent,
+			person: fmt.Sprintf("The item was restored, but only %d of the %d "+
+				"items that go with it came back. The rest are still in the "+
+				"trash; restore them there.", followed, total)}
 	}
 	return Caveat{code: CodeSubtreeUnfinished, agent: agent,
-		person: fmt.Sprintf("The item was %s, but only %d of the %d items that "+
-			"go with it came along. Do it again to finish.", done, followed, total)}
+		person: fmt.Sprintf("The item is in the trash, but only %d of the %d items "+
+			"that go with it came along, and the rest are where they were. Remove "+
+			"them the same way, or restore this one from the trash to bring them "+
+			"back together.", followed, total)}
 }
 
 // DatastorePending is an artifact datastore write on the log that this node
-// has not applied yet.
+// has not applied yet. Its verdict is not known: the batch can still be
+// refused, so the person is told it was sent, not that it was saved, and
+// where to see what became of it.
 func DatastorePending(agent string) Caveat {
 	return Caveat{code: CodeDatastorePending, agent: agent,
-		person: "The change is saved, and shows here once this server catches up."}
+		person: "The change was sent, but whether it was applied is not known " +
+			"yet. Open the artifact to see whether it was."}
 }
 
 // FileFinding is a finding about a file its caller authored: where names the
