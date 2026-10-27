@@ -29,6 +29,9 @@
  *   on, a raised line inside a raised panel would be the panel's own colour.
  * - THE WORD UNDERLINE: where a removed line and an added line are one line
  *   edited, the run of each that differs is underlined (`lib/wordDiff.ts`).
+ *   Which two lines those are is read off the change's shape, a setting's
+ *   path or a text's place ([pairsOf]), and where the shape cannot say, no
+ *   line is underlined: an underline is a claim that two lines are one.
  *
  * # The shapes it takes
  *
@@ -42,9 +45,11 @@
  * rewritten in the middle.
  *
  * UNIFIED OR SPLIT. Split draws the older text and the newer side by side,
- * each removed line beside the added line it pairs with, and it is drawn only
- * where the diff is at least the phone breakpoint wide (640px, the kit's
- * `breakpoint.phone`): two columns of code under that are a word or two each.
+ * each removed line of a change beside the added line in its place in the
+ * change — a layout, which says nothing of whether the two are one line
+ * edited: that is the underline's to say. It is drawn only where the diff is
+ * at least the phone breakpoint wide (640px, the kit's `breakpoint.phone`):
+ * two columns of code under that are a word or two each.
  * A keyed diff is always unified: a setting's two values are one path read
  * down, and there is no text whose lines a second column would line up.
  *
@@ -78,7 +83,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { VisuallyHidden, collapseDiff, cx, diffLines } from "@crewlethq/ui";
+import { MAX_DIFF_LINES, VisuallyHidden, collapseDiff, cx, diffLines } from "@crewlethq/ui";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { plural } from "~/lib/format.ts";
 import { scrollerOf } from "~/lib/scroller.ts";
@@ -238,11 +243,14 @@ type Pairs = ReadonlyMap<DiffLine, Pair>;
  * paths alone: not a word of them is read here ([Pair]).
  *
  * In a text, the kth removed with the kth added, the pairing a reader makes
- * down the two columns of a split diff. In a keyed diff, the removed and the
- * added line of ONE path, since a change can hold one setting removed and
- * another one edited, and pairing those by position would underline one
- * setting against another; one to one and in order, so a path's lines meet
- * once each, and a line with no path names no setting and pairs with none.
+ * down the two columns of a split diff, and only in a change whose shape lets
+ * position still mean one line edited ([alignedByPosition]). In a keyed diff,
+ * the removed and the added line of ONE path, since a change can hold one
+ * setting removed and another one edited, and pairing those by position would
+ * underline one setting against another; one to one and in order, so a path's
+ * lines meet once each, and a line with no path names no setting and pairs
+ * with none. A path is the setting's identity rather than a place, so it
+ * pairs at any size.
  *
  * Linear in the diff's lines, keyed or not: a path finds its partner through
  * a map rather than a search of the change, which a change holding a release's
@@ -272,12 +280,53 @@ function pairsOf(hunks: readonly DiffHunk[], keyed: boolean): Pairs {
         pairByPath(removed, added, join);
         continue;
       }
+      if (!alignedByPosition(removed.length, added.length)) continue;
       for (let k = 0; k < Math.min(removed.length, added.length); k++) {
         join(removed[k]!, added[k]!);
       }
     }
   }
   return pairs;
+}
+
+/**
+ * Whether a change of a text, of `removed` lines and `added` lines, is one in
+ * which the kth removed line and the kth added line can still be one line
+ * edited — position being all a text's lines have to be paired by.
+ *
+ * - AS MANY ADDED AS REMOVED: each removed line has a line in its own place,
+ *   the one shape git's own `contrib/diff-highlight` pairs ("It will only
+ *   highlight hunks in which the number of removed and added lines is the
+ *   same", its README). A line taken out at one end and another put in at
+ *   the other shift every pair between them, but a diff that aligned the
+ *   lines between draws those as two changes rather than one, unless every
+ *   line between changed too: the case git's README calls pathological, and
+ *   the one this shape still misreads.
+ * - ONE LINE AGAINST SEVERAL: a line rewritten with lines written after it
+ *   (a paragraph edited and one added under it) or deleted after it, the
+ *   commonest uneven edit there is. It is one pair, the first line of each
+ *   side, so what the edit added or removed misplaces that pair at most —
+ *   lines written ABOVE the edited one do — and a misplaced pair is
+ *   underlined only where its two lines share a word at an end
+ *   (`lib/wordDiff.ts`).
+ *
+ * NOWHERE ELSE. With two lines or more on both sides and the counts unequal,
+ * the lines one side has beyond the other sit at places position cannot see,
+ * and every pair after the first of them is two neighbours, underlined as one
+ * line edited wherever neighbours share a word at an end: a YAML key, a
+ * table's cells, a `return`. And not in a change longer than
+ * [MAX_DIFF_LINES] on a side, whatever its counts, since that is past what
+ * the package's line diff aligns: from `diffLines` it is the whole
+ * replacement it reports there — every line of the older text removed and
+ * every line of the newer added, compared nowhere — whose kth lines are
+ * whatever stood kth in each text, so after one line inserted or a paragraph
+ * moved, every pair below it is two neighbours. From any other diff a change
+ * that long is a rewrite, and it gives up its underline rather than risk a
+ * false one on each of thousands of rows.
+ */
+function alignedByPosition(removed: number, added: number): boolean {
+  if (removed > MAX_DIFF_LINES || added > MAX_DIFF_LINES) return false;
+  return removed === added || Math.min(removed, added) === 1;
 }
 
 /** One change of a keyed diff, paired by path (see [pairsOf]). */

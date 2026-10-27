@@ -9,6 +9,7 @@
 
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { MAX_DIFF_LINES } from "@crewlethq/ui";
 
 import { changedRuns } from "~/lib/wordDiff.ts";
 import { sheetRules } from "~/test/sheets.ts";
@@ -141,6 +142,106 @@ describe("a diff of a text", () => {
     expect(container.querySelector(".diff-view")).toBeNull();
     rerender(<DiffView before={"same\n"} after={"same\n"} />);
     expect(container.textContent).toBe("Nothing changed.");
+  });
+});
+
+// AN UNDERLINE SAYS TWO LINES ARE ONE LINE EDITED, so it is drawn only where
+// the change's shape lets position say which two: a text's lines carry
+// nothing else to be paired by.
+describe("which lines of a text are one line edited", () => {
+  test("in a change that removes as many lines as it adds, each and the line in its place", () => {
+    const hunks: DiffHunk[] = [
+      {
+        skipped: 0,
+        lines: [
+          removed(1, "- name: api"),
+          removed(2, "- name: web"),
+          removed(3, "- name: db"),
+          added(1, "- name: gateway"),
+          added(2, "- name: site"),
+          added(3, "- name: store"),
+        ],
+      },
+    ];
+    const { container } = render(<DiffView hunks={hunks} />);
+    expect(runs(container)).toEqual([
+      ["remove", "api"],
+      ["remove", "web"],
+      ["remove", "db"],
+      ["add", "gateway"],
+      ["add", "site"],
+      ["add", "store"],
+    ]);
+  });
+
+  test.each([
+    ["one line against several added after it", EDIT, "paid in any", "ordered by join"],
+    [
+      "several against one: lines deleted after the edited one",
+      { before: EDIT.after, after: EDIT.before },
+      "ordered by join",
+      "paid in any",
+    ],
+  ])("in %s, the first line of each side", (_, texts, older, newer) => {
+    const { container } = render(<DiffView {...texts} />);
+    expect(runs(container)).toEqual([
+      ["remove", older],
+      ["add", newer],
+    ]);
+  });
+
+  // TWO LINES OR MORE ON BOTH SIDES AND THE COUNTS UNEQUAL: the line one side
+  // has beyond the other sits where position cannot see it, and every pair
+  // below it is two neighbours, which share a key here.
+  test("in nothing of an uneven change of two lines or more a side", () => {
+    const hunks: DiffHunk[] = [
+      {
+        skipped: 0,
+        lines: [
+          removed(1, "- name: api"),
+          removed(2, "- name: web"),
+          added(1, "- name: queue"),
+          added(2, "- name: api-v2"),
+          added(3, "- name: web-v2"),
+        ],
+      },
+    ];
+    for (const layout of ["unified", "split"] as const) {
+      const { container, unmount } = render(<DiffView hunks={hunks} layout={layout} />);
+      // By position "api" would read as edited into "queue", and "web" into "api-v2".
+      expect(runs(container), layout).toEqual([]);
+      unmount();
+    }
+  });
+
+  // PAST MAX_DIFF_LINES A SIDE the package's line diff compares nothing: it
+  // reports every older line removed and every newer one added, whose kth
+  // lines are whatever stood kth in each text — so after one line inserted,
+  // or one moved, every pair below it is two neighbours.
+  test.each([
+    ["inserted at the top", (older: string[]) => ["- name: queue", ...older]],
+    ["moved to the end", (older: string[]) => [...older.slice(1), older[0]!]],
+  ])("in nothing of a whole replacement, one line %s", (_, edit) => {
+    const restore = installObserver();
+    try {
+      const read = vi.mocked(changedRuns);
+      read.mockClear();
+      const older = Array.from({ length: MAX_DIFF_LINES + 1 }, (_, i) => `- name: item${i}`);
+      const { container } = render(
+        <DiffView before={older.join("\n")} after={edit(older).join("\n")} />,
+      );
+      // The first block holds the first lines removed; the block where they
+      // end holds the first lines added, which position would pair them with.
+      Observer.made[0]!.say([{ block: Math.floor(older.length / WINDOW_BLOCK_ROWS), near: true }]);
+      const drawn = lines(container);
+      expect(drawn).toHaveLength(2 * WINDOW_BLOCK_ROWS);
+      expect(drawn[0]).toEqual(["remove", "- name: item0"]);
+      expect(drawn).toContainEqual(["add", edit(older)[0]]);
+      expect(runs(container)).toEqual([]);
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 });
 

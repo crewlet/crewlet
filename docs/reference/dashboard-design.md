@@ -217,6 +217,16 @@ A line's kind is said three ways, each enough alone:
   whole words, and none at all when all they share is spacing and
   punctuation. A word-by-word diff would mark every word the edit moved past,
   which makes a small edit prettier and a rewritten paragraph unreadable.
+  Which two lines are one line edited is read off the change, never guessed
+  from their words, because an underline says they are one: a setting's old
+  and new value under one path; in a text, the lines in the same place of a
+  change that removes as many lines as it adds (the one shape git's own
+  `contrib/diff-highlight` pairs), or one line against several, the first
+  of each. Any other change of a text underlines nothing: one of two lines
+  or more a side with unequal counts, where every pair after a line added
+  is two neighbours, and one past 2,000 lines a side — `diffLines`' whole
+  replacement, whose pairs after one line inserted or moved are neighbours
+  too.
 
 A diff of a text is numbered in both versions, in Geist Mono at the document's
 13px. A diff of SETTINGS — a configuration's paths, an artifact's files — is
@@ -3839,7 +3849,8 @@ clause that would go first is the fence.
 A page's history shows **what a save changed**, not only what one version
 said. The two revisions are compared by line with the design system's
 `diffLines` (the longest common subsequence of their lines; past 2,000 lines
-a side, a whole replacement rather than a frozen tab) and drawn by the one
+a side, a whole replacement rather than a frozen tab, with nothing in it
+underlined) and drawn by the one
 `DiffView` ([Diffs carry no hue](#diffs-carry-no-hue)), over the count of
 lines added and removed against the revision before. Inside an edited line
 it underlines ONE run, never a word-by-word diff, because these documents are
