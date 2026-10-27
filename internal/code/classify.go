@@ -7,6 +7,8 @@ import (
 	"go/token"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // A CHANGE'S CLASSES — what a review of a change need not read — and the one
@@ -61,9 +63,20 @@ func (c ChangeClass) Valid() bool { return slices.Contains(ChangeClasses(), c) }
 // and the three past 1 MiB (cmd/compile's opGen.go and rewriteAMD64.go,
 // time/tzdata's zzipdata.go) are all generated — files a generator rewrites
 // and no person reads line by line, so a class on one would exempt nothing a
-// reviewer reads. And the lexer is linear, so the bound caps what one path
-// costs at two lexes of 1 MiB; what a whole revision may cost is the bound of
-// its classification, not of one file.
+// reviewer reads.
+//
+// WHAT A PATH AT THE BOUND COSTS follows its bytes, whatever they hold,
+// because the walk keeps nothing of a version but the comments between two
+// code tokens, as offsets, and drops them once the token after them is read.
+// Two versions at the bound, classed to the end (BenchmarkClassifyGo, one
+// bounded run of five iterations an arm on two E-cores of a Core Ultra 7
+// 265U), took 26 ms and 9 MB of allocation as ordinary code, and 105 ms and
+// 85 MB as nothing but comments, one to a line, the most lexemes the bound
+// holds — no more, 107 ms, where a //go:noinline governs every one of them.
+// Half the latter's allocation is the lexer's own, a line table and a text a
+// comment; the walk's is one gap of 24-byte records, here the whole file.
+// What a whole revision may cost is the bound of its classification, which
+// takes the comment arms as its worst, not of one file.
 const MaxClassedBlobBytes = 1 << 20
 
 // byteOrderMark is the UTF-8 byte-order mark, which go/scanner skips at a
@@ -80,8 +93,9 @@ var byteOrderMark = []byte("\uFEFF")
 // ends a statement included, because in Go a newline there IS a token:
 // `return` and x on two lines return nothing, and on one line return x.
 // whitespace_only is two versions whose tokens and comments are the same,
-// comment_only two whose tokens are the same once the comments are set aside. So a raw string's spaces are its value's and count as code, a `;`
-// swapped for a newline is not whitespace though it compiles alike, and a line
+// comment_only two whose tokens are the same once the comments are set aside.
+// So a raw string's spaces are its value's and count as code, a `;` swapped
+// for a newline is not whitespace though it compiles alike, and a line
 // ending's carriage return, which the language discards even inside a raw
 // string, is. Never `git diff -w`, which calls a newline that ends a statement
 // a space, and never a pattern over the text, which cannot tell a comment
@@ -140,61 +154,81 @@ func ClassifyGo(before, after []byte) (ChangeClass, bool) {
 	if bytes.HasPrefix(before, byteOrderMark) != bytes.HasPrefix(after, byteOrderMark) {
 		return "", false
 	}
-	a, b := lexGo(before), lexGo(after)
-	imports, ok := lexInStep(a, b)
-	if !ok {
-		return "", false
-	}
-	rule := contextRule{preamble: imports.gaps, examples: exampleBodies(a, b)}
-	if !slices.Equal(a.context(rule), b.context(rule)) {
+	var j judgement
+	if !j.lexInStep(lexGo(before), lexGo(after)) {
 		return "", false
 	}
 	if !slices.Equal(buildConstraints(before), buildConstraints(after)) {
 		return "", false
 	}
-	if slices.EqualFunc(a.comments, b.comments, sameComment) {
+	if j.sameText {
 		return ChangeClassWhitespaceOnly, true
 	}
 	return ChangeClassCommentOnly, true
 }
 
-// goFile is one version of the file as the lexer reads it: its comments, each
-// placed by the code token it precedes, and what the walk to there knows.
-// Code tokens are compared as both versions are read and never kept, so a
-// classification holds the comments of the two versions and nothing else.
-type goFile struct {
-	src      []byte
-	file     *token.File
-	sc       goscanner.Scanner
-	comments []goComment
-	prevEnd  int // where the last lexeme other than an inserted semicolon ended
-	open     int // the comment the next lexeme gives its after and next, or -1
-	groups   int // comment groups begun
-	depth    int // braces open
-	region   int // the code token opening the outermost brace still open
-	line     int // where the line holding seen starts
-	seen     int // how far line has been brought (lineStart)
+// judgement is what the walk has found of a change so far, and what it holds
+// of a gap a later token decides.
+//
+// THE WALK KEEPS ONE GAP. Both versions are lexed in step, a code token at a
+// time; the comments each reads before code token k — gap k — are compared
+// with the other's the moment both have read token k, and dropped. A gap's
+// comments are code whole where a LATER token says so — an import's path
+// that turns out to be "C", the closing brace of a body that turns out to
+// hold an example's output — so such a gap is compared both ways when it is
+// read, and the walk keeps the two answers, never the comments, until that
+// token. A version's comments are offsets into its source, the text the
+// lexer returned for one left behind: so what a classification holds is two
+// gaps of offsets, and the rest of its cost is the lexer's own. Keeping every
+// comment of both versions to the end instead — its text, its layout, and the
+// entries a directive's context made of them — cost two versions at
+// [MaxClassedBlobBytes] of nothing but comments 247 ms and 374 MB, and 321 ms
+// and 577 MB where a directive governed them all: nine times the time and
+// thirty times the allocation of code as long (BenchmarkClassifyGo, measured
+// as MaxClassedBlobBytes' doc says).
+type judgement struct {
+	same     bool // every token, and every directive's context, alike: comment_only so far
+	sameText bool // every comment alike too: whitespace_only so far
+	depth    int  // braces open
+	imports  cImports
+	body     pendingBody
+	// text is scratch for two comments' texts where a carriage return the
+	// lexer drops sits in their bytes.
+	text [2][]byte
 }
 
-// goComment is one comment of a version, and where it sits.
-type goComment struct {
-	text   string // as the lexer returns it: its markers, no carriage return
-	gap    int    // the code token it precedes: the comments of one gap lie between two tokens
-	end    int    // the offset just past it
-	group  int    // its comment group: comments on adjacent lines, with no token between
-	region int    // the code token opening the top-level brace it sits in, or -1
-	kind   commentKind
-	output bool // an example's Output: or Unordered output:
-	key    layout
+// goFile is one version of the file as the walk reads it: the comments of the
+// gap it is in, and what the walk to there knows.
+type goFile struct {
+	src     []byte
+	file    *token.File
+	sc      goscanner.Scanner
+	gap     []lexComment // the comments before the code token being read
+	open    bool         // gap's last comment awaits the lexeme after it
+	prevEnd int          // where the last lexeme other than an inserted semicolon ended
+	line    int          // where the line holding seen starts
+	seen    int          // how far line has been brought (lineStart)
+	lower   []byte       // scratch for a header comment's text in lower case
+}
+
+// lexComment is one comment of a version: where its bytes are, where it sits,
+// and what reads it — its text is src[off:end] itself, but for the carriage
+// returns the lexer drops from it.
+type lexComment struct {
+	off, end int32
+	key      layout
+	kind     commentKind
+	cr       bool // its bytes hold a carriage return the lexer drops from its text
+	output   bool // an example's Output: or Unordered output:
 }
 
 // layout is where a comment sits, as far as a directive's meaning reads it.
 type layout struct {
-	col    int   // bytes before it on its line
-	lead   bool  // nothing but blanks before it on its line
+	col    int32 // bytes before it on its line
+	next   int32 // the column the lexeme after it starts at, or -1 at the end of the file
 	before uint8 // line breaks since the lexeme before it: 0, 1, or 2 for a blank line or more
 	after  uint8 // line breaks until the lexeme after it, likewise
-	next   int   // the column the lexeme after it starts at, or -1 at the end of the file
+	lead   bool  // nothing but blanks before it on its line
 }
 
 // commentKind is what reads a comment besides a person.
@@ -220,35 +254,42 @@ const headerGap = 3
 
 // lexGo readies one version for lexInStep.
 func lexGo(src []byte) *goFile {
-	f := &goFile{src: src, open: -1, region: -1}
+	f := &goFile{src: src}
 	f.file = token.NewFileSet().AddFile("", -1, len(src))
 	f.sc.Init(f.file, src, nil, goscanner.ScanComments)
 	return f
 }
 
-// lexInStep walks both versions' code tokens side by side, stopping at the
-// first that differs, and answers whether every token matched with neither
-// version reporting a lexical error, and where a cgo preamble may sit.
-func lexInStep(a, b *goFile) (cImports, bool) {
-	var imports cImports
+// lexInStep walks both versions' code tokens side by side, judging each gap
+// as its token is read, and answers whether every token matched, with
+// neither version reporting a lexical error, and every directive's context
+// compared alike. It stops at the first that does not.
+func (j *judgement) lexInStep(a, b *goFile) bool {
+	j.same, j.sameText = true, true
 	for k := 0; ; k++ {
 		ta, la := a.code(k)
 		tb, lb := b.code(k)
 		if ta != tb || la != lb || a.sc.ErrorCount > 0 || b.sc.ErrorCount > 0 {
-			return imports, false
+			return false
 		}
+		j.judgeGap(a, b, ta)
 		if ta == token.EOF {
-			return imports, true
+			j.endFile()
+			return j.same
 		}
-		imports.see(k, ta, la, a.depth)
-		a.brace(k, ta)
-		b.brace(k, tb)
+		j.seeImport(ta, la)
+		j.brace(ta)
+		if !j.same {
+			return false
+		}
 	}
 }
 
 // code scans to the next code token — an inserted semicolon is one — and
-// answers it, recording each comment it passes as one of gap k.
+// answers it, gathering the comments it passes as gap k, every one of which
+// knows what follows it by the time it returns.
 func (f *goFile) code(k int) (token.Token, string) {
+	f.gap = f.gap[:0]
 	for {
 		pos, tok, lit := f.sc.Scan()
 		off := f.file.Offset(pos)
@@ -257,31 +298,44 @@ func (f *goFile) code(k int) (token.Token, string) {
 			f.comment(k, off, f.file.Offset(f.sc.End()), lit)
 			continue
 		case tok == token.EOF:
-			f.closeOpen(len(f.src), -1)
-		case tok != token.SEMICOLON || lit != "\n":
+			f.closeOpen(len(f.src))
+		case tok == token.SEMICOLON && lit == "\n":
 			// An inserted semicolon sits at the newline that ended its line,
 			// or inside the comment that held one: no lexeme a layout is
-			// measured from.
-			f.closeOpen(off, off-f.lineStart(off))
+			// measured from. What follows the gap's last comment is the
+			// lexeme the lexer reaches next, past the blanks it skips, which
+			// is read now rather than when the next gap begins, so that the
+			// gap is whole when the walk compares it.
+			if f.open {
+				f.closeOpen(f.nextLexeme(int(f.gap[len(f.gap)-1].end)))
+			}
+		default:
+			f.closeOpen(off)
 			f.prevEnd = f.file.Offset(f.sc.End())
 		}
 		return tok, lit
 	}
 }
 
-// comment records the comment text at [off, end) as one of gap k.
+// comment records the comment text at [off, end) as one of gap k. Its text is
+// read here, for what reads it, and left behind: the comment is its offsets.
 func (f *goFile) comment(k, off, end int, text string) {
 	start := f.lineStart(off)
-	f.closeOpen(off, off-start)
-	c := goComment{
-		text:   text,
-		gap:    k,
-		end:    end,
-		region: -1,
-		kind:   kindOf(text, k <= headerGap),
-		output: outputMarker(text),
+	f.closeOpen(off)
+	if len(f.gap) == cap(f.gap) {
+		// A gap may hold every comment of the file, so it doubles as it
+		// grows, allocating under four records a comment in all; append,
+		// which grows a long slice by a quarter, allocates five times the
+		// records it ends with, and slices.Grow overshoots a doubling.
+		grown := make([]lexComment, len(f.gap), max(2*len(f.gap), 16))
+		copy(grown, f.gap)
+		f.gap = grown
+	}
+	f.gap = append(f.gap, lexComment{
+		off: int32(off),
+		end: int32(end),
 		key: layout{
-			col: off - start,
+			col: int32(off - start),
 			// Every byte that is not whitespace belongs to a lexeme (a
 			// leading byte-order mark aside, which no version adds alone),
 			// so only blanks precede a comment on its line exactly when the
@@ -289,86 +343,134 @@ func (f *goFile) comment(k, off, end int, text string) {
 			lead:   f.prevEnd <= start,
 			before: lineBreaks(f.src[f.prevEnd:off]),
 		},
-	}
-	if f.depth > 0 {
-		c.region = f.region
-	}
-	if n := len(f.comments); n == 0 || f.comments[n-1].gap != k || c.key.before > 1 {
-		f.groups++
-	}
-	c.group = f.groups
-	f.comments = append(f.comments, c)
-	f.open = len(f.comments) - 1
+		kind:   f.kindOf(text, k <= headerGap),
+		cr:     len(text) != end-off,
+		output: outputMarker(text),
+	})
+	f.open = true
 	f.prevEnd = end
 }
 
 // closeOpen gives the comment awaiting it what follows it: the lexeme at off,
-// starting at column col (-1: the end of the file).
-func (f *goFile) closeOpen(off, col int) {
-	if f.open < 0 {
+// or the end of the file at len(src).
+func (f *goFile) closeOpen(off int) {
+	if !f.open {
 		return
 	}
-	c := &f.comments[f.open]
+	f.open = false
+	c := &f.gap[len(f.gap)-1]
 	c.key.after = lineBreaks(f.src[c.end:off])
-	c.key.next = col
-	f.open = -1
+	c.key.next = -1
+	if off < len(f.src) {
+		c.key.next = int32(off - f.lineStart(off))
+	}
 }
 
-// brace follows code token k into and out of top-level braces — a function's
-// body, a composite's elements — the regions an example's output is judged in.
-func (f *goFile) brace(k int, tok token.Token) {
-	switch tok {
-	case token.LBRACE:
-		if f.depth == 0 {
-			f.region = k
+// nextLexeme is where the lexeme at or after off starts: past the blanks,
+// carriage returns and newlines go/scanner skips, every other byte belonging
+// to a lexeme — or the end of the file.
+func (f *goFile) nextLexeme(off int) int {
+	for off < len(f.src) {
+		switch f.src[off] {
+		case ' ', '\t', '\r', '\n':
+			off++
+		default:
+			return off
 		}
-		f.depth++
-	case token.RBRACE:
-		if f.depth > 0 {
-			f.depth--
+	}
+	return off
+}
+
+// judgeGap compares the comments both versions read before code token tok —
+// a gap, every comment of which knows what follows it — and files what it
+// found where the token says the gap belongs: before an import declaration
+// or one of its specs, where the import's path says whether it is a cgo
+// preamble; in a top-level body, whose closing brace says whether it holds
+// an example; or nowhere a later token decides, where only a directive's
+// context counts.
+func (j *judgement) judgeGap(a, b *goFile, tok token.Token) {
+	empty := len(a.gap) == 0 && len(b.gap) == 0
+	context, whole, output := true, true, false
+	if !empty {
+		if j.sameText && !j.sameTexts(a, b) {
+			j.sameText = false
+		}
+		context = j.sameContexts(a, b)
+		output = slices.ContainsFunc(a.gap, isOutput) || slices.ContainsFunc(b.gap, isOutput)
+	}
+	pending := j.imports.pendingFor(tok, j.depth)
+	inBody := j.depth > 0
+	if !empty && (pending != nil || inBody && j.body.whole) {
+		whole = j.sameWholes(a, b)
+	}
+	if pending != nil {
+		*pending = pendingGap{open: true, whole: whole, context: context}
+	}
+	if inBody {
+		j.body.output = j.body.output || output
+		j.body.context = j.body.context && context
+		j.body.whole = j.body.whole && whole
+	}
+	if pending == nil && !inBody {
+		j.same = j.same && context
+	}
+}
+
+// sameTexts reports whether the gap's comments are the same in both
+// versions, comment for comment: whitespace_only's own test.
+func (j *judgement) sameTexts(a, b *goFile) bool {
+	if len(a.gap) != len(b.gap) {
+		return false
+	}
+	for i := range a.gap {
+		if !j.sameCommentText(a, a.gap[i], b, b.gap[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameWholes reports whether the gap's comments are the same in both
+// versions, text and layout, comment for comment: a gap that is code whole.
+func (j *judgement) sameWholes(a, b *goFile) bool {
+	if len(a.gap) != len(b.gap) {
+		return false
+	}
+	for i := range a.gap {
+		if a.gap[i].key != b.gap[i].key || !j.sameCommentText(a, a.gap[i], b, b.gap[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameContexts reports whether the two versions' comments of the gap hold
+// the same entries a directive's context is, in order: from the gap's first
+// directive on, every comment whole, text and layout; ahead of it, a header
+// comment's text, and the layout of each other comment of the directive's
+// own group — free to say anything, not to move. The entries are walked in
+// step and never gathered.
+func (j *judgement) sameContexts(a, b *goFile) bool {
+	fa, ga := directiveStart(a.gap)
+	fb, gb := directiveStart(b.gap)
+	x, y := 0, 0
+	for {
+		px, okx := nextEntry(a.gap, &x, fa, ga)
+		py, oky := nextEntry(b.gap, &y, fb, gb)
+		switch {
+		case okx != oky || px != py:
+			return false
+		case !okx:
+			return true
+		}
+		cx, cy := a.gap[x-1], b.gap[y-1]
+		if px != layoutEntry && !j.sameCommentText(a, cx, b, cy) || px != textEntry && cx.key != cy.key {
+			return false
 		}
 	}
 }
 
-// contextRule names the gaps all of whose comments are code: a cgo preamble's,
-// and those of an example's body.
-type contextRule struct {
-	preamble map[int]bool // gaps, by the code token they precede
-	examples map[int]bool // top-level brace regions, by the token opening them
-}
-
-// whole reports whether c's gap is one all of whose comments are code.
-func (r contextRule) whole(c goComment) bool {
-	return r.preamble[c.gap] || c.region >= 0 && r.examples[c.region]
-}
-
-// exampleBodies is the top-level brace regions holding an example's output
-// marker in either version.
-func exampleBodies(files ...*goFile) map[int]bool {
-	var bodies map[int]bool
-	for _, f := range files {
-		for _, c := range f.comments {
-			if c.output && c.region >= 0 {
-				if bodies == nil {
-					bodies = map[int]bool{}
-				}
-				bodies[c.region] = true
-			}
-		}
-	}
-	return bodies
-}
-
-// contextEntry is what a version holds of one comment a directive governs: its
-// text, its layout, or both, beside the gap it sits in.
-type contextEntry struct {
-	gap  int
-	text string
-	key  layout
-	part entryPart
-}
-
-// entryPart is what of a comment its entry holds.
+// entryPart is what of a comment a directive's context holds.
 type entryPart uint8
 
 const (
@@ -384,70 +486,264 @@ const (
 	layoutEntry
 )
 
-// context is every entry of this version's comments that a directive governs,
-// in order: the two versions' lists equal is "no directive changed".
-func (f *goFile) context(rule contextRule) []contextEntry {
-	var out []contextEntry
-	for cs := f.comments; len(cs) > 0; {
-		n := 1
-		for n < len(cs) && cs[n].gap == cs[0].gap {
-			n++
-		}
-		out = appendContext(out, cs[:n], rule)
-		cs = cs[n:]
-	}
-	return out
-}
-
-// appendContext appends the entries of one gap's comments: every one where the
-// gap is code whole; else, from its first directive on, every comment whole;
-// ahead of it, a header comment's text and the layout of the directive's own
-// group.
-func appendContext(out []contextEntry, gap []goComment, rule contextRule) []contextEntry {
-	if rule.whole(gap[0]) {
-		for _, c := range gap {
-			out = append(out, c.entry(wholeEntry))
-		}
-		return out
-	}
-	first := slices.IndexFunc(gap, func(c goComment) bool { return c.kind == directiveComment })
-	for i, c := range gap {
+// nextEntry moves *i past the next comment of gap that a directive's context
+// holds, and answers what of it the context holds; first is the gap's first
+// directive and group the first comment of its group, both len(gap) where it
+// holds none.
+func nextEntry(gap []lexComment, i *int, first, group int) (entryPart, bool) {
+	for ; *i < len(gap); *i++ {
+		var part entryPart
 		switch {
-		case first >= 0 && i >= first:
-			out = append(out, c.entry(wholeEntry))
-		case c.kind == headerComment:
-			out = append(out, c.entry(textEntry))
-		case first >= 0 && c.group == gap[first].group:
-			out = append(out, c.entry(layoutEntry))
+		case *i >= first:
+			part = wholeEntry
+		case gap[*i].kind == headerComment:
+			part = textEntry
+		case *i >= group:
+			part = layoutEntry
+		default:
+			continue
+		}
+		*i++
+		return part, true
+	}
+	return 0, false
+}
+
+// directiveStart is the index of the gap's first directive and that of the
+// first comment of its comment group — comments on adjacent lines, with no
+// token between — or len(gap) for both where it holds none.
+func directiveStart(gap []lexComment) (first, group int) {
+	for i, c := range gap {
+		if c.key.before > 1 {
+			group = i
+		}
+		if c.kind == directiveComment {
+			return i, group
 		}
 	}
-	return out
+	return len(gap), len(gap)
 }
 
-// entry is c's entry holding part.
-func (c goComment) entry(part entryPart) contextEntry {
-	e := contextEntry{gap: c.gap, part: part}
-	if part != layoutEntry {
-		e.text = c.text
-	}
-	if part != textEntry {
-		e.key = c.key
-	}
-	return e
+// isOutput reports an example's output marker.
+func isOutput(c lexComment) bool { return c.output }
+
+// sameCommentText reports whether two comments, x of version a and y of b, have
+// the same text as the lexer returns it.
+func (j *judgement) sameCommentText(a *goFile, x lexComment, b *goFile, y lexComment) bool {
+	return bytes.Equal(a.text(x, &j.text[0]), b.text(y, &j.text[1]))
 }
 
-// sameComment reports two versions' comments that are one comment, in one
-// place among the code.
-func sameComment(x, y goComment) bool { return x.gap == y.gap && x.text == y.text }
+// text is c's text as the lexer returns it: its bytes, but for the carriage
+// returns it drops, which only where its bytes hold one are stripped, into
+// buf.
+func (f *goFile) text(c lexComment, buf *[]byte) []byte {
+	raw := f.src[c.off:c.end]
+	if !c.cr {
+		return raw
+	}
+	*buf = stripCR((*buf)[:0], raw, raw[1] == '*')
+	return *buf
+}
+
+// stripCR appends b, a comment's bytes, without the carriage returns
+// go/scanner drops from its text: every one, but for one in a block
+// comment's `*\r/`, which would close the comment early without it (its own
+// stripCR, Go issue 11151).
+func stripCR(dst, b []byte, block bool) []byte {
+	start := len(dst)
+	for i, ch := range b {
+		if ch != '\r' || block && len(dst)-start > len("/*") && dst[len(dst)-1] == '*' && i+1 < len(b) && b[i+1] == '/' {
+			dst = append(dst, ch)
+		}
+	}
+	return dst
+}
+
+// pendingBody is the open top-level body's gaps — a function's, a
+// composite's — compared both ways until its closing brace says whether it
+// holds an example's output, which makes every comment in it code.
+type pendingBody struct {
+	output  bool // an example's output marker in either version
+	whole   bool // every gap so far alike, text and layout
+	context bool // every gap so far alike as a directive's context
+}
+
+// brace follows code token tok into and out of top-level braces — a
+// function's body, a composite's elements — the bodies an example's output
+// is judged in, and gives a body's gaps their verdict at its closing brace.
+func (j *judgement) brace(tok token.Token) {
+	switch tok {
+	case token.LBRACE:
+		if j.depth == 0 {
+			j.body = pendingBody{whole: true, context: true}
+		}
+		j.depth++
+	case token.RBRACE:
+		if j.depth > 0 {
+			j.depth--
+			if j.depth == 0 {
+				j.closeBody()
+			}
+		}
+	}
+}
+
+// closeBody files the body's gaps: whole where it holds an example's output,
+// else as a directive's context.
+func (j *judgement) closeBody() {
+	if j.body.output {
+		j.same = j.same && j.body.whole
+	} else {
+		j.same = j.same && j.body.context
+	}
+}
+
+// endFile files what the end of the file leaves undecided: an import
+// declaration or a body it cuts off.
+func (j *judgement) endFile() {
+	j.closeSpec()
+	j.closeDecl()
+	if j.depth > 0 {
+		j.closeBody()
+	}
+}
+
+// cImports reads the import declarations, a code token at a time, for where
+// a cgo preamble may sit: before an import declaration that imports "C",
+// whose doc cgo reads where "C" is its only spec, and before the spec
+// itself, whose doc it reads otherwise. Both are code. A gap there is a
+// preamble only once its import's path is read, so its two comparisons wait
+// for that.
+type cImports struct {
+	state cState
+	decl  pendingGap // the gap before the declaration's import keyword
+	spec  pendingGap // the gap before the spec being read, in a parenthesized declaration
+}
+
+// cState is where cImports is in an import declaration.
+type cState uint8
+
+const (
+	cOutside cState = iota // in no import declaration
+	cImport                // just past `import`
+	cNamed                 // past `import name`
+	cBlock                 // in `import ( … )`, where a spec begins
+	cSpec                  // in `import ( … )`, past a spec's first token
+)
+
+// pendingGap is a gap a cgo preamble may sit in, compared both ways until
+// its import's path says which comparison counts.
+type pendingGap struct {
+	open    bool
+	c       bool // its import is of "C": a preamble, code whole
+	whole   bool // its comments alike, text and layout
+	context bool // its comments alike as a directive's context
+}
+
+// pendingFor is the pending gap the gap before code token tok is, read at
+// brace depth depth, or nil: the gap before an import keyword, or before a
+// spec of a parenthesized declaration.
+func (c *cImports) pendingFor(tok token.Token, depth int) *pendingGap {
+	switch {
+	case c.state == cOutside && tok == token.IMPORT && depth == 0:
+		return &c.decl
+	case c.state == cBlock && tok != token.RPAREN && tok != token.SEMICOLON && tok != token.EOF:
+		return &c.spec
+	}
+	return nil
+}
+
+// seeImport reads code token tok, the gap before which judgeGap has filed.
+func (j *judgement) seeImport(tok token.Token, lit string) {
+	c := &j.imports
+	switch c.state {
+	case cOutside:
+		if tok == token.IMPORT && j.depth == 0 {
+			c.state = cImport
+		}
+	case cImport:
+		switch tok {
+		case token.LPAREN:
+			c.state = cBlock
+		case token.IDENT, token.PERIOD:
+			c.state = cNamed
+		case token.STRING:
+			c.path(lit, false)
+			j.closeDecl()
+		default:
+			j.closeDecl()
+		}
+	case cNamed:
+		if tok == token.STRING {
+			c.path(lit, false)
+		}
+		j.closeDecl()
+	case cBlock, cSpec:
+		switch {
+		case tok == token.RPAREN:
+			j.closeSpec()
+			j.closeDecl()
+		case tok == token.SEMICOLON:
+			j.closeSpec()
+			c.state = cBlock
+		case c.state == cBlock:
+			c.state = cSpec
+			if tok == token.STRING {
+				c.path(lit, true)
+			}
+		case tok == token.STRING:
+			c.path(lit, true)
+		}
+	}
+}
+
+// path reads an import path's literal; inSpec is whether it is a spec's of a
+// parenthesized declaration. Both spellings of "C" count: go/build unquotes a
+// raw one to C, and cgo reads only the quoted one, so the raw one errs toward
+// code.
+func (c *cImports) path(lit string, inSpec bool) {
+	if lit != `"C"` && lit != "`C`" {
+		return
+	}
+	c.decl.c = true
+	if inSpec {
+		c.spec.c = true
+	}
+}
+
+// closeDecl ends the import declaration, filing the gap before it.
+func (j *judgement) closeDecl() {
+	j.same = j.same && j.imports.decl.verdict()
+	j.imports.decl, j.imports.state = pendingGap{}, cOutside
+}
+
+// closeSpec ends a parenthesized declaration's spec, filing the gap before it.
+func (j *judgement) closeSpec() {
+	j.same = j.same && j.imports.spec.verdict()
+	j.imports.spec = pendingGap{}
+}
+
+// verdict is the comparison that counts for the gap: whole where it is a cgo
+// preamble, else as a directive's context — and nothing to hold where no gap
+// is pending.
+func (p pendingGap) verdict() bool {
+	switch {
+	case !p.open:
+		return true
+	case p.c:
+		return p.whole
+	}
+	return p.context
+}
 
 // kindOf is what reads the comment text, as the lexer returns it; header is
 // whether it sits in the file's header.
-func kindOf(text string, header bool) commentKind {
+func (f *goFile) kindOf(text string, header bool) commentKind {
 	if strings.HasPrefix(text, "/*") {
 		switch body := strings.TrimSuffix(text[2:], "*/"); {
 		case strings.HasPrefix(body, "line "), suppression(body):
 			return directiveComment
-		case header && generatedMarker(body):
+		case header && f.generatedMarker(body):
 			return headerComment
 		}
 		return plainComment
@@ -458,7 +754,7 @@ func kindOf(text string, header bool) commentKind {
 	switch body := text[2:]; {
 	case goDirective(body), generatorMarker(body), suppression(body):
 		return directiveComment
-	case header && generatedMarker(body):
+	case header && f.generatedMarker(body):
 		return headerComment
 	}
 	return plainComment
@@ -498,21 +794,45 @@ func suppression(body string) bool {
 			return true
 		}
 	}
-	return strings.Contains(strings.ToLower(body), "#nosec")
+	for i := strings.IndexByte(body, '#'); i >= 0; {
+		if strings.EqualFold(body[i:min(i+len("#nosec"), len(body))], "#nosec") {
+			return true
+		}
+		next := strings.IndexByte(body[i+1:], '#')
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+	return false
 }
 
+// generatedPhrases are the phrases that mark a file generated, in lower case:
+// Go's "Code generated … DO NOT EDIT." line (go/ast's IsGenerated), and the
+// looser ones golangci-lint takes for one.
+var generatedPhrases = [][]byte{[]byte("code generated"), []byte("do not edit"), []byte("autogenerated"), []byte("automatically generated"), []byte("generated by")}
+
 // generatedMarker reports a header comment's body that marks the file
-// generated: Go's "Code generated … DO NOT EDIT." line (go/ast's
-// IsGenerated), and the looser phrases golangci-lint takes for one, in any
-// case — under any of which it lints none of the file.
-func generatedMarker(body string) bool {
-	lower := strings.ToLower(body)
-	for _, phrase := range []string{"code generated", "do not edit", "autogenerated", "automatically generated", "generated by"} {
-		if strings.Contains(lower, phrase) {
+// generated, in any case — under any of which golangci-lint lints none of the
+// file. The body is lowered into scratch the version keeps, so a header of a
+// hundred thousand comments costs no allocation a comment.
+func (f *goFile) generatedMarker(body string) bool {
+	f.lower = appendLower(f.lower[:0], body)
+	for _, phrase := range generatedPhrases {
+		if bytes.Contains(f.lower, phrase) {
 			return true
 		}
 	}
 	return false
+}
+
+// appendLower appends s in lower case, rune by rune, as strings.ToLower maps
+// it.
+func appendLower(dst []byte, s string) []byte {
+	for _, r := range s {
+		dst = utf8.AppendRune(dst, unicode.ToLower(r))
+	}
+	return dst
 }
 
 // outputMarker reports a comment go/doc reads as an example's output, once it
@@ -532,91 +852,15 @@ func outputMarker(text string) bool {
 	return false
 }
 
-// cImports finds where a cgo preamble may sit: before an import declaration
-// that imports "C", whose doc cgo reads where "C" is its only spec, and before
-// the spec itself, whose doc it reads otherwise. Both are code. It is fed the
-// code tokens in order, with the brace depth each is read at.
-type cImports struct {
-	state   cState
-	declGap int          // the gap before the declaration's import keyword
-	specGap int          // the gap before the spec being read, in a parenthesized declaration
-	gaps    map[int]bool // the gaps a preamble may sit in
-}
-
-// cState is where cImports is in an import declaration.
-type cState uint8
-
-const (
-	cOutside cState = iota // in no import declaration
-	cImport                // just past `import`
-	cNamed                 // past `import name`
-	cBlock                 // in `import ( … )`, where a spec begins
-	cSpec                  // in `import ( … )`, past a spec's first token
-)
-
-// see reads code token k.
-func (c *cImports) see(k int, tok token.Token, lit string, depth int) {
-	switch c.state {
-	case cOutside:
-		if tok == token.IMPORT && depth == 0 {
-			c.declGap, c.state = k, cImport
-		}
-	case cImport:
-		c.state = cOutside
-		switch tok {
-		case token.LPAREN:
-			c.state = cBlock
-		case token.IDENT, token.PERIOD:
-			c.state = cNamed
-		case token.STRING:
-			c.path(lit, -1)
-		}
-	case cNamed:
-		if tok == token.STRING {
-			c.path(lit, -1)
-		}
-		c.state = cOutside
-	case cBlock, cSpec:
-		switch {
-		case tok == token.RPAREN:
-			c.state = cOutside
-		case tok == token.SEMICOLON:
-			c.state = cBlock
-		case c.state == cBlock:
-			c.specGap, c.state = k, cSpec
-			if tok == token.STRING {
-				c.path(lit, k)
-			}
-		case tok == token.STRING:
-			c.path(lit, c.specGap)
-		}
-	}
-}
-
-// path reads an import path's literal; specGap is the gap before its spec in a
-// parenthesized declaration, or -1. Both spellings of "C" count: go/build
-// unquotes a raw one to C, and cgo reads only the quoted one, so the raw one
-// errs toward code.
-func (c *cImports) path(lit string, specGap int) {
-	if lit != `"C"` && lit != "`C`" {
-		return
-	}
-	if c.gaps == nil {
-		c.gaps = map[int]bool{}
-	}
-	c.gaps[c.declGap] = true
-	if specGap >= 0 {
-		c.gaps[specGap] = true
-	}
-}
-
 // buildConstraints is what go/build reads of a file's build constraints: every
 // //go:build line of its header, and the // +build lines it honours — those
 // above the last blank line before the header's first line that is not a //
 // comment — following go/build's reading of a header line for line (its
 // parseFileHeader). It is why a blank line, or a block comment above a +build
 // line, is code there, while a //go:build line may sit anywhere in the
-// header. A header ends at the first line holding anything but comments.
+// header. A header ends at the first line holding anything but comments, so
+// a header may be a file of comments: a line is made a string only once it
+// holds a constraint's word.
 func buildConstraints(src []byte) []string {
 	src = bytes.TrimPrefix(src, byteOrderMark)
 	var lines []string
@@ -638,7 +882,7 @@ header:
 		if !bytes.HasPrefix(line, []byte("//")) {
 			ended = true
 		}
-		if !inBlock && constraint.IsGoBuild(string(line)) {
+		if !inBlock && bytes.HasPrefix(line, []byte("//go:build")) && constraint.IsGoBuild(string(line)) {
 			lines = append(lines, string(line))
 		}
 		for len(line) > 0 {
@@ -661,6 +905,9 @@ header:
 		}
 	}
 	for line := range bytes.SplitSeq(src[:end], []byte("\n")) {
+		if !bytes.Contains(line, []byte("+build")) {
+			continue
+		}
 		if text := string(bytes.TrimSpace(line)); constraint.IsPlusBuild(text) {
 			lines = append(lines, text)
 		}

@@ -432,7 +432,13 @@
 // go/build reads them from its header. Documentation — a doc comment above a
 // pragma, a license above a //go:build line — changes freely. A class is
 // judged a path at a time and gives none to a version past
-// [MaxClassedBlobBytes].
+// [MaxClassedBlobBytes]. The walk holds one gap of a version's comments at a
+// time — those between two code tokens, as offsets into it — and keeps only
+// the verdict of one a later token decides, so what a path costs follows its
+// bytes, whatever they hold: a file of nothing but comments takes some four
+// times the time of code as long ([MaxClassedBlobBytes] has the measure),
+// where keeping every comment to the walk's end took nine, and thirty times
+// the allocation.
 //
 // # What this package does not do
 //

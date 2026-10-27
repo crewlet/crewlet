@@ -1,9 +1,12 @@
 package code_test
 
 import (
+	"bytes"
 	"go/parser"
 	"go/scanner"
 	"go/token"
+	"math"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -430,6 +433,48 @@ func TestAnUnclassableVersionGetsNoClass(t *testing.T) {
 		atBound, strings.Replace(atBound, "package p", "package\tp", 1), code.ChangeClassWhitespaceOnly)
 	wantClass(t, "a version a byte past the bound",
 		atBound, strings.Replace(atBound, "package p", "package  p", 1), noClass)
+}
+
+// A CLASSIFICATION'S MEMORY FOLLOWS ITS BYTES, NOT ITS COMMENTS: the walk
+// holds the comments of one gap at a time, as records of 24 bytes in a gap
+// that doubles as it grows — under four records a comment allocated in all —
+// so past what the lexer allocates reading the two versions it allocates
+// under 32 bytes a byte of them, since a comment takes three at the least,
+// its slashes and its newline. That holds where the file is one gap of
+// comments, every one of which a directive governs, the costliest shape.
+// Keeping every comment of both versions to the walk's end, and a
+// directive's entries made of them, allocated 231 bytes a byte of it.
+//
+// NOT PARALLEL, because an allocation figure is the whole process's; each
+// figure is the least of three runs, so another goroutine's allocation
+// during one is not counted.
+func TestAClassificationAllocatesByItsBytes(t *testing.T) {
+	before := filled("package p\n\n//go:noinline\n", "//\n", "func f() {}\n", 64<<10)
+	after := bytes.Clone(before)
+	lexed := leastAllocated(func() { lexes(before); lexes(after) })
+	var class code.ChangeClass
+	var ok bool
+	classed := leastAllocated(func() { class, ok = code.ClassifyGo(before, after) })
+	if !ok || class != code.ChangeClassWhitespaceOnly {
+		t.Fatalf("classed %q (%v), want whitespace_only: the case is not the one it measures", class, ok)
+	}
+	if limit := lexed + 32*uint64(len(before)+len(after)); classed > limit {
+		t.Errorf("classing %d bytes of comments allocated %d bytes, past the lexer's %d and 32 a byte: %d",
+			len(before)+len(after), classed, lexed, limit)
+	}
+}
+
+// leastAllocated is the fewest bytes any of three calls of f allocated.
+func leastAllocated(f func()) uint64 {
+	least := uint64(math.MaxUint64)
+	for range 3 {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		f()
+		runtime.ReadMemStats(&after)
+		least = min(least, after.TotalAlloc-before.TotalAlloc)
+	}
+	return least
 }
 
 // FuzzClassifyGo: whatever two versions are, a class is the same both ways
