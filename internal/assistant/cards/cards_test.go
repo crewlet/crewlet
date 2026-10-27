@@ -384,3 +384,51 @@ func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 		t.Errorf("a project link with no name reads %q (%v), want its key", link.Label, err)
 	}
 }
+
+// A RECORD CARRIES THE KEY PROSE WRITES IT BY, read from the record as its
+// spec says, so the drawer turns the answer's first "GOP-11" into the task's
+// chip without guessing which of a card's strings is a key. A spec that names
+// no key carries none: the subtitle is never taken for one. Mutation: drop
+// the Key from buildEntity and the card names no key.
+func TestARecordCarriesTheKeyProseWritesItBy(t *testing.T) {
+	t.Parallel()
+	answer, _ := json.Marshal(map[string]any{"task": map[string]any{
+		"key": "GOP-11", "title": "Android 12 crash when lesson audio starts"}})
+	keyed := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, Root: "task",
+		ID: "key", Key: "key", Title: "title", Subtitle: "key"}}
+	built, err := cards.Build(keyed, answer, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := built.Card.Entity.Key; got != "GOP-11" {
+		t.Errorf("the task's key is %q, want GOP-11", got)
+	}
+	unkeyed := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, Root: "task",
+		ID: "key", Title: "title", Subtitle: "key"}}
+	built, err = cards.Build(unkeyed, answer, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := built.Card.Entity.Key; got != "" {
+		t.Errorf("a spec with no key carries %q", got)
+	}
+}
+
+// THE MODEL IS TOLD EACH RECORD'S KEY, beside its title, so it names the
+// record the way the drawer finds it. Mutation: leave Key out of the digest.
+func TestTheModelIsToldARecordsKey(t *testing.T) {
+	t.Parallel()
+	card := wire.Card{Type: wire.CardEntity, Entity: &wire.EntityCard{Kind: wire.ResourceTask,
+		ID: "GOP-11", Key: "GOP-11", Title: "Android 12 crash"}}
+	out, err := cards.Summary(card, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digest map[string]any
+	if err := json.Unmarshal(out, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if digest["key"] != "GOP-11" {
+		t.Errorf("the model reads %s, with no key", out)
+	}
+}

@@ -97,6 +97,9 @@ type Entity struct {
 	Root string
 	// ID, Title and Subtitle are paths within the record.
 	ID, Title, Subtitle string
+	// Key is the path to the short name the record is written by in prose
+	// (a task's key, a project's), empty for a record with none.
+	Key string
 	// Name is the card's heading where the record names none of its own
 	// (Title is empty): the company's principles are three values, not a
 	// record with a name.
@@ -200,7 +203,7 @@ func (s Spec) Paths() []Path {
 	}
 	if e := s.Entity; e != nil {
 		add("", e.Root)
-		for _, p := range []string{e.ID, e.Title, e.Subtitle, e.Text} {
+		for _, p := range []string{e.ID, e.Key, e.Title, e.Subtitle, e.Text} {
 			add("record", p)
 		}
 		for _, f := range e.Facts {
@@ -455,7 +458,8 @@ func morePast(v any) bool {
 func buildEntity(e *Entity, doc any) (Built, error) {
 	record := lookup(doc, e.Root)
 	card := &wire.EntityCard{Kind: e.Kind, ID: text(field(record, e.ID)),
-		Title: text(field(record, e.Title)), Subtitle: text(field(record, e.Subtitle))}
+		Key: text(field(record, e.Key)), Title: text(field(record, e.Title)),
+		Subtitle: text(field(record, e.Subtitle))}
 	if card.Title == "" {
 		card.Title = card.ID
 	}

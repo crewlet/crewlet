@@ -387,6 +387,13 @@ export interface AssistantEntityCard {
   /** The dashboard object the record is; absent for a generic read's record, which is the API's. */
   kind?: AssistantResourceKind;
   id: string;
+  /**
+   * The short name the record is written by in prose: a task's key
+   * ("GOP-11"), a project's ("GOP"). The answer's first mention of it is the
+   * record's chip (`app/assistant/chunk/mentions.ts`); absent for a record
+   * with none, a seat included, which the answer names by its name.
+   */
+  key?: string;
   title: string;
   subtitle?: string;
   facts?: AssistantFact[];

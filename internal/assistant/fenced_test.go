@@ -115,8 +115,8 @@ func answerFor(spec cards.Spec) any {
 		set(root, spec.Table.Rows, []any{row})
 	case spec.Entity != nil:
 		record := map[string]any{}
-		for _, path := range []string{spec.Entity.ID, spec.Entity.Title, spec.Entity.Subtitle,
-			spec.Entity.Text} {
+		for _, path := range []string{spec.Entity.ID, spec.Entity.Key, spec.Entity.Title,
+			spec.Entity.Subtitle, spec.Entity.Text} {
 			set(record, path, "written by somebody")
 		}
 		for _, fact := range spec.Entity.Facts {

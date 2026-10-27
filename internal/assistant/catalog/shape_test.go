@@ -85,7 +85,7 @@ func hostileAnswer(spec cards.Spec, b provenance.Boundary, rows int) []byte {
 	}
 	e := spec.Entity
 	record := map[string]any{}
-	for _, p := range []string{e.ID, e.Title, e.Subtitle, e.Text} {
+	for _, p := range []string{e.ID, e.Key, e.Title, e.Subtitle, e.Text} {
 		if p != "" {
 			put(record, p, attack(b))
 		}

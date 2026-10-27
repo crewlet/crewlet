@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -305,5 +306,38 @@ func TestTheModelReadsTimesOnTheCompanysClock(t *testing.T) {
 	}
 	if got := res.Cards[0].Table.Rows[0]; !slices.Contains(got, any("2026-10-26T07:00:00Z")) {
 		t.Errorf("the card's row is %v, want the instant kept for the dashboard", got)
+	}
+}
+
+// EVERY TASK AND PROJECT CARD NAMES ITS KEY, and no seat card names one: the
+// drawer makes the answer's first mention of a record its chip, the model
+// writes a task or a project by its key and a seat by its name (the prompt's
+// rule), so a seat keyed by its handle would never be found. Mutation: drop
+// Key from a task spec, or key the seat detail by its handle.
+func TestARecordIsKeyedTheWayTheAnswerNamesIt(t *testing.T) {
+	t.Parallel()
+	keyed := 0
+	for _, tool := range catalog.Tools() {
+		for variant, spec := range tool.Cards {
+			e := spec.Entity
+			if e == nil {
+				continue
+			}
+			switch e.Kind {
+			case wire.ResourceTask, wire.ResourceProject:
+				if e.Key == "" {
+					t.Errorf("%s (%q) cards a %s with no key", tool.Name, variant, e.Kind)
+				}
+				keyed++
+			case wire.ResourceSeat:
+				if e.Key != "" {
+					t.Errorf("%s (%q) keys a seat by %q; the answer names a seat by its name",
+						tool.Name, variant, e.Key)
+				}
+			}
+		}
+	}
+	if keyed == 0 {
+		t.Error("no read cards a task or a project")
 	}
 }

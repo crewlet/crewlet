@@ -88,11 +88,19 @@ type Link struct {
 type EntityCard struct {
 	// Kind is the dashboard object the record is, absent for a record that
 	// is none of them: a generic read's answer, which is the API's.
-	Kind     ResourceKind `json:"kind,omitempty"`
-	ID       string       `json:"id"`
-	Title    string       `json:"title"`
-	Subtitle string       `json:"subtitle,omitempty"`
-	Facts    []Fact       `json:"facts,omitempty"`
+	Kind ResourceKind `json:"kind,omitempty"`
+	ID   string       `json:"id"`
+	// Key is the short name the record is written by in prose, where it has
+	// one: a task's key ("GOP-11"), a project's ("GOP"). The drawer makes the
+	// answer's first mention of it the record's chip. A record with no key is
+	// matched by its Title, and only where the title is a name a person writes
+	// (a seat's, a team's), never a task's sentence (dashboard
+	// app/assistant/mentions.ts). A seat has none: the answer names a seat by
+	// its name, never its handle.
+	Key      string `json:"key,omitempty"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Facts    []Fact `json:"facts,omitempty"`
 	// Text is a body the record carries, rendered in the restricted
 	// Markdown subset: no images, no raw HTML, no autolinks.
 	Text  string       `json:"text,omitempty"`

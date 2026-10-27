@@ -89,6 +89,7 @@ func tableSummary(t *wire.TableCard, more bool, zone *time.Location, budget int)
 type entityDigest struct {
 	Kind         wire.ResourceKind `json:"kind,omitempty"`
 	ID           string            `json:"id,omitempty"`
+	Key          string            `json:"key,omitempty"`
 	Title        string            `json:"title"`
 	Subtitle     string            `json:"subtitle,omitempty"`
 	Facts        map[string]string `json:"facts,omitempty"`
@@ -108,8 +109,8 @@ type itemDigest struct {
 }
 
 func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte, error) {
-	d := entityDigest{Kind: e.Kind, ID: e.ID, Title: e.Title, Subtitle: e.Subtitle,
-		Text: e.Text}
+	d := entityDigest{Kind: e.Kind, ID: e.ID, Key: e.Key, Title: e.Title,
+		Subtitle: e.Subtitle, Text: e.Text}
 	if len(e.Facts) > 0 {
 		d.Facts = map[string]string{}
 		for _, f := range e.Facts {

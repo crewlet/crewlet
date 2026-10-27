@@ -171,7 +171,7 @@ func readTools() []Tool {
 				return get("GET /worklet/{id}", map[string]string{"id": Args(a).String("item")}, nil)
 			},
 			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, Root: "task",
-				ID: "key", Title: "title", Subtitle: "key", Prose: true, Text: "body",
+				ID: "key", Key: "key", Title: "title", Subtitle: "key", Prose: true, Text: "body",
 				Facts: []cards.Fact{fact("Status", "status", tLabel),
 					fact("Priority", "priority", tLabel), fact("Assignee", "assignee", tText),
 					{Label: "Reporter", Path: "reporter", Type: tText, Detail: true},
@@ -197,7 +197,7 @@ func readTools() []Tool {
 					query(a).str("item", "item").num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, ID: "key",
-				Title: "title", Prose: true,
+				Key: "key", Title: "title", Prose: true,
 				Items: &cards.Items{Path: "comments", Kind: wire.ResourceTask, ID: "id",
 					Label: "body", Fact: "author", Prose: true,
 					Noun: wire.Noun{One: "comment", Many: "comments"}},
@@ -309,7 +309,7 @@ func readTools() []Tool {
 						col("done", "Done", "task_counts.done", tNumber)},
 					Open: &cards.Open{Screen: "worklet-projects"}}},
 				"one": {Entity: &cards.Entity{Kind: wire.ResourceProject, ID: "key",
-					Title: "name", Subtitle: "purpose", Prose: true,
+					Key: "key", Title: "name", Subtitle: "purpose", Prose: true,
 					Facts: []cards.Fact{fact("Lead", "lead.handle", tText),
 						fact("Unit", "unit.name", tText), fact("Target", "target_date", tText),
 						fact("To do", "task_counts.todo", tNumber),
