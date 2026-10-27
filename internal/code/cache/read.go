@@ -72,6 +72,12 @@ type snapshot struct {
 	// of the incarnation's live set.
 	retiredSince, retiredFrom statelog.Position
 	retired                   []code.RetiredRow
+	// layers is the repository's published chain as of position, root first
+	// (code.RepoSnapshot.Layers), and layersServed whether page 1 served it:
+	// on every full answer, and on a delta whose chain moved above its floor.
+	// A copy replaces the chain it records only when it is served.
+	layers       []code.LayerRow
+	layersServed bool
 }
 
 // retiredChecksums is the checksums s's retired phase names, as a set: what
@@ -450,6 +456,19 @@ func (s *snapshot) add(id string, n int, page code.RepoSnapshot, seen map[string
 	case s.full && !s.retiredFrom.IsZero() && s.retiredFrom != s.retiredSince:
 		return bad("a full answer asked for the retirements above %s serves those above %s", s.retiredSince,
 			s.retiredFrom)
+	case n > 1 && (page.LayersServed || len(page.Layers) > 0):
+		// The chain is the snapshot's first phase, read in page 1's own
+		// transaction and never continued.
+		return bad("it serves the published chain, which page 1 alone serves")
+	case n == 1 && s.full && !page.LayersServed:
+		return bad("a full answer serves no published chain, which every full answer serves, an empty one included")
+	case n == 1 && !page.LayersServed && len(page.Layers) > 0:
+		return bad("it serves %d layers of a published chain it says it does not serve", len(page.Layers))
+	}
+	if n == 1 && page.LayersServed {
+		if err := s.addLayers(page.Layers); err != nil {
+			return bad("%v", err)
+		}
 	}
 	for _, p := range page.Packs {
 		if err := checkPack(p); err != nil {
@@ -499,6 +518,67 @@ func (s *snapshot) add(id string, n int, page code.RepoSnapshot, seen map[string
 		}
 	}
 	s.repo = page.Repo
+	return nil
+}
+
+// addLayers validates the published chain page 1 served and takes it in, as
+// the domain keeps it (code.LayerRow): at most code.MaxPublishedLayers rows,
+// each a layer every git node may hold to its files (code.LayerRef.Check) and
+// none a replacement; Seq 1 up, one by one; the root over no base and every
+// other layer over the one below it — a layer is valid only over its exact
+// base, and the chain's order is the only thing that names it; no layer, and
+// no commit-graph layer, twice; no pack in two layers, since each covers what
+// none below it does; and every layer added at a position on the code log at
+// or below the snapshot's. Whether the copy holds a layer's packs is the
+// install's to decide (installable), never the read's: a chain over a pack it
+// lacks serves from the prefix below.
+func (s *snapshot) addLayers(rows []code.LayerRow) error {
+	if len(rows) > code.MaxPublishedLayers {
+		return fmt.Errorf("its published chain holds %d layers, past the %d a chain holds (code.MaxPublishedLayers)",
+			len(rows), code.MaxPublishedLayers)
+	}
+	ids, graphs, packs := map[string]bool{}, map[string]bool{}, map[string]string{}
+	for i, r := range rows {
+		l := r.Layer
+		if err := l.Check(); err != nil {
+			return fmt.Errorf("layer %d of its published chain: %w", r.Seq, err)
+		}
+		switch {
+		case r.Seq != i+1:
+			return fmt.Errorf("layer %s is layer %d of its published chain, served as layer %d", l.LayerID, i+1,
+				r.Seq)
+		case len(l.Replaces) > 0:
+			return fmt.Errorf("layer %d (%s) names the layers it replaces, which a published row never does", r.Seq,
+				l.LayerID)
+		case i == 0 && l.BaseID != "":
+			return fmt.Errorf("the root of its published chain, %s, names a base %s", l.LayerID, l.BaseID)
+		case i > 0 && l.BaseID != rows[i-1].Layer.LayerID:
+			return fmt.Errorf("layer %d (%s) is over %q and the layer below it is %s", r.Seq, l.LayerID, l.BaseID,
+				rows[i-1].Layer.LayerID)
+		case ids[l.LayerID]:
+			return fmt.Errorf("layer %s is in its published chain twice", l.LayerID)
+		case l.GraphID != "" && graphs[l.GraphID]:
+			return fmt.Errorf("commit-graph layer %s is in its published chain twice", l.GraphID)
+		case r.Added.Stream != topics.CodeLogStream || r.Added.Valid() != nil:
+			return fmt.Errorf("layer %d (%s) was added at %s, which is no position on %s", r.Seq, l.LayerID,
+				r.Added, topics.CodeLogStream)
+		case r.Added.Packed() > s.position.Packed():
+			return fmt.Errorf("layer %d (%s) was added at %s, past the snapshot's %s", r.Seq, l.LayerID, r.Added,
+				s.position)
+		}
+		ids[l.LayerID] = true
+		if l.GraphID != "" {
+			graphs[l.GraphID] = true
+		}
+		for _, cs := range l.Packs {
+			if other, twice := packs[cs]; twice {
+				return fmt.Errorf("pack-%s is covered by layers %s and %s of its published chain", cs, other,
+					l.LayerID)
+			}
+			packs[cs] = l.LayerID
+		}
+	}
+	s.layers, s.layersServed = slices.Clone(rows), true
 	return nil
 }
 

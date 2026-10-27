@@ -448,7 +448,15 @@ var cacheWriters = []writerRow{
 			"spool (Spool), created there and unlinked at once, so it is no file of the cache's", nil},
 	{"internal/code/cache/adopt.go", kindOS,
 		"the receiving node's own pack, once its row has applied: linked into tmp/ and from there into " +
-			"objects/pack, and its staging names removed", nil},
+			"objects/pack, and its staging names removed; and a maintainer's own published layer, once its " +
+			"record has applied, linked from its scratch into tmp/ for the installer, which places it " +
+			"(layers.go)", nil},
+	{"internal/code/cache/layers.go", kindOS,
+		"the installed published chain: a layer's three files staged in tmp/ from its parts or from its " +
+			"maintainer's own, made durable and renamed — or, kept across a swap or a rebuild, linked — into " +
+			"an incarnation, the two chain files written from the rows (staged, synced, renamed), and a " +
+			"placement given up on or a layer cut moved into trash/: a function of the code_layers rows the " +
+			"incarnation installed from", []cache.DerivedName{cache.DerivedLayers, cache.DerivedGraphLayers}},
 	{"internal/code/cache/provenance.go", kindOS,
 		"the index of pushes, the cache's own derived file under the incarnation's crewlet/: the directory " +
 			"made for its first run, and a rebuild's links of the runs of the copy it replaces into its own — " +
@@ -463,10 +471,11 @@ var cacheWriters = []writerRow{
 		[]cache.DerivedName{cache.DerivedMemo}},
 	{"internal/code/cache/swap.go", kindOS,
 		"a swap's next incarnation, staged under scratch/: its directory, every incarnation's directories " +
-			"and those of what it links, every live pack's three files, HEAD, config, the packed-refs and each " +
-			"derived file a retirement keeps but the memo HARD-LINKED from the incarnation it replaces — the " +
-			"same inodes, written by nothing here — and the whole renamed into repos/ under its number; its " +
-			"state goes through durable.go, and the memo's tree moves whole through memo.go", nil},
+			"and those of what it links, every live pack's three files — and every pack its installed chain " +
+			"names — HEAD, config, the packed-refs and each derived file a retirement keeps but the memo and " +
+			"the chain HARD-LINKED from the incarnation it replaces — the same inodes, written by nothing " +
+			"here — and the whole renamed into repos/ under its number; its state goes through durable.go, " +
+			"the memo's tree moves whole through memo.go, and the chain is placed through layers.go", nil},
 	{"internal/code/host/receive.go", kindGit + " receive-pack",
 		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
 			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +

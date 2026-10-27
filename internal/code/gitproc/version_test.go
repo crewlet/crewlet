@@ -321,10 +321,14 @@ func TestEveryNodeGitClaimRunsOnBothEnds(t *testing.T) {
 // either is safe because gitproc.NodeMinVersion is past 2.48, and this case
 // runs on both ends of what a pool admits — the node pin and the node floor's
 // own build (onNodeGits) — since the claim is about every git at the floor,
-// not the one a make target puts first on PATH.
+// not the one a make target puts first on PATH. And over the published chain a
+// cache installs in its index's place (cache's layers.go), whose tail packs
+// overlap its root layer's preferred pack: single-pack reuse walks the chain
+// to its root.
 //
-// Mutation: lower gitproc.NodeMinVersion to 2.47.0 and name a 2.47.3 build
-// as CREWLET_TEST_GIT_NODE_FLOOR, and the floor's multi arm is red.
+// Mutations: lower gitproc.NodeMinVersion to 2.47.0 and name a 2.47.3 build
+// as CREWLET_TEST_GIT_NODE_FLOOR, and the floor's multi arm is red; write the
+// chain arm's chain file without its root, and its reads are red.
 func TestEveryPackReuseModeSendsOverlappingPacksWhole(t *testing.T) {
 	t.Parallel()
 	c := gittest.NewClient(t)
@@ -352,7 +356,11 @@ func TestEveryPackReuseModeSendsOverlappingPacksWhole(t *testing.T) {
 		return nil
 	})
 	packs := gittest.Empty(t)
-	for _, commit := range strings.Fields(c.Run(t, src, "rev-list", "--reverse", "main")) {
+	commits := strings.Fields(c.Run(t, src, "rev-list", "--reverse", "main"))
+	// order is every push's pack, by checksum, in the order they were pushed.
+	var order []string
+	held := map[string]bool{}
+	for _, commit := range commits {
 		// A PACK A PUSH, as the cache keeps them: never unpacked into loose
 		// objects, never repacked. Named on receive-pack's own command line,
 		// because a local push clears GIT_CONFIG_PARAMETERS for the process
@@ -361,6 +369,19 @@ func TestEveryPackReuseModeSendsOverlappingPacksWhole(t *testing.T) {
 		c.Run(t, src, "push", "--quiet",
 			"--receive-pack=git -c transfer.unpackLimit=1 -c receive.autogc=false receive-pack",
 			packs, commit+":refs/heads/main")
+		idx, err := filepath.Glob(filepath.Join(packs, "objects", "pack", "pack-*.idx"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range idx {
+			if cs := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "pack-"), ".idx"); !held[cs] {
+				held[cs] = true
+				order = append(order, cs)
+			}
+		}
+	}
+	if len(order) != pushes {
+		t.Fatalf("%d pushes left %d packs, want one each", pushes, len(order))
 	}
 
 	onNodeGits(t, func(t *testing.T, git string) {
@@ -394,6 +415,69 @@ func TestEveryPackReuseModeSendsOverlappingPacksWhole(t *testing.T) {
 			clone := c.Init(t)
 			if _, stderr, err := c.Try(t, clone, &pack, "index-pack", "--stdin"); err != nil {
 				t.Fatalf("git %s with pack.allowPackReuse=%s sent a pack the client refuses: %v\n%s",
+					p.Version(), reuse, err, stderr)
+			}
+		}
+
+		// THE CHAIN ARM (M3-O72): the published chain a cache installs in
+		// place of its own index — a root layer over the first half of the
+		// packs and a layer over the next quarter, each written as a
+		// maintainer writes it, over a chain file naming exactly its base —
+		// and the last quarter outside it, the tail, whose packs overlap the
+		// root's own: receive-pack completed each thin push with the bases
+		// the packs before it hold. git 2.56.0's single-pack reuse
+		// (reuse_partial_packfile_from_bitmap) walks the chain down to its
+		// root and reuses that layer's preferred pack, so a tail pack holding
+		// one of its objects is what it must send around. Sent whole under
+		// either mode.
+		chained := filepath.Join(t.TempDir(), "chained.git")
+		if err := os.CopyFS(chained, os.DirFS(packs)); err != nil {
+			t.Fatal(err)
+		}
+		chainFile := filepath.Join(chained, "objects", "pack", "multi-pack-index.d", "multi-pack-index-chain")
+		var ids []string
+		for _, layer := range [][2]int{{0, pushes / 2}, {pushes / 2, 3 * pushes / 4}} {
+			// Its refs at the newest commit its packs and the base's close over.
+			c.Run(t, chained, "update-ref", "refs/heads/main", commits[layer[1]-1])
+			var names strings.Builder
+			for _, cs := range order[layer[0]:layer[1]] {
+				names.WriteString("pack-" + cs + ".idx\n")
+			}
+			base := "none"
+			if len(ids) > 0 {
+				base = ids[len(ids)-1]
+			}
+			var out bytes.Buffer
+			if _, err := p.Run(t.Context(), gitproc.Cmd{
+				Dir: chained, Args: []string{"multi-pack-index", "write", "--incremental", "--bitmap", "--stdin-packs",
+					"--no-write-chain-file", "--base=" + base, "--no-progress"},
+				Config: []gitproc.KV{{Key: "pack.writeBitmapLookupTable", Value: "true"}},
+				Stdin:  strings.NewReader(names.String()), Stdout: &out,
+				Class: gitproc.ClassMaintenance, Deadline: gitproc.ReadDeadline,
+			}); err != nil {
+				t.Fatalf("git %s wrote no layer over packs %d to %d: %v", p.Version(), layer[0], layer[1], err)
+			}
+			ids = append(ids, strings.TrimSpace(out.String()))
+			if err := os.WriteFile(chainFile, []byte(strings.Join(ids, "\n")+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c.Run(t, chained, "update-ref", "refs/heads/main", commits[len(commits)-1])
+		for _, reuse := range []string{"single", "multi"} {
+			var pack bytes.Buffer
+			if _, err := p.Run(t.Context(), gitproc.Cmd{
+				Dir:  chained,
+				Args: []string{"pack-objects", "--revs", "--thin", "--stdout", "--delta-base-offset", "-q"},
+				Config: []gitproc.KV{{Key: "core.multiPackIndex", Value: "true"}, {Key: "pack.useBitmaps", Value: "true"},
+					{Key: "pack.allowPackReuse", Value: reuse}},
+				Stdin: strings.NewReader("refs/heads/main\n"), Stdout: &pack,
+				Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
+			}); err != nil {
+				t.Fatalf("git %s: pack-objects over a chain with pack.allowPackReuse=%s: %v", p.Version(), reuse, err)
+			}
+			clone := c.Init(t)
+			if _, stderr, err := c.Try(t, clone, &pack, "index-pack", "--stdin"); err != nil {
+				t.Fatalf("git %s over a chain with pack.allowPackReuse=%s sent a pack the client refuses: %v\n%s",
 					p.Version(), reuse, err, stderr)
 			}
 		}

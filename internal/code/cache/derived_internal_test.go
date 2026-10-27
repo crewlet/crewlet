@@ -161,15 +161,15 @@ func TestValidateRefusesAnUnsaidDeclaration(t *testing.T) {
 	})
 }
 
-// AN IN-PROCESS DECLARATION — the cache's own code writes its files, and no
-// git reads them — SAYS WHAT IT HOLDS AND CLAIMS NOTHING A GIT WRITE HAS: no
-// lane, deadline, charge an object or argument list, which nothing would read,
-// but a Charge sentence; no damage part and nothing done on a report, since no
-// report can name a file git never reads; at most one main file, its presence
-// otherwise its record's; and every file under crewlet/, never objects/, the
-// namespace a push's scratch names as its alternate. A declaration's writes
-// are of one kind. Each row breaks one of those on the provenance index's
-// valid declaration.
+// AN IN-PROCESS DECLARATION — the cache's own code writes its files — SAYS
+// WHAT IT HOLDS AND CLAIMS NOTHING A GIT WRITE HAS: no lane, deadline, charge
+// an object or argument list, which nothing would read, but a Charge
+// sentence; where no git reads its files either (the index of pushes), nothing
+// done on a report, since no report can name such a file; at most one main
+// file, its presence otherwise its record's; and every file of one no git
+// reads under crewlet/, never objects/, the namespace a push's scratch names
+// as its alternate. A declaration's writes are of one kind. Each row breaks
+// one of those on the provenance index's valid declaration.
 //
 // Mutation: let an in-process write name a lane (drop validateInProcess's lane
 // case) — the "a lane" row passes.
@@ -197,7 +197,6 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 		{"no charge said", func(d *Derived) { d.Writes[1].Charge = " " }, "Writes[1].Charge"},
 		{"writes of both kinds", func(d *Derived) { d.Writes[1] = DerivedFiles()[0].Writes[0] },
 			"Writes[1].Writer.Subcommand"},
-		{"a damage part", func(d *Derived) { d.Part = gitproc.PartCommitGraph }, "Part"},
 		{"a drop on a report", func(d *Derived) { d.OnReported = Drop }, "OnReported"},
 		{"two main files", func(d *Derived) {
 			for _, name := range []string{"first", "second"} {
@@ -248,9 +247,12 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 			{"the index of pushes under objects/", set(func(_, p *Derived) { p.Owns[0].Dir = "objects/info" })},
 			{"the index of pushes under refs/", set(func(_, p *Derived) { p.Owns[0].Dir = "refs/crewlet" })},
 			{"git's index under crewlet/", set(func(m *Derived, _ *Derived) { m.Owns[1].Dir = engineRoot })},
+			// The cache's own write of files git READS lives where git
+			// looks: a part a report names, under objects/.
+			{"the index of pushes read by git", set(func(_, p *Derived) { p.Part = gitproc.PartCommitGraph })},
 		} {
 			err := validateAll(tc.decls)
-			if err == nil || !strings.Contains(err.Error(), "one the cache's own code writes under crewlet/") {
+			if err == nil || !strings.Contains(err.Error(), "one no git process reads under crewlet/") {
 				t.Errorf("%s: validateAll answered %v, want the root rule's refusal", tc.name, err)
 			}
 		}
@@ -259,6 +261,93 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 				"own", got, engineRoot)
 		}
 	})
+}
+
+// WHO READS A DECLARATION'S FILES IS ITS PART'S TO SAY, never who writes them
+// (§6.0's restatement of P2's rule): the installed chain is the cache's own
+// write of files every git process reads, so a declaration whose every write
+// is in-process may name a part a report drops — and then lives under
+// objects/ — where one NO git reads names none and keeps its files on a
+// report; one git writes names a part, whatever else it says. And what the
+// installed chain's declarations hold beside it: a name carrying its own
+// checksum (Named) has the one group Prior has and is never both; the chain
+// file, the one Main, carries neither; a chain is cut to a prefix of itself
+// and dropped on nothing; and no other declaration cuts. Each row breaks one
+// of those on a valid declaration of the build.
+//
+// Mutation: restore P2's "an in-process declaration has Part 0" — the
+// installed chain's own declaration is refused (the accepted rows fail, and
+// Open of every cache with them).
+func TestValidateHoldsAPartToWhoReadsTheFiles(t *testing.T) {
+	t.Parallel()
+	of := func(name DerivedName) Derived {
+		for _, d := range DerivedFiles() {
+			if d.Name == name {
+				return d
+			}
+		}
+		t.Fatalf("the build declares no %s", name)
+		return Derived{}
+	}
+	for _, name := range []DerivedName{DerivedLayers, DerivedGraphLayers} {
+		d := of(name)
+		if !d.inProcess() || !d.gitReads() {
+			t.Fatalf("%s is in-process %t and read by git %t: the installed chain is both", name, d.inProcess(),
+				d.gitReads())
+		}
+		if err := d.Validate(); err != nil {
+			t.Errorf("an in-process declaration git reads, %s: %v", name, err)
+		}
+	}
+	// Validate alone accepts a part on an in-process write — the chain's
+	// shape — and the root rule is what holds where its files live
+	// (TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite's roots).
+	prov := of(DerivedProvenance)
+	prov.Part = gitproc.PartCommitGraph
+	if err := prov.Validate(); err != nil {
+		t.Errorf("an in-process declaration with a part: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		decl   DerivedName
+		mutate func(d *Derived)
+		field  string
+	}{
+		{"a git write naming no part", DerivedMidx, func(d *Derived) { d.Part = 0 }, "Part"},
+		{"a drop on a report of files no git reads", DerivedProvenance, func(d *Derived) { d.OnReported = Drop },
+			"OnReported"},
+		{"a checksum in a name of two groups", DerivedLayers, func(d *Derived) {
+			d.Owns[1].Name = regexp.MustCompile(`^multi-pack-index-([0-9a-f]{40})\.(midx)$`)
+		}, "Owns[1].Name"},
+		{"a name both Prior and Named", DerivedLayers, func(d *Derived) { d.Owns[1].Prior = true }, "Owns[1]"},
+		{"a chain file named by a checksum", DerivedGraphLayers, func(d *Derived) {
+			d.Owns[0].Name = regexp.MustCompile(`^commit-graph-chain-([0-9a-f]{40})$`)
+			d.Owns[0].Named = true
+		}, "Owns[0]"},
+		{"a chain dropped when a pack leaves", DerivedLayers, func(d *Derived) { d.OnPackRemoved = Drop },
+			"On(pack-removed)"},
+		{"a chain kept whole as it moves", DerivedGraphLayers, func(d *Derived) { d.OnLayersMoved = Keep },
+			"OnLayersMoved"},
+		{"a chain no git reads", DerivedLayers, func(d *Derived) { d.Part = 0 }, "Check"},
+		{"a cut of what holds no chain", DerivedMidx, func(d *Derived) { d.OnPackRemoved = Prefix },
+			"On(pack-removed)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := of(tc.decl)
+			if err := d.Validate(); err != nil {
+				t.Fatalf("the declaration before the change: %v", err)
+			}
+			tc.mutate(&d)
+			err := d.Validate()
+			if err == nil {
+				t.Fatalf("Validate passed %s with %s", tc.decl, tc.name)
+			}
+			if !strings.Contains(err.Error(), `"`+string(tc.decl)+`"`) || !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("Validate answered %q: want it to name the declaration and the field %s", err, tc.field)
+			}
+		})
+	}
 }
 
 // A TREE IS ONE DIRECTORY THE CACHE'S OWN CODE OWNS WHOLE, AND NOTHING ELSE

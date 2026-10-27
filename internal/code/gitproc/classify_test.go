@@ -336,6 +336,49 @@ func writeMidx(t *testing.T, d *damaged) {
 	}
 }
 
+// writeChain writes the published chain a cache installs over d's packs, as
+// a repository's maintainer writes one: a root layer over the older pack and a
+// layer over the newer, each an incremental multi-pack-index with its bitmap
+// over a chain file naming exactly its base — the refs at the newest commit
+// the layer's packs and its base close over while it is written, and at the
+// tip again after.
+func writeChain(t *testing.T, d *damaged) {
+	t.Helper()
+	chain := filepath.Join(d.dir, "objects", "pack", "multi-pack-index.d", "multi-pack-index-chain")
+	var ids []string
+	for _, l := range []struct{ pack, tip string }{{d.older, d.f.Commits[2]}, {d.newer, d.f.Tip()}} {
+		gittest.SetRefs(t, d.dir, map[string]string{"refs/heads/main": l.tip})
+		base := "none"
+		if len(ids) > 0 {
+			base = ids[len(ids)-1]
+		}
+		var out bytes.Buffer
+		c := maintenance(d.dir, "multi-pack-index", "write", "--incremental", "--bitmap", "--stdin-packs",
+			"--no-write-chain-file", "--base="+base, "--no-progress")
+		c.Config = []gitproc.KV{{Key: "pack.writeBitmapLookupTable", Value: "true"}}
+		c.Stdin, c.Stdout = strings.NewReader(filepath.Base(l.pack)+".idx\n"), &out
+		if _, err := d.p.Run(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, strings.TrimSpace(out.String()))
+		if err := os.WriteFile(chain, []byte(strings.Join(ids, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gittest.SetRefs(t, d.dir, map[string]string{"refs/heads/main": d.f.Tip()})
+}
+
+// chainLayers is the layers d's chain file lists, root first, and its path.
+func chainLayers(t *testing.T, d *damaged) ([]string, string) {
+	t.Helper()
+	path := filepath.Join(d.dir, "objects", "pack", "multi-pack-index.d", "multi-pack-index-chain")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Fields(string(raw)), path
+}
+
 // writeGraph writes the maintainer's commit-graph over d's refs.
 func writeGraph(t *testing.T, d *damaged) {
 	t.Helper()
@@ -504,6 +547,34 @@ func formatCases(f *fixture) []damageCase {
 		midxCase("E a multi-pack-index whose reverse index is overwritten beside its bitmap", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxRidx) }, gitproc.PartMultiPackIndex,
 			on("rev-list over its bitmap", bitmapWalk, midxFatal(`invalid MIDX object position, MIDX is likely corrupt`)),
 			on("upload-pack v2", fetchTip, midxFatal(`invalid MIDX object position, MIDX is likely corrupt`))),
+		// THE PUBLISHED CHAIN a cache installs (cache's layers.go): its top
+		// layer's reverse index overwritten, as E's, and the chain file
+		// listing its layers the other way round — a layer over the wrong
+		// base, which every file's own check passes and the first read
+		// through the bitmap meets (M16): the cache's canary, as its
+		// placement runs it.
+		{name: "E2 a published layer whose reverse index is overwritten beside its bitmap", setup: writeChain,
+			damage: func(t *testing.T, d *damaged) {
+				ids, _ := chainLayers(t, d)
+				top := filepath.Join(d.dir, "objects", "pack", "multi-pack-index.d",
+					"multi-pack-index-"+ids[len(ids)-1]+".midx")
+				start, end := gittest.MidxChunk(t, top, "RIDX")
+				writable(t, top)
+				overwrite(t, top, start, bytes.Repeat([]byte{0xff}, int(end-start)))
+			}, drops: gitproc.PartMultiPackIndex, arms: []arm{
+				on("rev-list over its bitmap", bitmapWalk, midxFatal(`invalid MIDX object position, MIDX is likely corrupt`)),
+				on("upload-pack v2", fetchTip, midxFatal(`invalid MIDX object position, MIDX is likely corrupt`)),
+			}},
+		{name: "E3 a published chain over the wrong base", setup: writeChain,
+			damage: func(t *testing.T, d *damaged) {
+				ids, path := chainLayers(t, d)
+				slices.Reverse(ids)
+				if err := os.WriteFile(path, []byte(strings.Join(ids, "\n")+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}, drops: gitproc.PartMultiPackIndex, arms: []arm{
+				on("rev-list over its bitmap", bitmapWalk, midxFatal(`invalid MIDX object position, MIDX is likely corrupt`)),
+			}},
 		midxCase("F a multi-pack-index with its signature overwritten", func(t *testing.T, d *damaged) { gittest.Damage(t, d.dir, gittest.MidxSignature) }, gitproc.PartMultiPackIndex,
 			on("rev-list", revList, midxFatal(`multi-pack-index signature 0x%08x does not match signature 0x%08x`)),
 			on("upload-pack v2", fetchTip, midxFatal(`multi-pack-index signature 0x%08x does not match signature 0x%08x`))),

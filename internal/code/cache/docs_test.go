@@ -25,10 +25,11 @@ import (
 // declaration cannot land it without the page, and a row whose declaration
 // went fails here.
 //
-// Mutation: add a row for `layers` to the page, and it names a derived file the
+// Mutation: add a row for `tip` to the page, and it names a derived file the
 // cache does not declare; drop `.bitmap` from midx's Owns, and the row's files
 // are not what the declaration owns; declare the graph dropped on a
-// retirement, and its row says it is kept.
+// retirement, and its row says it is kept; keep the installed chain whole when
+// a pack it names leaves, and its row says it is cut.
 func TestTheConceptPageNamesEveryDerivedFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
@@ -149,6 +150,7 @@ var derivedTriggers = map[cache.Trigger]string{
 	cache.TriggerMaintainer: "the background indexing",
 	cache.TriggerBackfill:   "the backfill",
 	cache.TriggerRead:       "a seat's read by object id",
+	cache.TriggerInstall:    "the install of the maintainer's published layers",
 }
 
 // derivedWritesCell is the writes cell d's Writes spell: each trigger in the
@@ -183,6 +185,8 @@ func packLeavingCell(t *testing.T, name cache.DerivedName, field string, does ca
 		return "dropped first"
 	case cache.Keep:
 		return "kept"
+	case cache.Prefix:
+		return "cut first, below the layer that names it"
 	}
 	t.Fatalf("%s's %s is %q, which the page has no words for", name, field, does)
 	return ""

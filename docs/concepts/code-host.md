@@ -60,7 +60,10 @@ This is the product's current shape, not a configuration choice:
   repository's packs are only ever removed with the repository — so one that
   reaches the 2 048 live packs a repository may hold ([Limits](#limits))
   refuses every push carrying objects from then on, `compaction_behind`,
-  with nothing in this build to merge its packs and make room.
+  with nothing in this build to merge its packs and make room. Nor does
+  anything publish a repository's layers: a git node installs the chain the
+  rows name ([Published layers](#published-layers)), and no row names one
+  yet, so each node serves from the index and graph it writes itself.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
   id, for as long as the repository lives. The object each such push left is
@@ -772,16 +775,21 @@ still holding every pack the rows name, and the repository's next sync tries
 again; one a crash interrupts leaves the old directory in place, and the
 node's first sync of the repository after its restart finishes the job,
 keeping the graph. `crewlet.code.cache.swaps` counts every move by whether
-the commit-graph came along, was dropped or was never there to keep, and
-every one that failed.
+the commit-graph came along, was dropped or was never there to keep —
+`chain` for a copy that serves from an installed published chain, whose graph
+layers move with it, a placement of one included
+([Published layers](#published-layers)) — and every one that failed.
 
-**What the cache writes beside the packs.** Four kinds of file in a
-repository's cache are the node's own work rather than the rows': the
-multi-pack index — a full read's, written before it answers once the
-repository holds 256 packs, and the background indexing's, with its bitmap or
-without one — the commit-graph, the index of which push introduced each
-commit ([Which push landed a commit](#which-push-landed-a-commit)), and the
-answers of seats' reads by object id ([The memo](#the-memo)). Each lives
+**What the cache writes beside the packs.** Six kinds of file in a
+repository's cache are derived on the git nodes rather than named by the
+rows: the multi-pack index — a full read's, written before it answers once
+the repository holds 256 packs, and the background indexing's, with its
+bitmap or without one — the commit-graph, the index of which push introduced
+each commit ([Which push landed a commit](#which-push-landed-a-commit)), the
+answers of seats' reads by object id ([The memo](#the-memo)), and an
+installed published chain's multi-pack-index layers with their bitmaps and
+its commit-graph layers, each half with the chain file the node writes over
+it ([Published layers](#published-layers)). Each lives
 inside the repository's own directory, so it counts against the budget and
 leaves with the repository when it is evicted. The multi-pack index and the
 commit-graph are written again over a rebuild's packs, and each is dropped
@@ -789,14 +797,20 @@ before a pack it may name leaves the directory — the copy's next directory
 never holds it ([When packs leave a copy](#the-cache-on-a-git-node)) — so no
 git process reads an index that names a pack that is gone; the one exception
 is the commit-graph when a compaction retires the pack, since a merge drops no
-commit and the graph names only commits the repository still holds. The index
+commit and the graph names only commits the repository still holds. An
+installed chain is cut rather than dropped, below the first layer naming a
+pack that leaves — and a pack an installed layer names stays while the layer
+does, so it is the chain moving that takes one out. The installed layers are
+linked into a rebuild's copy where their files and packs are whole, and
+fetched again otherwise. The index
 of pushes is built from the push rows rather than the packs, and the memo's
 answers are about objects rather than packs, so a pack leaving changes nothing
 of either: a rebuild or a move to the next directory links the index of pushes
 into it and moves the memo there whole, in one rename however many answers it
 holds, and a log restored or recreated under the node drops both. One the node
 has not written since it started is held to its
-checksum before it serves — git's for the first two, the run's own for the
+checksum before it serves — git's for the first two and a chain's layers,
+the layers installed for its chain files, the run's own for the
 index of pushes — and every file of a copy is checked again behind the
 serving; a memo's answer is checked by every read of it instead. Anything else in the directory that is neither one of them nor the
 repository's own files is moved aside the next time the node reads the
@@ -811,8 +825,12 @@ that text climbs back out of `refs/`, as the file it leads to.
 `crewlet code verify` names any of them. Each is declared once in the engine,
 and this table is that list; the steps are what
 `code_cache_maintenance_refused` and its counter name when the node's memory
-refuses one — never `provenance` or `memo`, which the engine's own code
-writes, holding no git slot and charged against no memory budget.
+refuses one — never `provenance`, `memo` or `layer`, which the engine's own
+code writes, holding no git slot and charged against no memory budget. The
+`layers` and `graph-layers` files are git's own, written once by the
+repository's maintainer and installed byte for byte from the object store
+([Published layers](#published-layers)); a copy holds them or `midx` and
+`commit-graph`, never both, and placing a chain drops the other two first.
 
 | Declared file | Its files, in the repository's directory | Written by | When a compaction retires a pack | When any other pack leaves |
 |---|---|---|---|---|
@@ -820,6 +838,8 @@ writes, holding no git slot and charged against no memory budget.
 | `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | kept | dropped first |
 | `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept |
 | `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | kept |
+| `layers`, the installed published multi-pack-index chain — each layer's index and bitmap, and the chain file the node writes from the rows | `objects/pack/multi-pack-index.d/multi-pack-index-chain`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.midx`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.bitmap` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | cut first, below the layer that names it |
+| `graph-layers`, the installed published commit-graph layers, one a layer, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | cut first, below the layer that names it |
 
 **Memory.** Every git process a node runs over a whole repository holds memory
 in proportion to the repository's objects, measured on git 2.43 over a source
@@ -1097,7 +1117,9 @@ again, and the collector's daily audit raises the
 **Checking a copy.** An operator asks a git node to check its copy of a
 repository against the rows — every pack hashed as the bundle its push stored,
 every multi-pack-index, bitmap and commit-graph held to its own checksum (the
-one check that names a damaged bitmap: no git command can), the refs against
+one check that names a damaged bitmap: no git command can), an installed
+chain's chain files to the layers installed and each layer to the row it was
+installed from ([Published layers](#published-layers)), the refs against
 what was written, git's own connectivity check — and, asked
 to, to repair what it finds ([`POST
 /code/repos/{name}/verify`](../reference/api-endpoints.md#post-codereposnameverify)).
@@ -1163,12 +1185,189 @@ engine writing into the cache, and `damaged` under `file=pack` or
 disk losing data under the cache, `again` one that keeps losing it, `crash` a
 git process dying on something in a copy, `request` requests failing on
 damage they then had repaired under them — `crewlet.code.cache.maintenance.refused`, above zero a
-repository whose bitmap the node's memory cannot hold — and
-`crewlet.code.cache.memo.lookups` by `outcome` beside
+repository whose bitmap the node's memory cannot hold —
+`crewlet.code.cache.chained` against `crewlet.code.cache.repos`, the
+repositories served from an installed published chain rather than in their
+own mode ([Published layers](#published-layers)) —
+`crewlet.code.cache.layers` by `outcome` — `missing`, `corrupt` or
+`newer_git` at all a layer this node refused and serves without, each logged
+as `code_layer_refused` ([When a layer is missing](#when-a-layer-is-missing)),
+and `failed` climbing an object store failing the installer — beside
+`crewlet.code.cache.layer.install`, how long each layer took to fetch, check
+and place — and `crewlet.code.cache.memo.lookups` by `outcome` beside
 `crewlet.code.cache.memo.bytes`: misses climbing while the memo sits at its
 sixteenth of the budget is a memo too small for the pages seats ask for again,
 and `corrupt` at all a disk damaging what the cache holds
 ([metrics reference](../reference/metrics.md)).
+
+### Published layers
+
+A repository's multi-pack index, its bitmap and its commit-graph are the
+dearest files a git node derives — writing the bitmap walks the whole history
+and holds about 1 000 bytes of memory an object of it ([Memory](#the-cache-on-a-git-node))
+— and every git node that serves the repository wants them. So they can be
+written **once**, by one git node, the repository's **maintainer**, and
+installed by every other. The maintainer writes git's own incremental
+multi-pack-index **layer** over the packs the layers below it do not cover,
+with that layer's bitmap and a commit-graph layer over the same packs; stores
+the three files in the object store, in parts of at most 1 GiB; and names the
+layer on the code log on top of the repository's **chain**: at most 32
+layers, root first, each valid only over the exact layers beneath it
+([Live, retired and derived references](object-store.md#live-retired-and-derived-references)).
+Every git node installs the chain the rows name. Each layer is fetched, held
+to its row and placed byte for byte as the maintainer's git wrote it, which
+any node holding the layer's packs byte for byte can read — every copy does.
+The two chain files that list the layers are the node's own, written from the
+rows' order, since a layer's files never name the layer beneath them.
+
+Nothing in this build publishes a layer yet: a publication is a compaction
+carrying one, and nothing compacts ([what it does not do
+yet](#what-it-does-not-do-yet)). So every copy serves from the index and
+graph its own node writes, and the rest of this section is how a git node
+installs whatever chain the rows name.
+
+**Chain mode or own mode, never both.** A copy holding an installed chain
+serves in **chain mode**: each layer's `.midx` and `.bitmap` in
+`objects/pack/multi-pack-index.d/`, each commit-graph layer in
+`objects/info/commit-graphs/`, and the chain file of each. A copy holding
+none serves in **own mode**, from the whole multi-pack index, bitmap and
+commit-graph its background indexing writes (above). git refuses the two side
+by side: it reads a whole index before a chain, and writing either whole
+deletes every layer and its chain file. So placing a chain drops the copy's
+own index and graph first; the background indexing writes neither while a
+chain is installed, and a sync writes no index of its own beside one; and a
+chain cut to nothing leaves the copy in own mode, its index and graph the
+background indexing's to write again. `crewlet.code.cache.chained` counts the
+repositories a node serves in chain mode.
+
+**No node writes a layer of its own.** On git 2.56 a layer with a bitmap
+costs the walk of the whole history however few objects it adds. Over a
+synthetic history of 220 000 objects in 64 packs, a layer of an eighth of the
+objects took 1.52 seconds and 132 MiB and a layer of a sixty-fourth 1.89
+seconds and 128 MiB, against 1.43 seconds and 168 MiB for the whole index —
+and a layer without a bitmap switches off the bitmap of every layer beneath
+it. So the packs pushed since the last publication, the **tail**, stay
+outside the chain, and git reads them beside it through each pack's own
+index. A bitmapped walk of every object took 0.004 seconds with no pack
+outside the chain, 0.03 with one, 0.09 with four and 0.35 with sixteen, and a
+clone's pack ran in the same 2.7 to 3.0 seconds with four packs outside it as
+with none (4.6 with no index at all). The tail's commits are outside the
+commit-graph layers too, read from their packs until a publication covers
+them.
+
+**A full sync installs the chain before it answers.** A full read of a
+repository — a cold cache, a node's first sync of it after a restart, a
+rebuild — keeps the longest part of the chain, from its root, that the copy
+already holds whole: every file there at its row's size and held to its
+checksum, as every file a previous process left is before it serves
+([Damage and repair](#the-cache-on-a-git-node)). It fetches the rest, every
+part of every layer queued in the sync's one download queue behind its packs,
+so a cold copy's first answer is served through the bitmap for the layers'
+bytes downloaded beside the packs' rather than after them. A layer's index and
+bitmap are about 37 bytes an object it covers, about a tenth of a source
+repository's packs. A layer is installed only over every pack it names, and
+only in the rows' order: one whose packs the copy does not hold, or a git
+newer than the node's wrote, is not installed, and nothing above it is either.
+
+**A delta never downloads a layer.** A sync after a push that brings a new
+publication hands the new layers to the node's **installer** and answers at
+once. A root layer of the largest repository the defaults admit is some
+2.6 GB, which inside a delta would hold every fetch waiting on that sync. The
+installer runs behind the serving, on at most half the node's downloads —
+sixteen parts at once, of the thirty-two the node runs at once — fetches
+each layer in chain order, and places them once all are held. Meanwhile the copy
+serves from its chain as it was, the new packs in its tail.
+
+**The chain holds its packs.** A publication retires the packs its own repack
+merged, which the chain installed before it still names. Every pack an
+installed layer names stays in the copy while the layer does, whatever its row
+says — no sync, scrub or check takes one out — and leaves with the layer once
+its replacement is placed. Dropped at the sync that retired them, they would
+cut the chain, and its bitmap with it, until the replacement was fetched. A
+layer the rows no longer name whose replacement cannot be placed for half an
+hour is cut, and the packs it held leave with it
+(`crewlet.code.cache.layers{outcome=cut}`, which counts every layer that
+leaves a copy, a replaced one included).
+
+**A placement is a swap, read before it is seen.** A copy a request may be
+reading has its chain placed the way packs leave one ([When packs leave a
+copy](#the-cache-on-a-git-node)): in its next directory, the layers it keeps
+linked from the old one and the fetched ones renamed in, the chain files
+written from the rows, and the copy moved into place whole. A copy nobody
+holds — a node's first sync of it after a restart, a rebuild's — has its chain
+placed in place. Either way the chain is read once through its bitmap before
+any request sees it. A layer's files do not name the layer beneath them, so
+one placed over the wrong base passes git's own `multi-pack-index verify` and
+fails the first read that uses its bitmap (`invalid MIDX object position, MIDX
+is likely corrupt`). That read is one bitmapped walk of every object from the
+copy's refs, in the node's read lane: 0.004 seconds with no pack outside the
+chain, 0.35 with sixteen. A placement whose read fails refuses the layers it
+added as `corrupt`, and the copy serves from the layers beneath them.
+
+**The maintainer's own layers.** The node that published a layer already
+holds its files, so it links them into its copy rather than fetching them back
+(`crewlet.code.cache.layers{outcome=adopted}`), as the node that received a
+push links the push's pack. Files no install claims within the twelve hours
+a write may take are removed: their publication never applied.
+
+**Damage.** Every file of an installed chain is held to its checksum as the
+other derived files are — before a copy a previous process left serves, by
+every scrub, and by `crewlet code verify`. A layer's `.midx` and `.graph` are
+held to the checksum their names carry, its bitmap to its own, and the two
+chain files line for line to the layers the copy installed. `crewlet code
+verify` also holds each layer to the row it was installed from: its packs,
+its counts and the graph layers beneath it, which no checksum says. A layer
+file that fails is fetched again by the copy's next full sync, which a scrub's
+finding asks at once: before it answers, the sync fetches that layer and every
+layer above it, since a layer is valid only over its exact base, and places
+them as any layer is placed. A layer the sync cannot fetch is cut, with every
+one above it, and the copy serves from the layers below. A chain file that
+fails is written again from the rows, in place. A git process that names a
+chain's files damaged drops nothing: it makes the copy's scrub due instead,
+which holds every file of the chain to its checksum. A rebuild links into its
+new copy every layer whose files pass and whose packs it linked, and fetches
+the rest.
+
+### When a layer is missing
+
+A layer is never needed for a right answer: without the chain, git reads each
+pack's own index — slower, never wrong. So a layer a node cannot install is
+**refused**, never an error. The copy serves from the layers below it — the
+longest part of the chain from its root that it holds sound — or in own mode
+where none is left, its background indexing writing the copy's own index and
+graph. The layer and every one above it wait for the rows to name another
+chain. Each refusal is logged once a copy as `code_layer_refused`, with its
+`outcome`, and counted by `crewlet.code.cache.layers`:
+
+- **`missing`**: a part of the layer the object store holds nothing for. The
+  rows may have moved to a newer publication since the node read them, and
+  the store collected the old one's parts, so the node asks the log's head
+  first: the layer is refused only while a read made after the store's answer
+  still names it.
+- **`corrupt`**: a part whose bytes are not its row's, files the row does not
+  describe — sections, packs or counts not the row's, a graph layer over
+  another base — or a placement whose read through the bitmap failed.
+- **`newer_git`**: written by a git newer than the node's own, which the node
+  does not hand its git to read.
+
+A refusal holds while the rows name that very layer record, and lives in the
+node's memory, so a restart tries the layer once more. A failure that may
+pass is no refusal. A store that fails to answer, or a disk that refuses a
+write, is logged as `code_layer_install_failed` and tried again a minute
+later, then twice as long each time up to half an hour — at most one try of a
+repository a node each half hour once it keeps failing — while the copy
+serves as it is.
+
+**After a restore.** A backup carries no layer: a layer is derived, and the
+backup neither copies nor asks after it ([Live, retired and derived
+references](object-store.md#live-retired-and-derived-references)). So a
+restore brings back rows naming layers whose parts the restored object store
+may not hold. On `s3` it holds none; on the broker's bucket it holds what the
+bucket's snapshot did. A part the store holds is held to its row and placed
+like any other. A layer with a part it lacks is refused `missing` on every git
+node, and each copy serves from the layers below it, or in own mode, until the
+rows name another chain. Nothing alarms: a layer is not data, and the
+collector's audit never asks after one.
 
 ---
 
@@ -2374,21 +2573,25 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_sync_restarted` | `INFO` | A repository's rows moved under a read that spans pages — the log under it re-anchored — and the read began again from its first page (`restart`); it begins again at most three times, and a sync whose history moves a fourth time fails. |
 | `code_sync_damaged` | `INFO` | The node's own sync of a repository — peeling the tags it sets, in the repository's copy — found the copy damaged, or the node would not run git in it for its shape, or still would not once the sync had read it whole (`reason`: `corrupt`, `derived`, `missing`, `shape`, with git's `error`; `swept` true when the sync had read the copy whole; `packs`, those git named that, hashed, are not what their push stored); the copy is repaired as a request's would be — a shape the sync did not read whole, and a damaged derived file the sync did not just drop, in place; a pack's or an object's damage in place first, one download a damaged pack (the pack git named, once its hash confirms it), then by a scrub, and by a rebuild only when neither finds anything to fetch again; a shape the sync had read whole by a rebuild — and the sync answered by the repair. A check's own sync repairs nothing: what it met is the check's first finding. |
 | `code_cache_reshaped` | `WARN` | A repository's copy the node would not run git in because it was not the shape the engine writes was read whole again in place, every pack it holds reused; `moved` is how many files the engine never writes there went to the trash. One is a disk's bad moment or a person's edit; a run of them is something outside the engine writing into the cache's directory. Counted as `crewlet.code.cache.rebuilds{reason=shape}`. |
-| `code_cache_check_damaged` | `WARN` | A repository's copy held a `file` — its commit-graph, multi-pack-index, bitmap or reverse index, a run of its index of pushes (`crewlet/provenance.<n>`, held to its SHA-256 trailer before anything reads one this process did not write, and by every scrub), or a pack, its index or its reverse index — that failed its own checksum, or that the disk could not read (`error`), or a run of the index of pushes gone from the disk while the index names it — repaired the same way, since git cannot serve it either: before the copy answered, or in a scrub behind the serving (`trigger`: `first`, the copy's first sync since the node started, or the scrub after it; `unvouched`, a later sync reading a file replaced since; `scrub`, a used copy's daily scrub; `report`, a scrub a git process's report or crash asked for; `forced`, the repair a git failure of a pack or an object asked — a request's, or the node's own sync's — which reads every index file whatever was checked before; `request`, the scrub that repair runs when it found nothing, or when the sync's git met the damage again past it). `action` says what was done: `dropped`, a derived file the node writes again at once over the same packs — for a run of the index of pushes, the whole index, which the full sync that repairs the copy makes again at its own position and the backfill reads back below it as far as it is wanted; `reinstalled`, the pack fetched again (`code_cache_pack_reinstalled`). One is a disk's bad moment; a run of them is a disk losing data, or something outside the engine writing into the cache. Counted as `crewlet.code.cache.checks{outcome=damaged}`. |
+| `code_cache_check_damaged` | `WARN` | A repository's copy held a `file` — its commit-graph, multi-pack-index, bitmap or reverse index, a file of its installed published chain (a layer's `.midx`, `.bitmap` or `.graph`, or one of the two chain files, held line for line to the layers installed), a run of its index of pushes (`crewlet/provenance.<n>`, held to its SHA-256 trailer before anything reads one this process did not write, and by every scrub), or a pack, its index or its reverse index — that failed its own checksum, or that the disk could not read (`error`), or a run of the index of pushes gone from the disk while the index names it — repaired the same way, since git cannot serve it either: before the copy answered, or in a scrub behind the serving (`trigger`: `first`, the copy's first sync since the node started, or the scrub after it; `unvouched`, a later sync reading a file replaced since; `scrub`, a used copy's daily scrub; `report`, a scrub a git process's report or crash asked for; `forced`, the repair a git failure of a pack or an object asked — a request's, or the node's own sync's — which reads every index file whatever was checked before; `request`, the scrub that repair runs when it found nothing, or when the sync's git met the damage again past it). `action` says what was done: `dropped`, a derived file the node writes again at once over the same packs — for a run of the index of pushes, the whole index, which the full sync that repairs the copy makes again at its own position and the backfill reads back below it as far as it is wanted; `reinstalled`, the pack fetched again (`code_cache_pack_reinstalled`); `refetched`, a published layer's file, the chain cut below that layer and the layer fetched again with every one above it ([Published layers](#published-layers)); `rewritten`, a chain file, written again from the layers installed. One is a disk's bad moment; a run of them is a disk losing data, or something outside the engine writing into the cache. Counted as `crewlet.code.cache.checks{outcome=damaged}`. |
 | `code_cache_pack_reinstalled` | `WARN` | A pack of a repository's copy was fetched again and put in over its own files, in the same copy (`pack_id`): `found` says why — `trailer`, the pack, its index or its reverse index failed its checksum; `size`, a file of it was not the size its row says; `hint`, a request's git or the node's own sync's named it and it is not what the push stored; `absent`, a sync found the copy had lost it — named by the rows at a position the copy had read, whichever sync put it back: a request's or a sync's own repair, or any that read the copy whole — put in rather than over anything — and `trigger` what looked, as `code_cache_check_damaged`, or `request` for a pack git named. One download, counted as `crewlet.code.cache.rebuilds{reason=stored}`; a request already reading the pack finishes on the files it opened. |
 | `code_cache_scrub_failed` | `WARN` | A scrub of a repository's copy could not list its files (`error`): it decides nothing, and the next scrub, a day later or at a report's word, lists them again. A disk refusing reads under the cache. A file the scrub lists and cannot read is no failure of the scrub's: it is `code_cache_check_damaged`, with its `error`, and repaired. |
 | `code_cache_pack_reinstall_failed` | `WARN` | A pack of a repository's copy that failed its checksum or could not be read (`found`, as `code_cache_pack_reinstalled`) could not be fetched again (`error`): the copy keeps serving as it is, its other repairs go on, and the pack is tried again ten minutes later, then twice as long each time up to a day. Until then a request or sync that meets the pack's damage is answered 503 rather than read again or rebuilt, since either would ask the store for the same pack. The `error` says why — most often the object store not answering ([the object store](object-store.md)). |
-| `code_cache_derived_repaired` | `WARN` | A repository's copy whose derived files git could not read — its multi-pack-index (`MIDX is likely corrupt`), its commit-graph, or a chunk-format file of either — named by any git process over the copy, had those files dropped in place (`files`), its packs kept, none downloaded; the node writes sound ones over the same packs, and requests are served meanwhile from the packs themselves. `trigger` says what named them: `request`, a request's git that failed on them; `round`, the node's own sync's git; `report`, any git run that named them, failing or not — counted as `crewlet.code.cache.reports`; `check`, their own checksum, before the copy answered; `scrub`, their own checksum, in a scrub behind the serving. A request's or a sync's is counted as `crewlet.code.cache.rebuilds{reason=derived}` — or under the reason the copy was already being read whole for. One is a disk's bad moment; damage that survives it is a pack's, repaired as one — in place first — and the copy rebuilt (`code_cache_rebuilt`, `corrupt`) only when that finds nothing to fetch again. |
+| `code_cache_derived_repaired` | `WARN` | A repository's copy whose derived files git could not read — its multi-pack-index (`MIDX is likely corrupt`), its commit-graph, or a chunk-format file of either — named by any git process over the copy, had those files dropped in place (`files`), its packs kept, none downloaded; the node writes sound ones over the same packs, and requests are served meanwhile from the packs themselves. `trigger` says what named them: `request`, a request's git that failed on them; `round`, the node's own sync's git; `report`, any git run that named them, failing or not — counted as `crewlet.code.cache.reports`; `check`, their own checksum, before the copy answered; `scrub`, their own checksum, in a scrub behind the serving. A request's or a sync's is counted as `crewlet.code.cache.rebuilds{reason=derived}` — or under the reason the copy was already being read whole for. One is a disk's bad moment; damage that survives it is a pack's, repaired as one — in place first — and the copy rebuilt (`code_cache_rebuilt`, `corrupt`) only when that finds nothing to fetch again. A copy serving from an installed published chain drops nothing on a git process's word: the report makes the copy's scrub due, which cuts the chain at a layer whose files fail (`code_cache_check_damaged`, `refetched`). |
 | `code_cache_derived_damaged_again` | `WARN` | A derived file (`part`) was named damaged again within a day of its last drop for damage, whatever the node wrote of it between: it is dropped and left to the ordinary schedule rather than written again at once. Logged once a copy a part; counted as `crewlet.code.cache.reports{outcome=again}`. A disk that keeps losing what is written to it, or a git that rejects its own write — look at the disk. |
 | `code_cache_hint_confirmed` | `WARN` | git named a packed object of a repository's copy corrupt and the pack holding it (git's sentence that a packed object is corrupt: a report of its own on 2.55, a bare message on 2.56), and that pack, hashed, is not the one the push stored. Whichever git named it — a request's, or the node's own sync's, peeling the tags it sets — the pack is fetched again in place (`code_cache_pack_reinstalled`, `found` `hint`). Counted as `crewlet.code.cache.hints{outcome=confirmed}`. |
 | `code_cache_hint_unknown`, `code_cache_hint_unread` | `INFO` | git named a pack corrupt in words, and it was no pack of the copy's rows (`unknown`), or no verdict was reached (`unread`): its rows could not be read, no read slot was free for the hash, the hash ran past its bound (`bound`: a tenth of a second a mebibyte of the pack, five times the slowest cold disk or CPU the cache allows for), or the pack's files were replaced while it was hashed. Nothing is repaired, and an `unread` pack is hashed again by the next request git fails on it. Counted as `crewlet.code.cache.hints{outcome=unknown}` and `{outcome=unread}`, and each hash as `crewlet.code.cache.hint.hashes`. |
 | `code_cache_hint_gone` | `DEBUG` | A request git failed with such a report ended before the pack's hash did — its client gave up or a balancer cut it. The hash goes on, on the node's own time, and the next request about that pack takes its verdict. Counted as `crewlet.code.cache.hints{outcome=gone}`. |
 | `code_cache_rebuilt` | `WARN` | git found a repository's copy damaged — a request's git or the node's own sync's — and repairing it in place and a scrub found nothing to fetch again, or the node still would not run git in it for its shape after reading it whole in place, and the node rebuilt it beside the damaged one from the rows and the object store; `reason` is what git found (`corrupt`, `missing`, `shape`), or `verify` for a repair asked for. One is a disk's bad moment or damage in the rows (`crewlet code verify` names which); a run of them is a disk to replace — and a `shape` here, something that keeps writing into the cache's directory. |
 | `code_cache_rebuild_refused` | `WARN` | A rebuild was asked for and refused: one that did not end the failure ran too recently, or the copy holds exactly what such a rebuild read. The damage is then in the object store or the rows, not in this node's copy. At most once every ten minutes a repository. |
-| `code_cache_rebuild_seeded` | `INFO` | A rebuild linked the `packs` found whole into the new copy, of the `whole` found so — by `crewlet code verify` asked to repair, or by the scrub a request's repair ran before it — so it downloads only the rest. |
-| `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead. The disk refusing a hard link. |
-| `code_cache_swapped` | `INFO` | Packs left a repository's copy — a compaction retired them, or a whole read found pack files no row names — and the node moved the copy into its next directory ([When packs leave a copy](#the-cache-on-a-git-node)): `from` and `to` the two directories' numbers, `packs_kept` the packs the rows still name, hard-linked, `packs_dropped` those that left, `graph` whether the commit-graph came along (`kept`, a compaction's), went with a pack no compaction retired (`dropped`, written again at once) or was never there to keep (`none`), and `took`. Requests reading the old directory finish there. |
+| `code_cache_rebuild_seeded` | `INFO` | A rebuild linked the `packs` found whole into the new copy, of the `whole` found so — by `crewlet code verify` asked to repair, or by the scrub a request's repair ran before it — so it downloads only the rest. A copy serving from a published chain logs a second line: the `layers` of the `installed` chain it linked in, root first, each over packs it linked and held to the row it was installed from ([Published layers](#published-layers)); it fetches the layers above them. |
+| `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead — or could not link a published `layer` of the copy's chain, or found its files not its row's, so it fetches that layer and every one above it. The disk refusing a hard link, or a layer damaged in the copy. |
+| `code_cache_swapped` | `INFO` | Packs left a repository's copy — a compaction retired them, or a whole read found pack files no row names — or a published chain was placed in a copy a request may be reading ([Published layers](#published-layers)), and the node moved the copy into its next directory ([When packs leave a copy](#the-cache-on-a-git-node)): `from` and `to` the two directories' numbers, `packs_kept` the packs the rows still name and the chain holds, hard-linked, `packs_dropped` those that left, `layers` the installed chain the next directory holds, `graph` whether the commit-graph came along (`kept`, a compaction's), went with a pack no compaction retired or a chain cut whole (`dropped`, written again at once), was never there to keep (`none`), or moves with the chain (`chain`), and `took`. Requests reading the old directory finish there. |
 | `code_cache_swap_failed` | `WARN` | Packs left a repository's copy and the node could not build its next directory (`step`, `error`; `incarnation` the copy's number): the copy keeps serving, every pack the rows name still in it, and the repository's next sync tries again. Recurring, the cache volume is refusing links or is full. |
+| `code_layer_installed` | `INFO` | A published layer of a repository's chain was placed in this node's copy ([Published layers](#published-layers)): the `layer` (its multi-pack-index's checksum) and the `seq` of its row, its `bytes`, how long its fetch, check and placement `took`, and whether it was `adopted` — linked from the files the repository's maintainer wrote on this node rather than fetched. |
+| `code_layer_refused` | `WARN` | This node will not install a published layer while the rows name it ([When a layer is missing](#when-a-layer-is-missing)): `outcome` `missing`, a part the object store holds nothing for while the log's head still names the layer; `corrupt`, bytes or files its row does not describe, or a placement whose read through its bitmap failed — a layer over the wrong base; or `newer_git`, written by a git newer than this node's — with the `detail`. The copy serves from the layers below it, or in its own mode. Once a copy a layer; a restart tries it again. |
+| `code_layers_cut` | `INFO` | A repository's installed chain was cut in place (`incarnation` the copy's number), the `kept` layers beneath the `cut` ones staying: `why` is `layers-moved` — the rows name another chain, or a layer's file failed its checksum, its layers then fetched again — or `pack-removed` or `pack-retired`, a pack a cut layer names leaving. |
+| `code_layer_install_failed` | `WARN` | A published layer could not be installed (`error`). The installer logs it when the object store failed to answer or this node's disk refused a write, with `retry_in` — a minute, doubling to half an hour; a full sync logs it for any layer it could not fetch, with the layer's `seq` and `outcome`, and leaves the layer to the installer (one `corrupt` is refused at once). The copy serves as it is meanwhile. |
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
 | `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph`, or `state` when its record could not be written). The repository is served without the index — slower, never wrong — and the next run waits out the interval. |
 | `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused. Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, each of which keeps 224 MiB of it. |

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -121,6 +122,40 @@ func ParseVersion(out string) (Version, error) {
 			return Version{}, fmt.Errorf("gitproc: %q is not what `git version` prints: %w", textcut.Ellipsis(out, 120), err)
 		}
 		*field = n
+	}
+	return v, nil
+}
+
+// ParseRelease reads a release as [Version.String] writes it — "2.56.0", its
+// exact inverse — where [ParseVersion] reads what `git version` prints: three
+// decimal numbers joined by dots, each with no sign and no leading zero, nine
+// digits at most. It is how a git node reads the release a published layer's
+// row names (code.LayerRef.Git, which the domain holds to the same spelling
+// without importing this package), so a node knows a layer written by a newer
+// git before it fetches a byte of it. Anything else — "2.56", "v2.56.0", a
+// vendor's suffix, a version line — is refused: a row spells exactly what
+// String wrote, and a spelling it did not write is not a release this reads.
+func ParseRelease(s string) (Version, error) {
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return Version{}, fmt.Errorf("gitproc: %q is not a release as Version.String spells one (2.56.0)",
+			textcut.Ellipsis(s, 120))
+	}
+	var v Version
+	for i, field := range []*int{&v.Major, &v.Minor, &v.Patch} {
+		n := parts[i]
+		// NINE DIGITS AT MOST, so every number fits an int on every platform
+		// the engine builds for — the bound code.LayerRef.Check holds too.
+		if n == "" || len(n) > 9 || (len(n) > 1 && n[0] == '0') {
+			return Version{}, fmt.Errorf("gitproc: %q is not a release as Version.String spells one (2.56.0)",
+				textcut.Ellipsis(s, 120))
+		}
+		u, err := strconv.ParseUint(n, 10, 32)
+		if err != nil {
+			return Version{}, fmt.Errorf("gitproc: %q is not a release as Version.String spells one (2.56.0): %w",
+				textcut.Ellipsis(s, 120), err)
+		}
+		*field = int(u)
 	}
 	return v, nil
 }

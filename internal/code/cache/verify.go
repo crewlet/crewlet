@@ -286,9 +286,13 @@ func (v *Verification) Release() {
 //  4. every derived file the listing found — the multi-pack-index with its
 //     bitmap and reverse index, and the commit-graph — held to its own
 //     trailer (checkDerived): git reads each without checking it, and no git
-//     command names a damaged bitmap;
-//  5. packed-refs hashed against the digest this cache wrote with it;
-//  6. git's connectivity check, `fsck --connectivity-only`, in the
+//     command names a damaged bitmap; and a published chain's two chain files
+//     to the layers the copy installed;
+//  5. every layer the copy installed held to the row it was installed from
+//     (checkLayers, code.CheckLayer): its sections, its packs, its counts and
+//     its base's graph layers, which no trailer says;
+//  6. packed-refs hashed against the digest this cache wrote with it;
+//  7. git's connectivity check, `fsck --connectivity-only`, in the
 //     maintenance slot the admission took.
 //
 // What the sync before it found failing by its own check — a full round,
@@ -687,6 +691,12 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	if err != nil {
 		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
 	}
+	problems, err = c.checkLayers(ctx, inc.dir, l)
+	r.Problems = append(r.Problems, problems...)
+	r.damaged = r.damaged || len(problems) > 0
+	if err != nil {
+		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
+	}
 	refs, problem, err := l.checkRefs()
 	r.Refs = refs
 	if problem != "" {
@@ -725,6 +735,13 @@ type listing struct {
 	// derived is every file a declaration owns that the grammar admitted
 	// (derived.go), with its declaration, in declaration order.
 	derived []ownedFile
+	// installed is the published chain the incarnation holds (layers.go),
+	// each layer with the row it was installed from; chains what each chain
+	// file holds when it is sound (chainWants); and chained every pack an
+	// installed layer names, which the chain holds whatever its rows say.
+	installed []code.LayerRow
+	chains    map[string][]byte
+	chained   map[string]bool
 	// problems is what the grammar does not admit, and what it requires that
 	// is missing.
 	problems []string
@@ -756,9 +773,13 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 		c.knobs.verifyListing(inc.dir)
 	}
 
-	l := &listing{packs: map[string]map[string]int64{}}
+	l := &listing{packs: map[string]map[string]int64{}, chained: map[string]bool{}}
 	e.mu.Lock()
 	l.at, l.stream, l.repo, l.digest = inc.at, inc.stream, inc.repo, inc.refsDigest
+	l.installed, l.chains = slices.Clone(inc.installed), chainWants(inc)
+	for cs := range inc.installedPacks {
+		l.chained[cs] = true
+	}
 	running := e.maint != nil && e.maint.inc == inc
 	e.mu.Unlock()
 	im := c.image
@@ -807,7 +828,10 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 				continue
 			}
 			admitted[path] = true
-			if rel == packRel {
+			// A directory of the image under objects/pack — the installed
+			// chain's, multi-pack-index.d — is listed as one, below; every
+			// other entry there is a file a pack's or a declaration's.
+			if rel == packRel && !im.dir[path] {
 				packFiles = append(packFiles, d)
 			}
 			if f, ok := im.owned(path); ok {
@@ -966,7 +990,9 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 	}
 	strays := make([]string, 0)
 	for cs := range l.packs {
-		if !named[cs] {
+		// A pack an installed layer names is the chain's, held until the
+		// layer goes (layers.go): no stray, its row retired or not.
+		if !named[cs] && !l.chained[cs] {
 			strays = append(strays, cs)
 		}
 	}
@@ -995,7 +1021,7 @@ func (c *Cache) checkDerived(ctx context.Context, dir string, l *listing) ([]str
 		if !f.of.Check.hashed() {
 			continue
 		}
-		_, want, err := f.held()
+		_, want, err := f.held(l.chains)
 		if err != nil {
 			return problems, err
 		}
@@ -1006,11 +1032,65 @@ func (c *Cache) checkDerived(ctx context.Context, dir string, l *listing) ([]str
 		switch {
 		case err != nil:
 			return problems, fmt.Errorf("hashing %s: %w", filepath.ToSlash(f.rel), err)
+		case v == hashDamaged && want.whole:
+			problems = append(problems, fmt.Sprintf("%s does not list the installed chain %v",
+				filepath.ToSlash(f.rel), strings.Fields(string(want.content))))
 		case v == hashDamaged:
 			problems = append(problems, filepath.ToSlash(f.rel)+" fails its checksum")
 		}
 	}
 	return problems, nil
+}
+
+// checkLayers is the LAYER PASS, after the packs' hashes and before the fsck:
+// every layer the incarnation installed held to the row it was installed from
+// (code.CheckLayer — each of its files read once, its sections, its packs, its
+// counts and its base's graph layers), which a trailer cannot see: a file
+// whose hashfile trailer is sound over bytes the row does not describe. Each
+// finding names the layer and what differed, and is damage: a rebuild seeds
+// every layer that passes and fetches the rest (seedRebuild). A file gone is
+// one finding, as the listing would name it. Its bytes are within the pass's
+// bound, which counts every file the copy holds (CheckBudget), and, as
+// checkDerived's, are hashed with no read slot a piece: the check holds its
+// maintenance slot across the whole of it.
+func (c *Cache) checkLayers(ctx context.Context, dir string, l *listing) ([]string, error) {
+	var problems []string
+	p := c.pieces(nil).layer()
+	for i, row := range l.installed {
+		if err := ctx.Err(); err != nil {
+			return problems, context.Cause(ctx)
+		}
+		err := checkLayerAt(ctx, dir, row, baseOf(l.installed, i), p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			problems = append(problems, fmt.Sprintf("layer %s: a file of it is missing: %v", row.Layer.LayerID, err))
+		case errors.Is(err, code.ErrBadLayer):
+			problems = append(problems, fmt.Sprintf("layer %s: %v", row.Layer.LayerID, err))
+		case err != nil:
+			return problems, fmt.Errorf("reading layer %s: %w", row.Layer.LayerID, err)
+		}
+	}
+	return problems, nil
+}
+
+// checkLayerAt holds the files of row's layer in the incarnation at dir to the
+// row over base (code.CheckLayer), each trailer hashed as p says and stopped
+// with ctx: ErrNotExist for a file gone, code.ErrBadLayer for one the row does
+// not describe, and a failed read, a refused hold or an ended ctx as it came.
+func checkLayerAt(ctx context.Context, dir string, row code.LayerRow, base []string, p code.Pieces) error {
+	var readers [3]io.ReaderAt
+	for i, rel := range layerRels(row.Layer) {
+		if rel == "" {
+			continue
+		}
+		f, err := os.Open(filepath.Join(dir, rel))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }() // read-only: what was read is the answer
+		readers[i] = f
+	}
+	return code.CheckLayer(ctx, row.Layer, readers[0], readers[1], readers[2], base, p)
 }
 
 // hashBundle is the SHA-256 of the pack at stem as the push stored it: its

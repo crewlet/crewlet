@@ -158,7 +158,7 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 		// packed-refs is renamed in (dropFor's order rule). No declaration
 		// drops for moved refs today — a bitmap names commits it selected,
 		// and stays sound whichever refs point at them.
-		if _, err := c.dropFor(e, inc, EventRefsMoved, 0); err != nil {
+		if _, err := c.dropFor(e, inc, EventRefsMoved, eventDetail{}); err != nil {
 			return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 		}
 	}

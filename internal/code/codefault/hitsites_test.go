@@ -93,7 +93,7 @@ var pointNames = map[string]codefault.Point{
 	"CommitterAfterAppend": codefault.CommitterAfterAppend, "HostAfterPropose": codefault.HostAfterPropose,
 	"HostBeforeAdopt": codefault.HostBeforeAdopt, "HostHookClose": codefault.HostHookClose,
 	"SyncDownload": codefault.SyncDownload, "SyncRefs": codefault.SyncRefs, "SyncState": codefault.SyncState,
-	"SyncSwapBeforeRename": codefault.SyncSwapBeforeRename,
+	"SyncSwapBeforeRename": codefault.SyncSwapBeforeRename, "InstallAfterFetch": codefault.InstallAfterFetch,
 }
 
 // byPoint is counts keyed by identifier, read as points.

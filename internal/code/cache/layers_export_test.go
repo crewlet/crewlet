@@ -1,0 +1,160 @@
+package cache
+
+import (
+	"slices"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+)
+
+// The suite's knobs into the installed published chain (layers.go): what a
+// copy holds of it and the rows' account of it, the installer's queue and its
+// passes run synchronously, and the one cut both chains share.
+
+// Installed is the published chain repoID's current incarnation holds, root
+// first, each layer with the row it was installed from; nil for none.
+func Installed(c *Cache, repoID string) []code.LayerRow {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.current.installed)
+}
+
+// ChainOf is the rows' published chain as repoID's current incarnation last
+// read it (incarnation.chain), and whether a round of this process read it.
+func ChainOf(c *Cache, repoID string) ([]code.LayerRow, bool) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.current.chain), e.current.chainRead
+}
+
+// Refused is the layers repoID's current incarnation refuses while the rows
+// name them, by layer id, with the outcome that refused each.
+func Refused(c *Cache, repoID string) map[string]string {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := map[string]string{}
+	for id, r := range e.current.refused {
+		out[id] = string(r.outcome)
+	}
+	return out
+}
+
+// ChainedRepos is the running total crewlet.code.cache.chained reports.
+func ChainedRepos(c *Cache) int64 { return c.chainedRepos.Load() }
+
+// InstallQueued is the repositories the installer holds queued, in order.
+func InstallQueued(c *Cache) []string {
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return slices.Clone(in.queue)
+}
+
+// InstallWait is when repoID's next try is due by the installer's backoff,
+// and the tries in a row that failed; the zero time where it waits for none.
+func InstallWait(c *Cache, repoID string) (time.Time, int) {
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if w := in.waits[repoID]; w != nil {
+		return w.retryAt, w.failures
+	}
+	return time.Time{}, 0
+}
+
+// InstallPass runs one pass of the installer synchronously, as work of the
+// cache's own, and waits for every task it started: the repositories it took
+// up, in queue order. A stopped cache runs none.
+func InstallPass(c *Cache) []string {
+	if !c.enter() {
+		return nil
+	}
+	queued := InstallQueued(c)
+	_, tasks := c.installPass(c.life)
+	c.leave()
+	tasks.Wait()
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return slices.DeleteFunc(queued, func(id string) bool { return in.queued[id] })
+}
+
+// ChainLinesWith makes every multi-pack-index chain file c writes list what f
+// makes of the ids installed: a chain over the wrong base, reversed.
+func ChainLinesWith(f func(ids []string) []string) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.chainLines = f
+	}
+}
+
+// InstallWakesWith makes the installer wait on f's channel, told when its
+// earliest wait ends, in place of a timer.
+func InstallWakesWith(o *Options, f func(at time.Time) <-chan time.Time) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.installWake = f
+}
+
+// PrefixOf is how many layers of installed the cut a change ev makes keeps
+// (prefixOf): packs the checksums it takes out, want the rows' chain for
+// EventLayersMoved, failing the layers whose files failed their check.
+func PrefixOf(installed []code.LayerRow, ev Event, packs []string, want []code.LayerRow, failing []string) int {
+	d := eventDetail{packs: map[string]bool{}, want: want, failing: map[string]bool{}}
+	for _, cs := range packs {
+		d.packs[cs] = true
+	}
+	for _, id := range failing {
+		d.failing[id] = true
+	}
+	return prefixOf(installed, ev, d)
+}
+
+// PlanSteps is what the maintainer would plan for repoID's current
+// incarnation now on an unbounded budget, due or not: whether an index (of
+// either kind) and the graph.
+func PlanSteps(c *Cache, repoID string) (index, graph bool) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	p, _, _ := c.plan(e.current, 1<<62, true)
+	return p.index != 0, p.graph
+}
+
+// WantsRun reports whether the maintainer wants a run of repoID's current
+// incarnation for what it holds (wantsRun).
+func WantsRun(c *Cache, repoID string) bool {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return c.wantsRun(e)
+}
+
+// InstallerShare is the installer's parts in flight bound and its tasks.
+func InstallerShare(c *Cache) int { return c.installer.tasks }
+
+// AdoptedLayers is the layers maintainers adopted on c that no placement has
+// taken yet, by repository.
+func AdoptedLayers(c *Cache) map[string][]string {
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	out := map[string][]string{}
+	for repo, layers := range in.adopted {
+		for id := range layers {
+			out[repo] = append(out[repo], id)
+		}
+		slices.Sort(out[repo])
+	}
+	return out
+}
+
+// ExpireAdoptedLayers runs the janitor's discard of the adoptions no round's
+// chain named within objstore.RecordWithin, on c's clock.
+func ExpireAdoptedLayers(c *Cache) { c.expireAdoptedLayers() }

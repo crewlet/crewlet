@@ -180,22 +180,25 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 	// Every entry planted outside the image, by its path relative to the
 	// incarnation, each with a base name of its own; true for a directory.
 	// A directory at an owned file's name is outside it too: a derived file
-	// is a file.
+	// is a file. The installed chain's two directories are the image's — a
+	// copy with no chain installed has neither, and an entry in one that no
+	// declaration owns is outside it.
 	cs := strings.Repeat("ab", 20)
 	planted := map[string]bool{
-		"description":                                  false,
-		"refs/stray-in-refs":                           false,
-		"refs/heads/loose":                             false,
-		"refs/tags/stray-tag":                          false,
-		"objects/stray-in-objects":                     false,
-		"objects/info/stray-in-info":                   false,
-		"objects/info/commit-graphs":                   true,
-		"objects/pack/stray-in-pack":                   false,
-		"objects/pack/multi-pack-index.d":              true,
-		"objects/pack/multi-pack-index.lock":           false,
-		"objects/pack/tmp_bitmap_Xq3vRk":               false,
-		"objects/info/commit-graph.lock":               false,
-		"objects/pack/multi-pack-index-" + cs + ".rev": true,
+		"description":                                     false,
+		"refs/stray-in-refs":                              false,
+		"refs/heads/loose":                                false,
+		"refs/tags/stray-tag":                             false,
+		"objects/stray-in-objects":                        false,
+		"objects/info/stray-in-info":                      false,
+		"objects/info/commit-graphs/stray-in-graphs":      false,
+		"objects/pack/stray-in-pack":                      false,
+		"objects/pack/multi-pack-index.d/stray-in-layers": false,
+		"objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".midx": true,
+		"objects/pack/multi-pack-index.lock":                               false,
+		"objects/pack/tmp_bitmap_Xq3vRk":                                   false,
+		"objects/info/commit-graph.lock":                                   false,
+		"objects/pack/multi-pack-index-" + cs + ".rev":                     true,
 	}
 	for rel, isDir := range planted {
 		path := filepath.Join(dir, filepath.FromSlash(rel))
@@ -342,20 +345,60 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 // declarations, each read at the one place its change is made: dropFor in
 // place, and a swap's links (swap.go) where a pack leaves a copy a reader
 // holds — the reader here holding every copy, each event's checked in the
-// copy that answers it.
+// copy that answers it. And a published chain PLACED over own mode's files
+// (EventLayersMoved) drops the index, its bitmap and the graph — git reads a
+// whole index and a whole graph before a chain — and keeps the memo; the
+// installed chain's own answer to a change is a CUT to the longest prefix it
+// leaves valid (Prefix): a layer naming a pack that leaves goes with every
+// layer above it, a pack outside the chain cuts nothing, and the chain moving
+// keeps the layers the rows still name in turn.
 //
 // Mutations: declare the multi-pack-index dropped on a pack added, and the
 // first delta takes it; declare the graph dropped on a retirement
-// (OnPackRetired), and the compaction's swap leaves it behind.
+// (OnPackRetired), and the compaction's swap leaves it behind; let prefixOf
+// keep a layer above one a removed pack cuts, and the Prefix table's cut is
+// past it.
 func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	t.Parallel()
+	// THE PREFIX TABLE: a three-layer chain — packs a and b under layer 1, c
+	// under 2, d under 3 — and e outside it, the tail.
+	layer := func(seq int, id string, packs ...string) code.LayerRow {
+		return code.LayerRow{Seq: seq, Layer: code.LayerRef{LayerID: strings.Repeat(id, 40), Packs: packs}}
+	}
+	chain := []code.LayerRow{layer(1, "1", "a", "b"), layer(2, "2", "c"), layer(3, "3", "d")}
+	moved := slices.Clone(chain)
+	moved[1] = layer(2, "4", "c")
+	for _, tc := range []struct {
+		name    string
+		ev      cache.Event
+		packs   []string
+		want    []code.LayerRow
+		failing []string
+		keep    int
+	}{
+		{"a retired pack in layer 2", cache.EventPackRetired, []string{"c"}, nil, nil, 1},
+		{"a removed pack in the root", cache.EventPackRemoved, []string{"b"}, nil, nil, 0},
+		{"a retired tail pack", cache.EventPackRetired, []string{"e"}, nil, nil, 3},
+		{"a removed tail pack", cache.EventPackRemoved, []string{"e"}, nil, nil, 3},
+		{"the rows' chain as it is", cache.EventLayersMoved, nil, chain, nil, 3},
+		{"the rows' chain without its top", cache.EventLayersMoved, nil, chain[:2], nil, 2},
+		{"the rows' chain moved at layer 2", cache.EventLayersMoved, nil, moved, nil, 1},
+		{"no chain in the rows", cache.EventLayersMoved, nil, nil, nil, 0},
+		{"layer 3's files failing their check", cache.EventPackAdded, nil, nil, []string{chain[2].Layer.LayerID}, 2},
+	} {
+		if got := cache.PrefixOf(chain, tc.ev, tc.packs, tc.want, tc.failing); got != tc.keep {
+			t.Errorf("the prefix %s keeps is %d layers, want %d", tc.name, got, tc.keep)
+		}
+	}
+
 	w := newSyncWorld(t, onMemory)
 	clk := newClock()
 	repo := w.repo(t, 1)
 	var rows []code.PackRow
+	var tip string
 	for range 3 {
-		_, row := w.push(t, repo, "refs/heads/main", nil)
-		rows = append(rows, row)
+		oid, row := w.push(t, repo, "refs/heads/main", nil)
+		rows, tip = append(rows, row), oid
 	}
 	c := w.open(t, clk.on)
 	first := w.sync(t, c, repo)
@@ -386,13 +429,15 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	every := map[string]bool{"multi-pack-index": true, "bitmap": true, "commit-graph": true, "memo": true}
 	before := w.log.state()
 
-	w.push(t, repo, "refs/heads/main", nil)
+	oid, row := w.push(t, repo, "refs/heads/main", nil)
+	rows, tip = append(rows, row), oid
 	held("a delta that adds a pack", w.sync(t, c, repo), every)
 
 	w.tag(t, repo, "v1", false)
 	held("a delta that only moves refs", w.sync(t, c, repo), every)
 
-	w.push(t, repo, "refs/heads/main", nil)
+	oid, row = w.push(t, repo, "refs/heads/main", nil)
+	rows, tip = append(rows, row), oid
 	w.sync(t, c, repo)
 	// THE INDEX OF PUSHES is built over the push rows, which none of those
 	// moved: every delta above folded its push as a run, and every run is
@@ -402,7 +447,7 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 		t.Fatalf("the index of pushes after three deltas is %+v (kept %t), want a run of each", idx, ok)
 	}
 
-	w.compacted(t, repo, rows[0], rows[1])
+	merged := w.compacted(t, repo, rows[0], rows[1])
 	retired := w.sync(t, c, repo)
 	if retired.Dir == first.Dir {
 		t.Fatalf("the compaction answered the copy a reader holds, %s: no swap", retired.Dir)
@@ -414,6 +459,24 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	var runs []string
 	for _, n := range idx.Runs {
 		runs = append(runs, cache.RunRel(n))
+	}
+
+	// THE CHAIN MOVING over own mode's files: a publication over every pack
+	// the copy holds, placed by the installer — a swap, the copy being held.
+	clk.Add(cache.MidxMinInterval)
+	if ran := cache.MaintainerPass(c); len(ran) != 1 {
+		t.Fatalf("the maintainer ran %v after the compaction, want the repository", ran)
+	}
+	held("the maintainer's pass after the compaction", w.sync(t, c, repo), every)
+	group := []pushed{{row: merged}, {row: rows[2]}, {row: rows[3]}, {oid: tip, row: rows[4]}}
+	w.log.publish(repo, w.buildChain(t, group), nil)
+	w.sync(t, c, repo).Release()
+	cache.InstallPass(c)
+	placed := w.sync(t, c, repo)
+	held("a published chain placed", placed, map[string]bool{"memo": true})
+	if idx, ok := cache.Index(c, repo); !ok || len(idx.Runs) != 3 {
+		t.Errorf("the index of pushes after the chain's placement is %+v (kept %t), want its three runs carried",
+			idx, ok)
 	}
 
 	w.log.recreate(before)

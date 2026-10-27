@@ -8,8 +8,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -211,6 +214,132 @@ func (c *Cache) adoptCounted(repoID string, outcome adoptOutcome) {
 	}
 }
 
+// AdoptLayer hands the installer a published layer its own node wrote — the
+// repository's MAINTAINER, which built it in sc — so that node installs it
+// with no GET: called once the publication's record has applied, as Adopt is
+// for a pack, and for the same reason only then (a layer placed before its
+// row would be a chain no row names). row is the layer as the record names it.
+//
+// sc holds the layer's files under the names git gives them — its
+// multi-pack-index layer and bitmap in objects/pack/multi-pack-index.d, and
+// its commit-graph layer, where it carries one, in objects/info/commit-graphs
+// — and its commit-graph-chain lists the base's graph layers, root first, and
+// then the layer's own: what git leaves where it wrote a split graph over a
+// named base. They are hard-linked into tmp/layer-<id>-<v7>/, which outlives
+// the scratch, held to row over that base (code.CheckLayer: the rule every
+// install meets, hashed a piece at a time in a slot of the read lane), and
+// registered for the installer: the round or the installer that next reaches
+// the layer over that very base places them in place of a GET
+// (crewlet.code.cache.layers{outcome=adopted}). One no round's chain names
+// within objstore.RecordWithin is a function of a record that never applied,
+// and the janitor discards it (expireAdoptedLayers).
+//
+// A row the files are not (code.ErrBadLayer), or a scratch of another cache
+// or repository, is refused (ErrInvalid) with nothing staged; a link or a
+// read that fails, no read slot in time and an ended ctx are returned as
+// they came, and cost the installer a GET, never the publication.
+func (c *Cache) AdoptLayer(ctx context.Context, repoID string, sc *Scratch, row code.LayerRef) error {
+	switch {
+	case sc == nil || sc.c != c:
+		return fmt.Errorf("%w: a layer's adoption names a scratch this cache made", ErrInvalid)
+	case sc.view:
+		return fmt.Errorf("%w: %s is an advertisement view, which no publication writes into", ErrInvalid, sc.Dir)
+	case sc.e.id != repoID:
+		return fmt.Errorf("%w: %s is a scratch of %s, not of %s", ErrInvalid, sc.Dir, sc.e.id, repoID)
+	}
+	if err := row.Check(); err != nil {
+		return fmt.Errorf("%w: adopting layer %s into %s: %w", ErrInvalid, row.LayerID, repoID, err)
+	}
+	if !c.enter() {
+		return ErrStopped
+	}
+	defer c.leave()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("cache: adopting layer %s into %s: %w", row.LayerID, repoID, context.Cause(ctx))
+	}
+	base, err := scratchGraphBase(sc.Dir, row)
+	if err != nil {
+		return fmt.Errorf("cache: adopting layer %s into %s: %w", row.LayerID, repoID, err)
+	}
+	st, err := c.stageAdoptedLayer(sc, code.LayerRow{Layer: row})
+	if err != nil {
+		return fmt.Errorf("cache: adopting layer %s into %s: %w", row.LayerID, repoID, err)
+	}
+	// Hashed in the read lane a piece at a time: the publisher holds no
+	// maintenance slot by now, having released its admission once its build's
+	// last git step ended.
+	if err = checkStaged(ctx, st, base, c.pieces(c.git.HoldRead).layer()); err != nil {
+		st.remove(c)
+		if errors.Is(err, code.ErrBadLayer) {
+			return fmt.Errorf("%w: adopting layer %s into %s: %w", ErrInvalid, row.LayerID, repoID, err)
+		}
+		// A read that failed, no read slot in time or ctx ended: nothing
+		// said of the files, whose layer the installer fetches instead.
+		return fmt.Errorf("cache: adopting layer %s into %s: %w", row.LayerID, repoID, err)
+	}
+	st.base = base
+	in := c.installer
+	in.mu.Lock()
+	if in.adopted[repoID] == nil {
+		in.adopted[repoID] = map[string]*stagedLayer{}
+	}
+	old := in.adopted[repoID][row.LayerID]
+	in.adopted[repoID][row.LayerID] = st
+	in.mu.Unlock()
+	if old != nil {
+		old.remove(c)
+	}
+	c.kickInstall(repoID, false)
+	return nil
+}
+
+// scratchGraphBase is the commit-graph layers the scratch at dir wrote row's
+// graph layer over, root first: its commit-graph-chain's lines, less the
+// layer's own last line — or all of them where the layer carries no graph.
+// A chain that does not end in the layer's own graph layer is refused: the
+// files are no layer the row names.
+func scratchGraphBase(dir string, row code.LayerRef) ([]string, error) {
+	text, err := os.ReadFile(filepath.Join(dir, graphChainRel))
+	if errors.Is(err, fs.ErrNotExist) {
+		text, err = nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Fields(string(text))
+	if row.GraphID == "" {
+		return lines, nil
+	}
+	if len(lines) == 0 || lines[len(lines)-1] != row.GraphID {
+		return nil, fmt.Errorf("%w: %s's commit-graph-chain does not end in the layer's graph-%s",
+			ErrInvalid, dir, row.GraphID)
+	}
+	return lines[:len(lines)-1], nil
+}
+
+// stageAdoptedLayer links the scratch's files of row's layer into
+// tmp/layer-<id>-<v7>/, as a fetch stages them (stageLayer), and counts their
+// bytes into tmp/'s. A link that fails takes back the staging.
+func (c *Cache) stageAdoptedLayer(sc *Scratch, row code.LayerRow) (*stagedLayer, error) {
+	dir := filepath.Join(c.dir, tmpDir, "layer-"+row.Layer.LayerID+"-"+newV7())
+	if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
+		return nil, err
+	}
+	st := &stagedLayer{row: row, dir: dir, adopted: true, at: c.now(), began: time.Now()}
+	c.tmpBytes.Add(row.Layer.Size())
+	for i, rel := range layerRels(row.Layer) {
+		if rel == "" {
+			continue
+		}
+		st.paths[i] = filepath.Join(dir, []string{"midx", "bitmap", "graph"}[i])
+		if err := os.Link(filepath.Join(sc.Dir, rel), st.paths[i]); err != nil {
+			st.remove(c)
+			return nil, fmt.Errorf("staging %s: %w", filepath.Join(sc.Dir, rel), err)
+		}
+	}
+	return st, nil
+}
+
 // checkAdoption holds the scratch's one pack to the row's: its checksum, and
 // each section's size.
 func checkAdoption(sc *Scratch, pack code.PackRef) error {
@@ -357,7 +486,7 @@ func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutc
 	}
 	// A pack added: what a declaration says of one, before it is linked in
 	// (dropFor's order rule). No declaration drops for an added pack today.
-	if _, err := c.dropFor(e, inc, EventPackAdded, 0); err != nil {
+	if _, err := c.dropFor(e, inc, EventPackAdded, eventDetail{}); err != nil {
 		return adoptFailed, err
 	}
 	linked, err := linkBundle(nil, st.stem, packDir, st.pack.GitChecksum, nil)

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
@@ -521,6 +522,24 @@ func (im *image) reported(parts gitproc.Part) derivedSet {
 	return s
 }
 
+// holding is the declarations inc holds a file of: those its record has an
+// entry for, which a declaration has exactly while a file of it is on disk
+// (setDerived). A REPORT REACHES ONLY THESE: a part names the files git read
+// of it, and an incarnation in CHAIN mode holds no own-mode index or graph
+// (layers.go), so a multi-pack-index's or a commit-graph's report there names
+// the installed chain alone — which keeps its files on a report, the scrub
+// deciding — and never a drop of files that are not there, which would read
+// the copy whole for nothing. e.mu is held.
+func (im *image) holding(inc *incarnation) derivedSet {
+	var s derivedSet
+	for i, d := range im.decls {
+		if _, ok := inc.derived[d.Name]; ok {
+			s |= 1 << i
+		}
+	}
+	return s
+}
+
 // naming is the parts of derived — a report's derived parts — that name a
 // declaration of s (gitproc.Damage.Drops, the one map from a part to the
 // files it names): what a report is counted by under what became of the
@@ -539,15 +558,26 @@ func (im *image) naming(derived gitproc.Part, s derivedSet) gitproc.Part {
 // dropping is the declarations whose answer to ev is Drop (Derived.On): what
 // a change ev drops, and — for EventReported — the only declarations a drop
 // can repair, since a report of one that keeps its files moves nothing. For
-// eventFailedCheck it is every declaration: a file that fails its check is
-// dropped whatever its declaration says of a report.
+// eventFailedCheck it is every declaration but the installed chain's: a file
+// that fails its check is dropped whatever its declaration says of a report,
+// and a chain's is CUT at the layer that holds it (cutting).
 func (im *image) dropping(ev Event) derivedSet {
-	if ev == eventFailedCheck {
-		return im.all()
-	}
 	var s derivedSet
 	for i, d := range im.decls {
-		if d.On(ev) == Drop {
+		if d.On(ev) == Drop || (ev == eventFailedCheck && !d.chained()) {
+			s |= 1 << i
+		}
+	}
+	return s
+}
+
+// cutting is the installed chain's declarations a change ev cuts to a prefix
+// of what they hold (Prefix) — for eventFailedCheck, every one of them: a
+// layer's file that fails its check goes with every layer above it.
+func (im *image) cutting(ev Event) derivedSet {
+	var s derivedSet
+	for i, d := range im.decls {
+		if d.On(ev) == Prefix || (ev == eventFailedCheck && d.chained()) {
 			s |= 1 << i
 		}
 	}
@@ -782,6 +812,15 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 			want["pack-"+p.GitChecksum+ext] = true
 		}
 	}
+	// THE CHAIN HOLDS ITS PACKS (layers.go): a pack an installed layer names
+	// is no stray, whatever its rows say, until the layer goes.
+	e.mu.Lock()
+	for cs := range inc.installedPacks {
+		for _, ext := range []string{".pack", ".idx", ".rev"} {
+			want["pack-"+cs+ext] = true
+		}
+	}
+	e.mu.Unlock()
 	list, err := os.ReadDir(packDir)
 	if err != nil {
 		return nil, nil, false, err
@@ -837,12 +876,14 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 		return nil, leaving, now.moved, nil
 	}
 	ev := EventPackRetired
-	for _, v := range leaving {
+	gone := map[string]bool{}
+	for key, v := range leaving {
 		if v == EventPackRemoved {
 			ev = EventPackRemoved
 		}
+		gone[key] = true
 	}
-	if _, err = c.dropFor(e, inc, ev, 0); err != nil {
+	if _, err = c.dropFor(e, inc, ev, eventDetail{packs: gone}); err != nil {
 		return nil, nil, true, err
 	}
 	return strays, nil, true, nil
@@ -904,10 +945,33 @@ func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, e
 // one it stopped among them — removes it as it ends (clearWriting). Its
 // caller holds the repository's write lock — whole for a round, a share for
 // an adoption — and not entry.mu.
-func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) (derivedSet, error) {
+//
+// THE INSTALLED CHAIN IS CUT, NEVER DROPPED (Prefix): every declaration of
+// it the change cuts (image.cutting) keeps the longest prefix of the chain
+// that d's packs, its failing layers and — for EventLayersMoved — the chain
+// it wants leave valid (prefixOf, the one cut both chains share), and the
+// rest goes (cutChain). A change that keeps the whole chain moves nothing of
+// it. d names what the change takes out: for EventReported and
+// eventFailedCheck the declarations named (d.named), for a pack's leaving its
+// checksums (d.packs), for the chain moving the chain wanted (d.want), and
+// for a failed check the layers whose files failed (d.failing).
+func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, d eventDetail) (derivedSet, error) {
 	drop := c.image.dropping(ev)
 	if ev == EventReported || ev == eventFailedCheck {
-		drop &= named
+		drop &= d.named
+	}
+	if cut := c.image.cutting(ev); cut != 0 && (ev != eventFailedCheck || cut&d.named != 0) {
+		e.mu.Lock()
+		installed := slices.Clone(inc.installed)
+		e.mu.Unlock()
+		// THE CHAIN MOVING makes the chain's directories exactly the prefix it
+		// keeps, whatever the cut: a placement in place is where a previous
+		// process's files no record names, or a crashed placement's, go.
+		if k := prefixOf(installed, ev, d); k < len(installed) || ev == EventLayersMoved {
+			if err := c.cutChain(e, inc, k, ev); err != nil {
+				return 0, err
+			}
+		}
 	}
 	if drop == 0 {
 		return 0, nil
@@ -1003,13 +1067,26 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, named derivedSet) 
 	return drop, nil
 }
 
+// eventDetail is what a change takes out, as dropFor reads it: the
+// declarations a report or a check named (named, for EventReported and
+// eventFailedCheck); and, for the installed chain's cut (prefixOf), the pack
+// checksums the change removes or retires (packs), the chain the rows want
+// (want, for EventLayersMoved) and the layers whose files failed their check,
+// by id (failing).
+type eventDetail struct {
+	named   derivedSet
+	packs   map[string]bool
+	want    []code.LayerRow
+	failing map[string]bool
+}
+
 // droppedDerived stamps that this process has just dropped a file of each
 // declaration of s from inc: a write of it (wrote, D4's guard) and one that
 // can end a pack's or an object's failure (repaired). e.mu is held.
 func (c *Cache) droppedDerived(inc *incarnation, s derivedSet) {
 	c.wrote(inc, s)
 	read := false
-	c.image.each(s, func(_ int, d *Derived) { read = read || !d.inProcess() })
+	c.image.each(s, func(_ int, d *Derived) { read = read || d.gitReads() })
 	if read {
 		// Only a file git reads can be what a failed process met: the
 		// cache's own (the index of pushes) repairs no read.
@@ -1040,6 +1117,11 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 	for name, size := range sizes {
 		if i, _ := c.image.ownerOf(packRel, name); i >= 0 {
 			continue // a derived file's: ownedIn counts it
+		}
+		if c.image.dir[filepath.Join(packRel, name)] {
+			// A directory of the image there — the installed chain's — is
+			// listed and counted below as the declared directory it is.
+			continue
 		}
 		if strings.HasSuffix(name, ".idx") {
 			if _, ok := sizes[strings.TrimSuffix(name, ".idx")+".pack"]; ok {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -148,6 +149,16 @@ type derivedState struct {
 	// this. At most maxStateCohorts, so a state stays constant-size whatever
 	// the memo holds. IMMUTABLE once stored, as Provenance is.
 	Cohorts []memoCohort `json:"cohorts,omitempty"`
+	// Layers is an installed published chain's record (layers.go), which only
+	// the two chains' entries carry, and only with their Step: the ids their
+	// chain file lists, root first — what a boot's first round holds that
+	// chain file to before any round has read the rows' chain (chainWants),
+	// and reads what the copy holds by (bootInstalled). At most
+	// code.MaxPublishedLayers ids, so a state stays constant-size. A state
+	// written before any chain was installed carries none, which reads as
+	// nothing installed — what such a copy holds. IMMUTABLE once stored, as
+	// Provenance is.
+	Layers []string `json:"layers,omitempty"`
 }
 
 // covers is how many packs d covers: the packs the write that made it
@@ -217,6 +228,36 @@ func (st *state) check() error {
 			if err := checkCohorts(d); err != nil {
 				return fmt.Errorf("it records derived file %q as %w", name, err)
 			}
+		case d.Layers != nil && name != DerivedLayers && name != DerivedGraphLayers:
+			return fmt.Errorf("it records published layers for derived file %q, which installs none", name)
+		case d.Layers != nil || name == DerivedLayers || name == DerivedGraphLayers:
+			if err := checkLayers(d); err != nil {
+				return fmt.Errorf("it records derived file %q as %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// checkLayers refuses an installed chain's record no write of this build
+// leaves: ids recorded without the install's step or a step without ids
+// (the record is what says the chain was installed), more of them than a
+// published chain holds, one that is no layer's checksum, or one twice.
+func checkLayers(d derivedState) error {
+	switch {
+	case (len(d.Layers) > 0) != (d.Step != ""):
+		return fmt.Errorf("a chain of %d layers made by step %q: a chain is recorded by the install that made it",
+			len(d.Layers), d.Step)
+	case len(d.Layers) > code.MaxPublishedLayers:
+		return fmt.Errorf("a chain of %d layers, past the %d a published chain holds (code.MaxPublishedLayers)",
+			len(d.Layers), code.MaxPublishedLayers)
+	}
+	for i, id := range d.Layers {
+		switch {
+		case !gitref.ValidOID(id) || id == gitref.ZeroOID:
+			return fmt.Errorf("a chain naming %q, which is no layer's checksum", id)
+		case slices.Contains(d.Layers[:i], id):
+			return fmt.Errorf("a chain naming %s twice", id)
 		}
 	}
 	return nil

@@ -171,14 +171,35 @@ import (
 // cannot hold one. It never waits for that room either: an index the budget
 // cannot hold beside what is in flight is one the round answers without.
 
+// indexed reports whether inc holds an index of EITHER SHAPE on disk: the
+// maintainer's whole multi-pack-index (DerivedMidx's main file), or an
+// installed chain's chain file (DerivedLayers') — one Lstat each. git reads a
+// whole index before a chain, and a whole write deletes every layer and the
+// chain file, so a round writes no index beside either: the guard on the
+// whole index alone let a full round past MidxRoundPacks delete a chain it
+// had just installed.
+func (c *Cache) indexed(inc *incarnation) bool {
+	for _, name := range []DerivedName{DerivedMidx, DerivedLayers} {
+		rel := c.image.mainRel(name)
+		if rel == "" {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(inc.dir, rel)); !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+	}
+	return false
+}
+
 // indexRound writes a multi-pack-index without a bitmap over exactly the
 // snapshot's packs, for a full round, when the snapshot names MidxRoundPacks
-// or more packs and the incarnation holds NO multi-pack-index file — one stat,
-// never the state's count, which reads zero beside an index on disk when the
-// state was unreadable. A round never writes over an index that exists: git
-// deletes a bitmap that does not match the index it writes. What it runs, in
-// which lane, under which deadline and at which charge is DerivedMidx's round
-// write (derived.go); when is this file's.
+// or more packs and the incarnation holds NO index of either shape (indexed) —
+// a stat each, never the state's count, which reads zero beside an index on
+// disk when the state was unreadable. A round never writes over an index that
+// exists: git deletes a bitmap that does not match the index it writes, and a
+// whole write deletes every layer of an installed chain and its chain file
+// (layers.go). What it runs, in which lane, under which deadline and at which
+// charge is DerivedMidx's round write (derived.go); when is this file's.
 //
 // IT RUNS BEFORE THE REFS, because the refs' peel reads every tag the round
 // sets out of the packs, and without an index each lookup searches every
@@ -201,10 +222,7 @@ import (
 // reports whether it wrote.
 func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap snapshot) bool {
 	packs := len(snap.packs)
-	if packs < c.roundPacks {
-		return false
-	}
-	if _, err := os.Lstat(filepath.Join(inc.dir, c.image.mainRel(DerivedMidx))); !errors.Is(err, fs.ErrNotExist) {
+	if packs < c.roundPacks || c.indexed(inc) {
 		return false
 	}
 	w := c.mw.round
@@ -692,12 +710,16 @@ func (c *Cache) holdsWork(e *entry) bool {
 
 // wantsRun reports whether e's current incarnation wants a maintenance run
 // for what it HOLDS, whenever one may start: one the maintainer works on
-// (holdsWork) lacking the maintainer's bitmapped index or its commit-graph.
-// runnable and due add WHEN — no round, run or verify in flight, the debounce
-// and the interval passed — and plan WHAT, on the node's memory. e.mu is
-// held.
+// (holdsWork) in OWN mode lacking the maintainer's bitmapped index or its
+// commit-graph. One in CHAIN mode — an installed published chain (layers.go)
+// — wants no own-mode write: a whole index written beside the chain deletes
+// every layer of it and the chain file, a whole graph the graph chain, and
+// its index is its maintainer's to publish. runnable and due add WHEN — no
+// round, run or verify in flight, the debounce and the interval passed — and
+// plan WHAT, on the node's memory. e.mu is held.
 func (c *Cache) wantsRun(e *entry) bool {
-	return c.holdsWork(e) && (c.indexDue(e.current) || !e.current.graphed())
+	return c.holdsWork(e) && len(e.current.installed) == 0 &&
+		(c.indexDue(e.current) || !e.current.graphed())
 }
 
 // indexDue reports whether inc wants the maintainer's BITMAPPED index
@@ -740,6 +762,9 @@ func (c *Cache) indexDue(inc *incarnation) bool {
 // gauge and the alarm follow the repositories rather than the runs. The plan's
 // own charge is the largest of its steps', since they run one after the
 // other.
+//
+// IN CHAIN MODE — an installed published chain (layers.go) — NO OWN-MODE STEP
+// IS EVER PLANNED, nor refused: the two modes never coexist (wantsRun).
 func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refused maintStep,
 	charges map[maintStep]int64) {
 
@@ -750,6 +775,9 @@ func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refus
 	}
 	p = runPlan{covers: Covers{Packs: inc.packs, Objects: inc.objects, DiskBytes: inc.diskBytes}, startedAt: c.now(),
 		graphCharge: charges[mw.graph]}
+	if len(inc.installed) > 0 {
+		return p, 0, charges
+	}
 	fits := func(s maintStep) bool {
 		if charges[s] > budget {
 			refused |= s

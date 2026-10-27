@@ -1,0 +1,1916 @@
+package cache
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"golang.org/x/sync/semaphore"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// THE INSTALLED CHAIN. A repository's MAINTAINER — one git node — writes its
+// multi-pack-index as a CHAIN OF PUBLISHED LAYERS, each git's own incremental
+// layer with its bitmap and the commit-graph layer over the same packs,
+// stores each layer's bytes in the object store and names it on the code log
+// (code.LayerRef, ADR-0051's Derived standing); every git node INSTALLS that
+// chain: each layer fetched, held to its row (code.CheckLayer), and placed
+// byte for byte as the maintainer's git wrote it, both chain files written by
+// this cache from the rows' order. No node writes a multi-pack-index layer of
+// its own: on the node pin a bitmapped layer costs the walk of the WHOLE
+// history however few objects it adds (1.52–1.89 s and 127–132 MiB over a
+// 220 000-object history against 1.43 s and 168 MiB for the whole index), and
+// a layer without its bitmap turns off every bitmap beneath it — so a chain of
+// node-local tips would be the whole rewrite paid more often. So the packs
+// that arrived since the last publication stay OUTSIDE the chain, the TAIL,
+// which git reads beside it (0.03–0.35 s of walk at 1 to 16 packs outside
+// it, nothing a clone measures), their commits read from the packs rather
+// than a graph until a publication covers them.
+//
+// TWO MODES, PER INCARNATION, NEVER BOTH. An incarnation holding a non-empty
+// installed chain is in CHAIN mode; one holding none is in OWN mode — the
+// maintainer's whole index and graph of derived.go's DerivedMidx and
+// DerivedGraph. git refuses the mix every way: it reads a whole
+// multi-pack-index before a chain, a whole write deletes every layer and the
+// chain file (midx-write.c's clear_midx_files), it loads a whole commit-graph
+// before the chain, and a whole graph write unlinks the chain and expires its
+// layers. So a chain placed drops own mode's files first (EventLayersMoved),
+// the maintainer plans no own-mode write while a chain is installed
+// (maintain.go), a round writes no index of its own beside one (indexRound's
+// indexed), and a chain cut to nothing leaves the copy in own mode, its index
+// the maintainer's to write.
+//
+// A FULL ROUND INSTALLS THE CHAIN BEFORE IT ANSWERS: it keeps the longest
+// prefix of the chain the copy holds whole and sound — every file there at its
+// row's sizes, held to its Check (CheckLayers) by the round's check, which a
+// previous process's files meet at the copy's first round — and fetches the
+// rest, every part of every layer queued in the round's ONE download queue
+// behind its packs (install.go), so a cold node's first answer serves with a
+// bitmap at the cost of the layers' bytes overlapped with the packs', never a
+// first byte a layer in series. A DELTA NEVER DOWNLOADS A LAYER: a root layer
+// of the largest repository the defaults admit is some 2.6 GB, and inside a
+// delta it would hold every fetch waiting on that round on every git node; it
+// hands the new rows to the INSTALLER, one goroutine a cache started by
+// Start, and answers at once. Correctness never waits on a layer: without one
+// git reads every pack's own index.
+//
+// THE CHAIN HOLDS ITS PACKS. A publication's repack retires packs its own new
+// layer replaces, so between the delta that brings it and the installer's
+// placement every pack an INSTALLED layer names stays in the copy, whether or
+// not a live row still names it — a round never takes one out (apply's live
+// set, packStrays, Verify's strays) — and leaves with the layer that held it.
+// Dropped at the delta, they would cut the chain, and the bitmap with it,
+// until the replacement was fetched. The longest such a pack stays is the
+// installer's retry ceiling, installRetryCap, past which the stale layer is
+// cut.
+//
+// A PLACEMENT IS A SWAP on an incarnation a reader may hold (swap.go's layer
+// step: the kept layers linked, the fetched renamed in, the chain files
+// written, every live pack and every pack the new chain names linked), and in
+// place on one nobody holds (a boot's first round, a rebuild's product); and
+// before the chain is visible a CANARY reads through its bitmap. A layer file
+// does not name its base — the chain's order does — so a layer placed over
+// the wrong base passes `multi-pack-index verify` and fails the first read
+// that uses the bitmap ("invalid MIDX object position, MIDX is likely
+// corrupt"), which CheckLayer, reading each file alone, cannot see; the
+// canary is one bitmapped walk, 0.004 s with no tail and 0.35 s with sixteen
+// packs outside the chain.
+//
+// A LAYER MISSING, CORRUPT OR FROM A NEWER GIT IS REFUSED, never an error: the
+// copy serves from the prefix below it, or in own mode, and the layer and every
+// one above it wait for the maintainer's next publication, which replaces
+// what its own cache refused (code_layer_refused, crewlet.code.cache.layers).
+// A missing part is asked about once at the log's head first — a publication
+// may have replaced the layer since the rows were read, and the store
+// collected its parts — and a refusal is kept in memory while the rows name
+// that very record, so a restart tries once more.
+
+// layersFile is this file as the declarations name their writer
+// (Writer.File): the writers gate holds the install writes of DerivedLayers
+// and DerivedGraphLayers to this file's allowance row.
+const layersFile = "internal/code/cache/layers.go"
+
+// layerOutcome is what became of one published layer on this node: the
+// outcome attribute of crewlet.code.cache.layers and
+// crewlet.code.cache.layer.install.
+type layerOutcome string
+
+const (
+	// layerInstalled: fetched from the object store, held to its row and
+	// placed.
+	layerInstalled layerOutcome = "installed"
+	// layerAdopted: placed from the files the repository's maintainer wrote
+	// on this node (Cache.AdoptLayer), with no GET.
+	layerAdopted layerOutcome = "adopted"
+	// layerKept: carried into the incarnation a placement or a rebuild
+	// made, the chain moving around it.
+	layerKept layerOutcome = "kept"
+	// layerCut: taken out of the copy — the rows no longer name it, a pack it
+	// names left, its files failed their check, or a layer below it went.
+	layerCut layerOutcome = "cut"
+	// layerMissing: a part the object store holds no object for, while a
+	// read at the log's head made after it still names the layer.
+	layerMissing layerOutcome = "missing"
+	// layerCorrupt: a part whose bytes are not its row's, files code.CheckLayer
+	// refuses, or a placement whose canary failed.
+	layerCorrupt layerOutcome = "corrupt"
+	// layerNewerGit: written by a git newer than this node's, which it would
+	// not read.
+	layerNewerGit layerOutcome = "newer_git"
+	// layerFailed: the store failing to answer, or this node's disk failing a
+	// write: tried again.
+	layerFailed layerOutcome = "failed"
+)
+
+// layerOutcomes is every layerOutcome, in the order the reference lists them.
+var layerOutcomes = []layerOutcome{layerInstalled, layerAdopted, layerKept, layerCut, layerMissing, layerCorrupt,
+	layerNewerGit, layerFailed}
+
+// layerRefusal is one layer of the rows' chain this node will not try to
+// install again while the rows name it at the record that added it: what
+// refused it, and that record's position — a publication of the same bytes
+// again, under a new record and new parts (the maintainer's repair of a layer
+// the store lost), is another try.
+type layerRefusal struct {
+	outcome layerOutcome
+	added   statelog.Position
+}
+
+// The installed chain's files, relative to an incarnation: its two chain
+// files, and the directories every layer's files live in.
+var (
+	layersChainRel = filepath.Join(filepath.FromSlash(layersDir), "multi-pack-index-chain")
+	graphChainRel  = filepath.Join(filepath.FromSlash(graphLayersDir), "commit-graph-chain")
+)
+
+// layerRels is where l's three files live in an incarnation: its
+// multi-pack-index layer, its bitmap and — "" where it carries none — its
+// commit-graph layer, as git names each (derived.go's patterns).
+func layerRels(l code.LayerRef) [3]string {
+	out := [3]string{
+		filepath.Join(filepath.FromSlash(layersDir), "multi-pack-index-"+l.LayerID+".midx"),
+		filepath.Join(filepath.FromSlash(layersDir), "multi-pack-index-"+l.LayerID+".bitmap"),
+	}
+	if l.GraphID != "" {
+		out[2] = filepath.Join(filepath.FromSlash(graphLayersDir), "graph-"+l.GraphID+".graph")
+	}
+	return out
+}
+
+// chainIDs is rows as the two chain files list them: every layer's id, and
+// the id of every commit-graph layer they carry, root first.
+func chainIDs(rows []code.LayerRow) (midx, graph []string) {
+	for _, r := range rows {
+		midx = append(midx, r.Layer.LayerID)
+		if r.Layer.GraphID != "" {
+			graph = append(graph, r.Layer.GraphID)
+		}
+	}
+	return midx, graph
+}
+
+// chainText is a chain file listing ids, as git writes one and reads one: an
+// id a line.
+func chainText(ids []string) []byte {
+	var b bytes.Buffer
+	for _, id := range ids {
+		b.WriteString(id)
+		b.WriteByte('\n')
+	}
+	return b.Bytes()
+}
+
+// sameLayer reports whether a and b are one layer of one chain: the same
+// multi-pack-index layer — named by its own checksum, so the same bytes — and
+// the same commit-graph layer over the same base. Another record publishing
+// the same bytes again (new parts, a new position) is the same layer: a copy
+// holding it holds what the rows name.
+func sameLayer(a, b code.LayerRow) bool {
+	return a.Layer.LayerID == b.Layer.LayerID && a.Layer.GraphID == b.Layer.GraphID && a.Layer.BaseID == b.Layer.BaseID
+}
+
+// layerPacks is every pack checksum rows' layers name.
+func layerPacks(rows []code.LayerRow) map[string]bool {
+	out := map[string]bool{}
+	for _, r := range rows {
+		for _, cs := range r.Layer.Packs {
+			out[cs] = true
+		}
+	}
+	return out
+}
+
+// prefixOf is how many layers of installed a change ev keeps, as d details
+// it — THE ONE CUT, which both chains, the swap and every placement read, so
+// the multi-pack-index chain and the commit-graph chain are never cut at two
+// places: the longest prefix whose every layer names none of d's packs, has no
+// file d names failing, and — for EventLayersMoved — is, layer for layer, the
+// chain d wants. A layer is valid only over its exact base, so nothing above
+// the first layer cut is kept.
+func prefixOf(installed []code.LayerRow, ev Event, d eventDetail) int {
+	for i, l := range installed {
+		if d.failing[l.Layer.LayerID] {
+			return i
+		}
+		for _, cs := range l.Layer.Packs {
+			if d.packs[cs] {
+				return i
+			}
+		}
+		if ev == EventLayersMoved && (i >= len(d.want) || !sameLayer(d.want[i], l)) {
+			return i
+		}
+	}
+	return len(installed)
+}
+
+// recordInstalled makes rows what inc holds of the chain — its in-memory
+// record and the declarations' records the state persists — keeping the
+// cache's total in step through setDerived; e.mu is held. THE ONE WRITE OF
+// AN INCARNATION'S INSTALLED CHAIN: each declaration's record lists the ids
+// its chain file lists (derivedState.Layers) and counts its files' bytes from
+// the rows — every layer's sections and the chain file — so a boot restores
+// both halves of what the copy holds without measuring a file, and a
+// declaration with no layer has no entry. held is the packs the copy holds,
+// by checksum, at the figures their rows count — every pack rows names is
+// among them, since nothing is installed over a pack the copy lacks
+// (installable) — and the packs the chain then holds keep those figures
+// whatever becomes of their rows (incarnation.installedPacks).
+func (c *Cache) recordInstalled(inc *incarnation, rows []code.LayerRow, held map[string]livePack) {
+	inc.installed = slices.Clone(rows)
+	inc.installedPacks = map[string]livePack{}
+	for cs := range layerPacks(rows) {
+		inc.installedPacks[cs] = held[cs]
+	}
+	midx, graph := chainIDs(rows)
+	var midxBytes, graphBytes int64
+	for _, r := range rows {
+		midxBytes += r.Layer.MidxBytes + r.Layer.BitmapBytes
+		graphBytes += r.Layer.GraphBytes
+	}
+	for _, d := range []struct {
+		name  DerivedName
+		ids   []string
+		bytes int64
+	}{{DerivedLayers, midx, midxBytes}, {DerivedGraphLayers, graph, graphBytes}} {
+		if c.image.decl(d.name) == nil {
+			continue
+		}
+		if len(d.ids) == 0 {
+			c.setDerived(inc, d.name, derivedState{}, false)
+			continue
+		}
+		c.setDerived(inc, d.name, derivedState{Bytes: d.bytes + int64(len(chainText(d.ids))),
+			Covers: len(inc.installedPacks), Step: StepLayer, Layers: d.ids}, true)
+	}
+}
+
+// setInstalled is recordInstalled for an incarnation placed in place, its
+// generation moved and the chained gauge kept in step (noteChained); e.mu is
+// held.
+func (c *Cache) setInstalled(e *entry, inc *incarnation, rows []code.LayerRow, held map[string]livePack) {
+	c.recordInstalled(inc, rows, held)
+	inc.chainGen++
+	c.noteChained(e)
+}
+
+// heldPacks is every pack inc holds, by checksum, at the figures its rows
+// count: its live rows', and those its installed chain holds beyond them.
+// e.mu is held.
+func heldPacks(inc *incarnation) map[string]livePack {
+	out := maps.Clone(inc.installedPacks)
+	if out == nil {
+		out = map[string]livePack{}
+	}
+	for _, p := range inc.live {
+		out[p.checksum] = p
+	}
+	return out
+}
+
+// packFigures is the packs snap names, by checksum, at the figures their rows
+// count: what a full round's copy holds once its install has run.
+func (s snapshot) packFigures() map[string]livePack {
+	out := make(map[string]livePack, len(s.packs))
+	for _, p := range s.packs {
+		out[p.GitChecksum] = liveOf(p.Ref())
+	}
+	return out
+}
+
+// noteChained keeps crewlet.code.cache.chained's running total in step with
+// e: whether its current incarnation serves from an installed chain; e.mu is
+// held. Called wherever the current incarnation or its chain changes, so the
+// gauge is two loads, never a walk of every repository.
+func (c *Cache) noteChained(e *entry) {
+	now := !e.dead && e.current != nil && len(e.current.installed) > 0
+	if now == e.chained {
+		return
+	}
+	e.chained = now
+	if now {
+		c.chainedRepos.Add(1)
+	} else {
+		c.chainedRepos.Add(-1)
+	}
+}
+
+// recordedIDs is the chain inc's records name — the ids each chain file
+// lists — from its installed rows, or, before a round of this process has
+// read the chain (a boot's copy), from the declarations' records the state
+// carried. e.mu is held.
+func recordedIDs(inc *incarnation) (midx, graph []string) {
+	if len(inc.installed) > 0 || inc.chainRead {
+		return chainIDs(inc.installed)
+	}
+	return inc.derived[DerivedLayers].Layers, inc.derived[DerivedGraphLayers].Layers
+}
+
+// chainWants is what each chain file of inc holds when it is sound — the ids
+// its record names, a line each — by its path relative to the incarnation:
+// what the check, the scrub and Verify hold a chain file to (CheckLayers),
+// since it carries no trailer of its own. e.mu is held.
+func chainWants(inc *incarnation) map[string][]byte {
+	midx, graph := recordedIDs(inc)
+	return map[string][]byte{layersChainRel: chainText(midx), graphChainRel: chainText(graph)}
+}
+
+// bootInstalled is the chain inc holds as its record names it, read against
+// the rows' chain: the longest prefix of chain whose every layer is, in turn,
+// the next the multi-pack-index record lists and — where it carries one — the
+// next the commit-graph record lists. What a boot's copy holds is known by
+// its ids alone until the rows name them; a layer the rows no longer name is
+// held by nobody's account, and its files go with the round's placement
+// (cutChain). e.mu is held.
+func bootInstalled(inc *incarnation, chain []code.LayerRow) []code.LayerRow {
+	midx, graph := inc.derived[DerivedLayers].Layers, inc.derived[DerivedGraphLayers].Layers
+	var out []code.LayerRow
+	g := 0
+	for i, r := range chain {
+		if i >= len(midx) || midx[i] != r.Layer.LayerID {
+			break
+		}
+		if r.Layer.GraphID != "" {
+			if g >= len(graph) || graph[g] != r.Layer.GraphID {
+				break
+			}
+			g++
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// setChain records chain as the rows' published chain of inc, as a snapshot
+// served it (code.RepoSnapshot.LayersServed), and drops every refusal of a
+// layer the rows no longer name at the record that added it; e.mu is held.
+func setChain(inc *incarnation, chain []code.LayerRow) {
+	inc.chain, inc.chainRead = slices.Clone(chain), true
+	inc.chainGen++
+	for id, r := range inc.refused {
+		i := slices.IndexFunc(chain, func(row code.LayerRow) bool { return row.Layer.LayerID == id })
+		if i < 0 || chain[i].Added != r.added {
+			delete(inc.refused, id)
+		}
+	}
+}
+
+// refuse records that this node will not install row while the rows name it
+// at its record — logged code_layer_refused once an incarnation a layer —
+// and counts it; e.mu is held.
+func (c *Cache) refuse(e *entry, inc *incarnation, row code.LayerRow, outcome layerOutcome, detail string) {
+	if r, ok := inc.refused[row.Layer.LayerID]; ok && r == (layerRefusal{outcome: outcome, added: row.Added}) {
+		return
+	}
+	if inc.refused == nil {
+		inc.refused = map[string]layerRefusal{}
+	}
+	inc.refused[row.Layer.LayerID] = layerRefusal{outcome: outcome, added: row.Added}
+	c.countLayers(outcome, 1)
+	c.log.Warn("code_layer_refused", "repo", e.id, "layer", row.Layer.LayerID, "seq", row.Seq,
+		"outcome", string(outcome), "detail", detail)
+}
+
+// countLayers counts n layers under outcome.
+func (c *Cache) countLayers(outcome layerOutcome, n int) {
+	if c.metrics != nil && n > 0 {
+		c.metrics.Add(metrics.CodeCacheLayers, uint64(n), metrics.Attrs{"outcome": string(outcome)})
+	}
+}
+
+// observeInstall records how long one layer's fetch, check and placement
+// took, by what became of it.
+func (c *Cache) observeInstall(outcome layerOutcome, took time.Duration) {
+	if c.metrics != nil {
+		c.metrics.Observe(metrics.CodeCacheLayerInstall, took, metrics.Attrs{"outcome": string(outcome)})
+	}
+}
+
+// chainPlan is what a round or the installer decided of one incarnation's
+// chain before a byte moves: what it holds (installed), the longest prefix of
+// the rows' chain it holds whole and sound (kept), and the layers above it to
+// fetch, in chain order (want) — stopping at the first that is refused, from
+// a newer git, or over a pack the copy does not hold, since nothing is
+// installed over a base it lacks.
+type chainPlan struct {
+	installed, kept, want []code.LayerRow
+	// failing is the layers with a file a check or a scrub found failing that
+	// is still the file found so, by id: cut, and fetched again.
+	failing map[string]bool
+	// rewrite: a chain file is not what the incarnation's record says — it
+	// failed its check, or is absent where layers are installed, or present
+	// where none are — so the chain files are written again even where
+	// nothing else of the chain moves.
+	rewrite bool
+	// held is the packs the copy holds once the round's install has run, by
+	// checksum, at the figures their rows count: the snapshot's. tips is the
+	// object ids the snapshot's refs name, each once: what a placement in
+	// place, before the round writes those refs, walks its canary from.
+	held map[string]livePack
+	tips []string
+	// at is when the plan was made, a time.Now() reading: how long each
+	// layer's install took is measured from it.
+	at time.Time
+}
+
+// base is the commit-graph layers below want[i] once the chain is placed,
+// root first: what CheckLayer holds its graph layer's base to.
+func (p chainPlan) base(i int) []string {
+	return baseOf(slices.Concat(p.kept, p.want), len(p.kept)+i)
+}
+
+// rows is the chain a placement of p installs, given the layers fetched:
+// kept, then the fetched prefix of want.
+func (p chainPlan) rows(fetched []*stagedLayer) []code.LayerRow {
+	out := slices.Clone(p.kept)
+	for _, st := range fetched {
+		out = append(out, st.row)
+	}
+	return out
+}
+
+// moves reports whether placing rows, fetched among them, changes what the
+// incarnation holds of its chain: another chain, a layer's files fetched
+// again over ones that failed, or chain files that are not the record's.
+func (p chainPlan) moves(rows []code.LayerRow, fetched []*stagedLayer) bool {
+	return p.rewrite || len(fetched) > 0 || !sameChain(rows, p.installed)
+}
+
+// placeChain is a FULL round's placement of the chain it planned (planChain),
+// once its install has fetched what it could (layers, in chain order): the
+// kept prefix and every layer fetched up to the first that was not — a layer
+// is valid only over its exact base, so whatever was fetched above a failure
+// goes from tmp/ — and nothing where that is what the copy holds already.
+//
+//   - Chain files alone not the record's are written again IN PLACE, even on a
+//     copy a reader may hold — one rename each — and anything of the two
+//     directories no layer kept names goes (cutChain).
+//   - Any other change to a copy a reader may hold is answered as a SWAP's
+//     layer step (swap.go): the step returned, which the round's swap takes.
+//   - On one nobody holds — a boot's first round, a rebuild's product — it is
+//     placed IN PLACE (placeInPlace), the canary reading it first.
+//
+// A layer the round could not fetch is the installer's: bytes not its row's
+// are refused at once (corrupt); a part the store does not hold is asked of
+// the log's head by the installer's own try (refuseFailed), since the round
+// holds the repository a read at the head would queue behind; anything else
+// is the installer's to try again behind its wait. It answers the swap's
+// step, or whether it wrote into the copy here. e.mu is not held; the round's
+// write lock is.
+func (c *Cache) placeChain(ctx context.Context, e *entry, inc *incarnation, p chainPlan,
+	layers []layerFetch) (*layerStep, bool, error) {
+
+	var fetched []*stagedLayer
+	stopped := false
+	for _, f := range layers {
+		if !stopped && f.staged != nil {
+			fetched = append(fetched, f.staged)
+			continue
+		}
+		if f.staged != nil {
+			f.staged.remove(c)
+			continue
+		}
+		if !stopped {
+			c.roundLayerFailed(e, inc, f)
+		}
+		stopped = true
+	}
+	rows := p.rows(fetched)
+	if !p.moves(rows, fetched) {
+		return nil, false, nil
+	}
+	e.mu.Lock()
+	held := inc.converged || inc.pins > 0
+	e.mu.Unlock()
+	switch {
+	case len(fetched) == 0 && sameChain(rows, p.installed):
+		return nil, true, c.cutChain(e, inc, len(rows), EventLayersMoved)
+	case held:
+		return &layerStep{rows: rows, fetched: fetched}, false, nil
+	}
+	objects := make(map[string]int64, len(p.held))
+	for cs, f := range p.held {
+		objects[cs] = f.objects
+	}
+	_, err := c.placeInPlace(ctx, e, inc, rows, fetched, p.held, tailObjects(rows, objects), p.tips)
+	if err != nil {
+		for _, st := range fetched {
+			st.remove(c)
+		}
+	}
+	return nil, true, err
+}
+
+// roundLayerFailed is a full round's layer it could not fetch, as its install
+// answered it (placeChain): refused at once where its bytes are not its row's,
+// and otherwise the installer's — which the round's end kicks, since the copy
+// then wants it (installDue) — where a part the store does not hold is asked
+// of the log's head, and anything else tried again behind its wait. Logged
+// code_layer_install_failed either way.
+func (c *Cache) roundLayerFailed(e *entry, inc *incarnation, f layerFetch) {
+	if f.err == nil {
+		return
+	}
+	c.log.Warn("code_layer_install_failed", "repo", e.id, "layer", f.row.Layer.LayerID, "seq", f.row.Seq,
+		"outcome", string(f.outcome), "error", f.err)
+	c.observeInstall(f.outcome, f.took)
+	if f.outcome == layerCorrupt {
+		e.mu.Lock()
+		c.refuse(e, inc, f.row, layerCorrupt, f.err.Error())
+		e.mu.Unlock()
+	}
+}
+
+// planChain is a FULL round's plan for inc's chain, the snapshot's chain made
+// the incarnation's own (setChain): kept is the longest prefix of that chain
+// the incarnation holds, its every file present at its row's size, held to
+// its Check by the round's check — which vouches every file it finds sound,
+// and hashes every one this process has not vouched — and named failing by no
+// finding still at the identity it failed at (found: the round's check's and
+// every scrub's waiting on the repair mark, which a scrub makes of a file this
+// process had vouched); want is installable above it. On a boot's copy what
+// it holds is its record's, read against the rows' chain (bootInstalled), and
+// made the incarnation's, so the placement cuts what the record held past it.
+// e.mu is NOT held.
+func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []checkedFile) chainPlan {
+	p := chainPlan{failing: map[string]bool{}, held: snap.packFigures(), at: time.Now()}
+	tips := map[string]bool{}
+	for _, r := range snap.refs {
+		if r.OID != "" && !tips[r.OID] {
+			tips[r.OID] = true
+			p.tips = append(p.tips, r.OID)
+		}
+	}
+	// What the files are now, read before the lock: a finding still at the
+	// identity it failed at, and every file of the rows' chain.
+	failingFiles := map[string]bool{}
+	for _, f := range found {
+		if i, _ := c.image.owner(f.rel); i >= 0 && c.image.decls[i].chained() &&
+			lstatID(filepath.Join(inc.dir, f.rel)) == f.id {
+			failingFiles[f.rel] = true
+		}
+	}
+	ids := map[string]fileID{}
+	for _, r := range snap.layers {
+		for _, rel := range layerRels(r.Layer) {
+			if rel != "" {
+				ids[rel] = lstatID(filepath.Join(inc.dir, rel))
+			}
+		}
+	}
+	holds := func(r code.LayerRow) bool {
+		return !slices.ContainsFunc(r.Layer.Packs, func(cs string) bool { _, ok := p.held[cs]; return !ok })
+	}
+	e.mu.Lock()
+	first := !inc.chainRead
+	setChain(inc, snap.layers)
+	if first && len(inc.installed) == 0 {
+		// A BOOT'S COPY holds what its record names, as far as the rows'
+		// chain names it in turn and the copy holds every pack each layer
+		// names: a layer is valid only over its exact base and its packs.
+		boot := bootInstalled(inc, inc.chain)
+		if i := slices.IndexFunc(boot, func(r code.LayerRow) bool { return !holds(r) }); i >= 0 {
+			boot = boot[:i]
+		}
+		c.setInstalled(e, inc, boot, p.held)
+	}
+	p.installed = slices.Clone(inc.installed)
+	for _, row := range p.installed {
+		for _, rel := range layerRels(row.Layer) {
+			if failingFiles[rel] {
+				p.failing[row.Layer.LayerID] = true
+			}
+		}
+	}
+	k := prefixOf(p.installed, EventLayersMoved, eventDetail{want: inc.chain, failing: p.failing})
+	if i := slices.IndexFunc(inc.chain[:k], func(r code.LayerRow) bool {
+		return !layerSound(inc, r, ids) || !holds(r)
+	}); i >= 0 {
+		k = i
+	}
+	p.kept = slices.Clone(inc.chain[:k])
+	p.want = c.installable(e, inc, inc.chain[k:], func(cs string) bool { _, ok := p.held[cs]; return ok })
+	wants := chainWants(inc)
+	e.mu.Unlock()
+	p.rewrite = failingFiles[layersChainRel] || failingFiles[graphChainRel] || !chainFilesAre(inc.dir, wants)
+	return p
+}
+
+// layerSound reports whether inc holds every file of row at its row's size,
+// as files this process wrote or checked at the identity they have now (ids,
+// read by the caller before it took e.mu) — what the round's check leaves
+// vouched of a sound layer. e.mu is held.
+func layerSound(inc *incarnation, row code.LayerRow, ids map[string]fileID) bool {
+	sizes := row.Layer.Sections()
+	for i, rel := range layerRels(row.Layer) {
+		if rel == "" {
+			continue
+		}
+		id := ids[rel]
+		if !id.present || id.size != sizes[i] || !vouchedAt(inc, rel, id) {
+			return false
+		}
+	}
+	return true
+}
+
+// chainFilesAre reports whether the incarnation at dir holds exactly wants'
+// chain files: each present holding what wants says, and absent where it says
+// nothing. A read that fails reads as not.
+func chainFilesAre(dir string, wants map[string][]byte) bool {
+	for rel, want := range wants {
+		got, err := os.ReadFile(filepath.Join(dir, rel))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			if len(want) > 0 {
+				return false
+			}
+		case err != nil, len(want) == 0, !bytes.Equal(got, want):
+			// A chain file where the record lists no layer is one too many,
+			// whatever it holds.
+			return false
+		}
+	}
+	return true
+}
+
+// installable is the layers of above — the rows' chain past what inc keeps —
+// this node may fetch, in chain order: up to the first refused while the rows
+// name it at the same record, written by a git newer than this node's (refused
+// newer_git, before a byte moves), or naming a pack holds says the copy will
+// not hold. Nothing is installed over a base the copy lacks. e.mu is held.
+func (c *Cache) installable(e *entry, inc *incarnation, above []code.LayerRow, holds func(cs string) bool) []code.LayerRow {
+	var out []code.LayerRow
+	for _, row := range above {
+		if r, ok := inc.refused[row.Layer.LayerID]; ok && r.added == row.Added {
+			break
+		}
+		v, err := gitproc.ParseRelease(row.Layer.Git)
+		if err != nil || !c.git.Version().AtLeast(v) {
+			c.refuse(e, inc, row, layerNewerGit, fmt.Sprintf("written by git %s, and this node runs %s",
+				row.Layer.Git, c.git.Version()))
+			break
+		}
+		if !slices.ContainsFunc(row.Layer.Packs, func(cs string) bool { return !holds(cs) }) {
+			out = append(out, row)
+			continue
+		}
+		break
+	}
+	return out
+}
+
+// stagedLayer is one layer's files in tmp/ — fetched from the object store
+// and held to their row, or linked from the maintainer's own (AdoptLayer) —
+// until a placement renames them in: tmp/layer-<id>-<v7>/{midx,bitmap,graph}.
+// Whatever of it no placement takes is removed, and counted out of tmp/'s
+// bytes.
+type stagedLayer struct {
+	row code.LayerRow
+	dir string
+	// paths is the three files, in the order of code.LayerRef.Sections; the
+	// graph's "" where the layer carries none.
+	paths   [3]string
+	adopted bool
+	// base is the commit-graph layers the layer was checked over, root first.
+	base []string
+	// at is when it was staged, on Options.Now's clock: an adoption no
+	// round's chain names within objstore.RecordWithin is discarded. began is
+	// the same moment as a time.Now() reading: how long its install took, to
+	// its placement, is measured from it (crewlet.code.cache.layer.install).
+	at, began time.Time
+}
+
+// installedLayers counts and logs every layer of placed a placement put into
+// an incarnation: installed from the object store, or adopted from its
+// maintainer's files, with how long since it was staged.
+func (c *Cache) installedLayers(id string, placed []*stagedLayer) {
+	for _, st := range placed {
+		outcome := layerInstalled
+		if st.adopted {
+			outcome = layerAdopted
+		}
+		took := time.Since(st.began)
+		c.countLayers(outcome, 1)
+		c.observeInstall(outcome, took)
+		c.log.Info("code_layer_installed", "repo", id, "layer", st.row.Layer.LayerID, "seq", st.row.Seq,
+			"bytes", st.row.Layer.Size(), "took", took, "adopted", st.adopted)
+	}
+}
+
+// stageLayer makes row's three files in tmp/, open for its parts to be
+// written into, and counts its bytes into tmp/'s.
+func (c *Cache) stageLayer(row code.LayerRow) (*stagedLayer, [3]*os.File, error) {
+	var files [3]*os.File
+	dir := filepath.Join(c.dir, tmpDir, "layer-"+row.Layer.LayerID+"-"+newV7())
+	if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
+		return nil, files, fmt.Errorf("cache: staging layer %s: %w", row.Layer.LayerID, err)
+	}
+	st := &stagedLayer{row: row, dir: dir, at: c.now(), began: time.Now()}
+	c.tmpBytes.Add(row.Layer.Size())
+	for i, name := range []string{"midx", "bitmap", "graph"} {
+		if row.Layer.Sections()[i] == 0 {
+			continue
+		}
+		st.paths[i] = filepath.Join(dir, name)
+		f, err := os.OpenFile(st.paths[i], os.O_CREATE|os.O_EXCL|os.O_WRONLY, indexMode)
+		if err != nil {
+			closeAll(files)
+			st.remove(c)
+			return nil, files, fmt.Errorf("cache: staging layer %s: %w", row.Layer.LayerID, err)
+		}
+		files[i] = f
+	}
+	return st, files, nil
+}
+
+// closeAll closes every file of files that is open: files a fetch wrote, or
+// gave up on, whose bytes are judged by what reads them next.
+func closeAll(files [3]*os.File) {
+	for _, f := range files {
+		if f != nil {
+			// What a failed close lost is found by the sync before it, or by
+			// the check after it.
+			_ = f.Close()
+		}
+	}
+}
+
+// remove takes st's directory out of tmp/ and its bytes out of tmp/'s count:
+// once, whatever is left of it. Once Stop has begun, tmp/ is the next Open's
+// to empty.
+func (st *stagedLayer) remove(c *Cache) {
+	if st.dir == "" {
+		return
+	}
+	c.tmpBytes.Add(-st.row.Layer.Size())
+	if c.enter() {
+		if err := os.RemoveAll(st.dir); err != nil {
+			c.log.Warn("code_cache_trash_failed", "path", st.dir, "error", err)
+		}
+		c.leave()
+	}
+	st.dir = ""
+}
+
+// fetchParts reads every part of st's layer from the object store into the
+// files it cuts (code.FetchLayerPart: each part through the store's verified
+// read, laid back where StoreLayer took it from) — ALL AT ONCE, one goroutine
+// a part, each taking its GET's slot from slot and giving it back the moment
+// its read ends — and answers the first failure, which ends the rest.
+func (c *Cache) fetchParts(ctx context.Context, st *stagedLayer, files [3]*os.File,
+	slot func(ctx context.Context) ([]byte, func(), error)) error {
+
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var writers [3]io.WriterAt
+	for i, f := range files {
+		if f != nil {
+			writers[i] = f
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, len(st.row.Layer.Parts))
+	for i := range st.row.Layer.Parts {
+		wg.Go(func() {
+			buf, give, err := slot(ctx)
+			if err != nil {
+				errs[i] = err
+				cancel(err)
+				return
+			}
+			defer give()
+			if err = code.FetchLayerPart(ctx, c.objects, st.row.Layer, i, writers, buf); err != nil {
+				errs[i] = err
+				cancel(err)
+			}
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// finishLayer makes st's files durable — every sync in flight at once, as a
+// pack's three are (syncStaged) — closes them, and holds them to the row
+// over the commit-graph layers base names below it (code.CheckLayer): the
+// one rule the maintainer's adoption and every install share, hashed a
+// piece at a time in a slot of the read lane, as the round's check of the
+// files a copy keeps is, and stopped with ctx. Then the layer is fetched and
+// checked and nothing is placed: the fault point InstallAfterFetch.
+func (c *Cache) finishLayer(ctx context.Context, st *stagedLayer, files [3]*os.File, base []string) error {
+	syncFile := (*os.File).Sync
+	if c.knobs != nil && c.knobs.fileSync != nil {
+		syncFile = c.knobs.fileSync
+	}
+	errs := make([]error, len(files))
+	var wg sync.WaitGroup
+	for i, f := range files {
+		if f != nil {
+			wg.Go(func() { errs[i] = syncFile(f) })
+		}
+	}
+	wg.Wait()
+	for i, f := range files {
+		if f != nil {
+			if cerr := f.Close(); errs[i] == nil {
+				errs[i] = cerr
+			}
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("cache: layer %s: making its files durable on this node: %w", st.row.Layer.LayerID, err)
+	}
+	if err := checkStaged(ctx, st, base, c.pieces(c.git.HoldRead).layer()); err != nil {
+		return err
+	}
+	st.base = base
+	if c.faults != nil {
+		if err := c.faults.Hit(ctx, codefault.InstallAfterFetch, 0); err != nil {
+			return fmt.Errorf("cache: layer %s: %w", st.row.Layer.LayerID, err)
+		}
+	}
+	return nil
+}
+
+// checkStaged holds st's files to its row over base (code.CheckLayer), each
+// trailer hashed as p says and stopped with ctx: a refused hold and an ended
+// ctx are answered as they came, never as code.ErrBadLayer.
+func checkStaged(ctx context.Context, st *stagedLayer, base []string, p code.Pieces) error {
+	var readers [3]io.ReaderAt
+	for i, path := range st.paths {
+		if path == "" {
+			continue
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("cache: layer %s: %w", st.row.Layer.LayerID, err)
+		}
+		defer func() { _ = f.Close() }() // read-only: what was read is the answer
+		readers[i] = f
+	}
+	if err := code.CheckLayer(ctx, st.row.Layer, readers[0], readers[1], readers[2], base, p); err != nil {
+		return fmt.Errorf("cache: layer %s: %w", st.row.Layer.LayerID, err)
+	}
+	return nil
+}
+
+// baseOf is the commit-graph layers below chain[i], root first: what layer
+// i's commit-graph layer names as its BASE (code.CheckLayer).
+func baseOf(chain []code.LayerRow, i int) []string {
+	_, graph := chainIDs(chain[:i])
+	return graph
+}
+
+// layerFailure is what a layer's fetch failing says of the layer: missing, a
+// part the store holds no object for; corrupt, bytes that are not its row's
+// or files CheckLayer refuses — both definite — and failed for anything else,
+// the store failing to answer or this node's disk, tried again.
+func layerFailure(err error) layerOutcome {
+	switch {
+	case errors.Is(err, objstore.ErrNotFound):
+		return layerMissing
+	case errors.Is(err, objstore.ErrCorrupt), errors.Is(err, code.ErrBadLayer):
+		return layerCorrupt
+	}
+	return layerFailed
+}
+
+// layerFetch is one layer a round or the installer fetched: staged and
+// checked, or the failure that stopped the chain at it.
+type layerFetch struct {
+	row     code.LayerRow
+	staged  *stagedLayer
+	err     error
+	outcome layerOutcome
+	// took is how long the fetch ran before it failed: what
+	// crewlet.code.cache.layer.install observes of a layer no placement took.
+	took time.Duration
+}
+
+// placeInPlace makes rows the chain inc holds, IN PLACE: on an incarnation
+// nobody holds — a boot's first round, a rebuild's product — and only there,
+// since a pack taken out under a reader would be met half way. In order: own
+// mode's files go and the chain is cut below the first layer of what it holds
+// that rows does not keep as it is — one fetched again included, whose files
+// the fetch replaces (dropFor, EventLayersMoved: before anything of the new
+// chain is visible); every fetched layer's files are renamed in; both chain
+// files are written over rows; and, where the placement added a layer the copy
+// did not hold, the CANARY reads through the chain's bitmap — a failure
+// refuses every layer it added as corrupt and puts the chain back to the
+// layers below the first of them, before any reader is handed the
+// incarnation. It answers the chain placed. held is the packs the copy holds,
+// by checksum, with their rows' figures (recordInstalled). e.mu is not held;
+// the round's write lock is.
+func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, rows []code.LayerRow,
+	fetched []*stagedLayer, held map[string]livePack, tail int64, tips []string) ([]code.LayerRow, error) {
+
+	e.mu.Lock()
+	installed := slices.Clone(inc.installed)
+	e.mu.Unlock()
+	replaced := map[string]bool{}
+	for _, st := range fetched {
+		replaced[st.row.Layer.LayerID] = true
+	}
+	if _, err := c.dropFor(e, inc, EventLayersMoved, eventDetail{want: rows, failing: replaced}); err != nil {
+		return installed, err
+	}
+	e.mu.Lock()
+	kept := slices.Clone(inc.installed)
+	e.mu.Unlock()
+	var moved []string
+	for _, st := range fetched {
+		rels, err := c.moveLayerIn(st, inc.dir)
+		moved = append(moved, rels...)
+		if err != nil {
+			c.trashRels(inc.dir, moved)
+			return kept, err
+		}
+	}
+	if err := c.writeChains(inc.dir, rows); err != nil {
+		c.trashRels(inc.dir, moved)
+		return kept, err
+	}
+	added := (&layerStep{rows: rows}).adds(installed)
+	if len(added) > 0 {
+		if err := c.canary(ctx, e, inc, inc.dir, tail, tips); err != nil {
+			// A layer above its base is valid only over that base, so every
+			// layer from the first added up goes with it.
+			first := slices.IndexFunc(rows, func(r code.LayerRow) bool { return sameLayer(r, added[0]) })
+			e.mu.Lock()
+			for _, r := range added {
+				c.refuse(e, inc, r, layerCorrupt, err.Error())
+			}
+			e.mu.Unlock()
+			for _, st := range fetched {
+				if slices.ContainsFunc(added, func(r code.LayerRow) bool { return sameLayer(r, st.row) }) {
+					c.observeInstall(layerCorrupt, time.Since(st.began))
+				}
+			}
+			var gone []string
+			for _, r := range rows[first:] {
+				for _, rel := range layerRels(r.Layer) {
+					if rel != "" && slices.Contains(moved, rel) {
+						gone = append(gone, rel)
+					}
+				}
+			}
+			if werr := c.writeChains(inc.dir, rows[:first]); werr != nil {
+				return kept, errors.Join(err, werr)
+			}
+			c.trashRels(inc.dir, gone)
+			c.placed(e, inc, rows[:first], fetched, held)
+			return rows[:first], nil
+		}
+	}
+	c.placed(e, inc, rows, fetched, held)
+	return rows, nil
+}
+
+// placed records rows as the chain inc holds once a placement made it so in
+// place: every file of rows vouched at the identity it has now — written by
+// this process from files held to their rows, or checked by its round — and
+// the chain files with them, the incarnation's record set (setInstalled),
+// and every staged layer of fetched gone from tmp/. e.mu is not held.
+func (c *Cache) placed(e *entry, inc *incarnation, rows []code.LayerRow, fetched []*stagedLayer,
+	held map[string]livePack) {
+
+	var rels []string
+	for _, r := range rows {
+		for _, rel := range layerRels(r.Layer) {
+			if rel != "" {
+				rels = append(rels, rel)
+			}
+		}
+	}
+	if len(rows) > 0 {
+		rels = append(rels, layersChainRel)
+		if _, graph := chainIDs(rows); len(graph) > 0 {
+			rels = append(rels, graphChainRel)
+		}
+	}
+	c.vouchFiles(e, inc, rels...)
+	e.mu.Lock()
+	c.setInstalled(e, inc, rows, held)
+	c.wrote(inc, c.image.set(DerivedLayers, DerivedGraphLayers))
+	e.mu.Unlock()
+	var in []*stagedLayer
+	for _, st := range fetched {
+		if slices.ContainsFunc(rows, func(r code.LayerRow) bool { return sameLayer(r, st.row) }) {
+			in = append(in, st)
+		}
+		st.remove(c)
+	}
+	c.installedLayers(e.id, in)
+}
+
+// moveLayerIn renames st's files into the incarnation (or the staged one) at
+// dir, under the names git opens them by, and answers the paths it placed,
+// relative to dir. The directories are made where missing; each is synced by
+// the chain files' write that follows, before anything names what landed.
+func (c *Cache) moveLayerIn(st *stagedLayer, dir string) ([]string, error) {
+	var placed []string
+	for i, rel := range layerRels(st.row.Layer) {
+		if rel == "" {
+			continue
+		}
+		to := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(to), hostbox.DirMode); err != nil {
+			return placed, fmt.Errorf("cache: placing layer %s: %w", st.row.Layer.LayerID, err)
+		}
+		if err := os.Rename(st.paths[i], to); err != nil {
+			return placed, fmt.Errorf("cache: placing layer %s: renaming %s over %s: %w", st.row.Layer.LayerID,
+				st.paths[i], to, err)
+		}
+		placed = append(placed, rel)
+	}
+	return placed, nil
+}
+
+// linkLayerIn hard-links row's files from the incarnation at from into the one
+// at to — a swap's kept layer, the same inodes — and answers what it linked,
+// relative to them.
+func (c *Cache) linkLayerIn(row code.LayerRow, from, to string) ([]string, error) {
+	var linked []string
+	for _, rel := range layerRels(row.Layer) {
+		if rel == "" {
+			continue
+		}
+		dst := filepath.Join(to, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), hostbox.DirMode); err != nil {
+			return linked, err
+		}
+		if err := c.link(filepath.Join(from, rel), dst); err != nil {
+			return linked, err
+		}
+		linked = append(linked, rel)
+	}
+	return linked, nil
+}
+
+// trashRels moves the files at rels, relative to dir, into trash/: what a
+// placement that did not complete had renamed in. A file already gone is no
+// failure, and one that will not move is logged — the next full round's
+// placement makes the chain directories exactly the chain's again.
+func (c *Cache) trashRels(dir string, rels []string) {
+	for _, rel := range rels {
+		path := filepath.Join(dir, rel)
+		if err := toTrash(c.dir, path, newV7()+"-"+filepath.Base(path)); err != nil &&
+			!errors.Is(err, fs.ErrNotExist) {
+			c.log.Warn("code_cache_trash_failed", "path", path, "error", err)
+		}
+	}
+}
+
+// writeChains writes both chain files of the incarnation (or the staged one)
+// at dir over rows — staged in tmp/, durable, renamed in, each directory
+// synced — or, for an empty chain, removes them and the directories left
+// empty: an incarnation with no chain holds no file of one. Each directory
+// is synced once, so every layer file renamed into it before is durable
+// before a chain file names it.
+func (c *Cache) writeChains(dir string, rows []code.LayerRow) error {
+	midx, graph := chainIDs(rows)
+	if c.knobs != nil && c.knobs.chainLines != nil {
+		midx = c.knobs.chainLines(midx)
+	}
+	for _, f := range []struct {
+		rel string
+		ids []string
+	}{{layersChainRel, midx}, {graphChainRel, graph}} {
+		path := filepath.Join(dir, f.rel)
+		if len(f.ids) == 0 {
+			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("cache: removing %s: %w", path, err)
+			}
+			// Left only where something else is still in it.
+			if err := os.Remove(filepath.Dir(path)); err != nil && !errors.Is(err, fs.ErrNotExist) &&
+				!errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+				return fmt.Errorf("cache: removing %s: %w", filepath.Dir(path), err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), hostbox.DirMode); err != nil {
+			return fmt.Errorf("cache: making %s: %w", filepath.Dir(path), err)
+		}
+		text := chainText(f.ids)
+		staged, err := c.stage(hostbox.FileMode, func(w *os.File) error {
+			_, werr := w.Write(text)
+			return werr
+		})
+		if err != nil {
+			return err
+		}
+		// The layers' files renamed in before the chain file are made durable
+		// by this sync of their directory too: the rule "what a file names is
+		// durable before that file is renamed in" (durable.go).
+		if err = syncDir(filepath.Dir(path)); err != nil {
+			return removeStaged(staged, err)
+		}
+		if err = c.place(staged, path); err != nil {
+			return err
+		}
+		if err = syncDir(filepath.Dir(path)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cutChain cuts inc's installed chain to its first k layers IN PLACE — the
+// chain files written over what is kept first, so no reader opening them
+// from then on names what goes, then every file of the two chain directories
+// that no kept layer owns moved into trash/ (what a layer above the cut held,
+// and anything a crash or a previous process left there under a layer's name
+// that no record accounts for) — and records what is kept. e.mu is not held;
+// the caller holds the repository's write lock. dropFor's one cut, for every
+// change a chain answers Prefix.
+func (c *Cache) cutChain(e *entry, inc *incarnation, k int, why Event) error {
+	e.mu.Lock()
+	installed := slices.Clone(inc.installed)
+	e.mu.Unlock()
+	kept := installed[:min(k, len(installed))]
+	if err := c.writeChains(inc.dir, kept); err != nil {
+		return err
+	}
+	keep := map[string]bool{layersChainRel: len(kept) > 0}
+	for _, r := range kept {
+		for _, rel := range layerRels(r.Layer) {
+			keep[rel] = true
+		}
+	}
+	if _, graph := chainIDs(kept); len(graph) > 0 {
+		keep[graphChainRel] = true
+	}
+	var moved []string
+	for _, rel := range []string{filepath.FromSlash(layersDir), filepath.FromSlash(graphLayersDir)} {
+		list, err := os.ReadDir(filepath.Join(inc.dir, rel))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, d := range list {
+			name := filepath.Join(rel, d.Name())
+			if i, _ := c.image.owner(name); i < 0 || keep[name] || !c.image.decls[i].chained() {
+				continue
+			}
+			path := filepath.Join(inc.dir, name)
+			if err = toTrash(c.dir, path, newV7()+"-"+d.Name()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			moved = append(moved, name)
+		}
+		if len(moved) > 0 {
+			if err = syncDir(filepath.Join(inc.dir, rel)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	c.vouchFiles(e, inc, layersChainRel, graphChainRel)
+	e.mu.Lock()
+	unvouch(inc, moved...)
+	if len(moved) > 0 {
+		c.wrote(inc, c.image.set(DerivedLayers, DerivedGraphLayers))
+		repaired(inc)
+	}
+	c.setInstalled(e, inc, kept, inc.installedPacks)
+	e.mu.Unlock()
+	if cut := len(installed) - len(kept); cut > 0 {
+		c.countLayers(layerCut, cut)
+		c.log.Info("code_layers_cut", "repo", e.id, "incarnation", inc.n, "kept", len(kept), "cut", cut,
+			"why", string(why))
+	}
+	return nil
+}
+
+// canary is the read a placement makes through the chain's bitmap before any
+// reader is handed it: one bitmapped walk of every object, in the read lane,
+// under the read's bound plus a walk of the tail the chain leaves outside
+// (gitproc.HistoryWalk of tail objects) — `rev-list --objects
+// --use-bitmap-index --count`, from every ref of dir (--all) or, where tips is
+// given, from those object ids (--stdin): a full round places its chain in
+// place before it writes the refs it read, so its walk starts from the rows'
+// tips, every object of which its install has just put in the copy. A layer
+// file names no base, so one placed over the wrong base passes
+// `multi-pack-index verify` and fails the first bitmapped read ("invalid MIDX
+// object position, MIDX is likely corrupt"): what this reads, and what
+// code.CheckLayer, reading each file alone, cannot. It fails when git exits
+// non-zero or names damage (gitproc.Result.Damage).
+//
+// WHAT IT REPORTS IS THE PLACEMENT'S: it runs naming a reader of inc
+// (gitproc.Cmd.Repairer) whose reports the observer holds rather than makes
+// inc's scrub due, and which this consumes — the placement it judges is the
+// answer to whatever it met. Run at dir, inc's own directory for a placement
+// in place or a swap's staged one, which the observer routes to inc as the
+// swap's (swapAt).
+func (c *Cache) canary(ctx context.Context, e *entry, inc *incarnation, dir string, tail int64,
+	tips []string) error {
+
+	e.mu.Lock()
+	by := c.reader(inc)
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		c.consume(inc, by)
+		delete(inc.held, by)
+		e.mu.Unlock()
+	}()
+	// Each argument list a literal at its run, so the writers gate reads it.
+	deadline := gitproc.ReadDeadline + gitproc.HistoryWalk(tail)
+	var res gitproc.Result
+	var err error
+	if len(tips) > 0 {
+		res, err = c.git.Run(ctx, gitproc.Cmd{
+			Dir: dir, Config: c.ServeConfig(), Class: gitproc.ClassRead, Repairer: by, Deadline: deadline,
+			Args:  []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--stdin"},
+			Stdin: strings.NewReader(strings.Join(tips, "\n") + "\n"),
+		})
+	} else {
+		res, err = c.git.Run(ctx, gitproc.Cmd{
+			Dir: dir, Config: c.ServeConfig(), Class: gitproc.ClassRead, Repairer: by, Deadline: deadline,
+			Args: []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--all"},
+		})
+	}
+	switch {
+	case err != nil:
+		return fmt.Errorf("cache: the chain's canary: %w", err)
+	case res.Damage != nil:
+		return fmt.Errorf("cache: the chain's canary read damage: %w", res.Damage)
+	}
+	return nil
+}
+
+// tailObjects is the objects of packs no layer of rows names: what a walk of
+// the copy reads outside the chain's bitmap. live is the live packs, by
+// checksum, with the objects each row counts.
+func tailObjects(rows []code.LayerRow, live map[string]int64) int64 {
+	in := layerPacks(rows)
+	var n int64
+	for cs, objects := range live {
+		if !in[cs] {
+			n += objects
+		}
+	}
+	return n
+}
+
+// Layers is the published chain the incarnation s pins holds the rows'
+// account of — the chain as of s.Position, root first, the layers this node
+// may not have installed among them — copied under its entry's lock: what a
+// repository's maintainer plans a publication over, beside the packs. nil for
+// a Synced this cache did not hand out.
+func (c *Cache) Layers(s Synced) []code.LayerRow {
+	if c.handedOut(s, "a read of the published chain") != nil {
+		return nil
+	}
+	s.entry.mu.Lock()
+	defer s.entry.mu.Unlock()
+	return slices.Clone(s.inc.chain)
+}
+
+// THE INSTALLER: one goroutine a cache, started by Start, that installs the
+// layers a delta named and the copy does not hold — behind the serving, since
+// no reader waits on a layer.
+//
+//   - ITS QUEUE is repositories in the order they were kicked — by a round
+//     whose chain moved, by an adoption, by its own retry — each once.
+//   - IT FETCHES AT MOST FetchConcurrency PARTS AT ONCE ACROSS THE
+//     REPOSITORIES it installs, taking the next from the queue whenever one
+//     ends, through the node's fetch slots (NodeFetches): half the node's
+//     fetches for background installs and the other half for the rounds a
+//     reader waits on — the round's own share, FetchConcurrency — never one
+//     repository at a time: most layers are ONE part (a layer over a tail of
+//     a few tens of thousands of objects is some 37 bytes an object, a few
+//     MiB), so a node catching up after a restore, or after a burst of
+//     publications over thousands of repositories, would wait a first byte
+//     (100–200 ms on S3) and a placement a repository in series — 10 000
+//     one-part installs are 17 to 33 minutes that way, about a minute
+//     sixteen wide.
+//   - ONE REPOSITORY IS INSTALLED BY ONE TASK AT A TIME, its layers fetched in
+//     chain order and placed together, by a swap, under the repository's write
+//     lock: a round queues behind it, and it behind a round.
+//   - A FAILURE: a part the store does not hold is asked about once at the
+//     log's head (a linearizable sync) and refused `missing` only while the
+//     rows still name the layer; bytes that are not the row's are refused
+//     `corrupt`; anything else waits 1 minute, doubling to installRetryCap,
+//     and the repository's next round that serves its chain clears the wait.
+//     A layer the rows no longer name — one a publication replaced — keeps
+//     serving, its packs held, while its replacement cannot be placed, and is
+//     cut once that has lasted installRetryCap.
+type layerInstaller struct {
+	// share is the parts in flight across every repository it installs, and
+	// tasks the repositories it installs at once: both a round's share, since
+	// a task fetches at least a part.
+	share *semaphore.Weighted
+	tasks int
+	kicks chan struct{}
+
+	mu sync.Mutex
+	// queue is the repositories waiting, in the order they were kicked, and
+	// queued the same as a set; running is the ones being installed now, and
+	// waits each one's backoff. adopted is the layers the repositories'
+	// maintainer handed this node (AdoptLayer), by repository and layer id,
+	// staged in tmp/ until a placement takes them or the janitor discards
+	// them.
+	queue   []string
+	queued  map[string]bool
+	running map[string]bool
+	waits   map[string]*installWait
+	adopted map[string]map[string]*stagedLayer
+}
+
+// installWait is one repository's place in the installer's backoff: the
+// failures in a row, when the next try may be made (Options.Now's clock), and
+// since when a layer the rows no longer name has stood in for a replacement
+// that could not be placed.
+type installWait struct {
+	failures   int
+	retryAt    time.Time
+	stuckSince time.Time
+}
+
+// installRetryBase is the installer's first wait after a try that failed for
+// a reason that may pass — the store failing to answer, this node's disk —
+// doubled after each one in a row, to installRetryCap: A MINUTE, since a
+// layer's absence costs a copy speed and never correctness, so nothing is
+// gained by asking a failing store sooner, and a store back within a minute
+// costs one wait.
+const installRetryBase = time.Minute
+
+// installRetryCap is the most the installer waits between tries of one
+// repository, and how long a layer the rows no longer name may keep serving
+// while its replacement cannot be placed: THIRTY MINUTES (a decision, not a
+// measurement). A layer refused here is replaced by its maintainer's next
+// publication, which reaches this node as new rows through a delta — a round,
+// which ends the wait (kickInstall's fresh) — rather than through this retry,
+// so the retry serves only a store that failed to answer: at most one GET a
+// repository a node every half hour, about 5.6 a second at 10 000
+// repositories; and a retired pack a stale layer holds stays at most this
+// long past its retirement before the stale layer is cut.
+const installRetryCap = 30 * time.Minute
+
+// installWindow is the wait after n tries in a row that failed:
+// installRetryBase doubled for each after the first, never past
+// installRetryCap.
+func installWindow(n int) time.Duration {
+	w := installRetryBase
+	for i := 1; i < n && w < installRetryCap; i++ {
+		w *= 2
+	}
+	return min(w, installRetryCap)
+}
+
+// newLayerInstaller is an installer of nothing yet, fetching at most share
+// parts at once: a round's share (Cache.fetchConcurrency), so the rounds keep
+// the node's other half.
+func newLayerInstaller(share int) *layerInstaller {
+	return &layerInstaller{
+		share: semaphore.NewWeighted(int64(share)), tasks: share, kicks: make(chan struct{}, 1),
+		queued: map[string]bool{}, running: map[string]bool{}, waits: map[string]*installWait{},
+		adopted: map[string]map[string]*stagedLayer{},
+	}
+}
+
+// kickInstall queues id for the installer and wakes it; fresh says a round
+// of the repository served its chain, which ends its wait (a new chain is a
+// new try). Its lock is a leaf: called with an entry's mu held or not.
+func (c *Cache) kickInstall(id string, fresh bool) {
+	in := c.installer
+	in.mu.Lock()
+	if fresh {
+		if w := in.waits[id]; w != nil {
+			w.failures, w.retryAt = 0, time.Time{}
+		}
+	}
+	if !in.queued[id] {
+		in.queued[id] = true
+		in.queue = append(in.queue, id)
+	}
+	in.mu.Unlock()
+	select {
+	case in.kicks <- struct{}{}:
+	default:
+	}
+}
+
+// installDue reports whether inc has work for the installer: a converged copy
+// holding a layer the rows' chain no longer names there, or one whose next
+// layer of the rows' chain above what it holds is not refused while the rows
+// name it at that record. A copy whose chain stops at a refused layer has none
+// until the rows move. e.mu is held.
+func installDue(inc *incarnation) bool {
+	if inc == nil || inc.retired || !inc.converged || !inc.chainRead {
+		return false
+	}
+	k := prefixOf(inc.installed, EventLayersMoved, eventDetail{want: inc.chain})
+	switch {
+	case k < len(inc.installed):
+		return true
+	case k == len(inc.chain):
+		return false
+	}
+	r, ok := inc.refused[inc.chain[k].Layer.LayerID]
+	return !ok || r.added != inc.chain[k].Added
+}
+
+// runInstaller is the installer's loop, started by Start: a pass at every
+// kick and whenever the earliest wait ends, until ctx ends or the cache
+// stops. Each pass starts a task for every repository queued and not waiting,
+// while fewer than its tasks run, and waits for none of them — each
+// kicks it as it ends.
+func (c *Cache) runInstaller(ctx context.Context) {
+	// Every task's fetches and placement end with Start's ctx or the cache's
+	// lifetime, whichever ends first: Stop waits for the tasks (enter).
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(c.life, cancel)()
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
+	for {
+		if !c.enter() {
+			return
+		}
+		select {
+		case <-c.installer.kicks:
+		default:
+		}
+		next, _ := c.installPass(ctx)
+		c.leave()
+		var wake <-chan time.Time
+		switch {
+		case next.IsZero():
+		case c.knobs != nil && c.knobs.installWake != nil:
+			wake = c.knobs.installWake(next)
+		default:
+			timer.Reset(max(next.Sub(c.now()), 0))
+			wake = timer.C
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.life.Done():
+			return
+		case <-c.installer.kicks:
+		case <-wake:
+		}
+	}
+}
+
+// installPass starts a task (installRepo) for every queued repository whose
+// wait has passed, in queue order, while fewer than its tasks run, and
+// answers when the earliest wait still holding one back ends — zero when none
+// does — and the tasks it started, which end as they finish. The tasks run on
+// goroutines of their own, registered as the cache's work (enter), so Stop
+// waits for them; the loop waits for none.
+func (c *Cache) installPass(ctx context.Context) (time.Time, *sync.WaitGroup) {
+	in, now := c.installer, c.now()
+	var next time.Time
+	var tasks sync.WaitGroup
+	in.mu.Lock()
+	var start []string
+	rest := in.queue[:0]
+	for _, id := range in.queue {
+		w := in.waits[id]
+		switch {
+		case in.running[id] || len(in.running)+len(start) >= in.tasks:
+			rest = append(rest, id)
+		case w != nil && now.Before(w.retryAt):
+			rest = append(rest, id)
+			if next.IsZero() || w.retryAt.Before(next) {
+				next = w.retryAt
+			}
+		default:
+			start = append(start, id)
+			delete(in.queued, id)
+		}
+	}
+	in.queue = rest
+	for _, id := range start {
+		in.running[id] = true
+	}
+	in.mu.Unlock()
+	for _, id := range start {
+		if !c.enter() {
+			in.mu.Lock()
+			delete(in.running, id)
+			in.mu.Unlock()
+			continue
+		}
+		tasks.Go(func() {
+			defer c.leave()
+			c.installRepo(ctx, id)
+			in.mu.Lock()
+			delete(in.running, id)
+			in.mu.Unlock()
+			select {
+			case in.kicks <- struct{}{}:
+			default:
+			}
+		})
+	}
+	return next, &tasks
+}
+
+// installRepo is one repository's install, in four steps:
+//
+//  1. THE PLAN, of the copy current now, pinned (no use, as the maintainer's
+//     pin is none): the prefix of its chain the rows still name, kept, and
+//     what is installable above it (installable).
+//  2. EACH LAYER of it fetched in chain order, every part at once, holding
+//     no lock — or taken from the maintainer's adoption (AdoptLayer), no GET
+//     — stopping at the first that fails.
+//  3. THE PLACEMENT, under the repository's write lock: the copy still
+//     current and its chain the one planned for, else the downloads are
+//     dropped and the repository queued again; then a SWAP (swap.go's layer
+//     step) to the kept prefix and what was fetched — a layer the rows no
+//     longer name is cut by it — the canary reading the staged chain.
+//  4. THE FAILURE, if one stopped the fetches: a part the store does not hold
+//     is asked about at the log's head once, refused `missing` while the rows
+//     still name it there; bytes not its row's are refused `corrupt`; and
+//     anything else is tried again after its wait. A layer the rows no longer
+//     name that has stood in for its replacement for installRetryCap with
+//     nothing fetched is cut.
+func (c *Cache) installRepo(ctx context.Context, id string) {
+	c.mu.Lock()
+	e := c.entries[id]
+	c.mu.Unlock()
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	inc := e.current
+	if e.dead || !installDue(inc) {
+		e.mu.Unlock()
+		return
+	}
+	chain := slices.Clone(inc.chain)
+	k := prefixOf(inc.installed, EventLayersMoved, eventDetail{want: chain})
+	kept := chain[:k]
+	want := c.installable(e, inc, chain[k:], func(cs string) bool {
+		_, chained := inc.installedPacks[cs]
+		return inc.byChecksum[cs] > 0 || chained
+	})
+	stale := len(inc.installed) > k
+	gen := inc.chainGen
+	inc.pins++
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		gone := c.unpin(e, inc)
+		e.mu.Unlock()
+		c.trash(gone)
+	}()
+
+	var fetched []*stagedLayer
+	var stop *layerFetch
+	defer func() {
+		for _, st := range fetched {
+			st.remove(c)
+		}
+	}()
+	for i, row := range want {
+		f := c.fetchForInstall(ctx, id, row, baseOf(chain, k+i))
+		if f.err != nil {
+			stop = &f
+			break
+		}
+		fetched = append(fetched, f.staged)
+	}
+
+	// THE PLACEMENT: what was fetched over what is kept, a stale layer cut
+	// by it — or, with nothing fetched, the stale layer cut alone once it has
+	// stood in for its replacement for installRetryCap.
+	cut := stale && len(fetched) == 0 && c.stuckFor(id, c.now()) >= installRetryCap
+	swapFailed := false
+	if len(fetched) > 0 || cut {
+		rows := slices.Clone(kept)
+		for _, st := range fetched {
+			rows = append(rows, st.row)
+		}
+		switch c.placeBySwap(ctx, e, inc, gen, rows, fetched) {
+		case placementMoved:
+			// Planned over a copy or a chain no longer there: planned again.
+			c.kickInstall(id, false)
+			return
+		case placementMade:
+			// Counted by the swap that placed them (swapped).
+			fetched = nil
+			stale = false
+		case placementRefused:
+			// The canary refused what it added — every layer the installer
+			// fetches is one its copy does not hold — which is definite: the
+			// next plan stops below it.
+		default:
+			swapFailed = true
+		}
+	}
+
+	// WHAT IS LEFT: a definite failure decided, and the repository queued
+	// again behind its wait — a failure that may pass, a placement that did
+	// not, or a stale layer still standing in for a replacement — or nothing.
+	if stop != nil && stop.outcome != layerFailed {
+		c.refuseFailed(ctx, e, *stop)
+	}
+	c.settleInstall(id, stop, swapFailed, stale)
+}
+
+// stuckFor is how long a layer the rows no longer name has stood in for a
+// replacement the installer could not place in id's copy: zero where none
+// has.
+func (c *Cache) stuckFor(id string, now time.Time) time.Duration {
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if w := in.waits[id]; w != nil && !w.stuckSince.IsZero() {
+		return now.Sub(w.stuckSince)
+	}
+	return 0
+}
+
+// settleInstall records how id's install ended: done — its wait forgotten —
+// or queued again behind a wait. A try that failed for a reason that may pass
+// (the store, this node's disk, a swap that did not complete) waits
+// installWindow of its failures in a row; a definite refusal plans again at
+// once, the refused layer now blocking; and a layer the rows no longer name
+// still standing in for its replacement waits until it has stood
+// installRetryCap, when its cut is due.
+func (c *Cache) settleInstall(id string, stop *layerFetch, swapFailed, stale bool) {
+	in, now := c.installer, c.now()
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	w := in.waits[id]
+	if stop == nil && !swapFailed && !stale {
+		delete(in.waits, id)
+		return
+	}
+	if w == nil {
+		w = &installWait{}
+		in.waits[id] = w
+	}
+	switch {
+	case swapFailed || (stop != nil && stop.outcome == layerFailed):
+		w.failures++
+		w.retryAt = now.Add(installWindow(w.failures))
+		if stop != nil {
+			c.log.Warn("code_layer_install_failed", "repo", id, "layer", stop.row.Layer.LayerID, "error", stop.err,
+				"retry_in", installWindow(w.failures))
+		}
+	default:
+		w.failures, w.retryAt = 0, time.Time{}
+	}
+	if stale {
+		if w.stuckSince.IsZero() {
+			w.stuckSince = now
+		}
+		if at := w.stuckSince.Add(installRetryCap); w.retryAt.IsZero() || at.Before(w.retryAt) {
+			w.retryAt = at
+		}
+	} else {
+		w.stuckSince = time.Time{}
+	}
+	if !in.queued[id] {
+		in.queued[id] = true
+		in.queue = append(in.queue, id)
+	}
+}
+
+// fetchForInstall is one layer of the installer's: the maintainer's adoption
+// of it when one is registered for this very layer, else fetched — every part
+// at once, each a unit of the installer's share and one of the node's fetch
+// slots — and held to its row over base.
+func (c *Cache) fetchForInstall(ctx context.Context, id string, row code.LayerRow, base []string) layerFetch {
+	if st := c.claimAdoptedLayer(id, row, base); st != nil {
+		return layerFetch{row: row, staged: st}
+	}
+	if err := c.fetches.hold(ctx); err != nil {
+		return layerFetch{row: row, err: err, outcome: layerFailed}
+	}
+	defer c.fetches.letGo()
+	st, files, err := c.stageLayer(row)
+	if err != nil {
+		return layerFetch{row: row, err: err, outcome: layerFailed}
+	}
+	share := c.installer.share
+	err = c.fetchParts(ctx, st, files, func(ctx context.Context) ([]byte, func(), error) {
+		if err := share.Acquire(ctx, 1); err != nil {
+			return nil, nil, err
+		}
+		buf, err := c.fetches.take(ctx)
+		if err != nil {
+			share.Release(1)
+			return nil, nil, err
+		}
+		return buf, func() {
+			c.fetches.give(buf)
+			share.Release(1)
+		}, nil
+	})
+	if err == nil {
+		err = c.finishLayer(ctx, st, files, base)
+	} else {
+		closeAll(files)
+	}
+	if err != nil {
+		st.remove(c)
+		f := layerFetch{row: row, err: err, outcome: layerFailure(err), took: time.Since(st.began)}
+		c.observeInstall(f.outcome, f.took)
+		return f
+	}
+	return layerFetch{row: row, staged: st}
+}
+
+// refuseFailed decides a definite failure the installer met: a part the store
+// does not hold is asked about once at the log's head — a linearizable sync,
+// a round like any other — and refused `missing` on the copy current then
+// only while its rows still name the layer at the same record (a publication
+// that replaced it since leaves nothing to refuse); bytes that are not the
+// row's are refused `corrupt` while the rows name it.
+func (c *Cache) refuseFailed(ctx context.Context, e *entry, f layerFetch) {
+	if f.outcome == layerMissing {
+		s, err := c.Sync(ctx, e.id, statelog.Freshness{Level: statelog.ReadLinearizable})
+		if err != nil {
+			// Unknown, not refused: the next try asks again.
+			return
+		}
+		s.Release()
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	inc := e.current
+	if e.dead || inc == nil || !slices.ContainsFunc(inc.chain, func(r code.LayerRow) bool {
+		return r.Layer.LayerID == f.row.Layer.LayerID && r.Added == f.row.Added
+	}) {
+		return
+	}
+	c.refuse(e, inc, f.row, f.outcome, f.err.Error())
+}
+
+// chainPlacement is what became of the installer's placement of a chain.
+type chainPlacement int
+
+const (
+	// placementFailed: the swap failed — a step of it, or the write lock not
+	// had before the cache stopped — and inc serves as it did: tried again.
+	placementFailed chainPlacement = iota
+	// placementMade: the next incarnation holds the chain planned.
+	placementMade
+	// placementMoved: planned over a copy no longer current, or a chain no
+	// longer the rows' as planned: nothing placed, planned again at once.
+	placementMoved
+	// placementRefused: the canary refused the layers the placement added.
+	placementRefused
+)
+
+// placeBySwap places rows as the chain of inc by a swap into its next
+// incarnation (swap.go's layer step), under the repository's write lock, and
+// answers what became of it: made, the copy or its chain moved under the
+// install since it planned at gen — which leaves the downloads unplaced — the
+// canary refusing what it added, or the swap failing.
+func (c *Cache) placeBySwap(ctx context.Context, e *entry, inc *incarnation, gen uint64, rows []code.LayerRow,
+	fetched []*stagedLayer) chainPlacement {
+
+	if err := c.acquireWrite(c.life, e); err != nil {
+		return placementFailed
+	}
+	defer c.releaseWrite(e, writeExclusive)
+	e.mu.Lock()
+	if e.dead || e.current != inc || inc.retired || inc.chainGen != gen {
+		e.mu.Unlock()
+		return placementMoved
+	}
+	e.mu.Unlock()
+	next := c.swapLeaving(ctx, e, inc, snapshot{}, &layerStep{rows: rows, fetched: fetched})
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	switch {
+	case next != inc && sameChain(next.installed, rows):
+		return placementMade
+	case slices.ContainsFunc(fetched, func(st *stagedLayer) bool {
+		r, ok := inc.refused[st.row.Layer.LayerID]
+		return ok && r.added == st.row.Added
+	}):
+		return placementRefused
+	}
+	return placementFailed
+}
+
+// sameChain reports whether a and b are one chain, layer for layer.
+func sameChain(a, b []code.LayerRow) bool {
+	return slices.EqualFunc(a, b, sameLayer)
+}
+
+// layerStep is a placement a swap makes (swap.go): the chain the next
+// incarnation holds, root first — the layers it keeps of the one it leaves,
+// linked, and those fetched, renamed in from tmp/.
+type layerStep struct {
+	rows    []code.LayerRow
+	fetched []*stagedLayer
+}
+
+// discard takes every staged layer of s that no swap placed out of tmp/.
+func (s *layerStep) discard(c *Cache) {
+	for _, st := range s.fetched {
+		st.remove(c)
+	}
+}
+
+// adds is the layers of s that are none of inc's installed chain: what its
+// canary is for.
+func (s *layerStep) adds(installed []code.LayerRow) []code.LayerRow {
+	var out []code.LayerRow
+	for _, r := range s.rows {
+		if !slices.ContainsFunc(installed, func(i code.LayerRow) bool { return sameLayer(i, r) }) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// claimAdoptedLayer takes the maintainer's adoption of row — registered for
+// this repository, this very layer over this very base — for an install,
+// which places it in place of a GET; or nil.
+func (c *Cache) claimAdoptedLayer(id string, row code.LayerRow, base []string) *stagedLayer {
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	st := in.adopted[id][row.Layer.LayerID]
+	if st == nil || !sameLayer(st.row, row) || !slices.Equal(st.base, base) {
+		return nil
+	}
+	delete(in.adopted[id], row.Layer.LayerID)
+	if len(in.adopted[id]) == 0 {
+		delete(in.adopted, id)
+	}
+	st.row = row
+	return st
+}
+
+// expireAdoptedLayers discards every adoption no round's chain has named
+// within objstore.RecordWithin of it: a function of a record that never
+// applied — the publication refused, or its node gone before it — whose
+// parts are the collector's. The janitor's, at every pass.
+func (c *Cache) expireAdoptedLayers() {
+	in, now := c.installer, c.now()
+	in.mu.Lock()
+	var gone []*stagedLayer
+	for id, layers := range in.adopted {
+		for lid, st := range layers {
+			if now.Sub(st.at) >= objstore.RecordWithin {
+				gone = append(gone, st)
+				delete(layers, lid)
+			}
+		}
+		if len(layers) == 0 {
+			delete(in.adopted, id)
+		}
+	}
+	in.mu.Unlock()
+	for _, st := range gone {
+		st.remove(c)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -661,9 +662,13 @@ func OnRoundIndex(fn func(dir string)) func(*Options) {
 // its own multi-pack-index. Between rounds, with nothing running.
 func SetRoundPacks(c *Cache, n int) { c.roundPacks = n }
 
-// SetFetchConcurrency sets how many downloads one round runs at once. Before
+// SetFetchConcurrency sets how many downloads one round runs at once — and
+// the installer's share of the node's, which is a round's (layers.go). Before
 // any sync.
-func SetFetchConcurrency(c *Cache, n int) { c.fetchConcurrency = n }
+func SetFetchConcurrency(c *Cache, n int) {
+	c.fetchConcurrency = n
+	c.installer = newLayerInstaller(n)
+}
 
 // SetNodeFetches sets how many downloads every round on the node shares.
 // Before any sync.
@@ -877,12 +882,28 @@ func testImage() *image {
 	return im
 }
 
+// recordedChains is what the state at dir records each chain file of an
+// installed chain holds (chainWants), for a helper with no cache open: the
+// ids its two chains' records list, which is what a boot's first round holds
+// the chain files to.
+func recordedChains(dir string) map[string][]byte {
+	inc := &incarnation{}
+	if raw, err := os.ReadFile(filepath.Join(dir, stateName)); err == nil {
+		var st state
+		if json.Unmarshal(raw, &st) == nil {
+			inc.derived = st.Derived
+		}
+	}
+	return chainWants(inc)
+}
+
 // Unsound is every file of the incarnation at dir a scrub holds to its
 // checksum — each pack's .idx, .pack and .rev, and every derived file
-// (scrub.go) — that fails it, by its path relative to dir.
+// (scrub.go), a chain file to what its state records — that fails it, by its
+// path relative to dir.
 func Unsound(dir string) ([]string, error) {
 	p := pieces{buf: make([]byte, copyBuffer), size: CheckPieceBytes}
-	files, wants, err := scrubFiles(testImage(), dir)
+	files, wants, err := scrubFiles(testImage(), dir, recordedChains(dir))
 	if err != nil {
 		return nil, err
 	}
@@ -918,9 +939,9 @@ func DeclareCheck(c *Cache, name DerivedName, check Check) {
 func ScrubListing(c *Cache, repoID string) ([]string, error) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
-	dir := e.current.dir
+	dir, chains := e.current.dir, chainWants(e.current)
 	e.mu.Unlock()
-	files, _, err := scrubFiles(c.image, dir)
+	files, _, err := scrubFiles(c.image, dir, chains)
 	if err != nil {
 		return nil, err
 	}
@@ -934,7 +955,7 @@ func ScrubListing(c *Cache, repoID string) ([]string, error) {
 // ScrubbedFiles is the bytes and the pieces of every file a scrub of the
 // incarnation at dir hashes (scrubFiles), as it holds them now.
 func ScrubbedFiles(dir string) (bytes int64, pieces int, err error) {
-	files, _, err := scrubFiles(testImage(), dir)
+	files, _, err := scrubFiles(testImage(), dir, recordedChains(dir))
 	if err != nil {
 		return 0, 0, err
 	}

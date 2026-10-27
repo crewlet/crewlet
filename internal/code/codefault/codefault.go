@@ -127,6 +127,12 @@ const (
 	// renamed into repos/: the swap's one irreversible step is next
 	// (internal/code/cache's swap.go).
 	SyncSwapBeforeRename Point = "sync.swap_before_rename"
+	// InstallAfterFetch: a published layer's every part is fetched into
+	// tmp/, its files made durable and held to its row (code.CheckLayer),
+	// and nothing of it is placed: no incarnation holds a file of it, and
+	// no chain file names it (internal/code/cache's layers.go) — hit by a
+	// full round's install and by the installer alike.
+	InstallAfterFetch Point = "sync.install_after_fetch"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -136,10 +142,12 @@ var pushPath = []Point{
 }
 
 // syncPath is the cache sync's points in the order a sync reaches them: a
-// round's download, its refs and its state, then — LAST, since the round has
+// round's download, its refs and its state, then — since the round has
 // applied to its end on the incarnation it leaves before the swap begins —
-// the swap's rename.
-var syncPath = []Point{SyncDownload, SyncRefs, SyncState, SyncSwapBeforeRename}
+// the swap's rename, and LAST a published layer fetched and not yet placed,
+// which a full round meets before its refs and the installer after every
+// round, so no order of the round's own puts it elsewhere.
+var syncPath = []Point{SyncDownload, SyncRefs, SyncState, SyncSwapBeforeRename, InstallAfterFetch}
 
 // PushPath is the receive pipeline's points in the order a push reaches them:
 // the nine the host hits and the committer's. A fresh copy at every call,

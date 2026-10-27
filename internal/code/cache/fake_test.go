@@ -80,6 +80,13 @@ type fakeRepo struct {
 	// sweep took them out, so no retirement there is served any more.
 	retired        []code.RetiredRow
 	retiredThrough int64
+	// layers is the repository's published chain as the rows keep it
+	// (code_layers: code.LayerRow, root first), and layersAt the position of
+	// the record that last moved it — what the reader serves a delta the
+	// chain on (code.RepoSnapshot.LayersServed: a delta whose floor is below
+	// it), and every full answer whatever it is.
+	layers   []code.LayerRow
+	layersAt statelog.Position
 }
 
 // fakePush is one push of a record: the packs it added, the refs it moved
@@ -239,6 +246,54 @@ func (f *fakeLog) compact(repo string, outputs []code.PackRow, retire ...string)
 	return pos
 }
 
+// publish is one publication record on repo, as the code domain's apply of
+// one writes it: the published chain made chain — each layer a row in turn,
+// Seq 1 up, a layer the chain held before keeping the position of the record
+// that added it and every other added at this one — the packs whose ids
+// retire leaving the live rows for the retired ones, and outputs added, at
+// one position, which it answers. A record of its own that moves no ref.
+func (f *fakeLog) publish(repo string, chain []code.LayerRef, outputs []code.PackRow,
+	retire ...string) statelog.Position {
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	pos := f.at()
+	r := f.repos[repo]
+	for _, id := range retire {
+		i := slices.IndexFunc(r.packs, func(p code.PackRow) bool { return p.PackID == id })
+		if i < 0 {
+			panic(fmt.Sprintf("the fake log: %s holds no live pack %s to retire", repo, id))
+		}
+		p := r.packs[i]
+		r.packs = slices.Delete(r.packs, i, i+1)
+		r.retired = append(r.retired, code.RetiredRow{PackID: p.PackID, Part: p.Part, GitChecksum: p.GitChecksum,
+			RetiredAt: time.Unix(1_800_000_000+int64(f.seq), 0).UTC(), Position: pos})
+	}
+	for _, out := range outputs {
+		out.Added = pos
+		r.packs = append(r.packs, out)
+	}
+	rows := make([]code.LayerRow, len(chain))
+	for i, l := range chain {
+		added := pos
+		if i < len(r.layers) && r.layers[i].Layer.LayerID == l.LayerID && r.layers[i].Layer.BaseID == l.BaseID {
+			added = r.layers[i].Added
+		}
+		l.Replaces = nil
+		rows[i] = code.LayerRow{Seq: i + 1, Layer: l, Added: added}
+	}
+	r.layers, r.layersAt = rows, pos
+	return pos
+}
+
+// chainOf is repo's published chain as the rows hold it now.
+func (f *fakeLog) chainOf(repo string) []code.LayerRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.repos[repo].layers)
+}
+
 // sweepRetired takes repo's retirements at or below through out of the rows,
 // as a retire_sweep record does, raising the mark below which a delta is
 // answered in full — a record of its own, which moves the checkpoint.
@@ -384,6 +439,7 @@ func cloneRepos(in map[string]*fakeRepo) map[string]*fakeRepo {
 		c.refs = maps.Clone(r.refs)
 		c.pushes = slices.Clone(r.pushes)
 		c.retired = slices.Clone(r.retired)
+		c.layers = slices.Clone(r.layers)
 		out[id] = &c
 	}
 	return out
@@ -595,10 +651,12 @@ func (f *fakeLog) page(q code.StateQuery, call fakeCall) (code.RepoSnapshot, err
 			}
 		}
 		if f.behindBy > 0 && q.Fresh.Level != statelog.ReadLinearizable {
+			// No rows, and so — on a full answer, which serves the chain
+			// whatever it is — an empty chain over no pack.
 			behind := cp
 			behind.Seq -= min(f.behindBy, cp.Seq)
 			return code.RepoSnapshot{Repo: f.repoRef(r, behind), Position: behind,
-				StreamCreated: f.stream, Full: full, RetiredFrom: retiredFrom}, nil
+				StreamCreated: f.stream, Full: full, RetiredFrom: retiredFrom, LayersServed: full}, nil
 		}
 		cur = code.StateCursor{Full: full, Phase: "packs", From: cp, Seen: cp, Stream: f.stream,
 			RetiredFrom: retiredFrom}
@@ -620,6 +678,12 @@ func (f *fakeLog) page(q code.StateQuery, call fakeCall) (code.RepoSnapshot, err
 	}
 	out := code.RepoSnapshot{Repo: f.repoRef(r, cp), Position: cur.From, StreamCreated: cur.Stream, Full: cur.Full,
 		RetiredFrom: cur.RetiredFrom}
+	if first && (cur.Full || r.layersAt.Packed() > cur.Since.Packed()) {
+		// THE CHAIN, page 1's first phase, whole: on every full answer, an
+		// empty one included, and on a delta whose floor is below the record
+		// that last moved it (the reader's layers_position).
+		out.Layers, out.LayersServed = slices.Clone(r.layers), true
+	}
 	room := f.pageRows
 	if room == 0 {
 		room = code.MaxSnapshotItems

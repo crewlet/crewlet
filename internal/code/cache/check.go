@@ -179,12 +179,17 @@ func (f checkedFile) by() string {
 
 // expect is what a file's name or its row says of its last bytes beside the
 // trailer rule: prior is the twenty before the trailer (a .idx's and a .rev's
-// pack checksum), trailer the trailer itself (a .pack's name); nil says
-// nothing. run is the provenance index's rule (CheckRunTrailer) in place of
-// git's: a SHA-256 trailer, the last 32 bytes, rather than git's SHA-1.
+// pack checksum), trailer the trailer itself (a .pack's name, and a published
+// layer's .midx's and .graph's); nil says nothing. run is the provenance
+// index's rule (CheckRunTrailer) in place of git's: a SHA-256 trailer, the
+// last 32 bytes, rather than git's SHA-1. whole is a CHAIN FILE's rule
+// (CheckLayers' main file), which carries no trailer: its every byte is
+// content, the ids the incarnation installed a line each.
 type expect struct {
 	prior, trailer []byte
 	run            bool
+	whole          bool
+	content        []byte
 }
 
 // hasher is the trailer's hash and its length under e's rule.
@@ -259,13 +264,29 @@ func (p pieces) of(path string) code.Pieces {
 	}}
 }
 
+// layer is p as a published layer's check reads by (code.CheckLayer), which
+// hashes the layer's three files through one code.Pieces: p's buffer, its
+// piece and its hold, without the cases' hooks, each of which names the one
+// file a piece is of.
+func (p pieces) layer() code.Pieces {
+	return code.Pieces{Buf: p.buf, Size: p.size, Hold: p.hold}
+}
+
 // repairAction is what a repair does about the checkable file at rel found
 // failing: a derived file is dropped, a pack's file installed again.
 func (im *image) repairAction(rel string) string {
-	if i, _ := im.owner(rel); i >= 0 {
-		return "dropped"
+	switch i, o := im.owner(rel); {
+	case i < 0:
+		return "reinstalled"
+	case im.decls[i].chained() && o.Main:
+		// A chain file is written again from the ids installed (planChain).
+		return "rewritten"
+	case im.decls[i].chained():
+		// A published layer's file is fetched again, the chain cut at it
+		// meanwhile (planChain).
+		return "refetched"
 	}
-	return "reinstalled"
+	return "dropped"
 }
 
 // noVerdict reports whether a hash's error is no fault of the file's: its
@@ -301,6 +322,8 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 		return hashNone, fileID{}, 0, err
 	case !before.Mode().IsRegular():
 		return hashDamaged, idOf(before), 0, nil
+	case want.whole:
+		return contentSound(ctx, path, idOf(before), want.content)
 	}
 	id := idOf(before)
 	sum, trailerLen := want.hasher()
@@ -358,6 +381,46 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 	return hashSound, id, read, nil
 }
 
+// contentSound holds the file at path, Lstat'ed at id, to want byte for byte —
+// a chain file, which carries no trailer, against the ids its incarnation
+// installed (CheckLayers): one read, never more than want's length and a
+// byte, since a file longer than want is damaged whatever it holds. As
+// trailerSound, a file replaced or removed while it was read has no verdict.
+func contentSound(ctx context.Context, path string, id fileID, want []byte) (hashVerdict, fileID, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return hashNone, id, 0, err
+	}
+	if len(want) == 0 || id.size != int64(len(want)) {
+		// Of no layer, a chain file is none: an incarnation that installed
+		// none holds no chain file (writeChains).
+		return hashDamaged, id, 0, nil
+	}
+	f, err := os.Open(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return hashNone, id, 0, nil
+	case err != nil:
+		return hashNone, id, 0, err
+	}
+	defer func() { _ = f.Close() }() // read-only: what was read is the answer
+	got := make([]byte, len(want)+1)
+	n, err := io.ReadFull(f, got)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return hashNone, id, int64(n), err
+	}
+	after, err := f.Stat()
+	if err != nil {
+		return hashNone, id, int64(n), err
+	}
+	if idOf(after) != id || lstatID(path) != id {
+		return hashNone, id, int64(n), nil
+	}
+	if !bytes.Equal(got[:n], want) {
+		return hashDamaged, id, int64(n), nil
+	}
+	return hashSound, id, int64(n), nil
+}
+
 // checksumBytes is a pack checksum (forty hex digits) as the twenty bytes a
 // .idx, a .rev and a .pack carry.
 func checksumBytes(cs string) []byte {
@@ -378,7 +441,11 @@ func checksumBytes(cs string) []byte {
 // (Check.hashed: the memo's, whose every read holds an entry) is passed over by
 // every caller before it asks (heldFiles, Verify's checkDerived), and refused
 // here like one this build does not know.
-func (f ownedFile) held() (checkedFile, expect, error) {
+//
+// chains is what each CHAIN FILE of the incarnation holds when it is sound
+// (chainWants), by its path relative to the incarnation: the one file of a
+// declaration that carries no trailer, held to the ids installed.
+func (f ownedFile) held(chains map[string][]byte) (checkedFile, expect, error) {
 	cf := checkedFile{kind: fileKind(f.as.File), rel: f.rel}
 	switch f.of.Check {
 	case CheckTrailer:
@@ -394,6 +461,22 @@ func (f ownedFile) held() (checkedFile, expect, error) {
 	case CheckRunTrailer:
 		// A provenance run's own SHA-256 trailer, written with it.
 		return cf, expect{run: true}, nil
+	case CheckLayers:
+		// A published layer's file to git's hashfile trailer — and one named
+		// by its checksum (Owned.Named: the .midx and the .graph) to the
+		// forty hex digits of its name AS that trailer — and the chain file,
+		// which the cache writes from the rows and which carries no trailer,
+		// to the ids installed, line for line.
+		var want expect
+		switch {
+		case f.as.Main:
+			want = expect{whole: true, content: chains[f.rel]}
+		case f.as.Named:
+			if m := f.as.Name.FindStringSubmatch(filepath.Base(f.rel)); m != nil {
+				want.trailer = checksumBytes(m[1])
+			}
+		}
+		return cf, want, nil
 	}
 	return checkedFile{}, expect{}, fmt.Errorf("cache: %s is a file of the derived file %q, which declares "+
 		"the check %q, and no check of this build holds a file to it", filepath.ToSlash(f.rel), f.of.Name,
@@ -401,15 +484,16 @@ func (f ownedFile) held() (checkedFile, expect, error) {
 }
 
 // heldFiles is every derived file of files as a check and the scrub hold it
-// (held), with what each is hashed against added to wants — passing over a
-// file whose declaration's Check no hash holds (Check.hashed).
-func heldFiles(files []ownedFile, wants map[string]expect) ([]checkedFile, error) {
+// (held, against chains for a chain file), with what each is hashed against
+// added to wants — passing over a file whose declaration's Check no hash
+// holds (Check.hashed).
+func heldFiles(files []ownedFile, wants map[string]expect, chains map[string][]byte) ([]checkedFile, error) {
 	out := make([]checkedFile, 0, len(files))
 	for _, f := range files {
 		if !f.of.Check.hashed() {
 			continue
 		}
-		cf, want, err := f.held()
+		cf, want, err := f.held(chains)
 		if err != nil {
 			return nil, err
 		}
@@ -704,8 +788,14 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 	if err != nil {
 		return ck, err
 	}
-	present = slices.DeleteFunc(present, func(f ownedFile) bool { return f.of.inProcess() })
-	derived, err := heldFiles(present, wants)
+	// Only a file GIT reads is the round's to hold before it serves (its
+	// Part, derived.go): the installed chain's are, though the cache writes
+	// them, and the provenance runs and the memo are not.
+	present = slices.DeleteFunc(present, func(f ownedFile) bool { return !f.of.gitReads() })
+	e.mu.Lock()
+	chains := chainWants(inc)
+	e.mu.Unlock()
+	derived, err := heldFiles(present, wants, chains)
 	if err != nil {
 		return ck, err
 	}
@@ -878,7 +968,13 @@ func (ck checked) still(im *image, dir string) (map[string]packFinding, derivedD
 			continue
 		}
 		if i, _ := im.owner(f.rel); i >= 0 {
-			drops.add(im.decls[i].Name, time.Time{}, f.by())
+			// A file of the installed chain is the round's chain plan's to
+			// answer — the chain cut at the layer that holds it, which is
+			// fetched again, or its chain file written again (planChain) —
+			// never a drop.
+			if !im.decls[i].chained() {
+				drops.add(im.decls[i].Name, time.Time{}, f.by())
+			}
 			continue
 		}
 		m := packFileName.FindStringSubmatch(filepath.Base(f.rel))
@@ -915,8 +1011,13 @@ func (ck checked) findings(im *image) []string {
 			continue
 		}
 		action := "dropped it to be written again"
-		if i, _ := im.owner(f.rel); i < 0 {
+		switch im.repairAction(f.rel) {
+		case "reinstalled":
 			action = "fetched its pack again"
+		case "refetched":
+			action = "cut the published chain there to fetch it again"
+		case "rewritten":
+			action = "wrote it again from the installed chain"
 		}
 		out = append(out, fmt.Sprintf("the sync before the check found %s failing its checksum and %s",
 			filepath.ToSlash(f.rel), action))

@@ -638,7 +638,9 @@ func TestARepairRoundSweepsNoAdoptedPack(t *testing.T) {
 // what is written to it, or a git that rejects its own write: it is dropped,
 // but not written again at once — the graph waits for the ordinary rules
 // (graphFailed) — logged once and counted `again`, so the loop costs one
-// rewrite rather than one a report. The ordinary write that follows ends
+// rewrite rather than one a report. A report of the graph once it is gone
+// reaches no file of the copy — counted stale, nothing dropped, no round —
+// and the graph stays waiting. The ordinary write that follows ends
 // nothing: it lands on the same disk, and a report of it within RebuildQuiet
 // of the last drop for damage waits its turn too, where a mark the ordinary
 // write cleared made every other damage a rewrite at once — one at once and
@@ -667,8 +669,12 @@ func TestADerivedFileDamagedAgainAfterItsRepairWaitsItsTurn(t *testing.T) {
 	if !cache.GraphFailed(r.c, r.repo) {
 		t.Error("the graph is not left to the ordinary rules")
 	}
-	if got := reports(r.w, "commit-graph", "again"); got != 2 {
-		t.Errorf("reports{part=commit-graph,outcome=again} = %d, want both reports after the repair", got)
+	if got := reports(r.w, "commit-graph", "again"); got != 1 {
+		t.Errorf("reports{part=commit-graph,outcome=again} = %d, want the report after the repair", got)
+	}
+	if got := reports(r.w, "commit-graph", "stale"); got != 1 {
+		t.Errorf("reports{part=commit-graph,outcome=stale} = %d, want the report of the graph once it was gone",
+			got)
 	}
 
 	// The ordinary rules write it — an index run, the graph after it — and
@@ -682,9 +688,9 @@ func TestADerivedFileDamagedAgainAfterItsRepairWaitsItsTurn(t *testing.T) {
 		t.Error("the graph the maintainer wrote ordinarily, reported within RebuildQuiet of the last drop " +
 			"for damage, was written again at once")
 	}
-	if got := reports(r.w, "commit-graph", "again"); got != 3 {
+	if got := reports(r.w, "commit-graph", "again"); got != 2 {
 		t.Errorf("reports{part=commit-graph,outcome=again} = %d, want the report after the ordinary write "+
-			"counted with the two before it", got)
+			"counted with the one before it", got)
 	}
 
 	// A RebuildQuiet after the last drop for damage, damage reported is new
@@ -696,8 +702,8 @@ func TestADerivedFileDamagedAgainAfterItsRepairWaitsItsTurn(t *testing.T) {
 	if cache.GraphFailed(r.c, r.repo) {
 		t.Error("damage reported a RebuildQuiet after the last drop for damage was left to the ordinary rules")
 	}
-	if got := reports(r.w, "commit-graph", "again"); got != 3 {
-		t.Errorf("reports{part=commit-graph,outcome=again} = %d, want 3: a RebuildQuiet passed", got)
+	if got := reports(r.w, "commit-graph", "again"); got != 2 {
+		t.Errorf("reports{part=commit-graph,outcome=again} = %d, want 2: a RebuildQuiet passed", got)
 	}
 	r.rewritten(t, "the commit-graph, at once", r.graph, nil)
 	if lines := r.w.logs.lines(t, "code_cache_derived_damaged_again"); len(lines) != 1 {

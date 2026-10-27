@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -236,6 +237,15 @@ func TestARequestsHeldReportsFollowItAcrossAnInPlaceRepair(t *testing.T) {
 	h := w.measured(t)
 	c := w.open(t)
 	s := w.sync(t, c, h.repo)
+	// The copy holds the commit-graph the repair is asked to drop: a report
+	// reaches only a file the copy holds (image.holding), and damage of one it
+	// does not hold is no derived file a drop ends.
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{h.repo}) {
+		t.Fatalf("the maintainer ran %v, want the copy's commit-graph written", ran)
+	}
+	if _, _, graph := cache.Indexed(c, h.repo); !graph {
+		t.Fatal("the copy holds no commit-graph")
+	}
 	began := time.Now()
 	cache.Report(c, gitproc.Ran{Dir: s.Dir, Repairer: s.Repairer, Result: gitproc.Result{Began: began, Exit: -1,
 		Crashed: true, Damage: &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: gitproc.PartCommitGraph,

@@ -51,6 +51,9 @@ type derivedDoc struct {
 	Provenance *provenanceDoc `json:"provenance,omitempty"`
 	// Cohorts is the memo's record: only its entry carries one.
 	Cohorts []cohortDoc `json:"cohorts,omitempty"`
+	// Layers is an installed published chain's record — the ids its chain
+	// file lists — which only the two chains' entries carry.
+	Layers []string `json:"layers,omitempty"`
 }
 
 // cohortDoc is one cohort of a memo as the state records it.
@@ -229,6 +232,39 @@ func TestAStateOfAnotherFormatIsDiscarded(t *testing.T) {
 			midx := doc.midx()
 			midx.Cohorts = []cohortDoc{{N: 1, Bytes: 0}}
 			doc.Derived[string(cache.DerivedMidx)] = midx
+		},
+		// Published layers on a declaration that installs none.
+		"f2d0a8c1-5e0b-4f1d-8c2a-1b4e6d8f9a03": func(doc *stateDoc) {
+			midx := doc.midx()
+			midx.Layers = []string{strings.Repeat("1", 40)}
+			doc.Derived[string(cache.DerivedMidx)] = midx
+		},
+		// An installed chain no install recorded — the record is what says it
+		// was installed — and an install recorded over no layer.
+		"a3e1b9d2-6f1c-4a2e-9d3b-2c5f7e9a0b14": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedLayers)] = derivedDoc{Bytes: 4096, Layers: []string{strings.Repeat("1", 40)}}
+		},
+		"b4f2c0e3-7a2d-4b3f-8e4c-3d6a8f0b1c25": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096, Step: string(cache.StepLayer)}
+		},
+		// A chain longer than a published one holds, one naming no checksum,
+		// and one naming a layer twice.
+		"c5a3d1f4-8b3e-4c4a-9f5d-4e7b9a1c2d36": func(doc *stateDoc) {
+			var ids []string
+			for i := range code.MaxPublishedLayers + 1 {
+				ids = append(ids, fmt.Sprintf("%040x", i+1))
+			}
+			doc.Derived[string(cache.DerivedLayers)] = derivedDoc{Bytes: 4096, Step: string(cache.StepLayer),
+				Layers: ids}
+		},
+		"d6b4e2a5-9c4f-4d5b-8a6e-5f8c0b2d3e47": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedLayers)] = derivedDoc{Bytes: 4096, Step: string(cache.StepLayer),
+				Layers: []string{"abc"}}
+		},
+		"e7c5f3b6-0d5a-4e6c-9b7f-6a9d1c3e4f58": func(doc *stateDoc) {
+			id := strings.Repeat("2", 40)
+			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096, Step: string(cache.StepLayer),
+				Layers: []string{id, id}}
 		},
 	}
 	unreadables := []string{repoB, c3, c4}

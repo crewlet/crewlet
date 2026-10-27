@@ -202,6 +202,11 @@ type entry struct {
 	bfQueued   atomic.Bool
 	bfFailures int
 	bfRetryAt  time.Time
+	// chained: the current incarnation serves from an installed published
+	// chain (layers.go), as crewlet.code.cache.chained counts it — kept in
+	// step by noteChained wherever the current incarnation or its chain
+	// changes, so the gauge is a running total rather than a walk.
+	chained bool
 
 	// stateMu serialises persisting the state.
 	stateMu sync.Mutex
@@ -522,6 +527,29 @@ type incarnation struct {
 	// files after the swap — a scrub's, a forced check's — is recorded on
 	// the one serving them now, which holds the same inodes (serving).
 	successor *incarnation
+
+	// THE PUBLISHED CHAIN (layers.go). chain is the ROWS' published chain,
+	// root first, as of the last snapshot that served it
+	// (code.RepoSnapshot.LayersServed) — every full answer, and a delta
+	// whose chain moved — and chainRead whether one has: in memory only,
+	// since every process's first round is full and serves it. installed is
+	// the layers the incarnation HOLDS, root first, each with the row it was
+	// installed from: a prefix of chain after a full round, and between a
+	// delta that moved the chain and the installer's placement a chain the
+	// rows held before — known by its packs until it is cut. installedPacks
+	// is every pack checksum an installed layer names, with the figures its
+	// row counted as it was installed: the packs the chain HOLDS, which no
+	// round takes out while a layer names them, live rows or none. chainGen
+	// counts every change to chain or installed, so a placement planned
+	// over one finds whether it moved. refused is the layers of chain this
+	// node will not try again while the rows name each at the record that
+	// added it — in memory, so a restart tries once more.
+	chain          []code.LayerRow
+	chainRead      bool
+	chainGen       uint64
+	installed      []code.LayerRow
+	installedPacks map[string]livePack
+	refused        map[string]layerRefusal
 }
 
 // livePack is one live row as the swap reads it: the checksum its files are
@@ -779,6 +807,7 @@ func (c *Cache) retire(e *entry, inc *incarnation) string {
 	if e.current == inc {
 		e.current = nil
 		c.heldRepos.Add(-1)
+		c.noteChained(e)
 		// The backfill takes no more steps of it (schedule.go).
 		c.backfillDirty(e)
 	}
@@ -984,6 +1013,7 @@ func (c *Cache) newIncarnation(e *entry, current bool) (*incarnation, error) {
 			c.heldRepos.Add(1)
 		}
 		e.current = inc
+		c.noteChained(e)
 		e.mu.Unlock()
 	}
 	return inc, nil

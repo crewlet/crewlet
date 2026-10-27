@@ -112,6 +112,9 @@ func (c *Cache) janitor(ctx context.Context) {
 func (c *Cache) janitorPass(ctx context.Context, ticked bool) {
 	c.emptyTrash(ctx)
 	c.measureScratch(ctx)
+	// A layer its maintainer adopted that no round's chain named within
+	// objstore.RecordWithin is a record that never applied (AdoptLayer).
+	c.expireAdoptedLayers()
 	c.listMemos(ctx)
 	trimmed := c.trimMemo(ctx, ticked)
 	if c.evictToBudget(ctx) > 0 || trimmed {
@@ -354,6 +357,7 @@ func (c *Cache) setGauges() {
 	c.metrics.Set(metrics.CodeCacheBytes, float64(c.total()), nil)
 	c.metrics.Set(metrics.CodeCacheRepos, float64(c.heldRepos.Load()), nil)
 	c.metrics.Set(metrics.CodeCacheMemoBytes, float64(c.memoBytes.Load()), nil)
+	c.metrics.Set(metrics.CodeCacheChained, float64(c.chainedRepos.Load()), nil)
 }
 
 // kick wakes the janitor without waiting for it: a kick already pending

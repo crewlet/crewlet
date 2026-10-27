@@ -446,13 +446,17 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, f Failure) (Synced, 
 	if c.isStopped() {
 		return Synced{}, ErrStopped
 	}
-	if reason == RebuildDerived && c.image.reported(drops)&c.image.dropping(EventReported) == 0 {
-		// DAMAGE NO DROP REPAIRS: every declaration it names keeps its files
-		// on a report (OnReported), so what git could not read is no derived
-		// file a drop of the copy ends — repaired as a pack's damage is, as
-		// a round whose own git met it asks (damagedRound). Read whole to
-		// drop nothing, the request was answered from the copy that failed
-		// it.
+	failed.entry.mu.Lock()
+	holding := c.image.holding(failed.inc)
+	failed.entry.mu.Unlock()
+	if reason == RebuildDerived && c.image.reported(drops)&holding&c.image.dropping(EventReported) == 0 {
+		// DAMAGE NO DROP REPAIRS: every declaration it names of those the
+		// copy holds files of (image.holding) keeps its files on a report
+		// (OnReported) — the installed chain's among them, the copy's index
+		// in CHAIN mode — so what git could not read is no derived file a
+		// drop of the copy ends: repaired as a pack's damage is, as a round
+		// whose own git met it asks (damagedRound). Read whole to drop
+		// nothing, the request was answered from the copy that failed it.
 		f = Failure{Reason: RebuildCorrupt, Began: f.Began}
 		reason = f.Reason
 	}
@@ -1150,18 +1154,33 @@ func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason, w
 // maintainer's index and the commit-graph by the maintainer, the graph first
 // — rather than linked from the copy being replaced, whose derived files may
 // be what failed.
-func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string) error {
+//
+// THE INSTALLED CHAIN IS SEEDED TOO (SeedLink, layers.go): every layer of the
+// chain replaced holds, root first, whose every pack was linked above — a
+// layer is valid only over its packs — and whose files, linked, pass
+// code.CheckLayer there and then against the row it was installed from, over
+// the graph layers seeded below it; the first that does not ends the seed,
+// since nothing above a layer is valid without it. A layer seeded is no GET:
+// the new incarnation records it installed, its files vouched as held to
+// their row, its chain files written, so the rebuild's round keeps it, and
+// fetches the rest. What a check costs here — one read of each layer's files,
+// hashed a piece at a time in a slot of the read lane and stopped with ctx,
+// as the round's own check is — a rebuild, rare and downloading whatever it
+// does not seed, can afford, and it seeds no layer it did not check.
+func (c *Cache) seedRebuild(ctx context.Context, e *entry, replaced, inc *incarnation, whole []string) error {
 	c.seedIndex(e, replaced, inc)
 	from := filepath.Join(replaced.dir, "objects", "pack")
 	into := filepath.Join(inc.dir, "objects", "pack")
 	seeded := 0
+	linked := map[string]bool{}
 	for _, cs := range whole {
-		linked, err := linkBundle(nil, filepath.Join(from, "pack-"+cs), into, cs, nil)
+		ok, err := linkBundle(nil, filepath.Join(from, "pack-"+cs), into, cs, nil)
 		switch {
-		case linked:
+		case ok:
 			// Found whole by the check that seeded it, bundle and all: what
 			// it holds is vouched in the new incarnation as in the old.
 			c.vouchPack(e, inc, cs)
+			linked[cs] = true
 			seeded++
 		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			c.log.Warn("code_cache_rebuild_seed_failed", "repo", e.id, "pack", "pack-"+cs, "error", err)
@@ -1172,7 +1191,72 @@ func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string
 	}
 	c.log.Info("code_cache_rebuild_seeded", "repo", e.id, "incarnation", inc.n, "packs", seeded,
 		"whole", len(whole))
-	return syncDir(into)
+	if err := syncDir(into); err != nil {
+		return err
+	}
+	return c.seedLayers(ctx, e, replaced, inc, linked)
+}
+
+// seedLayers is seedRebuild's chain (above): the layers of replaced's
+// installed chain, root first, as far as each names only packs linked and its
+// files, linked into inc, pass code.CheckLayer — placed with both chain
+// files, vouched, and recorded installed in inc. A hash that reached no
+// verdict — no read slot in time, ctx ended — ends the seed as a failing
+// layer does, unlogged: it says nothing of the layer, which the rebuild's
+// round fetches.
+func (c *Cache) seedLayers(ctx context.Context, e *entry, replaced, inc *incarnation, linked map[string]bool) error {
+	// As the declarations say (SeedLink): both chains are one install, each
+	// layer's commit-graph layer placed with it, so a rebuild seeds the two
+	// together or neither.
+	for _, name := range []DerivedName{DerivedLayers, DerivedGraphLayers} {
+		if d := c.image.decl(name); d == nil || d.Seed != SeedLink {
+			return nil
+		}
+	}
+	e.mu.Lock()
+	installed, held := slices.Clone(replaced.installed), heldPacks(replaced)
+	e.mu.Unlock()
+	var seeded []code.LayerRow
+	var rels []string
+	p := c.pieces(c.git.HoldRead).layer()
+	for i, row := range installed {
+		if slices.ContainsFunc(row.Layer.Packs, func(cs string) bool { return !linked[cs] }) {
+			break
+		}
+		got, err := c.linkLayerIn(row, replaced.dir, inc.dir)
+		if err == nil {
+			err = checkLayerAt(ctx, inc.dir, row, baseOf(installed, i), p)
+		}
+		if err != nil {
+			c.trashRels(inc.dir, got)
+			if !errors.Is(err, fs.ErrNotExist) && !noVerdict(ctx, err) {
+				c.log.Warn("code_cache_rebuild_seed_failed", "repo", e.id, "layer", row.Layer.LayerID,
+					"error", err)
+			}
+			break
+		}
+		seeded = append(seeded, row)
+		rels = append(rels, got...)
+	}
+	if len(seeded) == 0 {
+		return nil
+	}
+	if err := c.writeChains(inc.dir, seeded); err != nil {
+		c.trashRels(inc.dir, rels)
+		return err
+	}
+	rels = append(rels, layersChainRel)
+	if _, graph := chainIDs(seeded); len(graph) > 0 {
+		rels = append(rels, graphChainRel)
+	}
+	c.vouchFiles(e, inc, rels...)
+	e.mu.Lock()
+	c.recordInstalled(inc, seeded, held)
+	e.mu.Unlock()
+	c.countLayers(layerKept, len(seeded))
+	c.log.Info("code_cache_rebuild_seeded", "repo", e.id, "incarnation", inc.n, "layers", len(seeded),
+		"installed", len(installed))
+	return nil
 }
 
 // promote makes a rebuild's incarnation inc current in place of old, which is
@@ -1200,6 +1284,7 @@ func (c *Cache) promote(e *entry, old, inc *incarnation, reason RebuildReason, t
 		c.heldRepos.Add(1)
 	}
 	e.current = inc
+	c.noteChained(e)
 	// The backfill's work is the new copy's now (schedule.go).
 	c.backfillDirty(e)
 	e.mu.Unlock()

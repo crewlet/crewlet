@@ -23,7 +23,10 @@ import (
 // answer a read computed from its objects — and that no row names: the
 // multi-pack-index (a full round's, and the maintainer's with its bitmap or
 // without one), the commit-graph, the index of which push introduced each
-// commit (provenance.go), and the memo of answers by object id (memo.go). Each
+// commit (provenance.go), the memo of answers by object id (memo.go), and the
+// installed published chain — a repository's maintainer's multi-pack-index and
+// commit-graph layers, installed from the object store by the rows that name
+// them (layers.go). Each
 // was spelled in a dozen places that agreed only because
 // nothing had changed them apart: its file names in the sweep, Verify, the
 // size measure, the check and the scrub; its argument lists, charges, lanes
@@ -51,10 +54,12 @@ import (
 //   - what it promises a reader (Freshness), and what each change to its
 //     inputs does to it (On): a pack added, a pack removed, the refs
 //     rewritten, its own files reported damaged, the log under it gone back,
-//     or a pack a compaction retired — every one of them read by dropFor, the
-//     one removal of a derived file, at the one place each change is made, and
-//     a retired pack's by the swap too, which links into the next incarnation
-//     only what a retirement keeps (swap.go);
+//     a pack a compaction retired, or the installed chain moving — every one
+//     of them read by dropFor, the one removal of a derived file, at the one
+//     place each change is made, and a retired pack's and the chain's by the
+//     swap too, which links into the next incarnation only what they keep
+//     (swap.go) — and for the installed chain a CUT to a prefix of itself
+//     (Prefix), never a drop;
 //   - which part of a repository a damage report names it by (Part, in
 //     gitproc's vocabulary: gitproc.Damage.Drops), so a report reaches the
 //     declarations it names and no others.
@@ -67,15 +72,22 @@ import (
 //
 // TWO KINDS OF WRITER. git writes the multi-pack-index and the commit-graph,
 // in a lane of the pool, under a deadline over what it covers and a memory
-// charge an object; the cache's OWN GO CODE writes the provenance index and the
-// memo (an IN-PROCESS write: Writer.Subcommand ""), which runs no git, holds no
-// slot and is bounded by its caller's context, so its row says what it holds
-// instead (Write.Charge). A declaration's writes are all of one kind, and its kind
-// says who reads its files: git reads a git-written one — so a damage report
-// names it by its part — and nothing but the cache reads an in-process one,
-// which no report can name. A git-written declaration's files live under
-// objects/, git's own namespace; an in-process one's under crewlet/, the
-// engine's (engineRoot), which no git process reads.
+// charge an object; the cache's OWN GO CODE writes the provenance index, the
+// memo and the installed published chain (an IN-PROCESS write:
+// Writer.Subcommand ""), which runs no git, holds no slot and is bounded by its
+// caller's context, so its row says what it holds instead (Write.Charge). A
+// declaration's writes are all of one kind.
+//
+// WHO READS A DECLARATION'S FILES IS ITS PART'S TO SAY, never who writes them:
+// a declaration git READS names the part a damage report names it by (Part),
+// whoever writes its files — git's own multi-pack-index and commit-graph, and
+// the published layers the cache installs byte for byte as their maintainer's
+// git wrote them (layers.go) — and lives under objects/, git's own namespace;
+// one NO git process reads names none, which no report can name, and lives
+// under crewlet/, the engine's (engineRoot): the provenance index and the memo.
+// Read by who writes them, the rule refused the installed chain — files every
+// git process reads, written by the cache's own code — or had it live where
+// git never looks for an index.
 
 // DerivedName names one declared kind of node-local derived file: a closed
 // set whose one list is DerivedFiles.
@@ -102,6 +114,20 @@ const (
 	// incarnation's crewlet/memo, a directory it owns whole (Owned.Tree), and
 	// held to a share of the cache's budget (MemoShare).
 	DerivedMemo DerivedName = "memo"
+	// DerivedLayers is the incarnation's INSTALLED PUBLISHED multi-pack-index
+	// chain (layers.go): every layer's .midx and .bitmap as the repository's
+	// maintainer wrote them, installed byte for byte by the cache from the
+	// object store once held to its row (code.CheckLayer), and the chain file
+	// the cache writes from the rows' order — no node writes a multi-pack-index
+	// layer of its own (layers.go says why).
+	DerivedLayers DerivedName = "layers"
+	// DerivedGraphLayers is the incarnation's split commit-graph over the same
+	// chain: each installed layer's commit-graph layer, installed with it from
+	// the same parts, and the commit-graph-chain the cache writes from the
+	// rows. Its own declaration, because the graph's files live in a directory
+	// of their own under a chain file of their own; cut at the one place the
+	// multi-pack-index chain is (prefixOf), so the two chains never disagree.
+	DerivedGraphLayers DerivedName = "graph-layers"
 )
 
 // engineRoot is the one directory of an incarnation's root besides objects/
@@ -135,10 +161,15 @@ const (
 	// answer computed from them is the answer for as long as the ids name
 	// them, whatever packs hold them and whatever refs point at them.
 	InputOID Input = "oid"
+	// InputLayers is the code domain's published layer rows (code_layers and
+	// code_layer_parts) a snapshot serves (code.RepoSnapshot.Layers): what a
+	// layer is, the packs it covers, where in the chain it stands, and the
+	// parts its bytes are read back from.
+	InputLayers Input = "layers"
 )
 
 // Inputs is every Input.
-var Inputs = []Input{InputPacks, InputRefs, InputPushRows, InputOID}
+var Inputs = []Input{InputPacks, InputRefs, InputPushRows, InputOID, InputLayers}
 
 // Valid reports whether i is one of Inputs.
 func (i Input) Valid() bool { return slices.Contains(Inputs, i) }
@@ -164,10 +195,15 @@ const (
 	// (internal/code/query): the pages its one run cut, each kept for the
 	// next read that asks for it (memo.go).
 	TriggerRead Trigger = "read"
+	// TriggerInstall is a published layer placed into an incarnation from the
+	// object store (layers.go): by the FULL round that first reads the chain,
+	// before it answers, and otherwise by the cache's installer, behind the
+	// serving, once a delta has named a layer the copy does not hold.
+	TriggerInstall Trigger = "install"
 )
 
 // Triggers is every Trigger.
-var Triggers = []Trigger{TriggerRound, TriggerMaintainer, TriggerBackfill, TriggerRead}
+var Triggers = []Trigger{TriggerRound, TriggerMaintainer, TriggerBackfill, TriggerRead, TriggerInstall}
 
 // Valid reports whether t is one of Triggers.
 func (t Trigger) Valid() bool { return slices.Contains(Triggers, t) }
@@ -192,10 +228,17 @@ const (
 	// so it is never stale, only absent: a reader that finds no entry runs
 	// its git, and one that finds one is answered by it.
 	FreshImmutable Freshness = "immutable"
+	// FreshInstalled is installed by the full round that first reads it, and
+	// otherwise by the installer within one of its passes of the round that
+	// names it; until it is, the copy serves from the longest prefix of the
+	// chain it holds, or in own mode with none. Never a correctness promise:
+	// git reads every pack outside the chain beside it, and a pack's own
+	// index where there is no chain at all.
+	FreshInstalled Freshness = "installed"
 )
 
 // Freshnesses is every Freshness.
-var Freshnesses = []Freshness{FreshDebounced, FreshAtRound, FreshImmutable}
+var Freshnesses = []Freshness{FreshDebounced, FreshAtRound, FreshImmutable, FreshInstalled}
 
 // Valid reports whether f is one of Freshnesses.
 func (f Freshness) Valid() bool { return slices.Contains(Freshnesses, f) }
@@ -222,10 +265,20 @@ const (
 	// scrub, which hash a file behind the serving, have nothing to add: they
 	// pass over such a declaration's files (Check.hashed).
 	CheckEntryDigest Check = "entry-digest"
+	// CheckLayers is the installed published chain's (layers.go): every file
+	// a layer installed is a git hashfile held to its trailer, and one named
+	// by its own checksum (Owned.Named: a layer's .midx and .graph) to the
+	// forty hex digits of its name as that trailer; a CHAIN FILE — which the
+	// cache writes from the rows and which carries no trailer — is held, line
+	// for line, to the ids the incarnation installed. A file of a layer that
+	// fails CUTS the chain at that layer, to be fetched again with every layer
+	// above it, and a chain file that fails is written again from what the
+	// incarnation installed (layers.go): never a drop to own mode.
+	CheckLayers Check = "layers"
 )
 
 // Checks is every Check.
-var Checks = []Check{CheckTrailer, CheckRunTrailer, CheckEntryDigest}
+var Checks = []Check{CheckTrailer, CheckRunTrailer, CheckEntryDigest, CheckLayers}
 
 // Valid reports whether c is one of Checks.
 func (c Check) Valid() bool { return slices.Contains(Checks, c) }
@@ -284,6 +337,14 @@ const (
 	// round whose answer names the retirement (swap.go): a delta's retired
 	// phase, or a full answer's retirements above its caller's position.
 	EventPackRetired Event = "pack-retired"
+	// EventLayersMoved is the incarnation's installed published chain changing
+	// (layers.go): a layer placed, or the chain cut back to a prefix of
+	// itself. git reads a non-incremental multi-pack-index in preference to a
+	// chain, a non-incremental write deletes every layer and the chain file,
+	// and a commit-graph that is no split one is read before the chain and a
+	// whole write over a chain unlinks it — so the two modes never coexist,
+	// and what an own-mode file answers to the chain moving is a drop.
+	EventLayersMoved Event = "layers-moved"
 
 	// eventFailedCheck is a file of the declaration FAILING ITS CHECK — the
 	// round's check, the scrub: the bytes' verdict, which no declaration
@@ -297,7 +358,7 @@ const (
 
 // Events is every Event a declaration answers, in the order it states them.
 var Events = []Event{EventPackAdded, EventPackRemoved, EventRefsMoved, EventReported, EventHistoryGone,
-	EventPackRetired}
+	EventPackRetired, EventLayersMoved}
 
 // Valid reports whether e is one of Events.
 func (e Event) Valid() bool { return slices.Contains(Events, e) }
@@ -311,10 +372,19 @@ const (
 	// Drop means invalid, or not to be trusted — moved into trash/ before the
 	// change is visible to any git process (dropFor).
 	Drop Change = "drop"
+	// Prefix is the installed chain's answer (layers.go): keep the longest
+	// PREFIX of the installed chain whose every layer names none of the
+	// event's packs and — for EventLayersMoved — is, layer for layer, the
+	// chain wanted, and move the rest into trash/ before the change is
+	// visible, the chain files written again over what is kept (or removed,
+	// when nothing is). A layer is valid only over its exact base — its file
+	// does not name the base, the chain's order does — so a chain is never
+	// cut in its middle: every layer above a cut goes with it.
+	Prefix Change = "prefix"
 )
 
 // Changes is every Change.
-var Changes = []Change{Keep, Drop}
+var Changes = []Change{Keep, Drop, Prefix}
 
 // Valid reports whether c is one of Changes.
 func (c Change) Valid() bool { return slices.Contains(Changes, c) }
@@ -348,6 +418,13 @@ type Owned struct {
 	// trailer — a multi-pack-index's reverse index carries its index's, as a
 	// pack's .rev carries its pack's (git's write_rev_trailer).
 	Prior bool
+	// Named: the forty hex digits of its name, the pattern's one capture
+	// group, are its OWN trailer — a published layer's .midx and .graph are
+	// named by their checksum (multi-pack-index-<id>.midx, graph-<id>.graph),
+	// as a pack's .pack is (check.go's expect.trailer). git opens such a file
+	// by the name its chain file lists and reads none of its trailer, so the
+	// name is the one thing that ties the file to the row that names it.
+	Named bool
 	// Tree: Name matches a DIRECTORY the declaration owns WHOLE — every entry
 	// below it is the declaration's (crewlet/memo, one file an answer). The
 	// image keeps it as a directory, and only as one, without reading inside
@@ -381,10 +458,15 @@ const (
 	// StepMemo is an entry of the memo: an answer a read cut. Never refused
 	// for memory either.
 	StepMemo Step = "memo"
+	// StepLayer is a published layer installed — fetched, held to its row,
+	// placed — and the chain files written from the rows (layers.go). Never
+	// refused for memory either: it runs no git, and what it holds is a
+	// part's copy buffer and a fetch slot, as a pack's download does.
+	StepLayer Step = "layer"
 )
 
 // Steps is every Step, in the order a line or a count names them.
-var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepProvenance, StepMemo}
+var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepProvenance, StepMemo, StepLayer}
 
 // Valid reports whether s is one of Steps.
 func (s Step) Valid() bool { return slices.Contains(Steps, s) }
@@ -500,13 +582,15 @@ type Derived struct {
 	// Check is how its files are held to their bytes (check.go, scrub.go).
 	Check Check
 	// Part is the part of a repository a damage report names it by: one of
-	// the parts gitproc.Damage.Drops answers. A report naming it is
-	// EventReported for it. Zero for an in-process declaration, whose files
-	// no git process reads and so no report can name.
+	// the parts gitproc.Damage.Drops answers, for a declaration whose files
+	// git READS, whoever writes them. A report naming it is EventReported for
+	// it. Zero for one NO git process reads — the provenance index, the memo:
+	// written by the cache's own code and read by nothing else — so no report
+	// can name it.
 	Part      gitproc.Part
 	Freshness Freshness
 	// What each Event does to it.
-	OnPackAdded, OnPackRemoved, OnRefsMoved, OnReported, OnHistoryGone, OnPackRetired Change
+	OnPackAdded, OnPackRemoved, OnRefsMoved, OnReported, OnHistoryGone, OnPackRetired, OnLayersMoved Change
 	// Seed is what a rebuild does with its files.
 	Seed SeedRule
 }
@@ -526,6 +610,8 @@ func (d Derived) On(e Event) Change {
 		return d.OnHistoryGone
 	case EventPackRetired:
 		return d.OnPackRetired
+	case EventLayersMoved:
+		return d.OnLayersMoved
 	}
 	return ""
 }
@@ -536,6 +622,18 @@ func (d Derived) On(e Event) Change {
 func (d *Derived) inProcess() bool {
 	return len(d.Writes) > 0 && d.Writes[0].Writer.Subcommand == ""
 }
+
+// gitReads reports whether a git process reads d's files: whether it names a
+// part a damage report names it by (Part), whoever writes them. Where its
+// files live (validateAll), whether the round's check holds them before a
+// copy serves (check.go) and whether dropping one can end a failure a git
+// process met (droppedDerived) are all this, never who writes them.
+func (d *Derived) gitReads() bool { return d.Part != 0 }
+
+// chained reports whether d is one of the installed published chain's
+// declarations (CheckLayers): its files are placed and cut by the chain's own
+// code (layers.go), never written over or dropped whole.
+func (d *Derived) chained() bool { return d.Check == CheckLayers }
 
 // hasMain reports whether d owns a file whose presence is its own
 // (Owned.Main); one that owns none is present where its record says so.
@@ -567,6 +665,24 @@ var (
 	// memoTreeName is the memo's directory, crewlet/memo, which it owns whole
 	// (Owned.Tree): every entry in it an answer, named by its key's hex.
 	memoTreeName = regexp.MustCompile(`^memo$`)
+	// The installed chain's files, as git 2.56.0 names them (midx.c's
+	// get_midx_chain_filename and get_split_midx_filename_ext,
+	// commit-graph.c's get_commit_graph_chain_filename and
+	// get_split_graph_filename): a layer's .midx and .bitmap and the chain file
+	// under objects/pack/multi-pack-index.d, a commit-graph layer and its chain
+	// file under objects/info/commit-graphs. No .rev: git writes a layer's
+	// reverse index as its RIDX chunk, as it writes a whole index's.
+	layerChainName  = regexp.MustCompile(`^multi-pack-index-chain$`)
+	layerMidxName   = regexp.MustCompile(`^multi-pack-index-([0-9a-f]{40})\.midx$`)
+	layerBitmapName = regexp.MustCompile(`^multi-pack-index-[0-9a-f]{40}\.bitmap$`)
+	graphChainName  = regexp.MustCompile(`^commit-graph-chain$`)
+	graphLayerName  = regexp.MustCompile(`^graph-([0-9a-f]{40})\.graph$`)
+)
+
+// The installed chain's two directories, relative to an incarnation.
+const (
+	layersDir      = "objects/pack/multi-pack-index.d"
+	graphLayersDir = "objects/info/commit-graphs"
 )
 
 // DerivedFiles is the closed list, in the order a pass plans its steps and a
@@ -600,6 +716,23 @@ var (
 // cache holds of a copy's memo is its cohorts and their bytes, 16 bytes a
 // cohort and some seventeen cohorts at the most, however many answers they
 // hold — the order of use is the cohorts', on the disk.
+//
+// The INSTALLED CHAIN (layers.go) is git's files placed by the cache's own
+// code: each layer's .midx, .bitmap and commit-graph layer as its maintainer's
+// git wrote them, fetched from the object store and held to its row before
+// any git process is handed them, and both chain files written from the rows'
+// order — a function of the rows and of the packs they name, so a pack added
+// or the refs moved change nothing of it, and a pack that leaves, a retirement
+// or the rows' chain moving CUT it to the longest prefix still valid (Prefix),
+// never more: a layer is valid only over its exact base. A report about it
+// keeps its files and makes the copy's scrub due (a drop could only cut the
+// chain, and no git process says which layer it met), and a log gone back
+// reaches it as the rows' chain moving, which the full round that reads the
+// copy whole cuts it by. Its write holds no file in the incarnation: every
+// file is staged in tmp/ and renamed in. Kept by a rebuild where every pack a
+// layer names is seeded and the layer passes code.CheckLayer there and then —
+// the rows name it, and a cold copy's first clone would otherwise walk
+// without a bitmap until the chain was fetched again.
 func DerivedFiles() []Derived {
 	maintained := func(c Covers) time.Duration { return gitproc.PackWorkDeadline(c.DiskBytes) }
 	return []Derived{{
@@ -628,10 +761,13 @@ func DerivedFiles() []Derived {
 		// A pack RETIRED drops it as a pack removed does: the index names
 		// every pack it covers by checksum and places each object at an
 		// offset in one of them, so an index naming a pack that left fails
-		// every lookup that reaches it.
+		// every lookup that reaches it. The chain MOVING drops it: it is OWN
+		// mode's index, which git reads in preference to a chain and whose
+		// non-incremental write deletes every layer and the chain file, so it
+		// goes before a chain is placed (layers.go).
 		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop, OnHistoryGone: Keep,
-		OnPackRetired: Drop,
-		Seed:          SeedNone,
+		OnPackRetired: Drop, OnLayersMoved: Drop,
+		Seed: SeedNone,
 	}, {
 		Name:   DerivedGraph,
 		Inputs: []Input{InputPacks, InputRefs},
@@ -646,10 +782,13 @@ func DerivedFiles() []Derived {
 		// no object, so every commit the graph lists is still in a pack the
 		// incarnation keeps, and git reads the graph by commit id, never by
 		// pack. A pack REMOVED — a stray no retirement accounts for, a log
-		// gone back — may take commits with it, and drops it.
+		// gone back — may take commits with it, and drops it. The chain
+		// MOVING drops it as it does the index: git loads a commit-graph that
+		// is no split one before the chain, and a whole write over a chain
+		// unlinks commit-graph-chain and expires its every layer.
 		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop, OnHistoryGone: Keep,
-		OnPackRetired: Keep,
-		Seed:          SeedNone,
+		OnPackRetired: Keep, OnLayersMoved: Drop,
+		Seed: SeedNone,
 	}, {
 		Name:   DerivedProvenance,
 		Inputs: []Input{InputPushRows},
@@ -668,10 +807,11 @@ func DerivedFiles() []Derived {
 		// Its input is the push rows, which no pack and no ref of the
 		// incarnation moves — a pack a compaction retired included; a report
 		// names no file of it, since no git process reads one; and a log gone
-		// back makes every position it records another record's.
+		// back makes every position it records another record's. No layer
+		// moves a push row either.
 		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
-		OnPackRetired: Keep,
-		Seed:          SeedLink,
+		OnPackRetired: Keep, OnLayersMoved: Keep,
+		Seed: SeedLink,
 	}, {
 		Name:   DerivedMemo,
 		Inputs: []Input{InputOID},
@@ -688,14 +828,58 @@ func DerivedFiles() []Derived {
 		// and a compaction keeps every object of the packs it retires; a report
 		// names no file of it, since no git process reads one; and a restored
 		// or recreated log is another history, which the memo cannot tell entry
-		// by entry — so it goes whole, and is computed again on demand.
+		// by entry — so it goes whole, and is computed again on demand. No
+		// layer moves an object either.
 		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
-		OnPackRetired: Keep,
+		OnPackRetired: Keep, OnLayersMoved: Keep,
 		// A rebuild repairs packs, not answers, and a compaction's swap keeps
 		// every object: the whole tree moves into the new incarnation as it is
 		// promoted, one rename whatever it holds, where every read holds an
 		// entry to its key and digest as it did here.
 		Seed: SeedMove,
+	}, {
+		Name:   DerivedLayers,
+		Inputs: []Input{InputPacks, InputLayers},
+		Writes: []Write{{Step: StepLayer, Trigger: TriggerInstall, Writer: Writer{File: layersFile},
+			Charge: "a layer's files streamed from the object store a part at a time, each part one fetch slot " +
+				"and its copy buffer as a pack's download is, into tmp/ and renamed in once the layer is held to " +
+				"its row; the chain file from the rows, a line a layer"}},
+		Owns: []Owned{
+			{FilePattern: FilePattern{layersDir, layerChainName}, File: "layers-chain", Main: true},
+			{FilePattern: FilePattern{layersDir, layerMidxName}, File: "layer-midx", Named: true},
+			{FilePattern: FilePattern{layersDir, layerBitmapName}, File: "layer-bitmap"},
+		},
+		Check:     CheckLayers,
+		Part:      gitproc.PartMultiPackIndex,
+		Freshness: FreshInstalled,
+		// A layer names its packs by checksum and places each object at an
+		// offset in one of them, so a pack it names leaving — removed, or
+		// retired — cuts the chain at that layer; the chain moving cuts it to
+		// the prefix the rows still name. A pack added changes no layer (it
+		// stays outside the chain until the next publication), nor do the
+		// refs. A report keeps it (the scrub decides), and a log gone back
+		// reaches it as the chain moving.
+		OnPackAdded: Keep, OnPackRemoved: Prefix, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Keep,
+		OnPackRetired: Prefix, OnLayersMoved: Prefix,
+		Seed: SeedLink,
+	}, {
+		Name:   DerivedGraphLayers,
+		Inputs: []Input{InputPacks, InputLayers},
+		Writes: []Write{{Step: StepLayer, Trigger: TriggerInstall, Writer: Writer{File: layersFile},
+			Charge: "installed with its layer, from the same parts — the commit-graph layer is the last section " +
+				"of a layer's bytes — and the commit-graph-chain from the rows, a line a layer that carries one"}},
+		Owns: []Owned{
+			{FilePattern: FilePattern{graphLayersDir, graphChainName}, File: "graph-chain", Main: true},
+			{FilePattern: FilePattern{graphLayersDir, graphLayerName}, File: "graph-layer", Named: true},
+		},
+		Check:     CheckLayers,
+		Part:      gitproc.PartCommitGraph,
+		Freshness: FreshInstalled,
+		// Cut wherever the multi-pack-index chain is (prefixOf): a graph layer
+		// is its layer's, over the same packs, and names its base's.
+		OnPackAdded: Keep, OnPackRemoved: Prefix, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Keep,
+		OnPackRetired: Prefix, OnLayersMoved: Prefix,
+		Seed: SeedLink,
 	}}
 }
 
@@ -776,7 +960,11 @@ func (d Derived) Validate() error {
 				return bad(field+".Name", "%q is no literal, and the main file is one name", o.Name)
 			}
 		}
-		if o.Prior && o.Name.NumSubexp() != 1 {
+		switch {
+		case o.Prior && o.Named:
+			return bad(field, "is both Prior and Named: the forty hex digits of a name are the checksum before "+
+				"its trailer or the trailer itself, never both")
+		case (o.Prior || o.Named) && o.Name.NumSubexp() != 1:
 			return bad(field+".Name", "%q has %d capture groups, and a name carrying its checksum has one: "+
 				"the forty hex digits", o.Name, o.Name.NumSubexp())
 		}
@@ -808,35 +996,49 @@ func (d Derived) Validate() error {
 	case inProcess && mains > 1:
 		return bad("Owns", "has %d main files, and a declaration has at most one", mains)
 	}
+	// A DAMAGE REPORT NAMES ONLY WHAT GIT READS, and who reads a declaration's
+	// files is its Part's to say (gitReads), never who writes them. Every
+	// declaration git WRITES is one git reads, so it names a part a report
+	// drops; one the cache's own code writes names one too where git reads its
+	// files (the installed chain) and none where nothing but the cache does
+	// (the provenance index, the memo), which then keeps its files on a report
+	// — no report can be about them, and the check and the scrub hold them to
+	// their Check instead.
+	switch {
+	case !inProcess && !d.gitReads():
+		return bad("Part", "is none on a derived file git writes, and git reads what it writes: name the part a "+
+			"damage report names it by (gitproc.Damage.Drops)")
+	case d.gitReads() && (&gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: d.Part}).Drops() != d.Part:
+		return bad("Part", "is %v, which is no part a damage report drops (gitproc.Damage.Drops)", d.Part)
+	case !d.gitReads() && d.OnReported != Keep:
+		return bad("OnReported", "is %q, and no damage report names a file no git process reads: %q",
+			d.OnReported, Keep)
+	}
 	switch {
 	case !d.Check.Valid():
 		return bad("Check", "is %q, none of %v", d.Check, Checks)
-	case !inProcess && d.Check == CheckEntryDigest:
+	case d.gitReads() && d.Check == CheckEntryDigest:
 		// git's files carry git's own trailer, and the scrub is what holds
 		// them behind the serving: an entry's digest is read by the cache's
 		// own reads alone.
-		return bad("Check", "is %q on a derived file git writes, whose files carry git's trailer", d.Check)
-	}
-	// A DAMAGE REPORT NAMES ONLY WHAT GIT READS. A declaration git writes is a
-	// part a report drops; an in-process one is none, and keeps its files on a
-	// report — no report can be about them, and the check and the scrub hold
-	// them to their Check instead.
-	switch {
-	case !inProcess && (d.Part == 0 || (&gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: d.Part}).Drops() != d.Part):
-		return bad("Part", "is %v, which is no part a damage report drops (gitproc.Damage.Drops)", d.Part)
-	case inProcess && d.Part != 0:
-		return bad("Part", "is %v, and no git process reads the files of a derived file the cache's own code "+
-			"writes, so no damage report names one", d.Part)
-	case inProcess && d.OnReported != Keep:
-		return bad("OnReported", "is %q, and no damage report names a file the cache's own code writes: %q",
-			d.OnReported, Keep)
+		return bad("Check", "is %q on a derived file git reads, whose files carry git's trailer", d.Check)
+	case d.chained():
+		if err := d.validateChained(bad); err != nil {
+			return err
+		}
 	}
 	if !d.Freshness.Valid() {
 		return bad("Freshness", "is %q, none of %v", d.Freshness, Freshnesses)
 	}
 	for _, e := range Events {
-		if !d.On(e).Valid() {
-			return bad("On("+string(e)+")", "is %q, none of %v", d.On(e), Changes)
+		switch ch := d.On(e); {
+		case !ch.Valid():
+			return bad("On("+string(e)+")", "is %q, none of %v", ch, Changes)
+		case ch == Prefix && !d.chained():
+			// A PREFIX IS A CUT OF THE INSTALLED CHAIN, which only the chain's
+			// own declarations hold: anything else has no prefix to keep.
+			return bad("On("+string(e)+")", "is %q, which cuts an installed chain, and this declaration holds "+
+				"none (Check %q is the chain's)", ch, CheckLayers)
 		}
 	}
 	switch {
@@ -893,6 +1095,41 @@ func (w Write) validateInProcess(field string, bad func(field, format string, ar
 		return bad(field+".Args", "is %q, and an in-process write hands git nothing", w.Args)
 	case strings.TrimSpace(w.Charge) == "":
 		return bad(field+".Charge", "is empty: say, in a sentence, what the write holds while it runs")
+	}
+	return nil
+}
+
+// validateChained refuses a declaration of the installed chain (CheckLayers)
+// that the chain's code could not keep in step with the chain: one git does
+// not read — the chain is git's index, read by every git process — one whose
+// files are not one chain file and the layers' hashfiles (the chain file the
+// declaration's one Main, a literal, and no other file named so), or one that
+// answers an event Drop or a change of the chain anything but Prefix. Dropped
+// whole, a chain would leave its other declaration's chain naming layers the
+// first no longer holds, and the two chains are cut at the one place
+// (prefixOf) or not at all.
+func (d *Derived) validateChained(bad func(field, format string, args ...any) error) error {
+	if !d.gitReads() {
+		return bad("Check", "is %q, the installed chain's, on a derived file no git process reads", d.Check)
+	}
+	for i, o := range d.Owns {
+		if o.Main && (o.Named || o.Prior || o.Tree) {
+			return bad(fmt.Sprintf("Owns[%d]", i), "is the chain file, which the cache writes from the rows and "+
+				"which carries no trailer and names no checksum")
+		}
+	}
+	if !d.hasMain() {
+		return bad("Owns", "has no main file, and an installed chain's is its chain file")
+	}
+	for _, e := range Events {
+		if d.On(e) == Drop {
+			return bad("On("+string(e)+")", "is %q, and an installed chain is only ever cut to a prefix of itself "+
+				"(%q), at the one place both of its chains are cut", Drop, Prefix)
+		}
+	}
+	if d.OnLayersMoved != Prefix {
+		return bad("OnLayersMoved", "is %q, and the chain moving is what the installed chain follows: %q",
+			d.OnLayersMoved, Prefix)
 	}
 	return nil
 }
@@ -957,8 +1194,9 @@ func anchored(re *regexp.Regexp) bool {
 // validateAll is every declaration's Validate, and what holds only across
 // them: names unique; no two maintainer writes of one Step, since the refusal
 // counter and gauge are keyed by step (only git's writes are maintainer
-// writes); every file a declaration git writes owns or holds under objects/,
-// and every file one the cache's own code writes under crewlet/ (engineRoot)
+// writes); every file a declaration git READS owns or holds under objects/ —
+// whoever writes it: the installed chain is the cache's own write of git's
+// files — and every file one no git process reads under crewlet/ (engineRoot)
 // — the root is the repository's own fixed files, refs/ stays empty (a loose
 // ref would outrank packed-refs for every reader), and objects/ is git's, the
 // one directory a push's scratch names as its alternate; every part a
@@ -997,17 +1235,16 @@ func validateAll(decls []Derived) error {
 			steps[w.Step] = d.Name
 		}
 		root := "objects"
-		if d.inProcess() {
+		if !d.gitReads() {
 			root = engineRoot
 		}
 		for _, p := range d.patterns() {
 			if p.Dir != root && !strings.HasPrefix(p.Dir, root+"/") {
-				return fmt.Errorf("derived file %q has files in %s, and a derived file git writes lives under "+
-					"objects/, one the cache's own code writes under %s/: the root holds the repository's own "+
-					"files, refs/ stays empty since a loose ref outranks packed-refs for every reader, objects/ "+
-					"is git's own namespace — a push's scratch names it as its one alternate — and a boot counts "+
-					"a copy with no state by the roots its declarations own and packed-refs", d.Name, p.Dir,
-					engineRoot)
+				return fmt.Errorf("derived file %q has files in %s, and a derived file git reads lives under "+
+					"objects/, one no git process reads under %s/: the root holds the repository's own files, "+
+					"refs/ stays empty since a loose ref outranks packed-refs for every reader, objects/ is git's "+
+					"own namespace — a push's scratch names it as its one alternate — and a boot counts a copy "+
+					"with no state by the roots its declarations own and packed-refs", d.Name, p.Dir, engineRoot)
 			}
 		}
 		parts |= d.Part

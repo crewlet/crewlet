@@ -81,6 +81,7 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 		codefault.SyncRefs,             // the packs in, the refs not yet renamed in
 		codefault.SyncState,            // the refs in, the state not yet renamed in
 		codefault.SyncSwapBeforeRename, // the round applied, the next incarnation staged, not yet renamed in
+		codefault.InstallAfterFetch,    // a published layer fetched and checked, nothing of it placed
 	}
 	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints); !slices.Equal(got, wantAll) {
 		t.Fatalf("Points() = %v\nwant the push path, then the sync's: %v", got, wantAll)

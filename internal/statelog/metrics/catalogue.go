@@ -772,6 +772,23 @@ func Catalogue() []Instrument {
 				"the repositories this node serves.",
 		},
 		{
+			Name: CodeCacheChained, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Repositories this node's git cache serves from an " +
+				"installed published chain — the multi-pack-index layers, " +
+				"each with its bitmap and commit-graph layer, that the " +
+				"repository's maintainer wrote once for every git node and " +
+				"this node fetched and placed — rather than in its own mode, " +
+				"from the index and graph its background work writes itself. " +
+				"Beside `crewlet.code.cache.repos`: the rest are repositories " +
+				"no publication has reached yet, or whose chain this node " +
+				"refused or has not installed (`crewlet.code.cache.layers`). " +
+				"Falling all at once across the fleet, with `layers{outcome=" +
+				"missing}` rising, is an object store that lost the layers' " +
+				"parts — a restore carries none — which every maintainer " +
+				"publishes again; a node serves correctly either way, only " +
+				"slower while it waits.",
+		},
+		{
 			Name: CodeCacheChecks, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"file", "outcome", "trigger"},
 			Shows: "Files of this node's git cache held to their own " +
@@ -791,7 +808,15 @@ func Catalogue() []Instrument {
 				"whatever was checked before, then every file if that " +
 				"repaired nothing. By `file` " +
 				"(`commit-graph`, `multi-pack-index`, `bitmap`, `midx-rev`: " +
-				"files the node derives from its packs; `provenance`, a run " +
+				"files the node derives from its packs; `layer-midx`, " +
+				"`layer-bitmap`, `graph-layer`: a published layer's files as " +
+				"its repository's maintainer wrote them, the `.midx` and the " +
+				"`.graph` held to the checksum their names carry, and one " +
+				"that fails is fetched again with every layer above it; " +
+				"`layers-chain`, `graph-chain`: the two chain files the " +
+				"node writes over the layers it installed, held line for " +
+				"line to them and written again where they differ; " +
+				"`provenance`, a run " +
 				"of the node's index of which push introduced each commit, " +
 				"which no git reads, held to its own SHA-256 trailer — a run " +
 				"a previous process left before anything first reads it, " +
@@ -856,7 +881,12 @@ func Catalogue() []Instrument {
 				"damage and answered — as the cache took it, by the `part` " +
 				"named (`commit-graph`, `multi-pack-index`, `chunk`: a " +
 				"derived file of either, dropped by a repair round with no " +
-				"request waiting and written again at once; `pack`, " +
+				"request waiting and written again at once — on a copy " +
+				"serving from an installed published chain " +
+				"(`crewlet.code.cache.chained`), which keeps its files on a " +
+				"report, the copy's scrub made due instead, which holds every " +
+				"file of the chain to its checksum and fetches again a layer " +
+				"that fails; `pack`, " +
 				"`object`: stored damage, and `hint`, a pack git named as " +
 				"holding a corrupt object — git 2.56's bare message, or the " +
 				"pack git 2.55's report of that damage names — each making " +
@@ -876,7 +906,8 @@ func Catalogue() []Instrument {
 				"while a check of the repository ran, repaired once it ends; " +
 				"`stale`, not dropped — the node wrote the file after the " +
 				"process that named it began, so the report was of the file " +
-				"it replaced — and, for a `pack` or an `object`, a failed " +
+				"it replaced, or the copy holds no file of the part named any " +
+				"more — and, for a `pack` or an `object`, a failed " +
 				"request whose process began before the node last wrote a " +
 				"repair into the copy, answered from the copy as it stands " +
 				"once no round is repairing it and run once more rather " +
@@ -962,6 +993,53 @@ func Catalogue() []Instrument {
 				"bounded by the hash alone. Namings less hashes is what " +
 				"waiting saved; `unread` here is a hash the node could not " +
 				"fit, which the next naming starts again.",
+		},
+		{
+			Name: CodeCacheLayers, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Published layers of a repository's chain — a " +
+				"multi-pack-index layer with its bitmap and commit-graph " +
+				"layer, written once by the repository's maintainer for every " +
+				"git node — that this node's git cache installed, carried, " +
+				"cut or refused, by `outcome`. `installed`: fetched from the " +
+				"object store, held to its row and placed — by the full sync " +
+				"that first read the chain, before it answered, or behind the " +
+				"serving by the installer after a delta that named it. " +
+				"`adopted`: placed from the files the maintainer itself wrote " +
+				"on this node, no download. `kept`: carried into the " +
+				"directory a placement or a rebuild made, the chain moving " +
+				"around it. `cut`: taken out — the rows no longer name it, a " +
+				"pack it names left, one of its files failed its checksum, or " +
+				"a layer below it went. `missing`: a part the object store " +
+				"holds nothing for while the log's head still names the " +
+				"layer — after a restore, which carries no layer, every one, " +
+				"until each maintainer publishes again. `corrupt`: bytes that " +
+				"are not its row's, files its row does not describe, or a " +
+				"placement whose one bitmapped read through it failed — a " +
+				"layer over the wrong base. `newer_git`: written by a git " +
+				"newer than this node's, which it would not read. `failed`: " +
+				"the store failing to answer or this node's disk failing a " +
+				"write, tried again a minute later, doubling to thirty. A " +
+				"refused layer, and every one above it, is never installed " +
+				"while the rows name it: the copy serves from the layers " +
+				"below it, or in its own mode, correctly and slower, until " +
+				"the maintainer's next publication replaces it.",
+		},
+		{
+			Name: CodeCacheLayerInstall, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long one published layer took this node's git cache " +
+				"to install, from its staging to its placement — its parts' " +
+				"downloads, each beside the others in one of the node's " +
+				"fetch slots, its files' syncs and its check against its " +
+				"row, and the placement's bitmapped read through it — by " +
+				"`outcome` (`installed`, `adopted`, `missing`, `corrupt`, " +
+				"`failed`, as `crewlet.code.cache.layers`). A full sync " +
+				"fetches its layers beside its packs and a cold copy's first " +
+				"answer waits for them; the installer, behind the serving, " +
+				"keeps at most half the node's downloads for itself. A " +
+				"p95 climbing with `installed` steady is an object store " +
+				"slowing down; `failed` climbing, one failing.",
 		},
 		{
 			Name: CodeCacheMaintenanceRefusals, Kind: KindCounter, Unit: UnitCount,
@@ -1211,20 +1289,26 @@ func Catalogue() []Instrument {
 			Attributes: []string{"graph"},
 			Shows: "Repositories whose cache on this node moved into its next " +
 				"directory because packs left it — a compaction retired them, " +
-				"or a full read found pack files no row names — built by hard " +
-				"links of every pack still live beside the old directory, " +
-				"which the requests reading it keep until they end; by what " +
-				"became of the commit-graph. `kept`: every pack that left " +
-				"was a compaction's, which drops no commit, so the graph " +
-				"came along and the multi-pack index and its bitmap alone are " +
-				"written again. `dropped`: the copy held a graph and a pack " +
-				"left that no retirement accounts for — the code log " +
-				"recreated or restored under the node, or a full read that " +
-				"could not say which were retired — so the graph went with " +
-				"it, and the background indexing writes it again at once. " +
-				"`none`: the copy held no graph to keep — not written yet, " +
-				"or past what the node's memory holds for the repository — " +
-				"so nothing was lost. `failed`: the swap could not be " +
+				"or a full read found pack files no row names — or because a " +
+				"published chain was placed in a copy a request may be " +
+				"reading, built by hard links of every pack still live beside " +
+				"the old directory, which the requests reading it keep until " +
+				"they end; by what became of the commit-graph. `kept`: every " +
+				"pack that left was a compaction's, which drops no commit, so " +
+				"the graph came along and the multi-pack index and its bitmap " +
+				"alone are written again. `dropped`: the copy held a graph — " +
+				"its own, or its chain's graph layers — and the next " +
+				"directory holds none: a pack left that no retirement " +
+				"accounts for — the code log recreated or restored under the " +
+				"node, or a full read that could not say which were retired " +
+				"— or the chain was cut whole, and the background indexing " +
+				"writes the graph again at once. `none`: the copy held no " +
+				"graph to keep — not written yet, or past what the node's " +
+				"memory holds for the repository — so nothing was lost. " +
+				"`chain`: the next directory serves from an installed " +
+				"published chain — one placed, or carried while packs left — " +
+				"whose commit-graph layers came with it, so nothing is " +
+				"written again. `failed`: the swap could not be " +
 				"made — a link refused, the disk full — and the old directory " +
 				"goes on serving, every live pack in it, until the " +
 				"repository's next sync tries again (`code_cache_swap_failed` " +

@@ -80,6 +80,14 @@ type Cache struct {
 	// discard), so the gauges a round sets cost two loads, never a walk of
 	// every repository on the node under the lock every sync takes.
 	heldBytes, heldRepos atomic.Int64
+	// chainedRepos is how many repositories' current incarnation serves from
+	// an installed published chain (crewlet.code.cache.chained): a running
+	// total moved by noteChained, the rest serving in own mode.
+	chainedRepos atomic.Int64
+	// installer is the installed chain's background installer (layers.go):
+	// its queue, its share of the node's fetches and the layers maintainers
+	// adopted on this node, run by Start.
+	installer *layerInstaller
 	// memoBytes is what every incarnation's memo holds, of heldBytes — a
 	// RUNNING TOTAL moved where an incarnation's memo record moves
 	// (setDerived, discard), which the janitor holds to the memo's share of
@@ -248,6 +256,7 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 		kicks:        make(chan struct{}, 1), maintKicks: make(chan struct{}, 1), scrubKicks: make(chan struct{}, 1),
 		backfillKicks: make(chan struct{}, 1),
 		scrubs:        newScrubSlot(),
+		installer:     newLayerInstaller(FetchConcurrency),
 		entries:       map[string]*entry{}, idle: make(chan struct{}),
 	}
 	if o.knobs != nil && o.knobs.roundPacks > 0 {
@@ -477,12 +486,14 @@ func (c *Cache) leave() {
 }
 
 // Start starts the cache's background work — the janitor, the maintainer, the
-// scrubber and the backfill of its indexes of pushes — under ctx: each ends
-// with ctx or with [Cache.Stop], whichever comes first. A second call, or a
-// call after Stop, does nothing. A cache that is never started still opens,
-// syncs, pins and folds every delta's pushes into its indexes as it answers;
-// nothing is removed from trash/, evicted, maintained, scrubbed or backfilled
-// until it is.
+// scrubber, the backfill of its indexes of pushes and the installer of
+// published layers (layers.go) — under ctx: each ends with ctx or with
+// [Cache.Stop], whichever comes first. A second call, or a call after Stop,
+// does nothing. A cache that is never started still opens, syncs, pins,
+// folds every delta's pushes into its indexes and installs a full round's
+// published chain as it answers; nothing is removed from trash/, evicted,
+// maintained, scrubbed, backfilled or installed behind the serving until it
+// is.
 func (c *Cache) Start(ctx context.Context) {
 	c.lifeMu.Lock()
 	defer c.lifeMu.Unlock()
@@ -494,6 +505,7 @@ func (c *Cache) Start(ctx context.Context) {
 	go c.maintainer(ctx)
 	go c.scrubber(ctx)
 	go c.backfiller(ctx)
+	go c.runInstaller(ctx)
 }
 
 // isStopped reports whether Stop has begun.

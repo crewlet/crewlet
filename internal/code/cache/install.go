@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/sync/semaphore"
 
@@ -228,8 +229,21 @@ const (
 // A failure of anything else removes every temporary file the round made; the
 // packs installed before it stay, named by rows, and the next round skips
 // them.
-func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap snapshot, ck checked) (installs,
-	error) {
+//
+// A FULL ROUND'S LAYERS JOIN THE SAME QUEUE (layers.go): every part of every
+// layer of chain.want — the published chain above what the copy keeps, root
+// first — is handed out BEHIND the round's packs in the one turn chain, in
+// the round's share and the node's slots, so a layer's GET begins the moment
+// a slot the packs' tail no longer needs frees, and no layer waits for the
+// one below it: CheckLayer reads a layer's own files and the base's graph ids
+// from the rows. Each layer is staged in tmp/ and checked, and answered in
+// installs.layers for the round to place — never placed here, and never the
+// round's failure: a layer that cannot be fetched leaves the copy serving
+// from the prefix below it. A layer the repository's maintainer adopted on
+// this node (AdoptLayer) is taken from its files, no GET. What the round
+// does not place goes from tmp/ with it.
+func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap snapshot, ck checked,
+	chain chainPlan) (installs, error) {
 
 	var out installs
 	packDir := filepath.Join(inc.dir, "objects", "pack")
@@ -279,7 +293,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		}
 		todo = append(todo, p)
 	}
-	if len(todo) == 0 {
+	if len(todo) == 0 && len(chain.want) == 0 {
 		return out, nil
 	}
 	// dropOnce drops what the declarations drop when a pack is removed
@@ -293,7 +307,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	var droppedOver atomic.Bool
 	var dropped derivedSet
 	dropOnce := sync.OnceValue(func() error {
-		s, err := c.dropFor(e, inc, EventPackRemoved, 0)
+		s, err := c.dropFor(e, inc, EventPackRemoved, eventDetail{})
 		if err != nil {
 			return fmt.Errorf("cache: sync %s: install: %w", e.id, err)
 		}
@@ -302,7 +316,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 		return nil
 	})
 	addOnce := sync.OnceValue(func() error {
-		if _, err := c.dropFor(e, inc, EventPackAdded, 0); err != nil {
+		if _, err := c.dropFor(e, inc, EventPackAdded, eventDetail{}); err != nil {
 			return fmt.Errorf("cache: sync %s: install: %w", e.id, err)
 		}
 		return nil
@@ -484,6 +498,88 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 				"pack_id", staged.p.PackID, "found", why.found, "trigger", string(why.trigger))
 		})
 	}
+	// THE LAYERS, behind the packs in the same turn chain (above).
+	out.layers = make([]layerFetch, len(chain.want))
+	for i, row := range chain.want {
+		out.layers[i] = layerFetch{row: row}
+		if waited != nil || rctx.Err() != nil {
+			out.layers[i].err, out.layers[i].outcome = context.Cause(rctx), layerFailed
+			continue
+		}
+		base := chain.base(i)
+		if st := c.claimAdoptedLayer(e.id, row, base); st != nil {
+			out.layers[i].staged = st
+			continue
+		}
+		if err := inHand.Acquire(rctx, 1); err != nil {
+			waited = context.Cause(rctx)
+			out.layers[i].err, out.layers[i].outcome = waited, layerFailed
+			continue
+		}
+		if err := c.fetches.hold(rctx); err != nil {
+			inHand.Release(1)
+			waited = context.Cause(rctx)
+			out.layers[i].err, out.layers[i].outcome = waited, layerFailed
+			continue
+		}
+		st, files, err := c.stageLayer(row)
+		if err != nil {
+			letGo()
+			out.layers[i].err, out.layers[i].outcome = err, layerFailed
+			continue
+		}
+		// A layer's own end, which a part's failure brings about and which
+		// ends none of the round's other work.
+		lctx, lcancel := context.WithCancelCause(rctx)
+		parts := make([]error, len(row.Layer.Parts))
+		var partsDone sync.WaitGroup
+		var writers [3]io.WriterAt
+		for j, f := range files {
+			if f != nil {
+				writers[j] = f
+			}
+		}
+		for j := range row.Layer.Parts {
+			mine, next := turn, make(chan struct{})
+			turn = next
+			partsDone.Go(func() {
+				pass := sync.OnceFunc(func() { close(next) })
+				defer pass()
+				buf, give, err := getSlot(lctx, mine, pass)
+				if err != nil {
+					parts[j] = err
+					lcancel(err)
+					return
+				}
+				defer give()
+				if err = code.FetchLayerPart(lctx, c.objects, row.Layer, j, writers, buf); err != nil {
+					parts[j] = err
+					lcancel(err)
+				}
+			})
+		}
+		f := &out.layers[i]
+		workers.Go(func() {
+			defer letGo()
+			defer lcancel(nil)
+			partsDone.Wait()
+			var err error
+			if slices.ContainsFunc(parts, func(err error) bool { return err != nil }) {
+				// The first part's failure, which ended the rest: a part the
+				// store lost, bytes not its row's, or the round's own end.
+				closeAll(files)
+				err = context.Cause(lctx)
+			} else {
+				err = c.finishLayer(rctx, st, files, base)
+			}
+			if err != nil {
+				st.remove(c)
+				f.err, f.outcome, f.took = err, layerFailure(err), time.Since(st.began)
+				return
+			}
+			f.staged = st
+		})
+	}
 	workers.Wait()
 	err := failed
 	if err == nil && waited != nil {
@@ -531,6 +627,10 @@ type installs struct {
 	// files and could not download, each with the download's failure: left as
 	// they stand.
 	failed map[string]error
+	// layers is what became of each layer of the chain the round fetches
+	// (chainPlan.want), in chain order: staged and checked, or the failure
+	// that stopped it.
+	layers []layerFetch
 }
 
 // indexVouched reports whether the .idx of inc's pack cs is one this process

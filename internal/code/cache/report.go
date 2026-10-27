@@ -560,7 +560,15 @@ func (c *Cache) observe(ran gitproc.Ran) {
 	evidence := staged || at != inc
 	var named, drops derivedSet
 	if derived != 0 {
-		named = c.image.reported(dmg.Drops())
+		// Of the declarations whose files the copy holds (image.holding): in
+		// CHAIN mode a part reaches the installed chain alone, and in either
+		// mode a part of no file the copy holds — gone since the run read it,
+		// dropped or cut — reaches nothing, counted stale: a drop of what is
+		// not there would read the copy whole for nothing.
+		named = c.image.reported(dmg.Drops()) & c.image.holding(inc)
+		if named == 0 {
+			c.countReports(derived, reportStale)
+		}
 		if !evidence {
 			drops = named & c.image.dropping(EventReported)
 		}
@@ -740,7 +748,7 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 		// — a file failing its check is never kept and served, and kept, a
 		// declaration that keeps its files on a report would be found
 		// failing by every scrub its reports asked, for ever.
-		dropped, err := c.dropFor(e, inc, EventReported, drop&named)
+		dropped, err := c.dropFor(e, inc, EventReported, eventDetail{named: drop & named})
 		if err != nil {
 			e.mu.Lock()
 			inc.drop.merge(asked)
@@ -748,7 +756,7 @@ func (c *Cache) dropDamaged(e *entry, inc *incarnation, res *applied) error {
 			e.mu.Unlock()
 			return err
 		}
-		failed, err := c.dropFor(e, inc, eventFailedCheck, found&named)
+		failed, err := c.dropFor(e, inc, eventFailedCheck, eventDetail{named: found & named})
 		if err != nil {
 			return err
 		}

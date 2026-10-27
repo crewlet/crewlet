@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 )
 
@@ -75,17 +76,34 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			{rel: "crewlet/memo", owner: cache.DerivedMemo},
 			{rel: "crewlet/memo/" + strings.Repeat("ab", 32)}, {rel: "crewlet/memo.1"},
 			{rel: "objects/info/memo"},
+			// The installed published chain (layers.go): each layer's
+			// multi-pack-index and bitmap and the chain file the cache writes
+			// from the rows, as git 2.56.0 names them, and each layer's
+			// commit-graph layer under the graph's own chain file. Beside
+			// them, names no install of this build makes: a layer's reverse
+			// index as a file (git writes it as the RIDX chunk), a
+			// publisher's temporary layer (the sweep trashes one), a name
+			// whose checksum is short, and a split graph's lock and
+			// temporary layer, which no write of this build holds.
+			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-chain", owner: cache.DerivedLayers},
+			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".midx", owner: cache.DerivedLayers},
+			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".bitmap", owner: cache.DerivedLayers},
+			{rel: "objects/info/commit-graphs/commit-graph-chain", owner: cache.DerivedGraphLayers},
+			{rel: "objects/info/commit-graphs/graph-" + cs + ".graph", owner: cache.DerivedGraphLayers},
+			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".rev"},
+			{rel: "objects/pack/multi-pack-index.d/tmp_midx_AbC123"},
+			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-abc.midx"},
+			{rel: "objects/info/commit-graphs/graph-abc.graph"},
+			{rel: "objects/info/commit-graphs/commit-graph-chain.lock"},
+			{rel: "objects/info/commit-graphs/tmp_graph_AbC123"},
 			// The image's fixed files, a pack's own, and names beside the
-			// declared ones that no write of this build makes: a split
-			// graph's chain, an incremental index's chain, an alternates
-			// file, a bitmap whose name carries no checksum.
+			// declared ones that no write of this build makes: an
+			// alternates file, a bitmap whose name carries no checksum.
 			{rel: "HEAD"}, {rel: "config"}, {rel: "packed-refs"}, {rel: "crewlet-state.json"},
 			{rel: "objects/pack/pack-" + cs + ".pack"}, {rel: "objects/pack/pack-" + cs + ".idx"},
 			{rel: "objects/pack/pack-" + cs + ".rev"},
 			{rel: "objects/info/alternates"},
 			{rel: "objects/pack/multi-pack-index-abc.bitmap"},
-			{rel: "objects/info/commit-graphs/commit-graph-chain"},
-			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-chain"},
 			{rel: "refs/heads/commit-graph"},
 		}
 		for _, r := range rows {
@@ -148,10 +166,20 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 		w.push(t, repo, "refs/heads/main", nil)
 		memoize(t, c, w.sync(t, c, repo), memoKeys("declared", 1))
 		maintained := derivedOnDisk(t, s.Dir)
+		// AND THE INSTALLED CHAIN: a second repository's published layers,
+		// as the suite's git writes them in a maintainer's scratch and as the
+		// cache places them.
+		chained := w.repo(t, 2)
+		p := w.pushN(t, chained, 2)
+		build := w.newChainBuild(t, p)
+		w.log.publish(chained, []code.LayerRef{build.layer(t, p, false)}, nil)
+		installed := derivedOnDisk(t, w.sync(t, c, chained).Dir)
+		published := derivedOnDisk(t, build.bare)
 		t.Logf("the suite's git and the cache wrote, of the derived files: %v after the round, %v after the "+
-			"maintainer and a delta", roundWrote, maintained)
+			"maintainer and a delta, %v of a published layer and %v where the cache installed it", roundWrote,
+			maintained, published, installed)
 		owned := map[cache.DerivedName]int{}
-		for _, rel := range maintained {
+		for _, rel := range slices.Concat(maintained, published, installed) {
 			got := cache.OwnersOf(rel)
 			if len(got) != 1 {
 				t.Errorf("real git wrote %s, owned by %v: a file under objects/ that is no row's pack is one "+

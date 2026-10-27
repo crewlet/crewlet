@@ -676,7 +676,8 @@ func (c *Cache) damagedRound(e *entry, r *round, d *damaged) roundRepair {
 	case len(asking) == 0:
 		return roundRepair{}
 	case d.reason == RebuildShape && !d.swept,
-		d.reason == RebuildDerived && c.image.reported(d.drops)&c.image.dropping(EventReported)&^d.dropped != 0:
+		d.reason == RebuildDerived &&
+			c.image.reported(d.drops)&c.image.holding(d.inc)&c.image.dropping(EventReported)&^d.dropped != 0:
 		c.markWhole(e, d.inc, Failure{Reason: d.reason, Drops: d.drops, Began: d.began}, dropRound)
 		for _, w := range asking {
 			c.queue(e, w)
@@ -849,7 +850,8 @@ func (c *Cache) markWhole(e *entry, inc *incarnation, f Failure, by string) {
 	c.backfillDirty(e) // no step of the backfill is taken of a copy until its round converges it
 	inc.marks++
 	if f.Reason == RebuildDerived {
-		inc.drop.addSet(c.image, c.image.reported(f.Drops)&c.image.dropping(EventReported), f.Began, by)
+		inc.drop.addSet(c.image, c.image.reported(f.Drops)&c.image.holding(inc)&c.image.dropping(EventReported),
+			f.Began, by)
 	}
 	if inc.reread == "" {
 		inc.reread = f.Reason
@@ -1091,7 +1093,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			if rebuild != "" {
 				building = inc
 				if replaced != nil && replaced == of {
-					if err = c.seedRebuild(e, replaced, inc, whole); err != nil {
+					if err = c.seedRebuild(ctx, e, replaced, inc, whole); err != nil {
 						return nil, "", fmt.Errorf("cache: sync %s: seeding the rebuild: %w", e.id, err)
 					}
 				}
@@ -1121,7 +1123,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			// last round could not make is tried again (swap.go), over
 			// nothing of this answer, which names no pack the copy holds
 			// now: the zero snapshot, so no round's index is written.
-			inc = c.swapLeaving(ctx, e, inc, snapshot{})
+			inc = c.swapLeaving(ctx, e, inc, snapshot{}, nil)
 			c.account(e, inc, snap, applied{}, time.Since(began))
 			return inc, snap.kind(), nil
 		}
@@ -1168,6 +1170,12 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			e.mu.Unlock()
 		}
 		res, err = c.apply(ctx, e, inc, snap, epoch, marks, reader.by)
+		if err != nil && res.placing != nil {
+			// A placement no swap of this round will make: its layers go
+			// from tmp/.
+			res.placing.discard(c)
+			res.placing = nil
+		}
 		// AN APPLY CHANGES WHAT THE BACKFILL MAY DO OF THE COPY, however it
 		// ends (schedule.go): a full one's check vouched for runs or found
 		// them failing, its repairs settled what checks had found, and its
@@ -1276,12 +1284,24 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 		}
 		if rebuild != "" {
 			// A rebuild's product is a new incarnation nobody held: its
-			// strays left it in place (packStrays).
+			// strays left it in place (packStrays), and so was its chain
+			// placed (placeChain).
 			c.promote(e, replaced, inc, rebuild, time.Since(began))
 		} else {
-			// Packs left a copy a reader may hold: the round answers from
-			// the next incarnation, or from this one where the swap failed.
-			inc = c.swapLeaving(ctx, e, inc, snap)
+			// Packs left a copy a reader may hold, or its chain moves: the
+			// round answers from the next incarnation, or from this one
+			// where the swap failed.
+			inc = c.swapLeaving(ctx, e, inc, snap, res.placing)
+		}
+		// THE INSTALLER takes whatever of the rows' chain the copy does not
+		// hold now (layers.go): a delta's new layers, which it never fetches
+		// itself, and what a full round could not fetch — its wait ended
+		// where the round served the chain, a new try.
+		e.mu.Lock()
+		due := installDue(inc)
+		e.mu.Unlock()
+		if due {
+			c.kickInstall(e.id, snap.layersServed)
 		}
 		c.account(e, inc, snap, res, time.Since(began))
 		return inc, snap.kind(), nil
@@ -1331,6 +1351,11 @@ type applied struct {
 	dropped derivedSet
 	// checked is what the round's check found (check.go); zero for a delta.
 	checked checked
+	// placing is the published chain a full round places in the copy a
+	// reader may hold, as its swap's layer step (layers.go) — nil where it
+	// placed it in place or had nothing to place — which the round's swap
+	// takes, or which goes from tmp/ with a round that fails.
+	placing *layerStep
 }
 
 // add sums what another apply of the same round did into a.
@@ -1366,6 +1391,9 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// names is no compaction's retirement, whatever a retired phase says
 		// (packStrays).
 		history bool
+		// chain is a full round's plan of the published chain (layers.go):
+		// what the copy keeps of it and the layers its install fetches.
+		chain chainPlan
 	)
 	if snap.full {
 		// The sweep lists the directory and moves whatever lies outside the
@@ -1384,7 +1412,7 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		gone := c.historyGone(e, inc, snap)
 		history = gone || reread == RebuildStream || reread == RebuildRewound
 		if gone {
-			if _, err := c.dropFor(e, inc, EventHistoryGone, 0); err != nil {
+			if _, err := c.dropFor(e, inc, EventHistoryGone, eventDetail{}); err != nil {
 				return res, fmt.Errorf("cache: sync %s: drop derived files: %w", e.id, err)
 			}
 		}
@@ -1421,11 +1449,29 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		res.checked, reinstall = ck, asked
 		found = c.recordCheck(e, inc, forces, ck.damaged)
 		res.checked.damaged = slices.Concat(found, reinstall)
+		// THE PUBLISHED CHAIN'S PLAN (layers.go), once the check has vouched
+		// every file it found sound and named every one it did not: the
+		// prefix of the rows' chain the copy keeps — every file of it held to
+		// its Check by this process — and the layers above it to fetch, which
+		// the install queues behind the packs.
+		chain = c.planChain(e, inc, snap, found)
 	}
 	// A pack the check or a scrub found damaged, or a full round found at the
 	// wrong size, is installed again by renaming over its files (install.go),
 	// and the derived files that may have been built from it go first.
-	ins, err := c.install(ctx, e, inc, snap, res.checked)
+	ins, err := c.install(ctx, e, inc, snap, res.checked, chain)
+	defer func() {
+		// The layers the install staged that no placement took go from
+		// tmp/, however the round ends — but those it hands its swap
+		// (res.placing), which the swap places or discards.
+		if res.placing == nil {
+			for _, f := range ins.layers {
+				if f.staged != nil {
+					f.staged.remove(c)
+				}
+			}
+		}
+	}()
 	// COUNTED BY THE ROUND THAT DID IT, once a round, and here — before
 	// anybody is answered: a pack's stored files repaired in place, or a pack
 	// the copy had lost put back, one GET a pack (RebuildStored). Never by
@@ -1462,6 +1508,9 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// pack file no row names, in an incarnation a reader may hold — and
 		// nil where they leave in place or there are none (packStrays).
 		leaving map[string]Event
+		// placedHere: the round placed the published chain in place, or
+		// wrote its chain files again (placeChain).
+		placedHere bool
 	)
 	if snap.full {
 		// A DERIVED-DAMAGE REPAIR drops the files the damage named here,
@@ -1489,6 +1538,15 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// already (recordCheck).
 		c.settleFound(e, inc, found, unrepaired)
 		c.settleRequested(e, inc, reinstall, unrepaired)
+		// THE CHAIN'S PLACEMENT (layers.go), before the sweep's pack half
+		// decides — the packs a chain holds are none of its strays, and the
+		// packs a placement in place cuts the chain away from are — and before
+		// the round's index, which no round writes beside a chain: in place on
+		// a copy nobody holds, the canary reading it first; as the swap's
+		// layer step on one a reader may hold, the round's own swap.
+		if res.placing, placedHere, err = c.placeChain(ctx, e, inc, chain, ins.layers); err != nil {
+			return res, fmt.Errorf("cache: sync %s: place the published chain: %w", e.id, err)
+		}
 		// The sweep's pack half is DECIDED here and done once the refs are
 		// in; an index that may name a pack it will remove goes now, and so
 		// does whatever in objects/pack is no pack's file, so the round's
@@ -1503,7 +1561,9 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
 		}
 		res.trashed = res.trashed || moved
-		if leaving == nil {
+		if leaving == nil && res.placing == nil {
+			// Where the round swaps a chain in, its index is the swap's to
+			// write over the next incarnation — none, beside a chain.
 			indexed = c.indexRound(ctx, e, inc, snap)
 		}
 	}
@@ -1548,8 +1608,8 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// delta from the state re-reads rows that moved nothing here.
 	e.mu.Lock()
 	// wrote: the round wrote into the directory — packs in or out, refs, the
-	// index, a file swept out of it.
-	wrote := ins.added+ins.replaced > 0 || refsWritten || indexed || res.trashed
+	// index, the published chain, a file swept out of it.
+	wrote := ins.added+ins.replaced > 0 || refsWritten || indexed || placedHere || res.trashed
 	// A run of the index of pushes is written down with the state that
 	// names it, and one retired goes only once a state no longer names it
 	// (persist) — but neither is a file git reads, so no change a rebuild
@@ -1573,11 +1633,18 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		inc.leavingSince = lowest(inc.leavingSince, snap.since)
 	}
 	if snap.full {
-		// The directory holds exactly the snapshot's packs now: their rows'
-		// count, whatever the incarnation counted before the round.
+		// The directory holds exactly the snapshot's packs now, and the packs
+		// its installed chain holds beyond them: their rows' count, whatever
+		// the incarnation counted before the round.
 		inc.objects = 0
-		for _, p := range snap.packs {
-			inc.objects += p.Objects
+		figures := snap.packFigures()
+		for _, p := range figures {
+			inc.objects += p.objects
+		}
+		for cs, p := range inc.installedPacks {
+			if _, live := figures[cs]; !live {
+				inc.objects += p.objects
+			}
 		}
 	}
 	if wrote {
@@ -1617,12 +1684,23 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 				// A part this build installs none of: no live row is it.
 				continue
 			}
-			if cs := deleteLive(inc, r.PackID); cs != "" {
-				if inc.leaving == nil {
-					inc.leaving = map[string]Event{}
-				}
-				inc.leaving[cs] = EventPackRetired
+			cs := deleteLive(inc, r.PackID)
+			if _, chained := inc.installedPacks[cs]; cs == "" || chained {
+				// THE CHAIN HOLDS ITS PACKS (layers.go): a pack an installed
+				// layer names stays, its row retired or not, until the
+				// placement of the layer's replacement takes it out.
+				continue
 			}
+			if inc.leaving == nil {
+				inc.leaving = map[string]Event{}
+			}
+			inc.leaving[cs] = EventPackRetired
+		}
+		// A DELTA NEVER DOWNLOADS A LAYER: the chain it served is recorded,
+		// and what of it the copy does not hold is the installer's (converge
+		// kicks it once the round has answered).
+		if snap.layersServed {
+			setChain(inc, snap.layers)
 		}
 	}
 	if len(inc.leaving) == 0 {

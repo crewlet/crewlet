@@ -251,7 +251,11 @@
 // part a damage report names it by, what it promises a reader, and what each
 // change to its inputs — a pack added, a pack a compaction retired, a pack
 // removed with no retirement, the refs rewritten, its own files reported
-// damaged — does to it. There are four: the
+// damaged, the installed published chain moving — does to it. There are six:
+// the INSTALLED CHAIN's two halves (below, "The installed chain": the
+// published multi-pack-index layers with their bitmaps, and the commit-graph
+// layers, each with the chain file the cache writes from the rows, which a
+// change CUTS — Prefix — rather than drops), and four of the node's own: the
 // MULTI-PACK-INDEX (a full round's, without a bitmap, once the snapshot names
 // MidxRoundPacks packs; the maintainer's, with its bitmap and lookup table
 // where the node's memory holds one and without one where it does not), the
@@ -985,6 +989,51 @@
 // as the retirements they are and keeps the graph. An incarnation nobody can
 // hold — one not yet converged and unpinned: a boot's first round, a
 // rebuild's product — sheds what leaves it in place, as it always has.
+//
+// # The installed chain
+//
+// A repository's MAINTAINER, one git node, writes its multi-pack-index as a
+// chain of PUBLISHED LAYERS — git's own incremental layer, its bitmap and the
+// commit-graph layer over the same packs — stored in the object store and
+// named on the code log (code.LayerRef; derived, so no backup carries one and
+// no audit asks after one); every git node INSTALLS the chain the rows name
+// (layers.go): each layer fetched, held to its row (code.CheckLayer) and
+// placed byte for byte, both chain files written by the cache from the rows'
+// order, since a layer's files never name its base. Nothing in this build
+// publishes one; the cache installs whatever the rows name. No node writes a
+// layer of its own: on the node pin a bitmapped layer costs the walk of the
+// whole history however few objects it adds, and a layer without one turns
+// off every bitmap beneath it, so the packs since the last publication stay
+// outside the chain, the TAIL, which git reads beside it.
+//
+// An incarnation holding a chain is in CHAIN mode, one holding none in OWN
+// mode (the maintainer's whole index and graph); git refuses the two side by
+// side, so a placement drops own mode's files (EventLayersMoved), the
+// maintainer plans no write in chain mode, and a round writes no index beside
+// either shape (indexed). A FULL round installs the chain before it answers,
+// keeping the longest prefix the copy holds sound — held to its Check by the
+// round's check — and fetching the rest in its one download queue behind its
+// packs. A DELTA never downloads a layer: it records the chain the snapshot
+// served and hands what the copy lacks to the INSTALLER, the goroutine Start
+// begins, which fetches behind the serving on at most a round's share of the
+// node's downloads and places under the repository's write lock. THE CHAIN
+// HOLDS ITS PACKS: a pack an installed layer names stays in the copy, its row
+// retired or not, until a placement replaces the layer, and a stale layer
+// whose replacement cannot be placed is cut after installRetryCap. A
+// PLACEMENT is a swap on a copy a reader may hold (swap.go's layer step) and
+// in place on one nobody does, and before either is visible a CANARY reads
+// once through the chain's bitmap — a layer over the wrong base passes every
+// check of its own files and fails the first bitmapped read. A layer
+// missing, corrupt, or written by a newer git is REFUSED, never an error: the
+// copy serves from the prefix below it, the refusal kept in memory while the
+// rows name that very record. A failed check or a scrub's finding is the full
+// round's chain plan's to answer, never a drop: what it keeps stops below the
+// failing layer (prefixOf, the one cut both chains share), and the round
+// fetches that layer and every one above it again before it answers, cutting
+// what it cannot fetch; a git process's report drops nothing in chain
+// mode and makes the scrub due; a rebuild seeds every layer it holds to its
+// row over packs it linked; Verify holds each layer to its row; and the
+// maintainer's own files are adopted rather than fetched (AdoptLayer).
 //
 // # A boot starts from the disk, once
 //

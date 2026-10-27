@@ -134,6 +134,14 @@ type knobs struct {
 	// maintTicks, when set, is where the maintainer takes its ticks from, in
 	// place of a ticker of MidxDebounce.
 	maintTicks <-chan time.Time
+	// installWake, when set, is what the installer waits on for the earliest
+	// of its repositories' waits to end — told when, on Options.Now's clock —
+	// in place of a timer: a case moves its clock and wakes it.
+	installWake func(at time.Time) <-chan time.Time
+	// chainLines, when set, is what a written multi-pack-index chain file
+	// lists in place of the ids installed: a case writes one in another
+	// order, a chain over the wrong base, for the canary to meet (M16).
+	chainLines func(ids []string) []string
 	// verifyWaits runs as Verify is about to wait for the repository's
 	// rounds before listing the incarnation at dir.
 	verifyWaits func(dir string)

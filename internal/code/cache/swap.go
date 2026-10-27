@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -111,6 +112,18 @@ import (
 // next round — full — puts the pack back with one GET, or the file anew, and
 // swaps.
 //
+// THE INSTALLED CHAIN CROSSES A SWAP BY ITS ROWS (layers.go). Every pack an
+// installed layer names joins the packs the next incarnation holds, live row
+// or none — the chain holds its packs — and a swap that PLACES a chain, the
+// installer's or a full round's on a copy a reader may hold, links the layers
+// it keeps, renames in the ones it fetched, writes both chain files, and
+// carries no own-mode index and no graph (EventLayersMoved drops them: git
+// reads either before a chain); the packs the chain it leaves held alone go
+// with the old copy. Before the rename a CANARY reads through the staged
+// chain's bitmap wherever the placement added a layer, and a canary that
+// fails abandons the placement — its added layers refused corrupt — while the
+// swap is made again for any packs still leaving.
+//
 // A CRASH before the rename leaves the old incarnation the highest in repos/
 // with its state and the staged one in scratch/, which every boot empties;
 // the state names the floor the leaving files' retirements are above
@@ -121,40 +134,103 @@ import (
 
 // swapGraph is the graph attribute of crewlet.code.cache.swaps: what became
 // of the commit-graph of the copy a swap left — kept by the next
-// incarnation, dropped, or none there to keep (swapped) — or that the swap
-// failed.
+// incarnation, dropped, or none there to keep (swapped) — that the next
+// incarnation serves from an installed chain, or that the swap failed. CHAIN
+// is its own value because own mode's answers do not hold there: a chained
+// copy holds no whole graph to keep, and the background indexing writes none
+// beside the chain (layers.go), so counting its swaps as dropped would read
+// as a graph to be written again, and as none would hide that a chain's
+// every placement on a held copy is a swap.
 const (
 	swapGraphKept    = "kept"
 	swapGraphDropped = "dropped"
 	swapGraphNone    = "none"
+	swapGraphChain   = "chain"
 	swapFailed       = "failed"
 )
 
 // swapLeaving swaps inc, the entry's current incarnation, into its next when
-// packs are leaving it (swap), and answers the incarnation that is current
-// once it returns: the next one, or inc after a swap that failed — which
-// leaves inc serving, its leaving kept for the next round. A copy whose live
-// pack or root file is gone from its directory is marked to be read whole.
-// The caller holds the entry's write lock whole, for its round. snap is the
-// snapshot the round APPLIED — a full one's index is written over the next
-// incarnation, which holds exactly its packs — or the zero snapshot where it
-// applied none.
-func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, snap snapshot) *incarnation {
+// packs are leaving it or step places its chain (layers.go: a full round's
+// placement on a copy a reader may hold, or the installer's), and answers the
+// incarnation that is current once it returns: the next one, or inc after a
+// swap that failed — which leaves inc serving, its leaving kept for the next
+// round. A copy whose live pack or root file is gone from its directory is
+// marked to be read whole. The caller holds the entry's write lock whole, for
+// its round or its placement. snap is the snapshot the round APPLIED — a full
+// one's index is written over the next incarnation, which holds exactly its
+// packs — or the zero snapshot where it applied none.
+//
+// A PLACEMENT WHOSE CANARY FAILS IS ABANDONED: every layer it added is
+// refused as corrupt, and the swap is made again for what else it was for —
+// packs leaving — with the chain the copy holds carried as it stands, so one
+// bad layer undoes none of the round's own work. Whatever the placement
+// fetched and no swap placed goes from tmp/.
+func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, snap snapshot,
+	step *layerStep) *incarnation {
+
+	if step != nil {
+		defer step.discard(c)
+	}
 	e.mu.Lock()
-	leaving := len(inc.leaving) > 0 && e.current == inc && !inc.retired
+	leaving := (len(inc.leaving) > 0 || step != nil) && e.current == inc && !inc.retired
 	e.mu.Unlock()
 	if !leaving {
 		return inc
 	}
+	for {
+		next, err := c.swapOnce(ctx, e, inc, snap, step)
+		var bad *canaryFailed
+		if err == nil || !errors.As(err, &bad) {
+			return next
+		}
+		e.mu.Lock()
+		for _, row := range bad.added {
+			c.refuse(e, inc, row, layerCorrupt, bad.err.Error())
+		}
+		again := len(inc.leaving) > 0
+		e.mu.Unlock()
+		for _, st := range step.fetched {
+			if slices.ContainsFunc(bad.added, func(r code.LayerRow) bool { return sameLayer(r, st.row) }) {
+				c.observeInstall(layerCorrupt, time.Since(st.began))
+			}
+		}
+		if !again {
+			return inc
+		}
+		step = nil
+	}
+}
+
+// canaryFailed is a placement's canary failing in the staged incarnation: the
+// layers the placement added, and what the canary met.
+type canaryFailed struct {
+	added []code.LayerRow
+	err   error
+}
+
+func (f *canaryFailed) Error() string { return f.err.Error() }
+func (f *canaryFailed) Unwrap() error { return f.err }
+
+// swapOnce is one swap of inc into its next incarnation, with the placement
+// step when one is asked: the next incarnation made current, or inc and the
+// failure that left it serving.
+func (c *Cache) swapOnce(ctx context.Context, e *entry, inc *incarnation, snap snapshot,
+	step *layerStep) (*incarnation, error) {
+
 	began := time.Now()
-	s := &swapping{c: c, e: e, inc: inc, snap: snap}
+	s := &swapping{c: c, e: e, inc: inc, snap: snap, layers: step}
 	next, err := s.run(ctx)
 	e.mu.Lock()
 	e.swap = nil
 	e.mu.Unlock()
 	if err == nil {
 		c.swapped(s, next, time.Since(began))
-		return next
+		if s.layers != nil {
+			c.installedLayers(e.id, s.placedLayers)
+			c.countLayers(layerKept, s.keptLayers)
+		}
+		c.countLayers(layerCut, s.cutLayers)
+		return next, nil
 	}
 	if s.staged != "" {
 		if terr := toTrash(c.dir, s.staged, newV7()+"-"+filepath.Base(s.staged)); terr != nil &&
@@ -181,17 +257,19 @@ func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, sna
 		c.markWhole(e, inc, Failure{Reason: reason}, dropRound)
 		e.mu.Unlock()
 	}
-	return inc
+	return inc, err
 }
 
 // The steps of a swap, as code_cache_swap_failed names the one it failed at.
-// The round's index between the derived files and the sync is none: it
-// fails nothing (indexRound).
+// The round's index between the layers and the canary is none: it fails
+// nothing (indexRound).
 const (
 	stepStage   = "stage"
 	stepPacks   = "packs"
 	stepRoot    = "root"
 	stepDerived = "derived"
+	stepLayers  = "layers"
+	stepCanary  = "canary"
 	stepSync    = "sync"
 	stepState   = "state"
 	stepRename  = "rename"
@@ -249,6 +327,27 @@ type swapping struct {
 	e    *entry
 	inc  *incarnation
 	snap snapshot
+	// layers is a PLACEMENT the swap makes of the installed chain
+	// (layers.go): the chain the next incarnation holds, the layers it keeps
+	// of inc linked and those fetched renamed in — or nil, inc's installed
+	// chain carried whole, every pack it names being in inc (the chain holds
+	// its packs). chain is the chain the next incarnation holds once the
+	// layer step has run, added the layers of it inc did not hold, which the
+	// canary reads, and chainShared the bytes of each chain declaration's
+	// files the two incarnations hold alike, linked.
+	layers      *layerStep
+	chain       []code.LayerRow
+	added       []code.LayerRow
+	chainShared map[DerivedName]int64
+	// placedLayers is the staged layers the layer step renamed in,
+	// keptLayers how many it linked, and cutLayers how many layers of inc's
+	// installed chain the next incarnation carries no file of — replaced by
+	// a publication, stale, above a pack leaving, or fetched again over
+	// files that failed: what the swap counts once it is made, as cutChain
+	// counts what it cuts in place.
+	placedLayers []*stagedLayer
+	keptLayers   int
+	cutLayers    int
 
 	// next is the incarnation being built, staged at staged until the rename
 	// gives it its number. stagedAt is the staged directory as step 1 named
@@ -274,8 +373,9 @@ type swapping struct {
 	// packed-refs it linked, and shared the bytes the two incarnations hold
 	// alike: the live packs' and the packed-refs'. heldGraph: the copy the
 	// swap leaves held a commit-graph once nothing could write one in it —
-	// what tells a swap that dropped the graph from one of a copy with none
-	// to keep (swapped).
+	// its own whole graph, or its installed chain's graph layers — what tells
+	// a swap that dropped the graph from one of a copy with none to keep
+	// (swapped).
 	events    map[Event]bool
 	refsBytes int64
 	shared    int64
@@ -314,10 +414,22 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		s.packs[p.checksum] = p
 	}
 	s.events = map[Event]bool{}
-	for _, ev := range inc.leaving {
+	leaving := map[string]bool{}
+	for key, ev := range inc.leaving {
 		s.events[ev] = true
+		leaving[key] = true
 	}
+	installed, chainPacks := slices.Clone(inc.installed), maps.Clone(inc.installedPacks)
 	e.mu.Unlock()
+	// 0. THE CHAIN the next incarnation holds, decided before anything is
+	// staged: the placement's, or inc's own carried — cut where a pack
+	// leaving names a layer of it, which the chain's holding its packs means
+	// none does (prefixOf, the one cut) — and every pack it names joins what
+	// the next incarnation holds, live or not: the chain holds its packs.
+	if err := s.chainOf(installed, chainPacks, leaving); err != nil {
+		s.step = stepLayers
+		return nil, err
+	}
 	var drop derivedSet
 	for ev := range s.events {
 		drop |= c.image.dropping(ev)
@@ -409,7 +521,22 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		_, gerr := os.Lstat(filepath.Join(inc.dir, rel))
 		s.heldGraph = gerr == nil
 	}
+	if _, graph := chainIDs(installed); len(graph) > 0 {
+		// A chain's graph layers are the copy's commit-graph as much as an
+		// own one is: a swap whose next incarnation holds no chain and no
+		// graph took them, and the maintainer writes a whole graph again.
+		s.heldGraph = true
+	}
 	if err = s.carryDerived(); err != nil {
+		return nil, err
+	}
+
+	// 4b. THE INSTALLED CHAIN (layers.go): every layer of it the copy kept
+	// LINKED, every one the placement fetched RENAMED IN from tmp/, and both
+	// chain files written over the chain — staged, synced, renamed — after
+	// the layers' files, so neither names a file not there.
+	s.step = stepLayers
+	if err = s.placeLayers(); err != nil {
 		return nil, err
 	}
 
@@ -417,10 +544,28 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	// staged directory as it would have been into the old one in place —
 	// part of the round's answer, in the round's read lane, vouched for as
 	// written; what its git reports reaches the copy it reads (swapAt). A
-	// delta writes none. Never a failure of the swap: a round answers
-	// without its index, slower and never wrong (indexRound).
+	// delta writes none, and nor does a round beside a chain the next
+	// incarnation holds (indexRound's indexed). Never a failure of the swap:
+	// a round answers without its index, slower and never wrong.
 	if s.snap.full {
 		c.indexRound(ctx, e, s.next, s.snap)
+	}
+
+	// 5b. THE CANARY (layers.go), where the placement added a layer: one
+	// bitmapped walk in the staged directory before the rename that makes
+	// the chain visible — a layer over the wrong base passes every check of
+	// its own files and fails the first read through its bitmap. A failure
+	// abandons the placement (swapLeaving), its added layers refused — before
+	// the staging is synced, which a placement abandoned would have spent.
+	if len(s.added) > 0 {
+		s.step = stepCanary
+		objects := make(map[string]int64, len(s.packs))
+		for cs, p := range s.packs {
+			objects[cs] = p.objects
+		}
+		if err = c.canary(ctx, e, inc, s.staged, tailObjects(s.chain, objects), nil); err != nil {
+			return nil, &canaryFailed{added: s.added, err: err}
+		}
 	}
 
 	// 6. THE STAGING MADE DURABLE, each directory a link or a write landed
@@ -502,6 +647,11 @@ func (s *swapping) carryDerived() error {
 		switch {
 		case d.tree():
 			// Moved at the promote (carryMemo), never linked here.
+		case d.chained():
+			// The installed chain: placed by the layer step (placeLayers),
+			// layer by layer as the chain the next incarnation holds says —
+			// never by its patterns, which would carry a layer the chain
+			// leaves and the chain file naming it.
 		case d.inProcess() && !d.hasMain():
 			carried, err = s.carryIndex(d)
 		default:
@@ -541,6 +691,132 @@ func (s *swapping) syncStaged() error {
 		if err := s.c.durableDir(filepath.Join(s.staged, rel)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// chainOf decides the chain the next incarnation holds — the placement's
+// rows (layers), or inc's installed chain cut to the prefix the packs
+// leaving leave valid (prefixOf) — and the layers of it inc does not hold,
+// which the canary reads; and adds to the packs the next incarnation holds
+// every pack that chain names, with the figures inc recorded of it: a pack
+// an installed layer names stays while the layer does, whether or not a live
+// row still names it (layers.go, the chain holds its packs). A pack the chain
+// names that inc holds neither as a live row nor for its chain fails the swap:
+// a layer is valid only over every pack it names. installed, held and
+// leaving are inc's, read under e.mu: its chain, the packs its chain holds,
+// and the pack files leaving.
+func (s *swapping) chainOf(installed []code.LayerRow, held map[string]livePack, leaving map[string]bool) error {
+	if s.layers != nil {
+		s.chain = slices.Clone(s.layers.rows)
+		s.added = s.layers.adds(installed)
+		s.events[EventLayersMoved] = true
+	} else {
+		k := prefixOf(installed, EventPackRetired, eventDetail{packs: leaving})
+		s.chain = installed[:k]
+		if k < len(installed) {
+			s.events[EventLayersMoved] = true
+		}
+	}
+	// CUT is every layer of inc whose files the next incarnation does not
+	// carry: one its chain does not hold, and one fetched again over files
+	// that failed their check — counted as the cut in place counts them
+	// (cutChain), so the outcome reads alike whichever way it was placed.
+	refetched := map[string]bool{}
+	if s.layers != nil {
+		for _, st := range s.layers.fetched {
+			refetched[st.row.Layer.LayerID] = true
+		}
+	}
+	s.cutLayers = 0
+	for _, r := range installed {
+		if refetched[r.Layer.LayerID] ||
+			!slices.ContainsFunc(s.chain, func(n code.LayerRow) bool { return sameLayer(n, r) }) {
+			s.cutLayers++
+		}
+	}
+	for _, r := range s.chain {
+		for _, cs := range r.Layer.Packs {
+			if _, ok := s.packs[cs]; ok {
+				continue
+			}
+			p, ok := held[cs]
+			if !ok {
+				return fmt.Errorf("layer %s names pack-%s, which the copy holds for no live row and no "+
+					"installed layer", r.Layer.LayerID, cs)
+			}
+			s.packs[cs] = p
+		}
+	}
+	return nil
+}
+
+// placeLayers is the swap's layer step: every layer of the chain the next
+// incarnation holds placed in the staged directory — renamed in from tmp/
+// where the placement fetched it (a layer new to the copy, or one fetched
+// again over files that failed their check), linked from inc otherwise, the
+// same inodes — then both chain files written over the chain, and the next
+// incarnation's record of it set (recordInstalled) at the bytes the rows
+// count. Every file it wrote is vouched, as written by this process from
+// files held to their rows; a linked one carries inc's vouch (carryVouches).
+// The bytes the two incarnations hold alike, linked, are counted by
+// declaration (chainShared), which the promote takes out of inc's total.
+func (s *swapping) placeLayers() error {
+	c := s.c
+	fetched := map[string]*stagedLayer{}
+	if s.layers != nil {
+		for _, st := range s.layers.fetched {
+			fetched[st.row.Layer.LayerID] = st
+		}
+	}
+	s.chainShared = map[DerivedName]int64{}
+	var wrote []string
+	for _, r := range s.chain {
+		if st := fetched[r.Layer.LayerID]; st != nil && st.dir != "" && sameLayer(st.row, r) {
+			moved, err := c.moveLayerIn(st, s.staged)
+			wrote = append(wrote, moved...)
+			if err != nil {
+				return err
+			}
+			s.placedLayers = append(s.placedLayers, st)
+			continue
+		}
+		linked, err := c.linkLayerIn(r, s.inc.dir, s.staged)
+		for _, rel := range linked {
+			s.linked[rel] = true
+			if i, _ := c.image.owner(rel); i >= 0 {
+				s.carried |= 1 << i
+			}
+		}
+		if err != nil {
+			return err
+		}
+		s.keptLayers++
+		s.chainShared[DerivedLayers] += r.Layer.MidxBytes + r.Layer.BitmapBytes
+		s.chainShared[DerivedGraphLayers] += r.Layer.GraphBytes
+	}
+	if err := c.writeChains(s.staged, s.chain); err != nil {
+		return err
+	}
+	if len(s.chain) > 0 {
+		wrote = append(wrote, layersChainRel)
+		if _, graph := chainIDs(s.chain); len(graph) > 0 {
+			wrote = append(wrote, graphChainRel)
+		}
+	}
+	ids := make([]fileID, len(wrote))
+	for i, rel := range wrote {
+		ids[i] = lstatID(filepath.Join(s.staged, rel))
+	}
+	s.e.mu.Lock()
+	defer s.e.mu.Unlock()
+	s.next.chainGen = s.inc.chainGen + 1
+	c.recordInstalled(s.next, s.chain, s.packs)
+	for i, rel := range wrote {
+		vouch(s.next, rel, ids[i])
+	}
+	if len(wrote) > 0 {
+		c.wrote(s.next, c.image.set(DerivedLayers, DerivedGraphLayers))
 	}
 	return nil
 }
@@ -740,7 +1016,14 @@ func (s *swapping) promote() {
 	c.setSize(inc, max(inc.diskBytes-s.shared, 0))
 	c.image.each(s.carried, func(_ int, d *Derived) {
 		if st, ok := inc.derived[d.Name]; ok {
-			st.Bytes = 0
+			// A chain's files are shared only where a layer was kept, linked:
+			// inc holds its chain files, and every layer the next one does
+			// not, alone.
+			if d.chained() {
+				st.Bytes = max(st.Bytes-s.chainShared[d.Name], 0)
+			} else {
+				st.Bytes = 0
+			}
 			c.setDerived(inc, d.Name, st, true)
 		}
 	})
@@ -761,6 +1044,7 @@ func (s *swapping) promote() {
 	}
 	inc.successor = next
 	e.current = next
+	c.noteChained(e)
 	// The backfill's work is the new copy's now (schedule.go), as at a
 	// rebuild's promote.
 	c.backfillDirty(e)
@@ -770,17 +1054,24 @@ func (s *swapping) promote() {
 }
 
 // swapped records a swap made: code_cache_swapped and
-// crewlet.code.cache.swaps, by what became of the commit-graph — kept, where
-// the next incarnation linked it; dropped, where the copy held one and a
-// stray no retirement accounts for took it, which the maintainer writes
-// again at once; none, where the copy held none to keep, its graph not yet
-// written or past what the node's memory holds, so nothing was lost and
-// nothing is written again. Counted as dropped, a node too small for a large
-// repository's graph counted every compaction of it among the drops that
-// say whole reads cannot see their retirements.
+// crewlet.code.cache.swaps, by whether the next incarnation serves from an
+// installed chain (layers.go), and otherwise by what became of the
+// commit-graph — kept, where the next incarnation linked it; dropped, where
+// the copy held one, its own or its chain's graph layers, and the next holds
+// none — a stray no retirement accounts for took it, or the chain was cut
+// whole — which the maintainer writes again at once; none, where the copy
+// held none to keep, its graph not yet written or past what the node's
+// memory holds, so nothing was lost and nothing is written again. Counted as
+// dropped, a node too small for a large repository's graph counted every
+// compaction of it among the drops that say whole reads cannot see their
+// retirements. The packs dropped are every pack the old incarnation held
+// that the next does not: what was leaving, and the packs a chain the
+// placement replaced held alone, whose rows had gone.
 func (c *Cache) swapped(s *swapping, next *incarnation, took time.Duration) {
 	graph := swapGraphNone
 	switch rel := c.image.mainRel(DerivedGraph); {
+	case len(s.chain) > 0:
+		graph = swapGraphChain
 	case rel != "" && s.linked[rel]:
 		graph = swapGraphKept
 	case s.heldGraph:
@@ -793,9 +1084,16 @@ func (c *Cache) swapped(s *swapping, next *incarnation, took time.Duration) {
 			dropped++
 		}
 	}
+	for cs := range s.inc.installedPacks {
+		_, kept := s.packs[cs]
+		_, counted := s.inc.leaving[cs]
+		if !kept && !counted {
+			dropped++
+		}
+	}
 	s.e.mu.Unlock()
 	c.log.Info("code_cache_swapped", "repo", s.e.id, "from", s.inc.n, "to", next.n, "packs_kept", len(s.packs),
-		"packs_dropped", dropped, "graph", graph, "took", took)
+		"packs_dropped", dropped, "layers", len(s.chain), "graph", graph, "took", took)
 	if c.metrics != nil {
 		c.metrics.Add(metrics.CodeCacheSwaps, 1, metrics.Attrs{"graph": graph})
 	}
@@ -1025,6 +1323,19 @@ var swapFields = []swapField{
 	{name: "leaving", class: recomputed, why: "empty: the swap took out every file that was leaving"},
 	{name: "leavingSince", class: recomputed, why: "zero: nothing is leaving next"},
 	{name: "successor", class: notCarried, why: "inc's: the promote points it at next"},
+	{name: "chain", class: carried, why: "the rows' published chain as the round read it, which no placement moves",
+		carry: func(s *swapping) { s.next.chain = s.inc.chain }},
+	{name: "chainRead", class: carried, why: "whether a round of this process served the rows' chain",
+		carry: func(s *swapping) { s.next.chainRead = s.inc.chainRead }},
+	{name: "chainGen", class: recomputed, why: "one past inc's (placeLayers): a placement planned over inc finds " +
+		"the copy moved"},
+	{name: "installed", class: recomputed, why: "the chain the layer step placed or carried (recordInstalled)"},
+	{name: "installedPacks", class: recomputed, why: "the packs that chain names, at the figures the swap linked " +
+		"them by (recordInstalled)"},
+	{name: "refused", class: carried, why: "a layer refused while the rows name it at its record is refused for " +
+		"the repository: the next copy would meet the same bytes — a canary that abandoned the swap's own " +
+		"placement among them",
+		carry: func(s *swapping) { s.next.refused = maps.Clone(s.inc.refused) }},
 }
 
 // filterDrops is drops for the declarations the swap carries.

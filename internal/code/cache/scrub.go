@@ -665,7 +665,10 @@ type scrubbed struct {
 func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger checkTrigger) (scrubbed, error) {
 	var out scrubbed
 	began := time.Now()
-	files, wants, err := scrubFiles(c.image, inc.dir)
+	e.mu.Lock()
+	chains := chainWants(inc)
+	e.mu.Unlock()
+	files, wants, err := scrubFiles(c.image, inc.dir, chains)
 	if err != nil {
 		return out, fmt.Errorf("listing %s: %w", inc.dir, err)
 	}
@@ -741,8 +744,9 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 // forty bytes: each pack's three files where all three are there — its .pack
 // held to the trailer that is its name, its .idx and .rev to their pack's
 // checksum before their own — and every derived file present, held as its
-// declaration says (derived.go).
-func scrubFiles(im *image, dir string) ([]checkedFile, map[string]expect, error) {
+// declaration says (derived.go): a chain file to what chains says it holds
+// (chainWants), the ids the incarnation installed.
+func scrubFiles(im *image, dir string, chains map[string][]byte) ([]checkedFile, map[string]expect, error) {
 	list, err := os.ReadDir(filepath.Join(dir, packRel))
 	if err != nil {
 		return nil, nil, err
@@ -775,7 +779,7 @@ func scrubFiles(im *image, dir string) ([]checkedFile, map[string]expect, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	derived, err := heldFiles(present, wants)
+	derived, err := heldFiles(present, wants, chains)
 	if err != nil {
 		return nil, nil, err
 	}
