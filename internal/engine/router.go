@@ -34,9 +34,9 @@ import (
 // per-request questions read, never a second one, and never a listing of the
 // fleet per call. Who serves a repository's GIT work is read off the same
 // view — every live node with the git role ([wholeGit], ADR-0059) — and so is
-// what each of them advertises it can give its background work
-// ([presenceRoster.BackgroundBudget]), which places a repository's maintenance;
-// this node's own git half is asked per request ([engineGit]).
+// what each of them advertises it can give its background work, read together
+// with them off one listing ([wholeGit.Listing]), which places a repository's
+// maintenance; this node's own git half is asked per request ([engineGit]).
 //
 // # What this node answers
 //
@@ -90,7 +90,7 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string,
 
 	opts := estate.RouterOptions{
 		Self: nodeID, Queue: q, Placement: e.estatePlacement(), Git: e.gitPlacement(),
-		GitBudgets: e.gitBudgets(), Session: estate.NewSession(), Seams: e.serverSeams(),
+		Session: estate.NewSession(), Seams: e.serverSeams(),
 		Timing:    estate.Production(),
 		Envelopes: envelopes,
 	}
@@ -155,8 +155,11 @@ func (w wholeEstate) Unanswered(string) { w.roster.Invalidate() }
 
 // gitPlacement is who serves git as this node routes a repository's git work
 // (ADR-0059): every live node whose presence profile names the git role, from
-// the same watched view as the estate's placement.
-func (e *Engine) gitPlacement() estate.Placement {
+// the same watched view as the estate's placement — and, read together with
+// them off one listing of that view, what each of them advertises it can give
+// its background work, which places a repository's maintenance
+// ([wholeGit.Listing]).
+func (e *Engine) gitPlacement() estate.GitPlacement {
 	return wholeGit{roster: presenceRoster{view: e.dataView}}
 }
 
@@ -173,6 +176,10 @@ type wholeGit struct {
 type gitRoster interface {
 	// LiveGitNodes is every live git node; an error is UNKNOWN.
 	LiveGitNodes() ([]string, error)
+
+	// GitListing is every live git node and what each advertises it can
+	// give its background work, off ONE listing; an error is UNKNOWN.
+	GitListing() (estate.GitListing, error)
 
 	// Invalidate asks for the nodes to be listed again: one it named went
 	// silent.
@@ -191,16 +198,25 @@ func (w wholeGit) Holders() ([]string, error) {
 	return out, nil
 }
 
+// Listing is every live git node, sorted as Holders sorts them, and what each
+// one's presence row says its git cache gives its background work
+// ([coord.GitBackgroundKey]), off ONE listing of the view: the nodes and the
+// figures read together, so a node is weighed by the listing that names it
+// ([estate.GitPlacement]). An error from the roster is UNKNOWN, never "no git
+// node".
+func (w wholeGit) Listing() (estate.GitListing, error) {
+	listing, err := w.roster.GitListing()
+	if err != nil {
+		return estate.GitListing{}, fmt.Errorf("engine: who serves git, and what each git node can give "+
+			"its background work: %w", err)
+	}
+	slices.Sort(listing.Nodes)
+	return listing, nil
+}
+
 // Unanswered asks the roster to list again, because a node it named went
 // silent.
 func (w wholeGit) Unanswered(string) { w.roster.Invalidate() }
-
-// gitBudgets is what each git node advertises it can give its background work
-// as this node's router weighs a repository's maintainer
-// ([estate.Router.Maintainer]): the figure its presence row carries beside its
-// status ([coord.GitBackgroundKey]), off the same watched view as the git
-// placement.
-func (e *Engine) gitBudgets() estate.GitBudgets { return presenceRoster{view: e.dataView} }
 
 // localGit is this node's git half as the router and the estate server ask for
 // it: resolved on every request ([engineGit]), never once.
@@ -632,9 +648,9 @@ func (e *Engine) serverSeams() estate.ServerSeams {
 
 // presenceRoster is the fleet's presence view as the router's placements read
 // it: every live data node, and every live git node, from memory — one view
-// for both, so the two placements can never disagree about who is live — and
-// what each git node advertises it can give its background work, off the same
-// listing.
+// for both, so the two placements can never disagree about who is live — and,
+// read together with the git nodes off one listing of it, what each of them
+// advertises it can give its background work ([presenceRoster.GitListing]).
 type presenceRoster struct{ view *coord.LeaseView }
 
 // LiveDataNodes is every live data node. A node with no view has no
@@ -666,31 +682,39 @@ func (r presenceRoster) LiveGitNodes() ([]string, error) {
 	return gitNodesOf(leases), nil
 }
 
-// BackgroundBudget is what node's presence row says its git cache gives its
-// background work ([coord.GitBackgroundKey], which every git node's seat host
-// writes on every beat beside its status, from [Engine.gitBackgroundBudget]):
-// said, and zero for a git node that says it has nothing to give — no code
-// host built yet, or transfers that keep all of its memory. NOT SAYING where
-// node's row carries no figure — a build or a host that writes none — or the
-// view holds no lease of node at all; and a node with no view has no fleet,
-// so nobody in it says anything. A beat whose status read overran says it
-// all the same: the figure is not in the status. An error is UNKNOWN: the view
-// could not be read.
-func (r presenceRoster) BackgroundBudget(node string) (int64, bool, error) {
+// GitListing is every live node with the git role, by the rule
+// [presenceRoster.LiveGitNodes] lists them by ([gitNodeOf]), and what each
+// one's presence row says its git cache gives its background work
+// ([coord.GitBackgroundKey], which every git node's seat host writes on every
+// beat beside its status, from [Engine.gitBackgroundBudget]) — off ONE read of
+// the view, each lease decoded once, so a node is weighed by the very listing
+// that names it. A row that names a figure says it, zero included: a git node
+// with nothing to give — no code host built yet, or transfers that keep all of
+// its memory. A row that names none is NOT SAYING — a build or a host that
+// writes none — and has no entry. A beat whose status read overran says it
+// all the same: the figure is not in the status. A node with no view has no
+// fleet: no git node, and nobody saying anything. An error is UNKNOWN: the
+// view could not be read.
+func (r presenceRoster) GitListing() (estate.GitListing, error) {
 	if r.view == nil {
-		return 0, false, nil
+		return estate.GitListing{}, nil
 	}
 	leases, _, err := r.view.Leases()
 	if err != nil {
-		return 0, false, fmt.Errorf("engine: what %s can give its background work: %w", node, err)
+		return estate.GitListing{}, fmt.Errorf("engine: which nodes serve git: %w", err)
 	}
+	listing := estate.GitListing{Budgets: map[string]int64{}}
 	for _, lease := range leases {
-		if id, ok := coord.NodeID(lease.Resource); ok && id == node {
-			budget, said := coord.GitBackgroundFromMeta(lease.Meta)
-			return budget, said, nil
+		node, ok := gitNodeOf(lease)
+		if !ok {
+			continue
+		}
+		listing.Nodes = append(listing.Nodes, node)
+		if budget, said := coord.GitBackgroundFromMeta(lease.Meta); said {
+			listing.Budgets[node] = budget
 		}
 	}
-	return 0, false, nil
+	return listing, nil
 }
 
 // Invalidate lists again: a node the view named went silent,

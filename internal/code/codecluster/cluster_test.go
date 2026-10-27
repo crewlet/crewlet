@@ -267,8 +267,9 @@ func (c *cluster) record(_ context.Context, e types.OperatorActed) {
 func (m *member) route(t testing.TB) {
 	t.Helper()
 	r, err := estate.NewRouter(estate.RouterOptions{Self: m.id, Queue: m.q, Placement: m.c.placement,
-		Git: m.c.placement, GitBudgets: m.c.budgets(), LocalGit: memberGit{m}, Local: memberCopy{m},
-		Session: estate.NewSession(), Timing: clusterTiming, Envelopes: clusterEnvelopes, Now: m.c.now})
+		Git: codetest.GitPlacement{Placement: m.c.placement, Node: m.c.gitNodeOf}, LocalGit: memberGit{m},
+		Local: memberCopy{m}, Session: estate.NewSession(), Timing: clusterTiming, Envelopes: clusterEnvelopes,
+		Now: m.c.now})
 	if err != nil {
 		t.Fatalf("codecluster: %s's router: %v", m.id, err)
 	}
@@ -283,20 +284,20 @@ func (m *member) route(t testing.TB) {
 	m.withdraw = withdraw
 }
 
-// budgets is what each member's git node advertises it can give its
-// background work, as the engine's presence row carries it beside its status —
-// the routers' git budgets (codetest.GitBudgets): a member whose git node is
-// not started yet, or is stopped, is not saying, and a killed one says what
-// its last beat did, as its presence lease runs on (placement).
-func (c *cluster) budgets() codetest.GitBudgets {
-	return func(id string) *codetest.GitNode {
-		for _, m := range c.members {
-			if m.id == id {
-				return m.gitNode()
-			}
+// gitNodeOf is the git node of the member id names — nil for an id the
+// cluster holds no member for, and for a member whose git node is not started
+// yet — whose presence row the routers' git placement reads what it says its
+// cache gives its background work off (codetest.GitPlacement), as the
+// engine's presence row carries it beside its status: a member not started
+// yet is not saying, a stopped one is not listed (placement), and a killed
+// one says what its last beat did, as its presence lease runs on.
+func (c *cluster) gitNodeOf(id string) *codetest.GitNode {
+	for _, m := range c.members {
+		if m.id == id {
+			return m.gitNode()
 		}
-		return nil
 	}
+	return nil
 }
 
 // gitNode is the member's git node, nil before it is started.

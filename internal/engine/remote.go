@@ -205,11 +205,24 @@ func dataNodesOf(held []coord.Lease) []string {
 func gitNodesOf(held []coord.Lease) []string {
 	out := make([]string, 0, len(held))
 	for _, lease := range held {
-		if profile, ok := placement.FromLease(lease); ok && profile.Roles.Has(placement.RoleGit) {
-			out = append(out, profile.ID)
+		if node, ok := gitNodeOf(lease); ok {
+			out = append(out, node)
 		}
 	}
 	return out
+}
+
+// gitNodeOf is the node a presence lease names where it has the git role, by
+// the rule [gitNodesOf] states — the ONE rule a git listing
+// ([presenceRoster.GitListing]) reads a peer's row by too, so the git nodes a
+// repository's reads are asked of and those its maintenance is weighed among
+// are one set.
+func gitNodeOf(lease coord.Lease) (string, bool) {
+	profile, ok := placement.FromLease(lease)
+	if !ok || !profile.Roles.Has(placement.RoleGit) {
+		return "", false
+	}
+	return profile.ID, true
 }
 
 // serveEstate makes this data node answer the fleet from its copy of the

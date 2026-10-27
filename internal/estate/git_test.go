@@ -111,34 +111,6 @@ func (g *fakeGit) lefts() []time.Duration {
 	return slices.Clone(g.left)
 }
 
-// fakeBudgets is what each git node advertises it can give its background
-// work, as a case writes it: a node it names says its budget (zero for one
-// that says it has nothing to give), and every other node is NOT SAYING — a
-// row that carries no figure, or a node the view names no lease of — so a
-// router of a case that sets none places every repository's maintenance on its
-// home. err, where set, is a view that could not be read.
-type fakeBudgets struct {
-	mu   sync.Mutex
-	said map[string]int64
-	err  error
-}
-
-func (b *fakeBudgets) BackgroundBudget(node string) (int64, bool, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.err != nil {
-		return 0, false, b.err
-	}
-	budget, said := b.said[node]
-	return budget, said, nil
-}
-
-func (b *fakeBudgets) set(change func(*fakeBudgets)) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	change(b)
-}
-
 // gitHalf is a node's git half as [LocalGit] answers it: node's, and none —
 // a code host not built — where node is nil.
 type gitHalf struct{ node *fakeGit }
@@ -182,7 +154,7 @@ func (f *fleet) gitNodes(t *testing.T, names []string, idle ...string) map[strin
 func (f *fleet) gitRouter(t *testing.T, self string, local LocalGit) *Router {
 	t.Helper()
 	r, err := NewRouter(RouterOptions{Queue: f.start(t), Self: self, Placement: f.placement, Git: f.git,
-		GitBudgets: f.budgets, LocalGit: local, Session: NewSession(), Timing: Production(),
+		LocalGit: local, Session: NewSession(), Timing: Production(),
 		Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +347,7 @@ func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 	says := func(change func(said map[string]int64)) {
 		said := maps.Clone(advertised)
 		change(said)
-		f.budgets.set(func(b *fakeBudgets) { b.said = said })
+		f.git.set(func(p *fakePlacement) { p.said = said })
 	}
 	large := f.gitRouter(t, "git-c", gitHalf{node: &fakeGit{name: "git-c"}})
 	// home is the repository's home as the router names it: the first of
@@ -443,16 +415,16 @@ func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 	each("a home not saying", 4*gib, home)
 }
 
-// A MAINTAINER NOBODY CAN READ IS UNKNOWN, NEVER A GUESS: where who serves git
-// cannot be read, or what a git node advertises cannot, Maintainer answers the
-// error — never "this node" and never "nobody" — and IsMaintainer answers it
-// beside false, so a node that cannot tell compacts and publishes nothing that
-// pass; and a fleet that lists no git node has nobody to maintain anything,
-// ErrNoGitNode.
+// A MAINTAINER NOBODY CAN READ IS UNKNOWN, NEVER A GUESS: where the listing of
+// who serves git and what each advertises cannot be read, Maintainer answers
+// its error — never "this node" and never "nobody" — and IsMaintainer answers
+// it beside false, so a node that cannot tell compacts and publishes nothing
+// that pass. And a listing that carries no git node has nobody to maintain
+// anything, ErrNoGitNode — a node whose own git half is built included, which
+// no listing carries: its peers name nobody either.
 //
-// Mutations: answer a placement that could not be read with the home this node
-// would compute from nothing — IsMaintainer true, red; read an unreadable view
-// of the budgets as nobody saying — a maintainer named, red.
+// Mutation: answer a listing that could not be read with the node this one's
+// own git half would make it — IsMaintainer true, red.
 func TestAMaintainerOfAnUnreadablePlacementIsUnknown(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -464,20 +436,12 @@ func TestAMaintainerOfAnUnreadablePlacementIsUnknown(t *testing.T) {
 	}
 
 	f.git.set(func(p *fakePlacement) { p.err = errors.New("the presence view answers unknown") })
-	if m, err := own.Maintainer(repo, 1); err == nil || errors.Is(err, ErrNoGitNode) {
-		t.Errorf("Maintainer with the git placement unknown = (%s, %v), want the placement's error", m, err)
+	if m, err := own.Maintainer(repo, 1); err == nil || errors.Is(err, ErrNoGitNode) ||
+		!strings.Contains(err.Error(), "background work") {
+		t.Errorf("Maintainer with the git listing unknown = (%s, %v), want the listing's error", m, err)
 	}
 	if is, err := own.IsMaintainer(repo, 1); err == nil || is {
-		t.Errorf("IsMaintainer with the git placement unknown = (%v, %v), want (false, an error)", is, err)
-	}
-
-	f.git.set(func(p *fakePlacement) { p.err = nil })
-	f.budgets.set(func(b *fakeBudgets) { b.err = errors.New("the presence view answers unknown") })
-	if m, err := own.Maintainer(repo, 1); err == nil || !strings.Contains(err.Error(), "background work") {
-		t.Errorf("Maintainer with the git budgets unknown = (%s, %v), want their error", m, err)
-	}
-	if is, err := own.IsMaintainer(repo, 1); err == nil || is {
-		t.Errorf("IsMaintainer with the git budgets unknown = (%v, %v), want (false, an error)", is, err)
+		t.Errorf("IsMaintainer with the git listing unknown = (%v, %v), want (false, an error)", is, err)
 	}
 
 	none := newFleet(t)
@@ -487,21 +451,141 @@ func TestAMaintainerOfAnUnreadablePlacementIsUnknown(t *testing.T) {
 	if is, err := none.client.IsMaintainer(repo, 1); is || !errors.Is(err, ErrNoGitNode) {
 		t.Errorf("IsMaintainer on a fleet with no git node = (%v, %v), want (false, ErrNoGitNode)", is, err)
 	}
+	unlisted := none.gitRouter(t, "git-z", gitHalf{node: &fakeGit{name: "git-z"}})
+	if home, err := unlisted.Home(repo); err != nil || home != "git-z" {
+		t.Fatalf("the premise: a node whose git half is built is its own home on no listing (%s, %v)", home, err)
+	}
+	if is, err := unlisted.IsMaintainer(repo, 1); is || !errors.Is(err, ErrNoGitNode) {
+		t.Errorf("a node no listing carries, on a listing with no git node, maintains (%v, %v), want (false, "+
+			"ErrNoGitNode)", is, err)
+	}
 }
 
-// A ROUTER NEEDS WHAT EACH GIT NODE ADVERTISES: built without it, every
-// repository's maintenance would be placed on its home whatever any node can
-// hold — a fleet whose one large git node exists to publish what no other can
-// would never be asked to, a wiring mistake that reads as a fleet of alike
-// nodes — so it is refused by name.
+// shiftingListing is who serves git on a fleet whose presence view lists again
+// between ANY two reads: every read — of the holders or of the listing — is
+// answered from the listing it holds now, and the next listing of its script is
+// put in its place. listings counts the reads of the listing.
+type shiftingListing struct {
+	mu       sync.Mutex
+	script   []GitListing
+	next     int
+	listings int
+}
+
+func (s *shiftingListing) read() GitListing {
+	l := s.script[s.next%len(s.script)]
+	s.next++
+	return GitListing{Nodes: slices.Clone(l.Nodes), Budgets: maps.Clone(l.Budgets)}
+}
+
+func (s *shiftingListing) Holders() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.read().Nodes, nil
+}
+
+func (s *shiftingListing) Unanswered(string) {}
+
+func (s *shiftingListing) Listing() (GitListing, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listings++
+	return s.read(), nil
+}
+
+// listed is how many times the listing has been read.
+func (s *shiftingListing) listed() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listings
+}
+
+// A MAINTAINER IS WEIGHED OFF THE LISTING THAT NAMES IT. On a fleet whose view
+// lists again between any two reads — the small node git-a in one listing and
+// gone from the next — every maintainer question reads the listing ONCE, and
+// the node it names for work only the large node holds (40 GiB) is the large
+// node for every one of a thousand repositories, whichever listing the
+// question read: never git-a, which one listing names too small to hold the
+// work and the other does not name at all. Ordered off one listing and weighed
+// off the next, git-a would read as a home not saying and keep the work of
+// every repository it is home to — on every node reading in that window.
 //
-// Mutation: build a router with no git budgets, and the case goes red.
-func TestARouterNeedsWhatEachGitNodeAdvertises(t *testing.T) {
+// And a git node the listing does not carry is no maintainer — GONE, never a
+// node not saying — even where its own git half is built: a node that gave its
+// presence back to drain, or whose row no listing has carried yet, takes no
+// repository's maintenance, and names what every listed node names.
+//
+// Mutations: weigh each node by a read of the listing of its own — git-a,
+// ordered off one listing and weighed off the next, keeps the large node's
+// work, and the listing is read more than once a question, red; place this
+// node by its own git half rather than by the listing — the unlisted node
+// maintains the repositories it would be home to, red.
+func TestAMaintainerIsWeighedOffTheListingThatNamesIt(t *testing.T) {
 	t.Parallel()
-	_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{}, Placement: &fakePlacement{},
-		Git: &fakePlacement{}, Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
-	if err == nil || !strings.Contains(err.Error(), "RouterOptions.GitBudgets") {
-		t.Fatalf("a router with no git budgets = %v, want a refusal naming RouterOptions.GitBudgets", err)
+	const gib = int64(1) << 30
+	holders := []string{"git-a", "git-b", "git-c", "git-d", "git-e"}
+	said := map[string]int64{"git-a": 8 * gib, "git-b": 8 * gib, "git-c": 64 * gib, "git-d": 8 * gib,
+		"git-e": 8 * gib}
+	gone := maps.Clone(said)
+	delete(gone, "git-a")
+	shifting := &shiftingListing{script: []GitListing{
+		{Nodes: holders, Budgets: said},
+		{Nodes: slices.DeleteFunc(slices.Clone(holders), func(n string) bool { return n == "git-a" }), Budgets: gone},
+	}}
+	f := newFleet(t)
+	moving, err := NewRouter(RouterOptions{Queue: f.start(t), Self: "agent-1", Placement: f.placement,
+		Git: shifting, Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	homed := 0
+	for i := range 1000 {
+		repo := repoID(i)
+		if rendezvous.Order(repo, holders)[0] == "git-a" {
+			homed++
+		}
+		before := shifting.listed()
+		if got, err := moving.Maintainer(repo, 40*gib); err != nil || got != "git-c" {
+			t.Fatalf("Maintainer(%s, 40 GiB) over a listing that moves between reads = (%s, %v), want git-c, the "+
+				"one node either listing says can hold it", repo, got, err)
+		}
+		if reads := shifting.listed() - before; reads != 1 {
+			t.Fatalf("Maintainer(%s) read the listing %d times, want once: a node is weighed by the listing that "+
+				"names it", repo, reads)
+		}
+	}
+	if homed == 0 {
+		t.Fatal("the premise: git-a is home to none of the thousand repositories")
+	}
+
+	// GONE, NEVER NOT SAYING: git-f's own git half is built, and no listing
+	// carries it.
+	f.git.set(func(p *fakePlacement) { p.nodes, p.said = slices.Clone(holders), maps.Clone(said) })
+	unlisted := f.gitRouter(t, "git-f", gitHalf{node: &fakeGit{name: "git-f"}})
+	ahead := 0
+	for i := range 1000 {
+		repo := repoID(i)
+		if rendezvous.Order(repo, append(slices.Clone(holders), "git-f"))[0] == "git-f" {
+			ahead++
+		}
+		for _, charge := range []int64{4 * gib, 40 * gib} {
+			want, err := f.client.Maintainer(repo, charge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := unlisted.Maintainer(repo, charge)
+			if err != nil || got != want {
+				t.Fatalf("git-f, which no listing carries, names %s's maintainer for %d GiB (%s, %v), want %s, "+
+					"the node every listed node names", repo, charge/gib, got, err, want)
+			}
+			if is, err := unlisted.IsMaintainer(repo, charge); err != nil || is {
+				t.Fatalf("git-f, which no listing carries, takes %s's %d GiB work (%v, %v)", repo, charge/gib, is,
+					err)
+			}
+		}
+	}
+	if ahead == 0 {
+		t.Fatal("the premise: git-f, were it listed, would be home to none of the thousand repositories")
 	}
 }
 
@@ -1174,12 +1258,12 @@ func TestProductionsGitReadAttemptHoldsAGitReadsWaits(t *testing.T) {
 func TestARouterNeedsAGitPlacement(t *testing.T) {
 	t.Parallel()
 	_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{}, Placement: &fakePlacement{},
-		GitBudgets: &fakeBudgets{}, Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
+		Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
 	if err == nil || !strings.Contains(err.Error(), "git placement") {
 		t.Fatalf("a router with no git placement = %v, want a refusal naming it", err)
 	}
 	r, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{}, Placement: &fakePlacement{},
-		Git: &fakePlacement{}, GitBudgets: &fakeBudgets{}, Session: NewSession(), Timing: Production(),
+		Git: &fakePlacement{}, Session: NewSession(), Timing: Production(),
 		Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatalf("a router with an empty git placement: %v", err)

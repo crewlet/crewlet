@@ -298,13 +298,17 @@
 // [Router.Maintainer] names the git node a repository's MAINTENANCE — the
 // compaction of its packs, the publication of its layers — is placed on, which
 // is the home unless the home cannot hold the work: the first node of the same
-// order, still with no demotion, whose ADVERTISED background budget
-// ([GitBudgets]: each git node's maintenance budget, which its presence row
-// carries on every beat beside its status, so a beat whose status was dropped
-// still says it) holds the work's charge, and the home where none does. So on
-// a fleet of alike nodes the maintainer is the home and nothing moves, and on
-// one with a single large git node every repository only it can hold is
-// maintained there. NOTHING MOVES PAST THE HOME ON MISSING INFORMATION: a node
+// order, still with no demotion, whose ADVERTISED background budget (each git
+// node's maintenance budget, which its presence row carries on every beat
+// beside its status, so a beat whose status was dropped still says it) holds
+// the work's charge, and the home where none does. ONE LISTING answers the
+// whole question ([GitPlacement.Listing]: the git nodes and what each says,
+// read together), so a node is weighed by the listing that names it, and a
+// node that listing does not carry — this one included, wherever its own git
+// half is built — is GONE, never a node not saying. So on a fleet of alike
+// nodes the maintainer is the home and nothing moves, and on one with a single
+// large git node every repository only it can hold is maintained there.
+// NOTHING MOVES PAST THE HOME ON MISSING INFORMATION: a node
 // whose row carries no figure is NOT SAYING, never a node with nothing to
 // give, and is passed over where it is a runner-up — kept in its place, a
 // small runner-up not saying would take a large node's repositories, each

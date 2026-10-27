@@ -921,7 +921,7 @@ func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 		timing := Production()
 		timing.WriteAttempt = write
 		_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{},
-			Placement: &fakePlacement{}, Git: &fakePlacement{}, GitBudgets: &fakeBudgets{},
+			Placement: &fakePlacement{}, Git: &fakePlacement{},
 			Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes})
 		return err
 	}

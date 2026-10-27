@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -156,21 +157,25 @@ func TestTheGitPlacementIsTheLiveGitNodes(t *testing.T) {
 	}
 }
 
-// WHAT EACH GIT NODE ADVERTISES IS READ OFF THE ROUTER'S OWN WATCHED VIEW, as
-// its presence row says it beside its status: a budget the row names, across
-// the store's JSON round trip, is said — a beat that carried no status at all
-// included, since the figure is not in the status; a zero is said as zero, a
-// node with nothing to give its background work; a row that names no figure is
-// a node NOT SAYING (absent is not zero), whatever its status says, and so is
-// a node the view names no lease of; a view that has never listed is UNKNOWN,
-// never a fleet in which nobody says anything — which is what a node with no
-// view, and so no fleet, answers.
+// WHAT EACH GIT NODE ADVERTISES IS READ OFF THE ROUTER'S OWN WATCHED VIEW, ONE
+// LISTING FOR THE NODES AND THEIR FIGURES: the listing names exactly the git
+// nodes the git placement names — a node that declares no roles among them,
+// since such a node has every role, and never one whose roles leave git out,
+// whatever its row says — and beside each, what its presence row says beside
+// its status: a budget the row names, across the store's JSON round trip, said
+// — a beat that carried no status at all included, since the figure is not in
+// the status; a zero said as zero, a node with nothing to give its background
+// work; and no entry for a row that names no figure, a node NOT SAYING (absent
+// is not zero), whatever its status says. A view that has never listed is
+// UNKNOWN, never a fleet of no git node; a node with no view has no fleet, and
+// its listing names nobody.
 //
 // Mutations: read a row that names no figure as a node with nothing to give —
-// the quiet node said, red; read the figure out of the status — the node whose
-// beat dropped its status says nothing, red; read a view that has never listed
-// as nobody saying — no error, red.
-func TestTheGitBudgetsAreWhatEachGitNodesPresenceSays(t *testing.T) {
+// the quiet node says zero, red; read the figure out of the status — the node
+// whose beat dropped its status says nothing, red; list every node of the view
+// rather than its git nodes — the data node that writes a figure is listed,
+// red; read a view that has never listed as nobody — no error, red.
+func TestTheGitListingIsWhatEachGitNodesPresenceSays(t *testing.T) {
 	t.Parallel()
 	const budget = int64(64)<<30 + 12_345
 	backend := coordmem.New()
@@ -180,36 +185,44 @@ func TestTheGitBudgetsAreWhatEachGitNodesPresenceSays(t *testing.T) {
 		"git-cold": {"roles": gitRoles, coord.GitBackgroundKey: int64(0),
 			coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
 		"git-quiet": {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
+		"every-a":   {coord.GitBackgroundKey: int64(8) << 30},
+		"data-c":    {"roles": []string{"data", "ingress"}, coord.GitBackgroundKey: budget},
 	})
 	view, err := coord.NewLeaseView(backend, coord.ClassNode,
 		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
-	budgets := (&Engine{dataView: view}).gitBudgets()
-	if got, said, err := budgets.BackgroundBudget("git-large"); !errors.Is(err, coord.ErrUnavailable) {
-		t.Errorf("a view that has never listed says git-large gives %d (said %v, %v), want unknown", got, said,
-			err)
+	git := (&Engine{dataView: view}).gitPlacement()
+	if listing, err := git.Listing(); !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("a view that has never listed answers the git listing %+v (%v), want unknown", listing, err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = view.Run(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
 	waitUntil(t, 5*time.Second, "the view to list", func() bool { return !view.ListedAt().IsZero() })
-	for node, want := range map[string]struct {
-		budget int64
-		said   bool
-	}{
-		"git-large": {budget, true}, "git-cold": {0, true}, "git-quiet": {0, false}, "git-gone": {0, false},
-	} {
-		got, said, err := budgets.BackgroundBudget(node)
-		if err != nil || got != want.budget || said != want.said {
-			t.Errorf("%s gives its background work %d (said %v, %v), want %d (said %v)", node, got, said, err,
-				want.budget, want.said)
-		}
+	listing, err := git.Listing()
+	if err != nil {
+		t.Fatalf("the git listing: %v", err)
 	}
-	if got, said, err := (&Engine{}).gitBudgets().BackgroundBudget("git-large"); got != 0 || said || err != nil {
-		t.Errorf("a node with no view says git-large gives %d (said %v, %v), want nobody saying", got, said, err)
+	holders, err := git.Holders()
+	if err != nil {
+		t.Fatalf("the git placement: %v", err)
+	}
+	want := []string{"every-a", "git-cold", "git-large", "git-quiet"}
+	if !slices.Equal(listing.Nodes, want) || !slices.Equal(holders, want) {
+		t.Errorf("the git listing names %v and the git placement %v, want both every live git node %v",
+			listing.Nodes, holders, want)
+	}
+	said := map[string]int64{"every-a": 8 << 30, "git-cold": 0, "git-large": budget}
+	if !maps.Equal(listing.Budgets, said) {
+		t.Errorf("the git listing says %v, want %v: a figure where a git node's row names one, zero included, "+
+			"and none for a node not saying or a node that is no git node", listing.Budgets, said)
+	}
+	if listing, err := (&Engine{}).gitPlacement().Listing(); err != nil || len(listing.Nodes) != 0 ||
+		len(listing.Budgets) != 0 {
+		t.Errorf("a node with no view lists %+v (%v), want no git node and nobody saying anything", listing, err)
 	}
 }
 
@@ -221,8 +234,8 @@ func TestTheGitBudgetsAreWhatEachGitNodesPresenceSays(t *testing.T) {
 // holds on it for every one of two hundred repositories, and work every node
 // holds on each repository's home.
 //
-// Mutation: hand newRouter's router git budgets in which nobody says anything —
-// the 40 GiB work stays with each home, red.
+// Mutation: answer newRouter's git placement's listing with no figure in it —
+// nobody saying anything, the 40 GiB work stays with each home, red.
 func TestTheRoutersMaintainerWeighsWhatEachGitNodeAdvertises(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30

@@ -393,21 +393,37 @@ func (g *GitNode) BackgroundBudget() (int64, bool) {
 	return 0, false
 }
 
-// GitBudgets is a topology's git budgets as its routers weigh a repository's
-// maintainer by (estate.GitBudgets): the git node named by an id — nil for an
-// id the topology does not hold — saying what its presence row would
-// (GitNode.BackgroundBudget), and NOT SAYING where no row speaks for it: an id
-// the topology holds no git node for yet, or a git node stopped.
-type GitBudgets func(id string) *GitNode
+// GitPlacement is a topology's git placement as its routers read it
+// (estate.GitPlacement): its Placement — who serves git, as the topology lists
+// them, which the git walk and a repository's home order — and, off ONE read
+// of that same listing, what each git node it lists says its cache gives its
+// background work, as an engine's presence row says it
+// (GitNode.BackgroundBudget). Node is the git node an id names, nil for an id
+// the topology holds no git node for (yet): a node so listed is NOT SAYING,
+// and so is a stopped one a topology still lists, since no row speaks for it.
+type GitPlacement struct {
+	estate.Placement
+	Node func(id string) *GitNode
+}
 
-// BackgroundBudget is node's advertised budget, and whether it says one.
-func (b GitBudgets) BackgroundBudget(node string) (int64, bool, error) {
-	g := b(node)
-	if g == nil {
-		return 0, false, nil
+// Listing is the Placement's own listing — one read of it — with what each git
+// node it lists says beside it.
+func (p GitPlacement) Listing() (estate.GitListing, error) {
+	nodes, err := p.Holders()
+	if err != nil {
+		return estate.GitListing{}, err
 	}
-	budget, said := g.BackgroundBudget()
-	return budget, said, nil
+	listing := estate.GitListing{Nodes: nodes, Budgets: map[string]int64{}}
+	for _, id := range nodes {
+		g := p.Node(id)
+		if g == nil {
+			continue
+		}
+		if budget, said := g.BackgroundBudget(); said {
+			listing.Budgets[id] = budget
+		}
+	}
+	return listing, nil
 }
 
 // Node is the git node as a case reads it — nil while it is killed or stopped.

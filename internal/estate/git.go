@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -60,21 +61,43 @@ type GitServer interface {
 	Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
-// GitBudgets is what each git node ADVERTISES it can give its background work
-// — its maintenance budget, which its presence row carries on every beat
-// beside its status and never in it (coord.GitBackgroundKey) — as
-// [Router.Maintainer] weighs it. Declared here by its consumer; the engine's
-// answer reads the watched presence view its git placement is read from.
-type GitBudgets interface {
-	// BackgroundBudget is what node's row says it can give its background
-	// work: said, and zero where it says it has nothing to give (no code
-	// host built yet, or transfers that keep all of its memory). said is
-	// false where node's row carries no figure — a build or a host that
-	// writes none — or the view holds no lease of node at all: a node NOT
-	// SAYING, never one with nothing to give. A git node of this build
-	// always says it, a beat whose status read overran included. An error
-	// is UNKNOWN: the view could not be read.
-	BackgroundBudget(node string) (budget int64, said bool, err error)
+// GitPlacement is who serves GIT as the router reads it ([RouterOptions.Git]):
+// every live node with the `git` role, as [Placement] names them — what the
+// git walk and [Router.Home] order — and, for the question that weighs the git
+// nodes against each other, ONE LISTING of them with what each ADVERTISES it
+// can give its background work ([GitPlacement.Listing]), which
+// [Router.Maintainer] places a repository's maintenance by. Declared here by
+// its consumer; the engine answers both from its watched presence view.
+type GitPlacement interface {
+	Placement
+
+	// Listing is the git nodes and what each advertises, off ONE listing of
+	// the fleet: the nodes Holders would name at that listing, and what each
+	// one's row says beside them ([GitListing]). One read for the whole
+	// question, so a node is weighed by the very listing that names it —
+	// never ordered off one listing and weighed off the next a refresh put
+	// in its place, where a node the first named and the second did not
+	// would read as one that said nothing. An error is UNKNOWN: the view
+	// could not be read, never "no git node".
+	Listing() (GitListing, error)
+}
+
+// GitListing is one listing of the fleet's git nodes, as
+// [GitPlacement.Listing] answers it.
+type GitListing struct {
+	// Nodes is every git node the listing carries.
+	Nodes []string
+
+	// Budgets is what each node's presence row says it can give its
+	// background work — its maintenance budget, which a git node's row
+	// carries on every beat beside its status and never in it
+	// (coord.GitBackgroundKey) — where the row says one: zero included, a
+	// node saying it has nothing to give (no code host built yet, or
+	// transfers that keep all of its memory). A node of Nodes with no entry
+	// is NOT SAYING: its row carries no figure (a build or a host that
+	// writes none), never one with nothing to give. A git node of this build
+	// always says it, a beat whose status read overran included.
+	Budgets map[string]int64
 }
 
 // GitReadAttempt bounds one git read's wait on one git node: [Production]'s
@@ -357,9 +380,14 @@ var ErrNoGitNode = errors.New("estate: no live git node")
 // and a home's work done by a node that could not tell is work two nodes may
 // do. A fleet that lists no git node answers [ErrNoGitNode].
 func (r *Router) Home(repoID string) (string, error) {
-	order, err := r.homeOrder(repoID, "home")
+	nodes, err := r.gitPlacement.Holders()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("estate: the home of repository %s: read who serves git: %w", repoID, err)
+	}
+	_, own := r.gitHalf()
+	order := r.keyed(repoID, nodes, own)
+	if len(order) == 0 {
+		return "", fmt.Errorf("estate: the home of repository %s: %w", repoID, ErrNoGitNode)
 	}
 	return order[0], nil
 }
@@ -379,16 +407,29 @@ func (r *Router) IsHome(repoID string) (bool, error) {
 // Maintainer is the git node a repository's MAINTENANCE is placed on — the
 // compaction of its packs, the publication of its layers — for work charged at
 // charge bytes of a node's background budget: the FIRST node of the
-// repository's git order that can hold it — [Router.Home]'s order, the home
-// first, through the one function that builds both ([Router.homeOrder]) — and
-// the HOME where none can.
+// repository's git order that can hold it, and the HOME where none can.
 //
-// A NODE CAN HOLD IT where its ADVERTISED background budget ([GitBudgets]) is
-// at least charge — the figure its own admissions hold the work to, so the
-// node chosen is one that would run it. A git node says that figure on every
-// beat, from memory and beside its status rather than in it
-// (coord.GitBackgroundKey), so a beat whose status read overran — which
-// drops the status whole — still says it.
+// ONE LISTING ANSWERS THE WHOLE QUESTION ([GitPlacement.Listing]): the order
+// is the home's — rendezvous over the git nodes, [Router.keyed], the function
+// [Router.Home] orders by — over the nodes that one listing carries, and every
+// node of it is weighed by what that same listing says of it, its leases read
+// once. So a node is never ordered off one listing and weighed off the next a
+// refresh put in its place, where a node the first named and the second did
+// not would read as one not saying and, as the home, keep its repositories'
+// work on every node reading in that window. And a node the listing does not
+// carry is no candidate at all — GONE, never "not saying" — this one included,
+// wherever its own git half is built (unlike [Router.Home], which places this
+// node by its half so that its reads are answered in process): a node that has
+// given its presence back to drain, or whose row no listing has carried yet,
+// is one its peers cannot see, and work it took as maintainer would be work no
+// other node names it for.
+//
+// A NODE CAN HOLD IT where its ADVERTISED background budget is at least
+// charge — the figure its own admissions hold the work to, so the node chosen
+// is one that would run it. A git node says that figure on every beat, from
+// memory and beside its status rather than in it (coord.GitBackgroundKey), so a
+// beat whose status read overran — which drops the status whole — still says
+// it.
 //
 // NOTHING MOVES PAST THE HOME ON MISSING INFORMATION. A node whose row carries
 // no figure is NOT SAYING (a build or a host that writes none), and is no node
@@ -406,30 +447,31 @@ func (r *Router) IsHome(repoID string) (bool, error) {
 // the light work every home maintains — to a runner-up's cold sync.
 //
 // ONE ORDER, THE HOME'S: every git node computes the same answer from the same
-// view, so on a fleet of alike nodes the maintainer IS the home and nothing
+// listing, so on a fleet of alike nodes the maintainer IS the home and nothing
 // moves, and on a fleet with one large git node every repository only it can
 // hold is maintained there while every other stays with its home. NO
 // DEMOTION, as in Home: maintenance is a node's own work, not a read the walk
 // routes to it, so nothing the router remembers of a node's answers moves it.
-// Two nodes that read the view a heartbeat apart may each take itself for the
+// Two nodes whose views listed a heartbeat apart may each take itself for the
 // maintainer — no lease and no epoch decide it (ADR-0059) — so whatever is
 // done as the maintainer must be safe done twice, as a home's work is: its
 // repository's committer takes it once.
 //
-// A READ OF WHO SERVES GIT, OR OF WHAT A GIT NODE ADVERTISES, THAT FAILS
-// ANSWERS ITS ERROR — UNKNOWN, never "this node" and never "nobody". A fleet
-// that lists no git node answers [ErrNoGitNode].
+// A LISTING THAT CANNOT BE READ ANSWERS ITS ERROR — UNKNOWN, never "this node"
+// and never "nobody". A listing that carries no git node answers
+// [ErrNoGitNode].
 func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
-	order, err := r.homeOrder(repoID, "maintainer")
+	listing, err := r.gitPlacement.Listing()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("estate: the maintainer of repository %s: read who serves git and what each "+
+			"git node can give its background work: %w", repoID, err)
+	}
+	order := r.keyed(repoID, listing.Nodes, slices.Contains(listing.Nodes, r.self))
+	if len(order) == 0 {
+		return "", fmt.Errorf("estate: the maintainer of repository %s: %w", repoID, ErrNoGitNode)
 	}
 	for i, node := range order {
-		budget, said, err := r.gitBudgets.BackgroundBudget(node)
-		if err != nil {
-			return "", fmt.Errorf("estate: the maintainer of repository %s: read what %s can give its "+
-				"background work: %w", repoID, node, err)
-		}
+		budget, said := listing.Budgets[node]
 		switch {
 		case said && budget >= charge:
 			return node, nil
@@ -445,34 +487,15 @@ func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
 
 // IsMaintainer reports whether this node is repoID's maintainer for work
 // charged at charge ([Router.Maintainer]): (true, nil), (false, nil), or
-// (false, err) where who serves git or what a git node advertises cannot be
-// read — three facts, so a node that cannot tell does none of a maintainer's
-// work rather than guess.
+// (false, err) where the listing of who serves git and what each advertises
+// cannot be read — three facts, so a node that cannot tell does none of a
+// maintainer's work rather than guess.
 func (r *Router) IsMaintainer(repoID string, charge int64) (bool, error) {
 	maintainer, err := r.Maintainer(repoID, charge)
 	if err != nil {
 		return false, err
 	}
 	return maintainer == r.self, nil
-}
-
-// homeOrder is repoID's git order with NO DEMOTION — [Router.keyed] over every
-// live git node, this one among them where its git half is built — the one
-// order [Router.Home] and [Router.Maintainer] read, so a repository's home and
-// its maintainer on a fleet of alike nodes are one computation and can never
-// be two. what names the question its error answers: UNKNOWN where who serves
-// git cannot be read, and [ErrNoGitNode] where nobody does.
-func (r *Router) homeOrder(repoID, what string) ([]string, error) {
-	nodes, err := r.gitPlacement.Holders()
-	if err != nil {
-		return nil, fmt.Errorf("estate: the %s of repository %s: read who serves git: %w", what, repoID, err)
-	}
-	_, own := r.gitHalf()
-	order := r.keyed(repoID, nodes, own)
-	if len(order) == 0 {
-		return nil, fmt.Errorf("estate: the %s of repository %s: %w", what, repoID, ErrNoGitNode)
-	}
-	return order, nil
 }
 
 // runLocalGit runs one git operation in-process on this node's own git half,

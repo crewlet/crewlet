@@ -135,7 +135,7 @@ func halvesRouter(t *testing.T) *estate.Router {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Git: noGitNodes{}, GitBudgets: noGitNodes{},
+		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Git: noGitNodes{},
 		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: routerEnvelopes(t),
 	})
 	if err != nil {

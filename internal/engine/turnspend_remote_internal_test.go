@@ -171,7 +171,7 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	t.Cleanup(func() { _ = stop(context.Background()) })
 	q := start()
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Queue: q, Placement: placement, Git: noGitNodes{}, GitBudgets: noGitNodes{}, Self: "agent-1",
+		Queue: q, Placement: placement, Git: noGitNodes{}, Self: "agent-1",
 		Session:   estate.NewSession(),
 		Timing:    estate.Production(),
 		Envelopes: envelopes,

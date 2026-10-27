@@ -434,7 +434,7 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 		Result: json.RawMessage(`{"Tracker":true,"Pages":true}`)}}
 	r, err := NewRouter(RouterOptions{
 		Self: "agent-1", Queue: asker, Placement: &fakePlacement{nodes: []string{"data-a"}},
-		Git: &fakePlacement{}, GitBudgets: &fakeBudgets{}, Session: NewSession(), Timing: Production(),
+		Git: &fakePlacement{}, Session: NewSession(), Timing: Production(),
 		Envelopes: fleetEnvelopes,
 	})
 	if err != nil {

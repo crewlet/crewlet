@@ -112,7 +112,7 @@ func TestTheOperatorsSurfacesAreAnsweredThroughTheRouter(t *testing.T) {
 		return soundCopy()
 	})
 	router, err := estate.NewRouter(estate.RouterOptions{
-		Self: "data-self", Queue: start(), Placement: twoDataNodes{}, Git: noGitNodes{}, GitBudgets: noGitNodes{},
+		Self: "data-self", Queue: start(), Placement: twoDataNodes{}, Git: noGitNodes{},
 		Local: e.local, Session: estate.NewSession(), Timing: estate.Production(),
 		Envelopes: envelopes,
 	})
