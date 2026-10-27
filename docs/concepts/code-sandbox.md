@@ -127,8 +127,9 @@ Absent → the role never sees the sandbox option. Present with `enabled: true` 
 ```yaml
 roles:
   - name: Senior Engineer
+    handle: senior-engineer
     mcp_env:
-      github: { Authorization: "Bearer ${GITHUB_TOKEN_SENIOR}" }
+      github: { Authorization: "Bearer ${GITHUB_APP_TOKEN_SENIOR_ENGINEER}" }
     sandbox:
       enabled: true
       run_in: ""                        # direct | container | e2b
@@ -137,7 +138,7 @@ roles:
       # pause_ttl_seconds:              # leave out → provider default; 0 → never hold a paused box
       # max_turns:                      # leave out → provider default; 0 → uncapped
       env:                              # env injected into this seat's runs, ${VAR}-expanded
-        GITHUB_TOKEN: "${GITHUB_TOKEN_SENIOR}"   # this seat's own PAT (git-auth recipe + gh)
+        GITHUB_TOKEN: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"   # this seat's own app (git-auth recipe + gh)
         NPM_TOKEN: "${NPM_TOKEN_SENIOR}"
         DATABASE_URL: "postgres://${TEST_DB_HOST}/app"
       optional_keys: [DATABASE_URL]     # left out of the run when its value resolves to nothing;
@@ -478,7 +479,10 @@ providers:
             cat > "$HOME/.local/bin/git-credential-crewlet" <<'SH'
             #!/bin/sh
             [ "$1" = "get" ] || exit 0
-            [ -n "$GITHUB_TOKEN" ] || exit 0
+            token="$GITHUB_TOKEN"
+            file="$HOME/.config/crewlet/github-token"
+            [ -s "$file" ] && token=$(cat "$file")
+            [ -n "$token" ] || exit 0
             ok=""
             while IFS= read -r line; do
                 [ -z "$line" ] && break
@@ -486,7 +490,7 @@ providers:
             done
             [ -n "$ok" ] || exit 0
             echo "username=x-access-token"
-            echo "password=$GITHUB_TOKEN"
+            echo "password=$token"
             SH
           - chmod +x "$HOME/.local/bin/git-credential-crewlet"
           - 'git config --global credential."https://github.com".helper "!''$HOME/.local/bin/git-credential-crewlet''"'
@@ -497,13 +501,40 @@ providers:
         env:
           GIT_TERMINAL_PROMPT: "0"
         brief: >-
-          Use $GITHUB_TOKEN (already in your environment) for all GitHub work:
-          git authenticates to github.com with it automatically — clone/fetch/push
-          over plain HTTPS; SSH remotes are rewritten; never embed the token in a
-          URL. Your git commit identity is preconfigured.
+          git authenticates to github.com automatically: clone, fetch and push
+          over plain HTTPS, SSH remotes are rewritten, and the token is read
+          fresh at every call. For the gh CLI, pass the current token on each
+          call: GH_TOKEN="$(cat "$HOME/.config/crewlet/github-token" 2>/dev/null
+          || printf %s "$GITHUB_TOKEN")" gh pr create ... Never embed a token in
+          a URL or print it. Your git commit identity is preconfigured.
+
+roles:
+  - name: Senior Engineer
+    handle: senior-engineer
+    sandbox:
+      enabled: true
+      env:
+        GITHUB_TOKEN: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
+      setup:
+        # The seat's own token as a file the completion poll keeps current
+        # for as long as the job runs. Per seat, because the variable is.
+        - name: github-token
+          files:
+            .config/crewlet/github-token: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
 ```
 
-Each piece is load-bearing: the helper is **scoped to the code host twice** (the credential config key *and* the `host=` check in the script), so the PAT can never be offered to a foreign host such as a malicious submodule URL; it reads the token from the env at git-runtime (never persisted to disk) and stays silent without one, so public clones fall through to anonymous; the `insteadOf` rewrites use `--add` because the key is multi-valued (without it the second value replaces the first and scp-style `git@…:` remotes stay SSH, failing on host-key verification in a keyless box); and commit identity comes from the engine's generic `$CREWLET_AGENT_*` facts, so commits attribute to the seat without the recipe hardcoding a name. And the helper lives in the **box's home**, the one place every cell lets a setup step write it (see [Local sandboxes](#local-sandboxes)), and is written by a command rather than a `files:` entry, though a relative `files:` path would land in the same place: git has to be given the helper's absolute path, which only the box's shell knows (`"$HOME"`, expanded), and the helper has to be made executable, both of which are commands. It is registered as a shell snippet whose path is quoted, `"!'$HOME/…'"`, because git runs a helper's value through the shell and a box's home may hold a space: a `direct` box's sits under `local.state_dir` — by default `~/.crewlet/sandboxes`, and a relative one, like the examples' `./nimbus-data/sandboxes`, is resolved against wherever the engine was started. Written this way, the one step works in every cell.
+**The token is the agent's own GitHub App's**, issued by the engine at launch
+and good for at least 50 minutes in the environment
+([Acting as the app](../integrations/github.md#acting-as-the-app-the-seats-token)).
+A coding job is never stopped on a clock, so it can outlive that, and a
+process's environment cannot change under it. What can is a file: a setup file
+whose whole body is the seat's `${GITHUB_APP_TOKEN_<HANDLE>}` is rewritten by the
+completion poll every time the token behind it is renewed, so the helper above,
+which reads the file at every git call, always offers a token GitHub accepts.
+The file falls back to `$GITHUB_TOKEN` where a seat writes none, which is the
+shape for a personal access token that does not expire within the run.
+
+Each piece is load-bearing: the helper is **scoped to the code host twice** (the credential config key *and* the `host=` check in the script), so the token can never be offered to a foreign host such as a malicious submodule URL; it reads the token at git-runtime, from the file the engine keeps current or else from the env, and stays silent without one, so public clones fall through to anonymous; the `insteadOf` rewrites use `--add` because the key is multi-valued (without it the second value replaces the first and scp-style `git@…:` remotes stay SSH, failing on host-key verification in a keyless box); and commit identity comes from the engine's generic `$CREWLET_AGENT_*` facts, so commits attribute to the seat without the recipe hardcoding a name. And the helper lives in the **box's home**, the one place every cell lets a setup step write it (see [Local sandboxes](#local-sandboxes)), and is written by a command rather than a `files:` entry, though a relative `files:` path would land in the same place: git has to be given the helper's absolute path, which only the box's shell knows (`"$HOME"`, expanded), and the helper has to be made executable, both of which are commands. It is registered as a shell snippet whose path is quoted, `"!'$HOME/…'"`, because git runs a helper's value through the shell and a box's home may hold a space: a `direct` box's sits under `local.state_dir` (by default `~/.crewlet/sandboxes`), and a relative one, like the examples' `./nimbus-data/sandboxes`, is resolved against wherever the engine was started. Written this way, the one step works in every cell.
 
 The GitLab form of this recipe — same shape, `gitlab.com` scoping, `oauth2` username, MRs opened via `git push -o merge_request.create` push options — is in [GitLab Integration](../integrations/gitlab.md#how-code-authoring-works); the block above is itself the GitHub form, and [GitHub Integration](../integrations/github.md#how-code-authoring-works) covers the rest of a GitHub seat's code authoring. The repo to work in is **not** role config — it is task context the executor names in the brief, and the coding agent clones it inside the box with the seat's injected token.
 
@@ -518,7 +549,7 @@ The run env injected into each job is assembled by the engine at launch (`intern
   **An `api-key` entry's key sits in every box run on that entry**, remote cells included, readable by the coding agent, which runs with every permission. What the run reports back is passed through the engine's redaction, but that matches known credential **shapes** (the vendors' `sk-…` prefixes and the like), not values: a key of no recognisable shape that the agent prints into its report or transcript is carried into the phase record as printed. Give a box a key scoped to the work — a provider project with a spend limit — rather than the company's broadest one.
 - **Agent identity** — `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL`, the per-launch facts static config cannot know, which setup recipes map into tool shape (git commit identity above).
 
-Everything tool-specific comes from config: external-service tokens (`GITHUB_TOKEN`, `GITLAB_TOKEN`, registry tokens, a test `DATABASE_URL`, …) are declared in `role.sandbox.env` or a setup step's `env` and merely `${VAR}`-resolved — the engine never extracts, names, or special-cases them. Precedence, later wins: the model's sign-in → agent identity → setup-step env → `role.sandbox.env` → non-secret OTel values.
+Everything tool-specific comes from config: external-service tokens (`GITHUB_TOKEN`, `GITLAB_TOKEN`, registry tokens, a test `DATABASE_URL`, …) are declared in `role.sandbox.env` or a setup step's `env` and merely `${VAR}`-resolved: the engine never extracts, names, or special-cases them. One variable is the engine's to answer rather than the store's: a seat's own `${GITHUB_APP_TOKEN_<HANDLE>}`, the installation token of its GitHub App, issued for this seat's run alone and good for at least 50 minutes from launch ([Acting as the app](../integrations/github.md#acting-as-the-app-the-seats-token)). Precedence, later wins: the model's sign-in, then agent identity, then setup-step env, then `role.sandbox.env`, then non-secret OTel values.
 
 **Every reference resolves, or its key is declared optional.** A `${VAR}` reference that resolves to nothing — whole (`"${TOKEN}"`) or embedded (`"Bearer ${TOKEN}"`), unset or set to an empty value — is never handed to the box as an empty string, by the rule every tool server is held to ([Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers)): a run given an empty code-host token clones nothing and pushes nothing, after spending its box, its install and its model's tokens. A `run_sandbox` call whose run environment lacks one is **refused** before any box starts, as the call's own result — classed `unavailable`, so it costs the turn one round rather than the turn, and naming the variable and its remedy — and the launch logs **`sandbox_env_unresolved`** naming the keys, the files and the variables (never a value or a body). Both say why the value is missing: at info, telling the seat to try again, while a [provisioning pass](integration-reconcile.md) is minting it for the seat — the same `${VAR}` an `mcp_env` code-host credential points at, for example — and as a warning, with the remedy, where nothing will mint it or that pass cannot until somebody acts. A [box-mode](llm-backends.md#box-mode) executor's run is not refused: it is the turn itself rather than a tool call the turn chose, and refusing it would fail every message the seat could answer over its tool bridge for a token a pass may mint in a minute. It starts without what is missing and logs the same line. The engine's own identity facts never refuse a run: each is contributed when it has a value, and a seat `email:` naming a variable nothing sets is left out of `CREWLET_AGENT_EMAIL` and said on the same line, so a setup step's `git config user.email` reading it empty has a reason beside it.
 
@@ -758,7 +789,7 @@ The coding agent calls the LLM itself, from inside the sandbox, so the engine ca
 
 - **The sandbox is the isolation boundary.** Arbitrary, autonomously generated code runs *there*, never on the engine host. That is the whole reason running the coding agent with permissions bypassed is acceptable: the blast radius is one ephemeral, provider-isolated VM that is torn down at phase end. Human gating, where wanted, happens at the merge request — not mid-run.
 - **`run_in: direct` moves that boundary, deliberately.** There the coding agent runs as the engine user: per-box state isolation and an allowlisted environment still hold, but the host does not. Pick it only for a dedicated VM you are willing to hand to an autonomous agent; pick `container` (or `e2b`) anywhere else, a workstation included, with [an image of your own](#bring-your-own-image). This is the one cell in Crewlet where the sandbox is not a security boundary, and it is opt-in twice over — a `local:` block *plus* an explicit `run_in` naming it, on the seat or as the company default. Because the choice is now per seat, a company can run the seat that needs the host login `direct` and every other seat somewhere the host is not reachable, which the block-wide mode this replaced could not express.
-- **Only the seat's own identity enters the box.** The injected env carries credentials the agent legitimately acts *as* — its LLM key and the external-service tokens its config declares (`role.sandbox.env`). Leaking those from inside the box exposes only what the agent already is. Because the code-host token is the seat's **own** PAT, an MR/PR the coding agent opens is attributed to the agent, not to a shared bot identity.
+- **Only the seat's own identity enters the box.** The injected env carries credentials the agent legitimately acts *as*: its LLM key and the external-service tokens its config declares (`role.sandbox.env`). Leaking those from inside the box exposes only what the agent already is. Because the code-host token is the seat's **own** (its GitHub App's installation token, scoped to its tier and repositories, or a PAT of its own), an MR/PR the coding agent opens is attributed to the agent, not to a shared bot identity. An app's token in a box lives at most an hour, and is renewed only in the files that name it.
 - **Shared infrastructure secrets never enter the box.** The OTLP backend's ingest token is the canonical example: the sandbox sees only an engine-fronted, path-token-scoped OTLP endpoint (`CREWLET_SANDBOX_OTEL_RECEIVER_URL`); the engine attaches the real backend credential upstream. Apply the same rule to any credential you add — if the agent doesn't act *as* it, don't inject it.
 - **A run's own tokens are redacted from everything it hands back.** Every per-run token the engine mints — the telemetry endpoint's, the tool bridge's, an artifact view ticket's — opens with the literal `crewlet_rt1` (`crewlet_rt1.<tag>.<subject>.<expiry>.<signature>`), and every text a box hands back — its report, its transcript, its question, its failure, its live output — is redacted of every token of that shape, to `[REDACTED:run-token]`, on the node that collects the run, before anything is stored or shown. It is recognised by its shape, as a vendor's key is, because no node that collects a run holds the tokens its launch minted, and a coding agent that prints its environment or its MCP configuration to debug its setup prints its own.
 - **Injected values are ephemeral.** `${VAR}` references are resolved at acquire time into that sandbox's process env only; the database stores references, never values, and the values die with the box.

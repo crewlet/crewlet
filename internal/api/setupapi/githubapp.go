@@ -16,9 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -326,13 +326,25 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, r, err, setup.Result{})
 		return
 	}
+	// THE BROWSER COMES BACK HERE WHATEVER GITHUB CAN REACH. The redirect
+	// and the setup page are opened by the operator's own browser, which
+	// reaches a local engine perfectly well; only the DELIVERY address is
+	// GitHub's to reach. So an address GitHub cannot deliver to creates the
+	// app with its webhook off rather than refusing it: the agent acts on
+	// GitHub through it from the first install, and the card says that
+	// nothing comes back ([github.Deliverable]).
+	base = strings.TrimRight(base, "/")
+	delivery := ""
+	if github.Deliverable(base, s.enterpriseOf(company)) {
+		delivery = base + "/webhooks/github/" + handle
+	}
 	manifest := github.BuildManifest(github.ManifestOptions{
 		Seat:        handle,
 		Name:        github.AppName(company.Name, seat.Name),
-		DeliveryURL: strings.TrimRight(base, "/") + "/webhooks/github/" + handle,
-		RedirectURL: strings.TrimRight(base, "/") + "/webhooks/github-app",
-		SetupURL:    strings.TrimRight(base, "/") + "/webhooks/github-app?installed=" + handle,
-		Tier:        tier,
+		DeliveryURL: delivery,
+		RedirectURL: base + "/webhooks/github-app",
+		SetupURL:    base + "/webhooks/github-app?installed=" + handle,
+		Access:      github.Access{Tier: tier, Workflows: seatWorkflows(seat)},
 	})
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"seat": handle,
@@ -343,6 +355,9 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		"action_url": github.ActionURL(s.webBaseOf(company), orgOf(company)),
 		"manifest":   manifest,
 		"state":      state,
+		// WHETHER THE APP WILL DELIVER EVENTS HERE, so a client can say
+		// so before the operator confirms anything at GitHub.
+		"webhook_active": delivery != "",
 	})
 }
 
@@ -417,8 +432,8 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 
 	// SEALED BEFORE ANYTHING ELSE CAN FAIL. See the note above: these two
 	// values do not exist anywhere else and cannot be asked for again.
-	keyVar := secretNameFor(handle, "APP_KEY")
-	hookVar := secretNameFor(handle, "APP_WEBHOOK_SECRET")
+	keyVar := github.SeatVar(handle, github.FieldAppKey)
+	hookVar := github.SeatVar(handle, github.FieldAppWebhookSecret)
 	// THROUGH s.now(), which is the guarded reading. Calling s.clock()
 	// straight panicked here on the one path where a panic costs an app:
 	// GitHub had created it, and the crash landed before its key was
@@ -533,29 +548,6 @@ func (f *AppFlow) InstallURL(ctx context.Context, handle string) string {
 	return github.InstallURL(f.service.webBaseOf(company), orgOf(company), slug)
 }
 
-// secretNameFor is the sealed-store name one seat's value lives under.
-//
-// PER SEAT, because these are per-seat credentials: one shared name would
-// have the second agent's app key overwrite the first's, and both seats would
-// then authenticate as whichever app was created last.
-//
-// THROUGH THE SHARED GRAMMAR, and the ORDER is why. This built the name as
-// `<HANDLE>_<FIELD>`, so a handle beginning with a digit — `7th-engineer`,
-// which the org model accepts — produced `7TH_ENGINEER_GITHUB_APP_KEY`. That
-// is not a name a `${VAR}` can reference: envref's whole-reference grammar
-// requires a leading letter or underscore. The pointer written beside it
-// therefore resolved to nothing, and the value it pointed at was the app's
-// private key, which GitHub issues exactly once and never reissues — so the
-// app was unusable and unrecoverable the moment it was created.
-//
-// [setup.SecretNameFor] puts the constant first, which makes a leading letter
-// structural rather than something each caller has to remember.
-func secretNameFor(handle, field string) string {
-	return setup.SecretNameFor(integration.KindGitHub, setup.Requirement{
-		Field: field, Seat: handle,
-	})
-}
-
 // seatByHandle finds one agent seat in the fleet's company ([fleetCompany]).
 //
 // AN INDEX ON THE ORG, not a walk of the document: a stored revision carries
@@ -584,6 +576,13 @@ func seatTier(seat *org.Role) string {
 	return seat.GitHub.Tier
 }
 
+// seatWorkflows is whether this seat opts in to workflow writes, as written
+// down. [github.Access] decides what that grants at the seat's tier, so the
+// raw value is all a caller needs.
+func seatWorkflows(seat *org.Role) bool {
+	return seat != nil && seat.GitHub != nil && seat.GitHub.Workflows
+}
+
 // orgOf is the organization whose repositories these agents work in.
 func orgOf(company *config.Company) string {
 	gh := company.Integrations.GitHub
@@ -598,6 +597,17 @@ func orgOf(company *config.Company) string {
 func (s *Service) webBaseOf(company *config.Company) string {
 	_, web := company.Integrations.GitHub.Bases(s.resolve)
 	return web
+}
+
+// enterpriseOf reports a company on Enterprise Server rather than
+// github.com, which decides what [github.Deliverable] counts as reachable.
+func (s *Service) enterpriseOf(company *config.Company) bool {
+	gh := company.Integrations.GitHub
+	if gh == nil {
+		return false
+	}
+	url, _ := envref.Expand(gh.URL, s.resolve)
+	return strings.TrimSpace(url) != ""
 }
 
 // apiBaseOf is the REST base the conversion is POSTed to.

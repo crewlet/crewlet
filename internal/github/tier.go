@@ -103,6 +103,16 @@ func (t Tier) Hint() string {
 //
 // `metadata` is on every tier because GitHub requires it for almost every
 // read. Without it a token cannot resolve a repository at all.
+//
+// `actions` IS READ ON EVERY TIER, and never write. Read is what lets an
+// agent see why a check failed and read the job's log, which is most of what
+// fixing a red pull request takes. Write re-runs, cancels and dispatches
+// workflows, a deploy among them, and starting a release is a person's act
+// here, never an agent's.
+//
+// `workflows` is on no tier. It is what lets a push change a file under
+// `.github/workflows`, and a full-access seat opts in to it on its own
+// ([Access]).
 func (t Tier) Permissions() map[string]string {
 	switch t {
 	case TierReview:
@@ -138,6 +148,52 @@ func (t Tier) Permissions() map[string]string {
 			"deployments":   "read",
 		}
 	}
+}
+
+// PermissionWorkflows is GitHub's key for the permission a push needs to
+// change a workflow file.
+const PermissionWorkflows = "workflows"
+
+// Access is what one seat's tokens may do: its tier, and the one grant no
+// tier carries by itself.
+//
+// WORKFLOWS ARE AN OPT-IN AND NOT A TIER, because GitHub refuses any push
+// whose commits touch `.github/workflows` from a token without it, whatever
+// else the token holds, and the same grant is what lets an agent's branch run
+// a workflow it rewrote. A modified workflow runs on that branch with
+// whatever secrets the repository hands its runs, so it is a decision about
+// the repository's secrets as much as about its code, and a company takes it
+// per seat rather than inheriting it with a tier.
+//
+// Only full access carries it. Validation refuses the opt-in on any other
+// tier, and [Access.WritesWorkflows] asks the tier again, so a document a
+// validator never saw still cannot hand workflow writes to a seat that cannot
+// write code.
+type Access struct {
+	Tier Tier
+
+	// Workflows is the seat's opt-in to `workflows: write`.
+	Workflows bool
+}
+
+// WritesWorkflows reports whether this access carries `workflows: write`:
+// opted in, and at full access.
+func (a Access) WritesWorkflows() bool {
+	return a.Workflows && a.Tier == TierFullAccess
+}
+
+// Permissions is what this access asks for: the tier's own list, and
+// `workflows: write` where [Access.WritesWorkflows] holds.
+//
+// ONE LIST FOR EVERY ASKER. The manifest an app is created from, the token
+// minted for it and the installation it is checked against all read this, so
+// an app created for an opted-in seat holds exactly what its tokens ask for.
+func (a Access) Permissions() map[string]string {
+	perms := a.Tier.Permissions()
+	if a.WritesWorkflows() {
+		perms[PermissionWorkflows] = "write"
+	}
+	return perms
 }
 
 // Denied is what an agent's app must never hold, at any tier.
@@ -183,15 +239,16 @@ func Excess(held map[string]string) []string {
 	return out
 }
 
-// Shortfall is what a tier needs and an installation does not hold.
+// Shortfall is what an access needs and an installation does not hold.
 //
 // The other half of the same question, and the one an operator can act on: an
-// app installed with fewer permissions than its tier asks for mints tokens
-// that are refused by the calls the tier exists to allow, and GitHub says so
-// only at the call site.
-func Shortfall(tier Tier, held map[string]string) []string {
+// app installed with fewer permissions than its access asks for cannot mint
+// the token that access asks for at all, because GitHub refuses a token
+// request naming a permission the installation was not granted, and says why
+// only at the token endpoint.
+func Shortfall(access Access, held map[string]string) []string {
 	var out []string
-	for name, want := range tier.Permissions() {
+	for name, want := range access.Permissions() {
 		got := strings.TrimSpace(held[name])
 		if got == "" || (want == "write" && got == "read") {
 			out = append(out, name)

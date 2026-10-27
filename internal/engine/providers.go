@@ -14,6 +14,13 @@
 // is on is decided in worksubject.go and what each of its segments charges that
 // item in turnspend.go, because only this package holds the trigger, the
 // runner's tally and the tracker's writer together. ADR-0022 is the decision.
+//
+// And it is where an agent's own GitHub App token is issued: when a value
+// naming it is read, for that seat's resolution alone, renewed before it runs
+// short in the seat's tool servers and in a running box's token files, and
+// never sealed (githubtoken.go), because only this package holds a seat's
+// configuration, its app's key and its boxes together. ADR-0058 is the
+// decision.
 package engine
 
 import (

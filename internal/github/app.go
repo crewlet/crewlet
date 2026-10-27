@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -140,11 +141,11 @@ type ManifestOptions struct {
 	// which is a separate act from creating the app.
 	SetupURL string
 
-	// Tier is how much this seat may do, which decides the permissions the
-	// app is created with. An app cannot be widened later without every
-	// operator re-approving it, so this is the one field worth getting
-	// right at creation.
-	Tier Tier
+	// Access is how much this seat may do, which decides the permissions
+	// the app is created with. An app cannot be widened later without its
+	// installation approving the change, so this is the one field worth
+	// getting right at creation.
+	Access Access
 
 	// Homepage is the `url` field, which GitHub requires. It is the only
 	// required field in the whole manifest.
@@ -235,9 +236,67 @@ func BuildManifest(opts ManifestOptions) Manifest {
 		SetupOnUpdate:  true,
 		HookAttributes: hook,
 		DefaultEvents:  ManifestEvents,
-		DefaultPerms:   opts.Tier.Permissions(),
+		DefaultPerms:   opts.Access.Permissions(),
 	}
 }
+
+// Deliverable reports whether GitHub can deliver a webhook to base, this
+// deployment's webhook address ([config.API.WebhookBase]). enterprise is
+// whether the company runs Enterprise Server rather than github.com.
+//
+// AN APP'S DELIVERY ADDRESS IS BAKED IN AT CREATION, and only a person at
+// GitHub changes it afterwards. So an address GitHub can never reach is not
+// written into a manifest at all: the app is created with its webhook
+// switched off ([BuildManifest]), which is a state GitHub's own settings page
+// shows, rather than pointed at an address that fails every delivery while
+// the app reads as healthy. That is what a local engine is: one a person
+// reaches at `http://localhost:8200`, whose agents act on GitHub perfectly
+// well through their apps and hear nothing back from it.
+//
+// TWO READINGS OF "REACHABLE", because the two products sit in different
+// places. github.com delivers from the public internet, so it reaches no
+// loopback, private, link-local or unspecified address and no name that is
+// not a public domain: a single label (`devbox`), `localhost` and the
+// `.localhost`, `.local`, `.internal`, `.lan` and `.home.arpa` suffixes,
+// which no public resolver answers. An Enterprise Server runs inside the
+// company's own network and routinely delivers to private addresses, so
+// there only an address that names the server's own host (loopback, an
+// unspecified address, `localhost`) is refused. Either way the scheme is
+// http or https, which is what GitHub accepts for a hook.
+func Deliverable(base string, enterprise bool) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return false
+		}
+		return enterprise || (!ip.IsPrivate() && !ip.IsLinkLocalUnicast() &&
+			!ip.IsLinkLocalMulticast() && !ip.IsInterfaceLocalMulticast())
+	}
+	if enterprise {
+		return true
+	}
+	if !strings.Contains(host, ".") {
+		return false
+	}
+	for _, private := range privateSuffixes {
+		if strings.HasSuffix(host, private) {
+			return false
+		}
+	}
+	return true
+}
+
+// privateSuffixes are the name suffixes no public resolver answers: mDNS's
+// `.local`, and the names reserved or conventional for private networks
+// (RFC 8375's `.home.arpa`, ICANN's `.internal`, the routers' `.lan`).
+var privateSuffixes = []string{".local", ".internal", ".lan", ".home.arpa"}
 
 // ActionURL is where the operator's browser POSTs the manifest.
 //
@@ -367,6 +426,17 @@ func InstallURL(webBase, org, slug string) string {
 // the operator one tab away from the one thing they came to do.
 func ManageURL(webBase, org, slug string) string {
 	return appSettingsPage(webBase, org, slug, "advanced")
+}
+
+// PermissionsURL is the app's permissions page, where its owner changes what
+// the app asks every installation for.
+//
+// THE ONLY PLACE AN APP IS WIDENED. A manifest is read once, at creation, so
+// an app created before its seat opted in to more never asks for it on its
+// own: its owner adds the permission here, and GitHub then asks the
+// installation to approve it before any token can carry it.
+func PermissionsURL(webBase, org, slug string) string {
+	return appSettingsPage(webBase, org, slug, "permissions")
 }
 
 // appSettingsPage is one page of an app's settings, or "" when there is no
@@ -577,20 +647,23 @@ func (c *AppClient) Installation(ctx context.Context, id int64) (*Installation, 
 	return out, nil
 }
 
-// MintToken issues a token for one installation, scoped to the tier.
+// MintToken issues a token for one installation, scoped to the access.
 //
 // SCOPED DOWN AT MINT TIME, which is where the tier becomes real. The app may
-// hold more than the tier asks for, because a person installed it and a
-// person can widen it; the token carries only what the tier lists, so a
-// read-only seat cannot write even on an installation that could.
+// hold more than the access asks for, because a person installed it and a
+// person can widen it; the token carries only what the access lists, so a
+// read-only seat cannot write even on an installation that could. The other
+// direction is GitHub's to refuse: a request naming a permission the
+// installation does not hold mints nothing, which the seat-app pass reports
+// as the seat's shortfall ([Shortfall]).
 //
 // Repositories narrow it further where the seat names any. Empty means every
 // repository the installation covers, which is what the operator chose when
 // they installed it.
 func (c *AppClient) MintToken(
-	ctx context.Context, installationID int64, tier Tier, repos []string,
+	ctx context.Context, installationID int64, access Access, repos []string,
 ) (*InstallationToken, error) {
-	body := map[string]any{"permissions": tier.Permissions()}
+	body := map[string]any{"permissions": access.Permissions()}
 	if names := repoNames(repos); len(names) > 0 {
 		body["repositories"] = names
 	}

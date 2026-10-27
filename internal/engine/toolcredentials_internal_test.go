@@ -105,7 +105,7 @@ func missingFor(t *testing.T, c *Company, handle, server string, env *config.Res
 	t.Helper()
 	seat := c.Org.AgentSeatByHandle(handle)
 	_, missing := resolveServer(configured(t, c, server), handle,
-		mcp.InstanceName(server, seat.Name), seat.MCPEnv[server], env, (&Engine{}).mintedFor(c, handle))
+		mcp.InstanceName(server, seat.Name), seat.MCPEnv[server], env, &seatMint{kinds: (&Engine{}).mintedFor(c, handle)})
 	return missing
 }
 
@@ -425,7 +425,7 @@ mcp_servers:
 	seat := c.Org.AgentSeatByHandle("swe")
 	nothing := config.NewResolver(config.MapSource{})
 
-	specs, held := seatSpecs(c, seat, nothing, e.mintedFor(c, "swe"))
+	specs, held := seatSpecs(c, seat, nothing, &seatMint{kinds: e.mintedFor(c, "swe")})
 	var missing *credentialMissing
 	if len(specs) != 0 || len(held) != 1 || !errors.As(held[0].err, &missing) || !missing.waiting() {
 		t.Fatalf("specs %+v, held %+v: want the child held back, waiting for the token "+
@@ -471,10 +471,10 @@ func TestAHeldBackServersSentenceReachesTheScreenWhole(t *testing.T) {
 			_, m := resolveServer(template, "ceo", "atlassian::CEO", map[string]string{
 				"JIRA_USERNAME":  "${CEO_ATLASSIAN_EMAIL}",
 				"JIRA_API_TOKEN": "${CEO_ATLASSIAN_TOKEN}",
-			}, config.NewResolver(config.MapSource{}), map[string]integration.Kind{
+			}, config.NewResolver(config.MapSource{}), &seatMint{kinds: map[string]integration.Kind{
 				"CEO_ATLASSIAN_EMAIL": integration.KindAtlassian,
 				"CEO_ATLASSIAN_TOKEN": integration.KindAtlassian,
-			})
+			}})
 			return m
 		}, "waiting for the atlassian integration to mint ${CEO_ATLASSIAN_EMAIL} and ${CEO_ATLASSIAN_TOKEN}"},
 	} {

@@ -88,7 +88,7 @@ func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 		Seat: "sre-lead", Name: "Acme sre-lead",
 		DeliveryURL: "https://engine.example.com/webhooks/github/sre-lead",
 		RedirectURL: "https://engine.example.com/webhooks/github/app-callback",
-		Tier:        github.TierReview,
+		Access:      github.Access{Tier: github.TierReview},
 	})
 	if len(m.DefaultEvents) == 0 {
 		t.Fatal("the manifest subscribes to nothing")
@@ -111,6 +111,29 @@ func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 	if m.Public {
 		t.Error("a per-operator app was created public")
 	}
+	if _, asks := m.DefaultPerms[github.PermissionWorkflows]; asks {
+		t.Error("an app for a seat that did not opt in asks for workflows")
+	}
+}
+
+// AN OPTED-IN SEAT'S APP ASKS FOR WORKFLOWS AT CREATION, because creation is
+// the one moment its manifest is read: an app created without it gains it
+// only through its owner and its installation's approval.
+func TestAnOptedInSeatsAppAsksForWorkflowWrites(t *testing.T) {
+	t.Parallel()
+	opted := github.BuildManifest(github.ManifestOptions{
+		Seat: "s", Access: github.Access{Tier: github.TierFullAccess, Workflows: true},
+	})
+	if got := opted.DefaultPerms[github.PermissionWorkflows]; got != "write" {
+		t.Errorf("an opted-in full_access app asks for workflows=%q, want write", got)
+	}
+	// AND ONLY AT FULL ACCESS, whatever the document says.
+	review := github.BuildManifest(github.ManifestOptions{
+		Seat: "s", Access: github.Access{Tier: github.TierReview, Workflows: true},
+	})
+	if got, asks := review.DefaultPerms[github.PermissionWorkflows]; asks {
+		t.Errorf("a review app asks for workflows=%q", got)
+	}
 }
 
 // AN APP WITH NOWHERE TO DELIVER IS CREATED SWITCHED OFF, not pointed at a
@@ -118,7 +141,7 @@ func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 // URL is one that looks healthy at GitHub and arrives nowhere.
 func TestAnAppWithNoAddressIsCreatedWithDeliveryOff(t *testing.T) {
 	t.Parallel()
-	off := github.BuildManifest(github.ManifestOptions{Seat: "s", Tier: github.TierReadOnly})
+	off := github.BuildManifest(github.ManifestOptions{Seat: "s", Access: github.Access{Tier: github.TierReadOnly}})
 	if active, _ := off.HookAttributes["active"].(bool); active {
 		t.Error("an app with no delivery address was created active")
 	}
@@ -126,7 +149,7 @@ func TestAnAppWithNoAddressIsCreatedWithDeliveryOff(t *testing.T) {
 		t.Error("an app with no delivery address was given one anyway")
 	}
 	on := github.BuildManifest(github.ManifestOptions{
-		Seat: "s", Tier: github.TierReadOnly, DeliveryURL: "https://e.example.com/w",
+		Seat: "s", Access: github.Access{Tier: github.TierReadOnly}, DeliveryURL: "https://e.example.com/w",
 	})
 	if active, _ := on.HookAttributes["active"].(bool); !active {
 		t.Error("an app with an address was created inactive")
@@ -235,7 +258,7 @@ func TestATokenCarriesOnlyWhatTheTierAsksFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := client.MintToken(context.Background(), 11, github.TierReadOnly, []string{"acme/platform"})
+	token, err := client.MintToken(context.Background(), 11, github.Access{Tier: github.TierReadOnly}, []string{"acme/platform"})
 	if err != nil {
 		t.Fatal(err)
 	}

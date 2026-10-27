@@ -59,6 +59,16 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
+	// AN ADDRESS GITHUB CANNOT REACH IS AN ADVISORY, said once: what does
+	// not arrive, and what makes it arrive. See [Result.Undeliverable].
+	if r.Undeliverable != "" {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingCoveragePartial,
+			Subject: setup.BaseKey(r.NoIngressKey),
+			Detail:  r.Undeliverable,
+		})
+	}
+
 	// AND NO CREDENTIAL TO REGISTER THE HOOK THE COMPANY ASKED FOR.
 	//
 	// The organization credential is optional and the form does not ask for

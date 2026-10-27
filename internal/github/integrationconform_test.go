@@ -434,7 +434,7 @@ func newConvergedWorld(
 		// and anything in github.Denied is an Excess one. Built from
 		// Tier.Permissions so a tier that gains a permission does not
 		// leave this fixture quietly reporting a shortfall for ever.
-		perms, permErr := json.Marshal(seat.Tier.Permissions())
+		perms, permErr := json.Marshal(seat.Access().Permissions())
 		if permErr != nil {
 			tb.Fatalf("marshalling %s's tier permissions: %v", seat.Handle, permErr)
 		}
@@ -712,7 +712,7 @@ func outstandingSeatApps(pem string) []github.SeatApp {
 }
 
 // shortOfTheTier is what the outstanding installation actually holds: its
-// seat's tier, MINUS the first permission that tier asks for.
+// seat's access, MINUS the first permission that access asks for.
 //
 // DERIVED RATHER THAN SPELLED OUT, for the reason the converged fixture
 // derives its own: a tier that gains or loses a permission moves this with
@@ -720,8 +720,8 @@ func outstandingSeatApps(pem string) []github.SeatApp {
 // short (a finding nobody put there) or accidentally complete — and a
 // complete one makes this world converged, which is the exact vacuity the
 // suite's anti-vacuity clause exists to catch.
-func shortOfTheTier(tier github.Tier) (held map[string]string, missing string) {
-	held = maps.Clone(tier.Permissions())
+func shortOfTheTier(access github.Access) (held map[string]string, missing string) {
+	held = maps.Clone(access.Permissions())
 	names := slices.Sorted(maps.Keys(held))
 	missing = names[0]
 	delete(held, missing)
@@ -735,7 +735,7 @@ func newOutstandingWorld(
 	tb.Helper()
 
 	seats := outstandingSeatApps(pem)
-	held, _ := shortOfTheTier(seats[0].Tier)
+	held, _ := shortOfTheTier(seats[0].Access())
 	perms, err := json.Marshal(held)
 	if err != nil {
 		tb.Fatalf("marshalling the outstanding installation's permissions: %v", err)

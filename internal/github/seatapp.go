@@ -56,6 +56,10 @@ type SeatApp struct {
 	Tier   Tier
 	Repos  []string
 
+	// Workflows is the seat's opt-in to `workflows: write`, which only full
+	// access carries ([Access]).
+	Workflows bool
+
 	// AppID and Slug are the app GitHub created. Zero means the operator
 	// has not created one yet, which is a step rather than a fault.
 	AppID int64
@@ -68,6 +72,11 @@ type SeatApp struct {
 	// names a variable nothing answers, which is a different fault from
 	// naming none.
 	Key string
+}
+
+// Access is what this seat's tokens may do.
+func (s SeatApp) Access() Access {
+	return Access{Tier: s.Tier, Workflows: s.Workflows}
 }
 
 // SeatAppOptions is what one pass over the seats needs.
@@ -387,19 +396,45 @@ func (r *SeatAppResult) reconcileSeat(
 				"still worth removing at GitHub",
 		})
 	}
-	if short := Shortfall(seat.Tier, installation.Permissions); len(short) > 0 {
-		r.Findings = append(r.Findings, integration.Finding{
-			Kind:      integration.FindingGrantShort,
-			Subject:   seat.Handle,
-			ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
-			Detail: seat.Handle + " is set to " + seat.Tier.Label() + " and its app " +
-				"lacks " + strings.Join(short, ", ") + ", so those calls are refused " +
-				"at the call site with nothing naming the tier",
-		})
+	if short := Shortfall(seat.Access(), installation.Permissions); len(short) > 0 {
+		r.Findings = append(r.Findings, grantShort(opts, seat, short))
 		return nil
 	}
 	r.Ready = append(r.Ready, seat.Handle)
 	return nil
+}
+
+// grantShort is the finding for a seat whose installation holds less than its
+// access asks for.
+//
+// EVERY TOKEN IS REFUSED, not only the calls needing what is missing: GitHub
+// refuses a token request that names a permission the installation does not
+// hold, so the seat acts on GitHub not at all until the grant is widened.
+//
+// THE WORKFLOWS OPT-IN IS TOLD APART, because it is the one shortfall a
+// company causes on its own: it is set on a seat whose app already exists, and
+// a manifest is read only at creation. Widening it starts on the app's
+// permissions page rather than on its installation, and takes two people's
+// steps, so the finding names both.
+func grantShort(opts SeatAppOptions, seat SeatApp, short []string) integration.Finding {
+	finding := integration.Finding{
+		Kind:      integration.FindingGrantShort,
+		Subject:   seat.Handle,
+		ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
+		Detail: seat.Handle + " is set to " + seat.Tier.Label() + " and its app " +
+			"lacks " + strings.Join(short, ", ") + ", so GitHub refuses every " +
+			"token this seat asks for until the installation holds them",
+	}
+	if slices.Equal(short, []string{PermissionWorkflows}) {
+		finding.ActionURL = PermissionsURL(opts.WebBase, opts.Org, seat.Slug)
+		finding.Detail = seat.Handle + " opts in to workflow writes and its app's " +
+			"installation does not hold workflows, so GitHub refuses every token " +
+			"this seat asks for until it does. An app created before the opt-in " +
+			"gains it only when its owner adds Workflows (read and write) on the " +
+			"app's permissions page and the organization then approves the " +
+			"request on the installation"
+	}
+	return finding
 }
 
 // forget reports an app GitHub no longer has, and clears the record naming it.
@@ -571,7 +606,7 @@ func TokenFor(
 	if err != nil {
 		return nil, err
 	}
-	return client.MintToken(ctx, seat.InstallationID, seat.Tier, seat.Repos)
+	return client.MintToken(ctx, seat.InstallationID, seat.Access(), seat.Repos)
 }
 
 // UninstallSeat removes one agent's installation, which is what actually
