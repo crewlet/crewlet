@@ -255,99 +255,117 @@ func (d Decision) OptionIDs() []string {
 // something the caller changes. Nothing is trimmed, defaulted or cut: a
 // decision is stored exactly as it was accepted.
 func (d Decision) Validate() error {
-	if err := checkText("decision.question", d.Question, MaxDecisionQuestion, true); err != nil {
-		return err
+	// EVERY FAULT AT ONCE (ADR-0059): a decision is written again once it
+	// is refused, and a refusal naming one fault of several spends that
+	// attempt on the next.
+	var found []error
+	note := func(err error) {
+		if err != nil {
+			found = append(found, err)
+		}
 	}
+	note(checkText("decision.question", d.Question, MaxDecisionQuestion, true))
 	switch n := len(d.Options); {
 	case n < MinDecisionOptions:
-		return invalid("a decision has %d option(s) and needs at "+
+		note(invalid("a decision has %d option(s) and needs at "+
 			"least %d — a single option is an approval, which is the "+
-			"options yes and no", n, MinDecisionOptions)
+			"options yes and no", n, MinDecisionOptions))
 	case n > MaxDecisionOptions:
-		return invalid("a decision has %d options and the maximum is "+
+		note(invalid("a decision has %d options and the maximum is "+
 			"%d — a person cannot weigh more side by side; narrow them, or "+
-			"ask about the shortlist first", n, MaxDecisionOptions)
+			"ask about the shortlist first", n, MaxDecisionOptions))
 	}
 	seen := make(map[string]bool, len(d.Options))
 	for i, option := range d.Options {
 		field := fmt.Sprintf("decision.options[%d]", i)
-		if !optionIDPattern.MatchString(option.ID) {
-			return invalid("%s.id is %q and must be 1 to 32 of "+
+		switch {
+		case !optionIDPattern.MatchString(option.ID):
+			note(invalid("%s.id is %q and must be 1 to 32 of "+
 				"a-z, 0-9, `_` and `-` — it is typed back in `choice`",
-				field, option.ID)
-		}
-		if seen[option.ID] {
-			return invalid("%s.id %q names two options — an answer "+
-				"naming it would choose both", field, option.ID)
+				field, option.ID))
+		case seen[option.ID]:
+			note(invalid("%s.id %q names two options: an answer "+
+				"naming it would choose both", field, option.ID))
 		}
 		seen[option.ID] = true
-		if err := checkText(field+".label", option.Label, MaxOptionLabel, true); err != nil {
-			return err
-		}
-		if err := checkText(field+".detail", option.Detail, MaxOptionDetail, false); err != nil {
-			return err
-		}
+		note(checkText(field+".label", option.Label, MaxOptionLabel, true))
+		note(checkText(field+".detail", option.Detail, MaxOptionDetail, false))
 	}
 	if d.Recommended != "" && !seen[d.Recommended] {
-		return invalid("decision.recommended is %q, which is not one "+
+		note(invalid("decision.recommended is %q, which is not one "+
 			"of its options (%s)", d.Recommended,
-			strings.Join(d.OptionIDs(), ", "))
+			strings.Join(d.OptionIDs(), ", ")))
 	}
-	if err := checkText("decision.rationale", d.Rationale, MaxDecisionRationale, false); err != nil {
-		return err
-	}
+	note(checkText("decision.rationale", d.Rationale, MaxDecisionRationale, false))
 	if len(d.Evidence) > MaxDecisionEvidence {
-		return invalid("a decision cites %d pieces of evidence and the "+
+		note(invalid("a decision cites %d pieces of evidence and the "+
 			"maximum is %d — put the rest on a page and cite the page",
-			len(d.Evidence), MaxDecisionEvidence)
+			len(d.Evidence), MaxDecisionEvidence))
 	}
 	for i, evidence := range d.Evidence {
-		if err := evidence.validate(fmt.Sprintf("decision.evidence[%d]", i)); err != nil {
-			return err
-		}
+		note(evidence.validate(fmt.Sprintf("decision.evidence[%d]", i)))
 	}
 	if !d.Role.Valid() {
-		return invalid("decision.role is %q and must be %q (the "+
+		note(invalid("decision.role is %q and must be %q (the "+
 			"answer is the decision) or %q (the answer is an input to it)",
-			d.Role, RoleApprover, RoleContributor)
+			d.Role, RoleApprover, RoleContributor))
 	}
 	if d.Inform != nil {
 		if !d.Inform.Surface.Valid() {
-			return invalid("decision.inform.surface is %q and must be "+
-				"%q or %q", d.Inform.Surface, InformMattermost, InformSlack)
+			note(invalid("decision.inform.surface is %q and must be "+
+				"%q or %q", d.Inform.Surface, InformMattermost, InformSlack))
 		}
-		if err := checkText("decision.inform.channel", d.Inform.Channel,
-			MaxInformChannel, true); err != nil {
+		note(checkText("decision.inform.channel", d.Inform.Channel,
+			MaxInformChannel, true))
+	}
+	return joinInvalid(found)
+}
+
+// joinInvalid is several refusals of one value as one, every sentence in
+// order: nil for none, the refusal itself for one. Every error here is an
+// [ErrInvalid] refusal; one that is not is answered alone, as itself.
+func joinInvalid(found []error) error {
+	switch len(found) {
+	case 0:
+		return nil
+	case 1:
+		return found[0]
+	}
+	sentences := make([]string, len(found))
+	for i, err := range found {
+		if !errors.Is(err, ErrInvalid) {
 			return err
 		}
+		sentences[i] = Sentence(err)
 	}
-	return nil
+	return invalid("%s", strings.Join(sentences, "; "))
 }
 
 func (e Evidence) validate(field string) error {
+	var found []error
+	note := func(err error) {
+		if err != nil {
+			found = append(found, err)
+		}
+	}
 	if !e.Kind.Valid() {
-		return invalid("%s.kind is %q and must be one of task, page, "+
-			"turn, run or url", field, e.Kind)
+		note(invalid("%s.kind is %q and must be one of task, page, "+
+			"turn, run or url", field, e.Kind))
 	}
-	if err := checkText(field+".ref", e.Ref, MaxEvidenceRef, true); err != nil {
-		return err
+	note(checkText(field+".ref", e.Ref, MaxEvidenceRef, true))
+	note(checkText(field+".label", e.Label, MaxEvidenceLabel, false))
+	if e.Kind == EvidenceURL {
+		// HTTPS AND ABSOLUTE, because the ref is rendered as a link a
+		// person clicks: a relative ref resolves against whichever page
+		// shows it, and a `javascript:` or `http:` one is a link nobody
+		// should be handed from a record an agent wrote.
+		parsed, err := url.Parse(e.Ref)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+			note(invalid("%s.ref is %q and a url must be an absolute "+
+				"https:// address", field, e.Ref))
+		}
 	}
-	if err := checkText(field+".label", e.Label, MaxEvidenceLabel, false); err != nil {
-		return err
-	}
-	if e.Kind != EvidenceURL {
-		return nil
-	}
-	// HTTPS AND ABSOLUTE, because the ref is rendered as a link a person
-	// clicks: a relative ref resolves against whichever page shows it, and
-	// a `javascript:` or `http:` one is a link nobody should be handed from
-	// a record an agent wrote.
-	parsed, err := url.Parse(e.Ref)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return invalid("%s.ref is %q and a url must be an absolute "+
-			"https:// address", field, e.Ref)
-	}
-	return nil
+	return joinInvalid(found)
 }
 
 // checkText refuses an empty required value and one over its cap, in bytes —
@@ -399,6 +417,9 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 	out := d
 	out.Evidence = make([]Evidence, len(d.Evidence))
 	copy(out.Evidence, d.Evidence)
+	// EVERY MISSING REFERENCE AT ONCE; a lookup that fails is the node's,
+	// and answered at once as itself.
+	var missing []error
 	for i, evidence := range out.Evidence {
 		field := fmt.Sprintf("decision.evidence[%d]", i)
 		switch evidence.Kind {
@@ -406,8 +427,9 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 			id, err := lookup.TaskID(ctx, evidence.Ref)
 			switch {
 			case errors.Is(err, ErrNoTask):
-				return Decision{}, invalid("%s.ref names the work "+
-					"item %q, which does not exist", field, evidence.Ref)
+				missing = append(missing, invalid("%s.ref names the work "+
+					"item %q, which does not exist", field, evidence.Ref))
+				continue
 			case err != nil:
 				return Decision{}, fmt.Errorf("worklet: resolve %s.ref %q: %w",
 					field, evidence.Ref, err)
@@ -420,11 +442,15 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 				return Decision{}, fmt.Errorf("worklet: check %s.ref %q: %w",
 					field, evidence.Ref, err)
 			case !exists:
-				return Decision{}, invalid("%s.ref names the page "+
-					"%q, which does not exist", field, evidence.Ref)
+				missing = append(missing, invalid("%s.ref names the page "+
+					"%q, which does not exist", field, evidence.Ref))
+				continue
 			}
 			out.Evidence[i].Ref = id
 		}
+	}
+	if err := joinInvalid(missing); err != nil {
+		return Decision{}, err
 	}
 	return out, nil
 }

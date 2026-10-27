@@ -52,6 +52,16 @@ type Result struct {
 	// wording of a refusal an API.
 	Cause error
 
+	// Note is what the caller tells the MODEL beside Output: on a success,
+	// the arguments the call sent outside its tool's schema, which the tool
+	// did not read as sent (ADR-0059). NEVER PART OF OUTPUT, because a
+	// caller may parse Output (a write tool's JSON receipt, which the work
+	// API decodes); each renderer for a model places it where the model
+	// reads it: the model's text, an MCP answer's own content. A person's
+	// answer never carries it (ADR-0060); a surface answering a person tells
+	// it in process to an assistant's model instead (internal/modelnote).
+	Note string
+
 	// Caveats are what a call that LANDED says beside its answer, each in the
 	// words of every reader ([caveat.Caveat]). Nil on a failure and on a
 	// success that has nothing to add.

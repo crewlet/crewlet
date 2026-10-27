@@ -200,6 +200,11 @@ type Options struct {
 	// to the company and records nothing about who called it is the one
 	// [New] refuses to build.
 	Audit AuditPublisher
+
+	// Counter counts a call a tool answered outside its schema
+	// ([metrics.ToolArgsOutsideSchema]), the node's recorder. Nil counts
+	// nothing, and the call is still logged.
+	Counter tools.Counter
 }
 
 // Server is the operator surface: the dispatch, and the transports over it.
@@ -212,6 +217,7 @@ type Server struct {
 	steer     builtin.SteerDeps
 	answer    builtin.AnswerDeps
 	audit     AuditPublisher
+	counter   tools.Counter
 }
 
 // ErrNoAudit refuses a surface that would publish no audit record of the
@@ -247,7 +253,7 @@ func New(opts Options) (*Server, error) {
 	return &Server{
 		halves: opts.Halves, org: opts.Org, authorize: opts.Authorize,
 		runs: opts.Runs, pauses: opts.Pauses,
-		steer: opts.Steer, answer: opts.Answer, audit: opts.Audit,
+		steer: opts.Steer, answer: opts.Answer, audit: opts.Audit, counter: opts.Counter,
 	}, nil
 }
 
@@ -443,7 +449,18 @@ func (s *Server) run(ctx context.Context, cat catalogue, c Call) (tools.Result, 
 	if !served {
 		return tools.Result{}, fmt.Errorf("%w: %q", ErrNotServed, c.Tool)
 	}
-	result, err := tool.Call(withKey(ctx, c.Key), c.Args)
+	// THE CANONICAL ARGUMENTS ARE MADE HERE, ONCE ([tools.ArgsOf]), and the
+	// call carries them from here on: the tool and the audit record read
+	// the same form, so a retry spelt "Draft" after "draft" is one call.
+	args := tools.ArgsOf(tool, false, c.Args)
+	c.Args = args.Map()
+	// THROUGH [tools.Invoke], as every caller calls a tool: an operator's
+	// call is held to the schema the tool advertises like a seat's
+	// (ADR-0059), a value the tool would misread refused before it runs.
+	invoked, _, err := tools.Invoke(withKey(ctx, c.Key), tools.Invocation{
+		Name: c.Tool, Tool: tool, Args: args, Where: "operator", Counter: s.counter,
+	})
+	result := invoked.Result
 	if !readOnly(c.Tool) {
 		s.auditCall(ctx, c, result, err)
 	}

@@ -288,6 +288,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	}
 	answer := receiptOf(name, result)
 	answer.OpID = key
+	TellNote(r, result)
 	log.InfoContext(r.Context(), "operator_act",
 		append(logged, "outcome", string(answer.Outcome))...)
 	httpjson.Write(w, http.StatusOK, answer)
@@ -426,4 +427,16 @@ func FailTool(w http.ResponseWriter, r *http.Request, result tools.Result, key s
 
 	Fail(w, result.Cause, result.PersonRefusal, key, about)
 	modelnote.Tell(r.Context(), result.Output)
+}
+
+// TellNote tells the note on a successful call's arguments ([tools.Result.Note])
+// to the one reader it is worded for, the model that wrote the call, in
+// process (internal/modelnote), as [FailTool] tells a refusal's sentence. A
+// person's answer never carries it (ADR-0059, ADR-0060): the act route and the
+// human write surface answer the receipt through [PersonsReceipt], which reads
+// only the tool's answer, and call this beside it.
+func TellNote(r *http.Request, result tools.Result) {
+	if result.Note != "" {
+		modelnote.Tell(r.Context(), result.Note)
+	}
 }

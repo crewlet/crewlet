@@ -701,6 +701,7 @@ func answerTool(w http.ResponseWriter, r *http.Request, key, verb string,
 		return
 	}
 	receipt[KeyCaveats] = caveats
+	operator.TellNote(r, result)
 	subtreeStoppedHere(receipt, caveats)
 	moveStoppedHere(receipt, caveats)
 	// A RECEIPT CARRIES NO LEDGER FACTS: a tool reports an outcome nobody

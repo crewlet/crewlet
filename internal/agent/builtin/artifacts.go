@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // THE ARTIFACTS TOOLS: one tool per action, each named for its authority
@@ -487,7 +488,7 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 	args map[string]any) (key, opID, refusal string) {
 
 	raw, brought := args[opIDArg]
-	if text, ok := raw.(string); ok && text == "" {
+	if text, _ := argval.String(raw); text == "" {
 		brought = false
 	}
 	if seed := turnKey(turn); seed != "" {
@@ -522,7 +523,7 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 		op := statelog.NewOpID(d.now(), call)
 		return op, op, ""
 	}
-	op, _ := raw.(string)
+	op, _ := argval.String(raw)
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return "", "", fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}

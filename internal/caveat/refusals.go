@@ -89,3 +89,15 @@ func ArtifactTrashed() Refusal {
 	return Refusal{person: "This artifact is in the trash. Restore it first, " +
 		"then try again."}
 }
+
+// ValueInWrongForm is a change refused before it was made because the request
+// sent a value in a form it does not take (ADR-0059's misread). WHO READS IT is
+// mostly a person who approved an assistant's action, on the act route or the
+// work API: the request was malformed, not their choice, so resending it gets
+// the same answer, and what they can do is have it sent again correctly or
+// make the change themselves.
+func ValueInWrongForm() Refusal {
+	return Refusal{person: "The request sent a value in a form this change " +
+		"does not take, so nothing was changed. Ask the assistant to send it " +
+		"again, or make the change yourself."}
+}

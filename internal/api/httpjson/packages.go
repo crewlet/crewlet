@@ -12,7 +12,7 @@ package httpjson
 // when a package is added, renamed or removed without this table following.
 var goPackages = map[string]bool{
 	"a2a": true, "a2atest": true, "adr": true, "api": true,
-	"artifactdata": true, "artifactdataapi": true, "artifacts": true,
+	"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 	"artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 	"artifactspike": true, "artifactupload": true,
 	"approval": true, "approvaltest": true, "assistant": true, "assistantapi": true, "assistantdomain": true,

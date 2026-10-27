@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/modelnote"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -892,6 +893,34 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	}
 }
 
+// THE NOTE ON A CALL'S ARGUMENTS IS THE MODEL'S, NEVER A PERSON'S (ADR-0059,
+// ADR-0060): a person's receipt ([operator.PersonsReceipt], which the act
+// route and the human write surface both answer through) is the tool's answer
+// and carries neither the note nor a field for it, and the note is told in
+// process to the model that wrote the call, the one reader it is worded for.
+//
+// Mutation: carry the note beside the receipt and its text is in the answer;
+// drop TellNote and the assistant's model hears nothing.
+func TestTheArgumentsNoteIsTheModelsAndNeverAPersons(t *testing.T) {
+	t.Parallel()
+	const note = "`ops[0].opp` is not an argument"
+	result := tools.Result{Output: `{"key": "ENG-9", "outcome": "applied"}`, Note: note}
+	answer := operator.ReceiptOf(worklet.CreateWorkItemTool, result)
+	var receipt map[string]any
+	if err := json.Unmarshal(answer.Receipt, &receipt); err != nil || receipt["key"] != "ENG-9" {
+		t.Errorf("the receipt is %s (%v), want the tool's own JSON answer", answer.Receipt, err)
+	}
+	raw, _ := json.Marshal(answer)
+	if strings.Contains(string(raw), "is not an argument") || strings.Contains(string(raw), "note") {
+		t.Errorf("a person's answer carries the model's note: %s", raw)
+	}
+	ctx, heard := modelnote.Expect(t.Context())
+	operator.TellNote(httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx), result)
+	if heard.Said() != note {
+		t.Errorf("the model heard %q, want the note", heard.Said())
+	}
+}
+
 // A PERSON IS ANSWERED A CAVEAT IN A PERSON'S WORDS, and never the model's.
 //
 // The incident: answering a decision in the dashboard left a toast that never
@@ -953,5 +982,56 @@ func TestTheActReceiptLosesOnlyTheModelsWarnings(t *testing.T) {
 			t.Errorf("%s: receipt %s (%s), want %s applied", name, got.Receipt,
 				got.Outcome, c.want)
 		}
+	}
+}
+
+// oneTaskReader is a work reader that holds one item, ENG-1.
+type oneTaskReader struct{ stubWorkReader }
+
+func (oneTaskReader) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
+
+	return worklet.TaskDetail{Task: worklet.Task{ID: "t-1", Key: "ENG-1", Project: "ENG",
+		Title: "Rotate the signing key"}}, nil
+}
+
+// THE ACT ROUTE TELLS THE MODEL THE NOTE AND NEVER THE PERSON (ADR-0059,
+// ADR-0060), through the handler itself: a call that succeeds while one of its
+// arguments was not read as sent (a key `checklist` does not take) is answered
+// to the person with the receipt and nothing of the note, and the note is told
+// to the model that made the request, in process.
+//
+// Mutation: drop TellNote from the act handler and the model hears nothing;
+// carry the note beside the receipt and the body names it.
+func TestTheActRouteTellsTheModelTheNoteAndNeverThePerson(t *testing.T) {
+	t.Parallel()
+	h := guarded(newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{
+			Work: builtin.WorkDeps{Reader: oneTaskReader{}, Writer: (&recordingWork{}).writer},
+			Pages: builtin.PageDeps{
+				Reader: stubPageReader{}, Writer: stubPageWriter{},
+			},
+		}),
+		Org: company,
+	}))
+	body, _ := json.Marshal(map[string]any{"args": map[string]any{
+		"item": "ENG-1", "checklist": map[string]any{
+			"op": "remove_list", "list": "l-1", "bogus": "x"}}})
+	ctx, heard := modelnote.Expect(t.Context())
+	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+builtin.UpdateWorkItemTool,
+		strings.NewReader(string(body))).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer founder")
+	r.Header.Set(opkey.Header, newKey())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the update answered %d: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(heard.Said(), "checklist.bogus") {
+		t.Errorf("the model heard %q, want the note on `checklist.bogus`", heard.Said())
+	}
+	if strings.Contains(rec.Body.String(), "bogus") {
+		t.Errorf("the person's answer carries the model's note: %s", rec.Body)
 	}
 }

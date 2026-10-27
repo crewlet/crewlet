@@ -2,13 +2,10 @@ package builtin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/caveat"
@@ -18,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -32,51 +30,19 @@ import (
 // sent where a string belongs — which they do, and refusing it teaches
 // nothing.
 func argString(args map[string]any, key string) string {
-	switch v := args[key].(type) {
-	case string:
-		return v
-	case nil:
-		return ""
-	case float64:
-		return fmt.Sprintf("%g", v)
-	case json.Number:
-		// THE LITERAL, not `%g` of it: this is the spelling the model
-		// sent, and it is exact where the float rendering is not.
-		return v.String()
-	case bool:
-		return fmt.Sprintf("%t", v)
-	}
-	return ""
+	s, _ := argval.String(args[key])
+	return s
 }
 
-// argInt reads an integer argument, or the fallback.
+// argInt reads an integer argument, or the fallback when it is absent.
 //
-// JSON has one number type, so an int arrives as a number through every
-// decoder in this path; the int cases are for the callers that hand a map
-// straight in.
+// THE CHECK'S OWN READER ([argval.Whole]), so a value the check at the surface
+// admits is the value read here, and one it refuses never reaches the tool.
+// The fallback is for an absent argument; a present one the reader cannot
+// read was refused before the tool ran (ADR-0059).
 func argInt(args map[string]any, key string, fallback int) int {
-	switch v := args[key].(type) {
-	case float64:
-		return int(v)
-	case json.Number:
-		// INT64 FIRST, because that is the whole reason the decoders on
-		// this path read through json.Number: an id past 2^53 is exact
-		// here and rounded the moment it becomes a float.
-		if i, err := v.Int64(); err == nil {
-			return int(i)
-		}
-		if f, err := v.Float64(); err == nil {
-			return int(f)
-		}
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case string:
-		var n int
-		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
-			return n
-		}
+	if n, ok := argval.Whole(args[key]); ok {
+		return n
 	}
 	return fallback
 }
@@ -85,44 +51,8 @@ func argInt(args map[string]any, key string, fallback int) int {
 // model sends where a list belongs — which they do, constantly, and refusing
 // it costs a round to teach nothing.
 func argStrings(args map[string]any, key string) []string {
-	switch v := args[key].(type) {
-	case []string:
-		return cleanStrings(v)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			out = append(out, argString(map[string]any{"v": item}, "v"))
-		}
-		return cleanStrings(out)
-	case string:
-		// A COMMA-SEPARATED STRING IS ALSO ACCEPTED, for the same reason:
-		// "backend, api" is what a model writes when it has decided a
-		// list field takes prose, and splitting it is right far more
-		// often than treating it as one label containing a comma.
-		return cleanStrings(strings.Split(v, ","))
-	}
-	return nil
-}
-
-// cleanStrings trims, drops empties and deduplicates, preserving order.
-func cleanStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		v = strings.TrimSpace(v)
-		if v == "" || seen[v] {
-			continue
-		}
-		seen[v] = true
-		out = append(out, v)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	list, _ := argval.Strings(args[key])
+	return list
 }
 
 // argBool reads a boolean argument, false when absent or not one.
@@ -132,8 +62,8 @@ func cleanStrings(in []string) []string {
 // with three states: "do not protect this view" and "say nothing about
 // protecting it" are the same instruction.
 func argBool(args map[string]any, key string) bool {
-	value, _ := args[key].(bool)
-	return value
+	b, _ := argval.Bool(args[key])
+	return b
 }
 
 // argFloat reads a numeric argument, zero when absent or not one.
@@ -142,22 +72,11 @@ func argBool(args map[string]any, key string) bool {
 // whose zero IS its default — a target that starts at zero, a current nobody
 // has moved. A field where zero were a distinct setting would take a pointer,
 // which is the rule the config models follow for the same reason.
+//
+// THE CHECK'S OWN READER ([argval.Number]), as for [argInt].
 func argFloat(args map[string]any, key string) float64 {
-	switch v := args[key].(type) {
-	case float64:
-		return v
-	case json.Number:
-		if f, err := v.Float64(); err == nil {
-			return f
-		}
-	case int:
-		return float64(v)
-	case string:
-		if n, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-			return n
-		}
-	}
-	return 0
+	f, _ := argval.Number(args[key])
+	return f
 }
 
 // argStringMap reads an object argument whose values are strings.
@@ -177,15 +96,11 @@ func argStringMap(args map[string]any, key string) map[string]string {
 		if k = strings.TrimSpace(k); k == "" || v == nil {
 			continue
 		}
-		switch typed := v.(type) {
-		case string:
-			out[k] = typed
-		case bool:
-			out[k] = strconv.FormatBool(typed)
-		case float64:
-			out[k] = strconv.FormatFloat(typed, 'f', -1, 64)
-		default:
-			out[k] = fmt.Sprint(v)
+		// BY THE CHECK'S OWN READER ([argval.String]), which renders a
+		// number or a boolean as written and reads nothing from an object
+		// or a list (refused at the surface before the tool runs).
+		if s, ok := argval.String(v); ok {
+			out[k] = s
 		}
 	}
 	if len(out) == 0 {
@@ -600,75 +515,6 @@ func sortedKeys(m map[string]string) []string {
 // rule and a second spelling of the json.Number / finiteness discipline is how
 // one of them stops matching the other — the objection [textcut] and [whsec]
 // each record for a grammar that was written twice.
-func argIntValue(raw any) (int, bool) {
-	switch v := raw.(type) {
-	case json.Number:
-		// BACK THROUGH THIS FUNCTION rather than repeating the whole-number
-		// and finiteness discipline below, which is the half a second
-		// spelling always gets wrong. An integer past 2^53 is none of the
-		// things this reads — minutes, story points, decimal places — so
-		// the float is the honest intermediate here, unlike in [argInt].
-		f, err := v.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return argIntValue(f)
-	case float64:
-		// JSON has one number type, so a whole number arrives here. A
-		// fraction is not a whole number of minutes, nor of decimal
-		// places, and is refused rather than truncated to one nobody
-		// typed.
-		//
-		// FINITE FIRST, because the fraction test does not cover it: an
-		// infinity IS its own truncation, so it passed, and `int(+Inf)`
-		// is not defined by the language — it lands on the platform's
-		// minimum int, which the negative check below then refuses as a
-		// NEGATIVE estimate. Right answer, wrong reason, and a message
-		// naming a sign nobody typed.
-		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) {
-			return 0, false
-		}
-		return int(v), true
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		return n, err == nil
-	}
-	return 0, false
-}
+func argIntValue(raw any) (int, bool) { return argval.Whole(raw) }
 
-func argFloatValue(raw any) (float64, bool) {
-	switch v := raw.(type) {
-	case json.Number:
-		f, err := v.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return argFloatValue(f)
-	case float64:
-		return v, finite(v)
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case string:
-		// [strconv.ParseFloat] ACCEPTS "NaN", "Inf" and "infinity" in
-		// every casing, which is why the check is here rather than left
-		// to the caller: a size of NaN passed the `points < 0` guard
-		// below — every comparison with NaN is false — and an infinity
-		// passed it honestly, so both reached the writer. Downstream
-		// neither is a number a total can be summed from, and JSON
-		// cannot even encode them, so the failure surfaced as a broken
-		// answer somewhere with no memory of who typed it.
-		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return n, err == nil && finite(n)
-	}
-	return 0, false
-}
-
-// finite is what a size has to be: a real number a total can be summed from,
-// which NaN and the infinities are not.
-func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+func argFloatValue(raw any) (float64, bool) { return argval.Number(raw) }

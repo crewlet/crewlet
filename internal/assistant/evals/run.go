@@ -143,7 +143,18 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	if err != nil {
 		return Trial{}, err
 	}
-	trial := judge(c.Expect, frames)
+	// THE REFUSALS THE MODEL HEARD, from the scripted model, which hears
+	// every answer; nil for a live model, whose answers travel inside its
+	// own CLI.
+	var refusals []string
+	if scripted, ok := meter.inner.(*Model); ok {
+		for _, m := range scripted.Seen() {
+			if m.Role == llm.RoleTool && m.Failed {
+				refusals = append(refusals, m.Content)
+			}
+		}
+	}
+	trial := judge(c.Expect, frames, refusals, o.scripted())
 	trial.Rounds, trial.Tokens, trial.Latencies = meter.read()
 	return trial, nil
 }
@@ -214,7 +225,10 @@ func register(mux *http.ServeMux, route string, status int, body []byte) (err er
 }
 
 // judge reads what a turn did out of its frames and holds it to e.
-func judge(e Expect, frames []wire.Frame) Trial {
+//
+// refusals are the answers of the turn's refused calls in order, and heard
+// reports whether they could be read at all (a scripted model's).
+func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 	var t Trial
 	seen := map[string]bool{}
 	var answer, shown strings.Builder
@@ -287,7 +301,27 @@ func judge(e Expect, frames []wire.Frame) Trial {
 	if e.Brief != nil {
 		judgeBrief(*e.Brief, brief, fail)
 	}
+	if heard {
+		judgeRefusals(e.Refusals, refusals, fail)
+	}
 	return t
+}
+
+// judgeRefusals holds each refused call's answer to what the case expects it
+// to name: every entry of the i-th list in the i-th refusal.
+func judgeRefusals(want [][]string, got []string, fail func(string, ...any)) {
+	for i, names := range want {
+		if i >= len(got) {
+			fail("refusals[%d]: only %d calls were refused", i, len(got))
+			return
+		}
+		answer := strings.ToLower(got[i])
+		for _, n := range names {
+			if !strings.Contains(answer, strings.ToLower(n)) {
+				fail("refusals[%d]: %q is not named in %q", i, n, got[i])
+			}
+		}
+	}
 }
 
 // judgeBrief holds a brief's card to what the case expects: the records its

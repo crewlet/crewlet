@@ -79,15 +79,6 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	r.steered = append([]string(nil), state.Steered...)
 	r.mu.Unlock()
 
-	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED. A resume
-	// is the same run in a fresh process, so a count it derives must see
-	// every call made before it parked — the rounds that closed, the parked
-	// round's own calls and whatever a box-mode run called over the
-	// bridge — or a call made again after a different one would take its
-	// first copy's operation id. See [turnctx.CallLog].
-	seedCalls(r.cfg.Turn.Context.CallLog(), history, parkedCalls(state),
-		bridgedLedger(r.cfg.Resume.Bridged))
-
 	if state.AgentRun {
 		// THE STATE DECIDES, NOT THE CONFIG. A run launched as an agentic
 		// one is collected as one however the company's providers have
@@ -116,6 +107,15 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
+	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED. A resume
+	// is the same run in a fresh process, so a count it derives must see
+	// every call made before it parked (the rounds that closed, the parked
+	// round's own calls and whatever a box-mode run called over the
+	// bridge), or a call made again after a different one would take its
+	// first copy's operation id. See [turnctx.CallLog]. Seeded once the
+	// surface is built, through it ([seedCalls]).
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, parkedCalls(state),
+		bridgedLedger(r.cfg.Resume.Bridged))
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface,
@@ -219,13 +219,31 @@ func parkedCalls(state execstate.State) []ledger.Call {
 // seedCalls records into a resumed run's log every call it made before it
 // parked. Order does not matter to a count, and a call recorded twice — a
 // bridged call the parked round also holds — only raises one, which is safe.
-func seedCalls(log *turnctx.CallLog, history []ledger.Iteration, groups ...[]ledger.Call) {
+//
+// BY THE CANONICAL ARGUMENTS, made through the resumed surface itself
+// ([tools.Surface.ArgsOf]), so the seeding and every call made after the
+// resume read one universe by construction, the tools the surface adds
+// (submit_work, the discovery pair) included. The records hold the model's
+// own spelling, which they keep: a parked round's calls and a bridged run's
+// log are what the model sent, and a count read against them as written took
+// a repeat spelt "Draft" after "draft" for another call and wrote it twice.
+//
+// A tool the resumed surface does not hold (one removed since the run
+// parked) is seeded by its arguments as sent, and logged at debug so the
+// fallback is visible: no call made now can reach it to be counted anyway.
+func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.Iteration,
+	groups ...[]ledger.Call) {
+
 	for _, iteration := range history {
 		groups = append(groups, iteration.Calls)
 	}
+	universe := surface.Universe()
 	for _, group := range groups {
 		for _, call := range group {
-			log.Seed(turnctx.SeededCall{Tool: call.Name, Args: call.Args})
+			if _, known := universe.Lookup(call.Name); !known {
+				log.Debug("agent_resume_seed_unknown_tool", "tool", call.Name)
+			}
+			calls.Seed(turnctx.SeededCall{Tool: call.Name, Args: surface.ArgsOf(call.Name, call.Args)})
 		}
 	}
 }

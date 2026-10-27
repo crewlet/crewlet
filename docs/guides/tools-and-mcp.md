@@ -408,6 +408,42 @@ and how many arguments its schema declares. A tool whose server advertised
 nothing shows as `unknown` rather than as a read — which is the row to check
 before granting a seat a new server.
 
+### A call is held to the schema its tool advertises
+
+Every call to one of the engine's own tools is checked against the JSON schema
+that tool hands the model, before the tool runs, whoever makes it (a seat, a
+worker, an operator's assistant over `/operator/mcp`, or the work API), with
+every finding named in one pass by its path and the shape the tool reads there
+([ADR-0059](../../adr/0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md)).
+A third-party MCP server holds its own schema and is not checked here.
+
+- **A value the tool would misread is refused before anything runs.** That
+  covers:
+  - a string or a number where `true` or `false` belongs;
+  - an object or a list where a string belongs;
+  - a fraction where a whole number belongs;
+  - `"5 days"` where a number belongs;
+  - a number spelt outside decimal notation (`"0x10"`, `"1_000"`);
+  - a word where a number belongs;
+  - anything but a list or a string where a list belongs.
+
+  Each of these was read as something else (`"true"` as false, 2.5 as 2), so
+  it would write wrong data. The refusal (`invalid`) lists every finding of
+  the call, so one corrected call answers them all.
+- **What the tool decides on itself runs as before.** That covers a missing
+  required argument, a value outside a closed set, a number past its bound and
+  a list too long. A refusal from the tool carries every finding of the call.
+- **An argument the tool does not take is refused at the top level,** as the
+  engine's own tools always refused one (and the refusal carries every
+  finding). An unknown key inside an object argument is noted, not refused. If
+  the tool answers successfully while something was not read as sent, a note
+  names it. A model or an MCP client reads the note after the answer. An act
+  or work API answer, which a person reads, never carries it. The call is logged as `tool_args_outside_schema` and
+  counted in `crewlet.tools.args_outside_schema`, by tool.
+- **The lenient readings are kept.** A number or a boolean where a string
+  belongs, one string or a comma-separated one where a list belongs, and a
+  numeric string where a number belongs are read exactly as before.
+
 ### When a tool refuses
 
 A tool that cannot do what it was asked answers with a **failed result** rather

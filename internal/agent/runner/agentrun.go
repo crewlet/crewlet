@@ -252,7 +252,6 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	}
 	history := state.Iterations
 	called := bridgedLedger(inAdmissionOrder(bridged))
-	seedCalls(r.cfg.Turn.Context.CallLog(), history, called)
 
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
 	var surface *tools.Surface
@@ -276,6 +275,9 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 		return nil, nil, err
 	}
 	surface = built
+	// THE RUN'S CALL LOG STARTS FROM WHAT IT ALREADY CALLED, through the
+	// surface it is served ([seedCalls]).
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, called)
 
 	// THE SKILLS IT LOADED, told to the guard the surface was just armed
 	// with, by the guard's own reading of a call — the one rule for which
@@ -287,7 +289,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	r.mu.Unlock()
 	for _, call := range called {
 		if !call.Failed {
-			guard.Observe(call.Name, call.Args)
+			guard.Observe(call.Name, surface.ArgsOf(call.Name, call.Args))
 		}
 	}
 	return surface, meter, nil
@@ -328,6 +330,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
+	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED, through
+	// the surface it resumes on ([seedCalls]); see [Runner.Resume].
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, parkedCalls(state), bridged)
 
 	replaySubmission(ctx, submit, bridged)
 
@@ -415,7 +420,8 @@ func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload],
 		if call.Name != SubmitWorkTool || call.Failed {
 			continue
 		}
-		if _, err := submit.Call(ctx, call.Args); err != nil {
+		if _, _, err := tools.Invoke(ctx, tools.Invocation{Name: SubmitWorkTool, Tool: submit,
+			Args: tools.ArgsOf(submit, false, call.Args), Where: "replay"}); err != nil {
 			log.WarnContext(ctx, "agent_run_submission_replay_failed", "error", err.Error())
 		}
 	}

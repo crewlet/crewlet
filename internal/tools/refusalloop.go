@@ -142,7 +142,5 @@ func (s *Surface) reportLoop(tool, target string, run int, turn *turnctx.Turn) {
 		attrs = append(attrs, "turn", turn.RunID, "work_key", turn.WorkKey)
 	}
 	loopLog.Warn("tool_policy_refusal_loop", attrs...)
-	if s.counter != nil {
-		s.counter.Add(metrics.ToolPolicyRefusalLoops, 1, metrics.Attrs{"tool": tool})
-	}
+	policyRefusalLoops.add(s.counter, tool)
 }

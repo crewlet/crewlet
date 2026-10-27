@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -989,7 +990,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if v := strings.TrimSpace(argString(args, "preset")); v != "" {
 		params["preset"] = v
 	}
-	if open, held := args["open_only"].(bool); held && open {
+	if open, _ := argval.Bool(args["open_only"]); open {
 		// THE TWO OPEN GROUPS, named from the constants rather than
 		// typed: there are FOUR status groups and neither `in_progress`
 		// nor `blocked` is one of them, so a literal naming either is a
@@ -1174,7 +1175,7 @@ func (t *getWorkItem) Parameters() map[string]any {
 					"that explain each, which is what you write back with.",
 				"items": map[string]any{
 					"type": "string",
-					"enum": []any{"body", "comments", "history", "links", "fields"},
+					"enum": stringsToAny(includeParts),
 				},
 			},
 			"comments_cursor": map[string]any{
@@ -1195,6 +1196,10 @@ func (t *getWorkItem) Parameters() map[string]any {
 		"required": []any{"item"},
 	}
 }
+
+// includeParts are the parts `include` names, as its schema closes them and
+// as its reading takes them ([argval.Choice]): one list, both places.
+var includeParts = []string{"body", "comments", "history", "links", "fields"}
 
 // detailWants reads the `include` argument, defaulting to all four.
 //
@@ -1230,8 +1235,16 @@ func detailWants(args map[string]any) (worklet.DetailWants, bool, string) {
 		return want, true, ""
 	}
 	body := false
-	for _, part := range refList(raw) {
-		switch strings.ToLower(part) {
+	parts, ok := refList(raw)
+	if !ok {
+		return want, false, "get_work_item takes `include` as a list of parts: body, comments, " +
+			"history, links, fields."
+	}
+	for _, part := range parts {
+		// THE ONE RULE for a closed set ([argval.Choice]), which the
+		// check of the call reads `include` by too.
+		member, _ := argval.Choice(part, includeParts)
+		switch member {
 		case "body":
 			body = true
 		case "comments":
@@ -3126,7 +3139,7 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 			kind = worklet.ChangeTags
 		}
 	}
-	if watch, held := args["watch"].(bool); held {
+	if watch, held := argval.Bool(args["watch"]); held {
 		// A GESTURE ABOUT ONE PERSON, never the set. This tool cannot
 		// form the watcher list: [worklet.TaskPatch]'s collections are
 		// carried whole, so writing `watchers: [me]` here removed
@@ -4021,7 +4034,7 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 	args map[string]any) (Actor, string) {
 
 	raw, brought := args[opIDArg]
-	if text, ok := raw.(string); ok && text == "" {
+	if text, _ := argval.String(raw); text == "" {
 		brought = false
 	}
 	if !d.callerOperations || actor.OperationSeed() != "" {
@@ -4038,7 +4051,7 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 		actor.Operation = statelog.NewOpID(time.Now(), call)
 		return actor, ""
 	}
-	op, _ := raw.(string)
+	op, _ := argval.String(raw)
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return actor, fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}

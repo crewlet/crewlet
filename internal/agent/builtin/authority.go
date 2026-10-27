@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -459,7 +460,7 @@ func viewObject(owner string, c worklet.Container) authz.Object {
 // what an absent project means would be this table holding an opinion the
 // rules already hold.
 func stringArg(args map[string]any, field string) string {
-	held, _ := args[field].(string)
+	held, _ := argval.String(args[field])
 	return held
 }
 

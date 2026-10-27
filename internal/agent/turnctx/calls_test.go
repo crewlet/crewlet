@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // A CALL'S COUNT IS THE DIFFERENT CALLS TO ITS TOOL BEFORE IT, so a call made
@@ -22,7 +23,7 @@ func TestACallCountsTheDifferentCallsBeforeIt(t *testing.T) {
 		var out []int
 		for _, c := range calls {
 			out = append(out, log.Ordinal(c.tool, c.args))
-			log.Record(c.tool, c.args)
+			log.Record(c.tool, toolargs.Of(nil, c.args))
 		}
 		return out
 	}
@@ -77,7 +78,7 @@ func TestARerunReproducesEveryCount(t *testing.T) {
 		var out []int
 		for _, args := range calls {
 			out = append(out, log.Ordinal("update", args))
-			log.Record("update", args)
+			log.Record("update", toolargs.Of(nil, args))
 		}
 		return out
 	}
@@ -94,8 +95,8 @@ func TestASeededLogCountsTheCallsBeforeTheSeed(t *testing.T) {
 	t.Parallel()
 	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
 	log := turnctx.NewCallLog()
-	log.Seed(turnctx.SeededCall{Tool: "update", Args: a},
-		turnctx.SeededCall{Tool: "update", Args: b})
+	log.Seed(turnctx.SeededCall{Tool: "update", Args: toolargs.Of(nil, a)},
+		turnctx.SeededCall{Tool: "update", Args: toolargs.Of(nil, b)})
 	if got := log.Ordinal("update", a); got != 1 {
 		t.Fatalf("a call made again after the seeded different one counts %d, "+
 			"want 1 — the resumed run would take the first copy's id", got)
@@ -108,13 +109,13 @@ func TestAForkCountsItsOwnCallsAndIsAbsorbed(t *testing.T) {
 	t.Parallel()
 	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
 	run := turnctx.NewCallLog()
-	run.Record("update", a)
+	run.Record("update", toolargs.Of(nil, a))
 
 	first, second := run.Fork(), run.Fork()
 	if got := first.Ordinal("update", b); got != 1 {
 		t.Fatalf("a fork counts %d different calls before it, want the run's 1", got)
 	}
-	first.Record("update", b)
+	first.Record("update", toolargs.Of(nil, b))
 	if got := second.Ordinal("update", a); got != 0 {
 		t.Fatalf("a sibling's call reached another fork (count %d, want 0) — a "+
 			"count that depends on which sibling finished first is one a re-run "+
@@ -145,9 +146,9 @@ func TestAdmittedCallsCountInTheOrderTheyArrived(t *testing.T) {
 	t.Parallel()
 	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
 	run := turnctx.NewCallLog()
-	first := run.Admit("update", a)
-	second := run.Admit("update", b)
-	third := run.Admit("update", a)
+	first := run.Admit("update", toolargs.Of(nil, a))
+	second := run.Admit("update", toolargs.Of(nil, b))
+	third := run.Admit("update", toolargs.Of(nil, a))
 	// Asked in the reverse of the admission order, as calls returning
 	// out of order would ask.
 	if got := third.Ordinal("update", a); got != 1 {
@@ -165,13 +166,13 @@ func TestAdmittedCallsCountInTheOrderTheyArrived(t *testing.T) {
 		t.Fatalf("the run counts %d calls before a fourth, want the two that differ", got)
 	}
 	// What a call recorded on its own fork reaches the run once absorbed.
-	second.Record("comment", b)
+	second.Record("comment", toolargs.Of(nil, b))
 	run.Absorb(second)
 	if got := run.Ordinal("comment", a); got != 1 {
 		t.Fatalf("a call's own fork was not absorbed (count %d, want 1)", got)
 	}
 	var none *turnctx.CallLog
-	if none.Admit("update", a) != nil {
+	if none.Admit("update", toolargs.Of(nil, a)) != nil {
 		t.Fatal("a nil log admitted a call")
 	}
 }
@@ -181,7 +182,7 @@ func TestAdmittedCallsCountInTheOrderTheyArrived(t *testing.T) {
 func TestANilLogCountsNothing(t *testing.T) {
 	t.Parallel()
 	var log *turnctx.CallLog
-	log.Record("update", map[string]any{"status": "done"})
+	log.Record("update", toolargs.Of(nil, map[string]any{"status": "done"}))
 	log.Absorb(log.Fork())
 	if got := log.Ordinal("update", map[string]any{"status": "todo"}); got != 0 {
 		t.Fatalf("a nil log counted %d", got)

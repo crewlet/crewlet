@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -255,4 +256,94 @@ func (p *recordingPages) keys() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.opKeys...)
+}
+
+// AN OPERATOR'S CALL IS HELD TO ITS TOOL'S SCHEMA LIKE A SEAT'S (ADR-0059):
+// the operator surface calls a tool through tools.Invoke, so a value the tool
+// would misread (an object where the comment's text belongs, read as "") is
+// refused before the tool runs and nothing is written, with every finding
+// named; a lossless value (a number where a string belongs) is written.
+//
+// Mutation: call the tool directly from Server.run and the empty comment is
+// written.
+func TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns(t *testing.T) {
+	t.Parallel()
+	kb := &recordingPages{}
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+	})})
+	ctx := iam.WithPrincipal(t.Context(),
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
+	got, err := s.Dispatch(ctx, operator.Call{Transport: types.TransportAct,
+		Key: statelog.NewOpID(time.Now(), ""), Tool: builtin.CommentOnPageTool,
+		Args: map[string]any{"page": "Runbook", "body": map[string]any{"text": "the step is wrong"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Failed || !strings.Contains(got.Output, "comment_on_page did not run") ||
+		!strings.Contains(got.Output, "`body` is an object, and comment_on_page reads a string there") {
+		t.Errorf("a misread was answered %q", got.Output)
+	}
+	// AND A PERSON IS ANSWERED IN A PERSON'S WORDS (ADR-0060), never the
+	// sentence above, which names arguments.
+	if got.PersonRefusal != caveat.ValueInWrongForm() {
+		t.Errorf("a misread carries the person's words %q", got.PersonRefusal.Person())
+	}
+	if n := len(kb.keys()); n != 0 {
+		t.Errorf("a misread wrote %d comments", n)
+	}
+	got, err = s.Dispatch(ctx, operator.Call{Transport: types.TransportAct,
+		Key: statelog.NewOpID(time.Now(), ""), Tool: builtin.CommentOnPageTool,
+		Args: map[string]any{"page": "Runbook", "body": 42.0}})
+	if err != nil || got.Failed || len(kb.keys()) != 1 {
+		t.Errorf("a lossless value was answered %+v (%v)", got, err)
+	}
+}
+
+// creatingPages records each page the knowledge base is asked to create, by
+// the operation key and the status it was written under.
+type creatingPages struct {
+	recordingPages
+	created []string
+}
+
+func (p *creatingPages) Create(_ context.Context, actor doclet.Actor,
+	page doclet.NewPage) (doclet.Written, error) {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.created = append(p.created, actor.OpKey+"|"+string(page.Status))
+	return doclet.Written{}, nil
+}
+
+// AN OPERATOR'S RETRY SPELT ANOTHER WAY IS THE SAME WRITE (#423 re-verify):
+// the operator surface makes the canonical arguments once, at its entry, so a
+// request sent again under its key with "Draft" for "draft" asks the store
+// for the very same write (one key, one status), which the store makes once.
+//
+// Mutation: hand the tool the arguments as sent and the store is asked for a
+// page with status "Draft".
+func TestAnOperatorsRetrySpeltAnotherWayIsTheSameWrite(t *testing.T) {
+	t.Parallel()
+	kb := &creatingPages{}
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+	})})
+	ctx := iam.WithPrincipal(t.Context(),
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
+	key := statelog.NewOpID(time.Now(), "")
+	for _, status := range []string{"Draft", " draft "} {
+		got, err := s.Dispatch(ctx, operator.Call{Transport: types.TransportAct, Key: key,
+			Tool: builtin.WritePageTool, Args: map[string]any{
+				"title": "Runbook", "body": "the steps", "container": "ENG", "status": status}})
+		if err != nil || got.Failed {
+			t.Fatalf("status %q was answered %+v (%v)", status, got, err)
+		}
+	}
+	kb.mu.Lock()
+	defer kb.mu.Unlock()
+	if len(kb.created) != 2 || kb.created[0] != kb.created[1] ||
+		!strings.HasSuffix(kb.created[0], "|"+string(doclet.StatusDraft)) {
+		t.Errorf("the store was asked for %q, want one write twice, as a draft", kb.created)
+	}
 }

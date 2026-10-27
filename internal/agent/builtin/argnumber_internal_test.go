@@ -50,8 +50,8 @@ func TestAWideIDReadsExactly(t *testing.T) {
 // THE PRESENCE-REPORTING READERS KEEP THEIR OWN DISCIPLINE, whichever spelling
 // the number arrived in: a fraction is not a whole number of minutes — nor of
 // decimal places — and NaN and the infinities are not sizes a total can be
-// summed from. The json.Number arm routes back through the float arm rather
-// than restating any of it.
+// summed from. A json.Number is read as the decimal text it is, by the same
+// rule as a string.
 func TestPresenceReportingReadersKeepTheirDisciplineOnJSONNumbers(t *testing.T) {
 	if n, ok := argIntValue(json.Number("15")); !ok || n != 15 {
 		t.Errorf("argIntValue(15) = %d, %v; want 15, true", n, ok)

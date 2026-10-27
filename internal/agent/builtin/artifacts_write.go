@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // The stale answer's budget for the live version's text: the first
@@ -84,13 +85,13 @@ func capabilitiesArg(tool string, args map[string]any) ([]artifacts.Capability, 
 	if !present || raw == nil {
 		return nil, ""
 	}
-	list, ok := raw.([]any)
+	list, ok := argval.StringItems(raw)
 	if !ok {
 		return nil, tool + " takes `capabilities` as a list of names."
 	}
 	out := make([]artifacts.Capability, 0, len(list))
 	for _, v := range list {
-		name, _ := v.(string)
+		name, _ := argval.String(v)
 		c := artifacts.Capability(strings.TrimSpace(name))
 		if !c.Valid() {
 			return nil, fmt.Sprintf("%s: %q is not a capability; the page may use %v.",
@@ -294,13 +295,13 @@ func starterArg(args map[string]any) (*slideformat.Plan, string) {
 	for field, v := range m {
 		switch field {
 		case "theme":
-			theme, ok := v.(string)
-			if !ok {
+			theme, ok := argval.String(v)
+			if !ok || v == nil {
 				return nil, "create_artifact: `starter.theme` is a theme's id."
 			}
 			plan.Theme = strings.TrimSpace(theme)
 		case "slides":
-			list, ok := v.([]any)
+			list, ok := argval.List(v)
 			if !ok {
 				return nil, "create_artifact: `starter.slides` is a list of `{layout, title}`."
 			}
@@ -891,7 +892,7 @@ func editsArg(args map[string]any) ([]edits.Edit, string) {
 	if !present || raw == nil {
 		return nil, ""
 	}
-	list, ok := raw.([]any)
+	list, ok := argval.List(raw)
 	if !ok {
 		return nil, "publish_artifact takes `edits` as a list of `{path, old_str, new_str}`."
 	}
@@ -906,9 +907,9 @@ func editsArg(args map[string]any) ([]edits.Edit, string) {
 		if !ok {
 			return nil, fmt.Sprintf("publish_artifact: edit %d is not an object.", i)
 		}
-		old, hasOld := m["old_str"].(string)
-		repl, hasNew := m["new_str"].(string)
-		if !hasOld || !hasNew {
+		old, hasOld := argval.String(m["old_str"])
+		repl, hasNew := argval.String(m["new_str"])
+		if !hasOld || !hasNew || m["old_str"] == nil || m["new_str"] == nil {
 			return nil, fmt.Sprintf("publish_artifact: edit %d needs `old_str` and "+
 				"`new_str`, both strings.", i)
 		}

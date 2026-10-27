@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -53,7 +54,10 @@ func parseSetArg(args map[string]any, name string) (setArg, bool, string) {
 	if !held || raw == nil {
 		return setArg{}, false, ""
 	}
-	object, ok := raw.(map[string]any)
+	// NULL IS ABSENT ([argval.Object]), as the check reads it: `{"set":
+	// null}` is a set this call does not state, never an empty one, which
+	// cleared every relation.
+	object, ok := argval.Object(raw)
 	if !ok {
 		return setArg{}, false, fmt.Sprintf("`%s` takes an object saying which "+
 			"shape you mean: {\"set\": [...]} replaces the whole set, and "+
@@ -69,7 +73,11 @@ func parseSetArg(args map[string]any, name string) (setArg, bool, string) {
 				"`add`/`remove` change part of it.", name)
 		}
 		out.Whole = true
-		out.Values = refList(values)
+		list, ok := refList(values)
+		if !ok {
+			return setArg{}, false, fmt.Sprintf("`%s.set` is a list of references.", name)
+		}
+		out.Values = list
 		return out, true, ""
 	}
 	for key := range object {
@@ -79,7 +87,13 @@ func parseSetArg(args map[string]any, name string) (setArg, bool, string) {
 				name, key)
 		}
 	}
-	out.Add, out.Remove = refList(object["add"]), refList(object["remove"])
+	var addOK, removeOK bool
+	out.Add, addOK = refList(object["add"])
+	out.Remove, removeOK = refList(object["remove"])
+	if !addOK || !removeOK {
+		return setArg{}, false, fmt.Sprintf("`%s.add` and `%s.remove` are lists of references.",
+			name, name)
+	}
 	if out.Empty() {
 		return setArg{}, false, fmt.Sprintf("`%s` adds and removes nothing. "+
 			"Leave it out to change nothing, or pass {\"set\": []} to clear "+
@@ -88,27 +102,17 @@ func parseSetArg(args map[string]any, name string) (setArg, bool, string) {
 	return out, true, ""
 }
 
-// refList is one list of references, trimmed and deduped, order preserved.
-func refList(raw any) []string {
-	values, ok := raw.([]any)
-	if !ok {
-		return nil
+// refList is one list of references, trimmed and deduped, order preserved,
+// read as every list of strings is ([argval.Strings]): the single reference a
+// model sends for a list of one is that list, and a number is the reference it
+// spells. ok is false for anything else, which the caller refuses by name:
+// read as no list, `{"set": 12}` cleared every relation and was answered
+// applied.
+func refList(raw any) ([]string, bool) {
+	if raw == nil {
+		return nil, true
 	}
-	out := make([]string, 0, len(values))
-	seen := make(map[string]bool, len(values))
-	for _, value := range values {
-		text, ok := value.(string)
-		if !ok {
-			continue
-		}
-		text = strings.TrimSpace(text)
-		if text == "" || seen[text] {
-			continue
-		}
-		seen[text] = true
-		out = append(out, text)
-	}
-	return out
+	return argval.Strings(raw)
 }
 
 // resolveRefs turns every reference in a set argument into a task id.
