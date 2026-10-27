@@ -338,11 +338,21 @@ const MidxMaxWait = MidxMinInterval
 // of MidxDutyCycle times the last run, when that is longer), the run's own
 // duration and a tick. At a push every five seconds and runs of seconds,
 // about 120 packs, each one more walk of its own commits and trees for a
-// request that reaches it — a twentieth of a millisecond or so (MidxPacks).
-// A failed run waits it out too, so a repository whose run keeps failing
-// costs a run every ten minutes rather than every tick; a run stopped from
-// outside (Stop, a full round's sweep, a retire) is no run, and waits
-// nothing.
+// request that reaches it — a twentieth of a millisecond or so (MidxPacks). A
+// failed run waits it out too, so a repository whose run keeps failing costs
+// a run every ten minutes rather than every tick. A run stopped from outside
+// (Stop, a full round's sweep, a rebuild's or a purge's retire) is no run,
+// and waits nothing. One stop alone counts as a run: a SWAP's (swap.go's
+// stopRun), recorded as the repository's last run, ended at the stop after
+// what it had spent. A repository compacted more often than its index run
+// lasts would otherwise have every run stopped by the next swap and every
+// next one due at once, holding a maintenance slot for ever and writing
+// nothing. The cost: after such a stop the copy — which the swap's retirement
+// has just left with no multi-pack-index and no bitmap — goes without them
+// until the next run has written them, due this interval after the stop (or
+// MidxDutyCycle times what the stopped run had spent, where that is longer),
+// on each git node whose run the swap stopped — served meanwhile from its
+// packs' own indexes, which a compacted repository keeps few of.
 const MidxMinInterval = 10 * time.Minute
 
 // MidxDutyCycle bounds one repository's maintenance to 1/MidxDutyCycle of a
