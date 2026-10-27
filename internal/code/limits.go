@@ -1025,13 +1025,25 @@ func compactDecidedRows(n, m int, l *LayerRef) int {
 // maintainer.
 const (
 	// MaxExpungeInputs is the most packs one expunge's begin rewrites:
-	// MaxCompactInputs, for its reason — the begin's apply writes two rows an
-	// input, its retired row and its deletion from code_packs, as a
-	// compaction's does, and the record names each by its id — so a begin at
-	// every bound is expungeBeginRows of them, 2 625, about two thirds of
-	// MaxRecordRows. It bounds what this build's committer takes
-	// ([ExpungeProposal.Validate]); the apply takes whatever a record carries,
-	// as a compaction's does.
+	// MaxCompactInputs. The begin's apply writes two rows an input, its
+	// retired row and its deletion from code_packs, as a compaction's does,
+	// and the record names each by its id, so a begin at every bound is
+	// expungeBeginRows of them, 2 625, about two thirds of MaxRecordRows —
+	// the widest record the code domain forms — beside the reads only a
+	// publication's apply makes too: the chain whole before, and the live
+	// packs again for the recount after.
+	//
+	// MEASURED AS ITS OWN SHAPE, not a compaction's: BenchmarkApplyACompaction's
+	// expunge/begin arm — every bound at once, a chain of MaxPublishedLayers
+	// layers of MaxLayerParts parts dropped whole, against MaxPacksPerRepo
+	// live packs — applies in 75 ms (one bounded run, -benchtime 5x and one
+	// count, on two E-cores of a Core Ultra 7 265U at a load average of
+	// 3.4–4.7), under the third of statelog.ApplyTxTimeBudget (83 ms) a
+	// compaction's apply is held to, by 8 ms (doc.go's measured section). A
+	// measurement of that arm past the third halves this below
+	// MaxCompactInputs until it is under. It bounds what this build's
+	// committer takes ([ExpungeProposal.Validate]); the apply takes whatever
+	// a record carries, as a compaction's does.
 	MaxExpungeInputs = MaxCompactInputs
 
 	// MaxExpungeOutputs is the most packs one expunge's begin writes — the

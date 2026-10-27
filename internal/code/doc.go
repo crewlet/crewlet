@@ -876,7 +876,9 @@
 // repositories with an expunge open or a request waiting, by id, one walk of
 // code_repos_expunging_idx (replicated 0064), the engine's own read. Its
 // bounds: at most [MaxExpungeInputs] inputs and [MaxExpungeOutputs] outputs a
-// begin, so its record writes at most 2 625 rows (expungeBeginRows).
+// begin, so its record writes at most 2 625 rows (expungeBeginRows), the
+// widest record of the domain, held to the third of
+// statelog.ApplyTxTimeBudget a compaction's apply is (# Measured).
 //
 // # Measured
 //
@@ -1026,6 +1028,18 @@
 // that bound is held to, the publication by 15 ms: an arm past the third on a
 // slower machine halves MaxCompactInputs — or, where the publication's alone
 // is past it, bounds a publication's repack below it — until it is under.
+//
+// AN EXPUNGE'S RECORDS (the same benchmark's expunge arms, one bounded run on
+// the same two E-cores at a load average of 3.4–4.7, -benchtime 5x and one
+// count): 75 ms for a BEGIN at every bound at once — [MaxExpungeInputs]
+// inputs into [MaxExpungeOutputs] outputs, half kept and half left dropping,
+// dropping a chain of [MaxPublishedLayers] layers of [MaxLayerParts] parts
+// against [MaxPacksPerRepo] live packs: 2 625 rows, the widest record the
+// domain forms, the chain read whole before and the live packs again for the
+// recount after — under the third by 8 ms; and 13.5 ms for the widest
+// COMMIT, retiring [MaxExpungeOutputs] dropping packs into as many rescue
+// packs, 97 rows and the open request's one seek. A begin's arm past the
+// third halves MaxExpungeInputs below MaxCompactInputs until it is under.
 //
 // A RECONCILE (BenchmarkAnUnchangedActivation): an activation that changes
 // nothing, over ten thousand declared repositories — the most a configuration

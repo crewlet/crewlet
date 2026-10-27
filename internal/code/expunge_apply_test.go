@@ -65,7 +65,7 @@ func expungeRec(t testing.TB, p ExpungeProposal) built {
 
 // expungeDecidedIn runs one round of an expunge record's decide over e's rows
 // at now.
-func expungeDecidedIn(t *testing.T, e *estate, p ExpungeProposal, now time.Time) (expungeDecision, error) {
+func expungeDecidedIn(t testing.TB, e *estate, p ExpungeProposal, now time.Time) (expungeDecision, error) {
 	t.Helper()
 	var d expungeDecision
 	err := e.db.Reader().Read(context.Background(), func(tx *sql.Tx) error {

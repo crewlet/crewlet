@@ -577,16 +577,29 @@ func BenchmarkApplyARetireSweep(b *testing.B) {
 //     rows compactDecidedRows counts. A publication's apply also reads what
 //     no other compaction's does — the chain whole before, 2 048 checksums
 //     here, and the live packs again for the recount after — so the widest
-//     record of the op is publication/inputs=1024, not inputs=1024.
+//     record of the op is publication/inputs=1024, not inputs=1024;
+//   - expunge/begin: an expunge's BEGIN, the other rewrite that takes a
+//     compaction's bound on its inputs, at every bound at once: the chain the
+//     publication arms seed, MaxExpungeInputs inputs — the first packs, which
+//     the root names, so it drops every layer and its parts — into
+//     MaxExpungeOutputs outputs, half kept live and half left dropping: the
+//     2 625 rows expungeBeginRows counts, the widest record the code domain
+//     forms, beside the chain read whole before and the live packs again for
+//     the recount after;
+//   - expunge/commit: the COMMIT of a purge's begin of MaxExpungeInputs inputs
+//     that left MaxExpungeOutputs packs dropping, retiring them all into as
+//     many rescue packs — expungeCommitRows' 97 rows — and judging the open
+//     request by one seek of the packs' content index.
 //
 // Every shape is held to what a committer forms: its proposal is Validated and
 // decided over the rows, outside the timer, before its record is applied.
 //
-// inputs=1024 and publication/inputs=1024 are held under a third of
-// statelog.ApplyTxTimeBudget, which a record is checked against only at its
-// boundary: MaxCompactInputs is halved until the first is, and a
-// publication's repack bounded below it until the second is (its doc, and
-// doc.go's measured section).
+// inputs=1024, publication/inputs=1024 and expunge/begin are held under a third
+// of statelog.ApplyTxTimeBudget, which a record is checked against only at its
+// boundary: MaxCompactInputs is halved until the first is, a publication's
+// repack bounded below it until the second is, and MaxExpungeInputs halved
+// below MaxCompactInputs until the third is (their docs, and doc.go's
+// measured section).
 func BenchmarkApplyACompaction(b *testing.B) {
 	quiet(b)
 	for _, arm := range []struct {
@@ -647,6 +660,124 @@ func BenchmarkApplyACompaction(b *testing.B) {
 				}
 			}
 		})
+	}
+	b.Run("expunge/begin", func(b *testing.B) {
+		e := openApplyEstate(b)
+		a := NewApplier()
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.StopTimer()
+		for i := range b.N {
+			repo := fmt.Sprintf("0190f3c4-5b6a-7c8d-9e0f-%012d", i)
+			e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
+			begin := e.widestBegin(b, repo)
+			e.expungeAdmitted(b, ExpungeProposal{Begin: &begin})
+			e.applyTimed(b, a, expungeRec(b, ExpungeProposal{Begin: &begin}), expungeBeginRows(len(begin.Retire),
+				len(begin.Add)+len(begin.Dropping), len(begin.DropLayers)))
+			if live, want := e.num(`SELECT live_packs FROM code_repos WHERE id = ?`, repo),
+				int64(MaxPacksPerRepo-len(begin.Retire)+len(begin.Add)); live != want {
+				b.Fatalf("the begin left %d live packs, want %d", live, want)
+			}
+			if chain := e.chainOf(repo); len(chain) != 0 {
+				b.Fatalf("the begin left the chain %v, want none: its inputs are under the root", chain)
+			}
+		}
+	})
+	b.Run("expunge/commit", func(b *testing.B) {
+		e := openApplyEstate(b)
+		a := NewApplier()
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.StopTimer()
+		for i := range b.N {
+			repo := fmt.Sprintf("0190f3c4-5b6a-7c8d-9e0f-%012d", i)
+			e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
+			commit := e.widestCommit(b, repo)
+			e.expungeAdmitted(b, ExpungeProposal{Commit: &commit})
+			e.applyTimed(b, a, expungeRec(b, ExpungeProposal{Commit: &commit}),
+				expungeCommitRows(len(commit.Retire), len(commit.Add)))
+			if dropping := e.num(`SELECT COUNT(*) FROM code_packs WHERE repo_id = ? AND state = 'dropping'`,
+				repo); dropping != 0 {
+				b.Fatalf("the commit left %d packs dropping, want none", dropping)
+			}
+			if id, _ := e.openRequest(repo); id != commit.RequestID {
+				b.Fatalf("the commit served request %s with packs from before it live (open %q)",
+					commit.RequestID, id)
+			}
+		}
+	})
+}
+
+// ones is n packs' objects, one each: the outputs of the widest expunge
+// records, each holding an object of the inputs they replace.
+func ones(n int) []int64 {
+	out := make([]int64, n)
+	for i := range out {
+		out[i] = 1
+	}
+	return out
+}
+
+// widestBegin seeds repository id as the publication arms do — MaxPacksPerRepo
+// live packs under a chain of MaxPublishedLayers layers of MaxLayerParts parts
+// naming every one — and answers an expunge's begin at every bound at once:
+// MaxExpungeInputs inputs, the first packs, which the chain's root names, so
+// it drops every layer; MaxExpungeOutputs outputs, half kept and half left
+// dropping — expungeBeginRows' 2 625 rows.
+func (e *estate) widestBegin(b *testing.B, id string) ExpungeBegin {
+	b.Helper()
+	chain := e.seedChain(b, id)
+	retire := make([]string, MaxExpungeInputs)
+	for k := range retire {
+		retire[k] = idOf(id, k)
+	}
+	layers := make([]string, len(chain))
+	for k, l := range chain {
+		layers[k] = l.LayerID
+	}
+	begin := beginOver(id, 1, retire, ones(MaxExpungeOutputs/2), ones(MaxExpungeOutputs-MaxExpungeOutputs/2),
+		layers...)
+	begin.Seen = codeAt(e.next - 1)
+	return begin
+}
+
+// widestCommit seeds repository id with MaxPacksPerRepo live packs, asks for a
+// purge of it, and applies — outside any timer — that purge's begin of
+// MaxExpungeInputs inputs, leaving MaxExpungeOutputs packs dropping and
+// keeping none; and answers the commit at every bound: it retires all of them
+// and writes as many rescue packs — expungeCommitRows' 97 rows — and, a
+// request being open, judges it with one seek of the packs' content index.
+func (e *estate) widestCommit(b *testing.B, id string) ExpungeCommit {
+	b.Helper()
+	e.seed(id, 0, 0, MaxPacksPerRepo)
+	request := requestOf(id, statelog.NewOpID(applyClock, "code_purge_unreachable"))
+	e.apply(expungeRec(b, ExpungeProposal{Request: &request}))
+	retire := make([]string, MaxExpungeInputs)
+	for k := range retire {
+		retire[k] = idOf(id, k)
+	}
+	begin := beginOver(id, 1, retire, nil, ones(MaxExpungeOutputs))
+	begin.RequestID, begin.Grace, begin.Seen = request.RequestID, 0, codeAt(e.next-1)
+	e.expungeAdmitted(b, ExpungeProposal{Begin: &begin})
+	e.apply(expungeRec(b, ExpungeProposal{Begin: &begin}))
+	commit := commitOver(begin, ones(MaxExpungeOutputs)...)
+	commit.Seen = codeAt(e.next - 1)
+	return commit
+}
+
+// expungeAdmitted fails b unless p is an expunge record the committer takes
+// and whose decide over e's rows forms its record — [estate.admitted]'s rule
+// for an expunge's.
+func (e *estate) expungeAdmitted(b *testing.B, p ExpungeProposal) {
+	b.Helper()
+	if err := p.Validate(); err != nil {
+		b.Fatalf("the committer refuses the %s's proposal: %v", opOf(p), err)
+	}
+	switch d, err := expungeDecidedIn(b, e, p, applyClock); {
+	case err != nil:
+		b.Fatalf("decide the %s: %v", opOf(p), err)
+	case d.refusal != "":
+		b.Fatalf("the %s is refused %s: %s", opOf(p), d.refusal, d.detail)
 	}
 }
 
