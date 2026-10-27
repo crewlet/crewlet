@@ -6,6 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // The budgets answer: the CEILINGS the engine enforces against, paired with the
@@ -25,6 +26,16 @@ import (
 // So `durable: false` means UNREADABLE, never zero: a company drawn at 0% of
 // its budget when the truth is that nobody looked is the lie this shape exists
 // to avoid, and every window list is empty rather than a list of zeroes.
+//
+// THE ASSISTANT'S PER-PERSON CEILINGS (`assistant.token_budget`) ride the same
+// answer as `assistant`, because they are what a person's Dashboard Assistant
+// question is refused by and the Budgets screen is where they are raised: its
+// three windows carry the ceiling every person is held to, and `used` is the
+// VIEWER's own spend against it. `counted` says whether that figure is real: a
+// person's spend is counted on a scope of their own only while the company
+// caps it ([engine.AssistantBudget]), and a caller who is not a person has no
+// assistant spend at all, so where `counted` is false every `used` is a zero
+// nobody measured, and a screen draws no figure.
 
 // budgets answers the whole budget surface.
 //
@@ -37,6 +48,7 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		"near_fraction": engine.BudgetNearFraction,
 		"org":           map[string]any{"windows": []types.BudgetWindow{}},
 		"seats":         []any{},
+		"assistant":     map[string]any{"counted": false, "windows": []types.BudgetWindow{}},
 	}
 	company, roster := s.Company()
 	if company == nil {
@@ -100,5 +112,19 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 		})
 	}
 	out["seats"] = seats
+
+	// THE VIEWER'S OWN counter, where one is kept: a person, under a company
+	// that caps a person's assistant spend.
+	caps := engine.AssistantCaps(company)
+	principal, _ := iam.From(ctx)
+	counted := principal.Kind == iam.KindPerson && len(caps) > 0
+	mine := coord.Unspent(coord.PersonScope(principal.ID), windows)
+	if counted {
+		mine = read(coord.PersonScope(principal.ID))
+	}
+	out["assistant"] = map[string]any{
+		"counted": counted,
+		"windows": engine.BudgetWindows(caps, mine),
+	}
 	return out, nil
 }

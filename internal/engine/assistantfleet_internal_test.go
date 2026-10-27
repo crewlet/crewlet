@@ -87,6 +87,45 @@ func TestAPersonsDayBudgetStopsTheirTurns(t *testing.T) {
 	}
 }
 
+// A RAISED ASSISTANT CEILING TAKES EFFECT ON THE NEXT TURN, WITH NO RESTART.
+// The remedy a person's refusal carries opens the Budgets screen, whose save
+// is a company revision this node applies; the meter reads the ceilings off the
+// company it runs NOW, per turn, so the person refused a moment ago asks again
+// and is admitted as soon as the revision is applied.
+//
+// Mutation: read the ceilings once, when the meter's engine starts, and the
+// raised ceiling still refuses grace.
+func TestARaisedAssistantCeilingAdmitsTheNextTurn(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	e, _ := assistantEngine(t, assistantCompany(1_000_000, 500))
+	budget := AssistantBudget(e)
+	grace := personNamed("grace")
+	m, err := budget.Meter(ctx, grace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := m.Spend(ctx, 500); err != nil || !got.OK {
+		t.Fatalf("grace's round inside her day = (%+v, %v), want admitted", got, err)
+	}
+	spent, err := budget.Meter(ctx, grace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := toolloop.Refusal(ctx, spent); err == nil {
+		t.Fatal("grace's next turn ran on a spent day, so this case proves nothing")
+	}
+	// THE APPLIED REVISION: the same company with the person's day raised.
+	e.epoch.current.Store(assistantCompany(1_000_000, 2_000))
+	raised, err := budget.Meter(ctx, grace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := toolloop.Refusal(ctx, raised); err != nil {
+		t.Errorf("grace's turn after the ceiling was raised: %v, want admitted", err)
+	}
+}
+
 // THE COMPANY'S WINDOWS STILL HOLD A CAPPED PERSON: a person with room left
 // under their own ceiling is refused once the company's day is spent, and the
 // refusal names the company.
