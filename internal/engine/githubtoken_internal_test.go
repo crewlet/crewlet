@@ -935,6 +935,75 @@ func TestATokenWaitIsToldOncePerJob(t *testing.T) {
 	}
 }
 
+// A TOKEN FILE THE POLL CANNOT WRITE IS TOLD ONCE FOR THE FILE, NOT EVERY POLL.
+//
+// Every agent turn is a run whose box the refresh visits, and a job can make
+// its token file one no write reaches: read-only, a link or a directory in its
+// place, a box out of disk. Each fails the same way on every poll and every
+// nudge, and the line said so on each, for the life of the job, while the
+// token the file holds went on expiring. It is told once for the file, saying
+// that token is no longer renewed; a write that succeeds settles it, so a
+// file that fails again later is told again. Not parallel: it adds a
+// destination to the process-wide logger.
+func TestATokenFileThePollCannotWriteIsToldOnce(t *testing.T) {
+	logs := captureEngineLogs(t)
+	gh := newAppGitHub(t)
+	c := appCompany(t, gh.url, true)
+	e := appEngine(t, c)
+	const path = ".config/crewlet/github-token"
+	defaults := []sandbox.SetupStep{{
+		Name: "git-auth", Files: map[string]string{path: "${GITHUB_APP_TOKEN_BUILDER}"},
+	}}
+	refused := errors.New("local sandbox box-1: open " + path + ": permission denied")
+	box := &unwritableBox{FakeSandbox: sandbox.NewFakeSandbox("box-1"), refuse: refused}
+	box.Put(path, "ghs_issued_before")
+	run := sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}
+
+	for range 5 {
+		e.refreshTokenFiles(t.Context(), defaults, run, box)
+	}
+	told := logs.records("sandbox_token_refresh_failed", "builder")
+	if len(told) != 1 {
+		t.Fatalf("five polls of a file no write reaches logged %d lines, want one", len(told))
+	}
+	detail, _ := told[0]["detail"].(string)
+	for _, want := range []string{"permission denied", "no longer renewed"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the line does not say %q: %s", want, detail)
+		}
+	}
+	if told[0]["file"] != path {
+		t.Errorf("the line names file %v, want %s", told[0]["file"], path)
+	}
+
+	box.refuse = nil
+	e.refreshTokenFiles(t.Context(), defaults, run, box)
+	if held, _ := box.ReadFile(t.Context(), path); !strings.HasPrefix(string(held), "ghs_test_") {
+		t.Fatalf("a poll whose write succeeds left %q in the file", held)
+	}
+	box.refuse = refused
+	box.Put(path, "ghs_put_back_by_the_job")
+	e.refreshTokenFiles(t.Context(), defaults, run, box)
+	if got := len(logs.records("sandbox_token_refresh_failed", "builder")); got != 2 {
+		t.Errorf("a file that failed again after a write succeeded was told %d times in all, "+
+			"want twice: the success settles it", got)
+	}
+}
+
+// unwritableBox is a box whose writes fail with refuse while it is set, as a
+// file the job made read-only fails every write the engine makes.
+type unwritableBox struct {
+	*sandbox.FakeSandbox
+	refuse error
+}
+
+func (b *unwritableBox) WriteFile(ctx context.Context, path string, content []byte) error {
+	if b.refuse != nil {
+		return b.refuse
+	}
+	return b.FakeSandbox.WriteFile(ctx, path, content)
+}
+
 // tokenFiles finds only whole references to the seat's own variable: a file
 // that mentions it inside other text is the box's own content, expanded
 // there, and a file naming another seat's is not this seat's to keep.
