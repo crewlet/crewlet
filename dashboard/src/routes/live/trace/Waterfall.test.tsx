@@ -411,10 +411,10 @@ describe("a person's note", () => {
     mount(events, RUNNING);
     await flush();
     for (const words of [
-      "read by the coding run in its brief of Execute",
-      "read by the coding run after a tool batch of Execute",
-      "read by the coding run as it was finishing of Execute",
-      "read by the coding run at its next step of Execute",
+      "read by the coding run of Execute in its brief",
+      "read by the coding run of Execute after a tool batch",
+      "read by the coding run of Execute as it was finishing",
+      "read by the coding run of Execute at its next step",
       "read at round 2 of Review",
     ]) {
       expect(screen.getByText(new RegExp(words))).toBeTruthy();

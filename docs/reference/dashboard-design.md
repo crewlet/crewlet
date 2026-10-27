@@ -6743,10 +6743,13 @@ that can.
   reads it, from the answer's `reads`: *at its next step*, or, for a run waiting
   on a question, *once that is answered* (`lib/steer.ts`). What became of a note
   is the turn's own `agent_turn_steered`, drawn under the waterfall and where it
-  was read — at the round, or for a read inside a coding run on the run's bar,
-  in the words of its step: *read by the coding run in its brief*, *after a
-  tool batch*, *as it was finishing*, *at its next step* — or *expired — the
-  turn finished before it read the note*. *Pause* is the seat's
+  was read — at the round (*read at round 2 of Review*), or for a read inside a
+  coding run on the run's bar, in the words of its step, owned by the phase
+  whose run it was: *read by the coding run of Execute in its brief*, *after a
+  tool batch*, *as it was finishing*, *at its next step*; a step a newer build
+  names and this one does not is *read by the turn in Execute*, on the run's
+  bar where its record names the run and never drawn or said as a round — or
+  *expired — the turn finished before it read the note*. *Pause* is the seat's
   (with *Also stop the current turn*), *Open task* its item — by the task's
   id, since a turn's item carries no word on whether its key is one another
   task claimed first — and one menu

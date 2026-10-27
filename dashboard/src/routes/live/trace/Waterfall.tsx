@@ -109,15 +109,17 @@ type SteerBoundary = (typeof STEER_BOUNDARIES)[number];
 /**
  * How the trace says each kind of step that read a note. A read INSIDE A CODING
  * RUN is the run's — its brief, a batch of its tool calls, its finish, its next
- * step — and is drawn on the run's bar; a round is the engine's own loop's.
- * The compiler holds every boundary of the contract to its words.
+ * step — and is drawn on the run's bar, said as the step of the phase's run
+ * (*read by the coding run of Execute as it was finishing*); a round is the
+ * engine's own loop's (*read at round 2 of Review*). The compiler holds every
+ * boundary of the contract to its words.
  */
 const READ_AT: Record<SteerBoundary, { inRun: boolean; words: string }> = {
   round: { inRun: false, words: "read at round" },
-  brief: { inRun: true, words: "read by the coding run in its brief" },
-  tool_batch: { inRun: true, words: "read by the coding run after a tool batch" },
-  finish: { inRun: true, words: "read by the coding run as it was finishing" },
-  step: { inRun: true, words: "read by the coding run at its next step" },
+  brief: { inRun: true, words: "in its brief" },
+  tool_batch: { inRun: true, words: "after a tool batch" },
+  finish: { inRun: true, words: "as it was finishing" },
+  step: { inRun: true, words: "at its next step" },
 };
 
 /**
@@ -452,13 +454,17 @@ function Notes({ marks }: { marks: readonly SteerMark[] }) {
   );
 }
 
-/** Where a delivered note was read, in words. */
+/**
+ * Where a delivered note was read, in words: the round of a phase, the step of a
+ * phase's coding run, or — for a step a newer build names — the turn in that
+ * phase, never a round.
+ */
 function readAt(m: SteerMark): string {
   const phase = m.phase ? phaseLabel({ phase: m.phase, iteration: m.iteration }) : "";
   if (m.boundary === "unknown") return `read by the turn${phase ? ` in ${phase}` : ""}`;
   const of = phase ? ` of ${phase}` : "";
   if (m.boundary === "" || m.boundary === "round") return `read at round ${m.round}${of}`;
-  return `${READ_AT[m.boundary].words}${of}`;
+  return `read by the coding run${of} ${READ_AT[m.boundary].words}`;
 }
 
 function Facts({ rows }: { rows: [string, ReactNode][] }) {
