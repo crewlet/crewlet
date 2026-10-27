@@ -351,18 +351,33 @@ func (b TokenBudget) IdleUnder(seat org.TokenCeilings) []IdleCeiling {
 // Sentence is what an author is told about an idle ceiling of the seat called
 // handle: which company ceiling reaches first, and the two ways out.
 func (i IdleCeiling) Sentence(handle string) string {
+	return i.sentence(fmt.Sprintf("seat %q's token_budget", handle), "this seat a turn",
+		"a seat", "this seat")
+}
+
+// AssistantSentence is [IdleCeiling.Sentence] for the ceiling every person's
+// assistant spend is held to (`assistant.token_budget`), which the company's
+// reaches first for the same reason a seat's does.
+func (i IdleCeiling) AssistantSentence() string {
+	return i.sentence("assistant.token_budget", "a person's question",
+		"a person's assistant", "each person")
+}
+
+// sentence is the one wording of an idle ceiling: key is the budget's key as
+// an author writes it, refused what it would refuse, spender whose spend is
+// the company's too, and held who a lower ceiling holds to a share.
+func (i IdleCeiling) sentence(key, refused, spender, held string) string {
 	reason := fmt.Sprintf("the company's (%d)", i.Limit)
 	if i.Over != i.Window {
 		reason = fmt.Sprintf("the company's token_budget.%s (%d), and a %s lies inside one %s",
 			i.Over, i.Limit, i.Window, i.Over)
 	}
 	return fmt.Sprintf(
-		"seat %q's token_budget.%s (%d) is at or above %s, so it can "+
-			"never refuse this seat a turn: everything a seat spends is "+
-			"the company's spend too, so the company's ceiling is reached "+
-			"first. Remove it, or lower it below %d to hold this seat to "+
-			"a share of the company's",
-		handle, i.Window, i.Ceiling, reason, i.Limit)
+		"%s.%s (%d) is at or above %s, so it can never refuse %s: everything "+
+			"%s spends is the company's spend too, so the company's ceiling is "+
+			"reached first. Remove it, or lower it below %d to hold %s to a "+
+			"share of the company's",
+		key, i.Window, i.Ceiling, reason, refused, spender, i.Limit, held)
 }
 
 // budgetWarnings is every ceiling in the company that can never refuse a
@@ -377,11 +392,23 @@ func (i IdleCeiling) Sentence(handle string) string {
 // "this seat may spend 5M a day" beside a company capped at 2M believes the
 // seat has a headroom it does not — and that is what a warning is for.
 //
+// The ceiling each person's assistant is held to (`assistant.token_budget`) is
+// judged the same two ways: its own windows against each other, and against
+// the company's, since a person's assistant spend is the company's too. The
+// Budgets screen checks a change to it as it checks the company's and a
+// seat's, so a ceiling that can never refuse a question is said before it is
+// saved.
+//
 // Agent seats only. A human seat carrying a budget is refused as a conflict,
 // and a warning beside that refusal would be advice about a key that has to
 // go anyway.
 func (c *Company) budgetWarnings() []Warning {
 	out := c.TokenBudget.warnings(field("token_budget"))
+	assistant := at(field("assistant"), "token_budget")
+	out = append(out, c.Assistant.TokenBudget.warnings(assistant)...)
+	for _, idle := range c.TokenBudget.IdleUnder(c.Assistant.TokenBudget.Ceilings()) {
+		out = append(out, advisory(at(assistant, string(idle.Window)), idle.AssistantSentence()))
+	}
 	for role, path := range c.EachRole() {
 		seat := role.Seat()
 		if !seat.IsAgent() {
