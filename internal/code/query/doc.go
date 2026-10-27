@@ -201,21 +201,22 @@
 // comparison with the history it walks; and code.GitShareWait keeps its
 // two-second floor.
 //
-// THE MEMO, over the rig as it stood before the wide tree — gittest.History's
-// 44 files over 14 080 commits and the 3 MB file, whose tree kinds listed 2
-// and 45 entries, one page each — ten reads of each kind and arm (-benchtime
-// 10x, one count, the warm, miss and memo arms alone), git 2.56.0 on two
-// cores of the same machine: a read the memo
-// misses (cache=miss) costs what the read with no memo (cache=warm) does
-// within half a millisecond, but for a file's pages, since it cuts every page
-// to the file's end: the first 24.7 ms (p95 28.1), all 55 of them, against
-// 6.9 with no memo, and the fiftieth 10.3 ms (11.1). A hit (cache=memo) takes
-// 16 µs for the root's listing, 22 for the whole tree's first page, 50 and 56
-// for the file's first and fiftieth, 27 for the stat, 20 for the patch and 33
-// for the comparison: 131 to 1 573 times faster than the miss and 131 to
-// 1 559 than the read with no memo, every kind past the ten times the memo's
-// premise asks, since a hit is one file's read and its decode where a miss is
-// at least one git process.
+// THE MEMO, measured once over the same rig with it landed (-benchtime 5x,
+// one count, the in-process arms alone, git 2.56.0 on the same two E-cores
+// of a busier machine, whose warm arm read each kind in 4.6 to 262 ms where
+// the run above read 3.1 to 227 — each ratio below is of one run's own arms):
+// a read the memo misses (cache=miss) costs what the read with no memo
+// (cache=warm) does within eight per cent, but for a file's pages, since it
+// cuts every page to the file's end: the first 32 ms (p95 35), all 55 of
+// them, against 9.5 with no memo, and the fiftieth 11.9 against 10.3. A hit
+// (cache=memo) takes 21 µs for the root's listing, 79 and 90 for the whole
+// tree's first page and the one nine tenths through it, 67 and 68 for the
+// file's first and fiftieth, 35 for one session's stat, 76 and 57 for the
+// wide edit's stat whole and filtered to one directory, 23 for the patch and
+// 34 for the comparison: 130 to 3 723 times faster than the miss and 133 to
+// 3 460 than the read with no memo, the wide edit's whole stat the most, every
+// kind past the ten times the memo's premise asks, since a hit is one file's
+// read and its decode where a miss is at least one git process.
 //
 // BenchmarkLandedIn over gittest.History's same 32 MB composition (14 080
 // commits, nothing on top) with a branch moved through it 2 000 times by

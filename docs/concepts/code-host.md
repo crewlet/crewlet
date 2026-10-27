@@ -1397,12 +1397,13 @@ and listing that tree page by page runs `ls-tree` once. A comparison is kept
 whole; whether a commit landed in a branch never is, since its answer moves
 with the branch.
 
-**Measured.** Over a history of about 2 800 files and 13 000 commits, on two
-cores of a laptop, a page from the memo is answered in 16 to 56 µs, where
-cutting it took 3 to 53 ms — 131 to 1 573 times faster, a comparison's walk the
-most. A read the memo misses costs what one with no memo does, but for a long
-file's first page: it cuts all 55 pages of a 3 MB file in 25 ms, against 7 ms
-for that one page, and every page after it is a hit.
+**Measured.** Over a history of 14 080 commits under a tree of 10 000 files,
+on two cores of a laptop, a page from the memo is answered in 21 to 90 µs,
+where cutting it with no memo took 4.6 to 262 ms — 133 to 3 460 times faster,
+the stat of an edit across all 10 000 files the most. A read the memo misses
+costs what one with no memo does, but for a long file's first page: it cuts
+all 55 pages of a 3 MB file in 32 ms, against 9.5 ms for that one page, and
+every page after it is a hit.
 
 **At most a sixteenth of the budget.** The memo holds at most a sixteenth of
 the cache's [budget](#the-cache-on-a-git-node), each answer counted at the

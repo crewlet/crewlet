@@ -338,8 +338,8 @@ at most a sixteenth of the cache's budget across every copy it holds — some
 450 000 pages of 56 KiB at a 400 GB budget — and it is trimmed to that before
 any repository is evicted, so fifteen sixteenths of the budget stay the
 repositories it exists for. A page from the memo is answered with no git run
-— in 16 to 56 µs, measured — where the page cut costs at least one git
-process, 3 to 53 ms warm and up to the read's ten seconds; and the read that
+— in 21 to 90 µs, measured — where the page cut costs at least one git
+process, 4.6 to 262 ms warm and up to the read's ten seconds; and the read that
 misses cuts every page after the one asked too, so a seat paging through a
 large listing, a long file or a wide diff pays for one git run, not one a
 page.
