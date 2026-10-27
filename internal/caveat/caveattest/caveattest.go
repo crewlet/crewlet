@@ -71,11 +71,25 @@ func Problems(text string) []string {
 }
 
 // valueFields are the keys of a write's answer, at any depth, whose strings are
-// values a screen reads (ids, keys, positions, codes, enumerations, the
-// grants and the fields a refusal names) and never sentences it draws.
+// values a screen reads (ids, keys, handles, positions, codes, enumerations,
+// addresses, the titles and paths people gave things, the grants and the
+// fields a refusal names) and never sentences it draws. DENY BY DEFAULT: a key
+// that is not listed here is held to a person's words, so a new key of prose
+// fails every walk until somebody decides it is a value and lists it.
 var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item", "key",
 	"status", "rank", "code", "action", "type", "project", "assignee", "labels_created",
-	"error", "reason", "grants", "field", "fields", "window"}
+	"error", "reason", "grants", "field", "fields", "window",
+	"comment_id", "page", "merged_into", "moved_from", "artifact", "url", "write",
+	"handle", "title", "withdrawn_from", "verdict", "container", "content_type", "hash",
+	"path", "folder", "move_waits_for", "operator_id", "paused_at", "paused_by",
+	"paused_by_kind", "agent_handle", "note_id", "turn_id", "model", "kind", "ref",
+	// THE QUESTION A RUN ASKED, which the person answering it read and is
+	// shown again as what their answer answers.
+	"question", "reference", "role", "shared_with", "asset", "name",
+	// AN ANSWER A MODEL WROTE FOR THE PERSON WHO ASKED (answer_knowledge),
+	// in markdown: it is the product, read as the person's own answer, and
+	// never a tool's sentence to a model.
+	"answer_md"}
 
 // AnswerProblems is every sentence a write's decoded answer carries that is not
 // worded for a person, each named by its path: every string at any depth

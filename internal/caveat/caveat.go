@@ -90,6 +90,26 @@ const (
 	// change landed and whose place in the lane did not.
 	CodeLaneChangedNotPlaced Code = "lane_changed_not_placed"
 
+	// CodeDependenciesNotRecorded is a create or an update that landed and
+	// whose dependency change did not.
+	CodeDependenciesNotRecorded Code = "dependencies_not_recorded"
+
+	// CodeMoveUnfinished is a move whose item landed in its new project and
+	// whose walk over the items under it stopped part of the way.
+	CodeMoveUnfinished Code = "move_unfinished"
+
+	// CodeMoveWaiting is [CodeMoveUnfinished] for a walk that waits on an
+	// item in the trash under it, which somebody has to restore or delete.
+	CodeMoveWaiting Code = "move_waiting"
+
+	// CodeSubtreeUnfinished is a removal or a restore whose item landed and
+	// whose walk over the items that go with it stopped part of the way.
+	CodeSubtreeUnfinished Code = "subtree_unfinished"
+
+	// CodeDatastorePending is an artifact datastore write on the log whose
+	// verdict this node has not applied yet.
+	CodeDatastorePending Code = "datastore_pending"
+
 	// CodeFileFinding is a finding about a file the caller authored and
 	// published: legal, and almost certainly not what they meant (an
 	// artifact page with no viewport, a resource the origin will not load).
@@ -130,6 +150,18 @@ var actions = map[Code]Action{
 	CodeTagNearDuplicate:    ActionNone,
 	CodeFiledEarlierUnread:  ActionNone,
 	CodeFiledEarlierRemoved: ActionNone,
+	// The item stands without what it should wait on until somebody sets
+	// it again.
+	CodeDependenciesNotRecorded: ActionRequired,
+	// The Worklet duty finishes the walk on its own.
+	CodeMoveUnfinished: ActionNone,
+	// The walk waits on an item in the trash until somebody restores or
+	// deletes it.
+	CodeMoveWaiting: ActionRequired,
+	// The items that go with it are split until the gesture is made again.
+	CodeSubtreeUnfinished: ActionRequired,
+	// The write landed; this node shows it once it catches up.
+	CodeDatastorePending: ActionNone,
 	// The card is in the lane it was dropped into; only its order there
 	// differs, which the next drag sets.
 	CodeLaneChangedNotPlaced: ActionNone,

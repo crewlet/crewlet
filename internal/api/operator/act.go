@@ -394,9 +394,10 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 }
 
 // PersonsReceipt is a tool call that landed, as every surface answering a
-// PERSON answers it (ADR-0060): the tool's receipt with its model-worded
-// caveats ([builtin.WarningsKey]) taken off, the rest as the tool wrote it,
-// and its caveats in a person's words, always a list. The act route and the
+// PERSON answers it (ADR-0060): the tool's receipt with every key that holds
+// its model's words taken off ([builtin.ModelOnlyKeys]: its caveats under
+// `warnings`, and a partial outcome's sentence under its own key), the rest
+// as the tool wrote it, and its caveats in a person's words, always a list. The act route and the
 // human write surface both answer through it, so neither can come to hand a
 // person what the other strips.
 //
@@ -406,22 +407,12 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 // and never answered; the caller says what the write came to without it.
 func PersonsReceipt(tool string, result tools.Result) (json.RawMessage, []caveat.Shown, bool) {
 	caveats := caveat.ForPeople(result.Caveats)
-	var fields map[string]json.RawMessage
-	if json.Unmarshal([]byte(result.Output), &fields) != nil || fields == nil {
+	receipt, readable := builtin.ForPerson(result.Output)
+	if !readable {
 		log.Warn("operator_receipt_unreadable", "tool", tool, "output", result.Output)
 		return nil, caveats, false
 	}
-	if _, carried := fields[builtin.WarningsKey]; !carried {
-		return json.RawMessage(result.Output), caveats, true
-	}
-	delete(fields, builtin.WarningsKey)
-	out, err := json.Marshal(fields)
-	if err != nil {
-		// Unreachable: every value was just decoded from valid JSON. The
-		// receipt is never answered with the model's words left on it.
-		return json.RawMessage("{}"), caveats, true
-	}
-	return out, caveats, true
+	return receipt, caveats, true
 }
 
 // FailTool answers a refused tool call to a person, as every surface answering

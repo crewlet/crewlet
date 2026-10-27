@@ -123,6 +123,53 @@ func LaneChangedNotPlaced(item, why string) Caveat {
 	}
 }
 
+// THE PARTIAL OUTCOMES: a call that landed part of what it was asked. Each
+// constructor takes the model's sentence as the site wrote it (the facts and
+// the next call only the site holds), and words the person's from the counts
+// a screen can show.
+
+// DependenciesNotRecorded is item saved and its dependency change not: agent is
+// the model's sentence about it.
+func DependenciesNotRecorded(item, agent string) Caveat {
+	return Caveat{code: CodeDependenciesNotRecorded, agent: agent,
+		person: fmt.Sprintf("%s was saved, but what it waits on was not "+
+			"recorded. Set its dependencies again.", item)}
+}
+
+// MoveUnfinished is a move whose item landed and of whose total items under it
+// only followed came along; waiting says the rest wait on an item in the trash.
+func MoveUnfinished(followed, total int, waiting bool, agent string) Caveat {
+	if waiting {
+		return Caveat{code: CodeMoveWaiting, agent: agent,
+			person: fmt.Sprintf("The item moved, but only %d of the %d items "+
+				"under it came along. The rest wait for an item in the trash "+
+				"under it. Restore it or delete it, and the move finishes.",
+				followed, total)}
+	}
+	return Caveat{code: CodeMoveUnfinished, agent: agent,
+		person: fmt.Sprintf("The item moved, but only %d of the %d items under "+
+			"it came along so far. The rest follow on their own.", followed, total)}
+}
+
+// SubtreeUnfinished is a removal (restored false) or a restore whose item
+// landed and of whose total items only followed came along.
+func SubtreeUnfinished(restored bool, followed, total int, agent string) Caveat {
+	done := "removed"
+	if restored {
+		done = "restored"
+	}
+	return Caveat{code: CodeSubtreeUnfinished, agent: agent,
+		person: fmt.Sprintf("The item was %s, but only %d of the %d items that "+
+			"go with it came along. Do it again to finish.", done, followed, total)}
+}
+
+// DatastorePending is an artifact datastore write on the log that this node
+// has not applied yet.
+func DatastorePending(agent string) Caveat {
+	return Caveat{code: CodeDatastorePending, agent: agent,
+		person: "The change is saved, and shows here once this server catches up."}
+}
+
 // FileFinding is a finding about a file its caller authored: where names the
 // file (and line), and finding is the linter's sentence. The finding is about
 // the file's own text, which a model and a person who wrote it read alike, so

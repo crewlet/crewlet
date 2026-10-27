@@ -1815,9 +1815,10 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// tell a model its item was not filed, and the next
 			// attempt would file a second one — which is also what
 			// the generic failure text's "call it again" did.
-			answer["dependencies_failed"] = dependencyFailure(task.ID, got.Key,
-				got.KeyCollision, writeTold(ctx, actor, t.Name(), err))
-			return caveated(answer, caveats)
+			return caveated(answer, caveats, partial(answer, DependenciesFailedKey,
+				caveat.DependenciesNotRecorded(worklet.ItemAddress(task.ID, got.Key,
+					got.KeyCollision), dependencyFailure(task.ID, got.Key,
+					got.KeyCollision, writeTold(ctx, actor, t.Name(), err)))))
 		}
 		t.deps.settle(ctx, result.Position)
 		// THE CALL ANSWERS FOR BOTH RECORDS, never for the create alone:
@@ -2776,9 +2777,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// is two writes and only the second failed, so the default
 			// failure's "the change was NOT made" was false about every
 			// field the first one set.
-			answer["dependencies_failed"] = updateDependencyFailure(before,
-				writeTold(ctx, actor, UpdateWorkItemTool, err))
-			return caveated(answer, caveats)
+			return caveated(answer, caveats, partial(answer, DependenciesFailedKey,
+				caveat.DependenciesNotRecorded(before.Address(), updateDependencyFailure(
+					before, writeTold(ctx, actor, UpdateWorkItemTool, err)))))
 		case err != nil:
 			return writeFailure(ctx, actor, UpdateWorkItemTool, err), nil
 		}

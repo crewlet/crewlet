@@ -5700,7 +5700,12 @@ to add, and each entry is written for a **person**:
 - **`code`**: the kind of caveat, stable to branch on (`unaddressed_comment`,
   `default_assignee_gone`, `body_links_capped`, `date_truncated`,
   `tag_near_duplicate`, `filed_earlier_unread`, `filed_earlier_removed`,
-  `lane_changed_not_placed`, `file_finding`).
+  `lane_changed_not_placed`, `dependencies_not_recorded`, `move_unfinished`,
+  `move_waiting`, `subtree_unfinished`, `datastore_pending`, `file_finding`).
+  A write that landed part of what it was asked (an item filed whose
+  dependencies were not recorded, a move or a removal whose walk stopped) says
+  so here, and never in a field of the receipt: an agent reads the same in its
+  own words under that field, which this route takes off.
 - **`message`**: one or two sentences in the words of the screen, naming no
   tool, argument or internal id.
 - **`action`**: `required` when something stays as it is until somebody acts

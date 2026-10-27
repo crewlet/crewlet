@@ -165,7 +165,9 @@ A move that stops part-way **after the item itself moved** is not answered as a
 failure: the item is in the new project, under its new key, and the answer is
 its receipt with the walk's count beside it — `subtree_followed` of
 `subtree_total` tasks under it made it across — and a `move_stopped` sentence
-saying what finishes it. That is the **same** call again, never a new one; a
+saying what finishes it (an agent reads that sentence; a person is told the same
+as a `move_unfinished` caveat, or `move_waiting` while a task in the trash holds
+it). That is the **same** call again, never a new one; a
 task in the trash under it that holds the walk is named as `move_waits_for`
 and has to be restored or purged first; and where the node cannot vouch for
 the task the walk stopped at (`move_unvouched`), the same call there stops at
@@ -1289,7 +1291,8 @@ of the way through — a step whose outcome is unknown, or the stream refusing a
 append. It then stops there rather than carrying on over it, and the answer
 says so: the item you named is removed (or restored), with
 `subtree_followed` and `subtree_total` counting how many of the items that go
-with it followed, and `subtree_stopped` saying why and what finishes it. What
+with it followed, and `subtree_stopped` saying why and what finishes it (a
+person is told the same as a `subtree_unfinished` caveat). What
 finishes it is the same call again — a task already where the gesture leaves it
 is nothing to do, so a second removal takes what the first did not reach, and a
 second restore brings back whatever is still in the trash with a parent that

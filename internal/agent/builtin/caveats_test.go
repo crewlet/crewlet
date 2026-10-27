@@ -29,9 +29,14 @@ func TestOnlyTheCaveatHelperWritesAToolsWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// AND EVERY PARTIAL OUTCOME'S KEY, which only [partial] writes beside a
+	// caveat. `note` is left out: it is also an argument's name.
+	keys := map[string]int{}
+	for _, key := range []string{builtin.WarningsKey, builtin.DependenciesFailedKey,
+		builtin.MoveStoppedKey, builtin.SubtreeStoppedKey} {
+		keys[strconv.Quote(key)] = 0
+	}
 	fset := token.NewFileSet()
-	quoted := strconv.Quote(builtin.WarningsKey)
-	found := 0
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -43,20 +48,26 @@ func TestOnlyTheCaveatHelperWritesAToolsWarnings(t *testing.T) {
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING || lit.Value != quoted {
+			if !ok || lit.Kind != token.STRING {
 				return true
 			}
-			found++
+			if _, watched := keys[lit.Value]; !watched {
+				return true
+			}
+			keys[lit.Value]++
 			if name != "caveats.go" {
-				t.Errorf("%s writes %s itself: a tool's caveats reach its answer "+
-					"only through caveated, which writes the model's words and "+
-					"hands a person's surface the person's", fset.Position(lit.Pos()), quoted)
+				t.Errorf("%s writes %s itself: a tool's caveats and partial "+
+					"outcomes reach its answer only through caveated and partial, "+
+					"which write the model's words and hand a person's surface the "+
+					"person's", fset.Position(lit.Pos()), lit.Value)
 			}
 			return true
 		})
 	}
-	if found != 1 {
-		t.Errorf("found %s %d times, want once at WarningsKey: the walk is "+
-			"reading the wrong source", quoted, found)
+	for key, found := range keys {
+		if found != 1 {
+			t.Errorf("found %s %d times, want once at its constant: the walk is "+
+				"reading the wrong source", key, found)
+		}
 	}
 }
