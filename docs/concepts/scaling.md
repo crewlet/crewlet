@@ -375,7 +375,7 @@ sixteenth more has been kept.
 whole estate, and the code host's rows with it. A seat's push of one commit
 leaves a push row of about 680 bytes, naming the seat and the turn, work item
 and model behind it (a person's push, naming the token it came through,
-leaves one of about 623), kept 181 days, and its pack's row of about 530,
+leaves one of about 623), kept 181 days, and its pack's row of about 588,
 kept as long as the repository is; a forced update or a deletion leaves a row
 more, naming the object it left, kept 14 days, and longer while the
 repository's pushes fill their records with such updates
@@ -393,8 +393,8 @@ its thousands of seats'. So:
 
 | Pushes a day | Push rows at the 181-day horizon | Pack rows added a year | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 581 MB | about 31 MB |
-| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 48.4 GB | 1.5 to 2.6 GB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 644 MB | about 31 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 53.6 GB | 1.5 to 2.6 GB |
 
 These rows come on top of what the tracker, the knowledge base and the rest of
 the estate hold: [the storage forecast](../guides/retention.md#the-storage-forecast)

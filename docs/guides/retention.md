@@ -2098,8 +2098,8 @@ a day, 3 000 turns a day, 50 projects):
 |---|---|---|---|
 | replicated store, per node | 9.7 GB | 26.6 GB | 43.8 GB |
 | snapshot volume at ×4.2 | 40.8 GB | 111.8 GB | 183.9 GB |
-| plus, hosting code at 3 000 pushes a day: the code host's rows, per node | 0.9 GB | 2.1 GB | 3.3 GB |
-| and their snapshot volume at ×4.2 | 4.0 GB | 8.9 GB | 13.7 GB |
+| plus, hosting code at 3 000 pushes a day: the code host's rows, per node | 1.0 GB | 2.3 GB | 3.6 GB |
+| and their snapshot volume at ×4.2 | 4.3 GB | 9.7 GB | 15.1 GB |
 
 The code host's line is for a company whose seats push — 3 000 pushes a day,
 the rate the code host is built for, every one of them a seat's (a hundred
@@ -2108,7 +2108,7 @@ their CI's, and the line scales with them. A seat's push leaves a push row of
 about 680 bytes, naming the seat and the turn, work item and model behind it
 (a person's is about 623), kept the 181 days of the push-history horizon
 (369 MB once the horizon is reached, in the first year), and its pack's row
-of about 530, kept for as long as its repository is (about 581 MB a year,
+of about 588, kept for as long as its repository is (about 644 MB a year,
 since nothing compacts a repository's packs yet) — measured in
 `internal/code`'s "What a push costs, measured", and set out with the code
 log's share, a seat's one counter row and a larger company's figures under

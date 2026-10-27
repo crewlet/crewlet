@@ -190,7 +190,9 @@
 //
 // THE PUSH'S TWO ROWS (BenchmarkPushHistoryBytes, the same figure every
 // count; restated from one count of one iteration once each row was weighed
-// by its own table, and again once every id was the shape production writes),
+// by its own table, again once every id was the shape production writes, and
+// the pack row again once it named the position its content dates from,
+// replicated 0067, with that column's index),
 // measured as the replicated estate's growth after a truncating checkpoint
 // over records whose refs existed before, so a ref's own row is rewritten in
 // place and never counted — EACH ROW BY THE PAGES ITS OWN TABLE'S B-TREES
@@ -199,7 +201,7 @@
 // row's, kept for good. Every id is a production one, in production's order:
 // the repository's, the push's and its pack's object's are UUIDs, which a
 // push row and its index entries carry six times and a pack row and its
-// eight, and a person's credential is a token's name (`pat:` and its id). A
+// nine, and a person's credential is a token's name (`pat:` and its id). A
 // figure is whole pages over the rows that filled them, so a row a few bytes
 // wider moves it only where it fits fewer rows a page. They have two
 // lifetimes:
@@ -215,16 +217,16 @@
 //     seventeen-byte model id; 4 000 records; 622.6 with no pack), and
 //     420 086 for the widest a push can leave ([MaxCommandsPerPush] commands
 //     on refs of [MaxRefNameBytes], [MaxIntroduced] ids; 100 records);
-//   - its pack's code_packs row, 530.4 bytes with its index entries, which
+//   - its pack's code_packs row, 587.8 bytes with its index entries, which
 //     lives as long as the pack does — until the repository is purged, since
 //     nothing in this release compacts a repository's packs.
 //
 // So every data node, holding the whole estate, holds 679.9 bytes for each
-// seat's push of the last 181 days (622.6 for a person's) and 530.4 for each
+// seat's push of the last 181 days (622.6 for a person's) and 587.8 for each
 // push ANY repository not yet purged has ever taken — the estate's whole
-// growth a seat's push of one commit, 1 210 — and the reference company's
+// growth a seat's push of one commit, 1 268 — and the reference company's
 // 3 000 pushes a day, every one a seat's, carry about 369 MB of push rows at
-// the horizon and grow by about 581 MB of pack rows a year for as long as its
+// the horizon and grow by about 644 MB of pack rows a year for as long as its
 // repositories live. A seat that has pushed holds one row more however much
 // it pushes, its pushes on its newest company day (code_seat_days, the
 // counter the decide's daily quota reads): a row of about thirty bytes and
