@@ -129,6 +129,8 @@ type WorkReader interface {
 	CompanyFeed(ctx context.Context, q worklet.FeedQuery) (worklet.FeedPage, error)
 	Decisions(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
 		loc *time.Location) (worklet.DecisionsAnswer, error)
+	AnsweredAsks(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+		loc *time.Location) (worklet.AnsweredAnswer, error)
 	TurnPlaces(ctx context.Context, runs []string,
 		fresh statelog.Freshness) (map[string]worklet.TurnPlace, error)
 	// Thread is the read a comment's write makes to find the question it

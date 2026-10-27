@@ -2886,10 +2886,30 @@ ceiling, or hand the item on. A condition's says what it costs to leave and
 where the answer is.
 
 **What was done is shown, then the next item opens.** An answered question
-or run stays in its place in Needs you, struck through and read as
-"Answered", and its pane shows the answer where the controls were; a read or
-snoozed update shows its new state. 700 ms later (`ADVANCE_MS`) the next item
-after it in the list opens, unless the reader has moved on first.
+or run stays in its place in Needs you until the reader leaves the screen,
+marked **Answered** in its head (a soft success tag where the time was) with
+the answer under the question ("You chose **Hold release**", or what was
+written, with a speech mark), in full ink and never struck through: a strike
+reads as "cancelled" and cuts through the words a reader comes back to check.
+The group's count is what is still open. Its pane shows the answer where the
+controls were; a read or snoozed update shows its new state. 700 ms later
+(`ADVANCE_MS`) the next item after it in the list opens, unless the reader has
+moved on first.
+
+**What was answered before waits in a closed group.** The asks put to the
+reader and closed in the last week (`answered_decisions`) are an **Answered**
+group after Updates, closed and counted ("Answered 4"): its label is a
+disclosure button inside the heading, so a reader moving by heading lands on
+it and Enter opens it. Each row names who asked, the question, and who
+answered and how ("Maya Ops chose **Ship anyway**"), since a colleague may
+answer a question put to you. A row answered on this visit is in Needs you
+instead, never in both. Opened, its rows step with `j` and `k`; a link to one
+opens the group. An answered ask's pane reads like the one it was answered
+on, with the answer in place of the buttons, a line saying who answered for
+you where it was not you, **What happened next** as four steps (asked,
+answered, picked up, acted on: the last two from the asker's seat as it is now
+and its first record on the task since, with a paused or stopped seat marked
+for attention), and the conversation with a reply box.
 
 **The conversation is the last part of the reading.** It is labelled by what
 it holds: "Replies to this question" under an ask, "Replies to this comment"

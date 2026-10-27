@@ -163,6 +163,12 @@ func (w Work) Decisions(ctx context.Context, q worklet.DecisionsQuery, now time.
 	return call(ctx, w.r, opDecisions, nil, decisionsArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
+// AnsweredAsks answers the asks put to a person and closed lately.
+func (w Work) AnsweredAsks(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+	loc *time.Location) (worklet.AnsweredAnswer, error) {
+	return call(ctx, w.r, opAnsweredAsks, nil, decisionsArgs{Query: q, Now: now, Zone: zoneArg(loc)})
+}
+
 // TurnPlaces answers which task each run was charged to.
 func (w Work) TurnPlaces(ctx context.Context, runs []string,
 	fresh statelog.Freshness) (map[string]worklet.TurnPlace, error) {

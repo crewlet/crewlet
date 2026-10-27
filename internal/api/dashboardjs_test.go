@@ -1245,8 +1245,13 @@ const (
 	// dropped socket. 4554 KiB, which still refuses a doubled baseline. uilet
 	// 0.67.0's product marks (a 16 grid drawing beside each master, the spark's
 	// motion and the soon keyline) and its artifact kit took it to 4557.3 KiB.
-	// 4558 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 462<<10
+	// 4558 KiB, which still refuses a doubled baseline. Keeping an answered
+	// inbox row legible in place with its answer under it, the closed Answered
+	// group of the last week's answers and the answered ask's pane with its
+	// four steps, on uilet 0.68.0's inbox row outcome and status and its
+	// collapsible group, took it to 4566.4 KiB. 4567 KiB, which still refuses
+	// a doubled baseline.
+	treeBudget = 4<<20 + 471<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

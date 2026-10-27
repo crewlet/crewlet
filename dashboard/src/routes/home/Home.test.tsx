@@ -764,7 +764,7 @@ describe("the decisions", () => {
     // NEEDS YOU, over the one decision, opened in the pane with its options
     // to answer, and no updates group beside it.
     expect(review).toBe("#/inbox");
-    expect(screen.getByRole("region", { name: "Needs you" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: /^Needs you/ })).toBeTruthy();
     expect(
       screen.getByRole("heading", {
         name: "Hold the 2.4 release until the scheduler migration lands?",

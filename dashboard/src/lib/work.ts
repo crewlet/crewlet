@@ -666,6 +666,23 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
 }
 
 /**
+ * What an asker did after its question was answered (`followed_up`), in the
+ * activity feed's words: the deltas where it moved something, its own text
+ * where it wrote a comment, the kind otherwise. Never a person's sentence the
+ * engine composed, which [describeChange] renames, since a follow-up is the
+ * asker's own record on its own task.
+ */
+export function describeFollowUp(
+  change: { kind: string; excerpt?: string; fields?: Record<string, unknown> },
+  ctx: LabelContext,
+): string {
+  const moved = deltaSentence(change.fields, ctx);
+  if (moved) return moved;
+  if (change.excerpt) return plainText(change.excerpt);
+  return change.kind.replaceAll("_", " ");
+}
+
+/**
  * The change kinds whose excerpt is a sentence the ENGINE composed naming a
  * PERSON by handle, rather than somebody's own prose: a reorder of somebody's
  * list (`worklet.prioritisedWake`, "<person> put ENG-1 at position 1 of your

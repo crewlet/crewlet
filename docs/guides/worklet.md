@@ -1899,6 +1899,15 @@ and naming somebody else's is a lead's or an administrator's to ask, with
 answers them in place: each option of a structured ask is a button that sends
 the choice as the answer, and a parked run is answered by its turn.
 
+**What a person decided lately** is the other half (`GET
+/worklet/decisions/answered`, `answered_decisions`): the asks put to them and
+closed in the last seven days, newest closing first, each with who closed it
+(a colleague may answer for you), when, the option chosen or the words, and
+the asker's first record on the task since, which says whether the answer has
+been acted on. It takes the same scope rule. The dashboard's Inbox keeps
+these in a closed **Answered** group at the end of the list; an answer older
+than the week is on its task's thread.
+
 ### What an answer may weigh
 
 A tool answer is read by a **model**: every byte lands in a context window

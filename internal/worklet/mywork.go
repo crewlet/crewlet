@@ -110,8 +110,9 @@ type AskRow struct {
 
 	// Answer is the literal call that answers it. A model handed the
 	// comment id still has to compose the call, and every one it composes
-	// differently is a round spent being refused.
-	Answer string `json:"answer_with"`
+	// differently is a round spent being refused. Absent on an answered
+	// ask, which nothing answers again.
+	Answer string `json:"answer_with,omitempty"`
 }
 
 // ChecklistRow is one sub-item claimed by this person.
@@ -504,14 +505,9 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 	}
 	defer func() { _ = rows.Close() }()
 
-	type ask struct {
-		comment, task, author, body string
-		at                          int64
-		document                    []byte
-	}
-	var pending []ask
+	var pending []askRecord
 	for rows.Next() {
-		var a ask
+		var a askRecord
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at,
 			&a.document); err != nil {
@@ -524,10 +520,37 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		return nil, ClaimTotal{}, fmt.Errorf("worklet: read the asks waiting on %s: %w",
 			handle, err)
 	}
-	if len(pending) == 0 {
-		return []AskRow{}, claim, nil
+	out, err := askRowsOf(ctx, tx, pending, dayStart, maxBytes, true)
+	if err != nil {
+		return nil, ClaimTotal{}, err
 	}
+	return out, claim, nil
+}
 
+// askRecord is one ask as its comment row holds it, before the task it is on
+// has been read.
+type askRecord struct {
+	comment, task, author, body string
+	at                          int64
+	document                    []byte
+}
+
+// askRowsOf is the asks' rows, each beside the task it is on, in the order
+// given: the ONE shape every list of asks shares ([readAsks], [readAnswered]),
+// so an open ask and an answered one read the same.
+//
+// An ask on a task the task read does not return is left out rather than
+// listed with no task.
+//
+// open is whether the asks are still waiting: an open one carries the literal
+// call that answers it, and an answered one none, since nothing answers it
+// again (an ask is answered once, ADR-0023). maxBytes is [readAsks]'.
+func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
+	dayStart time.Time, maxBytes int, open bool) ([]AskRow, error) {
+
+	if len(pending) == 0 {
+		return []AskRow{}, nil
+	}
 	ids := make([]any, 0, len(pending))
 	for _, a := range pending {
 		ids = append(ids, a.task)
@@ -536,7 +559,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		"t.id IN ("+placeholders(len(ids))+")", ids,
 		[]sortTerm{{Column: "t.id"}}, len(ids), dayStart)
 	if err != nil {
-		return nil, ClaimTotal{}, err
+		return nil, err
 	}
 	byID := make(map[string]TaskRow, len(tasks))
 	for _, row := range tasks {
@@ -551,10 +574,8 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		}
 		var stored Comment
 		if len(a.document) > 0 {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := json.Unmarshal(a.document, &stored); err != nil {
-				return nil, ClaimTotal{}, fmt.Errorf("worklet: decode the ask %s: %w",
-					a.comment, err)
+				return nil, fmt.Errorf("worklet: decode the ask %s: %w", a.comment, err)
 			}
 		}
 		ask := AskRow{
@@ -562,7 +583,9 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 			AskedAt:  store.DecodeTime(a.at),
 			Body:     a.body,
 			Decision: stored.Decision,
-			Open:     true,
+			Open:     open,
+		}
+		if open {
 			// THE LITERAL CALL, composed here rather than described.
 			// A model handed a comment id still has to compose the
 			// answer, and every one it composes differently is a
@@ -570,13 +593,13 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 			//
 			// ON THE TASK'S ADDRESS, not its key: an ask on a task
 			// whose key another task claimed first, answered through
-			// the key, would post the answer on the claimant — where
+			// the key, would post the answer on the claimant, where
 			// the comment it `answers` does not exist.
-			Answer: answerCall(row.Address(), a.comment, stored.Decision),
+			ask.Answer = answerCall(row.Address(), a.comment, stored.Decision)
 		}
 		// WHOLE OR BY REFERENCE: the first ask is always whole, and an
 		// ask past the block's budget names its size and its read
-		// rather than arriving as its opening — read on the same
+		// rather than arriving as its opening, read on the same
 		// address the answer is.
 		if maxBytes > 0 && len(out) > 0 && weight+len(a.body) > maxBytes {
 			ask.Body = ""
@@ -588,7 +611,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		}
 		out = append(out, ask)
 	}
-	return out, claim, nil
+	return out, nil
 }
 
 // answerCall is the literal call that answers an ask.
