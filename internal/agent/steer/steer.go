@@ -283,8 +283,7 @@ type Box struct {
 	taken  int
 	closed bool
 	// handed is a box whose notes went to its turn's run record
-	// ([Box.HandOver]): it takes no new note, and still takes back what a
-	// reader returns until it closes.
+	// ([Box.HandOver]): it takes no new note until [Box.Reopen].
 	handed bool
 	now    func() time.Time
 }
@@ -361,10 +360,10 @@ func (b *Box) Take(_ context.Context, _ Reading) []Note { return b.Drain() }
 func (b *Box) Brief(context.Context) []Note { return b.Drain() }
 
 // Return puts back notes a step took and could not deliver — a launch that
-// failed — AT THE FRONT, in their order, so they are read first by whatever
-// reads next, or reported expired when the box closes. Dedupe is kept: a note
-// taken once is still one note, and a retry of it is still answered accepted. A
-// closed box keeps nothing, and the caller reports them as the close would.
+// failed before it wrote its run's record — AT THE FRONT, in their order, so
+// they are read first by whatever reads next, or reported expired when the box
+// closes. Dedupe is kept: a note taken once is still one note, and a retry of
+// it is still answered accepted. A closed box keeps nothing.
 func (b *Box) Return(_ context.Context, notes []Note) {
 	if b == nil || len(notes) == 0 {
 		return
@@ -379,14 +378,11 @@ func (b *Box) Return(_ context.Context, notes []Note) {
 
 // HandOver ends the box's intake and answers every note it holds unread, for the
 // caller to file where the turn's notes wait from here — its coding run's
-// record, the moment the launch has written one. A new note is answered closed
-// from here, which tells its caller to file it there too.
+// record, in the write the launch makes to create it. A new note is answered
+// closed from here, which tells its caller to look where the turn's notes went.
 //
-// THE BOX STILL TAKES BACK WHAT A READER RETURNS ([Box.Return]), because the
-// launch that handed it over can still fail: its brief's notes come back here,
-// and the box's Close reports them expired with the turn — closed instead, the
-// box dropped them, and nothing ever said what became of them. Idempotent, and
-// nothing on a closed box.
+// Undone by [Box.Reopen] where that write never landed. Idempotent, and nothing
+// on a closed box.
 func (b *Box) HandOver() []Note {
 	if b == nil {
 		return nil
@@ -400,6 +396,26 @@ func (b *Box) HandOver() []Note {
 	out := b.pending
 	b.pending = nil
 	return out
+}
+
+// Reopen undoes a [Box.HandOver] whose notes reached no record — the launch
+// failed before the write that would have created it: the box takes notes
+// again, with notes, what the hand-over answered, back at the FRONT and in
+// their order, so whatever reads the box next reads them first. A closed box
+// keeps nothing and answers them, for the caller to report as the close would
+// have.
+func (b *Box) Reopen(notes []Note) []Note {
+	if b == nil {
+		return notes
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return notes
+	}
+	b.handed = false
+	b.pending = append(slices.Clone(notes), b.pending...)
+	return nil
 }
 
 // Waiting reports a note waiting to be read, without taking it — what ends a

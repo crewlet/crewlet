@@ -76,10 +76,11 @@ import (
 // The node whose step read it: the runner for a round of the engine's loop or
 // a coding run's brief, the run inbox of the node serving the run's bridge for
 // a read inside the run ([runInbox]), under ids derived from the turn and the
-// note. And the node that finishes the run's ending, for every note still
-// waiting when the turn is over ([runSteers.expired]), under ids derived from
-// the ending — so a repeat of either is the same record. Never at a park: a
-// question can wait days, and the turn that resumes reads what waited.
+// note. And the node that finishes the run's ending, for every note no job ran
+// with when the turn is over — still waiting, or read by the brief of a job
+// that never started ([runSteers.expired]) — under ids derived from the ending,
+// so a repeat of either is the same record. Never at a park: a question can
+// wait days, and the turn that resumes reads what waited.
 
 // SteerNoteDomain is the key domain a note on a run's record is sealed in: its
 // own, so no frame of another channel or a state log opens as a note, and no
@@ -370,6 +371,24 @@ func (s *runSteers) briefNotes(turnID string, round int, notes []steer.Note) ([]
 	return out, nil
 }
 
+// handedNotes is the notes a first segment's box held unread as its launch
+// began, sealed for the record the launch opens, which files them waiting
+// ([sandbox.LaunchRequest.HandedNotes]).
+func (s *runSteers) handedNotes(turnID string, notes []steer.Note) ([]sandbox.RunNote, error) {
+	if s == nil || len(notes) == 0 {
+		return nil, nil
+	}
+	out := make([]sandbox.RunNote, 0, len(notes))
+	for _, n := range notes {
+		sealed, err := s.seal(turnID, n)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sealed)
+	}
+	return out, nil
+}
+
 // readOf is where a note is read, as a run's record holds it.
 func readOf(at steer.Reading) sandbox.NoteRead {
 	return sandbox.NoteRead{Phase: string(at.Phase), Iteration: at.Iteration, Round: at.Round,
@@ -474,21 +493,21 @@ func (s *runSteers) publish(ctx context.Context, ident runIdentity, note steer.N
 	return s.pub.Publish(ctx, topics.Event(ev.Type), ev)
 }
 
-// expired records every note still waiting on run's record as expired — the
-// step a run's ending takes before it deletes the record
-// ([sandbox.CoordinatorOptions.SteersExpired]) — under ids derived from the
-// turn, the ending and the note, at the ending's own instant, so a repeat of the
-// ending publishes the same records. A note that does not open gets no record:
-// nothing can attribute it.
+// expired records every note on run's record that no job ran with as expired
+// ([sandbox.PendingRun.UnreadNotes]: the ones still waiting, and the ones the
+// brief of a job that never started recorded read) — the step a run's ending
+// takes before it deletes the record ([sandbox.CoordinatorOptions.SteersExpired])
+// — under ids derived from the turn, the ending and the note, at the ending's
+// own instant, so a repeat of the ending publishes the same records. THE ONE
+// PUBLISHER of an expiry for a note that reached a record: nothing else that
+// read one reports it, so no note is reported twice. A note that does not open
+// gets no record: nothing can attribute it.
 func (s *runSteers) expired(ctx context.Context, run sandbox.PendingRun) error {
 	if run.Ending == nil {
 		return nil
 	}
 	ident := identityOfRun(run)
-	for _, n := range run.Steer.Notes {
-		if !n.Waiting() {
-			continue
-		}
+	for _, n := range run.UnreadNotes() {
 		note, ok := s.open(run.TurnID, n)
 		if !ok {
 			log.Warn("steer_note_expired_unrecorded", "turn_id", run.TurnID, "note_id", n.ID,
@@ -609,34 +628,15 @@ func (r *rowSource) Brief(ctx context.Context) []steer.Note {
 	return out
 }
 
-// Return records expired the notes a failed launch's brief carried that the
-// record no longer holds waiting: the write that opened the launch's job read
-// them, and the job never ran. One still waiting is the record's again, for
-// whatever reads the turn next — or its ending.
-func (r *rowSource) Return(ctx context.Context, notes []steer.Note) {
-	if r == nil || len(notes) == 0 {
-		return
-	}
-	run, found, err := r.steers.store.Get(ctx, r.run.TurnID)
-	if err != nil {
-		log.WarnContext(ctx, "steer_notes_unreturned", "turn_id", r.run.TurnID, "error", err.Error(),
-			"detail", "whether the failed launch's notes were read could not be read; they are "+
-				"not recorded expired")
-		return
-	}
-	ident := identityOfRun(r.run)
-	for _, n := range notes {
-		if found && slices.ContainsFunc(run.Steer.Notes, func(held sandbox.RunNote) bool {
-			return held.ID == n.ID && held.Waiting()
-		}) {
-			continue
-		}
-		if err := r.steers.publish(context.WithoutCancel(ctx), ident, n, nil, uuid.Nil, time.Time{}); err != nil {
-			log.ErrorContext(ctx, "steer_note_expiry_unrecorded", "turn_id", r.run.TurnID,
-				"note_id", n.ID, "error", err.Error())
-		}
-	}
-}
+// Return takes back the notes a relaunch's brief peeked where the launch failed
+// before it wrote the record ([runner.SteerSource.Return]) — which is nothing to
+// do: a peek takes nothing, and the notes still wait on the record for whatever
+// reads the turn next, or for its ending. A launch that failed after its write
+// is never handed back: the record holds what its brief read, and the ending
+// that deletes the record reports them ([runSteers.expired]) — which is also
+// why nothing here may publish: a note this source peeked can be reported
+// expired by another node's ending while the launch is still failing.
+func (r *rowSource) Return(context.Context, []steer.Note) {}
 
 // Waiting reports a waiting note that opens, from the segment's view of the
 // record — never a store read: the tool loop asks it under its dispatcher's

@@ -130,12 +130,13 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model,
 		ProviderKey: run.Launch.ProviderKey}
 	// THE TURN'S NOTES START HERE, on a record the launch creates: the seat
-	// anchor the caller sealed, and the brief's notes, read by this job —
-	// see [PendingStore.BeginLaunch]. Nothing else of the caller's: a record
-	// made here holds no note it did not hand over.
+	// anchor the caller sealed, the brief's notes, read by this job, and then
+	// the notes the turn's box still held, waiting — see
+	// [PendingStore.BeginLaunch]. Nothing else of the caller's: a record made
+	// here holds no note it was not handed.
 	created := run
 	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
-	readBrief(&created.Steer, run.BriefNotes, run.LaunchID, now)
+	openNotes(&created.Steer, run, run.LaunchID, now)
 	raw, err := encodeRun(created)
 	if err != nil {
 		return PendingRun{}, err
@@ -275,13 +276,14 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// — written here only where the record has none. What is the job's
 		// is whether its CLI asked for them ([RunSteer.Pulled]), which a new
 		// job has not; and the brief's notes are read BY THIS JOB, in the
-		// write that names it, so its CLI can never take them again.
+		// write that names it, so its CLI can never take them again — and
+		// the box's, if the launch hands any, filed after them.
 		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
 		if len(existing.Steer.Seat) == 0 {
 			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)
 		}
 		existing.Steer.Pulled = ""
-		readBrief(&existing.Steer, run.BriefNotes, run.LaunchID, s.clock())
+		openNotes(&existing.Steer, run, run.LaunchID, s.clock())
 		return true
 	})
 	if err != nil {

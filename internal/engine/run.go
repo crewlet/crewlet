@@ -1342,8 +1342,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ever on the apply loop's own goroutine.
 		directoryNudge: make(chan struct{}, 1),
 	}
-	// THE DESK FILES WHAT IT HANDS OVER on the same records: a turn's box,
-	// once its run has launched, and a late offer to it (steer.go).
+	// THE DESK FILES ON THE SAME RECORDS: a turn's box, handed over in the
+	// write its launch makes to create the run's record — before any box or
+	// CLI exists — and every late offer to the turn after it (steer.go).
 	steers.runs = e.runSteers
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,

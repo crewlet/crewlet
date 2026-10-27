@@ -67,14 +67,25 @@ type AgentLauncher interface {
 	// run's collection re-enters the turn later.
 	//
 	// An error fails the phase: there is no other way to run the executor,
-	// and the error says why this run could not start.
+	// and the error says why this run could not start. It still names the
+	// job where the launch had opened one before it failed — see
+	// [Launched.LaunchID].
 	LaunchExecutor(ctx context.Context, req AgentRunRequest) (Launched, error)
 }
 
-// Launched is what a launch that started answers: the JOB it opened — the name
-// the run's record holds it under, which only the launch learns — so the notes
-// its brief carried are recorded delivered to that job.
+// Launched is what a launch answers.
 type Launched struct {
+	// LaunchID is the JOB the launch opened — the name the run's record
+	// holds it under, which only the launch learns — so the notes its brief
+	// carried are recorded delivered to that job.
+	//
+	// SET ON AN ERROR TOO, where the launch failed after the write that
+	// opened the job: that write recorded the brief's notes read by the job
+	// ([AgentRunRequest.Notes]), and the record, whose ending reports every
+	// note no job ran with, answers for them from then on — so they are not
+	// handed back to the turn's source ([SteerSource.Return]), which would
+	// report them a second time. Empty with an error is a launch that wrote
+	// nothing, whose notes are the turn's still.
 	LaunchID string
 }
 
@@ -197,8 +208,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 
 	// THE NOTES THIS BRIEF IS THE FIRST TO READ, after every one the turn
 	// read before — and the launch's from here: handed back on every way out
-	// that does not launch ([Runner.steerReturn]), and recorded delivered
-	// only once the launch has opened its job ([Runner.steerBriefed]).
+	// that reaches no run's record ([Runner.steerReturn]), and recorded
+	// delivered only once the launch has opened its job ([Runner.steerBriefed]).
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, notes, history, snapshot, built, fresh)
 	// AND ASKED AGAIN once the brief exists, before anything is on the
@@ -207,7 +218,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// and the rewrite can be what fills the window. Asked only at the top of
 	// the phase, that run was launched and paid for whole past the ceiling.
 	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
-		r.steerReturn(ctx, fresh)
+		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
 	// THE PROMPT REACHES THE RECORD, published here because nothing else
@@ -241,7 +252,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		Fence:      r.cfg.Fence,
 	})
 	if err != nil {
-		r.steerReturn(ctx, fresh)
+		r.steerReturn(ctx, launched, fresh)
 		err = fmt.Errorf("runner: %s: launching the executor's run: %w", phase.Execute, err)
 		// A PHASE A PERSON STOPPED DID NOT FAIL, exactly as for every phase
 		// the engine drives: it carries the stop as its error and is not
@@ -312,7 +323,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, snapshot, built, fresh)
 	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
-		r.steerReturn(ctx, fresh)
+		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
 	emit := r.emitter()
@@ -337,7 +348,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		Fence:      r.cfg.Fence,
 	})
 	if err != nil {
-		r.steerReturn(ctx, fresh)
+		r.steerReturn(ctx, launched, fresh)
 		err = fmt.Errorf("runner: %s: carrying on the run with its answer: %w", phase.Execute, err)
 		emit.completed(ctx, phaseRecord{
 			Phase: phase.Execute, Iteration: state.Round, System: system, User: user,

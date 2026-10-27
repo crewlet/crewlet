@@ -81,11 +81,14 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 // the token the box already holds reaches it.
 //
 // AND WITH THE TURN'S NOTES (ADR-0059). The record the launch opens carries
-// the sealed anchor of the seat the run serves, and the notes the brief carries
-// ([runner.AgentRunRequest.Notes]), read by the job the write opens; the job's
-// session serves the run's note inbox, bound to the same job as its ledger; and
-// once the run is going, the turn's first segment hands what its box still
-// holds to the record ([steerDesk.handOff]).
+// the sealed anchor of the seat the run serves, the notes the brief carries
+// ([runner.AgentRunRequest.Notes]), read by the job the write opens, and — for
+// a turn's first segment — the notes its box still holds, filed waiting in the
+// same write, before the record exists for anybody to file on
+// ([steerDesk.handOver]); the job's session serves the run's note inbox, bound
+// to the same job as its ledger. A launch that fails after that write names the
+// job it opened ([runner.Launched.LaunchID]): the record then answers for every
+// note, and its ending reports what no job ran with.
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	e, company, handle := l.engine, l.company, l.seat.Handle()
 	// THE TURN'S OWN FENCE, the closure its runner was built with, asked
@@ -271,8 +274,24 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	if inbox != nil {
 		session.Steer = inbox
 	}
+	// THE FIRST SEGMENT'S BOX, HANDED OVER IN THE WRITE THAT CREATES THE
+	// RECORD — the last step before the launch, past every refusal above:
+	// its intake ends here, and what it holds rides the write, so nothing a
+	// person files on the record once it exists lands ahead of it. Settled on
+	// every path out: recorded the moment the write lands, and given back to
+	// the box where the launch failed before it ([steerDesk.handOver]).
+	hand := e.steers.handOver(l.turn.RunID)
+	handed, err := e.runSteers.handedNotes(l.turn.RunID, hand.held())
+	if err != nil {
+		hand.unrecorded(ctx)
+		inbox.Close()
+		return runner.Launched{}, err
+	}
 
-	var opened bool
+	var (
+		opened   bool
+		recorded string
+	)
 	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:        ref,
 		Spec:        spec,
@@ -292,18 +311,19 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// A RUN CARRIED ON WITH A PERSON'S ANSWER, continued in its own
 		// session where the launch runs it in the asking run's box — see
 		// [runner.Asked].
-		Continue:   sandboxContinuation(req.Continue),
-		SteerSeat:  e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
-		BriefNotes: brief,
+		Continue:    sandboxContinuation(req.Continue),
+		SteerSeat:   e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
+		BriefNotes:  brief,
+		HandedNotes: handed,
+		Recorded: func(launch string) {
+			// THE RECORD HOLDS THE TURN'S NOTES FROM HERE, the box's
+			// included: a note to the turn waits on it, whichever node it
+			// reaches, and a launch that fails from here ends it, whose
+			// ending reports what no job ran with.
+			recorded = launch
+			hand.recorded()
+		},
 		Opened: func(launch string) (sandbox.Opening, error) {
-			// THE BOX'S NOTES GO TO THE RECORD THE MOMENT THERE IS ONE —
-			// before any box or CLI exists, and before a note a person files
-			// there directly can land ahead of them: from here a note to the
-			// turn waits on the record, whichever node it reaches. A launch
-			// that fails from here ends the record and expires what waits on
-			// it; one refused before it hands nothing over, and the box keeps
-			// its notes ([steerDesk.handOff]).
-			e.steers.handOff(ctx, l.turn.RunID)
 			opening, openErr := e.openBridge(ctx, session, ledger, inbox, launch)
 			opened = openErr == nil
 			return opening, openErr
@@ -314,6 +334,10 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Fence: req.Fence,
 	})
 	if err != nil {
+		if recorded == "" {
+			// NO RECORD WAS WRITTEN: the box's notes are the box's again.
+			hand.unrecorded(ctx)
+		}
 		if opened {
 			// The launch failed after the job's session opened, so
 			// nothing will ever close it on the completion path — and
@@ -330,17 +354,21 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// which a person may have lifted since ([sandbox.Coordinator.LaunchStopped]).
 		// Taken whatever the launch answered, so a stop that came with its own
 		// fence's refusal is not kept for nobody.
+		//
+		// AND WHETHER THE RECORD WAS WRITTEN, by the job it opened: its
+		// brief's notes are the record's then, never the turn's to hand back.
+		failed := runner.Launched{LaunchID: recorded}
 		decided, stopped := coordinator.LaunchStopped(l.turn.RunID)
 		switch {
 		case turn.Stopped(err):
-			return runner.Launched{}, err
+			return failed, err
 		case stopped:
 			log.InfoContext(ctx, "executor_launch_stopped", "seat", handle, "turn_id", l.turn.RunID,
 				"error", err, "detail", "a person stopped the seat's running work while its "+
 					"executor was launching; the launch is ended and the turn stops")
-			return runner.Launched{}, &stopError{pause: pauseOfStop(decided), handle: handle}
+			return failed, &stopError{pause: pauseOfStop(decided), handle: handle}
 		}
-		return runner.Launched{}, err
+		return failed, err
 	}
 	return runner.Launched{LaunchID: result.LaunchID}, nil
 }

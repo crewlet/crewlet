@@ -31,21 +31,22 @@ import (
 //
 // Once the turn's coding run has launched, its notes wait on the run's record
 // in the coordination store, which every node reads (runsteer.go): the asking
-// node files a note there itself, and asks nobody. The launch HANDS THE BOX OVER
-// ([steerDesk.handOff]) THE MOMENT THE RECORD EXISTS — as the store names the
-// job, before any box or CLI does ([sandbox.LaunchRequest.Opened]) — so a note
-// the box held is on the record ahead of any a person files there directly
-// once it exists: every reader takes in the record's order, and a note is the
-// later word. The box takes no new note from then ([steer.Box.HandOver]), every
-// note it held and nobody read is filed on the record, and the turn's entry
-// here is kept as HANDED — so a note that read "no record" a moment before the
-// launch wrote one, and was scattered here, is filed on the record by this node
-// and answered as the record answers it, and a probe is answered with the
-// turn's seat. An offer is never answered `closed` for a turn that is running:
-// one that met the box as it was being handed over finds the handed entry and
-// is filed on the record. The handed box is kept for the segment's close: a
-// launch that fails after the hand-over gives its brief's notes back to it,
-// and the close reports them expired with the turn.
+// node files a note there itself, and asks nobody. The launch HANDS THE BOX
+// OVER IN THE WRITE THAT CREATES THE RECORD ([steerDesk.handOver]): the box's
+// intake ends before that write, and every note it took and nobody read rides
+// it ([sandbox.LaunchRequest.HandedNotes]), filed waiting after the brief's —
+// so no note a person files on the record can land ahead of one the box took
+// first, nor use up the bounds a note the box accepted was already counted
+// against: every reader takes in the record's order, and a note is the later
+// word. While that write is in flight the turn is HANDING, and an offer that
+// reaches the desk waits for it; then the turn's entry here is kept as HANDED
+// — so a note that read "no record" a moment before the launch wrote one, and
+// was scattered here, is filed on the record by this node and answered as the
+// record answers it, and a probe is answered with the turn's seat. A launch
+// that fails before the write hands the box its notes back
+// ([steer.Box.Reopen]), and the turn is the box's again. An offer is never
+// answered `closed` for a turn that is running: one that met the box as its
+// intake ended looks again and finds the turn handing, handed or the box's.
 //
 // # A turn that ended is still answered for a while
 //
@@ -100,6 +101,7 @@ type steerDesk struct {
 	open   map[string]steerTurn
 	closed map[string]endedTurn
 	order  []string
+	gen    uint64
 
 	// wire signs and verifies the steer channel, both halves — this node's
 	// operator surface asks with it ([Engine.SteerWire]) and the desk
@@ -125,21 +127,29 @@ type steerSeat struct {
 	handle string
 }
 
-// steerTurn is a first segment the desk holds a box for: its seat, and how the
-// notes the box took and nobody read are recorded expired.
+// steerTurn is a first segment the desk holds a box for: its seat, how the
+// notes the box took and nobody read are recorded expired, and — while a launch
+// is handing the box to the record it writes — what an offer waits on.
 type steerTurn struct {
 	box *steer.Box
 	steerSeat
 	expire func(context.Context, []steer.Note)
+
+	// handing is closed when the launch handing the box over says whether
+	// the record holds its notes; nil while nothing is being handed.
+	handing chan struct{}
+
+	// gen is the desk's count when the entry last changed, so an offer the
+	// box answered closed can tell a box that changed hands under it — look
+	// again — from one that is simply closed.
+	gen uint64
 }
 
 // endedTurn is a turn the desk remembers: its seat, and whether its box was
-// handed to its run's record rather than closed with the turn — and, until the
-// segment that held it closes it, the handed box itself.
+// handed to its run's record rather than closed with the turn.
 type endedTurn struct {
 	steerSeat
 	handed bool
-	box    *steer.Box
 }
 
 // newSteerDesk builds this node's desk over the fleet keyring every state-log
@@ -171,7 +181,8 @@ func (d *steerDesk) register(runID string, seat steerSeat, box *steer.Box,
 ) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.open[runID] = steerTurn{box: box, steerSeat: seat, expire: expire}
+	d.gen++
+	d.open[runID] = steerTurn{box: box, steerSeat: seat, expire: expire, gen: d.gen}
 	delete(d.closed, runID)
 }
 
@@ -189,20 +200,14 @@ func (d *steerDesk) rememberLocked(runID string, t endedTurn) {
 
 // close ends a first segment's box and remembers the turn, returning the notes
 // it took and never read. A turn whose box was handed to its run's record stays
-// remembered as handed, and its box is closed here — holding only what a launch
-// that failed after the hand-over gave back.
+// remembered as handed: its notes are the record's, and its ending reports
+// what no job ran with.
 func (d *steerDesk) close(runID string) []steer.Note {
 	d.mu.Lock()
 	t, ok := d.open[runID]
 	if !ok {
-		var handed *steer.Box
-		if ended, remembered := d.closed[runID]; remembered && ended.handed {
-			handed = ended.box
-			ended.box = nil
-			d.closed[runID] = ended
-		}
 		d.mu.Unlock()
-		return handed.Close()
+		return nil
 	}
 	delete(d.open, runID)
 	d.rememberLocked(runID, endedTurn{steerSeat: t.steerSeat})
@@ -228,46 +233,99 @@ func (d *steerDesk) remember(runID string, seat steerSeat) {
 	d.rememberLocked(runID, endedTurn{steerSeat: seat})
 }
 
-// handOff hands a first segment's box to its turn's run record, the moment the
-// launch has written one: the turn is remembered as HANDED, the box's intake
-// ended ([steer.Box.HandOver]), and every note it took and nobody read filed on
-// the record — one the record refuses recorded expired. Nothing to hand over is
-// not an error: a segment that resumed the turn files no box.
+// handOver is one launch's hand-over of a first segment's box to the run record
+// the launch writes — see [steerDesk.handOver].
+type handOver struct {
+	desk  *steerDesk
+	runID string
+	turn  steerTurn
+	notes []steer.Note
+	once  sync.Once
+}
+
+// handOver begins handing a first segment's box to the record its launch is
+// about to write: the turn is marked HANDING, the box's intake ended
+// ([steer.Box.HandOver]), and the notes it took and nobody read are answered,
+// for the launch to file in the write that creates the record
+// ([sandbox.LaunchRequest.HandedNotes]). The launch then says whether that
+// write landed — [handOver.recorded] or [handOver.unrecorded], exactly one, on
+// every path — and until it does an offer to the turn waits. Nil, which hands
+// nothing and settles nothing, for a turn this desk holds no box for: a segment
+// that resumed the turn files none.
 //
-// HANDED BEFORE THE BOX'S INTAKE ENDS, under the desk's lock: an offer that
+// HANDING BEFORE THE BOX'S INTAKE ENDS, under the desk's lock: an offer that
 // found the box open and was answered `closed` by it looks again and finds the
-// turn handed ([steerDesk.offer]), so no offer racing the launch is told the
-// turn has ended.
-func (d *steerDesk) handOff(ctx context.Context, runID string) {
+// turn handing ([steerDesk.offer]), so no offer racing the launch is told the
+// turn has ended — nor filed on a record ahead of the notes the box held.
+func (d *steerDesk) handOver(runID string) *handOver {
 	if d == nil || d.runs == nil {
-		return
+		return nil
 	}
 	d.mu.Lock()
 	t, ok := d.open[runID]
-	if !ok {
+	if !ok || t.handing != nil {
 		d.mu.Unlock()
+		return nil
+	}
+	d.gen++
+	t.handing, t.gen = make(chan struct{}), d.gen
+	d.open[runID] = t
+	d.mu.Unlock()
+	return &handOver{desk: d, runID: runID, turn: t, notes: t.box.HandOver()}
+}
+
+// held is the notes the box held unread as the hand-over began, oldest first.
+func (h *handOver) held() []steer.Note {
+	if h == nil {
+		return nil
+	}
+	return h.notes
+}
+
+// recorded settles the hand-over as LANDED: the record holds the box's notes,
+// and the turn is remembered as handed — every later note is filed on the
+// record. The box is closed: it holds nothing, and nothing will read it again.
+func (h *handOver) recorded() {
+	if h == nil {
 		return
 	}
-	delete(d.open, runID)
-	d.rememberLocked(runID, endedTurn{steerSeat: t.steerSeat, handed: true, box: t.box})
-	d.mu.Unlock()
-	unread := t.box.HandOver()
-	var refused []steer.Note
-	for _, n := range unread {
-		filed, err := d.runs.File(ctx, runID, n)
-		switch {
-		case err != nil:
-			log.WarnContext(ctx, "steer_note_not_handed", "turn_id", runID, "note_id", n.ID,
-				"error", err.Error(), "detail", "the note the turn's box held could not be filed "+
-					"on its run's record, and is recorded expired")
-			refused = append(refused, n)
-		case filed.Status != steer.StatusAccepted:
-			refused = append(refused, n)
+	h.once.Do(func() {
+		d := h.desk
+		d.mu.Lock()
+		if t, ok := d.open[h.runID]; ok && t.handing == h.turn.handing {
+			delete(d.open, h.runID)
+			d.rememberLocked(h.runID, endedTurn{steerSeat: h.turn.steerSeat, handed: true})
 		}
+		d.mu.Unlock()
+		h.turn.box.Close()
+		close(h.turn.handing)
+	})
+}
+
+// unrecorded settles the hand-over as NEVER WRITTEN: the launch failed before
+// the write that would have created the record, so the box's notes are the
+// box's again, at its front ([steer.Box.Reopen]), and the turn is the box's —
+// read by whatever reads it next, or reported expired when the segment closes
+// it. A box closed meanwhile reports them expired here.
+func (h *handOver) unrecorded(ctx context.Context) {
+	if h == nil {
+		return
 	}
-	if len(refused) > 0 && t.expire != nil {
-		t.expire(context.WithoutCancel(ctx), refused)
-	}
+	h.once.Do(func() {
+		lost := h.turn.box.Reopen(h.notes)
+		d := h.desk
+		d.mu.Lock()
+		if t, ok := d.open[h.runID]; ok && t.handing == h.turn.handing {
+			d.gen++
+			t.handing, t.gen = nil, d.gen
+			d.open[h.runID] = t
+		}
+		d.mu.Unlock()
+		close(h.turn.handing)
+		if len(lost) > 0 && h.turn.expire != nil {
+			h.turn.expire(context.WithoutCancel(ctx), lost)
+		}
+	})
 }
 
 // deskEntry is what the desk holds for a turn.
@@ -291,18 +349,30 @@ func (d *steerDesk) find(turnID string) deskEntry {
 }
 
 // offer hands a note to the turn it names, if this node runs or remembers it:
-// into its box, or onto its run's record where its box was handed there.
+// into its box, or onto its run's record where its box was handed there — and,
+// while a launch is handing the box over, once the launch has said which.
 func (d *steerDesk) offer(ctx context.Context, turnID string, n steer.Note) (steer.Status, steer.Reads, steerSeat, error) {
-	for attempt := 0; ; attempt++ {
+	for {
 		entry := d.find(turnID)
 		switch {
 		case !entry.present:
 			return "", "", steerSeat{}, errNotThisNode
+		case entry.open != nil && entry.open.handing != nil:
+			// THE BOX IS BEING HANDED to the record its launch is writing:
+			// filed now, the note could land ahead of the ones the box held,
+			// which that write carries. It waits for the write.
+			select {
+			case <-entry.open.handing:
+				continue
+			case <-ctx.Done():
+				return "", "", steerSeat{}, fmt.Errorf("engine: a note to turn %s waited for its "+
+					"run's record to be written: %w", turnID, ctx.Err())
+			}
 		case entry.open != nil:
 			status := entry.open.box.Offer(n)
-			if status == steer.StatusClosed && attempt == 0 {
-				// THE BOX CLOSED UNDER THE OFFER: handed to the run's
-				// record, or the turn ended. The desk says which.
+			if status == steer.StatusClosed && d.changed(turnID, entry.open.gen) {
+				// THE BOX CLOSED UNDER THE OFFER: its turn is being handed
+				// to the run's record, or ended. The desk says which.
 				continue
 			}
 			return status, steer.ReadsNextStep, entry.open.steerSeat, nil
@@ -319,15 +389,27 @@ func (d *steerDesk) offer(ctx context.Context, turnID string, n steer.Note) (ste
 	}
 }
 
+// changed reports whether the desk's entry for a turn is no longer the open
+// one of generation gen: the box an offer read changed hands under it.
+func (d *steerDesk) changed(turnID string, gen uint64) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	t, open := d.open[turnID]
+	return !open || t.gen != gen
+}
+
 // probe answers what an offer to the turn would be answered, and whose turn it
-// is, taking nothing — see [steer.Request.Probe]. A turn handed to its run's
-// record is answered accepted: a person's note to it is decided on the record
-// from here, and the probe's asker reads it there next time.
+// is, taking nothing — see [steer.Request.Probe]. A turn being handed to its
+// run's record, or handed there, is answered accepted: a person's note to it is
+// decided on the record from here, and the probe's asker reads it there next
+// time.
 func (d *steerDesk) probe(turnID string) (steer.Status, steerSeat, error) {
 	entry := d.find(turnID)
 	switch {
 	case !entry.present:
 		return "", steerSeat{}, errNotThisNode
+	case entry.open != nil && entry.open.handing != nil:
+		return steer.StatusAccepted, entry.open.steerSeat, nil
 	case entry.open != nil:
 		return entry.open.box.Status(), entry.open.steerSeat, nil
 	case entry.ended.handed:

@@ -212,10 +212,24 @@ type LaunchRequest struct {
 	// person's authority to send the turn a note is decided on
 	// ([RunSteer.Seat]) — and BriefNotes the notes the job's brief carries,
 	// each sealed, which the write that opens the job records read by it
-	// ([PendingRun.BriefNotes]). Both written onto the record the launch
-	// opens, never anywhere else. Empty writes no anchor and reads nothing.
-	SteerSeat  []byte
-	BriefNotes []RunNote
+	// ([PendingRun.BriefNotes]). HandedNotes are the notes the turn's first
+	// segment's box still held unread as the launch began, each sealed, which
+	// the same write files WAITING after them ([PendingRun.HandedNotes]). All
+	// written onto the record the launch opens, never anywhere else. Empty
+	// writes no anchor and files nothing.
+	SteerSeat   []byte
+	BriefNotes  []RunNote
+	HandedNotes []RunNote
+
+	// Recorded is told the job's name the moment the store has written the
+	// record the launch opens ([PendingStore.BeginLaunch]) — before the
+	// launch's fence is asked again, and before anything else can fail. From
+	// that write the record holds the turn's notes, the brief's and the
+	// box's ([LaunchRequest.HandedNotes]), and a launch that fails after it
+	// ENDS the record, whose ending reports every one of them no job ran
+	// with ([PendingRun.UnreadNotes]); a launch that fails before it wrote
+	// nothing, and its notes are the caller's still. Nil tells nobody.
+	Recorded func(launchID string)
 
 	// Opened is told the job's name the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
@@ -386,14 +400,22 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// The model and the entry the run's phase record is filed under;
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey},
-		// THE TURN'S NOTES: the seat anchor, and the brief's notes, read by
-		// the job this write opens — see [PendingStore.BeginLaunch].
-		Steer:      RunSteer{Seat: req.SteerSeat},
-		BriefNotes: req.BriefNotes,
-		CreatedAt:  now(),
+		// THE TURN'S NOTES: the seat anchor, the brief's notes, read by the
+		// job this write opens, and the box's, waiting after them — see
+		// [PendingStore.BeginLaunch].
+		Steer:       RunSteer{Seat: req.SteerSeat},
+		BriefNotes:  req.BriefNotes,
+		HandedNotes: req.HandedNotes,
+		CreatedAt:   now(),
 	}, fence)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
+	}
+	// THE RECORD HOLDS THE TURN'S NOTES FROM HERE — see
+	// [LaunchRequest.Recorded]: told before anything below can fail, so the
+	// caller knows the record, and no longer itself, answers for them.
+	if req.Recorded != nil {
+		req.Recorded(opened.LaunchID)
 	}
 	// HELD FROM HERE, before anything below can fail or the turn can
 	// return — see [Coordinator.Launch]. Every failure past this point

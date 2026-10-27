@@ -41,6 +41,7 @@ var noteCases = []struct {
 	{"ALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob",
 		testALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob},
 	{"AResetKeepsTheTurnsNotesAndClearsPulled", testAResetKeepsTheTurnsNotesAndClearsPulled},
+	{"ALaunchFilesTheBoxsNotesWaitingAfterItsBrief", testALaunchFilesTheBoxsNotesWaitingAfterItsBrief},
 	{"APullIsRecordedOnceAndOnlyForItsJob", testAPullIsRecordedOnceAndOnlyForItsJob},
 	{"NotesRideABridgedCallStorm", testNotesRideABridgedCallStorm},
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
@@ -469,6 +470,63 @@ func testAResetKeepsTheTurnsNotesAndClearsPulled(t *testing.T, s sandbox.Pending
 	if late := byID["late"]; late.Seq != 4 || late.Read == nil || late.Read.Launch != relaunched.LaunchID ||
 		!bytes.Equal(late.Sealed, []byte("sealed:late")) {
 		t.Errorf("the brief's own note is %+v, want it added read under the new job", late)
+	}
+}
+
+// A LAUNCH FILES THE BOX'S NOTES WAITING AFTER ITS BRIEF, in the write that
+// creates the record: the brief's notes read by the job it opens, then every
+// note the turn's box still held, waiting, numbered after them — ahead of
+// anything a person files on the record once it exists, and counted against the
+// turn's bounds before it is: a box that held as many notes as may wait leaves
+// the next filing full, never one of the box's refused. A reset files them too,
+// and leaves a note the record already holds as it is.
+func testALaunchFilesTheBoxsNotesWaitingAfterItsBrief(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-handed")
+	r.Steer = sandbox.RunSteer{Seat: []byte("sealed-seat")}
+	r.BriefNotes = []sandbox.RunNote{{ID: "briefed", Sealed: []byte("sealed:briefed"), At: base,
+		Read: &sandbox.NoteRead{Phase: "execute", Iteration: 1, Round: 1, Boundary: "brief"}}}
+	for i := range maxWaiting {
+		r.HandedNotes = append(r.HandedNotes, sealedNote(fmt.Sprintf("held-%d", i+1)))
+	}
+	opened, err := s.BeginLaunch(ctx, r, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	notes := mustGet(t, s, "t-handed").Steer.Notes
+	if len(notes) != 1+maxWaiting {
+		t.Fatalf("the record holds %d notes, want the brief's and the box's %d", len(notes), maxWaiting)
+	}
+	for i, n := range notes {
+		switch {
+		case n.Seq != i+1:
+			t.Errorf("note %s is numbered %d, want %d", n.ID, n.Seq, i+1)
+		case i == 0 && (n.ID != "briefed" || n.Read == nil || n.Read.Launch != opened.LaunchID):
+			t.Errorf("the first note is %+v, want the brief's, read by job %s", n, opened.LaunchID)
+		case i > 0 && (n.ID != fmt.Sprintf("held-%d", i) || !n.Waiting() ||
+			!bytes.Equal(n.Sealed, []byte("sealed:"+n.ID))):
+			t.Errorf("note %d is %+v, want held-%d waiting with its seal", i+1, n, i)
+		}
+	}
+	if filed, _, err := file(ctx, s, "t-handed", "direct"); err != nil || filed != sandbox.NoteFull {
+		t.Errorf("a note filed behind a full hand-over = %s, %v, want full", filed, err)
+	}
+
+	// A RESET, which a first segment's launch can meet: a note the record
+	// holds is left as it is, and a new one is filed waiting after the rest.
+	if ok, err := s.MarkSuspended(ctx, "t-handed", suspension()); err != nil || !ok {
+		t.Fatalf("MarkSuspended = %v, %v", ok, err)
+	}
+	mustClaim(t, s, "t-handed")
+	again := run("t-handed")
+	again.HandedNotes = []sandbox.RunNote{sealedNote("held-1"), sealedNote("held-new")}
+	if _, err := s.BeginLaunch(ctx, again, sandbox.Fence{}); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	steer := mustGet(t, s, "t-handed").Steer
+	last := steer.Notes[len(steer.Notes)-1]
+	if len(steer.Notes) != 2+maxWaiting || last.ID != "held-new" || last.Seq != steer.Seq || !last.Waiting() {
+		t.Errorf("the reset left notes %+v, want the record's and held-new waiting last", steer.Notes)
 	}
 }
 

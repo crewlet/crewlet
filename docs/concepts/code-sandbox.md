@@ -578,10 +578,12 @@ its review, whichever node resumes it:
 What became of each note is published as `agent_turn_steered`: `delivered` by
 the node whose step read it, with the kind of step (`boundary`: `brief`,
 `tool_batch`, `finish`, `step`, or `round` for the review) and, for a read by
-the run, its job (`launch_id`); or `expired`, for a note still waiting when the
-turn ends, by the node that finishes the run's ending — before the record is
-deleted, under an id derived from the ending, so a retried ending records it
-once. A park is never an ending.
+the run, its job (`launch_id`); or `expired`, for a note no job ran with when
+the turn ends — still waiting, or read into the brief of a launch that failed
+after writing the record, whose job never started — by the node that finishes
+the run's ending, and by nothing else: before the record is deleted, under an
+id derived from the ending, so a retried ending records it once. A park is
+never an ending.
 
 A proxy between the boxes and `CREWLET_MCP_BRIDGE_URL` holds a poll open for
 up to those ten seconds, so it needs a request timeout of at least fifteen —

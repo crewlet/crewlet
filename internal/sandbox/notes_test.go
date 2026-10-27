@@ -23,21 +23,19 @@ type expirySpy struct {
 }
 
 type expiryCall struct {
-	waiting  []string
+	unread   []string
 	recorded bool
 }
 
 func (s *expirySpy) expired(ctx context.Context, run PendingRun) error {
 	_, recorded, _ := s.pending.Get(ctx, run.TurnID)
-	var waiting []string
-	for _, n := range run.Steer.Notes {
-		if n.Waiting() {
-			waiting = append(waiting, n.ID)
-		}
+	var unread []string
+	for _, n := range run.UnreadNotes() {
+		unread = append(unread, n.ID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls = append(s.calls, expiryCall{waiting: waiting, recorded: recorded})
+	s.calls = append(s.calls, expiryCall{unread: unread, recorded: recorded})
 	return s.err
 }
 
@@ -92,8 +90,8 @@ func TestAnEndingRecordsItsWaitingNotesBeforeItsDelete(t *testing.T) {
 	if !calls[0].recorded {
 		t.Error("the notes were handed over after the record was deleted")
 	}
-	if !slices.Equal(calls[0].waiting, []string{"waiting"}) {
-		t.Errorf("the ending handed over waiting notes %v, want only the one nothing read", calls[0].waiting)
+	if !slices.Equal(calls[0].unread, []string{"waiting"}) {
+		t.Errorf("the ending handed over waiting notes %v, want only the one nothing read", calls[0].unread)
 	}
 	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
 		t.Error("the ending did not delete the record")
@@ -147,7 +145,96 @@ func TestAnEndingWhoseNotesCouldNotBeRecordedKeepsItsRecord(t *testing.T) {
 		t.Fatal("the ending was never finished")
 	}
 	calls := spy.seen()
-	if len(calls) != 2 || !slices.Equal(calls[1].waiting, []string{"waiting"}) || !calls[1].recorded {
+	if len(calls) != 2 || !slices.Equal(calls[1].unread, []string{"waiting"}) || !calls[1].recorded {
 		t.Errorf("the attempts handed over %+v, want the waiting note again, before the delete", calls)
+	}
+}
+
+// ONLY A NOTE NO JOB RAN WITH IS UNREAD: one still waiting, or one the brief of
+// the record's job recorded read while that job never started — its command
+// never attached. A read by a job that started, a read by an earlier job, and a
+// take inside the job are reads, and their records say so.
+//
+// Mutation: count a brief read unread whatever the job's command, or leave the
+// never-started job's out, and this goes red.
+func TestOnlyANoteNoJobRanWithIsUnread(t *testing.T) {
+	t.Parallel()
+	read := func(launch, boundary string) *NoteRead {
+		return &NoteRead{Phase: "execute", Round: 1, Boundary: boundary, Launch: launch}
+	}
+	notes := []RunNote{
+		{ID: "waiting"},
+		{ID: "briefed", Read: read("job-2", "brief")},
+		{ID: "earlier-brief", Read: read("job-1", "brief")},
+		{ID: "taken", Read: read("job-2", "tool_batch")},
+		{ID: "reviewed", Read: read("", "round")},
+	}
+	unread := func(run PendingRun) []string {
+		var out []string
+		for _, n := range run.UnreadNotes() {
+			out = append(out, n.ID)
+		}
+		return out
+	}
+	neverStarted := PendingRun{LaunchID: "job-2", Steer: RunSteer{Notes: notes}}
+	if got := unread(neverStarted); !slices.Equal(got, []string{"waiting", "briefed"}) {
+		t.Errorf("a record whose job never started has %v unread, want the waiting note and its "+
+			"brief's", got)
+	}
+	started := neverStarted
+	started.CommandID = "4242"
+	if got := unread(started); !slices.Equal(got, []string{"waiting"}) {
+		t.Errorf("a record whose job started has %v unread, want the waiting note alone", got)
+	}
+	if !neverStarted.unreadNotes() || (PendingRun{LaunchID: "job-2", CommandID: "4242",
+		Steer: RunSteer{Notes: notes[1:]}}).unreadNotes() {
+		t.Error("unreadNotes disagrees with UnreadNotes")
+	}
+}
+
+// A FAILED LAUNCH'S ENDING REPORTS THE NOTES ITS WRITE HELD. The write that
+// opens a job records the brief's notes read by it and files the box's waiting,
+// and says so to the caller ([LaunchRequest.Recorded]) before anything else can
+// fail — so the caller hands none of them back. A launch refused after it, by
+// its turn's fence here, ends the record, and that ending hands every one of
+// them to be reported expired, before the delete: the brief's too, read by a job
+// that never started.
+//
+// Mutation: call Recorded after the fence, or leave the brief's reads out of
+// the ending's, and this goes red.
+func TestAFailedLaunchsEndingReportsTheNotesItsWriteHeld(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	spy := &expirySpy{pending: rig.pending}
+	c, err := NewCoordinator(CoordinatorOptions{
+		Answers: rigAnswers(),
+		Queue:   rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Resume: &resumeSpy{}, Audience: &audienceSpy{},
+		Lease:         leased(rigLease),
+		SteersExpired: spy.expired,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	t.Cleanup(c.Stop)
+	req := launchReq("t1")
+	req.BriefNotes = []RunNote{{ID: "briefed", Sealed: []byte("sealed:briefed"),
+		Read: &NoteRead{Phase: "execute", Iteration: 1, Round: 1, Boundary: "brief"}}}
+	req.HandedNotes = []RunNote{{ID: "held", Sealed: []byte("sealed:held")}}
+	var recorded []string
+	req.Recorded = func(launch string) { recorded = append(recorded, launch) }
+	req.Fence = func() error { return errors.New("a person stopped the seat") }
+	if _, err := c.Launch(t.Context(), rig.manager, req); err == nil {
+		t.Fatal("a launch its fence refused went ahead")
+	}
+	if len(recorded) != 1 || recorded[0] == "" {
+		t.Fatalf("the launch told its caller of the write %v, want once, with the job", recorded)
+	}
+	calls := spy.seen()
+	if len(calls) != 1 || !calls[0].recorded || !slices.Equal(calls[0].unread, []string{"briefed", "held"}) {
+		t.Errorf("the ending handed over %+v, want the brief's note and the box's, before the delete", calls)
+	}
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Error("the failed launch's record was not deleted")
 	}
 }

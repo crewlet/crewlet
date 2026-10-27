@@ -280,19 +280,21 @@ func TestSubagentsAreNotSteered(t *testing.T) {
 
 // watchingLauncher is a launcher that records what the turn had published of
 // its notes at the moment it was asked to launch, and launches as a store
-// names a job — or fails, where err is set.
+// names a job — or fails, where err is set, naming the job it opened before it
+// did where wrote is set.
 type watchingLauncher struct {
-	pub  *capture
-	err  error
-	seen []int
-	reqs []runner.AgentRunRequest
+	pub   *capture
+	err   error
+	wrote string
+	seen  []int
+	reqs  []runner.AgentRunRequest
 }
 
 func (l *watchingLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	l.seen = append(l.seen, len(l.pub.steered()))
 	l.reqs = append(l.reqs, req)
 	if l.err != nil {
-		return runner.Launched{}, l.err
+		return runner.Launched{LaunchID: l.wrote}, l.err
 	}
 	return runner.Launched{LaunchID: "job-1"}, nil
 }
@@ -358,6 +360,31 @@ func TestAFailedLaunchReturnsItsBriefNotes(t *testing.T) {
 	expired := box.Close()
 	if len(expired) != 1 || expired[0].ID != founderNote.ID {
 		t.Errorf("the box holds %+v after the failed launch, want the note it gave the brief", expired)
+	}
+}
+
+// A LAUNCH THAT FAILED AFTER ITS WRITE HANDS NOTHING BACK: it names the job it
+// opened, so its brief's notes are on that job's record, read by a job that
+// never ran — and the record's ending reports them. Handed back to the box as
+// well, they were reported a second time when the segment closed it.
+//
+// Mutation: hand the brief back whatever the launch answered, and this goes red.
+func TestALaunchThatFailedAfterItsWriteHandsNothingBack(t *testing.T) {
+	t.Parallel()
+	box := steer.New()
+	box.Offer(founderNote)
+	pub := newCapture()
+	launcher := &watchingLauncher{pub: pub, err: errors.New("no box could be had"), wrote: "job-1"}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{steer: box, pub: pub, launcher: launcher})
+	if _, _, err := r.Execute(t.Context(), 1, "", nil); err == nil {
+		t.Fatal("a launch that failed reported none")
+	}
+	if got := pub.steered(); len(got) != 0 {
+		t.Errorf("a failed launch published %+v", got)
+	}
+	if expired := box.Close(); len(expired) != 0 {
+		t.Errorf("the box holds %+v after a launch that wrote its record, want nothing", expired)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // A person's notes to a turn whose coding run is out, on the run's own record.
@@ -113,10 +114,41 @@ type RunNote struct {
 // Waiting reports whether nothing has read the note yet.
 func (n RunNote) Waiting() bool { return n.Read == nil }
 
-// waitingNotes reports whether the run's record holds a note nothing has read.
-func (r PendingRun) waitingNotes() bool {
-	return slices.ContainsFunc(r.Steer.Notes, RunNote.Waiting)
+// UnreadNotes is every note on the run's record that no job ran with: the ones
+// still WAITING, and the ones the BRIEF OF THE RECORD'S CURRENT JOB recorded
+// read where that job never started — its command was never attached
+// ([PendingRun.CommandID]), because the launch failed, or was ended, between
+// the write that opened the job and the job's start. What the run's ending
+// reports expired ([CoordinatorOptions.SteersExpired]).
+//
+// THE RECORD IS THE ONE WITNESS. A launch records its brief's notes read in the
+// write that opens its job ([PendingStore.BeginLaunch]), before it knows whether
+// the job will run, and every way it can then fail ends the record
+// ([Coordinator.abandon]) — or meets an ending another party decided, which
+// finishes in its place. So the ending is the one party that sees both what the
+// brief took and that no job ran with it, and it reports those notes under the
+// same ids as the waiting ones: a launch that reported them itself could not
+// tell a note its own brief took from one another node's ending had already
+// reported, and published one twice.
+func (r PendingRun) UnreadNotes() []RunNote {
+	var out []RunNote
+	for _, n := range r.Steer.Notes {
+		if n.Waiting() || r.briefNeverRan(n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
+
+// briefNeverRan reports whether n was read by the brief of the record's job
+// while that job has not started.
+func (r PendingRun) briefNeverRan(n RunNote) bool {
+	return n.Read != nil && r.CommandID == "" && r.LaunchID != "" &&
+		n.Read.Launch == r.LaunchID && n.Read.Boundary == string(types.SteerBoundaryBrief)
+}
+
+// unreadNotes reports whether the run's record holds a note no job ran with.
+func (r PendingRun) unreadNotes() bool { return len(r.UnreadNotes()) > 0 }
 
 // NoteRead is where a note was read: the phase, iteration and round on the
 // phase's own scale, the kind of step (the agent layer's vocabulary, carried as
@@ -396,13 +428,26 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 	return out, nil
 }
 
-// readBrief is the write a launch makes of its brief's notes on the record it
-// opens, under the job it opens ([PendingStore.BeginLaunch]): a note the record
-// already holds, still waiting, is recorded read; one it holds already read is
-// left as it was read; and any other — a turn's first segment's own, which the
-// record has never held — is added already read, numbered as if filed now.
-func readBrief(steer *RunSteer, brief []RunNote, launch string, at time.Time) {
-	for _, note := range brief {
+// openNotes is the write a launch makes of the turn's notes on the record it
+// opens, under the job it opens ([PendingStore.BeginLaunch]), in this order:
+//
+//   - the brief's notes ([PendingRun.BriefNotes]) are recorded READ by the job:
+//     a note the record already holds, still waiting, is recorded read; one it
+//     holds already read is left as it was read; and any other — a turn's first
+//     segment's own, which the record has never held — is added already read,
+//     numbered as if filed now;
+//   - then the notes the first segment's box still held ([PendingRun.HandedNotes])
+//     are filed WAITING, numbered after them — so they are on the record from
+//     the write that creates it, ahead of every note a person files there once
+//     it exists. A note the record already holds is left as it is.
+//
+// The handed notes are filed WHATEVER THE TURN'S BOUNDS SAY: the box answered
+// each one accepted under the same two bounds ([NoteFiling]), so each is a note
+// the person was told the turn holds, and a hand-over that refused one would
+// turn an accepted note into an expiry. They count against the bounds for every
+// filing after them.
+func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
+	for _, note := range run.BriefNotes {
 		if note.ID == "" {
 			continue
 		}
@@ -421,5 +466,16 @@ func readBrief(steer *RunSteer, brief []RunNote, launch string, at time.Time) {
 		steer.Notes = append(steer.Notes, RunNote{
 			ID: note.ID, Seq: steer.Seq, Sealed: bytes.Clone(note.Sealed), At: note.At, Read: &read,
 		})
+	}
+	for _, note := range run.HandedNotes {
+		if note.ID == "" || slices.ContainsFunc(steer.Notes, func(held RunNote) bool { return held.ID == note.ID }) {
+			continue
+		}
+		steer.Seq++
+		filed := RunNote{ID: note.ID, Seq: steer.Seq, Sealed: bytes.Clone(note.Sealed), At: note.At}
+		if filed.At.IsZero() {
+			filed.At = at
+		}
+		steer.Notes = append(steer.Notes, filed)
 	}
 }

@@ -1154,6 +1154,14 @@ type PendingRun struct {
 	// own), added already read. Never persisted as itself.
 	BriefNotes []RunNote `json:"-"`
 
+	// HandedNotes is TRANSIENT as well: the notes the turn's first segment's
+	// box still held unread when the launch began ([LaunchRequest.HandedNotes]),
+	// which the write that opens the job files WAITING — after the brief's
+	// notes, and ahead of every note a person files on the record once it
+	// exists. A note the record already holds is left as it is. Never
+	// persisted as itself.
+	HandedNotes []RunNote `json:"-"`
+
 	// Prior is TRANSIENT as well: on the row a relaunch's
 	// [PendingStore.BeginLaunch] answers, the box the row named before the
 	// reset moved it onto the new job — its id, the cell that holds it, the
@@ -1304,11 +1312,14 @@ type PendingStore interface {
 	// read or waiting, with its numbering and the seat anchor — and created
 	// with the row: the anchor the launch sealed ([RunSteer.Seat]), written
 	// on a reset only where the row has none. Whether a job's CLI asked for
-	// them ([RunSteer.Pulled]) is the job's, and starts empty. And the notes
-	// the job's brief carries ([PendingRun.BriefNotes]) are recorded READ BY
-	// THE JOB THIS WRITE OPENS, in the same write — a note the row holds and
-	// one it has never held alike — so the job's own CLI can never take
-	// them again.
+	// them ([RunSteer.Pulled]) is the job's, and starts empty. The notes the
+	// job's brief carries ([PendingRun.BriefNotes]) are recorded READ BY THE
+	// JOB THIS WRITE OPENS, in the same write — a note the row holds and one
+	// it has never held alike — so the job's own CLI can never take them
+	// again. And the notes the turn's box still held
+	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
+	// them: from the write that creates the record, nothing a person files on
+	// it can land ahead of a note the box took first.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)

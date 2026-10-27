@@ -239,14 +239,17 @@ type SteerSource interface {
 	// Brief is the notes a coding run's brief takes, oldest first. They are
 	// the launch's from here: recorded read by the write that opens the
 	// run's job, or handed back with [SteerSource.Return] where the launch
-	// fails.
+	// fails before that write.
 	Brief(ctx context.Context) []steer.Note
 
-	// Return hands back notes [SteerSource.Brief] gave a launch that failed.
-	// What becomes of them is the source's: a box keeps them for its next
-	// reader, or reports them expired when it closes; a run's record keeps
-	// the ones the failed launch did not record read, and the rest — read
-	// into the brief of a job that never ran — are recorded expired.
+	// Return hands back notes [SteerSource.Brief] gave a launch that failed
+	// BEFORE IT WROTE ITS RUN'S RECORD ([Launched.LaunchID] empty): they
+	// reached nobody, and are the source's again — a box keeps them, at its
+	// front, for its next reader or reports them expired when it closes; a
+	// run's record, which a brief only peeks, still holds them waiting. A
+	// launch that failed after the write is never handed back: the record
+	// holds its brief's notes read by a job that never ran, and its ending is
+	// the one party that reports them, once.
 	Return(ctx context.Context, notes []steer.Note)
 
 	// Waiting reports a note waiting, WITHOUT TAKING IT and without
@@ -1797,9 +1800,12 @@ func (r *Runner) steerBrief(ctx context.Context) []steer.Note {
 	return r.cfg.Steer.Brief(ctx)
 }
 
-// steerReturn hands back the notes a launch that failed took for its brief.
-func (r *Runner) steerReturn(ctx context.Context, notes []steer.Note) {
-	if r.cfg.Steer == nil || len(notes) == 0 {
+// steerReturn hands back the notes a launch that failed took for its brief —
+// only where it failed before it wrote its run's record: once it named the job
+// it opened, the record holds them, and its ending reports them
+// ([Launched.LaunchID]).
+func (r *Runner) steerReturn(ctx context.Context, launched Launched, notes []steer.Note) {
+	if r.cfg.Steer == nil || len(notes) == 0 || launched.LaunchID != "" {
 		return
 	}
 	r.cfg.Steer.Return(ctx, notes)

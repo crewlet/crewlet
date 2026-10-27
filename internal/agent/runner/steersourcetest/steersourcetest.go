@@ -1,17 +1,19 @@
 // Package steersourcetest is the ONE contract suite every [runner.SteerSource]
-// runs: the first segment's box ([steer.Box], certified from internal/agent/
-// steer) and the record of the coding run a resumed segment reads
-// (internal/engine's rowSource, certified from there).
+// runs: the first segment's box ([steer.Box], certified from
+// internal/agent/steer) and the record of the coding run a resumed segment
+// reads (internal/engine's rowSource, certified from there).
 //
 // The runner reads a turn's notes through the source and nothing else, so what
 // the two must agree on is written once: a waiting note is taken once, by one
 // take, however many race for it; Waiting reports a note without taking it,
 // and answers without waiting on anything — the tool loop asks it under its
-// dispatcher's lock; and a brief's notes handed back after a launch that
-// failed are never lost — taken again by the next reader, or, where the launch
-// had already recorded them read by a job that never ran, recorded expired
-// exactly once. What a source does beyond that — the box's bounds, the
-// record's seals and fences — stays in its own package's suite.
+// dispatcher's lock; and a brief's notes are never lost and never reported
+// twice — handed back after a launch that failed before its write, and taken
+// again by the next reader; or, where the launch had recorded them read by a job
+// that never ran, or another node's ending reached the record first, recorded
+// expired exactly once, by the record's ending and by nothing the source does.
+// What a source does beyond that — the box's bounds, the record's seals and
+// fences — stays in its own package's suite.
 package steersourcetest
 
 import (
@@ -36,10 +38,17 @@ type Source struct {
 	// Expired is the ids of every note the source has recorded expired.
 	Expired func() []string
 
-	// LaunchWrote, where the source has a record, plays the launch that took
-	// notes for its brief writing them read by the job it opened — before it
-	// failed. Nil for a source with no record to write them on.
-	LaunchWrote func(t *testing.T, notes []steer.Note)
+	// LaunchFailed, where the source has a record, plays the launch that took
+	// notes for its brief writing them read by the job it opened, then
+	// failing: the run's ending every such failure decides, which reports
+	// what no job ran with and deletes the record. Nil for a source with no
+	// record to write them on.
+	LaunchFailed func(t *testing.T, notes []steer.Note)
+
+	// End, where the source has a record, plays ANOTHER party ending the run
+	// — a seat's next holder reaping it — which reports what no job ran with
+	// and deletes the record. Nil for a source no other party ends.
+	End func(t *testing.T)
 
 	// Stall, where the source reads a store, holds every read of it until the
 	// function it answers is called. Nil for a source that reads none.
@@ -59,6 +68,8 @@ func Run(t *testing.T, newSource func(t *testing.T) Source) {
 		{"WaitingNeverWaitsOnTheStore", testWaitingNeverWaitsOnTheStore},
 		{"ABriefHandedBackIsReadAgain", testABriefHandedBackIsReadAgain},
 		{"ABriefTheFailedLaunchReadIsExpiredOnce", testABriefTheFailedLaunchReadIsExpiredOnce},
+		{"ABriefWhoseRecordAnotherEndingTookIsExpiredOnce",
+			testABriefWhoseRecordAnotherEndingTookIsExpiredOnce},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -190,7 +201,7 @@ func testABriefHandedBackIsReadAgain(t *testing.T, s Source) {
 }
 
 func testABriefTheFailedLaunchReadIsExpiredOnce(t *testing.T, s Source) {
-	if s.LaunchWrote == nil {
+	if s.LaunchFailed == nil {
 		return
 	}
 	ctx := t.Context()
@@ -199,15 +210,43 @@ func testABriefTheFailedLaunchReadIsExpiredOnce(t *testing.T, s Source) {
 	if got := ids(brief); !slices.Equal(got, []string{"n-1"}) {
 		t.Fatalf("the brief carried %v, want the waiting note", got)
 	}
-	// THE LAUNCH WROTE THEM READ BY ITS JOB, then failed: the job never ran.
-	s.LaunchWrote(t, brief)
+	// THE LAUNCH WROTE THEM READ BY ITS JOB, then failed: the job never ran,
+	// and the run's ending reports them. The runner hands nothing back — the
+	// launch named the job it opened — and a Return a caller made anyway
+	// must add nothing.
+	s.LaunchFailed(t, brief)
 	s.Return(ctx, brief)
-	eventually(t, "the returned note to be recorded expired", func() bool { return len(s.Expired()) > 0 })
-	time.Sleep(100 * time.Millisecond)
-	if expired := s.Expired(); !slices.Equal(expired, []string{"n-1"}) {
-		t.Errorf("recorded expired %v, want the note once", expired)
-	}
+	expiredOnce(t, s, "n-1")
 	if again := s.Take(ctx, at); len(again) != 0 {
 		t.Errorf("a note recorded expired was taken again: %v", ids(again))
+	}
+}
+
+func testABriefWhoseRecordAnotherEndingTookIsExpiredOnce(t *testing.T, s Source) {
+	if s.End == nil {
+		return
+	}
+	ctx := t.Context()
+	s.File(t, note("n-1"))
+	brief := s.Brief(ctx)
+	if got := ids(brief); !slices.Equal(got, []string{"n-1"}) {
+		t.Fatalf("the brief carried %v, want the waiting note", got)
+	}
+	// ANOTHER NODE ENDS THE RUN while the launch the brief was for is still
+	// failing — it never reached the record — and that ending reports the
+	// note, still waiting there. The launch's failure hands the brief back.
+	s.End(t)
+	s.Return(ctx, brief)
+	expiredOnce(t, s, "n-1")
+}
+
+// expiredOnce waits for the source's record of id expired, and fails the case
+// unless it is the only one.
+func expiredOnce(t *testing.T, s Source, id string) {
+	t.Helper()
+	eventually(t, "the note to be recorded expired", func() bool { return len(s.Expired()) > 0 })
+	time.Sleep(100 * time.Millisecond)
+	if expired := s.Expired(); !slices.Equal(expired, []string{id}) {
+		t.Errorf("recorded expired %v, want %s once", expired, id)
 	}
 }

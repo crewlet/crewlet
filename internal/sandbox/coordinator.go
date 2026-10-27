@@ -462,10 +462,12 @@ type CoordinatorOptions struct {
 	CloseStopped func(ctx context.Context, run PendingRun) error
 
 	// SteersExpired publishes, as expired, every note a person sent the run's
-	// turn that is still WAITING on the run's record ([RunSteer]) — the ones
-	// nothing will read now that the turn is over. The engine implements it,
-	// because only the engine opens a note's seal, and this package never
-	// publishes words it cannot verify.
+	// turn that no job ran with ([PendingRun.UnreadNotes]): the ones still
+	// WAITING on the run's record ([RunSteer]), which nothing will read now
+	// that the turn is over, and the ones the brief of a job that never
+	// started recorded read. The engine implements it, because only the
+	// engine opens a note's seal, and this package never publishes words it
+	// cannot verify.
 	//
 	// A STEP OF THE ENDING, as CloseStopped is: made before the record is
 	// deleted, once per attempt, and made again by any attempt that finishes
@@ -3244,7 +3246,8 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 //  5. the announcement is published, under the ending's own identity;
 //  6. for a stop, the turn that was parked on the run is closed on the record
 //     as stopped ([CoordinatorOptions.CloseStopped]);
-//  7. every note a person sent the turn that is still waiting on the record is
+//  7. every note a person sent the turn that no job ran with — still waiting on
+//     the record, or read by the brief of a job that never started — is
 //     published expired ([CoordinatorOptions.SteersExpired]);
 //  8. the record is deleted ([PendingStore.Finish]).
 //
@@ -3329,9 +3332,9 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			}
 			closed = true
 		}
-		if !expired && c.steersExpired != nil && run.waitingNotes() {
+		if !expired && c.steersExpired != nil && run.unreadNotes() {
 			if err := c.steersExpired(ctx, run); err != nil {
-				return fmt.Errorf("sandbox: ending run %s, whose waiting notes could not be "+
+				return fmt.Errorf("sandbox: ending run %s, whose unread notes could not be "+
 					"recorded expired: %w", run.TurnID, err)
 			}
 			expired = true

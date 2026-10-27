@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -364,12 +365,24 @@ func handingDesk(t *testing.T) (*steerDesk, *sandbox.CoordStore, *pub) {
 }
 
 // launchedRun is turnID's run record as a launch opens it, anchored on the swe
-// seat.
-func launchedRun(t *testing.T, store *sandbox.CoordStore, runs *runSteers, turnID string) sandbox.PendingRun {
+// seat: the brief's notes read by the job it opens, and the box's handed notes
+// filed waiting after them.
+func launchedRun(t *testing.T, store *sandbox.CoordStore, runs *runSteers, turnID string,
+	brief, handed []steer.Note,
+) sandbox.PendingRun {
 	t.Helper()
+	briefed, err := runs.briefNotes(turnID, 1, brief)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := runs.handedNotes(turnID, handed)
+	if err != nil {
+		t.Fatal(err)
+	}
 	opened, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
 		TurnID: turnID, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
-		Steer: sandbox.RunSteer{Seat: runs.anchor(turnID, sweAgent, "swe")},
+		Steer:      sandbox.RunSteer{Seat: runs.anchor(turnID, sweAgent, "swe")},
+		BriefNotes: briefed, HandedNotes: sealed,
 	}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
@@ -377,14 +390,38 @@ func launchedRun(t *testing.T, store *sandbox.CoordStore, runs *runSteers, turnI
 	return opened
 }
 
-// recordedNotes is the ids of the notes on turnID's record, and which wait.
+// handToRecord plays a turn's launch handing its first segment's box over: the
+// hand-over begins, the write that creates the run's record carries what the
+// box held, written — whatever runs between that write and the launch saying
+// so — and the hand-over is settled as recorded. It answers the record as the
+// launch opened it.
+func handToRecord(t *testing.T, d *steerDesk, store *sandbox.CoordStore, turnID string,
+	brief []steer.Note, written func(),
+) sandbox.PendingRun {
+	t.Helper()
+	hand := d.handOver(turnID)
+	if hand == nil {
+		t.Fatalf("the desk handed nothing over for %s", turnID)
+	}
+	opened := launchedRun(t, store, d.runs, turnID, brief, hand.held())
+	if written != nil {
+		written()
+	}
+	hand.recorded()
+	return opened
+}
+
+// recordedNotes is the ids of the notes on turnID's record, in the order they
+// were filed, and which wait.
 func recordedNotes(t *testing.T, store *sandbox.CoordStore, turnID string) (all, waiting []string) {
 	t.Helper()
 	run, found, err := store.Get(t.Context(), turnID)
 	if err != nil || !found {
 		t.Fatalf("Get %s = %v, %v", turnID, found, err)
 	}
-	for _, n := range run.Steer.Notes {
+	notes := slices.Clone(run.Steer.Notes)
+	slices.SortFunc(notes, func(a, b sandbox.RunNote) int { return a.Seq - b.Seq })
+	for _, n := range notes {
 		all = append(all, n.ID)
 		if n.Waiting() {
 			waiting = append(waiting, n.ID)
@@ -395,17 +432,18 @@ func recordedNotes(t *testing.T, store *sandbox.CoordStore, turnID string) (all,
 
 // AN OFFER RACING THE LAUNCH IS NEVER ANSWERED CLOSED. A note that read "no
 // record" a moment before the launch wrote one is scattered to the node that
-// held the turn's box: it lands in the box and is handed to the record with it,
-// or finds the box handed and is filed on the record by that node — and either
-// way it waits there for the run, under the person's request id. The box is
-// closed by the hand-over, and an offer that met the closing box looks again.
+// held the turn's box: it lands in the box and rides the write that creates the
+// record, or meets the turn being handed and waits for that write, or finds the
+// turn handed and is filed on the record by that node — and every way it waits
+// there for the run, under the person's request id, behind the note the box
+// held first.
 //
-// Mutation: answer the box's `closed` without looking again, or hand nothing
-// over, and this goes red.
+// Mutation: answer the box's `closed` without looking again, file an offer that
+// meets the hand-over at once rather than after the write, or hand the box's
+// notes over after the record exists, and this goes red.
 func TestAnOfferRacingTheLaunchIsNeverAnsweredClosed(t *testing.T) {
 	t.Parallel()
 	d, store, _ := handingDesk(t)
-	launchedRun(t, store, d.runs, "run-1")
 	box := steer.New()
 	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box, nil)
 	if got := box.Offer(steer.Note{ID: "before", Text: "use staging", By: "founder"}); got != steer.StatusAccepted {
@@ -413,29 +451,40 @@ func TestAnOfferRacingTheLaunchIsNeverAnsweredClosed(t *testing.T) {
 	}
 
 	const racers = 16
-	answers := make(chan steer.Status, racers)
+	type answer struct {
+		id     string
+		status steer.Status
+	}
+	answers := make(chan answer, racers)
 	start := make(chan struct{})
 	for i := range racers {
 		go func() {
 			<-start
-			status, _, _, err := d.offer(t.Context(), "run-1", steer.Note{
-				ID: "racer-" + string(rune('a'+i)), Text: "tag it", By: "founder"})
+			id := "racer-" + string(rune('a'+i))
+			status, _, _, err := d.offer(t.Context(), "run-1", steer.Note{ID: id, Text: "tag it", By: "founder"})
 			if err != nil {
 				t.Errorf("offer %d: %v", i, err)
 			}
-			answers <- status
+			answers <- answer{id: id, status: status}
 		}()
 	}
 	close(start)
-	d.handOff(t.Context(), "run-1")
+	handToRecord(t, d, store, "run-1", nil, nil)
+	all, waiting := recordedNotes(t, store, "run-1")
 	for range racers {
-		if got := <-answers; got == steer.StatusClosed {
+		got := <-answers
+		switch {
+		case got.status == steer.StatusClosed:
 			t.Fatal("an offer racing the launch was told the turn had ended")
+		case got.status == steer.StatusAccepted:
+			if _, waiting := recordedNotes(t, store, "run-1"); !slices.Contains(waiting, got.id) {
+				t.Errorf("note %s was answered accepted and does not wait on the record", got.id)
+			}
 		}
 	}
-	all, waiting := recordedNotes(t, store, "run-1")
-	if !slices.Contains(waiting, "before") {
-		t.Errorf("the note the box held before the launch is not waiting on the record: %v", all)
+	if len(all) == 0 || all[0] != "before" || !slices.Contains(waiting, "before") {
+		t.Errorf("the note the box held before the launch is not the record's first, waiting: %v (waiting %v)",
+			all, waiting)
 	}
 	// AND AFTER THE HAND-OVER the scatter files onto the record as the
 	// record answers.
@@ -446,13 +495,134 @@ func TestAnOfferRacingTheLaunchIsNeverAnsweredClosed(t *testing.T) {
 	}
 }
 
+// THE BOX'S NOTES ARE ON THE RECORD AHEAD OF ONE FILED THERE AS IT IS WRITTEN.
+// Once the launch's write lands, any node's steer_turn finds the record and
+// files on it directly — before this node's launch has gone on to anything
+// else. The box's notes ride that write, so they are first, and they are
+// counted against the turn's bounds before the direct filing is: a box that
+// held as many notes as may wait leaves the direct filing answered `full`,
+// never a note the box accepted refused and expired in its place.
+//
+// Mutation: file the box's notes on the record after its write, one
+// compare-and-swap each, as the hand-over did, and the direct filing lands first
+// and the last of the box's notes is refused.
+func TestTheBoxsNotesAreOnTheRecordAheadOfOneFiledAsItIsWritten(t *testing.T) {
+	t.Parallel()
+	d, store, p := handingDesk(t)
+	box := steer.New()
+	var expired []steer.Note
+	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box,
+		func(_ context.Context, notes []steer.Note) { expired = append(expired, notes...) })
+	var held []string
+	for i := range steer.MaxPendingNotes {
+		id := "box-" + string(rune('a'+i))
+		if got := box.Offer(steer.Note{ID: id, Text: "x", By: "founder"}); got != steer.StatusAccepted {
+			t.Fatalf("the box answered %s to %s", got, id)
+		}
+		held = append(held, id)
+	}
+	var direct builtin.RunFiled
+	handToRecord(t, d, store, "run-1", nil, func() {
+		var err error
+		direct, err = d.runs.File(t.Context(), "run-1", steer.Note{ID: "direct", Text: "y", By: "founder"})
+		if err != nil {
+			t.Fatalf("the direct filing: %v", err)
+		}
+	})
+	all, waiting := recordedNotes(t, store, "run-1")
+	if !slices.Equal(all, held) || !slices.Equal(waiting, held) {
+		t.Errorf("the record holds %v (waiting %v), want the box's notes alone, waiting in the order taken: %v",
+			all, waiting, held)
+	}
+	if direct.Status != steer.StatusFull {
+		t.Errorf("the direct filing behind a full hand-over answered %s, want full", direct.Status)
+	}
+	if len(expired) != 0 || len(steered(p)) != 0 {
+		t.Errorf("the hand-over reported notes expired: %v, %+v", expired, steered(p))
+	}
+}
+
+// AN OFFER THAT MEETS THE HAND-OVER WAITS FOR THE WRITE. Between the box's
+// intake ending and the write that creates the record the note has nowhere it
+// could land behind the box's notes, so it waits — and is filed on the record
+// the moment that write lands, behind them.
+//
+// Mutation: answer the offer from the box (closed), or file it before the
+// write, and this goes red.
+func TestAnOfferThatMeetsTheHandOverWaitsForTheWrite(t *testing.T) {
+	t.Parallel()
+	d, store, _ := handingDesk(t)
+	box := steer.New()
+	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box, nil)
+	box.Offer(steer.Note{ID: "held", Text: "x", By: "founder"})
+	hand := d.handOver("run-1")
+	answered := make(chan steer.Status, 1)
+	go func() {
+		status, _, _, err := d.offer(t.Context(), "run-1", steer.Note{ID: "late", Text: "y", By: "founder"})
+		if err != nil {
+			t.Errorf("offer: %v", err)
+		}
+		answered <- status
+	}()
+	select {
+	case got := <-answered:
+		t.Fatalf("an offer during the hand-over was answered %s before the record existed", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if status, _, err := d.probe("run-1"); err != nil || status != steer.StatusAccepted {
+		t.Errorf("a probe during the hand-over answered (%s, %v), want accepted", status, err)
+	}
+	launchedRun(t, store, d.runs, "run-1", nil, hand.held())
+	hand.recorded()
+	if got := <-answered; got != steer.StatusAccepted {
+		t.Fatalf("the offer that waited answered %s, want accepted on the record", got)
+	}
+	if all, waiting := recordedNotes(t, store, "run-1"); !slices.Equal(all, []string{"held", "late"}) ||
+		!slices.Equal(waiting, all) {
+		t.Errorf("the record holds %v (waiting %v), want the box's note, then the late one", all, waiting)
+	}
+}
+
+// A LAUNCH THAT FAILS BEFORE ITS WRITE GIVES THE BOX ITS NOTES BACK: no record
+// holds them, so they are the box's again — at its front, read first by
+// whatever reads the box next — and the turn takes notes in its box again.
+//
+// Mutation: leave the box handed, or drop what it held, and this goes red.
+func TestALaunchThatFailsBeforeItsWriteGivesTheBoxItsNotesBack(t *testing.T) {
+	t.Parallel()
+	d, _, _ := handingDesk(t)
+	box := steer.New()
+	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box, nil)
+	box.Offer(steer.Note{ID: "held", Text: "x", By: "founder"})
+	hand := d.handOver("run-1")
+	if got := ids(hand.held()); !slices.Equal(got, []string{"held"}) {
+		t.Fatalf("the hand-over took %v, want the box's note", got)
+	}
+	hand.unrecorded(t.Context())
+	status, _, _, err := d.offer(t.Context(), "run-1", steer.Note{ID: "after", Text: "y", By: "founder"})
+	if err != nil || status != steer.StatusAccepted {
+		t.Fatalf("an offer after the failed launch answered (%s, %v), want accepted in the box", status, err)
+	}
+	if got := ids(box.Drain()); !slices.Equal(got, []string{"held", "after"}) {
+		t.Errorf("the box holds %v, want the note it handed back first", got)
+	}
+}
+
+// ids is the ids of notes.
+func ids(notes []steer.Note) []string {
+	out := make([]string, 0, len(notes))
+	for _, n := range notes {
+		out = append(out, n.ID)
+	}
+	return out
+}
+
 // EVERY NOTE THE HAND-OVER ACCEPTED IS ON THE RECORD: an offer answered
 // `accepted` across the hand-over is one the run will read, never one that was
 // lost between the box and the record.
 func TestEveryNoteAcceptedAcrossTheHandOverIsOnTheRecord(t *testing.T) {
 	t.Parallel()
 	d, store, _ := handingDesk(t)
-	launchedRun(t, store, d.runs, "run-1")
 	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, steer.New(), nil)
 	accepted := make(chan string, steer.MaxPendingNotes)
 	done := make(chan struct{})
@@ -466,7 +636,7 @@ func TestEveryNoteAcceptedAcrossTheHandOverIsOnTheRecord(t *testing.T) {
 			}
 		}
 	}()
-	d.handOff(t.Context(), "run-1")
+	handToRecord(t, d, store, "run-1", nil, nil)
 	<-done
 	close(accepted)
 	all, _ := recordedNotes(t, store, "run-1")
@@ -484,9 +654,8 @@ func TestEveryNoteAcceptedAcrossTheHandOverIsOnTheRecord(t *testing.T) {
 func TestAHandedProbeNamesTheSeat(t *testing.T) {
 	t.Parallel()
 	d, store, _ := handingDesk(t)
-	launchedRun(t, store, d.runs, "run-1")
 	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, steer.New(), nil)
-	d.handOff(t.Context(), "run-1")
+	handToRecord(t, d, store, "run-1", nil, nil)
 
 	status, seat, err := d.probe("run-1")
 	if err != nil || status != steer.StatusAccepted || seat.agent != sweAgent || seat.handle != "swe" {
@@ -507,8 +676,8 @@ func TestAFailedLaunchExpiresItsBoxNotes(t *testing.T) {
 	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box,
 		func(context.Context, []steer.Note) { calls++ })
 	box.Offer(steer.Note{ID: "taken", Text: "x"})
-	// The brief takes the note, the launch fails, and the runner gives it
-	// back ([runner.SteerSource.Return]).
+	// The brief takes the note, the launch fails before its write, and the
+	// runner gives it back ([runner.SteerSource.Return]).
 	brief := box.Brief(t.Context())
 	box.Return(t.Context(), brief)
 
@@ -523,41 +692,53 @@ func TestAFailedLaunchExpiresItsBoxNotes(t *testing.T) {
 	}
 }
 
-// A LAUNCH THAT FAILS AFTER THE HAND-OVER LOSES NO NOTE. The box is handed to
-// the run's record the moment the launch has written one, and the launch can
-// still fail after that — its box not made, its CLI not started — and give its
-// brief's notes back. The handed box keeps them, the segment's close reports
-// them expired with the turn, and the turn stays handed: a late note is still
-// filed on the record, never answered closed by a box that took it back.
+// A LAUNCH THAT FAILS AFTER ITS WRITE LEAVES ITS NOTES TO THE RECORD'S ENDING.
+// The write that creates the record holds the brief's notes, read by the job it
+// opens, and the box's, waiting — and the launch can still fail after it, its
+// box not made, its CLI not started. Nothing is handed back: the segment's close
+// reports nothing, and the run's ending, which every such failure decides,
+// reports every one of them expired — the brief's too, read by a job that never
+// started — once, under its own ids.
 //
-// Mutation: hand the box over by closing it, and the brief's notes a failed
-// launch gives back are dropped with no record of what became of them.
-func TestALaunchThatFailsAfterTheHandOverExpiresItsBriefsNotes(t *testing.T) {
+// Mutation: hand the brief's notes back to the box as a failed launch did, or
+// leave a never-started job's brief reads out of the ending's, and a note is
+// reported twice or never.
+func TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding(t *testing.T) {
 	t.Parallel()
-	d, store, _ := handingDesk(t)
-	launchedRun(t, store, d.runs, "run-1")
+	d, store, p := handingDesk(t)
 	box := steer.New()
 	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box, nil)
 	box.Offer(steer.Note{ID: "briefed", Text: "use staging", By: "founder"})
 	brief := box.Brief(t.Context())
-	d.handOff(t.Context(), "run-1")
-	// The launch fails after the hand-over, and the runner gives the brief's
-	// notes back ([runner.SteerSource.Return]).
-	box.Return(t.Context(), brief)
-	expired := d.close("run-1")
-	if len(expired) != 1 || expired[0].ID != "briefed" {
-		t.Fatalf("the segment's close returned %+v, want the brief's note the failed launch gave back",
-			expired)
+	box.Offer(steer.Note{ID: "held", Text: "and tag it", By: "founder"})
+	opened := handToRecord(t, d, store, "run-1", brief, nil)
+	// THE LAUNCH FAILS: the runner hands nothing back, since the launch named
+	// the job it opened ([runner.Launched.LaunchID]).
+	if expired := d.close("run-1"); len(expired) != 0 {
+		t.Fatalf("the segment's close returned %+v, want nothing: the record holds them", expired)
 	}
-	if again := d.close("run-1"); len(again) != 0 {
-		t.Errorf("a second close returned %+v", again)
+	run := mustRow(t, store, "run-1")
+	if run.LaunchID != opened.LaunchID || run.CommandID != "" {
+		t.Fatalf("the record is %+v, want the job the launch opened, never started", run)
+	}
+	run.Ending = &sandbox.RecordedEnding{ID: "abandoned", At: time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)}
+	if err := d.runs.expired(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, rec := range steered(p) {
+		if rec.Outcome != types.SteerExpired {
+			t.Errorf("the ending published %+v", rec)
+		}
+		got = append(got, rec.NoteID)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"briefed", "held"}) {
+		t.Errorf("the ending reported %v expired, want the brief's note and the box's, once each", got)
 	}
 	status, _, _, err := d.offer(t.Context(), "run-1", steer.Note{ID: "late", Text: "x", By: "founder"})
 	if err != nil || status != steer.StatusAccepted {
 		t.Errorf("a late note after the close answered (%s, %v), want it filed on the record", status, err)
-	}
-	if all, _ := recordedNotes(t, store, "run-1"); !slices.Contains(all, "late") {
-		t.Errorf("the late note is not on the record: %v", all)
 	}
 }
 

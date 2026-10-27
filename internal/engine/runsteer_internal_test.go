@@ -341,7 +341,7 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 			}
 		})
 	}
-	launchedRun(t, store, runs, "run-good")
+	launchedRun(t, store, runs, "run-good", nil, nil)
 	if seat, _, _ := runs.Seat(t.Context(), "run-good"); seat.Agent != sweAgent || seat.Unverified != "" {
 		t.Errorf("a sealed anchor read as %+v", seat)
 	}
@@ -591,14 +591,36 @@ func (s *stallingStore) hold() func() {
 	}
 }
 
+// endRun plays a run's ending as the coordinator finishes one: decided under
+// fence, every note no job ran with reported expired, and the record deleted.
+func endRun(ctx context.Context, t *testing.T, store sandbox.PendingStore, runs *runSteers, turnID string,
+	fence sandbox.Fence,
+) {
+	t.Helper()
+	decided, ok, err := store.DecideEnding(ctx, turnID, sandbox.Decision{License: sandbox.License{
+		Fence: fence, WhileIn: sandbox.Active, Launch: sandbox.EveryLaunch}})
+	if err != nil || !ok || decided.Ending == nil {
+		t.Fatalf("DecideEnding = %v, %v (%+v)", ok, err, decided.Ending)
+	}
+	if err := runs.expired(ctx, decided); err != nil {
+		t.Fatalf("expired: %v", err)
+	}
+	if _, _, err := store.Finish(ctx, turnID, decided.Ending.ID); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+}
+
 // A RUN'S RECORD IS A STEER SOURCE LIKE THE FIRST SEGMENT'S BOX: the one suite
 // every source runs (internal/agent/runner/steersourcetest), against the source
 // a segment resuming the turn reads — its takes pinned to the claimed job, the
 // resumed status and its lease, Waiting answered from its view of the record,
-// and a brief its relaunch recorded read handed back as expired.
+// and a brief's notes reported expired once, by the run's ending alone, whether
+// its relaunch recorded them read and failed or another node ended the run
+// first.
 //
-// Mutation: answer Waiting false, read the store from Waiting, or return from
-// Return without recording anything, and the suite goes red.
+// Mutation: answer Waiting false, read the store from Waiting, publish from
+// Return, or leave a never-started job's brief reads out of the ending's, and
+// the suite goes red.
 func TestARunsRecordIsASteerSource(t *testing.T) {
 	t.Parallel()
 	steersourcetest.Run(t, func(t *testing.T) steersourcetest.Source {
@@ -628,7 +650,7 @@ func TestARunsRecordIsASteerSource(t *testing.T) {
 				}
 				return out
 			},
-			LaunchWrote: func(t *testing.T, notes []steer.Note) {
+			LaunchFailed: func(t *testing.T, notes []steer.Note) {
 				t.Helper()
 				sealed, err := runs.briefNotes("run-1", 2, notes)
 				if err != nil {
@@ -639,7 +661,9 @@ func TestARunsRecordIsASteerSource(t *testing.T) {
 				if _, err := store.BeginLaunch(ctx, relaunch, fence); err != nil {
 					t.Fatalf("the relaunch's write: %v", err)
 				}
+				endRun(ctx, t, store, runs, "run-1", fence)
 			},
+			End:   func(t *testing.T) { endRun(ctx, t, store, runs, "run-1", fence) },
 			Stall: store.hold,
 		}
 	})

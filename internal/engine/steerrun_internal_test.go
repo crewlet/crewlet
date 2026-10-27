@@ -15,6 +15,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -695,25 +696,26 @@ func TestALaunchedTurnsLateNoteIsFiledOnItsRecord(t *testing.T) {
 	}
 }
 
-// launchWindow is a run store that lets a case act inside a launch: before the
-// write that opens the run's record, and when the launch first attaches a box —
-// after the store has named the job and before the launch returns.
+// launchWindow is a run store that lets a case act inside a launch: the moment
+// the write that opens the run's record has landed — before the launch has
+// gone on to anything else — and when the launch first attaches a box.
 type launchWindow struct {
 	sandbox.PendingStore
 	mu       sync.Mutex
-	begin    func(ctx context.Context, turnID string)
+	written  func(ctx context.Context, turnID string)
 	attached func(ctx context.Context, turnID string)
 }
 
 func (w *launchWindow) BeginLaunch(ctx context.Context, run sandbox.PendingRun, fence sandbox.Fence) (sandbox.PendingRun, error) {
+	opened, err := w.PendingStore.BeginLaunch(ctx, run, fence)
 	w.mu.Lock()
-	hook := w.begin
-	w.begin = nil
+	hook := w.written
+	w.written = nil
 	w.mu.Unlock()
-	if hook != nil {
+	if hook != nil && err == nil {
 		hook(ctx, run.TurnID)
 	}
-	return w.PendingStore.BeginLaunch(ctx, run, fence)
+	return opened, err
 }
 
 func (w *launchWindow) AttachSandbox(ctx context.Context, turnID string, box sandbox.BoxRef, fence sandbox.Fence) error {
@@ -728,40 +730,55 @@ func (w *launchWindow) AttachSandbox(ctx context.Context, turnID string, box san
 }
 
 // A NOTE THE BOX HELD AT THE LAUNCH IS READ BEFORE ONE FILED ON THE RECORD
-// DURING IT. A note that reached the first segment's box after its brief was
-// taken — it read "no record" and was scattered to the box — was sent before
-// any note a person files on the record once the launch has written one. So it
-// goes to the record the moment there is one, ahead of them: every reader of a
+// AS IT IS WRITTEN. A note that reached the first segment's box after its brief
+// was taken was sent before any note a person files on the record once the
+// launch has written one — and the moment that write lands, any node's
+// steer_turn finds the record and files on it directly. So the box's note rides
+// the write that creates the record, ahead of everything: every reader of a
 // run's notes takes in the record's order, and where two notes disagree the
-// later word is the one a model is told to keep. Handed over once the launch
-// had returned — its box made, its CLI started — it was filed behind every
-// note filed on the record in that window, and read after them.
+// later word is the one a model is told to keep. Handed over by the launch once
+// the record existed, it was filed behind a note filed on the record in that
+// window, and read after it.
 //
-// Mutation: hand the box over after the launch returns, as it was, and the
-// note filed during the launch is first.
+// Mutation: hand the box over after the launch's write, as it was, and the note
+// filed as the record is written is first.
 func TestANoteTheBoxHeldAtTheLaunchIsReadBeforeOneFiledDuringIt(t *testing.T) {
 	t.Parallel()
 	model := &reviewWatch{}
 	e, _ := indicatingWith(t, notify.StatusAlways, model)
 	steerable(t, e)
-	store := &launchWindow{PendingStore: sandbox.NewCoordStore(e.backends.Fleet)}
-	store.begin = func(ctx context.Context, turnID string) {
-		status, _, _, err := e.steers.offer(ctx, turnID, steer.Note{
-			ID: "use-postgres", Text: "use postgres", By: "founder", ByKind: iam.ActorHuman})
-		if err != nil || status != steer.StatusAccepted {
-			t.Errorf("the note to the box before the record answered (%s, %v)", status, err)
+	// THE BOX'S NOTE, offered as the executor's phase opens: its brief has
+	// been taken, and its launch has not begun.
+	var once sync.Once
+	e.Backends().Queue.AddPublishListener(func(ctx context.Context, _ string, ev *events.Event) {
+		started, ok := events.DataAs[*types.AgentPhaseStarted](ev)
+		if !ok || started.Phase != types.PhaseExecute {
+			return
 		}
-	}
-	store.attached = func(ctx context.Context, turnID string) {
-		filed, err := e.RunSteers().File(ctx, turnID, steer.Note{
+		once.Do(func() {
+			status, _, _, err := e.steers.offer(ctx, started.TurnID, steer.Note{
+				ID: "use-postgres", Text: "use postgres", By: "founder", ByKind: iam.ActorHuman})
+			if err != nil || status != steer.StatusAccepted {
+				t.Errorf("the note to the box before the launch answered (%s, %v)", status, err)
+			}
+		})
+	})
+	store := &launchWindow{PendingStore: sandbox.NewCoordStore(e.backends.Fleet)}
+	var direct builtin.RunFiled
+	store.written = func(ctx context.Context, turnID string) {
+		var err error
+		direct, err = e.RunSteers().File(ctx, turnID, steer.Note{
 			ID: "use-sqlite", Text: "actually, sqlite", By: "founder", ByKind: iam.ActorHuman})
-		if err != nil || filed.Status != steer.StatusAccepted {
-			t.Errorf("the note filed on the record during the launch answered (%+v, %v)", filed, err)
+		if err != nil {
+			t.Errorf("the note filed on the record as it was written: %v", err)
 		}
 	}
 	rig := rigRunsOn(t, e, store, modelPlayer(t, model.run))
 	parkOnARun(t, e, rig, "run-1")
 
+	if direct.Status != steer.StatusAccepted {
+		t.Fatalf("the note filed on the record as it was written answered %+v", direct)
+	}
 	notes := slices.Clone(rig.row(t, "run-1").Steer.Notes)
 	slices.SortFunc(notes, func(a, b sandbox.RunNote) int { return a.Seq - b.Seq })
 	var order []string
