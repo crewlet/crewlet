@@ -165,17 +165,34 @@ export type DiffViewProps = DiffSource & {
 };
 
 /**
- * How many rows a diff draws before it is windowed.
+ * How many rows a diff draws before it is windowed. PROVISIONAL: the value
+ * was set without its cost measured, and the measurement that decides it is
+ * named below.
  *
  * A row is about 21px (13px mono on the body's 1.45 leading, and a quarter
  * step of padding above and below), so a 900px view shows some 43 rows and
  * the window — the view and one view either side of it — about 130: two
- * blocks, three at most. A thousand rows is some seven windows' worth, and
- * under it mounting all of them is a few thousand elements, which a tab lays
- * out in a frame or two; the cost of windowing them instead is find-in-page
- * and a screen reader's reading of the whole diff, which only a diff past it
- * is worth paying. Above it the mount grows with the diff and the window does
- * not.
+ * blocks, three at most. A thousand rows is some seven windows' worth.
+ *
+ * WHAT IT MOUNTS AT THE THRESHOLD, counted from what a row draws rather than
+ * timed. A unified row is one line: the line, its two numbers (a keyed line's
+ * path in their place), its mark and the glyph in it, the word read in the
+ * glyph's place, its text, and an underline where it was edited — five to
+ * eight elements, about 7. A split row is a PAIR of lines, since the
+ * threshold counts rows as they are drawn, so a split diff holds up to twice
+ * the lines under it: the pair, and five to seven elements on each side that
+ * holds a line — up to fifteen, about 13. Every line and every pair is a grid
+ * of its own. So a diff at the threshold mounts about 7,000 elements unified
+ * and about 13,000 split, every one of them laid out before the first paint.
+ *
+ * WHAT IT WEIGHS: a mounted diff keeps find-in-page and a screen reader's
+ * reading of the whole of it, which windowing takes away; windowing keeps the
+ * mount and the layout to the rows near the view, whatever the diff's length.
+ * WHAT DECIDES IT: the time from mounting a 1,000-row split diff to its first
+ * paint, the worst the threshold allows, measured on CI's class of runner.
+ * The value stands while that is within 100 ms, RAIL's budget for a response
+ * the reader sees (a diff is drawn in answer to a click); past it, the
+ * threshold comes down to the rows that fit in it.
  */
 export const WINDOW_FROM_ROWS = 1000;
 
