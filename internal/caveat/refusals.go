@@ -101,3 +101,24 @@ func ValueInWrongForm() Refusal {
 		"does not take, so nothing was changed. Ask the assistant to send it " +
 		"again, or make the change yourself."}
 }
+
+// TokenBudgetSpent is a call a token budget refused before anything was spent,
+// carrying where the ceiling that refused it is changed. NEVER "WAIT" ALONE:
+// the window turning over is one way back, and a raised ceiling is the other,
+// which is the one the remedy beside these words opens.
+func TokenBudgetSpent(where Remedy) Refusal {
+	const back = " It comes back when the window resets, or as soon as the " +
+		"ceiling is raised."
+	var whose string
+	switch where.Setting {
+	case SettingSeatTokenBudget:
+		whose = "@" + where.Seat + "'s token budget"
+	case SettingAssistantTokenBudget:
+		whose = "Your own assistant token budget"
+	default:
+		whose = "The company's token budget"
+		where = CompanyTokenBudget()
+	}
+	return Refusal{person: whose + " for this window is spent, so nothing was " +
+		"sent." + back, remedy: where}
+}

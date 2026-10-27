@@ -33,23 +33,41 @@ import (
 // guarantee [Caveat] makes.
 
 // Refusal is a refused call's words for a person: what was refused and, where
-// something is theirs to do, what, in the words of the controls they see. The
-// zero value is no phrasing at all, which a person's surface answers with the
-// refusal code's own sentence.
+// something is theirs to do, what, in the words of the controls they see; and,
+// for a refusal a configurable limit caused, the [Remedy] naming that limit.
+// The zero value is no phrasing at all, which a person's surface answers with
+// the refusal code's own sentence.
 type Refusal struct {
 	person string
+	remedy Remedy
 }
 
 // Person is the refusal as a person reads it.
 func (r Refusal) Person() string { return r.person }
 
+// Remedy is where a person changes the limit that caused the refusal, or the
+// zero [Remedy] for a refusal no configurable limit caused.
+func (r Refusal) Remedy() Remedy { return r.remedy }
+
 // IsZero reports whether r is no phrasing at all.
 func (r Refusal) IsZero() bool { return r.person == "" }
 
-// MarshalJSON writes the refusal as it crosses between nodes: its sentence.
-// There is no UnmarshalJSON, for [Caveat]'s reason: a peer's phrasing is
-// rebuilt only by the estate router ([SaidFromPeer]).
-func (r Refusal) MarshalJSON() ([]byte, error) { return json.Marshal(r.person) }
+// peerRefusal is a [Refusal] as it crosses between nodes.
+type peerRefusal struct {
+	Person string  `json:"person"`
+	Remedy *Remedy `json:"remedy,omitempty"`
+}
+
+// MarshalJSON writes the refusal as it crosses between nodes: its sentence and
+// its remedy. There is no UnmarshalJSON, for [Caveat]'s reason: a peer's
+// phrasing is rebuilt only by the estate router ([SaidFromPeer]).
+func (r Refusal) MarshalJSON() ([]byte, error) {
+	out := peerRefusal{Person: r.person}
+	if !r.remedy.IsZero() {
+		out.Remedy = &r.remedy
+	}
+	return json.Marshal(out)
+}
 
 // Said carries a [Refusal] in an error chain, so a domain writer's refusal
 // reaches the tool that answers it with its person's words still on it, on

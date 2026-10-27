@@ -132,6 +132,12 @@ func Fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
 	maps.Copy(detail, about)
 	if !said.IsZero() {
 		detail["detail"] = said.Person()
+		// WHERE THE LIMIT THAT CAUSED IT IS CHANGED, beside the words, for
+		// a refusal a configurable limit caused (ADR-0060): a value the
+		// dashboard resolves to the screen that edits it.
+		if remedy := said.Remedy(); !remedy.IsZero() {
+			detail["remedy"] = remedy
+		}
 	}
 	var unknown *builtin.UnknownOutcome
 	var refused *builtin.DecisionRefused
