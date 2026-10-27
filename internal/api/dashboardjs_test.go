@@ -1288,8 +1288,12 @@ const (
 	// drawn on every surface a spent budget is shown on, a section arrived
 	// at on Budgets, each person's assistant ceiling edited there, and the
 	// one rule a refused question goes back in the box by, took it to
-	// 4601.7 KiB. 4602 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 506<<10
+	// 4601.7 KiB. 4602 KiB, which still refuses a doubled baseline. The
+	// review's fixes (a restore decided once per turn in the session, a
+	// section matched by its path and name, Home's spent week through the
+	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
+	// still refuses a doubled baseline.
+	treeBudget = 4<<20 + 507<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
