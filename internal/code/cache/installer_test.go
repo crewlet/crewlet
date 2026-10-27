@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -255,5 +256,157 @@ func TestAStaleLayersWaitIsItsOwnEpisodes(t *testing.T) {
 			t.Errorf("after a try that found nothing due, the repository waits until %v after %d failures: "+
 				"an install that ends with nothing due forgets its wait", at, failures)
 		}
+	})
+}
+
+// THE INSTALLER WAITS OUT A STORE THAT FAILS: each try of a repository the
+// store fails to answer waits installRetryBase, doubled after each failure in a
+// row and never past installRetryCap — 1, 2, 4, 8, 16 and then 30 minutes, at
+// most one try of the repository a node every half hour while it keeps
+// failing — logged code_layer_install_failed with that wait (retry_in); a pass
+// before the wait ends asks the store nothing, and one at its end tries again.
+//
+// Mutations: an uncapped window (installWindow without its cap) — the sixth
+// wait is 32 minutes; a window that does not double — the second is a minute.
+func TestTheInstallerWaitsOutAStoreThatFails(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 2)
+	clk := newClock()
+	c := w.open(t, clk.on)
+	w.sync(t, c, repo).Release()
+	chain := w.buildChain(t, p)
+	w.refuseParts(chain...)
+	w.log.publish(repo, chain, nil)
+	w.sync(t, c, repo).Release()
+
+	parts := partsOf(chain...)
+	for n, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute,
+		16 * time.Minute, cache.InstallRetryCap, cache.InstallRetryCap} {
+		gets := w.gets(parts)
+		cache.InstallPass(c)
+		if got := w.gets(parts) - gets; got != len(parts) {
+			t.Fatalf("try %d asked the store for the layer's parts %d times, want once each", n+1, got)
+		}
+		at, failures := cache.InstallWait(c, repo)
+		if failures != n+1 || !at.Equal(clk.Now().Add(wait)) {
+			t.Fatalf("after try %d the next is due at %v after %d failures, want %v after %d", n+1, at, failures,
+				clk.Now().Add(wait), n+1)
+		}
+		lines := w.logs.lines(t, "code_layer_install_failed")
+		if len(lines) != n+1 || lines[n]["retry_in"] != float64(wait) {
+			t.Fatalf("try %d logged code_layer_install_failed %d times in all, the last %v: want once a try, "+
+				"retry_in %v", n+1, len(lines), lines[len(lines)-1], wait)
+		}
+		clk.Set(at.Add(-time.Second))
+		gets = w.gets(parts)
+		cache.InstallPass(c)
+		if got := w.gets(parts); got != gets {
+			t.Fatalf("a pass a second before try %d's wait ended asked the store again", n+2)
+		}
+		clk.Set(at)
+	}
+	if got := w.layerCount("failed"); got != 7 {
+		t.Errorf("crewlet.code.cache.layers{outcome=failed} = %d, want the seven tries", got)
+	}
+}
+
+// A ROUND THAT SERVES THE CHAIN ENDS THE INSTALLER'S WAIT: a new publication
+// reaches the node as new rows through a delta, which is a new try of the
+// repository — the installer takes it up at once, whatever its wait after
+// failures of the chain before — rather than through the retry the wait holds
+// back.
+//
+// Mutation: drop the wait's end at a round that serves the chain
+// (kickInstall's fresh) — the pass at the delta's instant asks the store
+// nothing, and the new chain waits out the old one's failures.
+func TestARoundThatServesTheChainEndsTheInstallersWait(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 3)
+	clk := newClock()
+	c := w.open(t, clk.on)
+	w.sync(t, c, repo).Release()
+	b := w.newChainBuild(t, p[:2], p[2:])
+	root := b.layer(t, p[:2], false)
+	top := b.layer(t, p[2:], false)
+	answer := w.refuseParts(root)
+	w.log.publish(repo, []code.LayerRef{root}, nil)
+	w.sync(t, c, repo).Release()
+	for range 3 {
+		cache.InstallPass(c)
+		at, _ := cache.InstallWait(c, repo)
+		clk.Set(at)
+	}
+	cache.InstallPass(c)
+	if at, failures := cache.InstallWait(c, repo); failures != 4 || !at.After(clk.Now()) {
+		t.Fatalf("after four failed tries the next is due at %v after %d failures, want a wait ahead", at,
+			failures)
+	}
+
+	// The store answers, and the maintainer's next publication arrives.
+	answer()
+	w.log.publish(repo, []code.LayerRef{root, top}, nil)
+	w.sync(t, c, repo).Release()
+	cache.InstallPass(c)
+	if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, []string{root.LayerID, top.LayerID}) {
+		t.Fatalf("the pass at the delta's own instant left the copy holding %v, want the new chain %v placed: "+
+			"a round that serves the chain is a new try", got, []string{root.LayerID, top.LayerID})
+	}
+	if at, failures := cache.InstallWait(c, repo); !at.IsZero() || failures != 0 {
+		t.Errorf("with the chain placed the repository waits until %v after %d failures, want no wait", at,
+			failures)
+	}
+}
+
+// THE INSTALLER WAKES WHEN ITS EARLIEST WAIT ENDS: the loop Start begins runs
+// a pass at every kick, and between kicks sleeps until the earliest wait of a
+// repository it holds ends — told to its wake (here the case's, in place of a
+// timer) — and retries then, with no kick: a store failing a layer is asked
+// again a minute later, and the layer placed once it answers.
+//
+// Mutation: sleep until a kick alone (runInstaller's wake left nil) — the loop
+// asks to be woken at nothing, and the layer is never retried.
+func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 2)
+	clk := newClock()
+	var mu sync.Mutex
+	var asked []time.Time
+	fire := make(chan time.Time)
+	c := w.open(t, clk.on, func(o *cache.Options) {
+		cache.InstallWakesWith(o, func(at time.Time) <-chan time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			asked = append(asked, at)
+			return fire
+		})
+	})
+	c.Start(t.Context())
+	w.sync(t, c, repo).Release()
+	chain := w.buildChain(t, p)
+	answer := w.refuseParts(chain...)
+	w.log.publish(repo, chain, nil)
+	w.sync(t, c, repo).Release()
+
+	due := clk.Now().Add(cache.InstallRetryBase)
+	eventually(t, "the installer asking to be woken once its first try's wait ends", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.ContainsFunc(asked, due.Equal)
+	})
+	answer()
+	clk.Set(due)
+	select {
+	case fire <- due:
+	case <-time.After(hangDetector):
+		t.Fatalf("the installer's loop took no wake within %v", hangDetector)
+	}
+	eventually(t, "the layer placed by the retry the wake made", func() bool {
+		return slices.Equal(layerIDs(cache.Installed(c, repo)), layerIDs(chain))
 	})
 }
