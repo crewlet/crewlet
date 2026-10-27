@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // ---- the one way a tool is called (ADR-0059) ------------------------------ //
@@ -133,9 +132,7 @@ func withFaults(in Invocation, res Result, faults []ArgFault) Result {
 			attrs = append(attrs, "turn", in.Turn.RunID)
 		}
 		contractLog.Info("tool_args_outside_schema", attrs...)
-		if in.Counter != nil {
-			in.Counter.Add(metrics.ToolArgsOutsideSchema, 1, metrics.Attrs{"tool": in.Name})
-		}
+		argsOutsideSchema.add(in.Counter, in.Name)
 	}
 	return res
 }
