@@ -31,24 +31,30 @@ func (in *interleaving) damageInPlace(string) string {
 	return fmt.Sprintf("%s of repo-%d flipped", filepath.Base(rel), slices.Index(in.repos, repo)+1)
 }
 
-// requestMeetsDamage is a request whose git meets damage of a copy: a file
-// the copy holds flipped in place, as media damage is, and the request's pack
+// requestMeetsDamage is a request whose git meets damage of the copy it
+// reads: a linearizable sync of a held repository, a file of the copy that
+// sync answered flipped in place, as media damage is, and the request's pack
 // or object failure handed to Rebuild as the host hands it — begun after
 // every write into the copy, so it is repaired, never answered as it stands:
 // by the forced round where an index file or a derived one failed, by the
 // scrub that round runs when it found nothing (a pack's body), and by the
-// whole rebuild only where neither found anything to fetch again.
+// whole rebuild only where neither found anything to fetch again. The file
+// is picked from the copy the sync answered, never before the sync: its
+// round may take files out of the copy in place — the first round after a
+// crash left a swap's leaving packs in it sweeps them there — or move the
+// repository into its next incarnation.
 func (in *interleaving) requestMeetsDamage(string) string {
-	repo, dir, rel := in.heldFile(true)
-	if rel == "" {
+	repo := in.heldRepo()
+	if repo == "" {
 		return "nothing held"
 	}
 	s := in.syncAt(repo, linearizable)
 	defer s.Release()
-	if s.Dir != dir {
-		return "replaced before the damage"
+	rel := in.fileOf(s.Dir, true)
+	if rel == "" {
+		return "nothing held"
 	}
-	flipInPlace(in.t, filepath.Join(dir, rel))
+	flipInPlace(in.t, filepath.Join(s.Dir, rel))
 	reason := []cache.RebuildReason{cache.RebuildCorrupt, cache.RebuildMissing}[in.rng.IntN(2)]
 	r, err := in.c.Rebuild(in.t.Context(), s, cache.Failure{Reason: reason, Began: time.Now()})
 	switch {

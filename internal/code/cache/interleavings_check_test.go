@@ -16,10 +16,22 @@ import (
 // and a file replaced while the check hashes it.
 
 // heldFile picks a repository the cache holds and one of its incarnation's
-// index files — a pack's .idx or .rev, or a derived file, and with packs a
-// pack's .pack too — answering the repository, the incarnation's directory
-// and the file's path relative to it, or "" when the cache holds nothing.
+// index files (fileOf), answering the repository, the incarnation's
+// directory and the file's path relative to it, or "" when the cache holds
+// nothing.
 func (in *interleaving) heldFile(packs bool) (repo, dir, rel string) {
+	if repo = in.heldRepo(); repo == "" {
+		return "", "", ""
+	}
+	dir = in.w.dir(in.t, in.c, repo)
+	if rel = in.fileOf(dir, packs); rel == "" {
+		return "", "", ""
+	}
+	return repo, dir, rel
+}
+
+// heldRepo picks a repository the cache holds, or "" when it holds none.
+func (in *interleaving) heldRepo() string {
 	held := cache.Repos(in.c)
 	var repos []string
 	for _, r := range in.repos {
@@ -28,10 +40,15 @@ func (in *interleaving) heldFile(packs bool) (repo, dir, rel string) {
 		}
 	}
 	if len(repos) == 0 {
-		return "", "", ""
+		return ""
 	}
-	repo = repos[in.rng.IntN(len(repos))]
-	dir = in.w.dir(in.t, in.c, repo)
+	return repos[in.rng.IntN(len(repos))]
+}
+
+// fileOf picks one of the index files of the incarnation at dir — a pack's
+// .idx or .rev, or a derived file, and with packs a pack's .pack too — and
+// answers its path relative to dir, or "" when it holds none.
+func (in *interleaving) fileOf(dir string, packs bool) string {
 	var files []string
 	for _, name := range names(in.t, filepath.Join(dir, "objects", "pack")) {
 		if strings.HasSuffix(name, ".idx") || strings.HasSuffix(name, ".rev") || strings.HasSuffix(name, ".bitmap") ||
@@ -43,10 +60,10 @@ func (in *interleaving) heldFile(packs bool) (repo, dir, rel string) {
 		files = append(files, filepath.Join("objects", "info", "commit-graph"))
 	}
 	if len(files) == 0 {
-		return "", "", ""
+		return ""
 	}
 	slices.Sort(files)
-	return repo, dir, files[in.rng.IntN(len(files))]
+	return files[in.rng.IntN(len(files))]
 }
 
 // damageAndRestart is damage a previous process left: the cache stops, a
