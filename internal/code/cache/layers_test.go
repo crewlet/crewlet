@@ -1719,12 +1719,12 @@ func TestAMaintainersOwnLayerIsInstalledWithNoDownload(t *testing.T) {
 		t.Fatalf("AdoptLayer: %v", err)
 	}
 	s.Release()
-	if got := cache.AdoptedLayers(c)[repo]; !slices.Equal(got, []string{stray.LayerID}) {
+	if got := cache.StagedLayers(c)[repo]; !slices.Equal(got, []string{stray.LayerID}) {
 		t.Fatalf("the adoptions held are %v, want the stray one", got)
 	}
 	clk.Add(objstore.RecordWithin)
-	cache.ExpireAdoptedLayers(c)
-	if got := cache.AdoptedLayers(c); len(got) != 0 {
+	cache.ExpireStagedLayers(c)
+	if got := cache.StagedLayers(c); len(got) != 0 {
 		t.Errorf("after RecordWithin the adoptions held are %v, want none", got)
 	}
 }

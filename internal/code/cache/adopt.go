@@ -274,7 +274,7 @@ func (c *Cache) adoptCounted(repoID string, outcome adoptOutcome) {
 // the layer over that very base places them in place of a GET
 // (crewlet.code.cache.layers{outcome=adopted}). One no round's chain names
 // within objstore.RecordWithin is a function of a record that never applied,
-// and the janitor discards it (expireAdoptedLayers).
+// and the janitor discards it (expireStagedLayers).
 //
 // A row the files are not (code.ErrBadLayer), or a scratch of another cache
 // or repository, is refused (ErrInvalid) with nothing staged; a link or a
@@ -322,11 +322,11 @@ func (c *Cache) AdoptLayer(ctx context.Context, repoID string, sc *Scratch, row 
 	st.base = base
 	in := c.installer
 	in.mu.Lock()
-	if in.adopted[repoID] == nil {
-		in.adopted[repoID] = map[string]*stagedLayer{}
+	if in.staged[repoID] == nil {
+		in.staged[repoID] = map[string]*stagedLayer{}
 	}
-	old := in.adopted[repoID][row.LayerID]
-	in.adopted[repoID][row.LayerID] = st
+	old := in.staged[repoID][row.LayerID]
+	in.staged[repoID][row.LayerID] = st
 	in.mu.Unlock()
 	if old != nil {
 		old.remove(c)

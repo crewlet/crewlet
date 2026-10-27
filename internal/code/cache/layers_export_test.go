@@ -223,14 +223,15 @@ func WantsRun(c *Cache, repoID string) bool {
 // InstallerShare is the installer's parts in flight bound and its tasks.
 func InstallerShare(c *Cache) int { return c.installer.tasks }
 
-// AdoptedLayers is the layers maintainers adopted on c that no placement has
-// taken yet, by repository.
-func AdoptedLayers(c *Cache) map[string][]string {
+// StagedLayers is the layers staged on c for a placement that has not taken
+// them yet — maintainers' adoptions, and the installer's own fetches a moved
+// placement held — by repository.
+func StagedLayers(c *Cache) map[string][]string {
 	in := c.installer
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	out := map[string][]string{}
-	for repo, layers := range in.adopted {
+	for repo, layers := range in.staged {
 		for id := range layers {
 			out[repo] = append(out[repo], id)
 		}
@@ -239,6 +240,6 @@ func AdoptedLayers(c *Cache) map[string][]string {
 	return out
 }
 
-// ExpireAdoptedLayers runs the janitor's discard of the adoptions no round's
-// chain named within objstore.RecordWithin, on c's clock.
-func ExpireAdoptedLayers(c *Cache) { c.expireAdoptedLayers() }
+// ExpireStagedLayers runs the janitor's discard of the staged layers no
+// placement took within objstore.RecordWithin, on c's clock.
+func ExpireStagedLayers(c *Cache) { c.expireStagedLayers() }

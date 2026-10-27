@@ -112,9 +112,11 @@ func (c *Cache) janitor(ctx context.Context) {
 func (c *Cache) janitorPass(ctx context.Context, ticked bool) {
 	c.emptyTrash(ctx)
 	c.measureScratch(ctx)
-	// A layer its maintainer adopted that no round's chain named within
-	// objstore.RecordWithin is a record that never applied (AdoptLayer).
-	c.expireAdoptedLayers()
+	// A layer staged for a placement that took none of it within
+	// objstore.RecordWithin: an adoption whose record never applied
+	// (AdoptLayer), or a fetch a moved placement held (holdFetched) that
+	// every plan of its copy since has passed by.
+	c.expireStagedLayers()
 	c.listMemos(ctx)
 	trimmed := c.trimMemo(ctx, ticked)
 	if c.evictToBudget(ctx) > 0 || trimmed {

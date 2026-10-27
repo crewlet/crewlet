@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -538,5 +539,163 @@ func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
 	}
 	eventually(t, "the layer placed by the retry the wake made", func() bool {
 		return slices.Equal(layerIDs(cache.Installed(c, repo)), layerIDs(chain))
+	})
+}
+
+// holdFirst holds the first read of key in the world's store until the answer
+// is called, and refuses the first read of it that is not held — one a case
+// makes while the held one waits — with an error that may pass; every other
+// read of it is answered.
+func (w *syncWorld) holdFirst(key objstore.Key) func() {
+	held, refused := make(chan struct{}), errors.New("SlowDown: please reduce your request rate")
+	var holds, fails atomic.Int32
+	w.objects.mu.Lock()
+	w.objects.hold = func(k objstore.Key) <-chan struct{} {
+		if k == key && holds.Add(1) == 1 {
+			return held
+		}
+		return nil
+	}
+	w.objects.fail = func(k objstore.Key) error {
+		// Asked once a read is past its hold: the held read's ask comes after
+		// that of any read made while it was held.
+		if k == key && fails.Add(1) == 1 && holds.Load() > 1 {
+			return refused
+		}
+		return nil
+	}
+	w.objects.mu.Unlock()
+	return sync.OnceFunc(func() { close(held) })
+}
+
+// THE INSTALLER DOWNLOADS A LAYER ONCE, WHATEVER MOVES UNDER IT: a placement
+// that finds the copy or its chain moved since its plan places nothing, and
+// the next plan installs the same layers over the same base — so the layers
+// it fetched are held for that plan, which claims each it still wants rather
+// than downloading it again (a root layer of the largest repository the
+// defaults admit is some 2.6 GB), and a round that serves the very chain the
+// plan was made over is no move at all.
+//
+//   - "a swap": the tail's packs merged and leaving by a swap while the
+//     installer downloads the layer — the next pass places it with no second
+//     GET, and nothing of it is left in tmp/;
+//   - "a publication past it": a publication replacing the layer while the
+//     installer downloads it — the moved placement stages it, and the next
+//     plan, which no longer wants it, takes it out of tmp/ at once rather
+//     than the janitor twelve hours on;
+//   - "a full round": a retirement sweep's full round while the installer
+//     downloads, serving the same chain, whose own fetch of the layer the
+//     store refuses — the installer's placement is made in the same pass.
+//
+// Mutations, each seen red: drop what a moved placement fetched
+// (installRepo's holdFetched) — "a swap" downloads the layer twice; drop no
+// staged fetch a plan does not want (installRepo's dropFetched) — "a
+// publication past it" leaves it in tmp/; count every chain a round reads as
+// a move (setChain's chainGen without its sameRows) — "a full round" places
+// nothing in the pass.
+func TestTheInstallerDownloadsALayerOnceWhateverMovesUnderIt(t *testing.T) {
+	t.Parallel()
+	// begin publishes a one-layer chain over a copy that holds its packs, has
+	// the store hold the installer's read of its part, and runs a pass that
+	// waits for it: the world, the cache, the repository, its pushes, the
+	// chain and its part, the call that lets the read go and the pass's end.
+	type begun struct {
+		w     *syncWorld
+		c     *cache.Cache
+		repo  string
+		p     []pushed
+		chain []code.LayerRef
+		part  objstore.Key
+		land  func()
+		pass  chan []string
+	}
+	begin := func(t *testing.T, pushes int) begun {
+		t.Helper()
+		b := begun{w: newSyncWorld(t, onMemory), pass: make(chan []string, 1)}
+		w := b.w
+		b.repo = w.repo(t, 1)
+		b.p = w.pushN(t, b.repo, pushes)
+		b.c = w.open(t, newClock().on)
+		w.sync(t, b.c, b.repo).Release()
+		b.chain = w.buildChain(t, b.p[:2])
+		b.part = b.chain[0].Parts[0].Object
+		b.land = w.holdFirst(b.part)
+		w.log.publish(b.repo, b.chain, nil)
+		w.sync(t, b.c, b.repo).Release()
+		go func() { b.pass <- cache.InstallPass(b.c) }()
+		eventually(t, "the installer's read of the layer's part", func() bool {
+			return w.gets([]string{b.part.String()}) == 1
+		})
+		return b
+	}
+
+	t.Run("a swap", func(t *testing.T) {
+		t.Parallel()
+		b := begin(t, 4)
+		w, c, repo := b.w, b.c, b.repo
+		held := w.dir(t, c, repo)
+		w.compacted(t, repo, b.p[2].row, b.p[3].row)
+		w.sync(t, c, repo).Release()
+		if w.dir(t, c, repo) == held {
+			t.Fatal("the compaction's round made no swap: the case needs the copy moved under the install")
+		}
+		b.land()
+		<-b.pass
+		cache.InstallPass(c)
+		if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(b.chain)) {
+			t.Fatalf("after the pass that planned again the copy holds %v, want %v", got, layerIDs(b.chain))
+		}
+		if got := w.gets([]string{b.part.String()}); got != 1 {
+			t.Errorf("the layer's part was read %d times, want once: the plan after the move takes what "+
+				"the moved placement fetched", got)
+		}
+		if got := cache.StagedLayers(c); len(got) != 0 {
+			t.Errorf("tmp/ still holds the staged layers %v", got)
+		}
+	})
+
+	t.Run("a publication past it", func(t *testing.T) {
+		t.Parallel()
+		b := begin(t, 3)
+		w, c, repo := b.w, b.c, b.repo
+		next := w.buildChain(t, b.p)
+		w.log.publish(repo, next, nil)
+		w.sync(t, c, repo).Release()
+		b.land()
+		<-b.pass
+		if got := cache.StagedLayers(c)[repo]; !slices.Equal(got, layerIDs(b.chain)) {
+			t.Fatalf("the moved placement staged %v, want the layer it fetched, %v", got, layerIDs(b.chain))
+		}
+		cache.InstallPass(c)
+		if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(next)) {
+			t.Fatalf("after the pass that planned again the copy holds %v, want the new chain %v", got,
+				layerIDs(next))
+		}
+		if got := cache.StagedLayers(c); len(got) != 0 {
+			t.Errorf("tmp/ still holds %v, a layer the rows moved past: the plan that no longer wants it "+
+				"drops it", got)
+		}
+	})
+
+	t.Run("a full round", func(t *testing.T) {
+		t.Parallel()
+		b := begin(t, 2)
+		w, c, repo := b.w, b.c, b.repo
+		w.log.write(repo, nil, nil)
+		w.log.sweepRetired(repo, w.log.head())
+		if s := w.sync(t, c, repo); s.Kind != cache.SyncFull {
+			t.Fatalf("the round below the sweep was %s, want a full one", s.Kind)
+		}
+		b.land()
+		<-b.pass
+		if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(b.chain)) {
+			t.Fatalf("the pass the full round ran beside left the copy holding %v, want %v placed: a round "+
+				"that serves the chain the plan was made over moves nothing", got, layerIDs(b.chain))
+		}
+		cache.InstallPass(c)
+		if got := w.gets([]string{b.part.String()}); got != 2 {
+			t.Errorf("the layer's part was read %d times, want twice: the installer's, and the full "+
+				"round's the store refused", got)
+		}
 	})
 }

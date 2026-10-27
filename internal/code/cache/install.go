@@ -507,7 +507,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			continue
 		}
 		base := chain.base(i)
-		if st := c.claimAdoptedLayer(e.id, row, base); st != nil {
+		if st := c.claimStagedLayer(e.id, row, base); st != nil {
 			out.layers[i].staged = st
 			continue
 		}

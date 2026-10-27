@@ -215,6 +215,18 @@ func sameLayer(a, b code.LayerRow) bool {
 	return a.Layer.LayerID == b.Layer.LayerID && a.Layer.GraphID == b.Layer.GraphID && a.Layer.BaseID == b.Layer.BaseID
 }
 
+// sameRow reports whether a and b are one row of the rows' chain: one layer of
+// one chain (sameLayer) named by the record that added it. An installed
+// layer's row is the one it was installed from.
+func sameRow(a, b code.LayerRow) bool {
+	return sameLayer(a, b) && a.Added == b.Added
+}
+
+// sameRows reports whether a and b are one chain, row for row (sameRow).
+func sameRows(a, b []code.LayerRow) bool {
+	return slices.EqualFunc(a, b, sameRow)
+}
+
 // layerPacks is every pack checksum rows' layers name.
 func layerPacks(rows []code.LayerRow) map[string]bool {
 	out := map[string]bool{}
@@ -332,11 +344,13 @@ func (c *Cache) recordChains(inc *incarnation) {
 }
 
 // setInstalled is recordInstalled for an incarnation placed in place, its
-// generation moved and the chained gauge kept in step (noteChained); e.mu is
-// held.
+// generation moved where rows are another chain than it held, and the chained
+// gauge kept in step (noteChained); e.mu is held.
 func (c *Cache) setInstalled(e *entry, inc *incarnation, rows []code.LayerRow, held map[string]livePack) {
+	if !sameRows(inc.installed, rows) {
+		inc.chainGen++
+	}
 	c.recordInstalled(inc, rows, held)
-	inc.chainGen++
 	c.noteChained(e)
 }
 
@@ -508,9 +522,15 @@ func bootInstalled(inc *incarnation, chain []code.LayerRow) []code.LayerRow {
 // setChain records chain as the rows' published chain of inc, as a snapshot
 // served it (code.RepoSnapshot.LayersServed), and drops every refusal of a
 // layer the rows no longer name at the record that added it; e.mu is held.
+// The generation moves only where chain is not the chain inc read before:
+// every full round serves the chain, and one serving the very chain an
+// installer's plan was made over is no move of it — counted as one, it threw
+// away whatever the plan had fetched.
 func setChain(inc *incarnation, chain []code.LayerRow) {
+	if !inc.chainRead || !sameRows(inc.chain, chain) {
+		inc.chainGen++
+	}
 	inc.chain, inc.chainRead = slices.Clone(chain), true
-	inc.chainGen++
 	for id, r := range inc.refused {
 		i := slices.IndexFunc(chain, func(row code.LayerRow) bool { return row.Layer.LayerID == id })
 		if i < 0 || chain[i].Added != r.added {
@@ -1579,15 +1599,19 @@ type layerInstaller struct {
 	mu sync.Mutex
 	// repos is every repository the installer holds, each with its place and
 	// its backoff: due is the DUE in order, waiting the WAITING by when each
-	// one's wait ends, and running counts the RUNNING. adopted is the layers
-	// the repositories' maintainer handed this node (AdoptLayer), by
-	// repository and layer id, staged in tmp/ until a placement takes them or
-	// the janitor discards them.
+	// one's wait ends, and running counts the RUNNING. staged is the layers
+	// staged in tmp/ for a placement to take in place of a GET, by repository
+	// and layer id: those the repositories' maintainer handed this node
+	// (AdoptLayer), and those the installer fetched for a placement that
+	// found the copy moved (holdFetched) — each over the base it was held to,
+	// until a placement takes it, a plan of its repository no longer wants
+	// the installer's own (dropFetched), or the janitor discards it
+	// (expireStagedLayers).
 	repos   map[string]*installEntry
 	due     installQueue
 	waiting installWaits
 	running int
-	adopted map[string]map[string]*stagedLayer
+	staged  map[string]map[string]*stagedLayer
 	// handled counts the repositories passes have taken in hand — moved among
 	// the due, or taken up — what the suite holds a pass's cost to.
 	handled uint64
@@ -1690,7 +1714,7 @@ func (in *layerInstaller) hold(e *installEntry, now time.Time) {
 // not be placed.
 //
 // A STALE LAYER'S CLOCK IS ITS OWN, keyed by the row it was installed from
-// (sameInstalled), never the repository's: an episode can end where the
+// (sameRow), never the repository's: an episode can end where the
 // installer does not see it — a full round placing the replacement itself, a
 // cut, the rows naming the layer again — and a clock kept for the repository
 // outlived it, so the next publication's stale layer was cut at its first
@@ -1711,12 +1735,6 @@ type staleLayer struct {
 	since time.Time
 }
 
-// sameInstalled reports whether a and b are one installed layer: one layer of
-// one chain (sameLayer) installed from the row of one record.
-func sameInstalled(a, b code.LayerRow) bool {
-	return sameLayer(a, b) && a.Added == b.Added
-}
-
 // staleSince is when the oldest of stale has stood in since by w's clocks —
 // each layer of stale w recorded at an earlier try, the rest now — and stale's
 // clocks as w keeps them from now on: one for each layer of stale, and none
@@ -1726,7 +1744,7 @@ func (w *installWait) staleSince(stale []code.LayerRow, now time.Time) (time.Tim
 	clocks := make([]staleLayer, 0, len(stale))
 	for _, row := range stale {
 		since := now
-		if i := slices.IndexFunc(w.stale, func(s staleLayer) bool { return sameInstalled(s.row, row) }); i >= 0 {
+		if i := slices.IndexFunc(w.stale, func(s staleLayer) bool { return sameRow(s.row, row) }); i >= 0 {
 			since = w.stale[i].since
 		}
 		clocks = append(clocks, staleLayer{row: row, since: since})
@@ -1774,7 +1792,7 @@ func installWindow(n int) time.Duration {
 func newLayerInstaller(share int) *layerInstaller {
 	return &layerInstaller{
 		share: semaphore.NewWeighted(int64(share)), tasks: share, kicks: make(chan struct{}, 1),
-		repos: map[string]*installEntry{}, adopted: map[string]map[string]*stagedLayer{},
+		repos: map[string]*installEntry{}, staged: map[string]map[string]*stagedLayer{},
 	}
 }
 
@@ -1952,13 +1970,16 @@ type installEnd struct {
 //     pin is none): the prefix of its chain the rows still name, kept, and
 //     what is installable above it (installable).
 //  2. EACH LAYER of it fetched in chain order, every part at once, holding
-//     no lock — or taken from the maintainer's adoption (AdoptLayer), no GET
-//     — stopping at the first that fails.
+//     no lock — or taken from what is staged for it (claimStagedLayer: the
+//     maintainer's adoption, or an earlier try's fetch), no GET — stopping
+//     at the first that fails. A fetch an earlier try staged that the plan
+//     does not install goes (dropFetched).
 //  3. THE PLACEMENT, under the repository's write lock: the copy still
 //     current and its chain the one planned for, else the downloads are
-//     dropped and the repository queued again; then a SWAP (swap.go's layer
-//     step) to the kept prefix and what was fetched — a layer the rows no
-//     longer name is cut by it — the canary reading the staged chain.
+//     staged for the next plan (holdFetched) and the repository is due
+//     again; then a SWAP (swap.go's layer step) to the kept prefix and what
+//     was fetched — a layer the rows no longer name is cut by it — the
+//     canary reading the staged chain.
 //  4. THE FAILURE, if one stopped the fetches: a part the store does not hold
 //     is asked about at the log's head once, refused `missing` while the rows
 //     still name it there; bytes not its row's are refused `corrupt`; and
@@ -1978,12 +1999,14 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 	e := c.entries[id]
 	c.mu.Unlock()
 	if e == nil {
+		c.dropFetched(id, nil, nil)
 		return installEnd{forget: true}
 	}
 	e.mu.Lock()
 	inc := e.current
 	if e.dead || !installDue(inc) {
 		e.mu.Unlock()
+		c.dropFetched(id, nil, nil)
 		return installEnd{forget: true}
 	}
 	chain := slices.Clone(inc.chain)
@@ -1997,6 +2020,11 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 	gen := inc.chainGen
 	inc.pins++
 	e.mu.Unlock()
+	bases := make([][]string, len(want))
+	for i := range want {
+		bases[i] = baseOf(chain, k+i)
+	}
+	c.dropFetched(id, want, bases)
 	defer func() {
 		e.mu.Lock()
 		gone := c.unpin(e, inc)
@@ -2012,7 +2040,7 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 		}
 	}()
 	for i, row := range want {
-		f := c.fetchForInstall(ctx, id, row, baseOf(chain, k+i))
+		f := c.fetchForInstall(ctx, id, row, bases[i])
 		if f.err != nil {
 			stop = &f
 			break
@@ -2032,7 +2060,10 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 		}
 		switch c.placeBySwap(ctx, e, inc, gen, rows, fetched) {
 		case placementMoved:
-			// Planned over a copy or a chain no longer there: planned again.
+			// Planned over a copy or a chain no longer there: planned again,
+			// what was fetched staged for that plan.
+			c.holdFetched(id, fetched)
+			fetched = nil
 			return installEnd{moved: true}
 		case placementMade:
 			// Counted by the swap that placed them (swapped).
@@ -2165,7 +2196,7 @@ func (c *Cache) settleWait(id string, w *installWait, end installEnd, now time.T
 // at once, each a unit of the installer's share and one of the node's fetch
 // slots — and held to its row over base.
 func (c *Cache) fetchForInstall(ctx context.Context, id string, row code.LayerRow, base []string) layerFetch {
-	if st := c.claimAdoptedLayer(id, row, base); st != nil {
+	if st := c.claimStagedLayer(id, row, base); st != nil {
 		return layerFetch{row: row, staged: st}
 	}
 	if err := c.fetches.hold(ctx); err != nil {
@@ -2316,34 +2347,107 @@ func (s *layerStep) adds(installed []code.LayerRow) []code.LayerRow {
 	return out
 }
 
-// claimAdoptedLayer takes the maintainer's adoption of row — registered for
-// this repository, this very layer over this very base — for an install,
-// which places it in place of a GET; or nil.
-func (c *Cache) claimAdoptedLayer(id string, row code.LayerRow, base []string) *stagedLayer {
+// claimStagedLayer takes the layer staged for row — registered for this
+// repository, this very layer over this very base: the maintainer's adoption,
+// or the installer's own fetch a moved placement held — for an install, a
+// round's or the installer's, which places it in place of a GET; or nil.
+func (c *Cache) claimStagedLayer(id string, row code.LayerRow, base []string) *stagedLayer {
 	in := c.installer
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	st := in.adopted[id][row.Layer.LayerID]
+	st := in.staged[id][row.Layer.LayerID]
 	if st == nil || !sameLayer(st.row, row) || !slices.Equal(st.base, base) {
 		return nil
 	}
-	delete(in.adopted[id], row.Layer.LayerID)
-	if len(in.adopted[id]) == 0 {
-		delete(in.adopted, id)
+	delete(in.staged[id], row.Layer.LayerID)
+	if len(in.staged[id]) == 0 {
+		delete(in.staged, id)
 	}
 	st.row = row
 	return st
 }
 
-// expireAdoptedLayers discards every adoption no round's chain has named
-// within objstore.RecordWithin of it: a function of a record that never
-// applied — the publication refused, or its node gone before it — whose
-// parts are the collector's. The janitor's, at every pass.
-func (c *Cache) expireAdoptedLayers() {
+// holdFetched stages the layers the installer fetched for id's copy, which a
+// placement that found the copy or its chain moved since its plan did not
+// place, for the plan that follows it: the next try's, or a full round's
+// install, which claims each it still wants over the same base
+// (claimStagedLayer) rather than downloading it again — a root layer of the
+// largest repository the defaults admit is some 2.6 GB, and a busy
+// repository's compactions swap its copy a few tens of seconds apart, so
+// thrown away at every move it was downloaded again and again. Where the very
+// layer over the very base is staged already (an adoption that came while it
+// downloaded), that one is kept and the fetched copy goes; anything else
+// staged under its id is the older staging, and goes for it, as an adoption
+// replaces an older one.
+func (c *Cache) holdFetched(id string, fetched []*stagedLayer) {
+	in := c.installer
+	var gone []*stagedLayer
+	in.mu.Lock()
+	for _, st := range fetched {
+		if in.staged[id] == nil {
+			in.staged[id] = map[string]*stagedLayer{}
+		}
+		lid := st.row.Layer.LayerID
+		if old := in.staged[id][lid]; old != nil {
+			if sameLayer(old.row, st.row) && slices.Equal(old.base, st.base) {
+				gone = append(gone, st)
+				continue
+			}
+			gone = append(gone, old)
+		}
+		in.staged[id][lid] = st
+	}
+	in.mu.Unlock()
+	for _, st := range gone {
+		st.remove(c)
+	}
+}
+
+// dropFetched takes out of tmp/ every layer the installer fetched for id's
+// copy and staged for a later plan (holdFetched) that the plan made now —
+// want, each layer over the base beside it — does not install: the rows
+// moved past it, or the copy holds it already. The maintainer's adoptions
+// stay: a copy's chain may not have read their rows yet, and the janitor
+// discards one no round's chain named in time.
+func (c *Cache) dropFetched(id string, want []code.LayerRow, bases [][]string) {
+	wanted := func(st *stagedLayer) bool {
+		for i, row := range want {
+			if sameLayer(row, st.row) && slices.Equal(bases[i], st.base) {
+				return true
+			}
+		}
+		return false
+	}
+	in := c.installer
+	var gone []*stagedLayer
+	in.mu.Lock()
+	for lid, st := range in.staged[id] {
+		if st.adopted || wanted(st) {
+			continue
+		}
+		gone = append(gone, st)
+		delete(in.staged[id], lid)
+	}
+	if len(in.staged[id]) == 0 {
+		delete(in.staged, id)
+	}
+	in.mu.Unlock()
+	for _, st := range gone {
+		st.remove(c)
+	}
+}
+
+// expireStagedLayers discards every staged layer no placement has taken
+// within objstore.RecordWithin of its staging: an adoption no round's chain
+// named in that time is a function of a record that never applied — the
+// publication refused, or its node gone before it — whose parts are the
+// collector's, and a fetch a moved placement held that long has outlived
+// every plan of its copy. The janitor's, at every pass.
+func (c *Cache) expireStagedLayers() {
 	in, now := c.installer, c.now()
 	in.mu.Lock()
 	var gone []*stagedLayer
-	for id, layers := range in.adopted {
+	for id, layers := range in.staged {
 		for lid, st := range layers {
 			if now.Sub(st.at) >= objstore.RecordWithin {
 				gone = append(gone, st)
@@ -2351,7 +2455,7 @@ func (c *Cache) expireAdoptedLayers() {
 			}
 		}
 		if len(layers) == 0 {
-			delete(in.adopted, id)
+			delete(in.staged, id)
 		}
 	}
 	in.mu.Unlock()
