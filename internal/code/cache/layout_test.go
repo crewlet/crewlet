@@ -234,15 +234,17 @@ func TestAPreparedDirectoryIsHeldUntilItsCacheStops(t *testing.T) {
 	prepare(t, w.layout.Dir)
 }
 
-// HELD IS EVERY BYTE THE CACHE OWNS, counted the cheap way: an incarnation
-// with a state of this build counts what its state says it holds — one
-// small read a repository, never a stat of its packs, which at one pack a
-// push is a walk of millions of files at every restart — and only what has
-// no state is walked. The leftovers count too: trash/, scratch/, tmp/ and a
-// home/ a killed git populated are given back by the janitor seconds after
-// the boot, so the next boot finds them as free space, and left out here
-// they would make this boot's budget smaller than the next one's. A link is
-// counted as itself, never as what it points at.
+// HELD IS EVERY BYTE THE CACHE OWNS, counted the cheap way: the incarnation
+// a boot keeps, with a state of this build, counts what its state says it
+// holds — one small read a repository, never a stat of its packs, which at
+// one pack a push is a walk of millions of files at every restart — and only
+// what has no state, and an older incarnation beside it, is walked: the
+// older one by the files it alone holds (TestABootCountsAnOlderIncarnation-
+// BySoleNames). The leftovers count too: trash/, scratch/, tmp/ and a home/ a
+// killed git populated are given back by the janitor seconds after the boot,
+// so the next boot finds them as free space, and left out here they would
+// make this boot's budget smaller than the next one's. A link is counted as
+// itself, never as what it points at.
 func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "c")
@@ -269,14 +271,22 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// B's older incarnation, which Open moves aside, counts by its state.
+	// B's older incarnation, which Open moves aside, counts the files it
+	// alone holds — here its state and a pack of its own — whatever its state
+	// says it holds.
 	older := aState(repoB)
 	older.DiskBytes = 50
 	older.Derived = map[string]derivedDoc{
 		string(cache.DerivedMidx):  {Bytes: 5, Covers: 1, Step: string(cache.StepIndex)},
 		string(cache.DerivedGraph): {Bytes: 3, Covers: 1, Step: string(cache.StepGraph)},
 	}
-	writeState(t, filepath.Join(dir, "repos", repoB+".1.git"), older)
+	olderDir := filepath.Join(dir, "repos", repoB+".1.git")
+	writeState(t, olderDir, older)
+	write(t, filepath.Join(olderDir, "objects", "pack", "pack-3.pack"), strings.Repeat("o", 800))
+	olderState, err := os.Lstat(filepath.Join(olderDir, "crewlet-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A stray is walked whole.
 	write(t, filepath.Join(dir, "repos", "junk", "file"), strings.Repeat("j", 300))
 	// The leftovers.
@@ -286,10 +296,132 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	write(t, filepath.Join(dir, "home", "left-behind"), strings.Repeat("h", 40))
 
 	layout := prepare(t, dir)
-	want := (9100 + 400 + 120) + (2000 + 100 + linkInfo.Size()) + (50 + 5 + 3) + 300 + 5000 + 7000 + 600 + 40
+	want := (9100 + 400 + 120) + (2000 + 100 + linkInfo.Size()) + (olderState.Size() + 800) + 300 + 5000 + 7000 +
+		600 + 40
 	if layout.Held != want {
-		t.Errorf("Layout.Held = %d, want %d: what each state counts, the stateless walked, and the leftovers", layout.Held, want)
+		t.Errorf("Layout.Held = %d, want %d: what each kept state counts, the stateless and the older walked, and "+
+			"the leftovers", layout.Held, want)
 	}
+}
+
+// AN OLDER INCARNATION COUNTS WHAT IT ALONE HOLDS. A boot after a crash can
+// find a repository's older incarnation beside the one it keeps — a
+// rebuild's predecessor a reader still held when the node died — and the one
+// it keeps holds HARD LINKS of the older one's packs: a rebuild links every
+// pack a check has just found whole rather than download it (seedRebuild).
+// The kept incarnation's state counts those packs, so Layout.Held counts an
+// older one by the files no other name holds. Counted by its state as well,
+// every linked pack was counted twice, and the engine — which adds
+// Layout.Held to the volume's free space to derive the cache's budget — gave
+// the cache room the volume did not have, by the linked bytes.
+//
+// What Held should be is counted here by inode rather than by link count:
+// the kept incarnation as its state says, and every file of the older one
+// whose inode is none of the kept one's.
+//
+// Mutation: count the older incarnation by its state again (readBoot) — the
+// linked packs are counted twice, and the rebuild's arm fails.
+func TestABootCountsAnOlderIncarnationBySoleNames(t *testing.T) {
+	t.Parallel()
+	t.Run("a rebuild's predecessor", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		_, damaged := w.push(t, repo, "refs/heads/main", nil)
+		w.push(t, repo, "refs/heads/dev", nil)
+		c := w.open(t)
+		// A reader holds the copy the rebuild replaces, so it stays in repos/
+		// past the rebuild, as it does on a node that dies before the reader
+		// lets go.
+		held := w.sync(t, c, repo)
+		damage(t, filepath.Join(held.Dir, "objects", "pack", "pack-"+damaged.GitChecksum+".pack"), 28,
+			[]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+		if r, err := verify(t.Context(), c, repo, true); err != nil || !r.Rebuilt {
+			t.Fatalf("Verify with repair = %+v, %v; want the copy rebuilt", r, err)
+		}
+		kept := w.dir(t, c, repo)
+		if kept == held.Dir {
+			t.Fatalf("the rebuild left the copy at %s", kept)
+		}
+		c.Stop(context.Background())
+		olderBootCount(t, w, held.Dir, kept)
+	})
+}
+
+// olderBootCount boots w's directory again, an older incarnation of a
+// repository at older beside the one the boot keeps at kept, and holds
+// Layout.Held to what the two hold counted once: kept as its state says,
+// and every file of older whose inode is none of kept's. It first empties
+// trash/, and requires tmp/ and scratch/ empty, so nothing but the two is
+// counted — and the two to share a file, the case's whole subject.
+func olderBootCount(t *testing.T, w *syncWorld, older, kept string) {
+	t.Helper()
+	trash := filepath.Join(w.layout.Dir, "trash")
+	if err := os.RemoveAll(trash); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(trash, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, leftover := range []string{"tmp", "scratch"} {
+		if files := regularFiles(t, filepath.Join(w.layout.Dir, leftover)); len(files) != 0 {
+			t.Fatalf("%s/ holds %d files once the node stopped: the case counts the two incarnations alone",
+				leftover, len(files))
+		}
+	}
+	keptInodes := map[uint64]bool{}
+	for path := range regularFiles(t, kept) {
+		keptInodes[inode(t, path)] = true
+	}
+	var alone, shared int64
+	for path, info := range regularFiles(t, older) {
+		if keptInodes[inode(t, path)] {
+			shared += info.Size()
+			continue
+		}
+		alone += info.Size()
+	}
+	if shared == 0 {
+		t.Fatalf("the incarnation kept at %s shares no file with the older one at %s: the case has nothing to "+
+			"count once", kept, older)
+	}
+	st := readStateDoc(t, kept)
+	want := st.DiskBytes + st.derivedBytes() + alone
+	layout := prepare(t, w.layout.Dir)
+	switch held := layout.Held; {
+	case held == want+shared:
+		t.Errorf("Layout.Held = %d: the %d bytes the older incarnation shares with the one kept are counted twice",
+			held, shared)
+	case held != want:
+		t.Errorf("Layout.Held = %d, want %d: the kept incarnation as its state counts it (%d), and the %d bytes "+
+			"only the older one holds", held, want, st.DiskBytes+st.derivedBytes(), alone)
+	}
+}
+
+// regularFiles is every regular file under dir, by its path, with what Lstat
+// says of it.
+func regularFiles(t *testing.T, dir string) map[string]os.FileInfo {
+	t.Helper()
+	out := map[string]os.FileInfo{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		out[path] = info
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", dir, err)
+	}
+	return out
 }
 
 // PREPARE ENDS WITH ITS CONTEXT, and gives its claim back as it does: a boot

@@ -62,8 +62,9 @@ type aside struct {
 }
 
 // readBoot is Prepare's step 6: the reading of repos/ and the bytes the cache
-// holds under root — its incarnations as their states count them, what has no
-// state as a walk finds it, and trash/, scratch/ and tmp/.
+// holds under root — each repository's kept incarnation as its state counts
+// it, one with no state as a walk finds it, an OLDER incarnation by the files
+// it alone holds, and trash/, scratch/ and tmp/.
 func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 	skipped := func(path string, err error) {
 		log.Warn("code_cache_held_unmeasured", "path", path, "error", err)
@@ -120,13 +121,23 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 		slices.SortFunc(incs, func(a, b found) int { return cmp.Compare(a.n, b.n) })
 		for _, older := range incs[:len(incs)-1] {
 			b.aside = append(b.aside, aside{older.name, "an older incarnation of " + id})
-			// An older incarnation's own state counts it, when it has one
-			// this build reads: an interrupted rebuild's predecessor can
-			// hold a large repository's every pack.
-			if st, _ := readState(filepath.Join(repos, older.name), id); st != nil {
-				held += st.DiskBytes + st.derivedBytes()
-			} else if err = walk(older.name); err != nil {
-				return nil, 0, err
+			// AN OLDER INCARNATION COUNTS WHAT IT ALONE HOLDS: every file of
+			// it no other name holds (soleNames). It is one a crash left beside
+			// the incarnation kept — a rebuild's predecessor, or a retired one a
+			// reader still held — and the kept one holds HARD LINKS of its
+			// packs: a rebuild links its predecessor's every pack a check has
+			// just found whole (seedRebuild). The kept one's state counts
+			// those, so counted by its own state as well, every linked pack
+			// was counted twice, and the engine, which adds Held to the
+			// volume's free space to derive the cache's budget, claimed room
+			// the volume did not have, by the linked bytes. Walked rather
+			// than read from its state: an older incarnation exists only
+			// where a crash left one, its walk one Lstat a file of a
+			// directory the janitor is about to remove.
+			n, werr := sizeUnder(ctx, filepath.Join(repos, older.name), soleNames, skipped, nil)
+			held += n
+			if werr != nil {
+				return nil, 0, werr
 			}
 		}
 

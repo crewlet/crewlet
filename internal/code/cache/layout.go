@@ -190,16 +190,18 @@ func (l Layout) Release() {
 //     sees its HOME move.
 //  6. repos/ is READ — which incarnation of each repository Open keeps, with
 //     its state, and which entries Open moves aside — and Held is summed
-//     from the reading: an incarnation with a state of this build counts what
-//     its state says it holds, so a warm node's boot reads one small file a
-//     repository and stats none of its packs. Only what has no state to
-//     count — an incarnation whose state is missing, unreadable or another
-//     build's, and an entry that is not an incarnation — is walked, and so
-//     are trash/, scratch/ and tmp/, which the janitor keeps small. An entry
-//     a walk cannot read is skipped and logged (code_cache_held_unmeasured),
-//     never a boot failure: the budget then errs small. The cost is
-//     O(repositories), whatever they hold (the package doc's Measured
-//     section). ctx bounds all of it.
+//     from the reading: the incarnation kept, with a state of this build,
+//     counts what its state says it holds, so a warm node's boot reads one
+//     small file a repository and stats none of its packs. Only what has no
+//     state to count — an incarnation whose state is missing, unreadable or
+//     another build's, and an entry that is not an incarnation — is walked;
+//     an OLDER incarnation a crash left beside the one kept is walked for the
+//     files it alone holds (soleNames), since the one kept links what they
+//     share and its state counts it; and trash/, scratch/ and tmp/, which the
+//     janitor keeps small, are walked too. An entry a walk cannot read is
+//     skipped and logged (code_cache_held_unmeasured), never a boot failure:
+//     the budget then errs small. The cost is O(repositories), whatever they
+//     hold (the package doc's Measured section). ctx bounds all of it.
 //
 // Any failure releases the claim.
 func Prepare(ctx context.Context, dir string) (Layout, error) {
@@ -407,7 +409,9 @@ const (
 	// scratch/, where a file with a second name is one of an incarnation's
 	// own linked in — an advertisement view's packed-refs, an adopted
 	// push's pack before its scratch goes — and its bytes are counted
-	// where that incarnation is. A symbolic link counts as itself.
+	// where that incarnation is; and an OLDER incarnation a boot finds
+	// beside the one it keeps, whose files the kept one links — a rebuild's
+	// seed — and counts by its state. A symbolic link counts as itself.
 	soleNames
 )
 
