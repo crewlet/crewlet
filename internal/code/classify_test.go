@@ -279,11 +279,12 @@ func TestADirectiveCommentIsNeverCommentOnly(t *testing.T) {
 // code: a //line or //go:generate indented off its line's start is ignored, a
 // pragma after code on its line is an error, a blank line parts an //export
 // or a nolint from what it governs — as a column the two no longer share
-// does — one inside an example's output splits off what go test compares, and
-// a +build line with no blank line under it, or under a block comment, is no
-// constraint. Whitespace that moves no directive — beside plain comments, a
-// body below a pragma, or a blank line beside a //go:build line, which
-// go/build reads anywhere in a header — is whitespace.
+// does — one inside an example's output splits off what go test compares,
+// a +build line with no blank line under it, or under a block comment, is
+// no constraint, and a call drawn onto the line a suppression covers is a
+// finding it silences. Whitespace that moves no directive — beside plain
+// comments, a body below a pragma, or a blank line beside a //go:build line,
+// which go/build reads anywhere in a header — is whitespace.
 func TestAWhitespaceChangeAroundADirectiveIsCode(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, before, after string }{
@@ -323,6 +324,19 @@ func TestAWhitespaceChangeAroundADirectiveIsCode(t *testing.T) {
 		{"a block comment above a +build line",
 			"// +build linux\n\npackage p\n",
 			"/* Package p. */\n\n// +build linux\n\npackage p\n"},
+		// golangci-lint's nolint covers the lines of its comment group, and
+		// errcheck reports a call at its opening parenthesis, a line above
+		// the nolint before and on its line after — the nolint's own column
+		// padded alike.
+		{"a call drawn onto its nolint's line",
+			"package p\n\nfunc f() {\n\tg(a,\n\t\tb)     //nolint:errcheck\n}\n",
+			"package p\n\nfunc f() {\n\tg(a, b) //nolint:errcheck\n}\n"},
+		// staticcheck's lint:ignore matches only the first line of the node
+		// go/ast attaches it to: the deprecated call is a line below it
+		// before, and on it after.
+		{"a call drawn onto the first line of an ignore's statement",
+			"package p\n\nfunc f() {\n\t//lint:ignore SA1019 the old API is what this tests\n\tx := g(a,\n\t\told.Deprecated())\n\t_ = x\n}\n",
+			"package p\n\nfunc f() {\n\t//lint:ignore SA1019 the old API is what this tests\n\tx := g(a, old.Deprecated())\n\t_ = x\n}\n"},
 	} {
 		wantClass(t, tc.name, tc.before, tc.after, noClass)
 	}
@@ -339,6 +353,55 @@ func TestAWhitespaceChangeAroundADirectiveIsCode(t *testing.T) {
 	} {
 		wantClass(t, tc.name, tc.before, tc.after, code.ChangeClassWhitespaceOnly)
 	}
+}
+
+// A SUPPRESSION'S REACH IS LINES, so in a file holding a linter's directive
+// the line each code token sits on is code, wherever the token is: which
+// lines a suppression covers is each linter's own rule over the node go/ast
+// attaches it to and the lines around it, and revive's //revive:disable
+// reaches to its enable or the file's end. A token moved onto or off a line
+// gets no class there, nor does a comment that, grown by a line, moves a
+// suppression a line from the statement go/ast attached it to, or moves the
+// code after it off its line — documentation in a suppression's own group
+// among them, whose words are free. What moves no token off its line — a
+// blank line, a reindent, a comment's text — keeps its class, and a file
+// whose directives are Go's own, which attach by order rather than by line,
+// keeps a reflow's.
+func TestASuppressionHoldsTheLinesOfItsFile(t *testing.T) {
+	t.Parallel()
+	const suppressed = "package p\n\nfunc f() {\n\tg() //nolint:errcheck\n}\n\nfunc k() {\n\th(a,\n\t\tb)\n\tm()\n}\n"
+	const nosecGroup = "package p\n\nvar x = 1 + /* why */ /* #nosec G101 */ 2\n"
+	for _, tc := range []struct{ name, before, after string }{
+		{"a call reflowed far from the suppression", suppressed, strings.Replace(suppressed, "h(a,\n\t\tb)", "h(a, b)", 1)},
+		{"a statement split from the line it shared",
+			strings.Replace(suppressed, "b)\n\tm()", "b); m()", 1), strings.Replace(suppressed, "b)\n\tm()", "b);\n\tm()", 1)},
+		// go/ast attaches a comment group starting on the line after a
+		// statement, with a blank line below it, to that statement: grown by
+		// a line, the comment above leaves the ignore to the statement below.
+		{"a comment above a suppression grown by a line",
+			"package p\n\nfunc f() {\n\tx := g() /* why */\n\t//lint:ignore SA1019 the old API is what this tests\n\n\ty := old.Deprecated()\n\t_, _ = x, y\n}\n",
+			"package p\n\nfunc f() {\n\tx := g() /* why\n\t */\n\t//lint:ignore SA1019 the old API is what this tests\n\n\ty := old.Deprecated()\n\t_, _ = x, y\n}\n"},
+		// The doc in a #nosec's group grows a line inside itself, padded so
+		// that the #nosec keeps its column: every comment keeps its layout,
+		// and the 2 after them leaves the line of the + before them.
+		{"documentation in a suppression's group grown inside by a line", nosecGroup,
+			strings.Replace(nosecGroup, "/* why */", "/* why\n                   */", 1)},
+	} {
+		wantClass(t, tc.name, tc.before, tc.after, noClass)
+	}
+	for _, tc := range []struct{ name, before, after string }{
+		{"a blank line added", suppressed, strings.Replace(suppressed, "b)\n\tm()", "b)\n\n\tm()", 1)},
+		{"a body reindented", suppressed, strings.Replace(suppressed, "\th(a,\n\t\tb)\n\tm()", "    h(a,\n        b)\n    m()", 1)},
+		{"a call reflowed beside a pragma",
+			"package p\n\n//go:noinline\nfunc f() {\n\tg(a,\n\t\tb)\n}\n",
+			"package p\n\n//go:noinline\nfunc f() {\n\tg(a, b)\n}\n"},
+	} {
+		wantClass(t, tc.name, tc.before, tc.after, code.ChangeClassWhitespaceOnly)
+	}
+	wantClass(t, "a comment added",
+		suppressed, strings.Replace(suppressed, "func k() {", "// k does it.\nfunc k() {", 1), code.ChangeClassCommentOnly)
+	wantClass(t, "documentation in a suppression's group reworded on its line",
+		nosecGroup, strings.Replace(nosecGroup, "why", "how", 1), code.ChangeClassCommentOnly)
 }
 
 // GO GENERATE READS LINES, NOT TOKENS: every line of a file that starts
@@ -583,8 +646,9 @@ func leastAllocated(f func()) uint64 {
 // dropping the comments finds the same tokens, go/parser accepts both or
 // neither, the plainest directives read alike in both, byte for byte as their
 // tools read them, go generate's reading of the file a line at a time finds
-// the same commands, and a whitespace_only change differs in nothing but
-// blanks and line breaks.
+// the same commands, a file holding the plainest suppression keeps each code
+// token on or off the line of the token before it, and a whitespace_only
+// change differs in nothing but blanks and line breaks.
 func FuzzClassifyGo(f *testing.F) {
 	for _, seed := range [][2]string{
 		{"package p\n\nfunc f() {\n\ta()\n\tb()\n}\n", "package p\n\nfunc f() {\n    a()\n\n    b()\n}\n"},
@@ -604,6 +668,8 @@ func FuzzClassifyGo(f *testing.F) {
 		{"package p\n\nconst s = `\n//go:generate x\n`\n", "package p\r\n\r\nconst s = `\r\n//go:generate x\r\n`\r\n"},
 		{"package p\n\n//go:noin\rline\nfunc f() {}\n", "package p\n\n//go:noinline\nfunc f() {}\n"},
 		{"package p\n\n// revive:disable\nfunc f() {}\n", "package p\n\n// revive:enable\nfunc f() {}\n"},
+		{"package p\n\nfunc f() {\n\tg(a,\n\t\tb)     //nolint:errcheck\n}\n", "package p\n\nfunc f() {\n\tg(a, b) //nolint:errcheck\n}\n"},
+		{"package p\n\nvar x = 1 + /* why */ /* #nosec G101 */ 2\n", "package p\n\nvar x = 1 + /* why\n                   */ /* #nosec G101 */ 2\n"},
 	} {
 		f.Add([]byte(seed[0]), []byte(seed[1]))
 	}
@@ -634,6 +700,9 @@ func FuzzClassifyGo(f *testing.F) {
 		}
 		if !slices.Equal(generateLinesOf(before), generateLinesOf(after)) {
 			t.Fatalf("classed %q, and go generate's commands differ:\n%q\n%q", class, generateLinesOf(before), generateLinesOf(after))
+		}
+		if (suppresses(before) || suppresses(after)) && !slices.Equal(tokenLinesOf(before), tokenLinesOf(after)) {
+			t.Fatalf("classed %q, and a token moved onto or off a line in a file a linter's suppression reads", class)
 		}
 		if class == code.ChangeClassWhitespaceOnly && spaceless(before) != spaceless(after) {
 			t.Fatalf("classed whitespace_only, and the versions differ in more than blanks and line breaks")
@@ -707,6 +776,32 @@ func revive(lit string) bool {
 	body, ok := strings.CutPrefix(lit, "//")
 	body = strings.TrimLeft(body, " \t")
 	return ok && (strings.HasPrefix(body, "revive:enable") || strings.HasPrefix(body, "revive:disable"))
+}
+
+// suppresses reports whether src holds the plainest suppression a linter
+// reads: a nolint, a staticcheck ignore, a #nosec or a revive directive.
+func suppresses(src []byte) bool {
+	found := false
+	scanAll(src, scanner.ScanComments, func(_, _ int, tok token.Token, lit string) {
+		found = found || tok == token.COMMENT && (lit == "//nolint" || strings.HasPrefix(lit, "//nolint:") ||
+			strings.HasPrefix(lit, "//lint:") || strings.Contains(lit, "#nosec") || revive(lit))
+	})
+	return found
+}
+
+// tokenLinesOf is, for each code token of src but the semicolons the lexer
+// inserts, whether a newline parts it from the end of the token before it.
+func tokenLinesOf(src []byte) []bool {
+	var lines []bool
+	prev := 0
+	scanAll(src, 0, func(off, end int, tok token.Token, lit string) {
+		if tok == token.SEMICOLON && lit == "\n" {
+			return
+		}
+		lines = append(lines, bytes.IndexByte(src[prev:off], '\n') >= 0)
+		prev = end
+	})
+	return lines
 }
 
 // generateLinesOf is the commands go generate finds in src, read as it reads

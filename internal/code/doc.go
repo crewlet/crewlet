@@ -433,16 +433,20 @@
 // go generate's commands as go generate does, a line at a time whatever
 // lexeme a line sits in — a command in a block comment or a raw string is
 // one — and a directive's text with the carriage returns the compiler reads
-// and the lexer drops. Documentation — a doc comment above a
-// pragma, a license above a //go:build line — changes freely. A class is
-// judged a path at a time and gives none to a version past
-// [MaxClassedBlobBytes]. The walk holds one gap of a version's comments at a
-// time — those between two code tokens, as offsets into it — and keeps only
-// the verdict of one a later token decides, so what a path costs follows its
-// bytes, whatever they hold: a file of nothing but comments takes some four
-// times the time of code as long ([MaxClassedBlobBytes] has the measure),
-// where keeping every comment to the walk's end took nine, and thirty times
-// the allocation.
+// and the lexer drops. And since a linter's reach is lines — a nolint's group
+// and the statement under it, the first line of the node a lint:ignore is
+// attached to, revive's next line or every line to its enable — a file
+// holding a linter's directive holds the line each code token sits on: a
+// token moved onto or off a line there is code. Documentation — a doc
+// comment above a pragma, a license above a //go:build line — changes
+// freely. A class is judged a path at a time and gives none to a version
+// past [MaxClassedBlobBytes]. The walk holds one gap of a version's comments
+// at a time — those between two code tokens, as offsets into it — and keeps
+// only the verdict of one a later token decides, so what a path costs
+// follows its bytes, whatever they hold: a file of nothing but comments takes
+// some three times the time of code as long ([MaxClassedBlobBytes] has the
+// measure), where keeping every comment to the walk's end took nine, and
+// thirty times the allocation.
 //
 // # What this package does not do
 //

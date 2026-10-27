@@ -70,13 +70,14 @@ func (c ChangeClass) Valid() bool { return slices.Contains(ChangeClasses(), c) }
 // code tokens, as offsets, and drops them once the token after them is read.
 // Two versions at the bound, classed to the end (BenchmarkClassifyGo, one
 // bounded run of five iterations an arm on two E-cores of a Core Ultra 7
-// 265U), took 26 ms and 9 MB of allocation as ordinary code, and 105 ms and
-// 85 MB as nothing but comments, one to a line, the most lexemes the bound
-// holds — no more, 107 ms, where a //go:noinline governs every one of them.
-// Half the latter's allocation is the lexer's own, a line table and a text a
-// comment; the walk's is one gap of 24-byte records, here the whole file.
-// What a whole revision may cost is the bound of its classification, which
-// takes the comment arms as its worst, not of one file.
+// 265U shared with other builds), took 34 ms and 9 MB of allocation as
+// ordinary code, and 106 ms and 85 MB as nothing but comments, one to a
+// line, the most lexemes the bound holds — 116 ms where a //go:noinline
+// governs every one of them. Half the comments' allocation is the lexer's
+// own, a line table and a text a comment; the walk's is one gap of 24-byte
+// records, here the whole file. What a whole revision may cost is the bound
+// of its classification, which takes the comment arms as its worst, not of
+// one file.
 const MaxClassedBlobBytes = 1 << 20
 
 // byteOrderMark is the UTF-8 byte-order mark, which go/scanner skips at a
@@ -160,6 +161,15 @@ var byteOrderMark = []byte("\uFEFF")
 // code. Documentation keeps the lexer's reading, under which a carriage
 // return is whitespace.
 //
+// AND A LINTER'S DIRECTIVE HOLDS ITS FILE'S LINES, because its reach is lines
+// (sameHeldLines' line record says whose): in a file holding one, a token
+// moved onto or off a line is code wherever it is, and so is a comment that,
+// grown or shrunk by a line, moves a directive a line nearer to or further
+// from the statement go/ast attaches it to. A reindent, a blank line between
+// statements, and documentation that keeps its lines keep their class. Go's
+// own directives attach by order — a pragma, an embed or an export to what
+// follows it — and hold no lines.
+//
 // NO CLASS for a version that is empty — a file added or deleted, which a
 // caller judges before it asks — or past [MaxClassedBlobBytes], for one with a
 // lexical error, or where one version has a byte-order mark and the other
@@ -204,11 +214,12 @@ func ClassifyGo(before, after []byte) (ChangeClass, bool) {
 // thirty times the allocation of code as long (BenchmarkClassifyGo, measured
 // as MaxClassedBlobBytes' doc says).
 type judgement struct {
-	same     bool // every token, and every directive's context, alike: comment_only so far
-	sameText bool // every comment alike too: whitespace_only so far
-	depth    int  // braces open
-	imports  cImports
-	body     pendingBody
+	same      bool // every token, and every directive's context, alike: comment_only so far
+	sameText  bool // every comment alike too: whitespace_only so far
+	sameLines bool // every lexeme the line record holds as many lines from the one before it
+	depth     int  // braces open
+	imports   cImports
+	body      pendingBody
 	// text is scratch for two comments' texts where a carriage return the
 	// lexer drops sits in their bytes.
 	text [2][]byte
@@ -226,6 +237,15 @@ type goFile struct {
 	line    int          // where the line holding seen starts
 	seen    int          // how far line has been brought (lineStart)
 	lower   []byte       // scratch for a header comment's text in lower case
+	// tokOff and tokEnd are where the code token just read starts and ends,
+	// one the lexer did not insert.
+	tokOff, tokEnd int
+	// heldEnd is where the last lexeme the line record holds ended, and
+	// heldCode whether it was a code token (sameHeldLines).
+	heldEnd  int
+	heldCode bool
+	// linter is whether a comment read so far is a linter's directive.
+	linter bool
 }
 
 // lexComment is one comment of a version: where its bytes are, where it sits,
@@ -282,24 +302,32 @@ func lexGo(src []byte) *goFile {
 // neither version reporting a lexical error, and every directive's context
 // compared alike. It stops at the first that does not.
 func (j *judgement) lexInStep(a, b *goFile) bool {
-	j.same, j.sameText = true, true
+	j.same, j.sameText, j.sameLines = true, true, true
+	a.heldCode, b.heldCode = true, true
 	for k := 0; ; k++ {
 		ta, la := a.code(k)
 		tb, lb := b.code(k)
 		if ta != tb || la != lb || a.sc.ErrorCount > 0 || b.sc.ErrorCount > 0 {
 			return false
 		}
-		j.judgeGap(a, b, ta)
+		j.judgeGap(a, b, ta, la)
 		if ta == token.EOF {
 			j.endFile()
-			return j.same
+			return j.same && j.linesHold(a, b)
 		}
 		j.seeImport(ta, la)
 		j.brace(ta)
-		if !j.same {
+		if !j.same || !j.linesHold(a, b) {
 			return false
 		}
 	}
+}
+
+// linesHold reports whether the line record lets the class stand: it held,
+// or neither version has read a linter's directive, whose reach is what the
+// record is for.
+func (j *judgement) linesHold(a, b *goFile) bool {
+	return j.sameLines || !a.linter && !b.linter
 }
 
 // code scans to the next code token — an inserted semicolon is one — and
@@ -329,6 +357,7 @@ func (f *goFile) code(k int) (token.Token, string) {
 		default:
 			f.closeOpen(off)
 			f.prevEnd = f.file.Offset(f.sc.End())
+			f.tokOff, f.tokEnd = off, f.prevEnd
 		}
 		return tok, lit
 	}
@@ -348,6 +377,8 @@ func (f *goFile) comment(k, off, end int, text string) {
 		copy(grown, f.gap)
 		f.gap = grown
 	}
+	kind, linter := f.kindOf(text, k <= headerGap)
+	f.linter = f.linter || linter
 	f.gap = append(f.gap, lexComment{
 		off: int32(off),
 		end: int32(end),
@@ -360,7 +391,7 @@ func (f *goFile) comment(k, off, end int, text string) {
 			lead:   f.prevEnd <= start,
 			before: lineBreaks(f.src[f.prevEnd:off]),
 		},
-		kind:   f.kindOf(text, k <= headerGap),
+		kind:   kind,
 		cr:     len(text) != end-off,
 		output: outputMarker(text),
 	})
@@ -404,16 +435,23 @@ func (f *goFile) nextLexeme(off int) int {
 // or one of its specs, where the import's path says whether it is a cgo
 // preamble; in a top-level body, whose closing brace says whether it holds
 // an example; or nowhere a later token decides, where only a directive's
-// context counts.
-func (j *judgement) judgeGap(a, b *goFile, tok token.Token) {
+// context counts. And it moves both versions' line records on over the gap
+// and the token, lit the token's literal.
+func (j *judgement) judgeGap(a, b *goFile, tok token.Token, lit string) {
 	empty := len(a.gap) == 0 && len(b.gap) == 0
+	fa, ga := directiveStart(a.gap)
+	fb, gb := directiveStart(b.gap)
 	context, whole, output := true, true, false
 	if !empty {
 		if j.sameText && !j.sameTexts(a, b) {
 			j.sameText = false
 		}
-		context = j.sameContexts(a, b)
+		context = j.sameContexts(a, fa, ga, b, fb, gb)
 		output = slices.ContainsFunc(a.gap, isOutput) || slices.ContainsFunc(b.gap, isOutput)
+	}
+	if j.sameLines {
+		atToken := tok != token.EOF && (tok != token.SEMICOLON || lit != "\n")
+		j.sameLines = sameHeldLines(a, a.gap[ga:], b, b.gap[gb:], atToken)
 	}
 	pending := j.imports.pendingFor(tok, j.depth)
 	inBody := j.depth > 0
@@ -466,10 +504,9 @@ func (j *judgement) sameWholes(a, b *goFile) bool {
 // directive on, every comment whole, text and layout; ahead of it, a header
 // comment's text, and the layout of each other comment of the directive's
 // own group — free to say anything, not to move. The entries are walked in
-// step and never gathered.
-func (j *judgement) sameContexts(a, b *goFile) bool {
-	fa, ga := directiveStart(a.gap)
-	fb, gb := directiveStart(b.gap)
+// step and never gathered; fa and ga, fb and gb are each version's
+// directiveStart.
+func (j *judgement) sameContexts(a *goFile, fa, ga int, b *goFile, fb, gb int) bool {
 	x, y := 0, 0
 	for {
 		px, okx := nextEntry(a.gap, &x, fa, ga)
@@ -539,6 +576,68 @@ func directiveStart(gap []lexComment) (first, group int) {
 		}
 	}
 	return len(gap), len(gap)
+}
+
+// THE LINE RECORD is what a linter's directive reads of where the code sits.
+// A suppression's reach is lines: golangci-lint's nolint covers the lines of
+// its comment group and of the statement under it, staticcheck's lint:ignore
+// the first line of the node go/ast attaches it to, gosec's #nosec that
+// node, revive's the next line or every line to its enable — and which node
+// go/ast attaches a comment to is its own reading of the lines around it. So
+// each version keeps, for every code token but an inserted semicolon and
+// every comment of a directive's context from its group on — the lexemes the
+// record holds — the line breaks since the one it held before, and for a
+// comment those inside it too, and a file holding a linter's directive gets
+// no class unless the two versions' records agree. Between them the two
+// counts reach every byte from one held lexeme to the next, so a token moved
+// onto or off a line moves one of them, wherever the line break was: a
+// directive's text and a code token's are compared whole, but the
+// documentation in a directive's group may say anything, and a line it grows
+// inside itself moves what follows it a line on as surely as a line break
+// after it would. The record runs through the whole file, since a reach may:
+// revive's //revive:disable runs to its enable or the file's end, and a
+// nolint above the package clause covers the file; a window drawn round each
+// directive instead would be each linter's own rule for the node it attaches
+// to, restated, and any rule it missed a reach left open.
+//
+// sameHeldLines moves both versions' line records on over a gap's held
+// comments, ha of version a and hb of b, and over the code token after them
+// where atToken says the walk is at one the lexer did not insert, and reports
+// whether each sits as many lines from the lexeme held before it in both,
+// and each comment spans as many.
+func sameHeldLines(a *goFile, ha []lexComment, b *goFile, hb []lexComment, atToken bool) bool {
+	if len(ha) != len(hb) {
+		return false
+	}
+	for i := range ha {
+		if a.heldComment(ha[i]) != b.heldComment(hb[i]) {
+			return false
+		}
+	}
+	return !atToken || a.held(a.tokOff, a.tokEnd, true) == b.held(b.tokOff, b.tokEnd, true)
+}
+
+// heldComment moves the version's line record on over comment c, one the
+// record holds, and answers its place there: the line breaks since the lexeme
+// held before it (held), and those inside it, up to two as lineBreaks counts
+// them.
+func (f *goFile) heldComment(c lexComment) [2]uint8 {
+	return [2]uint8{f.held(int(c.off), int(c.end), false), lineBreaks(f.src[c.off:c.end])}
+}
+
+// held moves the version's line record on to the lexeme at [off, end) — a
+// code token, or a comment the record holds — and answers the line breaks
+// since the lexeme it held before: between two code tokens whether there is
+// one at all, since all a linter asks of two tokens is whether they share a
+// line; beside a comment 0, 1, or 2 for a blank line or more, which go/ast
+// reads in attaching a comment to the statement above it or the one below.
+func (f *goFile) held(off, end int, code bool) uint8 {
+	n := lineBreaks(f.src[f.heldEnd:off])
+	if code && f.heldCode {
+		n = min(n, 1)
+	}
+	f.heldEnd, f.heldCode = end, code
+	return n
 }
 
 // isOutput reports an example's output marker.
@@ -777,28 +876,47 @@ func (p pendingGap) verdict() bool {
 	return p.context
 }
 
-// kindOf is what reads the comment text, as the lexer returns it; header is
-// whether it sits in the file's header.
-func (f *goFile) kindOf(text string, header bool) commentKind {
+// kindOf is what reads the comment text, as the lexer returns it, and whether
+// a linter reads it, whose reach is lines; header is whether it sits in the
+// file's header.
+func (f *goFile) kindOf(text string, header bool) (kind commentKind, linter bool) {
 	if strings.HasPrefix(text, "/*") {
 		switch body := strings.TrimSuffix(text[2:], "*/"); {
-		case strings.HasPrefix(body, "line "), suppression(body):
-			return directiveComment
+		case suppression(body):
+			return directiveComment, true
+		case strings.HasPrefix(body, "line "):
+			return directiveComment, false
 		case header && f.generatedMarker(body):
-			return headerComment
+			return headerComment, false
 		}
-		return plainComment
+		return plainComment, false
 	}
 	if constraint.IsGoBuild(text) || constraint.IsPlusBuild(text) {
-		return headerComment
+		return headerComment, false
 	}
 	switch body := text[2:]; {
-	case goDirective(body), generatorMarker(body), suppression(body):
-		return directiveComment
+	case suppression(body):
+		return directiveComment, true
+	case goDirective(body):
+		return directiveComment, linterDirective(body)
+	case generatorMarker(body):
+		return directiveComment, false
 	case header && f.generatedMarker(body):
-		return headerComment
+		return headerComment, false
 	}
-	return plainComment
+	return plainComment, false
+}
+
+// linterDirective reports a directive's body that a linter reads rather than
+// Go's own tools: staticcheck's lint:, and every //name:value but the
+// compiler's go: — revive's, and any tool's that follows Go's convention, an
+// unknown one's reach erring toward lines.
+func linterDirective(body string) bool {
+	if strings.HasPrefix(body, "lint:") {
+		return true
+	}
+	name, ok := nameValue(body)
+	return ok && name != "go"
 }
 
 // goDirective reports a line comment's body, past its //, that a tool reads
