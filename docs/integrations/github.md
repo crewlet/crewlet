@@ -1059,10 +1059,9 @@ seat holds both, the app is its identity. See
 The remote server also exposes GitHub Copilot tools
 (`create_pull_request_with_copilot`, `assign_copilot_to_issue`,
 `request_copilot_review`). They stay reachable and an agent may call any of
-them; Crewlet's own code-authoring path is the
-[code sandbox](../concepts/code-sandbox.md), which is what `run_sandbox`
-drives. The Copilot tools are only on the remote server, not a self-hosted
-one.
+them; Crewlet's own code-authoring path is the seat's executor run in its
+box ([code sandbox](../concepts/code-sandbox.md)), with its own shell and git.
+The Copilot tools are only on the remote server, not a self-hosted one.
 
 ---
 
@@ -1173,10 +1172,12 @@ units:
 - **An installation token cannot hold a seat's identity.** It authenticates
   as an app rather than a person, so `GET /user` names nobody and the seat is
   reported unresolved.
-- **Code authoring is the sandbox's job.** A role without
-  `role.sandbox.enabled` and an engine-level `providers.sandbox` can still
-  read, review and track through the GitHub tools; it has no engine-supported
-  path to author a pull request.
+- **Code authoring is the executor run's job.** Every agent seat's executor
+  is its coding CLI's own run with a shell and git in its box; a pull request
+  is opened from there with the token its `role.sandbox.env` declares (the
+  seat's own `${GITHUB_APP_TOKEN_<HANDLE>}`, or a personal access token) and a
+  git-auth setup step. A seat that declares none can still read, review and
+  track through the GitHub tools, and pushes nothing.
 - **A tool server inside a box keeps the token it started with.** It is handed
   one good for 50 minutes and is not restarted; past that GitHub refuses its
   calls. git and `gh` read the file the engine keeps current, and the seat's
