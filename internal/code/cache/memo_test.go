@@ -1063,3 +1063,43 @@ func TestAStateWrittenBehindTheServingKeepsTheLastUse(t *testing.T) {
 		t.Errorf("after a restart the copy was last used %v, want %v: the trim's state is no use of it", got, used)
 	}
 }
+
+// A RUN'S EXTENSION OF A PAGE IS THE PAGE'S. What a run appends to a page it
+// staged before its end (MemoBatch.Extend) — a diff stat's page's files'
+// counts, once the stat has counted past it — is part of the entry the tail
+// completes: read back whole, the page, the extension and the tail in that
+// order, counted in the memo's record as one entry; and an extension that,
+// with the tail, would pass what a run may append to a page gives that page
+// back unmemoized, its staged bytes with it.
+//
+// Mutation: append the extension and leave it out of the entry's digest
+// (Extend's sum left alone) — the entry fails its digest and is no answer.
+func TestARunsExtensionOfAPageIsThePages(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	keys := memoKeys("extended", 2)
+	const counts = "|its files' counts"
+	b := c.Memo(s)
+	first, second := b.Put(keys[0], memoBody(0)), b.Put(keys[1], memoBody(1))
+	b.Extend(first, []byte(counts))
+	b.Extend(second, make([]byte, cache.MemoMaxTail))
+	b.Place(func(int) []byte { return []byte(memoTail) })
+
+	if got, ok := c.MemoGet(s, keys[0]); !ok || string(got) != string(memoBody(0))+counts+memoTail {
+		t.Errorf("the extended page read back %q (%t), want its body, its extension and its tail", got, ok)
+	}
+	if _, ok := c.MemoGet(s, keys[1]); ok {
+		t.Error("a page extended past what a run appends was memoized")
+	}
+	if got, want := cache.MemoBytes(c), cache.MemoEntryBytes(len(memoBody(0))+len(counts)+len(memoTail)); got != want {
+		t.Errorf("the memo counts %d bytes, want the one extended page's %d", got, want)
+	}
+	if got := cache.MemoStaged(c); got != 0 {
+		t.Errorf("the memo counts %d bytes staged once the batch is placed", got)
+	}
+}

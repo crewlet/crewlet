@@ -113,6 +113,16 @@ func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 			if !reflect.DeepEqual(got, p) {
 				t.Errorf("the page read back =\n%+v\nwant every field written\n%+v", got, p)
 			}
+			// A stat writes a page's counts as it counts them, and its tail the
+			// totals alone: the same bytes.
+			if kind == code.GitDiff {
+				tail := tailOf(a)
+				counted := appendTail(appendCounts(appendPage(nil, p), tail.files), kind,
+					memoTail{total: tail.total, added: tail.added, deleted: tail.deleted, counted: true})
+				if string(counted) != string(body) {
+					t.Error("a page whose counts were written as they were counted is not the page its tail ends")
+				}
+			}
 			if _, err := decodePage(body[:len(body)-1]); err == nil {
 				t.Error("decodePage read a page cut short")
 			}
@@ -162,7 +172,7 @@ func shapeOf() string {
 // memoShapes is the shape of the answers each memoFormat this build reads was
 // written over: a format names one shape, for ever.
 var memoShapes = map[string]string{
-	"page/1": "e19253458e1843a7",
+	"page/2": "e19253458e1843a7",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the
@@ -230,6 +240,62 @@ func TestAPageFromTheMemoFitsWhateverItIsStamped(t *testing.T) {
 		}
 		if ok && (!a.Memo || a.Tree.Total != 3) {
 			t.Errorf("the page from the memo = %+v, want it marked and its tail read", a)
+		}
+	}
+}
+
+// A STAT'S RUN HOLDS ONE PAGE'S COUNTS AT A TIME. A stat cuts every page past
+// the asked one before git counts a line, and its counts follow every file:
+// filed under each staged page and held to the run's end, they were some 24
+// bytes for every file of the stat past the asked page, under no bound. So
+// each page's counts are handed on — into its staged entry — as soon as the
+// numstat half has counted past it: here fifty pages of twenty files, each
+// handed once, in order, its own twenty counts, with never more than one
+// page's held; and done hands on what is left, a page the half wrote no count
+// for among it.
+//
+// Mutation: hand nothing on until done (add filing every count) — a thousand
+// counts are held at once.
+func TestAStatsRunHoldsOnePagesCountsAtATime(t *testing.T) {
+	t.Parallel()
+	const pages, files = 50, 20
+	type handed struct {
+		page   int
+		counts []fileCounts
+	}
+	var got []handed
+	pc := pageCounts{hand: func(page int, counts []fileCounts) {
+		got = append(got, handed{page: page, counts: slices.Clone(counts)})
+	}}
+	for p := range pages + 1 {
+		limit := maxInt
+		if p < pages {
+			limit = (p + 1) * files
+		}
+		pc.page(p*files, limit)
+	}
+	for i := range pages * files {
+		pc.add(i, fileCounts{added: i, deleted: 2 * i})
+	}
+	pc.done()
+	if pc.most > files {
+		t.Errorf("the stat held %d counts at once, past the %d of the page it counted", pc.most, files)
+	}
+	if len(got) != pages+1 {
+		t.Fatalf("%d pages were handed on, want each of the %d once", len(got), pages+1)
+	}
+	for p, h := range got {
+		want := files
+		if p == pages {
+			want = 0 // the last page staged, which the half wrote no count for
+		}
+		if h.page != p || len(h.counts) != want {
+			t.Fatalf("hand %d was page %d with %d counts, want page %d with %d", p, h.page, len(h.counts), p, want)
+		}
+		for j, c := range h.counts {
+			if i := p*files + j; c.added != i || c.deleted != 2*i {
+				t.Fatalf("page %d's count %d is %+v, want file %d's", p, j, c, i)
+			}
 		}
 	}
 }

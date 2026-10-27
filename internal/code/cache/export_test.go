@@ -1645,6 +1645,10 @@ const MemoCohortsPerShare = memoCohortsPerShare
 // MaxMemoCohorts bounds the cohorts the node keeps.
 const MaxMemoCohorts = maxMemoCohorts
 
+// MemoMaxTail is the most a run may append to a page it staged, by Extend and
+// by its tail together.
+const MemoMaxTail = memoMaxTail
+
 // MemoEntryBytes is the volume an entry whose body and tail are n bytes takes,
 // as the memo counts it.
 func MemoEntryBytes(n int) int64 { return memoBytesOf(int64(memoHeader + n)) }

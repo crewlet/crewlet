@@ -98,9 +98,8 @@ func (r *read) diffRead(ctx context.Context, objs found, at cursor, m *memoRun) 
 	a := page(st.files, st.next)
 	a.Diff.Total, a.Diff.Added, a.Diff.Deleted = st.total, st.added, st.deleted
 	if sp != nil {
-		m.place(code.GitDiff, func(i int) memoTail {
-			return memoTail{total: st.total, added: st.added, deleted: st.deleted, files: sp.counts[i]}
-		})
+		sp.counts.done()
+		m.place(code.GitDiff, same(memoTail{total: st.total, added: st.added, deleted: st.deleted, counted: true}))
 	}
 	return a, nil
 }
@@ -117,9 +116,11 @@ type statPage struct {
 // statPages is the pages of a diff's stat its run memoizes: the asked one,
 // staged as soon as the raw half has decided it, and every one after it, cut
 // as the raw half reads their files and staged as each fills — with no counts,
-// which follow every file — and every page's files' counts, filed as the
-// numstat half reads them, for each page's tail. What it holds is a page of
-// files and a few bytes of counts a file.
+// which follow every file — and each page's files' counts, filed as the
+// numstat half reads them and written into the page's staged entry once the
+// half has counted past it (pageCounts). What it holds is a page of files and
+// the counts of one page: every page's first ordinal and its put, a few
+// bytes a page, and none a file past the page it counts.
 type statPages struct {
 	m    *memoRun
 	room int
@@ -134,24 +135,31 @@ type statPages struct {
 	first   int
 	left    int
 	cutting bool
-	// bounds is every staged page's first ordinal, the asked page's first,
-	// and limit the ordinal past the last staged page's last file; counts
-	// is each staged page's files' counts, in its files' order, filed by
-	// the numstat half (k the page it files into).
-	bounds []int
-	limit  int
-	counts [][]fileCounts
-	k      int
+	// counts files each staged page's files' counts as the numstat half reads
+	// them, and hands each page's on to its staged entry; puts is each staged
+	// page's put, by its index among them.
+	counts pageCounts
+	puts   []int
+}
+
+// stage records a page staged as put, of files from the first-th, ending
+// before next.
+func (sp *statPages) stage(put, first int, next cursor) {
+	sp.puts = append(sp.puts, put)
+	limit := maxInt
+	if next.letter != 0 {
+		limit = next.a
+	}
+	sp.counts.page(first, limit)
+	if sp.counts.hand == nil {
+		sp.counts.hand = func(page int, counts []fileCounts) { sp.m.extend(sp.puts[page], counts) }
+	}
 }
 
 // asked stages the asked page, of files from the start-th, ending before
 // next, its files leaving left of the room.
 func (sp *statPages) asked(files []code.DiffFile, start int, next cursor, left int) {
-	sp.m.put(sp.at, sp.page(files, next), left)
-	sp.bounds, sp.counts, sp.limit = append(sp.bounds, start), append(sp.counts, nil), maxInt
-	if next.letter != 0 {
-		sp.limit = next.a
-	}
+	sp.stage(sp.m.put(sp.at, sp.page(files, next), left), start, next)
 }
 
 // begin begins a page past the asked one at the ordinal-th file, f.
@@ -181,12 +189,7 @@ func (sp *statPages) take(ordinal int, f code.DiffFile) {
 // end stages the page being cut, ending before next (none past the stat's
 // end).
 func (sp *statPages) end(next cursor) {
-	sp.m.put(cursor{letter: 'f', a: sp.first}, sp.page(sp.files, next), sp.left)
-	sp.bounds, sp.counts = append(sp.bounds, sp.first), append(sp.counts, nil)
-	sp.limit = maxInt
-	if next.letter != 0 {
-		sp.limit = next.a
-	}
+	sp.stage(sp.m.put(cursor{letter: 'f', a: sp.first}, sp.page(sp.files, next), sp.left), sp.first, next)
 }
 
 // finish stages the last page being cut, which the stat's end ends.
@@ -198,14 +201,68 @@ func (sp *statPages) finish() {
 }
 
 // count files the ordinal-th file's counts under the staged page it is on.
-func (sp *statPages) count(ordinal int, c fileCounts) {
-	if len(sp.bounds) == 0 || ordinal < sp.bounds[0] || ordinal >= sp.limit {
+func (sp *statPages) count(ordinal int, c fileCounts) { sp.counts.add(ordinal, c) }
+
+// pageCounts files a stat's files' counts under the staged page each is of —
+// pages of consecutive ordinals, the numstat half's order — and HANDS EACH
+// PAGE'S ON as soon as the half has counted past it, so it holds the counts
+// of one page at a time: about 24 bytes a file of that page, where filing
+// every page's to the run's end held 24 bytes for every file of the stat past
+// the asked page, a stat of a million files 24 MB, under no bound. done hands
+// on what is left; a page counted past with no counts — none the half wrote
+// for it — is handed none, which its entry, held to its files, refuses.
+type pageCounts struct {
+	// bounds is every page's first ordinal and limit the ordinal past the
+	// last page's last file; k is the page being counted, held its counts so
+	// far, and handed how many pages are handed on.
+	bounds []int
+	limit  int
+	k      int
+	held   []fileCounts
+	handed int
+	// hand takes the page-th page's counts, in its files' order; most is the
+	// most counts held at once, which the suite reads.
+	hand func(page int, counts []fileCounts)
+	most int
+}
+
+// page adds a page of files from the first-th ordinal, ending before limit.
+func (pc *pageCounts) page(first, limit int) {
+	pc.bounds = append(pc.bounds, first)
+	pc.limit = limit
+}
+
+// add files the ordinal-th file's counts c under the page it is on, handing
+// on every page before it first.
+func (pc *pageCounts) add(ordinal int, c fileCounts) {
+	if len(pc.bounds) == 0 || ordinal < pc.bounds[0] || ordinal >= pc.limit {
 		return
 	}
-	for sp.k+1 < len(sp.bounds) && ordinal >= sp.bounds[sp.k+1] {
-		sp.k++
+	for pc.k+1 < len(pc.bounds) && ordinal >= pc.bounds[pc.k+1] {
+		pc.handOn()
+		pc.k++
 	}
-	sp.counts[sp.k] = append(sp.counts[sp.k], c)
+	pc.held = append(pc.held, c)
+	pc.most = max(pc.most, len(pc.held))
+}
+
+// handOn hands the page being counted on, and holds none of it.
+func (pc *pageCounts) handOn() {
+	if pc.handed > pc.k {
+		return
+	}
+	if pc.hand != nil {
+		pc.hand(pc.k, pc.held)
+	}
+	pc.handed = pc.k + 1
+	pc.held = pc.held[:0]
+}
+
+// done hands on every page not yet handed: the stat has counted all it will.
+func (pc *pageCounts) done() {
+	for ; pc.k < len(pc.bounds); pc.k++ {
+		pc.handOn()
+	}
 }
 
 // widestFile is f as a page costs it before its counts are read: its counts

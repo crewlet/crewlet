@@ -648,8 +648,9 @@ func DerivedFiles() []Derived {
 		Inputs: []Input{InputOID},
 		Writes: []Write{{Step: StepMemo, Trigger: TriggerRead, Writer: Writer{File: memoFile},
 			Charge: "the pages one read's run cuts, each staged in tmp/ as it is cut and renamed in once the run " +
-				"has answered whole: one page of at most code.MaxGitAnswerBytes held at a time, but for a diff's " +
-				"stat, whose files' counts follow every file, the few pages it is let hold"}},
+				"has answered whole: one page of at most code.MaxGitAnswerBytes held at a time, and of a diff's " +
+				"stat the counts of one page's files, about 24 bytes a file, written into that page's staged " +
+				"entry once the stat has counted past it (MemoBatch.Extend)"}},
 		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, memoTreeName}, File: "memo", Main: true, Tree: true}},
 		Check:     CheckEntryDigest,
 		Freshness: FreshImmutable,

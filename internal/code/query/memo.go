@@ -49,10 +49,13 @@ import (
 // (cache.MemoBatch.Put), holding one page at a time beside the asked one; then
 // memoizes them all once git has answered whole and reported no damage, each
 // ending with what the run learned of it only at its end (its tail): a
-// listing's total, a file's line count, a diff's totals and each file's
-// counts. Reading a file page by page costs one stream of it. A comparison,
-// whose answer is one page, is memoized whole; a landed-in read never, since
-// its answer moves with the target.
+// listing's total, a file's line count, a diff's totals. A
+// stat's page's files' counts, which follow every file, are written into the
+// page's staged entry as soon as the stat has counted past the page
+// (cache.MemoBatch.Extend), so a stat's run holds one page's counts at a time
+// however many files it counts. Reading a file page by page costs one stream
+// of it. A comparison, whose answer is one page, is memoized whole; a
+// landed-in read never, since its answer moves with the target.
 //
 // # A page fits whatever it is stamped with
 //
@@ -71,7 +74,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/1"
+const memoFormat = "page/2"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -89,10 +92,13 @@ type memoPage struct {
 // memoTail is what a run learns of a page only at its end: a listing's total,
 // a file's line count, a diff's totals and each of the page's files' counts
 // in their order — none known when the page is cut, since every page is
-// staged as it is cut and the run reads on to the answer's end.
+// staged as it is cut and the run reads on to the answer's end. counted: the
+// files' counts are in the entry already, written as the stat counted past
+// the page (memoRun.extend), so the tail carries the totals alone.
 type memoTail struct {
 	total, added, deleted, lines int
 	files                        []fileCounts
+	counted                      bool
 }
 
 // fileCounts is one diff file's lines added and deleted, or that git calls it
@@ -261,14 +267,23 @@ func (r *read) memoRun(objs found) *memoRun {
 }
 
 // put stages a, the page at at, whose items left left of the room it was cut
-// against. Pages are put in the order they are cut, which is what place's
-// i-th tail is of.
-func (m *memoRun) put(at cursor, a code.GitAnswer, left int) {
+// against, and answers which put it was (-1 for none). Pages are put in the
+// order they are cut, which is what place's i-th tail is of.
+func (m *memoRun) put(at cursor, a code.GitAnswer, left int) int {
 	if m == nil {
-		return
+		return -1
 	}
 	body := appendPage(nil, memoPage{answer: a, commits: m.r.named, budget: left + m.r.stampCost()})
-	m.batch.Put(m.r.memoKey(m.whole, at), body)
+	return m.batch.Put(m.r.memoKey(m.whole, at), body)
+}
+
+// extend writes files, the counts of the put-th page's files in their order,
+// into that page's staged entry, where its tail would carry them (a tail of
+// counted).
+func (m *memoRun) extend(put int, files []fileCounts) {
+	if m != nil {
+		m.batch.Extend(put, appendCounts(nil, files))
+	}
 }
 
 // place memoizes every page put, the i-th — each a page of kind — ending with
@@ -295,12 +310,15 @@ func same(t memoTail) func(int) memoTail { return func(int) memoTail { return t 
 // its length then its bytes, every field in its struct's order. A page's
 // fields its run learns only at its end are its tail's, never its own: a
 // listing's Total, a file's Lines, a diff's totals and its files' counts — a
-// stat's page and a patch's alike, the patch's naming its one file. Its Kind
-// says which part follows; a comparison is one answer, its counts in the
-// page. Binary rather than JSON because a hit decodes a whole page: a page of
-// a listing is some 400 entries of five strings, which encoding/json decodes
-// at a few tens of megabytes a second, against a varint reader slicing each
-// string out of one copy.
+// stat's page and a patch's alike, the patch's naming its one file. A diff's
+// files' counts are a block of their own, after the page and before its
+// totals, so a stat writes each page's block as it is counted
+// (memoRun.extend) and a patch's tail carries its one file's: the same bytes
+// either way. Its Kind says which part follows; a comparison is one answer,
+// its counts in the page. Binary rather than JSON because a hit decodes a
+// whole page: a page of a listing is some 400 entries of five strings, which
+// encoding/json decodes at a few tens of megabytes a second, against a
+// varint reader slicing each string out of one copy.
 
 // pageWriter is an entry's bytes as they are written.
 type pageWriter []byte
@@ -406,9 +424,13 @@ func appendFile(w *pageWriter, f code.DiffFile, with bool) {
 }
 
 // appendTail is buf with t's encoding appended, as a page of kind ends: a
-// listing's total, a file's line count, a diff's totals and its files'
-// counts, and nothing after a comparison.
+// listing's total, a file's line count, a diff's files' counts — unless they
+// were counted into the entry already — and its totals, and nothing after a
+// comparison.
 func appendTail(buf []byte, kind code.GitReadKind, t memoTail) []byte {
+	if kind == code.GitDiff && !t.counted {
+		buf = appendCounts(buf, t.files)
+	}
 	w := pageWriter(buf)
 	switch kind {
 	case code.GitTree:
@@ -419,12 +441,19 @@ func appendTail(buf []byte, kind code.GitReadKind, t memoTail) []byte {
 		w.int(t.total)
 		w.int(t.added)
 		w.int(t.deleted)
-		w.int(len(t.files))
-		for _, f := range t.files {
-			w.int(f.added)
-			w.int(f.deleted)
-			w.flag(f.binary)
-		}
+	}
+	return w
+}
+
+// appendCounts is buf with a diff page's files' counts appended, in its
+// files' order: how many, then each one's added, deleted and binary.
+func appendCounts(buf []byte, files []fileCounts) []byte {
+	w := pageWriter(buf)
+	w.int(len(files))
+	for _, f := range files {
+		w.int(f.added)
+		w.int(f.deleted)
+		w.flag(f.binary)
 	}
 	return w
 }
@@ -543,13 +572,13 @@ func decodePage(body []byte) (memoPage, error) {
 				d.Files[i] = readFile(r, false)
 			}
 		}
-		d.Total, d.Added, d.Deleted = r.int(), r.int(), r.int()
 		if n := r.count(); r.err == nil && n != len(d.Files) {
 			r.err = errMemoPage
 		}
 		for i := range d.Files {
 			d.Files[i].Added, d.Files[i].Deleted, d.Files[i].Binary = r.int(), r.int(), r.flag()
 		}
+		d.Total, d.Added, d.Deleted = r.int(), r.int(), r.int()
 		a.Diff = d
 	case code.GitCompare:
 		c := &code.CompareAnswer{Base: r.str(), Head: r.str(), MergeBase: r.str(), BaseIsAncestor: r.flag(),

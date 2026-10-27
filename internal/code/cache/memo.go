@@ -65,10 +65,13 @@ import (
 // nothing a read does not already refuse.
 //
 // A read's run stages every page it cuts as it cuts it (MemoBatch.Put), and
-// places them together — each ending with what the run learned of it only at
-// the run's end, a listing's total, a file's line count, a stat's counts
-// (Place's tails) — only once its git has answered whole and reported no
-// damage: an answer cut from a run that met damage is never memoized.
+// places them together — each ending with what the run learned of it after
+// it cut it: a stat's page's files' counts, written into its staged entry as
+// soon as the stat has counted past the page (Extend), so a run holds the
+// counts of one page at a time, and what only the run's end tells, a
+// listing's total, a file's line count, a stat's totals (Place's tails) —
+// only once its git has answered whole and reported no damage: an answer cut
+// from a run that met damage is never memoized.
 //
 // # Cohorts: the order of use kept by the disk, and nothing an entry in memory
 //
@@ -193,12 +196,13 @@ const (
 	// memoHeader is the header's bytes: the magic, the version, the key, the
 	// length and the digest.
 	memoHeader = len(memoMagic) + 1 + sha256.Size + 4 + sha256.Size
-	// memoMaxTail bounds what a run appends to a page it staged (Place): what
-	// the run learned of the page only at its end — a listing's total, a
-	// file's line count, a diff stat's counts of every file on the page —
-	// which is never more than the page itself, an answer at its bound: a
-	// file's counts are a few bytes against the hundred its entry of the page
-	// takes at the least.
+	// memoMaxTail bounds what a run appends to a page it staged, by Extend as
+	// it learns it and by Place's tail at its end together: what the run
+	// learned of the page only after cutting it — a listing's total, a file's
+	// line count, a diff stat's counts of every file on the page — which is
+	// never more than the page itself, an answer at its bound: a file's counts
+	// are a few bytes against the hundred its entry of the page takes at the
+	// least.
 	memoMaxTail = code.MaxGitAnswerBytes
 	// memoMaxBody is the most a body holds: an answer at its bound and its
 	// tail at its own.
@@ -542,16 +546,18 @@ type MemoBatch struct {
 }
 
 // memoStaged is one staged answer: its key, which Put it was (put), its file
-// in tmp/ ("" once placed or given back), its body's length as put, its
-// body's SHA-256 so far, which the run's tail completes, and the bytes its
-// file holds — the header, the body and, once completed, the tail.
+// in tmp/ ("" once placed or given back), its body's length so far — as put,
+// and as Extend lengthened it — and what Extend appended of it, its body's
+// SHA-256 so far, which the run's tail completes, and the bytes its file
+// holds — the header, the body and, once completed, the tail.
 type memoStaged struct {
-	key    MemoKey
-	put    int
-	path   string
-	length int
-	sum    hash.Hash
-	size   int64
+	key      MemoKey
+	put      int
+	path     string
+	length   int
+	appended int
+	sum      hash.Hash
+	size     int64
 }
 
 // Memo is a batch of answers to memoize into the incarnation s holds, as a
@@ -583,19 +589,22 @@ func (c *Cache) Memo(s Synced) *MemoBatch {
 // share is not staged at all — the memo could never keep it, and staged it
 // would hold room the repositories' budget is for (overBudget) — and the run
 // answers it unmemoized, as it does a page whose write failed.
-func (b *MemoBatch) Put(k MemoKey, body []byte) {
+//
+// It answers which Put this was — what Extend and Place's tail name the
+// answer by — staged or not; -1 for a batch that takes no more.
+func (b *MemoBatch) Put(k MemoKey, body []byte) int {
 	if b == nil || b.done {
-		return
+		return -1
 	}
 	put := b.puts
 	b.puts++
 	if len(body) > code.MaxGitAnswerBytes {
 		b.fail(fmt.Errorf("an answer of %d bytes, past the %d one holds", len(body), code.MaxGitAnswerBytes))
-		return
+		return put
 	}
 	n := int64(memoHeader + len(body))
 	if !b.c.stageMemo(n) {
-		return
+		return put
 	}
 	// THE HEADER'S ROOM FIRST: it names the body's length and digest, which
 	// the run's tail completes (Place).
@@ -606,7 +615,7 @@ func (b *MemoBatch) Put(k MemoKey, body []byte) {
 	if err != nil {
 		b.c.memoStaged.Add(-n)
 		b.fail(err)
-		return
+		return put
 	}
 	_, err = f.Write(b.buf)
 	if cerr := f.Close(); err == nil {
@@ -616,11 +625,63 @@ func (b *MemoBatch) Put(k MemoKey, body []byte) {
 		_ = os.Remove(f.Name()) // what it held is no answer
 		b.c.memoStaged.Add(-n)
 		b.fail(err)
-		return
+		return put
 	}
 	sum := sha256.New()
 	sum.Write(body)
 	b.staged = append(b.staged, memoStaged{key: k, put: put, path: f.Name(), length: len(body), sum: sum, size: n})
+	b.bytes += n
+	b.c.tmpBytes.Add(n)
+	return put
+}
+
+// Extend appends data to the answer the put-th Put staged: what the run
+// learned of it after it cut it and before its end — a diff stat's page's
+// files' counts, once the stat has counted past the page — so the run holds
+// none of it until its end, where Place's tail would. It takes its room out of
+// the memo's share as its page did (stageMemo), and with the tail Place
+// appends it is held to memoMaxTail; refused either way, or a write that
+// fails, the answer is given back unmemoized. Before Place; an answer not
+// staged takes nothing.
+func (b *MemoBatch) Extend(put int, data []byte) {
+	if b == nil || b.done || len(data) == 0 {
+		return
+	}
+	i, found := slices.BinarySearchFunc(b.staged, put, func(st memoStaged, put int) int {
+		return cmp.Compare(st.put, put)
+	})
+	if !found || b.staged[i].path == "" {
+		return
+	}
+	st := &b.staged[i]
+	if st.appended+len(data) > memoMaxTail {
+		b.fail(fmt.Errorf("%d bytes appended to an answer, past the %d a run appends", st.appended+len(data),
+			memoMaxTail))
+		b.unstage(st)
+		return
+	}
+	n := int64(len(data))
+	if !b.c.stageMemo(n) {
+		b.unstage(st)
+		return
+	}
+	f, err := os.OpenFile(st.path, os.O_WRONLY, 0)
+	if err == nil {
+		_, err = f.WriteAt(data, int64(memoHeader+st.length))
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		b.c.memoStaged.Add(-n)
+		b.fail(err)
+		b.unstage(st)
+		return
+	}
+	st.sum.Write(data)
+	st.length += len(data)
+	st.appended += len(data)
+	st.size += n
 	b.bytes += n
 	b.c.tmpBytes.Add(n)
 }
@@ -667,9 +728,13 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 		return
 	}
 	for i := range b.staged {
+		if b.staged[i].path == "" {
+			continue // given back already, by an Extend that could not be made
+		}
 		t := tail(b.staged[i].put)
-		if len(t) > memoMaxTail {
-			b.fail(fmt.Errorf("a tail of %d bytes, past the %d a run appends", len(t), memoMaxTail))
+		if b.staged[i].appended+len(t) > memoMaxTail {
+			b.fail(fmt.Errorf("a tail of %d bytes after %d appended, past the %d a run appends", len(t),
+				b.staged[i].appended, memoMaxTail))
 			b.unstage(&b.staged[i])
 			continue
 		}
