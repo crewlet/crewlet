@@ -978,11 +978,16 @@ var _ tools.SeatCallable = (*codeResolve)(nil)
 
 func (t *codeResolve) Name() string { return CodeResolveTool }
 
+// Description says what the tool is FOR: turning a ref into its commit id once,
+// so the calls after it name the commit. Never that it is the one read that
+// waits for the newest push — every code read of a row is linearizable, the
+// repositories' listing and detail and every ref a call names alike — which
+// taught the model that naming a branch anywhere else was free.
 func (t *codeResolve) Description() string {
-	return "Resolve a branch, a tag or a whole ref to the commit it points at NOW — the one code read " +
-		"that waits for the newest push. Call it once per ref you need, then pass the commit id it " +
-		"answers to the other code tools: every call that takes an id costs nothing extra, and " +
-		"reads the same commit however the branch moves meanwhile."
+	return "Resolve a branch, a tag, a whole ref or HEAD to the commit it points at now, so the calls " +
+		"after it can name that commit by its id. Call it once per ref you need and pass the id it " +
+		"answers to the other code tools: a call naming a commit by id resolves no ref, and reads " +
+		"the same commit however the branch moves meanwhile."
 }
 
 func (t *codeResolve) Parameters() map[string]any {
