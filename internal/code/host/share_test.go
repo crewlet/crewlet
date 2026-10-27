@@ -3,6 +3,7 @@ package host_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"sync"
@@ -129,31 +130,42 @@ func transferring(sub string) func(gitproc.Cmd) bool {
 // every read is served once released or answered unready, the share full,
 // never failed.
 //
-// Mutation: ShareOf answering the whole read lane — four reads hold every
-// slot, and the push is refused busy, red.
+// EVERY READ LISTS A DIRECTORY OF ITS OWN, so each is a page no other read is
+// cutting and runs its own listing under its own unit of the share: reads of
+// ONE page are a single flight (query.Server), the first leading and every
+// other waiting on its run with no unit of the share and no slot of the lane,
+// which would leave the share holding one unit and no read waiting on it.
+//
+// Mutations: ShareOf answering the whole read lane — four reads hold every
+// slot, and the push is refused busy, red; every read listing the same
+// directory — the second never reaches its listing, red.
 func TestAPushIsServedBesideAFullReadShare(t *testing.T) {
 	t.Parallel()
-	hold := &holdingPool{release: make(chan struct{}), held: make(chan struct{}, 66)}
+	const reads = 66
+	hold := &holdingPool{release: make(chan struct{}), held: make(chan struct{}, reads)}
 	c := newCase(t, codetest.SoloOptions{MaxProcesses: 4, QueryPool: hold.wrap}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
-	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	files := map[string]string{"README.md": "one\n"}
+	for i := range reads {
+		files[readDir(i)+"/f"] = fmt.Sprintf("%d\n", i)
+	}
+	head := p.Commit(work, files, "one")
 	c.MustPush(p, work, "main")
 	node := c.Fleet.Nodes()[0]
 	if got := node.Share().Units(); got != 2 {
 		t.Fatalf("a four-slot read lane's share holds %d units, want 2", got)
 	}
-	q := code.GitQuery{Kind: code.GitTree, RepoID: c.Rows().Repo.ID,
-		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"},
-		Tree:  &code.TreeQuery{Rev: head}}
 
-	results := make(chan error, 66)
-	read := func() {
-		_, err := node.GitRead(c.Ctx, q)
+	results := make(chan error, reads)
+	read := func(i int) {
+		_, err := node.GitRead(c.Ctx, code.GitQuery{Kind: code.GitTree, RepoID: c.Rows().Repo.ID,
+			Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"},
+			Tree:  &code.TreeQuery{Rev: head, Path: readDir(i)}})
 		results <- err
 	}
-	for range 2 {
-		go read()
+	for i := range 2 {
+		go read(i)
 	}
 	for range 2 {
 		select {
@@ -162,8 +174,8 @@ func TestAPushIsServedBesideAFullReadShare(t *testing.T) {
 			t.Fatal("no read reached its listing within 30 s")
 		}
 	}
-	for range 64 {
-		go read()
+	for i := 2; i < reads; i++ {
+		go read(i)
 	}
 
 	p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
@@ -182,13 +194,16 @@ func TestAPushIsServedBesideAFullReadShare(t *testing.T) {
 	if held > 2 {
 		t.Errorf("%d units of the share held during the push, past its 2", held)
 	}
-	for range 66 {
+	for range reads {
 		var unready *code.ErrGitUnready
 		if err := <-results; err != nil && (!errors.As(err, &unready) || unready.Reason != code.UnreadyShare) {
 			t.Errorf("a seat read beside the push = %v, want it served, or unready with the share full", err)
 		}
 	}
 }
+
+// readDir is the directory the share case's i-th read lists.
+func readDir(i int) string { return fmt.Sprintf("d%02d", i) }
 
 // holdingPool runs, before every listing a read runs, a read-lane process
 // held open on a standard input the case releases, so the read holds a real
