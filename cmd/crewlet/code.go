@@ -1279,7 +1279,7 @@ func codeExport(environ config.Source, args []string, stdout, stderr io.Writer) 
 	if _, err = g.run(ctx, g.environ, mirror, "bundle", "create", partial, "--all"); err != nil {
 		return err
 	}
-	if err = checkBundle(partial); err != nil {
+	if err = checkBundle(ctx, partial); err != nil {
 		return fmt.Errorf("the bundle git wrote for %s is not whole, so nothing was put at %s: %w", name, file, err)
 	}
 	if err = os.Rename(partial, target); err != nil {
@@ -1307,7 +1307,15 @@ const maxBundleHeader = maxGitOutput
 // version git writes, an object count, and the trailer, the hash of every
 // byte before it (SHA-1, or SHA-256 where the bundle names that object
 // format). A pack cut short or with a byte changed is caught by that one
-// hash, at hashing speed.
+// hash, at hashing speed — git's hashfile rule, held by its one
+// implementation (code.HashTrailer, which a git node holds its own files to),
+// so the bytes are judged here exactly as the node that serves them judges
+// its packs.
+//
+// STOPPED WITH ITS CALLER: the pack is the repository's whole size, and the
+// export catches an interrupt to cancel ctx rather than die of it, so a check
+// that took no context would read on to the end of a repository-sized file
+// after the operator asked it to stop. ctx is checked before every read.
 //
 // NOT `git bundle verify`, which reads the header and the prerequisites and
 // never the pack: a bundle with eight bytes of its pack overwritten, or cut
@@ -1316,20 +1324,24 @@ const maxBundleHeader = maxGitOutput
 // inflate and hash every object — measured at 0.11–0.14 s of CPU a mebibyte
 // (gitproc's PackWorkPerMiB) — when a pack whose trailer is its bytes' hash is
 // the pack `bundle create` wrote; the clone that restores it indexes it.
-func checkBundle(path string) error {
+func checkBundle(ctx context.Context, path string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }() // read-only: what was read is the answer
-	r := bufio.NewReaderSize(f, 64<<10)
-	sum, trailer, err := bundleHeader(r)
+	info, err := f.Stat()
 	if err != nil {
 		return err
 	}
+	sum, header, err := bundleHeader(bufio.NewReaderSize(f, 64<<10))
+	if err != nil {
+		return err
+	}
+	pack := io.NewSectionReader(f, header, info.Size()-header)
 	var head [12]byte
-	if _, err := io.ReadFull(r, head[:]); err != nil {
-		return fmt.Errorf("its pack has no header: %w", err)
+	if n, headErr := pack.ReadAt(head[:], 0); n < len(head) {
+		return fmt.Errorf("its pack has no header: %w", headErr)
 	}
 	if string(head[:4]) != "PACK" {
 		return fmt.Errorf("what follows its header is no pack (it begins %q)", head[:4])
@@ -1340,45 +1352,25 @@ func checkBundle(path string) error {
 	if binary.BigEndian.Uint32(head[8:12]) == 0 {
 		return errors.New("its pack holds no object, though its header names a ref")
 	}
-	sum.Write(head[:])
-	// EVERYTHING BUT THE TRAILER IS HASHED, and the trailer is the last
-	// bytes the file holds: the newest trailer's length of bytes read is
-	// held back, and what a later read pushes out of it is hashed.
-	held := make([]byte, 0, trailer)
-	buf := make([]byte, 64<<10)
-	for {
-		n, err := r.Read(buf)
-		data := buf[:n]
-		if over := len(held) + len(data) - trailer; over > 0 {
-			fromHeld := min(over, len(held))
-			sum.Write(held[:fromHeld])
-			sum.Write(data[:over-fromHeld])
-			held = append(held[:0], held[fromHeld:]...)
-			held = append(held, data[over-fromHeld:]...)
-		} else {
-			held = append(held, data...)
-		}
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("reading its pack: %w", err)
-		}
-	}
-	if len(held) < trailer {
+	if pack.Size() < int64(len(head)+sum.Size()) {
 		return errors.New("its pack ends before its trailer")
 	}
-	if got := sum.Sum(nil); !bytes.Equal(got, held) {
+	t, err := code.HashTrailer(ctx, pack, pack.Size(), sum, code.Pieces{})
+	switch {
+	case err != nil:
+		// io.ErrUnexpectedEOF among them: the file shortened as it was read.
+		return fmt.Errorf("reading its pack: %w", err)
+	case !t.Sound():
 		return fmt.Errorf("its pack's bytes hash to %x, and its trailer says %x: it was cut short or changed",
-			got, held)
+			t.Sum, t.Held)
 	}
 	return nil
 }
 
 // bundleHeader reads a bundle's header from r, through the blank line that
-// ends it, answering the hash its pack's trailer is made with and that
-// trailer's length.
-func bundleHeader(r *bufio.Reader) (hash.Hash, int, error) {
+// ends it, answering the hash its pack's trailer is made with — fresh — and
+// how many bytes the header takes: where its pack begins in the file.
+func bundleHeader(r *bufio.Reader) (hash.Hash, int64, error) {
 	read := 0
 	line := func() (string, error) {
 		s, err := r.ReadString('\n')
@@ -1398,7 +1390,7 @@ func bundleHeader(r *bufio.Reader) (hash.Hash, int, error) {
 	if signature != "# v2 git bundle" && signature != "# v3 git bundle" {
 		return nil, 0, fmt.Errorf("it is not a git bundle (its first line is %q)", signature)
 	}
-	sum, trailer, refs := sha1.New(), sha1.Size, 0
+	sum, refs := sha1.New(), 0
 	for {
 		l, err := line()
 		switch {
@@ -1408,12 +1400,12 @@ func bundleHeader(r *bufio.Reader) (hash.Hash, int, error) {
 			if refs == 0 {
 				return nil, 0, errors.New("its header names no ref")
 			}
-			return sum, trailer, nil
+			return sum, int64(read), nil
 		case strings.HasPrefix(l, "@"):
 			// A v3 capability: the object format is the one that changes
 			// what the trailer is.
 			if format, ok := strings.CutPrefix(l, "@object-format="); ok && format == "sha256" {
-				sum, trailer = sha256.New(), sha256.Size
+				sum = sha256.New()
 			}
 		case strings.HasPrefix(l, "-"):
 			return nil, 0, fmt.Errorf("it needs a commit it does not hold (%s), which no bundle of every ref of "+

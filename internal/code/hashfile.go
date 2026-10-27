@@ -22,7 +22,11 @@ import (
 // hash of the largest file a node holds reads it, is this one function,
 // [HashTrailer], over the one piece loop, [HashPieces]: two copies would judge
 // one file two ways, and the one that took no context or slot would be the
-// one a node could not stop.
+// one a node could not stop. The operator's export (cmd/crewlet's `code
+// export`) holds the bundle it writes to it too — a pack's trailer, SHA-1 or
+// SHA-256 as the bundle's object format says — so a bundle is judged as the
+// node that served it judges its packs, and stops when the export is
+// interrupted.
 //
 // A PIECE AT A TIME, STOPPED WITH ITS CALLER. A layer's root alone is some
 // 2.6 GB for the largest repository the defaults admit and 16 GiB at

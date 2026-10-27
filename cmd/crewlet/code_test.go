@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1" //nolint:gosec // a git object id IS a SHA-1: the case names the blob git stored, it trusts no hash of its own to it
 	"encoding/hex"
 	"encoding/json"
@@ -1611,7 +1612,7 @@ esac`)
 	src.Run(t, repo, "commit", "--allow-empty", "-q", "-m", "one")
 	whole := filepath.Join(t.TempDir(), "whole.bundle")
 	src.Run(t, repo, "bundle", "create", whole, "--all")
-	if err := checkBundle(whole); err != nil {
+	if err := checkBundle(t.Context(), whole); err != nil {
 		t.Fatalf("a bundle git wrote fails the check: %v", err)
 	}
 	raw, err := os.ReadFile(whole)
@@ -1635,8 +1636,32 @@ esac`)
 		if err := os.WriteFile(path, damaged, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := checkBundle(path); err == nil {
+		if err := checkBundle(t.Context(), path); err == nil {
 			t.Errorf("a bundle %s passes the check", name)
 		}
+	}
+}
+
+// A BUNDLE'S CHECK STOPS WITH ITS EXPORT. The export catches an interrupt to
+// cancel its context rather than die of it, and the bundle it checks is the
+// repository's whole size, so the check reads by that context: a bundle git
+// wrote passes under a live one, and under one that ended is
+// context.Canceled, its pack read no further.
+//
+// Mutation: hash the pack under a context that never ends — red.
+func TestABundlesCheckStopsWithItsExport(t *testing.T) {
+	t.Parallel()
+	src := gittest.NewClient(t)
+	repo := src.Init(t)
+	src.Run(t, repo, "commit", "--allow-empty", "-q", "-m", "one")
+	whole := filepath.Join(t.TempDir(), "whole.bundle")
+	src.Run(t, repo, "bundle", "create", whole, "--all")
+	if err := checkBundle(t.Context(), whole); err != nil {
+		t.Fatalf("a bundle git wrote fails the check: %v", err)
+	}
+	interrupted, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := checkBundle(interrupted, whole); !errors.Is(err, context.Canceled) {
+		t.Errorf("the check of an interrupted export: %v, want context.Canceled", err)
 	}
 }

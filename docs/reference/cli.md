@@ -1431,7 +1431,9 @@ prerequisite, and its pack is read from start to end and its bytes hashed
 against the trailer git wrote, so a pack cut short or with a byte changed —
 which `git bundle verify`, reading only the header, calls okay, and a clone of
 it refuses — is refused with nothing left at the path. An export that was
-interrupted leaves nothing that looks finished either; the mirror is
+interrupted leaves nothing that looks finished either, and an interrupt
+during the check stops it at its next read rather than after the rest of the
+bundle; the mirror is
 made in a directory **beside the bundle** and removed when the export ends, so
 the bundle's volume needs room for the repository twice while it runs. A
 repository with no refs yet, or one deleted, is refused with nothing written.
