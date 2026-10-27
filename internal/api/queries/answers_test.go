@@ -1044,7 +1044,7 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	r := registryOver(t, queries.Sources{
 		State: livestate.New(), Events: fleetOf(log), Company: companySource(t, cfg),
 	})
-	got := ask(t, r, "agent", map[string]any{"id": "ada"})
+	got := ask(t, r, "agent", map[string]any{"id": "ada", "history": "true"})
 
 	history, _ := got["llm_history"].([]store.EventRecord)
 	if len(history) != 2 {
@@ -1094,7 +1094,7 @@ func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 	r := registryOver(t, queries.Sources{
 		State: livestate.New(), Events: fleetOf(log), Company: companySource(t, cfg),
 	})
-	history, _ := ask(t, r, "agent", map[string]any{"id": "ada"})["llm_history"].([]store.EventRecord)
+	history, _ := ask(t, r, "agent", map[string]any{"id": "ada", "history": "true"})["llm_history"].([]store.EventRecord)
 	if len(history) != 2 {
 		t.Fatalf("ada's history = %v, want her two phases", history)
 	}
@@ -1103,7 +1103,7 @@ func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 			t.Error("ada's history carries bob's phase, which shares her role name")
 		}
 	}
-	if theirs, _ := ask(t, r, "agent", map[string]any{"id": "bob"})["llm_history"].([]store.EventRecord); len(theirs) != 1 {
+	if theirs, _ := ask(t, r, "agent", map[string]any{"id": "bob", "history": "true"})["llm_history"].([]store.EventRecord); len(theirs) != 1 {
 		t.Errorf("bob's history = %v, want his one phase", theirs)
 	}
 }
@@ -1317,7 +1317,7 @@ func TestAnAgentAnswerCarriesNoTranscriptToAStatusReader(t *testing.T) {
 				State: state, Events: fleetOf(log), Company: companySource(t, cfg),
 				Chart: leadsChart{lead: "lead", report: "ada"},
 			})
-			got, err := r.Answer(c.ctx, "agent", map[string]any{"id": "ada"})
+			got, err := r.Answer(c.ctx, "agent", map[string]any{"id": "ada", "history": "true"})
 			if err != nil {
 				t.Fatalf("agent: %v", err)
 			}
@@ -1370,13 +1370,13 @@ func TestAnAgentAnswerCarriesNoTranscriptToAStatusReader(t *testing.T) {
 	}
 }
 
-// A SEAT CAN BE ASKED FOR WITHOUT ITS CALLS: `history=false` answers the seat
-// and its live state with no finished call and no cursor, so a caller asking
-// what a seat is doing is not handed whole transcripts past what it reads (the
-// assistant's step dropped a busy seat's status as "larger than one step
-// reads"). Unset, the history is answered as before. Mutation: ignore the
-// parameter and the rows come back.
-func TestAnAgentAnswerCanLeaveItsCallsOut(t *testing.T) {
+// A SEAT IS ANSWERED WITHOUT ITS CALLS UNLESS THEY ARE ASKED FOR: unset, the
+// seat and its live state with no finished call and no cursor, so a caller
+// asking what a seat is doing is never handed whole transcripts (a busy
+// seat's are 2 MB, and the assistant's step dropped its status as too large
+// to read); `history=true` answers them. Mutation: default the parameter to
+// true and the unset answer carries the rows.
+func TestAnAgentAnswerCarriesItsCallsOnlyWhenAsked(t *testing.T) {
 	t.Parallel()
 	cfg, ids := namesakes(t)
 	db := openStore(t)
@@ -1384,14 +1384,15 @@ func TestAnAgentAnswerCanLeaveItsCallsOut(t *testing.T) {
 	r := registryOver(t, queries.Sources{
 		State: livestate.New(), Events: fleetOf(db.Events()), Company: companySource(t, cfg),
 	})
-	got := ask(t, r, "agent", map[string]any{"id": "ada", "history": "false"})
+	got := ask(t, r, "agent", map[string]any{"id": "ada"})
 	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 0 || got["next"] != "" {
-		t.Errorf("history=false answered llm_history %v and next %v", got["llm_history"], got["next"])
+		t.Errorf("unset, the answer carried llm_history %v and next %v", got["llm_history"], got["next"])
 	}
 	if got["handle"] != "ada" {
-		t.Errorf("history=false answered %+v, want the seat", got)
+		t.Errorf("unset, the answer is %+v, want the seat", got)
 	}
-	if history, _ := ask(t, r, "agent", map[string]any{"id": "ada"})["llm_history"].([]store.EventRecord); len(history) != 2 {
-		t.Errorf("unset, the history is %d rows, want both finished phases", len(history))
+	asked := ask(t, r, "agent", map[string]any{"id": "ada", "history": "true"})
+	if history, _ := asked["llm_history"].([]store.EventRecord); len(history) != 2 {
+		t.Errorf("history=true answered %d rows, want both finished phases", len(history))
 	}
 }

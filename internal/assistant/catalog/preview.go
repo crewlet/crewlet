@@ -364,7 +364,7 @@ func (c company) handover(ctx context.Context, read proposal.Read, handle, what 
 	case seat.kind == "human":
 		return name + " is notified of " + what + " once this is approved."
 	}
-	doc, err := readGet(ctx, read, "GET /agents/{id}", map[string]string{"id": handle}, seatAlone)
+	doc, err := readGet(ctx, read, "GET /agents/{id}", map[string]string{"id": handle}, nil)
 	if err != nil {
 		return assigned
 	}
@@ -384,11 +384,6 @@ func (c company) handover(ctx context.Context, read proposal.Read, handle, what 
 	}
 	return assigned
 }
-
-// seatAlone asks a seat's read for its state without its call history, whose
-// payloads are whole transcripts past what one read holds; a preview reads
-// none of it.
-var seatAlone = url.Values{"history": {"false"}}
 
 // stoppedWaits are what a stopped seat waits for, by the reason its live state
 // gives (internal/api/livestate's StoppedReason), each completing a sentence
@@ -685,7 +680,7 @@ func seatPreview(pause bool) func(t Tool) proposal.Previewer {
 			}
 			a := Args(args)
 			doc, err := readGet(ctx, read, "GET /agents/{id}",
-				map[string]string{"id": a.String("handle")}, seatAlone)
+				map[string]string{"id": a.String("handle")}, nil)
 			if err != nil {
 				return proposal.Preview{}, err
 			}

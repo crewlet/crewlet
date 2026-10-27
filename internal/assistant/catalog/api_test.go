@@ -520,3 +520,42 @@ func TestTheRequestIsAnAdministratorsToRead(t *testing.T) {
 		}
 	}
 }
+
+// A GENERIC LIST READ IS ONE PAGE: a route the reference says pages by `limit`
+// is asked for GenericPage rows when the model names no limit, so a bare read
+// of the event log or the turns is answered whole with its cursor to read on
+// rather than cut at the step's bound and lost; a limit the model names is
+// kept, and a route that takes none is sent as asked. Mutation: drop the
+// default and the bare reads carry no limit.
+func TestAGenericListReadIsOnePage(t *testing.T) {
+	t.Parallel()
+	table, err := catalog.NewRouteTable([]catalog.Route{
+		{Pattern: "GET /events", Action: authz.ActionWorkRead},
+		{Pattern: "GET /turns", Action: authz.ActionWorkRead},
+		{Pattern: "GET /config", Action: authz.ActionWorkRead},
+		// A WRITE TOO, since the generic tools are built as a set and the
+		// change tool needs a route to name.
+		{Pattern: "POST /worklet/items", Action: authz.ActionWorkCreate},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := catalog.GenericTools(table, admin, nil)[1]
+	for _, c := range []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{"route": "GET /events"}, "limit=25"},
+		{map[string]any{"route": "GET /turns", "query": map[string]any{"seat": "qa"}}, "limit=25&seat=qa"},
+		{map[string]any{"route": "GET /events", "query": map[string]any{"limit": "5"}}, "limit=5"},
+		{map[string]any{"route": "GET /config"}, ""},
+	} {
+		req, err := read.Request(c.args)
+		if err != nil {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		if got := req.Query.Encode(); got != c.want {
+			t.Errorf("%v asked %q, want %q", c.args, got, c.want)
+		}
+	}
+}

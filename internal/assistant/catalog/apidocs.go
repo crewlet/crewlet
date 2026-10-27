@@ -347,3 +347,34 @@ func cut(s string, limit int, more string) string {
 	}
 	return strings.ToValidUTF8(s, "") + "\n\n" + more
 }
+
+// queryRow is a row of the reference's question table: the question, the
+// parameters it takes, and the route it answers.
+var queryRow = regexp.MustCompile("^\\|\\s*`[a-z_]+`\\s*\\|\\s*`\\{([^}]*)\\}`\\s*\\|\\s*`GET (/[^`\\s]*)`")
+
+// pagedIndex is every read route the reference says pages by `limit`, by
+// [docKey].
+var pagedIndex = sync.OnceValue(func() map[string]bool {
+	return indexPaged(crewlet.APIReference)
+})
+
+// indexPaged reads the question table's rows of a reference.
+func indexPaged(md string) map[string]bool {
+	out := map[string]bool{}
+	for _, line := range strings.Split(md, "\n") {
+		m := queryRow.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		for _, param := range strings.Split(m[1], ",") {
+			if strings.TrimSuffix(strings.TrimSpace(param), "?") == "limit" {
+				out[docKey("GET "+m[2])] = true
+			}
+		}
+	}
+	return out
+}
+
+// pagedByLimit reports whether the reference says a read route pages by
+// `limit`.
+func pagedByLimit(pattern string) bool { return pagedIndex()[docKey(pattern)] }

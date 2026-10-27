@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant/wire`
-- **Enforced-by:** `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx` and `lib/markdown.test.tsx` (`prose`)
+- **Enforced-by:** `internal/assistant/catalog.TestEveryDefaultReadIsBounded`, `internal/assistant/catalog.TestAGenericListReadIsOnePage`, `internal/api/queries.TestAnAgentAnswerCarriesItsCallsOnlyWhenAsked`, `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx` and `lib/markdown.test.tsx` (`prose`)
 - **Cost-when-tried:** the drawer drew a folded card for every read a turn made. An answer on the Inbox that read two tasks, a table and an agent, and then both tasks again, stood six cards of about 140px each between the reader and the answer in a 560px drawer, each saying its key twice (in its summary and as its link's label), and the same record twice. An answer on Company › Brand added a blue notice per read and table cards whose CSV, XLSX and link wrapped onto a second line or not depending on the length of the title.
 - **Tag-status:** unreleased
 
@@ -79,9 +79,24 @@ a record its `items_total`; the drawer says "first 20" on the chip and which
 screen shows the rest in the peek. The notice beside each shortened card is
 gone.
 
-Measured on a real company before deciding: every dedicated read stays under
-the step's 64 KiB at its defaults (the largest, the token breakdown, 55 KB).
-What crossed it were generic `api_request` reads of routes whose defaults are
-heavy: `GET /agents/{id}` without `history=false` answers 2.1 MB of whole
-transcripts. The route's documentation already names the flag, and the model
-is now told which fields the cut answer began with, so it can ask for less.
+**No default read is cut.** Measured on a real company before deciding: every
+dedicated read stayed under the step's 64 KiB at its defaults (the largest,
+the token breakdown, 55 KB), and what crossed it were generic `api_request`
+reads of routes whose defaults were heavy. Each is fixed where it was heavy:
+
+- `GET /agents/{id}` answered fifty whole transcripts by default, 2.1 MB for
+  a busy seat. It now answers the seat alone unless `history=true` asks for
+  its calls, which only the seat page's Turns does; no tag ever shipped the
+  old default (v0.1.0 carries no Go), so it changed outright.
+- A generic read of a list route the reference says pages by `limit` (the
+  event log, the turns, the inbox) is asked for a page of 25 when the model
+  names none, so it is answered whole with the route's cursor, and the model
+  answers from that first page rather than from nothing.
+- Every dedicated read declares its bound (a page, a window, one record, a
+  route's own cap, or one row per configured thing), and
+  `catalog.TestEveryDefaultReadIsBounded` holds each request to it: a new read
+  that declares none, or a page that drops its limit, fails the build. The
+  inbox and the project list, which read whole, now ask for a page.
+
+The oversize card and the model's `cut` answer stay as the net for what a
+read the model narrows by hand still makes too large.

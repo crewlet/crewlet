@@ -243,7 +243,11 @@ func readTools() []Tool {
 			Routes: []string{"GET /worklet/my-work", "GET /worklet/inbox"}, Apps: workletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
 				if Args(a).String("section") == "inbox" {
-					return get("GET /worklet/inbox", nil, query(a).truth("unread", "unread").values())
+					// ONE PAGE OF THE INBOX, its cursor saying more lie past it:
+					// a person's notices grow with the company, and read whole
+					// they pass what one step reads.
+					return get("GET /worklet/inbox", nil,
+						query(a).truth("unread", "unread").num("limit", "limit", 25).values())
 				}
 				return get("GET /worklet/my-work", nil, nil)
 			},
@@ -266,7 +270,7 @@ func readTools() []Tool {
 						seat("actor", "By", "actor"), prose("excerpt", "What", "excerpt"),
 						col("at", "When", "at", tDatetime), col("read", "Read", "read", tText),
 						col("record", "Record", "record_id", tText)},
-					Open: &cards.Open{Screen: "inbox"}}},
+					More: "next_cursor", Open: &cards.Open{Screen: "inbox"}}},
 			},
 			Label: func(map[string]any) string { return "Reading your work" },
 			Scope: func(a Args) string {
@@ -289,7 +293,8 @@ func readTools() []Tool {
 				if key := Args(a).String("key"); key != "" {
 					return get("GET /worklet/projects/{key}", map[string]string{"key": key}, nil)
 				}
-				return get("GET /worklet/projects", nil, nil)
+				// ONE PAGE OF PROJECTS, `truncated` saying more lie past it.
+				return get("GET /worklet/projects", nil, url.Values{"limit": {"25"}})
 			},
 			Variant: func(a Args) string {
 				if a.String("key") != "" {
@@ -298,7 +303,7 @@ func readTools() []Tool {
 				return ""
 			},
 			Cards: map[string]cards.Spec{
-				"": {Table: &cards.Table{Title: "Projects", Rows: "projects",
+				"": {Table: &cards.Table{Title: "Projects", Rows: "projects", More: "truncated",
 					Brief: []string{"name", "active", "todo", "done"},
 					Columns: []cards.Column{col("key", "Key", "key", tText),
 						prose("name", "Name", "name"), seat("lead", "Lead", "lead.handle"),
@@ -417,10 +422,10 @@ func readTools() []Tool {
 				if args.String("handle") == "" {
 					return exec.Request{}, errors.New("a seat's detail names the seat's handle")
 				}
-				// THE SEAT ALONE: its call history is whole transcripts,
-				// past what a step reads, and a detail card reads none of it.
-				return get("GET /agents/{id}", map[string]string{"id": args.String("handle")},
-					url.Values{"history": {"false"}})
+				// THE SEAT ALONE, as the route answers unless its calls are
+				// asked for: they are whole transcripts, and a detail card
+				// reads none of them.
+				return get("GET /agents/{id}", map[string]string{"id": args.String("handle")}, nil)
 			},
 			Variant: by("view", "detail"),
 			Cards: map[string]cards.Spec{
