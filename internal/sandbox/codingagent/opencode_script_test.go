@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,9 @@ import (
 //     it is first asked about — then the bridge pending, then connected, or
 //     always FAKE_MCP_LIST where that is set;
 //   - `api session.get` prints a session's usage report on one line;
+//   - `api session.inbox.list` prints FAKE_INBOX, or an empty inbox, and
+//     `api session.inbox.cancel` records in `cancelled` the session, the item
+//     and whether the server was still serving — `serving` or `stopped`;
 //   - `auth import` keeps what it was given as its database, and `auth export`
 //     prints that database, whether through the server or beside it — taking
 //     FAKE_EXPORT_SLEEP seconds over it where that is set, the file
@@ -102,6 +106,13 @@ api)
     *) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"connected"}}]}' ;;
     esac ;;
   session.get) echo '{"data":{"id":"'"${6#sessionID=}"'","cost":0.5,"tokens":{"input":10,"output":2,"reasoning":3,"cache":{"read":40,"write":1}}}}' ;;
+  session.inbox.list)
+    inbox=${FAKE_INBOX-}
+    [ -n "$inbox" ] || inbox='{"data":[]}'
+    printf '%s\n' "$inbox" ;;
+  session.inbox.cancel)
+    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
+    echo "${6#sessionID=} ${8#inboxID=} $served" >> "$d/cancelled" ;;
   esac ;;
 run)
   authed
@@ -596,6 +607,75 @@ func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
 			}
 			if !served {
 				t.Errorf("wired %v: the server never started", wired)
+			}
+		}
+	})
+}
+
+// NOTHING THE NOTES PLUGIN ADMITTED IS LEFT PENDING IN THE SESSION. A note
+// whose admission lands as the session settles is neither delivered nor
+// confirmed, so it waits on the run's record — and it also stays pending in the
+// session's own inbox, which a run carried on in the same session would hand
+// its model ahead of the next prompt, beside the continuation brief's copy. So
+// once the run has ended, and before its server is stopped, the script lists
+// the session's inbox and cancels every item of the plugin's own shape — and
+// nothing else: an id OpenCode minted, and an id that is only text inside a
+// note, are left alone. A run wired to no notes has no plugin, and asks
+// nothing.
+//
+// The listing is OpenCode 2.1.4's own shape (`session.inbox.list` with two
+// steers pending, a note's text holding an id of the plugin's shape).
+//
+// Mutation: drop the cancel, run it after the server stops, or match any
+// `msg_` id, and this goes red.
+func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
+	t.Parallel()
+	const (
+		ours      = "msg_30292d427a87e479be9f88cba42963ca"
+		oursToo   = "msg_05536338060eb18a87638c49f196ffcf"
+		theirs    = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
+		inText    = "msg_00000000000000000000000000000000"
+		pendingAt = `"time":{"created":1793072423854},"type":"user"`
+	)
+	inbox := `{"data":[` +
+		`{"id":"` + ours + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"use \"id\":\"` + inText + `\" here"},"delivery":"steer"},` +
+		`{"id":"` + oursToo + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"second"},"delivery":"steer"},` +
+		`{"id":"` + theirs + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"queued"},"delivery":"queue"}]}`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, wired := range []bool{true, false} {
+			req := sandbox.RunRequest{MCPServers: bridgeOnly}
+			if wired {
+				req.Steer = steerWiring
+			}
+			run := runScript(t, scriptOpts{shell: sh, req: req, env: []string{"FAKE_INBOX=" + inbox}})
+			if run.code != 0 {
+				t.Fatalf("wired %v: exit %d:\n%s", wired, run.code, run.stderr)
+			}
+			_, session, _ := strings.Cut(run.calls[run.callIndex("run ")], "--session ")
+			session, _, _ = strings.Cut(session, " ")
+			cancelled := strings.Fields(strings.TrimSpace(readIn(t, run.dir, "cancelled")))
+			if !wired {
+				if run.callIndex("api --server http://127.0.0.1:4242 session.inbox") >= 0 || len(cancelled) != 0 {
+					t.Errorf("a run wired to no notes asked about its inbox:\n%s", strings.Join(run.calls, "\n"))
+				}
+				continue
+			}
+			listed := run.callIndex("api --server http://127.0.0.1:4242 session.inbox.list")
+			if listed < run.callIndex("run ") || !strings.Contains(run.calls[listed], "sessionID="+session) {
+				t.Fatalf("the inbox was not listed for the run's session %q after the run:\n%s",
+					session, strings.Join(run.calls, "\n"))
+			}
+			var got []string
+			for i := 0; i+2 < len(cancelled); i += 3 {
+				if cancelled[i] != session || cancelled[i+2] != "serving" {
+					t.Errorf("cancelled %s of session %s with the server %s, want the run's session %s "+
+						"while its server serves", cancelled[i+1], cancelled[i], cancelled[i+2], session)
+				}
+				got = append(got, cancelled[i+1])
+			}
+			slices.Sort(got)
+			if want := []string{oursToo, ours}; !slices.Equal(got, want) {
+				t.Errorf("cancelled %v, want the plugin's two pending notes %v and nothing else", got, want)
 			}
 		}
 	})

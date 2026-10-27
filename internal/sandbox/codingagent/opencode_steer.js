@@ -26,8 +26,15 @@
 // nothing — measured on 2.1.4 — where one that resumed the session would start
 // an execution `opencode run` no longer watches, whose answer nobody reads and
 // whose server the run's script then stops. So a note sent after the run's
-// last step waits on the run's record for its review. An execution OpenCode
-// starts itself afterwards opens the gate again. The session is the one the
+// last step waits on the run's record for its review. One whose admission
+// landed as the execution settled, after OpenCode last read the session's
+// inbox, stays pending there too — and the inbox outlives the server, so a run
+// carried on in the same session would be handed it ahead of its next prompt
+// while the continuation's brief carries it as well: the run's script cancels
+// every such admission once the run has ended (opencode.go,
+// openCodeLeftoverSteers), so the record alone holds the note and whatever
+// reads the turn next reads it once. An execution OpenCode starts itself
+// afterwards opens the gate again. The session is the one the
 // run's script names, handed over as CREWLET_STEER_SESSION; another session
 // of the server's — a subagent's — is never read from or written to.
 //

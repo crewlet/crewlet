@@ -690,7 +690,16 @@ session and no other:
 - **With `resume: false`**: a note admitted once the session has settled
   starts nothing — an execution `opencode run` no longer watched would answer
   nobody — and the plugin admits none then anyway. Such a note waits on the
-  run's record for its review.
+  run's record for its review. One whose admission landed just as the session
+  settled, after OpenCode last read its inbox, is left pending in the session
+  too, and the session's inbox outlives the server: a run carried on in the
+  same session with a person's answer would be handed it ahead of its next
+  prompt, beside the continuation brief's copy. So once `opencode run` has
+  exited, and before the server stops, the run's script lists the session's
+  inbox and **cancels every steer the plugin admitted and OpenCode never
+  delivered** (`session.inbox.cancel`, an id of the plugin's own shape and
+  nothing else), and the record alone carries the note — read once, by the
+  review or the next launch's brief.
 - **It confirms only what OpenCode delivered**: on the session's
   `session.inbox.delivered` for a note it admitted, it posts the note's id to
   the route's `read`, which records it read by the run's job (`boundary:
@@ -711,7 +720,9 @@ Measured against a stub model API: on OpenCode 2.0.32 and 2.1.4, a note
 admitted while a tool call ran was read by the next request, after the tool's
 result, and one admitted during the final model call was read in the same
 execution, after the answer it superseded; on 2.1.4, one admitted after the
-execution settled, with `resume: false`, started nothing. The run's
+execution settled, with `resume: false`, started nothing, stayed pending in the
+session across the server's restart and was handed to the next run in that
+session ahead of its prompt — and, cancelled, was handed to nobody. The run's
 [result](#opencode) is its **last** message's text, so a run steered past its
 answer reports the answer it gave after the note.
 

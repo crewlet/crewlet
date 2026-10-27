@@ -182,6 +182,10 @@ func (OpenCode) ReadsNotes() bool { return true }
 // drops the final step's counts, while the session the run worked in holds
 // the whole total, so the script prints it as one last line of its own type
 // ([openCodeUsageEvent]) once the run has ended.
+//
+// AND, FOR A RUN WIRED TO ITS NOTES, NO STEER LEFT PENDING: once the run has
+// ended, every note the plugin admitted and OpenCode never delivered is
+// cancelled in the session, before the server stops ([openCodeLeftoverSteers]).
 func (OpenCode) Command(req sandbox.RunRequest, paths Paths, _ string) string {
 	return "sh -c " + shellQuote(openCodeScript(req, paths, openCodeSessionFor(req), openCodeTimes{
 		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: openCodeStopWait,
@@ -369,6 +373,11 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 
 	line(`%s`, strings.Join(run, " "))
 	line(`code=$?`)
+	// NOTHING THE PLUGIN ADMITTED IS LEFT IN THE SESSION once the run has
+	// ended: see [openCodeLeftoverSteers].
+	if req.Steer.Set() {
+		line(`%s`, openCodeLeftoverSteers(sid))
+	}
 	line(`report=$(opencode api --server "$url" session.get --param sessionID=%s < /dev/null 2> /dev/null) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac`,
 		shellQuote(sid), openCodeUsageEvent)
 	line(`unsync`)
@@ -376,6 +385,38 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`stop; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
 	return b.String()
+}
+
+// openCodeLeftoverSteers is the script's line that cancels every steer the run's
+// notes plugin admitted to session sid and OpenCode never delivered, run once
+// `opencode run` has exited and before the server is stopped.
+//
+// A NOTE ADMITTED AS THE SESSION SETTLED STAYS IN ITS INBOX. The plugin admits
+// with `resume: false` and stops at the execution's settle, and a note whose
+// admission lands after OpenCode's last look at the inbox is neither delivered
+// nor confirmed — so it waits on the run's record, where the review or the next
+// launch's brief reads it. But it also stays pending in the session's own
+// inbox, which is durable and survives the server's restart: a run carried on
+// in the same box and session, with a person's answer, had OpenCode put it in
+// front of the next prompt, while the continuation's brief carried it too —
+// the model read the note twice, and the record said once. Measured on 2.1.4
+// with the server restarted between the two runs, as the script restarts it:
+// the second run's request carried the pending note before its own prompt, and
+// carried nothing once the item was cancelled (`session.inbox.cancel`), the
+// inbox listing empty after.
+//
+// ONLY THE PLUGIN'S OWN: an id of the shape it admits under ([OpenCodeInboxID],
+// `msg_` and 32 lowercase hexadecimal digits), as the `id` of an item — read
+// out of the listing as text, since a box may have no JSON parser, and a note's
+// own text cannot match it: its quotes are escaped in the listing. A failed
+// listing or cancel costs nothing more than the duplicate it was there to
+// prevent.
+func openCodeLeftoverSteers(sid string) string {
+	session := shellQuote(sid)
+	return `pending=$(opencode api --server "$url" session.inbox.list --param sessionID=` + session +
+		` < /dev/null 2> /dev/null) && for id in $(printf '%s\n' "$pending" | grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u); do ` +
+		`opencode api --server "$url" session.inbox.cancel --param sessionID=` + session +
+		` --param inboxID="$id" < /dev/null > /dev/null 2>&1; done`
 }
 
 // openCodeReadiness is the script's test of one `mcp.list` answer, `$s`, against
