@@ -83,8 +83,9 @@ import (
 // turn is one and a seat refused its turn for a token would do no work at all,
 // GitHub's or anyone else's. A token FILE it was launched without is the
 // poll's to write once the token can be issued — the app installed, the mint
-// answered, the integration switched back on — and the poll says the wait
-// once per job rather than on every pass.
+// answered, the integration switched back on — and the poll says each story
+// once per job, a refusal once per reason GitHub gives, rather than on every
+// pass ([tokenWait]).
 
 // seatToken answers one seat's own GitHub App token, issued at its first
 // lookup.
@@ -289,12 +290,8 @@ func (e *Engine) refreshTokenFiles(
 	job := run.TurnID + "/" + run.LaunchID
 	if !ok {
 		attrs := []any{"seat", seat.Handle(), "turn_id", run.TurnID, "files", paths}
-		if why := token.unissued(name); why != "" {
-			log.WarnContext(ctx, "sandbox_token_refresh_failed", append(attrs,
-				"detail", "the run keeps the token it holds and the next poll asks again: "+why)...)
-			return
-		}
-		e.tokenWaits.tell(ctx, job, e.tokenWaitStory(ctx, box, paths), e.tokenWaitForget(), attrs)
+		story := tokenWait{held: tokenFilesHold(ctx, box, paths), refused: token.unissued(name)}
+		e.tokenWaits.tell(ctx, job, story, e.tokenWaitForget(), attrs)
 		return
 	}
 	e.tokenWaits.settle(job)
@@ -316,39 +313,85 @@ func (e *Engine) refreshTokenFiles(
 }
 
 // tokenWait is the story a poll tells of a running job whose seat's GitHub
-// App issues no token now, as it is not created, not installed or its key
-// does not resolve: a person's step, which the GitHub integration's card asks
-// for ([github.ErrNotInstalled]).
-type tokenWait string
+// App token could not be issued now, read off two facts: whether the job's own
+// files hold a token, and why the issue failed.
+//
+// FOUR STORIES, because each pair of answers is a different thing to say:
+//
+//   - nothing held, nothing refused: the app is not created, not installed or
+//     its key does not resolve, a person's step the GitHub integration's card
+//     asks for ([github.ErrNotInstalled]), and the job was launched before it.
+//     Its files hold nothing, and the first poll after the app can issue a
+//     token writes them. The launch said the same wait as
+//     `sandbox_env_unresolved`, so this is information, not a failure.
+//   - a token held, nothing refused: the job was handed a token the app no
+//     longer renews, which GitHub refuses once it expires, halfway through the
+//     work, and which nothing else on this node would say.
+//   - a token held, a refusal: GitHub refused the mint, or could not be
+//     reached. The job keeps the token it holds until that expires.
+//   - nothing held, a refusal: the same refusal, met by a job that has nothing
+//     to keep. Every agent turn is an executor run and a run starts without a
+//     token its seat cannot issue, so this is an ordinary path, not one a
+//     refused launch rules out.
+//
+// THE REFUSAL'S REASON IS PART OF THE STORY, so a job is told each reason
+// GitHub gives once, and told again only when GitHub's answer changes.
+type tokenWait struct {
+	// held is whether any of the job's token files holds a token: one its
+	// launch wrote or an earlier poll did.
+	held bool
+	// refused is why a mint that was attempted failed ([seatToken.unissued]),
+	// or "" where the seat's app cannot issue a token at all.
+	refused string
+}
 
-const (
-	// tokenAwaited is a job launched without the token: its files hold
-	// nothing, and the first poll after the app can issue one writes them.
-	// The launch said the same wait as `sandbox_env_unresolved`, so this is
-	// information, not a failure.
-	tokenAwaited tokenWait = "awaited"
-	// tokenLapsed is a job that was handed a token the app no longer renews:
-	// what its files hold is refused by GitHub once it expires, halfway
-	// through the work, which nothing else on this node would say.
-	tokenLapsed tokenWait = "lapsed"
-)
-
-// tokenWaitStory reads which wait a job is in off its own token files: one
-// that holds a token was handed one, and a job whose files are all empty or
-// missing never was.
-func (e *Engine) tokenWaitStory(ctx context.Context, box sandbox.Sandbox, paths []string) tokenWait {
+// tokenFilesHold reports whether any of a job's token files holds anything: a
+// job whose files are all empty or missing was never handed a token, which a
+// file the launch could not write reads back as.
+func tokenFilesHold(ctx context.Context, box sandbox.Sandbox, paths []string) bool {
 	for _, path := range paths {
 		if held, err := box.ReadFile(ctx, path); err == nil && len(held) > 0 {
-			return tokenLapsed
+			return true
 		}
 	}
-	return tokenAwaited
+	return false
+}
+
+// failure reports whether the story is one a reader of the log has to act on,
+// written at warning; the one wait that is not is a person's step the launch
+// already said, written as information.
+func (w tokenWait) failure() bool { return w.held || w.refused != "" }
+
+// detail is the story's sentence. NEVER THE TOKEN: the reason is the
+// issuer's error, which carries neither the token nor GitHub's response body.
+func (w tokenWait) detail() string {
+	switch {
+	case w.refused != "" && w.held:
+		return "GitHub refused to issue the seat's GitHub App token: " + w.refused +
+			"; the run keeps the token it holds until that expires, and GitHub is " +
+			"asked again on the restart schedule"
+	case w.refused != "":
+		return "this run was launched without the seat's GitHub App token, and " +
+			"GitHub refused to issue it: " + w.refused + "; GitHub is asked again " +
+			"on the restart schedule, and the first poll after it issues one writes " +
+			"it into these files"
+	case w.held:
+		return "the seat's GitHub App no longer issues a token: it is no longer " +
+			"installed or no longer resolves its key, so nothing renews the token this " +
+			"run holds, which GitHub refuses once it expires; the first poll after the " +
+			"app is installed again writes a new one"
+	default:
+		return "this run was launched without the seat's GitHub App token, which " +
+			"is issued once the app is created and installed and its key resolves; " +
+			"the first poll after that writes it into these files"
+	}
 }
 
 // tokenWaits is what this node's polls have said of the jobs they reach whose
-// seat's app issues no token: each wait ONCE PER JOB, rather than on every
-// pass, which at the poll's interval and the nudges besides buried the one
-// line under a hundred copies of it for the life of the run.
+// seat's token could not be issued: each story ONCE PER JOB, and a refusal
+// once per reason GitHub gives, rather than on every pass, which at the poll's
+// interval and the nudges besides buried the one line under a hundred copies
+// of it for the life of the run.
 //
 // IN MEMORY, keyed by the job ([sandbox.PendingRun.LaunchID] under its run),
 // and forgotten once the job resolves a token again ([tokenWaits.settle]) or
@@ -387,19 +430,12 @@ func (w *tokenWaits) tell(ctx context.Context, job string, story tokenWait, forg
 	if !w.first(job, story, forget) {
 		return
 	}
-	switch story {
-	case tokenLapsed:
-		log.WarnContext(ctx, "sandbox_token_refresh_failed", append(attrs,
-			"detail", "the seat's GitHub App no longer issues a token: it is no longer "+
-				"installed or no longer resolves its key, so nothing renews the token this "+
-				"run holds, which GitHub refuses once it expires; the first poll after the "+
-				"app is installed again writes a new one")...)
-	default:
-		log.InfoContext(ctx, "sandbox_token_waiting", append(attrs,
-			"detail", "this run was launched without the seat's GitHub App token, which "+
-				"is issued once the app is created and installed and its key resolves; "+
-				"the first poll after that writes it into these files")...)
+	attrs = append(attrs, "detail", story.detail())
+	if story.failure() {
+		log.WarnContext(ctx, "sandbox_token_refresh_failed", attrs...)
+		return
 	}
+	log.InfoContext(ctx, "sandbox_token_waiting", attrs...)
 }
 
 // first records story as job's wait, and reports whether it was not already

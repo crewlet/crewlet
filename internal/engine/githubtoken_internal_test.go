@@ -716,7 +716,7 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 	// earlier poll found the job waiting on the install.
 	installed := sandbox.NewFakeSandbox("box-installed")
 	run := sandbox.PendingRun{TurnID: "turn-1", LaunchID: "job-1", AgentHandle: "builder"}
-	e.tokenWaits.first(run.TurnID+"/"+run.LaunchID, tokenAwaited, time.Hour)
+	e.tokenWaits.first(run.TurnID+"/"+run.LaunchID, tokenWait{}, time.Hour)
 	e.refreshTokenFiles(t.Context(), steps("builder"), run, installed)
 	if held, err := installed.ReadFile(t.Context(), path); err != nil || !strings.HasPrefix(string(held), "ghs_test_") {
 		t.Fatalf("the file a run was launched without holds %q (%v) once the app issues a token", held, err)
@@ -733,8 +733,8 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 	if held, _ := awaited.ReadFile(t.Context(), path); len(held) != 0 {
 		t.Fatalf("a seat whose app is not installed had %q written", held)
 	}
-	if got := e.tokenWaits.said[planner.TurnID+"/"+planner.LaunchID].story; got != tokenAwaited {
-		t.Errorf("a job launched without the token is told as %q, want %q", got, tokenAwaited)
+	if got := e.tokenWaits.said[planner.TurnID+"/"+planner.LaunchID].story; got != (tokenWait{}) {
+		t.Errorf("a job launched without the token is told as %+v, want a wait on the app", got)
 	}
 
 	// A FILE HOLDING A TOKEN THE APP NO LONGER RENEWS is the other story.
@@ -742,8 +742,8 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 	lapsed.Put(path, "ghs_before_the_uninstall")
 	gone := sandbox.PendingRun{TurnID: "turn-3", LaunchID: "job-3", AgentHandle: "planner"}
 	e.refreshTokenFiles(t.Context(), steps("planner"), gone, lapsed)
-	if got := e.tokenWaits.said[gone.TurnID+"/"+gone.LaunchID].story; got != tokenLapsed {
-		t.Errorf("a job holding a token its app no longer renews is told as %q, want %q", got, tokenLapsed)
+	if got := e.tokenWaits.said[gone.TurnID+"/"+gone.LaunchID].story; got != (tokenWait{held: true}) {
+		t.Errorf("a job holding a token its app no longer renews is told as %+v, want a lapsed token", got)
 	}
 	if held, _ := lapsed.ReadFile(t.Context(), path); string(held) != "ghs_before_the_uninstall" {
 		t.Errorf("a refresh that issued nothing rewrote the file to %q", held)
@@ -751,16 +751,60 @@ func TestARunLaunchedWithoutItsTokenGetsTheFileOnceTheAppIssuesOne(t *testing.T)
 	if gh.minted() != 1 {
 		t.Errorf("%d mints, want the installed app's one", gh.minted())
 	}
+
+	// REFUSED BY GITHUB, for a job that holds nothing: it was launched
+	// without the token, and saying it "keeps the token it holds" would send
+	// a reader looking for a token the box never had. A job that holds one
+	// does keep it, until it expires. A node of its own, whose issuer holds
+	// no token for the app yet, so the refresh asks GitHub.
+	gh.mu.Lock()
+	gh.refuse = true
+	gh.mu.Unlock()
+	e = appEngine(t, c)
+	for name, box := range map[string]struct {
+		box  *sandbox.FakeSandbox
+		held bool
+	}{
+		"empty":   {sandbox.NewFakeSandbox("box-refused-empty"), false},
+		"holding": {sandbox.NewFakeSandbox("box-refused-holding"), true},
+	} {
+		if box.held {
+			box.box.Put(path, "ghs_before_the_refusal")
+		}
+		job := sandbox.PendingRun{TurnID: "turn-" + name, LaunchID: "job", AgentHandle: "builder"}
+		e.refreshTokenFiles(t.Context(), steps("builder"), job, box.box)
+		got := e.tokenWaits.said[job.TurnID+"/"+job.LaunchID].story
+		if got.held != box.held || !strings.Contains(got.refused, "403") {
+			t.Errorf("%s: a refused mint is told as %+v, want held=%v and GitHub's reason", name, got, box.held)
+		}
+		says := got.detail()
+		if keeps := strings.Contains(says, "keeps the token it holds"); keeps != box.held {
+			t.Errorf("%s: the refusal says %q", name, says)
+		}
+		if launched := strings.Contains(says, "launched without"); launched == box.held {
+			t.Errorf("%s: the refusal says %q", name, says)
+		}
+		if !got.failure() {
+			t.Errorf("%s: a refusal is told as information, not as the failure it is", name)
+		}
+	}
 }
 
-// A JOB'S WAIT IS TOLD ONCE: again only when its story changes, once it has
-// resolved a token and waits anew, or once no poll on this node has found it
-// for longer than a live job goes unpolled.
+// A JOB'S WAIT IS TOLD ONCE: again only when its story changes, a refusal's
+// reason included, once it has resolved a token and waits anew, or once no
+// poll on this node has found it for longer than a live job goes unpolled.
+//
+// Mutation: compare only whether the job is known, and a changed reason goes
+// unsaid; drop the reason from tokenWait, and so does a refusal whose cause
+// changed at GitHub.
 func TestATokenWaitIsToldOncePerJob(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
 	w := &tokenWaits{now: func() time.Time { return now }}
 	const forget = time.Minute
+	awaited, lapsed := tokenWait{}, tokenWait{held: true}
+	suspended := tokenWait{refused: "github: POST /app/installations/9/access_tokens: 403: suspended"}
+	unapproved := tokenWait{refused: "github: POST /app/installations/9/access_tokens: 422: permissions not approved"}
 	steps := []struct {
 		job   string
 		story tokenWait
@@ -768,13 +812,17 @@ func TestATokenWaitIsToldOncePerJob(t *testing.T) {
 		tell  bool
 		why   string
 	}{
-		{"t/1", tokenAwaited, 0, true, "a job's first wait"},
-		{"t/1", tokenAwaited, 15 * time.Second, false, "the same wait on the next poll"},
-		{"t/1", tokenAwaited, 15 * time.Second, false, "the same wait on a third"},
-		{"t/2", tokenAwaited, 0, true, "another job's wait"},
-		{"t/1", tokenLapsed, 15 * time.Second, true, "a changed story"},
-		{"t/1", tokenLapsed, 50 * time.Second, false, "a job polled within the horizon"},
-		{"t/2", tokenAwaited, 0, true, "a job no poll found for longer than the horizon"},
+		{"t/1", awaited, 0, true, "a job's first wait"},
+		{"t/1", awaited, 15 * time.Second, false, "the same wait on the next poll"},
+		{"t/1", awaited, 15 * time.Second, false, "the same wait on a third"},
+		{"t/2", awaited, 0, true, "another job's wait"},
+		{"t/1", lapsed, 15 * time.Second, true, "a changed story"},
+		{"t/1", lapsed, 50 * time.Second, false, "a job polled within the horizon"},
+		{"t/2", awaited, 0, true, "a job no poll found for longer than the horizon"},
+		{"t/3", suspended, 0, true, "a job's first refusal"},
+		{"t/3", suspended, 15 * time.Second, false, "the same refusal on the next poll"},
+		{"t/3", unapproved, 15 * time.Second, true, "GitHub's reason changed"},
+		{"t/3", unapproved, 15 * time.Second, false, "the new reason on the next poll"},
 	}
 	for _, step := range steps {
 		now = now.Add(step.after)
@@ -783,7 +831,7 @@ func TestATokenWaitIsToldOncePerJob(t *testing.T) {
 		}
 	}
 	w.settle("t/1")
-	if !w.first("t/1", tokenLapsed, forget) {
+	if !w.first("t/1", lapsed, forget) {
 		t.Error("a job that resolved its token and lost it again was not told")
 	}
 }
