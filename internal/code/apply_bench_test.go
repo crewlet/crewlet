@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -762,7 +763,8 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 // the push:
 //
 //   - push=typical: one command moving a ref named in 40 bytes, one
-//     introduced commit id — a person's push of a commit, received by git;
+//     introduced commit id — a person's push of a commit through the token
+//     bound to them, received by git;
 //   - push=agent: the same commit pushed by a seat and built by the engine,
 //     its row naming the seat as its actor and the run behind it at each
 //     field's usual size — a turn id (a UUID), a tracker's work item
@@ -770,6 +772,17 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 //     so the difference from typical is what a seat's provenance costs;
 //   - push=widest: MaxCommandsPerPush commands on refs of MaxRefNameBytes and
 //     MaxIntroduced introduced ids — the widest row a push stores.
+//
+// EVERY ID IS THE SHAPE PRODUCTION WRITES, AND IN ITS ORDER, since an id is
+// in a row and in the index entries beside it, and an index takes its
+// entries at its end only while they come in order: the repository's and
+// each push's a UUIDv7, each push's minted after the one before as a
+// receiver mints one, its pack's id the push's own and its pack's object key
+// minted at its put as the object store mints one (objstore.KeyAt), and a
+// person's credential a token's name — `pat:` and its id, the push row's
+// actor — beside the human seat they hold. Ids of a dozen bytes and object
+// keys in no order once made every row these figures price lighter than the
+// rows a data node holds.
 //
 // Every push moves refs that exist before the file is measured, so a ref's
 // row is rewritten in place and never counted: a ref lives as long as it is
@@ -787,6 +800,18 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 	widestRef := func(c int) string {
 		ref := fmt.Sprintf("refs/heads/%08d", c)
 		return ref + strings.Repeat("w", MaxRefNameBytes-len(ref))
+	}
+	// person is who makes a person's push as git hands it over: the token
+	// bound to them, by its name, and the human seat they hold.
+	person := Principal{Kind: PrincipalOperator, Seat: "ada",
+		OperatorID: iam.MachineTokenName(uuid.NewSHA1(uuid.NameSpaceOID, []byte("ada's token")).String())}
+	// pushed is one person's push of cmds, its id minted as a receiver mints
+	// one, which its pack carries too, and its pack stored under a key the
+	// object store mints at the put.
+	pushed := func(cmds ...Command) PushEntry {
+		entry := pushEntry(uuid.Must(uuid.NewV7()).String(), cmds...)
+		entry.Principal, entry.Pack.Object = person, objstore.KeyAt(time.Now())
+		return entry
 	}
 	for _, shape := range []struct {
 		name string
@@ -810,7 +835,7 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 				for b.Loop() {
 					b.StopTimer()
 					e := openApplyEstate(b)
-					const repo = "repo-history"
+					repo := uuid.Must(uuid.NewV7()).String()
 					e.apply(create(b, repo, "history"))
 					// THE REFS EXIST BEFORE THE FILE IS MEASURED: each record
 					// moves them on from what the one before left.
@@ -818,14 +843,14 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 					for c := range cmds {
 						cmds[c] = move(shape.ref(c), ZeroOID, oid(fmt.Sprint("tip-0-", c)))
 					}
-					e.apply(pushOf(b, repo, pushEntry("history-0", cmds...)))
+					e.apply(pushOf(b, repo, pushed(cmds...)))
 					before := e.tally(b)
 					b.StartTimer()
 					for r := 1; r <= shape.records; r++ {
 						for c := range cmds {
 							cmds[c] = move(cmds[c].Ref, cmds[c].New, oid(fmt.Sprint("tip-", r, "-", c)))
 						}
-						entry := pushEntry(fmt.Sprint("history-", r), cmds...)
+						entry := pushed(cmds...)
 						entry.Introduced = make([]string, shape.ids)
 						for i := range entry.Introduced {
 							entry.Introduced[i] = oid(fmt.Sprint("introduced-", r, "-", i))
@@ -885,10 +910,10 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 // history benchmark's records, the growth of every table a push only rewrites
 // in place — its refs, its repository's counters — must stay: a HUNDREDTH.
 // Such a table grows at all only as a rewrite splits a page or a rewritten
-// row's numbers widen: code_refs by two pages over the widest arm's hundred
-// records of a thousand refs each, a fiftieth of a percent of its push rows'
-// 10 253, and nothing else at all. A third row each push left would be a few
-// percent of a push row at the least (a 30-byte counter row is seven percent
-// of one), and under a hundredth no figure these rows forecast moves past its
-// rounding.
+// row's numbers widen: code_refs by four pages over the widest arm's hundred
+// records of a thousand refs each, against its push rows' 10 256, and nothing
+// else at all (measured with the bound at zero). A third row each push left
+// would be a few percent of a push row at the least (a 30-byte counter row is
+// five percent of one), and under a hundredth no figure these rows forecast
+// moves past its rounding.
 const inPlaceShare = 100
