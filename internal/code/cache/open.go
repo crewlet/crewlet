@@ -89,6 +89,16 @@ type Cache struct {
 	// too, so the share is held to both together (memoExcess) and a
 	// repository is never evicted for a page in flight.
 	memoBytes, memoStaged atomic.Int64
+	// memoNewest is the node's NEWEST COHORT of the memo (memo.go) — where
+	// every answer is placed and every entry a read finds in an older one is
+	// moved — read without a lock; memoFill is what has been placed in it
+	// since it was opened, past a sixteenth of the share of which
+	// (memoCohortsPerShare) the next placement opens another; cohortMu guards
+	// memoFill and every move of memoNewest, and is taken after every other
+	// lock.
+	cohortMu   sync.Mutex
+	memoNewest atomic.Uint64
+	memoFill   int64
 	// scratchBytes is what scratch/ held when the janitor last measured it:
 	// a push's scratch is written by its client's receive-pack, so only the
 	// disk knows.
@@ -396,6 +406,8 @@ func (c *Cache) Hooks() string { return filepath.Join(c.dir, hooksDir) }
 func (c *Cache) index(b *boot) (int, error) {
 	repos := filepath.Join(c.dir, reposDir)
 	trashed := 0
+	var newest uint64
+	defer func() { c.memoNewest.Store(newest + 1) }()
 	for _, a := range b.aside {
 		path := filepath.Join(repos, a.name)
 		if err := toTrash(c.dir, path, bootLabel(a.name)); err != nil {
@@ -419,10 +431,16 @@ func (c *Cache) index(b *boot) (int, error) {
 			inc.lastUsed = c.now()
 		}
 		c.heldBytes.Add(inc.diskBytes + inc.metaBytes)
-		// The memo's bytes as the state records them, which is what the janitor
-		// writes again once they move (Cache.stateMemos).
-		inc.memoStated = inc.derived[DerivedMemo].Bytes
-		c.memoBytes.Add(inc.memoStated)
+		// The memo's record as the state holds it — what the janitor writes
+		// again once it moves (Cache.stateMemos) — and its bytes in the
+		// memo's running total; the newest cohort is opened past every one
+		// recorded, so what a previous process left is older than anything
+		// placed or read from here on.
+		memo := inc.derived[DerivedMemo]
+		c.memoBytes.Add(memo.Bytes)
+		if cs := memo.Cohorts; len(cs) > 0 {
+			newest = max(newest, cs[len(cs)-1].N)
+		}
 		c.heldRepos.Add(1)
 		e := newEntry(k.id)
 		e.current = inc

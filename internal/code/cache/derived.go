@@ -573,12 +573,16 @@ var (
 // reads the same rows again (provenance.go says why it is eager).
 //
 // The MEMO is the cache's own too: an answer a read cut, staged in tmp/ and
-// renamed into crewlet/memo once the read's git has answered whole, so no
-// write of it holds a file in the incarnation; a function of object ids alone,
-// so no pack added or removed and no ref moved changes an entry, while a log
-// gone back drops it whole — the memo cannot tell which entries read what, and
-// no answer outlives the history it was computed from on this host; and kept
-// by a rebuild, which repairs packs and not answers (memo.go).
+// renamed into a cohort of crewlet/memo once the read's git has answered
+// whole, so no write of it holds a file in the incarnation; a function of
+// object ids alone, so no pack added or removed and no ref moved changes an
+// entry, while a log gone back drops it whole — the memo cannot tell which
+// entries read what, and no answer outlives the history it was computed from
+// on this host; and kept by a rebuild, which repairs packs and not answers
+// (memo.go). Of its memory a declaration states, NONE IS AN ENTRY'S: what the
+// cache holds of a copy's memo is its cohorts and their bytes, 16 bytes a
+// cohort and some seventeen cohorts at the most, however many answers they
+// hold — the order of use is the cohorts', on the disk.
 func DerivedFiles() []Derived {
 	maintained := func(c Covers) time.Duration { return gitproc.PackWorkDeadline(c.DiskBytes) }
 	return []Derived{{

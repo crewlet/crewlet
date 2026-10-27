@@ -48,6 +48,14 @@ type derivedDoc struct {
 	Step   string `json:"step,omitempty"`
 	// Provenance is the index of pushes' record: only its entry carries one.
 	Provenance *provenanceDoc `json:"provenance,omitempty"`
+	// Cohorts is the memo's record: only its entry carries one.
+	Cohorts []cohortDoc `json:"cohorts,omitempty"`
+}
+
+// cohortDoc is one cohort of a memo as the state records it.
+type cohortDoc struct {
+	N     uint64 `json:"n"`
+	Bytes int64  `json:"bytes"`
 }
 
 // provenanceDoc is the index of pushes' record as the state holds it — every
@@ -201,6 +209,23 @@ func TestAStateOfAnotherFormatIsDiscarded(t *testing.T) {
 		// it for an index it need not write.
 		"b8f6c4e7-1a6d-4b7f-8e8c-7d0a2f4b5c69": func(doc *stateDoc) {
 			doc.Derived[string(cache.DerivedMidx)] = derivedDoc{Bytes: 400, Covers: 3}
+		},
+		// A memo of bytes and no cohorts: the record a build that kept the memo
+		// in one directory wrote, whose bytes no cohort of this build's holds.
+		"c9a7d5f8-2b7e-4c8a-9f9d-8e1b3a5c6d70": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedMemo)] = derivedDoc{Bytes: 8192, Step: string(cache.StepMemo)}
+		},
+		// A memo whose cohorts are out of order: the trim takes a record's first
+		// cohort for its oldest.
+		"d0b8e6a9-3c8f-4d9b-8a0e-9f2c4b6d7e81": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedMemo)] = derivedDoc{Bytes: 8192, Step: string(cache.StepMemo),
+				Cohorts: []cohortDoc{{N: 2, Bytes: 4096}, {N: 1, Bytes: 4096}}}
+		},
+		// Cohorts on a declaration that keeps no memo.
+		"e1c9f7b0-4d9a-4e0c-9b1f-0a3d5c7e8f92": func(doc *stateDoc) {
+			midx := doc.midx()
+			midx.Cohorts = []cohortDoc{{N: 1, Bytes: 0}}
+			doc.Derived[string(cache.DerivedMidx)] = midx
 		},
 	}
 	unreadables := []string{repoB, c3, c4}
@@ -373,7 +398,7 @@ func TestADerivedFileGoneFromUnderItsStateIsForgotten(t *testing.T) {
 			switch {
 			case kept == 0 && len(doc.overPacks()) != 0:
 				t.Errorf("the state records derived files %+v that are not on disk", doc.Derived)
-			case kept != 0 && (len(doc.overPacks()) != 1 || doc.midx() != derivedDoc{Bytes: kept}):
+			case kept != 0 && (len(doc.overPacks()) != 1 || !reflect.DeepEqual(doc.midx(), derivedDoc{Bytes: kept})):
 				t.Errorf("the state records derived files %+v, want only the index's bitmap's %d bytes, "+
 					"made by no write", doc.Derived, kept)
 			}

@@ -14,7 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
+	"strconv"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/hostbox"
@@ -44,9 +44,8 @@ import (
 // incarnation never losing an object it held while its history stands: packs
 // are only added to it, a rebuild holds the same rows' packs (and the memo
 // moves into it whole, SeedMove), and an object leaves a copy only with its
-// history — a log
-// restored or recreated under the node, another history, which the memo
-// cannot tell entry by entry. So a history gone drops the memo whole
+// history — a log restored or recreated under the node, another history, which
+// the memo cannot tell entry by entry. So a history gone drops the memo whole
 // (OnHistoryGone) and SHUTS it until the full round that dropped it has swept
 // the packs the history it replaced named (reopenMemo): no answer a read cut
 // while both histories' packs were on disk is placed, and no batch begun
@@ -71,7 +70,30 @@ import (
 // (Place's tails) — only once its git has answered whole and reported no
 // damage: an answer cut from a run that met damage is never memoized.
 //
-// # Its share of the budget, trimmed before any repository
+// # Cohorts: the order of use kept by the disk, and nothing an entry in memory
+//
+// A copy's memo is its COHORTS, a directory each, crewlet/memo/<n>/<key>:
+// every entry lives in the cohort that was the node's NEWEST when it was last
+// placed or read. The node opens a new cohort once a sixteenth of the memo's
+// share has been placed in the newest (memoCohortsPerShare), and a read that
+// finds an entry in an older cohort moves it into the newest, one rename
+// (memoUse) — so a cohort holds what was last used while it was the newest,
+// and the OLDEST cohort is the sixteenth of the memo used least recently,
+// whichever copies hold it. The cache keeps, for each copy, its cohorts'
+// numbers and the bytes each holds (its record, derivedState.Cohorts) and
+// NOTHING AN ENTRY: no index, no last use, no key, whatever the memo holds —
+// where a map of every entry this process had touched, 112 bytes an entry
+// measured, held some 680 MB at a 400 GB budget's worst case (6.1 million
+// entries of a block each) and 3 GB at the 1.75 TB a 2 TB dedicated volume
+// derives, memory the disk budget bounded and nothing charged. What a copy
+// holds in memory is 16 bytes a cohort, its cohorts some seventeen at the most
+// (the share's sixteen and the newest; maxMemoCohorts bounds them whatever
+// removals thinned), so 10 000 copies hold under 3 MB. A lookup opens the
+// entry's name in the copy's cohorts newest first: one open for a page read
+// since the newest opened, one an older cohort for an older one, and one a
+// cohort for a miss, which then runs git.
+//
+// # Its share of the budget, trimmed a cohort at a time, before any repository
 //
 // The memo holds at most a MemoShare-th of the cache's budget, node-wide,
 // counted as a running total (Cache.memoBytes) and each entry at the volume it
@@ -82,22 +104,37 @@ import (
 // the memo holds past its share), and one that would take the staged pages
 // past the share is not staged at all (MemoBatch.Put). The janitor holds it
 // there BEFORE it evicts any repository (janitorPass), woken by the placement
-// that takes it past its share: first every memo of a copy this process has not
-// read or written since it opened — nobody asked of it since the boot — WHOLE,
-// one rename each, the least recently used repository first; then entries, the
-// least recently used first. Each incarnation's memo INDEX — every entry this
-// process knows, its bytes and its last use — is made at the first read or
-// write of that memo in this process; what a previous process left in it is
-// LISTED by the janitor, behind the serving, never by a request (listMemos),
-// each such entry counted as used before any this process used. The janitor
-// writes a copy's state again once its memo's bytes have moved since it was
-// last written — at its TICK, so at most once an EvictInterval a copy however
-// often the memo moves, since a state is two syncs (janitorPass) — so a boot
-// counts the memo within a tick of its writes (Layout.Held) without walking
-// it.
+// that takes it past its share, by DROPPING THE OLDEST COHORT WHOLE: one
+// rename of its directory in each copy holding it, the memo's record of it
+// gone with it (trimMemo). A trim gives back a sixteenth of the share, so it
+// falls due once a sixteenth of the share of new pages has been placed rather
+// than after every miss, and costs one walk of the node's copies and a rename
+// for each copy holding the cohort, however many entries the cohort holds:
+// BenchmarkMemoTrim, over 1 000 and 10 000 copies of seventeen cohorts each,
+// measures it at 55 and 66 µs a copy, 0.66 s for 10 000 (cache doc.go,
+// "Measured"). The removal of the entries' files is the janitor's emptying of
+// trash/, as it is for every removal the cache makes.
+//
+// # What a boot and a crash leave
+//
+// A copy's state records its cohorts and their bytes; the janitor writes it
+// again once the memo's record has moved since it was last written — at its
+// TICK, so at most once an EvictInterval a copy however often the memo moves,
+// since a state is two syncs (janitorPass) — so a boot counts the memo within
+// a tick of its writes (Layout.Held) without walking it. A boot opens a
+// cohort past every one a state records, so whatever a previous process left
+// is older than anything placed or read since, and goes first unless a read
+// moves it on. The janitor LISTS each copy's tree once a process, behind the
+// serving and never on a request (listMemos): the names of its cohorts, never
+// its entries. A cohort no state records — placed after the last state a crash
+// kept — is measured then and counted; one recorded and gone is forgotten; and
+// a tree holding anything but cohorts is no memo of this build's and goes
+// whole, unread. What a crash costs the count is what was placed in a cohort a
+// state records after that state was written — a tick's writes at most, given
+// back with the cohort when the trim takes it.
 
 // memoFile is this file as the memo's declared write names its writer
-// (Writer.File): every placement, link and removal of an entry is made here.
+// (Writer.File): every placement, move and removal of an entry is made here.
 const memoFile = "internal/code/cache/memo.go"
 
 // MemoShare is the share of the cache's budget the memo may hold, node-wide:
@@ -115,6 +152,30 @@ const memoFile = "internal/code/cache/memo.go"
 // repositories rarely evicted, is a share too small for the answers seats ask
 // again.
 const MemoShare = 16
+
+// memoCohortsPerShare is how many cohorts a memo at its share holds: the
+// newest is closed once a sixteenth of the share has been placed in it
+// (memoPlaced). It is the trim's GRANULARITY, and so its rate: a trim drops
+// the oldest cohort, a sixteenth of the share, and the memo is then that far
+// under its share, so the next is due once as much again has been placed —
+// where a trim of single entries to the share exactly fell due again at the
+// very next miss, and paid a walk of every entry each time. Sixteen, so a
+// trim takes the least recently used sixteenth of the memo and leaves fifteen
+// sixteenths of it, while a lookup's misses open at most some seventeen names:
+// fewer cohorts trim more of the memo at once than its use says to, more cost
+// every miss an open more. A JUDGMENT, at the scale it is read at: a cohort of
+// a 400 GB budget's memo is 1.6 GB of pages, and of a test's a few blocks.
+const memoCohortsPerShare = 16
+
+// maxMemoCohorts bounds the cohorts the node keeps, whatever their bytes: past
+// it, the janitor's tick drops the oldest though the memo is within its share.
+// A cohort is opened only by a sixteenth of the share's placements and the
+// trim drops one once the memo holds its share, so a memo the disk keeps holds
+// seventeen; what thins old cohorts without the memo filling — damaged entries
+// removed, entries moved on by reads — would otherwise leave ever more of them
+// for every miss to open. Twice the share's sixteen: a cohort nobody has read
+// from for two shares' worth of placements is dropped.
+const maxMemoCohorts = 2 * memoCohortsPerShare
 
 // memoBlock is the volume an entry takes at the least: a file is given whole
 // blocks, 4 KiB at ext4's, xfs's and btrfs's defaults and the page size, so an
@@ -172,43 +233,72 @@ func NewMemoKey(parts ...string) MemoKey {
 // String is k's hex: its entry's file name.
 func (k MemoKey) String() string { return hex.EncodeToString(k[:]) }
 
-// parseMemoKey reads an entry's file name as its key — 64 lowercase hex
-// digits, its one spelling — or false.
-func parseMemoKey(name string) (MemoKey, bool) {
-	var k MemoKey
-	if len(name) != 2*len(k) {
-		return k, false
-	}
-	if _, err := hex.Decode(k[:], []byte(name)); err != nil || k.String() != name {
-		return MemoKey{}, false
-	}
-	return k, true
-}
-
 // memoBytesOf is the volume an entry of size bytes takes, as the memo counts
 // it: its length rounded up to whole blocks (memoBlock).
 func memoBytesOf(size int64) int64 { return (size + memoBlock - 1) / memoBlock * memoBlock }
 
-// memoIndex is an incarnation's memo as this process knows it
-// (incarnation.memo), under the entry's mu.
-type memoIndex struct {
-	// entries is every entry this process has placed, read or listed, each at
-	// the volume it takes and its last use.
-	entries map[MemoKey]memoEntry
-	// listed: every entry on disk is in entries — the janitor listed the tree
-	// (listMemo), or this process made it (Place).
-	// Until then the incarnation's record counts what its state did, and an
-	// entry no write of this process placed is counted there.
-	listed bool
+// memoCohort is one cohort of a copy's memo as its record keeps it: its
+// number, node-wide, and what its directory holds as the memo counts it.
+type memoCohort struct {
+	N     uint64 `json:"n"`
+	Bytes int64  `json:"bytes"`
 }
 
-// memoEntry is one entry of an index: its volume, and its last use on the
-// cache's clock (Options.Now) in nanoseconds — zero for one no read of this
-// process has used, which a listing found: older than any use this process
-// made, so the first an entry trim takes.
-type memoEntry struct {
-	bytes int64
-	used  int64
+// cohortName is cohort n's directory name: n in decimal, its one spelling.
+func cohortName(n uint64) string { return strconv.FormatUint(n, 10) }
+
+// parseCohort reads a name in a memo's tree as the cohort it names — a
+// positive number in its one spelling — or false.
+func parseCohort(name string) (uint64, bool) {
+	n, err := strconv.ParseUint(name, 10, 64)
+	return n, err == nil && n > 0 && cohortName(n) == name
+}
+
+// cohortDir is cohort n's directory in the incarnation at dir.
+func cohortDir(dir string, n uint64) string { return filepath.Join(dir, memoRel, cohortName(n)) }
+
+// memoPath is the file of entry k in cohort n of the incarnation at dir.
+func memoPath(dir string, n uint64, k MemoKey) string {
+	return filepath.Join(cohortDir(dir, n), k.String())
+}
+
+// withCohort is cs — ordered by cohort, as every record is — with delta added
+// to cohort n's bytes, never below none, and n added where cs holds none: a
+// new slice, since a record is never changed in place (setMemo).
+func withCohort(cs []memoCohort, n uint64, delta int64) []memoCohort {
+	i, found := slices.BinarySearchFunc(cs, n, func(c memoCohort, n uint64) int { return cmp.Compare(c.N, n) })
+	out := make([]memoCohort, 0, len(cs)+1)
+	out = append(out, cs[:i]...)
+	if found {
+		out = append(out, memoCohort{N: n, Bytes: max(cs[i].Bytes+delta, 0)})
+		return append(out, cs[i+1:]...)
+	}
+	out = append(out, memoCohort{N: n, Bytes: max(delta, 0)})
+	return append(out, cs[i:]...)
+}
+
+// withoutCohort is cs without cohort n, a new slice, and what n held.
+func withoutCohort(cs []memoCohort, n uint64) ([]memoCohort, int64) {
+	i, found := slices.BinarySearchFunc(cs, n, func(c memoCohort, n uint64) int { return cmp.Compare(c.N, n) })
+	if !found {
+		return cs, 0
+	}
+	return slices.Concat(cs[:i], cs[i+1:]), cs[i].Bytes
+}
+
+// holdsCohort reports whether cs holds cohort n.
+func holdsCohort(cs []memoCohort, n uint64) bool {
+	_, found := slices.BinarySearchFunc(cs, n, func(c memoCohort, n uint64) int { return cmp.Compare(c.N, n) })
+	return found
+}
+
+// cohortsBytes is what cs holds together.
+func cohortsBytes(cs []memoCohort) int64 {
+	var n int64
+	for _, c := range cs {
+		n += c.Bytes
+	}
+	return n
 }
 
 // The outcomes of crewlet.code.cache.memo.lookups.
@@ -222,47 +312,66 @@ const (
 // over declarations without it (WithDerived) keeps none.
 func (c *Cache) memoing() bool { return c.image.decl(DerivedMemo) != nil }
 
+// setMemo records cohorts as what inc's memo holds — no memo where present is
+// false — its bytes its cohorts' together, and where that is a change moves
+// its version, so the janitor writes the state again at its tick
+// (stateMemos). EVERY CHANGE to the memo's record goes through here, so no
+// move of an entry between cohorts is a change the state misses — and what
+// changes nothing, a listing of a copy with no memo among them, writes no
+// state. e.mu is held.
+func (c *Cache) setMemo(inc *incarnation, cohorts []memoCohort, present bool) {
+	d := derivedState{}
+	if present {
+		d = derivedState{Bytes: cohortsBytes(cohorts), Step: StepMemo, Cohorts: cohorts}
+	}
+	if was, had := inc.derived[DerivedMemo]; had == present && (!present ||
+		(was.Bytes == d.Bytes && was.Step == d.Step && slices.Equal(was.Cohorts, d.Cohorts))) {
+		return
+	}
+	c.setDerived(inc, DerivedMemo, d, present)
+	inc.memoVersion++
+}
+
 // MemoGet is the body memoized under k in the incarnation s holds — whole,
 // its header naming k and the SHA-256 of what it holds — or false: no entry,
 // or one that fails, which is removed (logged code_cache_memo_corrupt) so the
-// read that misses writes it again. A copy with no memo misses with no
-// syscall. A hit is a use of the entry, which the trims order by.
+// read that misses writes it again. It opens k's name in the copy's cohorts,
+// newest first; a copy with no memo misses with no syscall. A hit is a USE: an
+// entry found in an older cohort than the node's newest moves into the newest
+// (memoUse), so the trim, which takes the oldest cohort, takes it last.
 func (c *Cache) MemoGet(s Synced, k MemoKey) ([]byte, bool) {
 	if !c.memoing() || c.handedOut(s, "a memo lookup") != nil {
 		return nil, false
 	}
 	e, inc := s.entry, s.inc
 	e.mu.Lock()
-	_, recorded := inc.derived[DerivedMemo]
-	if !recorded || inc.discarded {
-		e.mu.Unlock()
-		c.lookedUp(memoMiss)
-		return nil, false
+	var cohorts []uint64
+	if rec, ok := inc.derived[DerivedMemo]; ok && !inc.discarded {
+		cohorts = make([]uint64, len(rec.Cohorts))
+		for i, ch := range rec.Cohorts {
+			cohorts[len(cohorts)-1-i] = ch.N
+		}
 	}
-	c.touchMemo(inc)
 	e.mu.Unlock()
-
-	path := filepath.Join(inc.dir, memoRel, k.String())
-	body, bytes, info, err := readMemo(path, k)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		e.mu.Lock()
-		c.memoGone(inc, k)
-		e.mu.Unlock()
-		c.lookedUp(memoMiss)
-		return nil, false
-	case err != nil:
-		c.log.Warn("code_cache_memo_corrupt", "repo", e.id, "incarnation", inc.n, "entry", k.String(),
-			"error", err)
-		c.removeEntry(e, inc, k, path, info, bytes)
-		c.lookedUp(memoCorrupt)
-		return nil, false
+	for _, n := range cohorts {
+		path := memoPath(inc.dir, n, k)
+		body, bytes, info, err := readMemo(path, k)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
+			c.log.Warn("code_cache_memo_corrupt", "repo", e.id, "incarnation", inc.n, "cohort", n,
+				"entry", k.String(), "error", err)
+			c.removeEntry(e, inc, n, k, path, info, bytes)
+			c.lookedUp(memoCorrupt)
+			return nil, false
+		}
+		c.memoUse(e, inc, n, k, info, bytes)
+		c.lookedUp(memoHit)
+		return body, true
 	}
-	e.mu.Lock()
-	c.memoUsed(inc, k, bytes)
-	e.mu.Unlock()
-	c.lookedUp(memoHit)
-	return body, true
+	c.lookedUp(memoMiss)
+	return nil, false
 }
 
 // errMemoEntry is an entry that is not whole: what MemoGet removes.
@@ -312,73 +421,70 @@ func readMemo(path string, k MemoKey) ([]byte, int64, fs.FileInfo, error) {
 	return body, memoBytesOf(size), info, nil
 }
 
-// touchMemo is inc's memo index, made at its first read or write in this
-// process — which makes the memo one the janitor no longer trims whole, and
-// kicks it to list what a previous process left there. e.mu is held.
-func (c *Cache) touchMemo(inc *incarnation) *memoIndex {
-	if inc.memo == nil {
-		inc.memo = &memoIndex{entries: map[MemoKey]memoEntry{}}
-		c.kick()
-	}
-	return inc.memo
-}
-
-// foundMemo gives a tree on disk that no record names — a copy whose state
-// named none, a previous process's — a record and an index for the janitor to
-// count by listing it (recordDerived). e.mu is held.
-func (c *Cache) foundMemo(inc *incarnation) {
-	c.setDerived(inc, DerivedMemo, derivedState{Step: StepMemo}, true)
-	c.touchMemo(inc)
-}
-
-// memoUsed records a hit of inc's entry k, of bytes, as a use. An entry the
-// index did not hold is one a previous process left — counted in what the
-// state recorded — or, in a listed memo, one placed by nothing this process
-// knows, which is counted now. e.mu is held.
-func (c *Cache) memoUsed(inc *incarnation, k MemoKey, bytes int64) {
-	idx := inc.memo
-	if idx == nil || inc.discarded {
-		return // dropped while it was read
-	}
-	now := c.now().UnixNano()
-	old, known := idx.entries[k]
-	idx.entries[k] = memoEntry{bytes: bytes, used: now}
-	switch {
-	case known:
-		c.addMemo(inc, bytes-old.bytes)
-	case idx.listed:
-		c.addMemo(inc, bytes)
-	}
-}
-
-// memoGone forgets inc's entry k, found gone. e.mu is held.
-func (c *Cache) memoGone(inc *incarnation, k MemoKey) {
-	idx := inc.memo
-	if idx == nil || inc.discarded {
+// memoUse is a hit of inc's entry k in its cohort n, of bytes, as the USE it
+// is: the entry moved into the node's newest cohort — one rename, and only
+// where n is older — so the cohort it leaves holds what nobody has read since,
+// and the trim reaches it last. Under the memo's lock, where the copy still
+// serves its memo and the file is still the one the read found (info): one a
+// placement renamed over it since is somebody's newer answer, and moves as
+// that one's use. A HIT NEVER WAITS: where the lock is held — a run placing
+// its pages, the trim, the janitor listing the tree — the entry stays where it
+// is this once, and the next read of it moves it; and a move that cannot be
+// made leaves it there too. The answer is served either way.
+func (c *Cache) memoUse(e *entry, inc *incarnation, n uint64, k MemoKey, info fs.FileInfo, bytes int64) {
+	to := c.memoNewest.Load()
+	if n >= to || !c.enter() {
 		return
 	}
-	if old, known := idx.entries[k]; known {
-		delete(idx.entries, k)
-		c.addMemo(inc, -old.bytes)
-	}
-}
-
-// addMemo moves inc's memo record by delta bytes, never below none. e.mu is
-// held, and the record is there.
-func (c *Cache) addMemo(inc *incarnation, delta int64) {
-	s, ok := inc.derived[DerivedMemo]
-	if !ok || delta == 0 {
+	defer c.leave()
+	if !inc.memoMu.TryLock() {
 		return
 	}
-	s.Bytes = max(s.Bytes+delta, 0)
-	c.setDerived(inc, DerivedMemo, s, true)
+	defer inc.memoMu.Unlock()
+	e.mu.Lock()
+	rec, recorded := inc.derived[DerivedMemo]
+	serving := recorded && !inc.discarded && !inc.retired && !inc.memoShut && holdsCohort(rec.Cohorts, n)
+	e.mu.Unlock()
+	if !serving {
+		return
+	}
+	src := memoPath(inc.dir, n, k)
+	if now, err := os.Lstat(src); err != nil || !os.SameFile(now, info) {
+		return
+	}
+	_, made, err := c.makeCohort(inc, to)
+	if err != nil {
+		return
+	}
+	dst := memoPath(inc.dir, to, k)
+	var prior int64
+	if !made {
+		if was, err := os.Lstat(dst); err == nil {
+			prior = memoBytesOf(was.Size())
+		}
+	}
+	if os.Rename(src, dst) != nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if inc.discarded {
+		return
+	}
+	cs := withCohort(inc.derived[DerivedMemo].Cohorts, n, -bytes)
+	if made {
+		cs, _ = withoutCohort(cs, to)
+	}
+	c.setMemo(inc, withCohort(cs, to, bytes-prior), true)
 }
 
-// removeEntry removes inc's entry k at path — the file whose identity info
-// is, and no other: one renamed over it since it was read is somebody's new
-// answer — and forgets it, its volume bytes where the index did not hold it.
+// removeEntry removes inc's entry k at path in its cohort n — the file whose
+// identity info is, and no other: one renamed over it since it was read is
+// somebody's new answer — and takes its volume, bytes, out of the cohort.
 // Under the memo's lock, so no answer is placed at the name as it goes.
-func (c *Cache) removeEntry(e *entry, inc *incarnation, k MemoKey, path string, info fs.FileInfo, bytes int64) {
+func (c *Cache) removeEntry(e *entry, inc *incarnation, n uint64, k MemoKey, path string, info fs.FileInfo,
+	bytes int64) {
+
 	if !c.enter() {
 		return
 	}
@@ -390,20 +496,13 @@ func (c *Cache) removeEntry(e *entry, inc *incarnation, k MemoKey, path string, 
 		return
 	}
 	if err := os.Remove(path); err != nil {
-		c.log.Warn("code_cache_memo_unremoved", "repo", e.id, "entry", k.String(), "error", err)
+		c.log.Warn("code_cache_memo_unremoved", "repo", e.id, "cohort", n, "entry", k.String(), "error", err)
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	idx := inc.memo
-	if idx == nil || inc.discarded {
-		return
-	}
-	if old, known := idx.entries[k]; known {
-		delete(idx.entries, k)
-		c.addMemo(inc, -old.bytes)
-	} else if !idx.listed {
-		c.addMemo(inc, -bytes)
+	if rec, recorded := inc.derived[DerivedMemo]; recorded && !inc.discarded && holdsCohort(rec.Cohorts, n) {
+		c.setMemo(inc, withCohort(rec.Cohorts, n, -bytes), true)
 	}
 }
 
@@ -552,11 +651,12 @@ func (b *MemoBatch) fail(err error) {
 // tail(i) — what the run learned of it only at its end: a listing's total, a
 // file's line count, a stat's counts; i counts every Put, so one that failed
 // to stage shifts no other's tail — into the incarnation the batch is of:
-// renamed into its crewlet/memo, made for its first answer, under the memo's
-// lock, where the incarnation still serves, the cache still runs, and the memo
-// is neither shut nor dropped since the batch began (its generation). A tail
-// past memoMaxTail leaves its answer unmemoized. Every staged file is given
-// back either way. Once a batch.
+// renamed into the node's NEWEST cohort of its memo, the cohort's directory
+// and the tree made for its first answer, under the memo's lock, where the
+// incarnation still serves, the cache still runs, and the memo is neither
+// shut nor dropped since the batch began (its generation). A tail past
+// memoMaxTail leaves its answer unmemoized. Every staged file is given back
+// either way. Once a batch.
 func (b *MemoBatch) Place(tail func(i int) []byte) {
 	if b == nil || b.done {
 		return
@@ -589,43 +689,30 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 	defer inc.memoMu.Unlock()
 	e.mu.Lock()
 	serving := !inc.discarded && !inc.retired && !inc.memoShut && inc.memoGen == b.gen
-	known := map[MemoKey]bool{}
-	listed := inc.memo != nil && inc.memo.listed
-	if inc.memo != nil {
-		for _, st := range b.staged {
-			_, known[st.key] = inc.memo.entries[st.key]
-		}
-	}
 	e.mu.Unlock()
 	if !serving {
 		return
 	}
-	created, err := c.makeMemoTree(inc)
+	n := c.memoNewest.Load()
+	tree, made, err := c.makeCohort(inc, n)
 	if err != nil {
 		b.fail(err)
 		return
 	}
-	type placed struct {
-		key MemoKey
-		// bytes is the volume it takes, and prior the volume of what it was
-		// renamed over that the index did not know — -1 for nothing there.
-		bytes, prior int64
-	}
-	var out []placed
-	dir := filepath.Join(inc.dir, memoRel)
+	// placed is the volume the answers take, and prior that of what they were
+	// renamed over — answers of the same keys an earlier placement made in
+	// this cohort, whose bytes the record counts already. A cohort this Place
+	// made holds nothing else.
+	var placed, prior int64
 	for i := range b.staged {
 		st := &b.staged[i]
 		if st.path == "" {
 			continue
 		}
-		target := filepath.Join(dir, st.key.String())
-		prior := int64(-1)
-		// AN ENTRY THIS PROCESS DOES NOT KNOW, in a memo it has not listed,
-		// may be a previous process's, which the state's bytes count: the
-		// rename replaces those bytes, never adds beside them.
-		if !created && !listed && !known[st.key] {
-			if info, lerr := os.Lstat(target); lerr == nil {
-				prior = memoBytesOf(info.Size())
+		target := memoPath(inc.dir, n, st.key)
+		if !made {
+			if was, lerr := os.Lstat(target); lerr == nil {
+				prior += memoBytesOf(was.Size())
 			}
 		}
 		if err := os.Rename(st.path, target); err != nil {
@@ -637,40 +724,62 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 		b.bytes -= st.size
 		c.tmpBytes.Add(-st.size)
 		c.memoStaged.Add(-st.size)
-		out = append(out, placed{key: st.key, bytes: memoBytesOf(st.size), prior: prior})
+		placed += memoBytesOf(st.size)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if inc.discarded {
 		return // its bytes left the total with it
 	}
-	idx := c.touchMemo(inc)
-	total := inc.derived[DerivedMemo].Bytes
-	if created {
+	cs := inc.derived[DerivedMemo].Cohorts
+	switch {
+	case tree:
 		// A TREE THIS PLACE MADE holds exactly what it placed: whatever a
-		// record or an index said of one before is gone with it.
-		idx = &memoIndex{entries: map[MemoKey]memoEntry{}, listed: true}
-		inc.memo, total = idx, 0
+		// record said of one before is gone with it, and nothing on the disk
+		// is one the record does not know.
+		cs = nil
+		inc.memoListed = true
+	case made:
+		// So does a cohort it made.
+		cs, _ = withoutCohort(cs, n)
 	}
-	now := c.now().UnixNano()
-	for _, p := range out {
-		old, ok := idx.entries[p.key]
-		switch {
-		case ok:
-			total += p.bytes - old.bytes
-		case !idx.listed && p.prior >= 0:
-			total += p.bytes - p.prior
-		default:
-			total += p.bytes
-		}
-		idx.entries[p.key] = memoEntry{bytes: p.bytes, used: now}
-	}
-	c.setDerived(inc, DerivedMemo, derivedState{Bytes: max(total, 0), Step: StepMemo}, true)
+	c.setMemo(inc, withCohort(cs, n, placed-prior), true)
+	c.memoPlaced(placed - prior)
 	// PAST ITS SHARE, the memo's trim is due at once rather than at the
 	// janitor's tick: no eviction is for the excess (overBudget), so nothing
 	// else would wake the janitor for it.
 	if c.memoExcess() > 0 {
 		c.kick()
+	}
+}
+
+// memoPlaced counts n bytes placed in the node's newest cohort, and opens the
+// next once the newest holds a sixteenth of the share (memoCohortsPerShare): a
+// cohort is the answers placed and read over a sixteenth of the share's worth
+// of placements, which is what a trim of it gives back. Only a placement opens
+// a cohort: an entry a read moves on adds nothing to the memo, so a memo read
+// over and over and placed in seldom stays in few cohorts. e.mu may be held;
+// cohortMu is taken after every other lock.
+func (c *Cache) memoPlaced(n int64) {
+	c.cohortMu.Lock()
+	defer c.cohortMu.Unlock()
+	c.memoFill += max(n, 0)
+	if c.memoFill >= c.memoShare()/memoCohortsPerShare {
+		c.memoNewest.Add(1)
+		c.memoFill = 0
+	}
+}
+
+// openCohortPast makes the node's newest cohort one past n, where it is not
+// already: what the trim does before it drops a newest cohort that is also
+// the oldest, and the listing for a cohort a previous process opened past
+// every one its states record.
+func (c *Cache) openCohortPast(n uint64) {
+	c.cohortMu.Lock()
+	defer c.cohortMu.Unlock()
+	if c.memoNewest.Load() <= n {
+		c.memoNewest.Store(n + 1)
+		c.memoFill = 0
 	}
 }
 
@@ -697,6 +806,7 @@ func (b *MemoBatch) complete(st *memoStaged, tail []byte) error {
 	copy(head[memoHeader-sha256.Size:], st.sum.Sum(nil))
 	f, err := os.OpenFile(st.path, os.O_WRONLY, 0)
 	if err != nil {
+		b.c.memoStaged.Add(-n)
 		return err
 	}
 	_, err = f.WriteAt(tail, int64(memoHeader+st.length))
@@ -746,38 +856,58 @@ func (b *MemoBatch) unstage(st *memoStaged) {
 	}
 }
 
-// makeMemoTree makes inc's memo tree where it is not there, and reports
-// whether it made it; a tree's name held by something that is no directory is
-// an error, which the next full round's sweep moves aside (image.imaged). Under
-// the memo's lock.
-func (c *Cache) makeMemoTree(inc *incarnation) (bool, error) {
-	if err := os.Mkdir(filepath.Join(inc.dir, engineRoot), hostbox.DirMode); err != nil &&
+// makeCohort makes cohort n's directory in inc's memo tree, and the tree,
+// where either is not there, and reports which it made; a name held by
+// something that is no directory is an error — the next full round's sweep
+// moves aside what holds the tree's name (image.imaged), and the janitor's
+// listing a tree holding what no cohort is. Under the memo's lock.
+func (c *Cache) makeCohort(inc *incarnation, n uint64) (tree, cohort bool, err error) {
+	if err = os.Mkdir(filepath.Join(inc.dir, engineRoot), hostbox.DirMode); err != nil &&
 		!errors.Is(err, fs.ErrExist) {
-		return false, err
+		return false, false, err
 	}
-	dir := filepath.Join(inc.dir, memoRel)
-	err := os.Mkdir(dir, hostbox.DirMode)
+	if tree, err = makeDir(filepath.Join(inc.dir, memoRel)); err != nil {
+		return false, false, err
+	}
+	cohort, err = makeDir(cohortDir(inc.dir, n))
+	return tree, cohort, err
+}
+
+// makeDir makes the directory path and reports whether it did; a directory
+// there already is no error, and anything else at its name is.
+func makeDir(path string) (bool, error) {
+	err := os.Mkdir(path, hostbox.DirMode)
 	switch {
 	case err == nil:
 		return true, nil
 	case !errors.Is(err, fs.ErrExist):
 		return false, err
 	}
-	if info, lerr := os.Lstat(dir); lerr != nil || !info.IsDir() {
-		return false, fmt.Errorf("cache: %s is no directory", dir)
+	if info, lerr := os.Lstat(path); lerr != nil || !info.IsDir() {
+		return false, fmt.Errorf("cache: %s is no directory", path)
 	}
 	return false, nil
 }
 
+// foundMemo gives a tree on disk that no record names — a copy whose state
+// named none, a previous process's — a record of no cohorts and leaves it for
+// the janitor to list and count (recordDerived, listMemo), which it is kicked
+// to do. e.mu is held.
+func (c *Cache) foundMemo(inc *incarnation) {
+	c.setMemo(inc, nil, true)
+	inc.memoListed = false
+	c.kick()
+}
+
 // dropMemo moves inc's memo tree into trash/ whole and forgets what inc
-// records of it, its index with it — under the memo's lock, so no answer is
-// placed into the tree as it goes and counted for a directory no longer there:
-// the one removal of a tree (dropFor). A memo with no tree on disk is
-// forgotten the same. AND IT SHUTS THE MEMO: its generation moves, so no batch
-// begun before the drop places anything, and none is begun until the round
-// that dropped it reopens it (reopenMemo) — the memo drops only where the
-// objects of the copy change under it, and an answer a read cuts until that
-// change is visible may be read off what it replaces.
+// records of it — under the memo's lock, so no answer is placed into the tree
+// as it goes and counted for a directory no longer there: the one removal of
+// a tree (dropFor). A memo with no tree on disk is forgotten the same. AND IT
+// SHUTS THE MEMO: its generation moves, so no batch begun before the drop
+// places anything, and none is begun until the round that dropped it reopens
+// it (reopenMemo) — the memo drops only where the objects of the copy change
+// under it, and an answer a read cuts until that change is visible may be
+// read off what it replaces.
 func (c *Cache) dropMemo(e *entry, inc *incarnation) error {
 	inc.memoMu.Lock()
 	defer inc.memoMu.Unlock()
@@ -791,8 +921,8 @@ func (c *Cache) dropMemo(e *entry, inc *incarnation) error {
 	if moved {
 		c.droppedDerived(inc, c.image.set(DerivedMemo))
 	}
-	c.setDerived(inc, DerivedMemo, derivedState{}, false)
-	inc.memo = nil
+	c.setMemo(inc, nil, false)
+	inc.memoListed = true
 	inc.memoGen++
 	inc.memoShut = true
 	e.mu.Unlock()
@@ -813,24 +943,22 @@ func (c *Cache) reopenMemo(e *entry, inc *incarnation) {
 	e.mu.Unlock()
 }
 
-// listMemos lists, behind the serving, every memo this process has touched
-// and not yet listed (memoIndex.listed): each entry a previous process left in
-// it is tracked as used before any this process used — the first the entry
-// trim takes — and the record's bytes made exactly those of its entries,
-// whatever the state said. A request never lists a memo: a tree a previous
-// process filled may hold hundreds of thousands of entries.
+// listMemos lists, behind the serving, the tree of every copy this process has
+// not yet listed (incarnation.memoListed) and that has a state — one a round
+// or a boot gave it; a copy with none is a stateless boot's, whose first full
+// round measures what it holds, and is listed after. A request never lists a
+// tree, and a listing reads a tree's cohorts' names alone.
 func (c *Cache) listMemos(ctx context.Context) {
 	type due struct {
 		e   *entry
 		inc *incarnation
-		idx *memoIndex
 	}
 	var dues []due
 	c.mu.Lock()
 	for _, e := range c.entries {
 		e.mu.Lock()
-		if inc := e.current; inc != nil && inc.memo != nil && !inc.memo.listed && !inc.discarded {
-			dues = append(dues, due{e: e, inc: inc, idx: inc.memo})
+		if inc := e.current; inc != nil && inc.state != nil && !inc.memoListed && !inc.discarded {
+			dues = append(dues, due{e: e, inc: inc})
 		}
 		e.mu.Unlock()
 	}
@@ -839,255 +967,286 @@ func (c *Cache) listMemos(ctx context.Context) {
 		if ctx.Err() != nil || c.life.Err() != nil {
 			return
 		}
-		c.listMemo(d.e, d.inc, d.idx)
+		c.listMemo(ctx, d.e, d.inc)
 	}
 }
 
-// listMemo lists inc's memo tree into idx, the index it had when it was
-// chosen: an index dropped or made anew since takes nothing. An entry no key
-// names, or that is no regular file, is nothing a read finds and nothing of
-// the memo's, and is moved into trash/.
-func (c *Cache) listMemo(e *entry, inc *incarnation, idx *memoIndex) {
-	dir := filepath.Join(inc.dir, memoRel)
-	list, err := os.ReadDir(dir)
-	gone := errors.Is(err, fs.ErrNotExist)
-	if err != nil && !gone {
-		c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "error", err)
+// listMemo lists inc's memo tree — its cohorts' names, never their entries —
+// and makes inc's record what it finds: a cohort recorded and gone is
+// forgotten, and one no record names, placed after the last state a crash
+// kept, is MEASURED and counted, the node's newest opened past it. A tree
+// holding anything but cohorts is no memo of this build's — a build of another
+// layout's, or something outside the engine's — and goes whole into trash/,
+// unread. Under the memo's lock, so nothing is placed, moved or removed in the
+// tree while it is read. A listing that fails leaves the copy to the next
+// pass.
+func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
+	inc.memoMu.Lock()
+	defer inc.memoMu.Unlock()
+	e.mu.Lock()
+	skip := inc.memoListed || inc.discarded
+	e.mu.Unlock()
+	if skip {
 		return
 	}
-	found := make(map[MemoKey]int64, len(list))
-	for _, d := range list {
-		k, ok := parseMemoKey(d.Name())
-		if !ok || !d.Type().IsRegular() {
-			path := filepath.Join(dir, d.Name())
-			if terr := toTrash(c.dir, path, newV7()+"-"+d.Name()); terr != nil && !errors.Is(terr, fs.ErrNotExist) {
-				c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "path", path, "error", terr)
-			}
+	tree := filepath.Join(inc.dir, memoRel)
+	found, foreign, err := listCohorts(tree)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		e.mu.Lock()
+		if !inc.discarded {
+			c.setMemo(inc, nil, false)
+			inc.memoListed = true
+		}
+		e.mu.Unlock()
+		return
+	case err != nil:
+		c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "error", err)
+		return
+	case foreign != "":
+		if terr := toTrash(c.dir, tree, newV7()+"-memo"); terr != nil && !errors.Is(terr, fs.ErrNotExist) {
+			c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "error", terr)
+			return
+		}
+		e.mu.Lock()
+		if !inc.discarded {
+			c.setMemo(inc, nil, false)
+			inc.memoListed = true
+		}
+		e.mu.Unlock()
+		c.log.Warn("code_cache_memo_foreign", "repo", e.id, "incarnation", inc.n, "found", foreign)
+		return
+	}
+	e.mu.Lock()
+	recorded := inc.derived[DerivedMemo].Cohorts
+	e.mu.Unlock()
+	var cs []memoCohort
+	for _, ch := range recorded {
+		if slices.Contains(found, ch.N) {
+			cs = append(cs, ch)
+		}
+	}
+	for _, n := range found {
+		if holdsCohort(recorded, n) {
 			continue
 		}
-		info, ierr := d.Info()
-		if ierr != nil {
-			continue // gone since the listing
+		bytes, err := measureCohort(ctx, cohortDir(inc.dir, n))
+		if err != nil {
+			c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "cohort", n, "error", err)
+			return
 		}
-		found[k] = memoBytesOf(info.Size())
+		cs = withCohort(cs, n, bytes)
+		c.openCohortPast(n)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if inc.memo != idx || inc.discarded {
+	if inc.discarded {
 		return
 	}
-	// WHAT THIS PROCESS PLACED IS KEPT AS IT KNOWS IT, the listing's view of
-	// it older: an answer placed after the listing read the tree is tracked,
-	// and in it, whatever the listing saw.
-	for k, n := range found {
-		if _, known := idx.entries[k]; !known {
-			idx.entries[k] = memoEntry{bytes: n}
+	// A TREE IS RECORDED WHILE IT IS THERE, holding cohorts or none: one with
+	// no record is what a round's measure gives a record to be listed
+	// (foundMemo), which would list it again at every round.
+	c.setMemo(inc, cs, true)
+	inc.memoListed = true
+}
+
+// listCohorts is the cohorts the memo tree at dir holds, in order; or the
+// first name in it that is no cohort's directory, which makes the tree none
+// of this build's — read a batch of names at a time, so a tree a previous
+// layout filled with entries is never held whole.
+func listCohorts(dir string) (found []uint64, foreign string, err error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = f.Close() }() // read-only: what was listed is the answer
+	for {
+		list, rerr := f.ReadDir(memoListBatch)
+		for _, d := range list {
+			n, ok := parseCohort(d.Name())
+			if !ok || !d.IsDir() {
+				return nil, d.Name(), nil
+			}
+			found = append(found, n)
+		}
+		switch {
+		case errors.Is(rerr, io.EOF):
+			slices.Sort(found)
+			return found, "", nil
+		case rerr != nil:
+			return nil, "", rerr
 		}
 	}
-	idx.listed = true
+}
+
+// memoListBatch is how many names a listing of the memo reads at once: a
+// cohort's directory, measured, holds as many entries as a sixteenth of the
+// share's placements left in it, so the listing holds a batch of names rather
+// than all of them.
+const memoListBatch = 256
+
+// measureCohort is what the cohort directory at dir holds as the memo counts
+// it: each regular file at the blocks it takes, read a batch of names at a
+// time. Anything else in it is no entry and counts nothing; it goes with the
+// cohort.
+func measureCohort(ctx context.Context, dir string) (int64, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }() // read-only: what was measured is the answer
 	var total int64
-	for _, en := range idx.entries {
-		total += en.bytes
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		list, rerr := f.ReadDir(memoListBatch)
+		for _, d := range list {
+			if !d.Type().IsRegular() {
+				continue
+			}
+			if info, ierr := d.Info(); ierr == nil {
+				total += memoBytesOf(info.Size())
+			}
+		}
+		switch {
+		case errors.Is(rerr, io.EOF):
+			return total, nil
+		case rerr != nil:
+			return 0, rerr
+		}
 	}
-	if gone && len(idx.entries) == 0 {
-		c.setDerived(inc, DerivedMemo, derivedState{}, false)
-		return
-	}
-	c.setDerived(inc, DerivedMemo, derivedState{Bytes: total, Step: StepMemo}, true)
 }
 
 // trimMemo holds the memo to its share of the budget (MemoShare) — the pages
 // it keeps and those runs have staged for it together (memoExcess), so a page
 // in flight takes its room from the memo's oldest answers rather than from a
-// repository — and reports whether it moved anything into trash/ for the
-// janitor to empty: first every memo of a copy this process has not touched
-// since it opened, WHOLE, the least recently used repository first — one
-// rename each, and nothing of theirs was read since the boot — then the
-// entries of the rest, the least recently used first. Before any repository
-// is evicted (janitorPass).
-func (c *Cache) trimMemo(ctx context.Context) bool {
-	if c.memoExcess() == 0 {
+// repository — by dropping its OLDEST COHORT whole, again until the memo is
+// within its share, and reports whether it moved anything into trash/ for the
+// janitor to empty. On a ticked pass it also drops the oldest while the node
+// keeps more than maxMemoCohorts. A newest cohort that is also the oldest has
+// the next opened first, so it can go. Before any repository is evicted
+// (janitorPass).
+func (c *Cache) trimMemo(ctx context.Context, ticked bool) bool {
+	if c.memoExcess() == 0 && !ticked {
 		return false
 	}
-	moved := c.trimColdMemos(ctx)
-	if c.memoExcess() > 0 {
-		c.trimMemoEntries(ctx)
-	}
-	return moved
-}
-
-// trimColdMemos moves into trash/ whole, the least recently used repository
-// first, the memo of every copy this process has not touched, while the memo
-// holds more than its share. It reports whether it moved any.
-func (c *Cache) trimColdMemos(ctx context.Context) bool {
-	type cold struct {
-		e        *entry
-		inc      *incarnation
-		lastUsed int64
-	}
-	var colds []cold
-	c.mu.Lock()
-	for _, e := range c.entries {
-		e.mu.Lock()
-		if inc := e.current; inc != nil && inc.memo == nil && !inc.discarded &&
-			inc.derived[DerivedMemo].Bytes > 0 {
-			colds = append(colds, cold{e: e, inc: inc, lastUsed: inc.lastUsed.UnixNano()})
-		}
-		e.mu.Unlock()
-	}
-	c.mu.Unlock()
-	slices.SortFunc(colds, func(a, b cold) int {
-		return cmp.Or(cmp.Compare(a.lastUsed, b.lastUsed), strings.Compare(a.e.id, b.e.id))
-	})
 	moved := false
-	for _, cl := range colds {
-		if c.memoExcess() == 0 || ctx.Err() != nil || c.life.Err() != nil {
+	for ctx.Err() == nil && c.life.Err() == nil {
+		oldest, ok := c.oldestCohort()
+		if !ok {
 			break
 		}
-		moved = c.trimColdMemo(cl.e, cl.inc) || moved
+		newest := c.memoNewest.Load()
+		if c.memoExcess() == 0 && (newest < oldest || newest-oldest < maxMemoCohorts) {
+			break
+		}
+		if oldest >= newest {
+			c.openCohortPast(oldest)
+		}
+		dropped, err := c.trimCohort(ctx, oldest)
+		if err != nil {
+			break
+		}
+		moved = moved || dropped
 	}
 	return moved
 }
 
-// trimColdMemo moves inc's memo into trash/ whole where it is still a memo
-// this process has not touched, and reports whether it did.
-func (c *Cache) trimColdMemo(e *entry, inc *incarnation) bool {
-	inc.memoMu.Lock()
-	defer inc.memoMu.Unlock()
-	e.mu.Lock()
-	bytes := inc.derived[DerivedMemo].Bytes
-	cold := inc.memo == nil && !inc.discarded && e.current == inc
-	e.mu.Unlock()
-	if !cold {
-		return false
+// oldestCohort is the oldest cohort any copy's memo holds, and false for none:
+// one walk of the node's copies, under the lock every sync takes for the
+// moment it reads each record's first cohort.
+func (c *Cache) oldestCohort() (uint64, bool) {
+	var oldest uint64
+	found := false
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.entries {
+		e.mu.Lock()
+		if inc := e.current; inc != nil && !inc.discarded {
+			if cs := inc.derived[DerivedMemo].Cohorts; len(cs) > 0 && (!found || cs[0].N < oldest) {
+				oldest, found = cs[0].N, true
+			}
+		}
+		e.mu.Unlock()
 	}
-	path := filepath.Join(inc.dir, memoRel)
-	err := toTrash(c.dir, path, newV7()+"-"+filepath.Base(path))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		c.log.Warn("code_cache_memo_untrimmed", "repo", e.id, "path", path, "error", err)
-		return false
-	}
-	e.mu.Lock()
-	c.setDerived(inc, DerivedMemo, derivedState{}, false)
-	e.mu.Unlock()
-	c.log.Info("code_cache_memo_trimmed", "repo", e.id, "incarnation", inc.n, "bytes", bytes, "whole", true)
-	return err == nil
+	return oldest, found
 }
 
-// trimMemoEntries removes the least recently used entries of every memo this
-// process has touched until the memo holds no more than its share. TWO
-// PASSES, so a trim of a memo of millions of entries holds no copy of their
-// keys: the first reads each entry's last use and volume, and finds the last
-// use at and before which enough entries lie (cut); the second takes, a copy
-// at a time, the entries at or before it.
-func (c *Cache) trimMemoEntries(ctx context.Context) {
-	type use struct{ used, bytes int64 }
-	var uses []use
-	var held []*entry
+// trimCohort moves cohort n of every copy's memo into trash/ — its directory,
+// one rename, whatever it holds — and takes it out of each copy's record, and
+// reports whether it moved any. A rename that fails is logged and stops the
+// trim, which the next pass takes up: the cohort stays recorded, its bytes
+// counted, for as long as its files are there.
+func (c *Cache) trimCohort(ctx context.Context, n uint64) (bool, error) {
+	type holder struct {
+		e   *entry
+		inc *incarnation
+	}
+	var holders []holder
 	c.mu.Lock()
 	for _, e := range c.entries {
-		held = append(held, e)
+		e.mu.Lock()
+		if inc := e.current; inc != nil && !inc.discarded && holdsCohort(inc.derived[DerivedMemo].Cohorts, n) {
+			holders = append(holders, holder{e: e, inc: inc})
+		}
+		e.mu.Unlock()
 	}
 	c.mu.Unlock()
-	for _, e := range held {
-		e.mu.Lock()
-		if inc := e.current; inc != nil && inc.memo != nil && !inc.discarded {
-			for _, en := range inc.memo.entries {
-				uses = append(uses, use{used: en.used, bytes: en.bytes})
-			}
+	moved, copies, bytes := false, 0, int64(0)
+	defer func() {
+		if copies > 0 {
+			c.log.Info("code_cache_memo_trimmed", "cohort", n, "copies", copies, "bytes", bytes)
 		}
-		e.mu.Unlock()
-	}
-	slices.SortFunc(uses, func(a, b use) int { return cmp.Compare(a.used, b.used) })
-	excess := c.memoExcess()
-	var cut int64
-	var covered int64
-	for _, u := range uses {
-		if covered >= excess {
-			break
+	}()
+	for _, h := range holders {
+		if ctx.Err() != nil || c.life.Err() != nil {
+			return moved, ctx.Err()
 		}
-		covered += u.bytes
-		cut = u.used
-	}
-	if covered == 0 {
-		return
-	}
-	type victim struct {
-		k    MemoKey
-		used int64
-	}
-	removed, bytes := 0, int64(0)
-	for _, e := range held {
-		if c.memoExcess() == 0 || ctx.Err() != nil || c.life.Err() != nil {
-			break
+		freed, gone, err := c.trimCohortOf(h.e, h.inc, n)
+		if err != nil {
+			c.log.Warn("code_cache_memo_untrimmed", "repo", h.e.id, "cohort", n, "error", err)
+			return moved, err
 		}
-		e.mu.Lock()
-		inc := e.current
-		var victims []victim
-		if inc != nil && inc.memo != nil && !inc.discarded {
-			for k, en := range inc.memo.entries {
-				if en.used <= cut {
-					victims = append(victims, victim{k: k, used: en.used})
-				}
-			}
-		}
-		e.mu.Unlock()
-		slices.SortFunc(victims, func(a, b victim) int { return cmp.Compare(a.used, b.used) })
-		for _, v := range victims {
-			if c.memoExcess() == 0 {
-				break
-			}
-			if n, ok := c.trimEntry(e, inc, v.k, v.used); ok {
-				removed++
-				bytes += n
-			}
+		if gone {
+			copies++
+			bytes += freed
+			moved = true
 		}
 	}
-	if removed > 0 {
-		c.log.Debug("code_cache_memo_trimmed", "entries", removed, "bytes", bytes, "whole", false)
-	}
+	return moved, nil
 }
 
-// trimEntry removes inc's entry k where its last use is still used — one read
-// since it was chosen is no longer the least recently used — and answers the
-// volume it took.
-func (c *Cache) trimEntry(e *entry, inc *incarnation, k MemoKey, used int64) (int64, bool) {
+// trimCohortOf moves inc's cohort n into trash/ where inc still holds it, and
+// answers what its record counted of it and whether it went. Under the memo's
+// lock.
+func (c *Cache) trimCohortOf(e *entry, inc *incarnation, n uint64) (int64, bool, error) {
 	inc.memoMu.Lock()
 	defer inc.memoMu.Unlock()
 	e.mu.Lock()
-	still := false
-	if idx := inc.memo; idx != nil && !inc.discarded && e.current == inc {
-		en, ok := idx.entries[k]
-		still = ok && en.used == used
-	}
+	held := e.current == inc && !inc.discarded && holdsCohort(inc.derived[DerivedMemo].Cohorts, n)
 	e.mu.Unlock()
-	if !still {
-		return 0, false
+	if !held {
+		return 0, false, nil
 	}
-	err := os.Remove(filepath.Join(inc.dir, memoRel, k.String()))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		c.log.Warn("code_cache_memo_untrimmed", "repo", e.id, "entry", k.String(), "error", err)
-		return 0, false
+	dir := cohortDir(inc.dir, n)
+	if err := toTrash(c.dir, dir, newV7()+"-memo-"+cohortName(n)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return 0, false, err
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if idx := inc.memo; idx != nil && !inc.discarded {
-		if en, ok := idx.entries[k]; ok {
-			delete(idx.entries, k)
-			c.addMemo(inc, -en.bytes)
-			return en.bytes, true
-		}
-	}
-	return 0, false
+	cs, freed := withoutCohort(inc.derived[DerivedMemo].Cohorts, n)
+	c.setMemo(inc, cs, true)
+	return freed, true, nil
 }
 
-// stateMemos writes again the state of every copy whose memo's bytes moved
-// since its state was last written, so a boot counts the memo within a tick
-// of its writes (Layout.Held) without walking it — on the janitor's ticked
-// pass alone (janitorPass), so a copy's memo costs its disk at most one
-// state's two syncs an EvictInterval. Only a copy with a state —
-// one a round or a boot gave it — is written: a state is never made for a copy
-// that has none, whose first full round writes it.
+// stateMemos writes again the state of every copy whose memo's record moved
+// since its state was last written (incarnation.memoVersion), so a boot counts
+// the memo within a tick of its writes (Layout.Held) without walking it — on
+// the janitor's ticked pass alone (janitorPass), so a copy's memo costs its
+// disk at most one state's two syncs an EvictInterval. Only a copy with a
+// state — one a round or a boot gave it — is written: a state is never made
+// for a copy that has none, whose first full round writes it.
 func (c *Cache) stateMemos(ctx context.Context) {
 	type due struct {
 		e   *entry
@@ -1098,7 +1257,7 @@ func (c *Cache) stateMemos(ctx context.Context) {
 	for _, e := range c.entries {
 		e.mu.Lock()
 		if inc := e.current; inc != nil && inc.state != nil && !inc.retired && !inc.discarded &&
-			inc.derived[DerivedMemo].Bytes != inc.memoStated {
+			inc.memoVersion != inc.memoStated {
 			dues = append(dues, due{e: e, inc: inc})
 		}
 		e.mu.Unlock()
@@ -1116,25 +1275,24 @@ func (c *Cache) stateMemos(ctx context.Context) {
 
 // carryMemo moves the memo of from, an incarnation a rebuild replaces, into
 // to, the incarnation replacing it, as to is promoted (rebuild.go's promote):
-// ONE RENAME OF THE TREE, whatever it holds (SeedMove), its record and its
-// index with it — so the carry costs the same at ten answers or a million, and
-// the round that holds the repository, which a request's repair waits on,
-// pays one syscall for it rather than a stat and a link an answer. An answer
-// is a function of object ids, which to holds as from did, and every read
-// there holds an entry to its key and digest as it did here, so nothing is
-// read on the way. A compaction's swap carries a memo the same way.
+// ONE RENAME OF THE TREE, whatever it holds (SeedMove), its record with it —
+// so the carry costs the same at ten answers or a million, and the round that
+// holds the repository, which a request's repair waits on, pays one syscall
+// for it rather than a stat and a link an answer. An answer is a function of
+// object ids, which to holds as from did, and every read there holds an entry
+// to its key and digest as it did here, so nothing is read on the way. A
+// compaction's swap carries a memo the same way.
 //
 // Under from's memo lock and then to's, so no answer is placed into from's
 // tree as it moves, nor counted for a tree no longer there; and from's memo is
-// SHUT once its tree is gone — its record and index taken, its generation
-// moved — so a batch begun on from places nothing (Place), none begins
-// (Memo), and a reader still holding from misses. Nothing is carried from a
-// memo whose log a round has marked gone (incarnation.historyGone), which
-// that round would drop, nor from one shut (dropMemo), nor into an
-// incarnation whose own round has dropped a memo (its generation moved): what
-// it holds is then not the history from's answers were cut from. A tree that
-// cannot be moved is logged and left in from, and goes with it: to starts
-// with none.
+// SHUT once its tree is gone — its record taken, its generation moved — so a
+// batch begun on from places nothing (Place), none begins (Memo), and a
+// reader still holding from misses. Nothing is carried from a memo whose log
+// a round has marked gone (incarnation.historyGone), which that round would
+// drop, nor from one shut (dropMemo), nor into an incarnation whose own round
+// has dropped a memo (its generation moved): what it holds is then not the
+// history from's answers were cut from. A tree that cannot be moved is logged
+// and left in from, and goes with it: to starts with none.
 //
 // NO SYNC: a memo is a cache of a cache. A crash that loses the rename leaves
 // the tree in from, the lower incarnation, which the boot moves aside; one
@@ -1167,13 +1325,13 @@ func (c *Cache) carryMemo(e *entry, from, to *incarnation) {
 		return
 	}
 	e.mu.Lock()
-	rec, idx := from.derived[DerivedMemo], from.memo
-	c.setDerived(from, DerivedMemo, derivedState{}, false)
-	from.memo = nil
+	rec, listed := from.derived[DerivedMemo], from.memoListed
+	c.setMemo(from, nil, false)
+	from.memoListed = true
 	from.memoGen++
 	from.memoShut = true
-	c.setDerived(to, DerivedMemo, rec, true)
-	to.memo = idx
+	c.setMemo(to, rec.Cohorts, true)
+	to.memoListed = listed
 	e.mu.Unlock()
 	c.log.Info("code_cache_memo_carried", "repo", e.id, "from", from.n, "to", to.n, "bytes", rec.Bytes)
 }

@@ -1428,9 +1428,27 @@ those it keeps, and is trimmed to that before any repository is evicted — an
 answer costs one git process to compute again, a repository a download of
 every pack it holds. No repository is ever evicted for what the memo holds past
 its sixteenth, and a page that would take the pages being cut past it is not
-kept at all. The trim takes first the memos of copies nobody has read
-since the node started, each whole, the least recently used repository first,
-then single answers, the least recently used first. Every read checks the
+kept at all.
+
+**Trimmed a sixteenth at a time, the least recently used first.** A copy's
+memo is kept in **cohorts**, a directory each under `crewlet/memo`: every
+answer is in the cohort that was the node's newest when it was last kept or
+read, the node opens a new one each time a sixteenth of the memo's share has
+been kept in the newest, and a read that finds an answer in an older cohort
+moves it into the newest. So the oldest cohort is the sixteenth of the memo
+used least recently, across every copy, and that is what a trim takes, whole —
+one rename of its directory in each copy that holds it, however many answers
+it holds — until the memo is back within its share: a trim gives back a
+sixteenth, so the next is due once as much has been kept again rather than
+after every read the memo missed. The node holds nothing of an answer in
+memory — only each copy's cohorts and what each holds, 16 bytes a cohort, of
+which a copy has some seventeen at the most — so a node's memory does not
+grow with its memo, however large its disk; and it keeps no more than 32
+cohorts, so a read the memo misses looks in at most that many places before
+it runs git. After a restart, what the previous process kept is older than
+anything kept or read since, so it goes first unless it is read again; the
+node lists each copy's cohorts once, behind the serving, and counts any a
+crash left unrecorded. Every read checks the
 answer against its own header — the key it answers and the SHA-256 of what it
 holds — so one a crash cut short or a disk damaged is computed again rather
 than served, and nothing behind the serving hashes the memo. A rebuild keeps
@@ -2170,6 +2188,14 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_provenance_seeded` | `INFO` | A rebuild linked the `runs` of the repository's index into the new copy, so the index outlives it. |
 | `code_cache_provenance_dropped` | `INFO` | The backfill found the repository gone from the rows at a position that had held it (`why`) — purged — and dropped its index; the repository's next sync takes its copy out of the cache. |
 | `code_cache_provenance_unpersisted` | `WARN` | The backfill changed a repository's index but could not write the copy's record of it (`error`): the index serves the change, and the runs it replaced stay on the disk, named by the record there, until the next write of the record — a sync's, the maintainer's or the backfill's own — catches up and takes them off the disk with it; a restart before it reads the index as that record left it. A disk refusing writes, or full. |
+| `code_cache_memo_trimmed` | `INFO` | The memo was past its sixteenth of the cache's budget, and the node dropped its oldest `cohort` — the answers used least recently — from every `copies` that held it, `bytes` in all. |
+| `code_cache_memo_untrimmed` | `WARN` | A copy's oldest cohort could not be moved out of its memo (`error`): the trim stops, and the next pass of the janitor takes it up. The disk refusing a rename within the cache's own directory. |
+| `code_cache_memo_corrupt` | `WARN` | An answer in a repository's memo (`cohort`, `entry`) did not read back whole — cut short, changed, or another answer's — so it was removed and the read computed it again. More than a rare one is the node's disk damaging what it holds. |
+| `code_cache_memo_unremoved` | `WARN` | An answer that did not read back whole could not be removed (`error`): every read of it is answered by git until it is. |
+| `code_cache_memo_unwritten` | `WARN` | A read could not keep the pages it cut (`error`), so it answered without keeping them, and the next read of them runs git again. Once a read. |
+| `code_cache_memo_unlisted` | `WARN` | The node could not list a copy's memo after its boot (`error`), or count a cohort of it no state recorded: it tries again at the janitor's next pass, and meanwhile counts only what the copy's state recorded. |
+| `code_cache_memo_foreign` | `WARN` | A copy's memo held something no cohort is — `found` names the first, as a build that kept the memo in one directory left it — so the node moved the whole memo aside unread; its answers are computed again as they are asked. |
+| `code_cache_memo_unstated` | `WARN` | The node could not write a copy's state after its memo moved (`error`): it tries again at its next tick, and a restart before then counts the memo as the last state written does. |
 | `code_cache_memo_carried` | `INFO` | A rebuild moved the repository's memo of answers into the new copy (`from` and `to` are the copies' numbers), whole and in one rename, with the `bytes` it holds. |
 | `code_cache_memo_uncarried` | `WARN` | A rebuild could not move the memo into the new copy (`error`): the new copy starts with none and computes its answers again; the old copy's goes with it. The disk refusing a rename within the cache's own directory. |
 | `code_cache_backfill_failed` | `WARN` | A step of the backfill failed for the `repo` (`error`): a page the data nodes could not serve, a run it could not write, or two runs it could not merge — kept as they are, a lookup reading one more run meanwhile. That repository's steps wait `retry_in`, five seconds doubling to five minutes with each of its failures in a row, while every other repository's steps go on; only failures of more than one repository in a row make the backfill as a whole wait, doubling the same way. One now and then is a data node restarting; one repository's, again and again, is rows of it the data nodes cannot serve this node (a rolling upgrade's record deferred everywhere) or a disk refusing its writes; every repository's, while `crewlet.code.cache.provenance.behind` stays up, is the data nodes unreachable from this node, or its disk full. |

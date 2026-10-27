@@ -54,10 +54,11 @@ const stateName = "crewlet-state.json"
 // maxStateBytes bounds the read of a state file. A state at the domain's
 // bounds is about 30 KB — 64 protection rules of a 255-byte pattern each
 // (code.MaxProtectionsPerRepo), a 1 KB description, a few hundred bytes of
-// scalars, the derived files' map at a few dozen bytes a declaration, and the
-// provenance index's record, MaxProvenanceRuns runs of about 150 bytes each —
-// so a mebibyte is thirty times anything this cache writes, and a file past it
-// is not one this cache wrote, whatever is in it.
+// scalars, the derived files' map at a few dozen bytes a declaration, the
+// provenance index's record, MaxProvenanceRuns runs of about 150 bytes each,
+// and the memo's, at most maxStateCohorts cohorts of about 30 — so a mebibyte
+// is thirty times anything this cache writes, and a file past it is not one
+// this cache wrote, whatever is in it.
 const maxStateBytes = 1 << 20
 
 // state is the state file.
@@ -92,6 +93,11 @@ type state struct {
 	// file's, because the duty cycle bounds a run of up to two steps — an
 	// index and a graph — over one repository.
 	Maintained maintainedState `json:"maintained"`
+
+	// memoVersion is the version of the memo's record this value holds
+	// (incarnation.memoVersion), never written: what the incarnation records
+	// as stated once the value is on the disk (writeState).
+	memoVersion uint64
 }
 
 // derivedState is one declared derived file as the cache last left it on
@@ -120,6 +126,13 @@ type derivedState struct {
 	// change stores a new value (copy on write), so a state encoded outside
 	// the entry's lock shares it safely.
 	Provenance *provenanceState `json:"provenance,omitempty"`
+	// Cohorts is the memo's record (memo.go) — each cohort of its tree and
+	// what the cohort holds, ordered by cohort, adding up to Bytes — which only
+	// that declaration's entry carries: the tree holds no file whose presence
+	// is a cohort's but its directory, and a boot counts and trims each from
+	// this. At most maxStateCohorts, so a state stays constant-size whatever
+	// the memo holds. IMMUTABLE once stored, as Provenance is.
+	Cohorts []memoCohort `json:"cohorts,omitempty"`
 }
 
 // covers is how many packs d covers: the packs the write that made it
@@ -183,7 +196,46 @@ func (st *state) check() error {
 			if err := d.Provenance.check(d.Bytes); err != nil {
 				return fmt.Errorf("it records derived file %q as %w", name, err)
 			}
+		case d.Cohorts != nil && name != DerivedMemo:
+			return fmt.Errorf("it records cohorts of a memo for derived file %q, which keeps none", name)
+		case name == DerivedMemo:
+			if err := checkCohorts(d); err != nil {
+				return fmt.Errorf("it records derived file %q as %w", name, err)
+			}
 		}
+	}
+	return nil
+}
+
+// maxStateCohorts bounds the cohorts a state records of a memo: twice what the
+// node keeps (maxMemoCohorts), since cohorts a crash left unrecorded are
+// counted when a listing finds them and the tick that drops the oldest past
+// the bound follows within a minute.
+const maxStateCohorts = 2 * maxMemoCohorts
+
+// checkCohorts refuses a memo's record no write of this build leaves: cohorts
+// out of order or repeated, of no number, holding a negative size, more of
+// them than any state this cache writes, or adding up to other than the
+// record's bytes — the record a build that kept the memo in one flat
+// directory wrote among them, which names bytes and no cohort.
+func checkCohorts(d derivedState) error {
+	if len(d.Cohorts) > maxStateCohorts {
+		return fmt.Errorf("a memo of %d cohorts, past the %d any state records", len(d.Cohorts), maxStateCohorts)
+	}
+	var total int64
+	for i, c := range d.Cohorts {
+		switch {
+		case c.N == 0:
+			return fmt.Errorf("a memo holding a cohort of no number")
+		case c.Bytes < 0:
+			return fmt.Errorf("a memo whose cohort %d holds %d bytes", c.N, c.Bytes)
+		case i > 0 && c.N <= d.Cohorts[i-1].N:
+			return fmt.Errorf("a memo whose cohorts are out of order at %d", c.N)
+		}
+		total += c.Bytes
+	}
+	if total != d.Bytes {
+		return fmt.Errorf("a memo of %d bytes whose cohorts hold %d", d.Bytes, total)
 	}
 	return nil
 }
@@ -299,7 +351,6 @@ func (c *Cache) persist(ctx context.Context, e *entry, inc *incarnation, round b
 
 // writeState writes st as inc's state, durable before it answers.
 func (c *Cache) writeState(ctx context.Context, e *entry, inc *incarnation, st state, round bool) error {
-	memo := st.Derived[DerivedMemo].Bytes
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return fmt.Errorf("cache: encoding %s's state: %w", e.id, err)
@@ -330,7 +381,7 @@ func (c *Cache) writeState(ctx context.Context, e *entry, inc *incarnation, st s
 	}
 	e.mu.Lock()
 	inc.state = &st
-	inc.memoStated = memo
+	inc.memoStated = st.memoVersion
 	e.mu.Unlock()
 	return nil
 }

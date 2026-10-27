@@ -1574,18 +1574,18 @@ func EvictToBudget(c *Cache) int {
 	return c.evictToBudget(context.Background())
 }
 
-// MemoState is what repoID's current incarnation records of its memo and what
-// this process's index of it holds.
+// MemoState is what repoID's current incarnation records of its memo.
 type MemoState struct {
 	// Bytes is its record's, and Recorded whether it records one at all.
 	Bytes    int64
 	Recorded bool
-	// Indexed is whether this process has touched the memo (read or written
-	// it), Listed whether its index holds every entry on disk, and Entries
-	// how many the index holds; Stated is the bytes its state last recorded.
-	Indexed, Listed bool
-	Entries         int
-	Stated          int64
+	// Cohorts is each cohort its record holds, oldest first, and Held what
+	// each holds.
+	Cohorts []uint64
+	Held    []int64
+	// Listed is whether every cohort on the disk is in the record, and Stated
+	// whether the state last written records the record as it stands.
+	Listed, Stated bool
 }
 
 // MemoOf is repoID's current incarnation's memo, as MemoState says, and false
@@ -1602,15 +1602,48 @@ func MemoOf(c *Cache, repoID string) (MemoState, bool) {
 		return MemoState{}, false
 	}
 	d, recorded := inc.derived[DerivedMemo]
-	s := MemoState{Bytes: d.Bytes, Recorded: recorded, Stated: inc.memoStated}
-	if idx := inc.memo; idx != nil {
-		s.Indexed, s.Listed, s.Entries = true, idx.listed, len(idx.entries)
+	s := MemoState{Bytes: d.Bytes, Recorded: recorded, Listed: inc.memoListed,
+		Stated: inc.memoStated == inc.memoVersion}
+	for _, ch := range d.Cohorts {
+		s.Cohorts, s.Held = append(s.Cohorts, ch.N), append(s.Held, ch.Bytes)
 	}
 	return s, true
 }
 
 // MemoTree is the memo's tree in the incarnation at dir.
 func MemoTree(dir string) string { return filepath.Join(dir, memoRel) }
+
+// MemoCohortDir is cohort n's directory in the memo of the incarnation at dir.
+func MemoCohortDir(dir string, n uint64) string { return cohortDir(dir, n) }
+
+// MemoEntryFile is the file entry k of the copy s holds is in — in whichever
+// of its cohorts holds it, newest first — and "" where none does.
+func MemoEntryFile(s Synced, k MemoKey) string {
+	s.entry.mu.Lock()
+	cs := s.inc.derived[DerivedMemo].Cohorts
+	s.entry.mu.Unlock()
+	for i := len(cs) - 1; i >= 0; i-- {
+		if path := memoPath(s.inc.dir, cs[i].N, k); exists(path) {
+			return path
+		}
+	}
+	return ""
+}
+
+// exists reports whether path names anything.
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+// MemoNewest is the node's newest cohort: where the next answer is placed.
+func MemoNewest(c *Cache) uint64 { return c.memoNewest.Load() }
+
+// MemoCohortsPerShare is how many cohorts a memo at its share holds.
+const MemoCohortsPerShare = memoCohortsPerShare
+
+// MaxMemoCohorts bounds the cohorts the node keeps.
+const MaxMemoCohorts = maxMemoCohorts
 
 // MemoEntryBytes is the volume an entry whose body and tail are n bytes takes,
 // as the memo counts it.

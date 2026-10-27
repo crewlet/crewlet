@@ -1988,3 +1988,99 @@ func BenchmarkPeel(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMemoTrim is the janitor's pass that drops the memo's oldest cohort
+// (trim), over copies copies of a warm node whose memos hold cohorts cohorts
+// each — a state each recording its memo, booted and listed: one walk of the
+// node's copies and one rename of the cohort's directory in each, and the
+// removal from trash/ of what was renamed there, which the same pass makes.
+// The trim reads no answer, so the figure follows the copies and not the
+// answers: each cohort holds one, an empty file, whose bytes the state says.
+// list is the pass a boot's first janitor pass is: every copy's tree listed
+// once, its cohorts' names read and none of its answers.
+func BenchmarkMemoTrim(b *testing.B) {
+	quiet(b)
+	gittest.RequireNode(b)
+	block := cache.MemoEntryBytes(0)
+	for _, arm := range []struct{ copies, cohorts int }{{1000, 17}, {10000, 17}} {
+		for _, step := range []string{"list", "trim"} {
+			b.Run(fmt.Sprintf("copies=%d/cohorts=%d/%s", arm.copies, arm.cohorts, step), func(b *testing.B) {
+				dir := filepath.Join(b.TempDir(), "c")
+				first, err := cache.Prepare(b.Context(), dir)
+				if err != nil {
+					b.Fatalf("Prepare: %v", err)
+				}
+				pool, err := gitproc.New(b.Context(), gitproc.Options{Home: first.Home, MaxProcesses: 2})
+				if err != nil {
+					b.Fatalf("gitproc.New: %v", err)
+				}
+				first.Release()
+				incs := memoFixture(b, dir, arm.copies, arm.cohorts, block)
+				memo := int64(arm.copies*arm.cohorts) * block
+				// One cohort past the share: the pass drops the oldest and no
+				// more.
+				budget := cache.MemoShare * (memo - int64(arm.copies)*block)
+				for b.Loop() {
+					b.StopTimer()
+					for _, inc := range incs {
+						write(b, filepath.Join(cache.MemoCohortDir(inc, 1), "entry"), "")
+					}
+					emptyTrash(b, dir)
+					layout, err := cache.Prepare(b.Context(), dir)
+					if err != nil {
+						b.Fatalf("Prepare: %v", err)
+					}
+					c, err := cache.Open(b.Context(), cache.Options{
+						Layout: layout, MaxBytes: 1 << 40, Git: pool, Objects: noObjects{t: b}, Fetch: noRows{t: b},
+						Fleet: soloFleet, Limits: code.DefaultLimits, HookCommand: []string{"/bin/true"}, Now: time.Now,
+					})
+					if err != nil {
+						b.Fatalf("Open: %v", err)
+					}
+					if step == "trim" {
+						cache.JanitorPass(c) // the boot's listing
+						cache.SetMaxBytes(c, budget)
+					}
+					b.StartTimer()
+					cache.JanitorPass(c)
+					b.StopTimer()
+					if step == "trim" && cache.MemoBytes(c) != memo-int64(arm.copies)*block {
+						b.Fatalf("the pass left the memo at %d bytes, want the oldest cohort of every copy gone: %d",
+							cache.MemoBytes(c), memo-int64(arm.copies)*block)
+					}
+					c.Stop(context.Background())
+					b.StartTimer()
+				}
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(arm.copies), "ns/copy")
+			})
+		}
+	}
+}
+
+// memoFixture writes copies repositories under dir/repos, each with a state of
+// this build recording a memo of cohorts cohorts of block bytes each, and each
+// cohort's directory holding one empty entry; it answers the incarnations'
+// directories.
+func memoFixture(b *testing.B, dir string, copies, cohorts int, block int64) []string {
+	b.Helper()
+	incs := make([]string, copies)
+	for r := range copies {
+		id := fmt.Sprintf("%08x-0000-4000-8000-000000000001", r)
+		inc := filepath.Join(dir, "repos", id+".1.git")
+		incs[r] = inc
+		if err := os.MkdirAll(filepath.Join(inc, "objects", "pack"), 0o700); err != nil {
+			b.Fatal(err)
+		}
+		write(b, filepath.Join(inc, "packed-refs"), "# pack-refs with: peeled sorted \n")
+		doc := aState(id)
+		doc.Packs = 0
+		memo := derivedDoc{Bytes: int64(cohorts) * block, Step: string(cache.StepMemo)}
+		for n := 1; n <= cohorts; n++ {
+			memo.Cohorts = append(memo.Cohorts, cohortDoc{N: uint64(n), Bytes: block})
+			write(b, filepath.Join(cache.MemoCohortDir(inc, uint64(n)), "entry"), "")
+		}
+		doc.Derived[string(cache.DerivedMemo)] = memo
+		writeState(b, inc, doc)
+	}
+	return incs
+}

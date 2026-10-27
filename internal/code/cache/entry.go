@@ -374,23 +374,26 @@ type incarnation struct {
 	provGen     uint64
 	provNext    uint64
 	retiredRuns []string
-	// THE MEMO'S IN-MEMORY HALF (memo.go). memo is its index — every entry
-	// this process knows, each one's bytes and last use — made at the first
-	// read or write of the memo in this process and nil before it, which is
-	// what makes a copy's memo one the janitor trims WHOLE; memoMu is the
-	// memo's own lock, under which an answer is placed into its tree and the
-	// tree, or an entry, is taken out — never held across anything but those
-	// renames, and never with entry.mu, which it is taken before; memoStated
-	// is the memo's bytes as the state last written records them, which the
-	// janitor writes again once they move (Cache.stateMemos). memoGen counts
-	// the memo's drops in this process, so a batch begun before one places
-	// nothing after it, and memoShut is a memo dropped whose round has not
-	// yet made the change it answered visible (dropMemo, reopenMemo).
-	memo       *memoIndex
-	memoMu     sync.Mutex
-	memoStated int64
-	memoGen    uint64
-	memoShut   bool
+	// THE MEMO'S IN-MEMORY HALF (memo.go), whose record — its cohorts and
+	// their bytes — is derived[DerivedMemo]; nothing of it is an entry's.
+	// memoMu is the memo's own lock, under which an answer is placed into its
+	// tree or moved between its cohorts and a cohort, the tree or an entry is
+	// taken out — never held across anything but those renames and the
+	// listing, and never with entry.mu, which it is taken before. memoListed:
+	// every cohort directory on the disk is in the record — this process made
+	// the tree, or the janitor listed it (listMemos); a boot's copy is not,
+	// until its first listing. memoVersion moves with every change to the
+	// record (setMemo) and memoStated is the version the state last written
+	// records, which the janitor writes again at its tick once they differ
+	// (Cache.stateMemos). memoGen counts the memo's drops in this process, so
+	// a batch begun before one places nothing after it, and memoShut is a memo
+	// dropped whose round has not yet made the change it answered visible
+	// (dropMemo, reopenMemo), or one carried away (carryMemo).
+	memoMu                  sync.Mutex
+	memoListed              bool
+	memoVersion, memoStated uint64
+	memoGen                 uint64
+	memoShut                bool
 	// written is when this process last changed each declaration's files —
 	// a write that moved a file's identity, the round's own index, or a drop
 	// — a time.Now() reading compared on the monotonic clock with a report's
@@ -519,6 +522,7 @@ func (inc *incarnation) stateValue(id string) state {
 		DiskBytes:     inc.diskBytes,
 		Derived:       maps.Clone(inc.derived),
 		Maintained:    inc.maintained,
+		memoVersion:   inc.memoVersion,
 	}
 }
 
@@ -862,7 +866,8 @@ func (c *Cache) newIncarnation(e *entry, current bool) (*incarnation, error) {
 		}
 		return nil, err
 	}
-	inc := &incarnation{n: n, dir: dir, lastUsed: c.now()}
+	// A new directory holds no memo tree, so nothing of one is unknown to it.
+	inc := &incarnation{n: n, dir: dir, lastUsed: c.now(), memoListed: true}
 	if current {
 		e.mu.Lock()
 		if e.current == nil {

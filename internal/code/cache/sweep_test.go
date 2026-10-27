@@ -361,7 +361,7 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	packDir := filepath.Join(dir, "objects", "pack")
 	files := []string{filepath.Join(packDir, "multi-pack-index"), bitmapOf(t, packDir),
 		filepath.Join(dir, "objects", "info", "commit-graph"),
-		filepath.Join(cache.MemoTree(dir), answer[0].String())}
+		cache.MemoEntryFile(first, answer[0])}
 	held := func(event string, want bool) {
 		t.Helper()
 		for _, path := range files {

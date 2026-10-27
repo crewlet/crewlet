@@ -353,7 +353,15 @@ repositories it exists for. A page from the memo is answered with no git run
 process, 4.6 to 262 ms warm and up to the read's ten seconds; and the read that
 misses cuts every page after the one asked too, so a seat paging through a
 large listing, a long file or a wide diff pays for one git run, not one a
-page.
+page. What the memo holds of a git node's MEMORY is nothing an answer: each
+copy's cohorts of answers and what each holds, 16 bytes a cohort and some
+seventeen at the most a copy, so 10 000 copies hold under 3 MB however many
+answers their memos keep — where an index of every answer would have held
+some 680 MB at a 400 GB budget's worst case, answers of one disk block each,
+and 3 GB at 1.75 TB. A trim drops the sixteenth of the memo used least
+recently in one rename a copy that holds it, whatever it holds — about 0.7 s of
+the janitor's at 10 000 copies, measured — and is due again only once a
+sixteenth more has been kept.
 
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A person's push of one commit

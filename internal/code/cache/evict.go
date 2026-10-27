@@ -88,9 +88,11 @@ func (c *Cache) janitor(ctx context.Context) {
 }
 
 // janitorPass is one pass, in order: trash/ emptied; scratch/ measured; every
-// memo this process has touched and not yet counted listed (memo.go); the memo
-// trimmed to its share of the budget (MemoShare), the pages runs have staged
-// for it counted with those it keeps, BEFORE any repository goes — an answer
+// copy's memo tree this process has not yet listed listed, its cohorts' names
+// alone (memo.go); the memo trimmed to its share of the budget (MemoShare) a
+// cohort at a time, the oldest first, the pages runs have staged for it
+// counted with those it keeps — and on a ticked pass held to maxMemoCohorts
+// too — BEFORE any repository goes — an answer
 // evicted costs one git process to compute again, a repository a cold sync of
 // every pack it holds; the cache evicted to its budget for what the
 // repositories hold past their room (overBudget), least recently used first —
@@ -111,7 +113,7 @@ func (c *Cache) janitorPass(ctx context.Context, ticked bool) {
 	c.emptyTrash(ctx)
 	c.measureScratch(ctx)
 	c.listMemos(ctx)
-	trimmed := c.trimMemo(ctx)
+	trimmed := c.trimMemo(ctx, ticked)
 	if c.evictToBudget(ctx) > 0 || trimmed {
 		c.emptyTrash(ctx)
 	}

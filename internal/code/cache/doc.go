@@ -368,21 +368,32 @@
 // objects it names, and a read naming whole ids is answered from it before
 // any git runs. Every read holds an entry to its own header — its key and the
 // SHA-256 of its body — so the check and the scrub, which hash files behind
-// the serving, pass over it (Check.hashed). Its bytes are its writer's
-// running total, per copy and node-wide (Cache.memoBytes), never a measure's:
-// a stat of its directory is the directory's few KiB. The janitor lists what a
-// previous process left in a copy's memo once this process first touches it,
-// holds the memo to a MemoShare-th of the budget — the pages runs have staged
-// for it counted with those it keeps — before it evicts any repository, and
-// never evicts one for what the memo holds past that (overBudget): the memos
-// of copies untouched since the boot whole, then single entries, the least
-// recently used first; and at its tick, once a minute at most, it writes a
-// copy's state again once its memo's bytes moved. A history gone drops it
-// whole and shuts
-// it until the round that dropped it has swept the replaced history's packs,
-// and no batch begun before the drop places anything after it. A rebuild
-// MOVES it whole into the incarnation it promotes, one rename however many
-// entries it holds (carryMemo, SeedMove), never a link an entry.
+// the serving, pass over it (Check.hashed).
+//
+// The tree is COHORTS, crewlet/memo/<n>/<key>: an entry lives in the cohort
+// that was the node's newest when it was last placed or read, a new one opened
+// past every sixteenth of the share placed and a read moving what it finds in
+// an older one into the newest — so the oldest cohort is the sixteenth of the
+// memo used least recently, and the order of use is the disk's to keep. What
+// the cache holds in memory is a copy's cohorts and their bytes (its record),
+// 16 bytes a cohort, and NOTHING AN ENTRY, so the memo's memory follows the
+// copies and not the answers. Its bytes are its writer's running total, per
+// cohort, per copy and node-wide (Cache.memoBytes), never a measure's: a stat
+// of its directory is the directory's few KiB. The janitor holds the memo to
+// a MemoShare-th of the budget — the pages runs have staged for it counted
+// with those it keeps — before it evicts any repository, and never evicts one
+// for what the memo holds past that (overBudget), by DROPPING THE OLDEST
+// COHORT whole: a rename of its directory in each copy holding it, a
+// sixteenth of the share at once, so a trim falls due once that much has been
+// placed again, not after every miss. It lists each copy's tree once a
+// process behind the serving, its cohorts' names alone, counting a cohort a
+// crash left unrecorded; and at its tick, once a minute at most, it writes a
+// copy's state again once its memo's record moved. A history gone drops it
+// whole and shuts it until the round that dropped it has swept the replaced
+// history's packs, and no batch begun before the drop places anything after
+// it. A rebuild MOVES it whole into the incarnation it promotes, one rename
+// however many entries it holds (carryMemo, SeedMove), never a link an
+// entry.
 //
 // # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //
@@ -1153,4 +1164,19 @@
 // from copy to copy by up to 5% under single and 11% under multi; single
 // sent fewer bytes for less CPU on every copy: the figures ServeConfig's
 // single is set from.
+//
+// THE MEMO'S TRIM AND ITS LISTING (BenchmarkMemoTrim, three passes an arm,
+// -count 1, on two E-cores of a Core Ultra 7 265U over ext4, no race): over
+// warm copies whose memos hold seventeen cohorts each, the janitor's pass that
+// drops the oldest cohort of every copy — the walk of the node's copies, a
+// rename a copy, and the removal of what it renamed from trash/ — takes 55 ms
+// at 1 000 copies and 0.66 s at 10 000, 55 and 66 µs a copy, whatever the
+// cohorts hold: a trim reads no answer, and it is due once a sixteenth of the
+// share has been placed. The boot's listing of every copy's tree, its
+// cohorts' names alone, takes 15 ms and 0.17 s, 15 and 17 µs a copy. Before
+// cohorts, a trim copied and sorted the last use of every entry the node
+// knew at every pass the memo was past its share — 178 ms for that alone over
+// 1 048 576 entries, as the review that replaced it measured on the same
+// cores, some 1 s at the 6.1 million of a 400 GB budget's worst case — and
+// fell due again at the next miss.
 package cache
