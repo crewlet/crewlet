@@ -60,18 +60,34 @@ import (
 //     them; cache=memo reads a page the memo holds, every read a hit;
 //     cache=cold reads a git node emptied before every iteration, whose first
 //     read waits statelog.ReadBudget on the download and answers what it can.
+//   - fresh is the FLOOR a read is sent with, over the root's listing from the
+//     memo on the copy that took every push — so the read itself costs a memo
+//     hit, and what one floor costs over another is the sync it makes the copy
+//     run first. Each read follows its own linearizable resolve of main,
+//     untimed, as a code tool's call follows its ref's: none is a read by an
+//     id the asking node never wrote (the copy as it stands); moved is a read
+//     by a ref as a code tool floors it, where the ref last moved
+//     (code.RefAnswer.Moved); read is the floor the tools sent before, where
+//     the resolve READ the ref, past its own barrier — a delta round of the
+//     copy on every read, which installs nothing.
 //
-// Each warm, miss and memo arm reports the p50, p95 and p99 of one read, and
-// the memo arm how many times faster than the warm and the miss arms' p50 its
-// own p50 is (x-warm, x-miss); the cold arm the time to its answer and the
-// share of answers unready, and fails a read answered past statelog.ReadBudget
-// and its margin. The figures decide code.GitShareWait — max(2 s, the slowest
-// warm kind's p95 rounded up to a second), under gitproc.ReadDeadline/4 —
-// confirm the read deadline's terms (a warm read well inside
-// gitproc.ReadDeadline, a cold one answered inside statelog.ReadBudget and its
-// margin from every store), and confirm the memo's premise: a hit at least ten
-// times faster than the read it saves, or the memo costs a sixteenth of the
-// budget for nothing a warm copy does not already give.
+// Each warm, miss, memo and fresh arm reports the p50, p95 and p99 of one
+// read, and the memo arm how many times faster than the warm and the miss
+// arms' p50 its own p50 is (x-warm, x-miss); the cold arm the time to its
+// answer and the share of answers unready, and fails a read answered past
+// statelog.ReadBudget and its margin. The figures decide code.GitShareWait —
+// max(2 s, the slowest warm kind's p95 rounded up to a second), under
+// gitproc.ReadDeadline/4 — confirm the read deadline's terms (a warm read well
+// inside gitproc.ReadDeadline, a cold one answered inside statelog.ReadBudget
+// and its margin from every store), and confirm the memo's premise: a hit at
+// least ten times faster than the read it saves, or the memo costs a sixteenth
+// of the budget for nothing a warm copy does not already give. The fresh arms
+// decide no constant: moved must read as none does — what flooring a read by a
+// ref where the ref moved buys — and read prices the sync round every read by
+// a ref paid before, on this in-process fleet the least it costs anywhere, its
+// data node one call away. Measured at history=32MB over mem, twenty reads an
+// arm on two cores of an Ultra 7 265U (-benchtime 20x): none 0.19 ms and moved
+// 0.19 ms at p50, read 3.8 ms — the round twenty times the read it delayed.
 func BenchmarkCodeRead(b *testing.B) {
 	codetest.Quiet(b)
 	for _, size := range readSizes {
@@ -88,6 +104,9 @@ func BenchmarkCodeRead(b *testing.B) {
 							b.Run("kind="+k.name+"/cache=warm", func(b *testing.B) { r.warm(b, k) })
 							b.Run("kind="+k.name+"/cache=miss", func(b *testing.B) { r.miss(b, k) })
 							b.Run("kind="+k.name+"/cache=memo", func(b *testing.B) { r.memo(b, k) })
+						}
+						for _, f := range readFloors {
+							b.Run("kind=tree-root/cache=memo/fresh="+f.name, func(b *testing.B) { r.floored(b, f) })
 						}
 					}
 					b.Run("kind=tree-root/cache=cold", func(b *testing.B) { r.cold(b) })
@@ -437,6 +456,58 @@ func (r *readRig) memo(b *testing.B, k kind) {
 			b.ReportMetric(float64(was)/float64(hit), "x-"+arm)
 		}
 	}
+}
+
+// readFloor is one fresh= arm: the floor a read is sent with, given the
+// answer of the linearizable resolve of main made just before it.
+type readFloor struct {
+	name string
+	of   func(code.RefAnswer) statelog.Freshness
+}
+
+// readFloors are the fresh= arms (BenchmarkCodeRead): no floor, the ref's
+// move, and where the resolve read it.
+var readFloors = []readFloor{
+	{"none", func(code.RefAnswer) statelog.Freshness { return statelog.Freshness{} }},
+	{"moved", func(a code.RefAnswer) statelog.Freshness {
+		return statelog.FloorAt(statelog.ReadSession, a.Moved)
+	}},
+	{"read", func(a code.RefAnswer) statelog.Freshness {
+		return statelog.FloorAt(statelog.ReadSession, a.Position)
+	}},
+}
+
+// floored times the root's listing over the first node, its page in the memo,
+// each read sent with f's floor off a linearizable resolve of main made,
+// untimed, just before it — a barrier of its own each, as each call of a code
+// tool resolves its ref anew, so a floor at the resolve's checkpoint is past
+// the copy on every read.
+func (r *readRig) floored(b *testing.B, f readFloor) {
+	q := treeQ(r.repo, code.TreeQuery{Rev: r.src.edit})
+	if _, err := r.s.Read(b.Context(), q); err != nil {
+		b.Fatal(err)
+	}
+	took := make([]time.Duration, 0, b.N)
+	for b.Loop() {
+		b.StopTimer()
+		ref, err := r.f.Data().Served().ResolveRef(b.Context(), code.RefQuery{Repo: codetest.RepoName,
+			Ref: "refs/heads/main", Fresh: codetest.Linearizable, Asker: person})
+		if err != nil {
+			b.Fatal(err)
+		}
+		q.Fresh = f.of(ref)
+		b.StartTimer()
+		start := time.Now()
+		a, err := r.s.Read(b.Context(), q)
+		took = append(took, time.Since(start))
+		switch {
+		case err != nil:
+			b.Fatal(err)
+		case !a.Memo:
+			b.Fatal("a read of a page the memo holds was cut again")
+		}
+	}
+	report(b, took)
 }
 
 // server is a query server over the first node's cache, its memo kept.
