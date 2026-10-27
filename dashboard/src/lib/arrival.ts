@@ -58,7 +58,8 @@ export function useArrivedSection(): string {
  * brought into view and focused, and again on every [arriveAgain].
  *
  * `find` picks the element to reveal inside the section, where that is not the
- * section itself: a table's current row.
+ * section itself: a table's current row. Where it finds none, nothing is
+ * revealed: the section the address names is not drawn.
  */
 export function useSectionArrival(
   section: string,
@@ -78,7 +79,10 @@ export function useSectionArrival(
   finder.current = find;
   useEffect(() => {
     if (!arrived || !el) return;
-    const target = finder.current?.(el) ?? el;
+    // A SECTION INSIDE THIS ONE THAT IS NOT DRAWN (a seat the table no
+    // longer lists) is not this one: nothing is revealed or focused.
+    const target = finder.current ? finder.current(el) : el;
+    if (!target) return;
     reveal(target);
     // THE READER CAME FOR THIS SECTION, so a keyboard or a screen reader
     // lands on it; the scroll is [reveal]'s, which leaves a section already
