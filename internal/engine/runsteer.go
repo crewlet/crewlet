@@ -385,22 +385,24 @@ func readingOf(read sandbox.NoteRead) steer.Reading {
 // carried is every note run's record holds read, opened, in the order read —
 // what a segment resuming the turn carries ([runner.Resume.Steered]). A note
 // that does not open is not carried: nobody can say it is a person's.
+//
+// THE WAITING NOTES GO BEFORE THE SORT, never into it: a comparison that
+// answered "equal" for any pair with a waiting note in it would not be an
+// order at all — a waiting note between two read ones would tie with both
+// while they did not tie with each other — and the sort could leave the read
+// notes out of the order they were read in. A record holds such a note
+// whenever one waits while a later one is read: a seal this node cannot open
+// yet, or a later note a CLI took first.
 func (s *runSteers) carried(run sandbox.PendingRun) []steer.Read {
 	if s == nil {
 		return nil
 	}
-	notes := slices.Clone(run.Steer.Notes)
+	notes := slices.DeleteFunc(slices.Clone(run.Steer.Notes), sandbox.RunNote.Waiting)
 	slices.SortStableFunc(notes, func(a, b sandbox.RunNote) int {
-		if a.Read == nil || b.Read == nil {
-			return 0
-		}
 		return cmp.Or(a.Read.At.Compare(b.Read.At), cmp.Compare(a.Seq, b.Seq))
 	})
 	var out []steer.Read
 	for _, n := range notes {
-		if n.Read == nil {
-			continue
-		}
 		note, ok := s.open(run.TurnID, n)
 		if !ok {
 			continue

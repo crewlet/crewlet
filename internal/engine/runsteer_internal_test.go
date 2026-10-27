@@ -375,3 +375,45 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 		t.Errorf("the notes still waiting are %v, want the newest, which did not fit", waiting)
 	}
 }
+
+// A RESUMED TURN CARRIES ITS NOTES IN THE ORDER THEY WERE READ, whatever waits
+// between them. A record holds a waiting note between two read ones whenever a
+// note waits while a later one is read — a seal this node cannot open yet, or a
+// later note a CLI took first — and the carry is what every later phase and
+// brief renders in order: two notes from one person that disagree must reach
+// the reviewer with the later read last, since a note is the later word.
+//
+// Mutation: sort with a comparator that ties every pair with a waiting note in
+// it, as carried did, and the two read notes come back in the order filed.
+func TestAResumedTurnCarriesItsNotesInTheOrderRead(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	sealed := func(seq int, id string, read *sandbox.NoteRead) sandbox.RunNote {
+		t.Helper()
+		n, err := runs.seal("run-1", steer.Note{ID: id, Text: "note " + id, By: "founder",
+			ByKind: iam.ActorHuman})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.Seq, n.Read = seq, read
+		return n
+	}
+	readAt := func(minute int) *sandbox.NoteRead {
+		return &sandbox.NoteRead{At: at.Add(time.Duration(minute) * time.Minute), Phase: "execute",
+			Iteration: 1, Round: 1, Boundary: string(types.SteerBoundaryStep), Launch: "job-1"}
+	}
+	run := sandbox.PendingRun{TurnID: "run-1", Steer: sandbox.RunSteer{Seq: 3, Notes: []sandbox.RunNote{
+		sealed(1, "use-postgres", readAt(5)),
+		sealed(2, "waits", nil),
+		sealed(3, "use-sqlite", readAt(2)),
+	}}}
+	var got []string
+	for _, r := range runs.carried(run) {
+		got = append(got, r.Note.ID)
+	}
+	if want := []string{"use-sqlite", "use-postgres"}; !slices.Equal(got, want) {
+		t.Errorf("the turn carries %v, want the read notes in the order read, %v", got, want)
+	}
+}
