@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/caveat"
 )
 
 // A DECISION IS A STRUCTURED ASK — ADR-0023.
@@ -505,12 +507,12 @@ func checkChoice(task, ask string, decision *Decision, choice string) error {
 		return nil
 	}
 	if decision == nil {
-		return invalid("the ask %s on task %s carries no decision, "+
+		return invalidSaying(caveat.QuestionHasNoOptions(), "the ask %s on task %s carries no decision, "+
 			"so there is nothing for the choice %q to name — answer it in the "+
 			"body", ask, task, choice)
 	}
 	if _, ok := decision.Option(choice); !ok {
-		return invalid("the choice %q is not an option of the "+
+		return invalidSaying(caveat.NotAnOption(), "the choice %q is not an option of the "+
 			"decision in %s on task %s — it offers %s", choice, ask, task,
 			strings.Join(decision.OptionIDs(), ", "))
 	}

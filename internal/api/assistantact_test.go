@@ -13,8 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -201,4 +203,45 @@ func (a *assistApp) tryDerive(req auth.AssistRequest) error {
 	r.AddCookie(a.cookie)
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	return err
+}
+
+// A REFUSED ASSISTED WRITE TELLS THE MODEL THE TOOL'S SENTENCE, AND NEVER THE
+// ANSWER (ADR-0060). The act route answers a person: a refusal's detail is a
+// person's phrasing, or none. The assistant's model is the one reader that can
+// act on the tool's own sentence, so the route tells it in process
+// (internal/modelnote) and the dispatcher hands it back beside the answer as
+// [exec.Response.ModelDetail]; the same request from a browser carries the
+// person's words alone. Mutation: drop the route's Tell and the model is told
+// only the floor; write the sentence into the answer and the browser reads it.
+func TestARefusedAssistedWriteTellsTheModelAndNeverTheAnswer(t *testing.T) {
+	t.Parallel()
+	fx, _ := actingAssistApp(t)
+	call := createCall()
+	call.Body = []byte(`{"args":{"title":" ","project":"ENG"}}`)
+	g := fx.derive(t, approvedFor(call, authz.ActionWorkCreate))
+	resp, err := fx.disp.Do(t.Context(), g, call)
+	if err != nil || resp.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("a create with no title answered %d %s, %v", resp.Status, resp.Body, err)
+	}
+	if !strings.Contains(resp.ModelDetail, "needs a `title`") {
+		t.Errorf("the model was told %q, want the tool's own sentence", resp.ModelDetail)
+	}
+	if strings.Contains(string(resp.Body), "`title`") ||
+		!strings.Contains(string(resp.Body), caveat.TitleMissing().Person()) {
+		t.Errorf("the answer is %s, want the person's words and never the model's", resp.Body)
+	}
+
+	// THE SAME REFUSAL OVER THE WIRE, as the dashboard sends it: nothing of
+	// the model's sentence, and nothing else to hear it.
+	browser := httptest.NewRequest(http.MethodPost, call.Path, strings.NewReader(string(call.Body)))
+	browser.AddCookie(fx.cookie)
+	browser.Header.Set("Content-Type", "application/json")
+	browser.Header.Set("Origin", fx.b.API.ExternalURL)
+	browser.Header.Set(opkey.Header, uuid.Must(uuid.NewV7()).String())
+	rec := httptest.NewRecorder()
+	fx.app.ServeHTTP(rec, browser)
+	if rec.Code != http.StatusUnprocessableEntity || strings.Contains(rec.Body.String(), "`title`") ||
+		strings.Contains(rec.Body.String(), worklet.CreateWorkItemTool+" needs") {
+		t.Errorf("the browser's refusal answered %d %s", rec.Code, rec.Body)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -144,8 +145,22 @@ func failed(msg string) tools.Result { return refused(tools.RefusalInvalid, msg)
 // statement about THIS call, which is why it is an argument: an item that does
 // not exist is not-found when the call is about it and an invalid argument
 // when the call merely named it.
+//
+// AND THE PERSON'S WORDS ARE THE CAUSE'S (ADR-0060): a writer that refused
+// with a person's phrasing beside its error ([caveat.Saying]) has it lifted
+// onto the result here, the one place a refusal with a cause is made, so no
+// tool answering that error has to remember to carry it.
 func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
-	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(class, cause)}
+	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(class, cause),
+		PersonRefusal: caveat.RefusalOf(cause)}
+}
+
+// toPerson is a refusal with a person's phrasing of it ([caveat.Refusal]),
+// for a refusal the tool itself decided: the model's sentence is untouched,
+// and the act route answers the phrasing in its place (ADR-0060).
+func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
+	r.PersonRefusal = words
+	return r
 }
 
 // Condition says whether a failure no sentinel of the caller's claimed is a

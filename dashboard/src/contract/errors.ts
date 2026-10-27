@@ -45,12 +45,13 @@ export type QueryErrorCode =
  * read — the browser's session cookie is the whole of it — so a person is
  * told to sign in again, never to set anything.
  *
- * THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
- * which means "show the tool's own `detail`". Those are the two classes whose
- * sentence names the argument that was wrong (`invalid`) or the rule that
- * forbade it (`forbidden`); every other class's sentence is written for a
- * model reading a tool result, and a person reading it would be told about
- * `if_match` and record ids.
+ * THE SENTENCE IS SECOND PERSON, and it is ours, except where it is `null`,
+ * which means "show the engine's own words". Those are the two classes whose
+ * words say what to change (`invalid`) or whom to ask (`forbidden`). The
+ * engine answers them as a `detail` worded for a person, or, where nobody has
+ * worded that refusal for one yet, with no detail and its code's own
+ * `message` (ADR-0060): never the tool's sentence, which is written for a
+ * model and names arguments and record ids.
  */
 export const ACT_ERRORS = {
   // Who is asking — the request guard's, before any tool is named.

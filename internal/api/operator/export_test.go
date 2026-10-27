@@ -3,9 +3,6 @@ package operator
 // ReceiptOf is the act transport's reading of a tool's answer.
 var ReceiptOf = receiptOf
 
-// AnswerOf is the act transport's answer for a tool's successful result.
-var AnswerOf = answerOf
-
 // AuditOutcomeOf is the audit's reading of what became of one call.
 var AuditOutcomeOf = auditOutcome
 

@@ -2,6 +2,8 @@ package workapi_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,7 +15,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -22,26 +23,22 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// ONE REFUSAL READS THE SAME ON ALL THREE SURFACES.
+// ONE REFUSAL IS ONE DECISION ON ALL THREE SURFACES, IN EACH READER'S TERMS.
 //
-// The same verb is served three ways — a seat's own turn, the operator's
-// assistant over MCP, and this HTTP surface — and "you may not" must be one
-// sentence on all of them. A person told one thing by the dashboard and
-// another by their assistant about the same verb asks which is wrong, and the
-// answer is neither: the only way to keep that question from arising is one
-// sentence and nowhere else to write one.
+// The same verb is served three ways: a seat's own turn, the operator's
+// assistant over MCP, and this HTTP surface. "You may not" must be one
+// decision on all of them. The two that answer a MODEL answer the same
+// sentence, byte for byte. This surface answers a PERSON (ADR-0060): it
+// carries the same decision as values (the rule's reason and the grants that
+// would have admitted the caller) and never the models' sentence, which names
+// the tool and is written for a model to act on.
 //
 // So the three are asked the SAME question by a caller holding the same
-// access (create an item, holding Doclet and not Worklet), and the three
-// texts compared byte for byte. The HTTP surface is the one that refuses at
-// its ROUTE, before any tool runs, which is exactly why it is the one that
-// could drift. Its `detail` is the same text written as a sentence, which the
-// API boundary ([httpjson.Sentence]) does to every detail it answers.
-//
-// The control is the router's own plain wording, which is what this surface
-// would say without the refusal seam: it is a different sentence, so the
-// comparison above is one that can fail.
-func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
+// access (create an item, holding Doclet and not Worklet). The HTTP surface
+// is the one that refuses at its ROUTE, before any tool runs, which is exactly
+// why it is the one that could drift: its reason and grants are held to the
+// decision the tool's own gate made.
+func TestOneRefusalIsOneDecisionOnAllThreeSurfaces(t *testing.T) {
 	t.Parallel()
 	grants := []iam.Grant{iam.GrantDoclet}
 	r := newRig(t, chart{})
@@ -110,25 +107,26 @@ func TestOneRefusalWordingOnAllThreeSurfaces(t *testing.T) {
 		t.Fatalf("the route answered %d", fromHTTP.status)
 	}
 
-	if fromSeat.Output != fromMCP.String() ||
-		httpjson.Sentence(fromMCP.String()) != fromHTTP.detail() {
-		t.Errorf("one refusal reads three ways:\nseat: %s\nmcp:  %s\nhttp: %s",
-			fromSeat.Output, fromMCP.String(), fromHTTP.detail())
+	if fromSeat.Output != fromMCP.String() {
+		t.Errorf("one refusal reads two ways to a model:\nseat: %s\nmcp:  %s",
+			fromSeat.Output, fromMCP.String())
 	}
+	var refused *builtin.DecisionRefused
+	if !errors.As(fromSeat.Cause, &refused) {
+		t.Fatalf("the seat's refusal carries no decision: %v", fromSeat.Cause)
+	}
+	want := authz.RefusalDetail(refused.Decision.Reason, refused.Decision.Grants)
+	routeGrants, _ := fromHTTP.body[authz.DetailGrants].([]any)
+	gateGrants, _ := want[authz.DetailGrants].([]string)
+	if fromHTTP.body[authz.DetailReason] != want[authz.DetailReason] ||
+		fmt.Sprint(routeGrants) != fmt.Sprint(gateGrants) {
 
-	// THE CONTROL: the router's own wording for the same refusal.
-	plain := http.NewServeMux()
-	if err := authz.NewRouter(plain, func(req *http.Request, p authz.Policy) authz.Decision {
-		return authz.Decide(req.Context(), caller, p.Action,
-			authz.Object{Kind: authz.KindTask}, chart{}, time.Now())
-	}).Handle("POST /worklet/items", authz.Policy{Action: authz.ActionWorkCreate},
-		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})); err != nil {
-		t.Fatalf("mount the control: %v", err)
+		t.Errorf("the route decided %v, and the tool's gate %v", fromHTTP.body, want)
 	}
-	rec := httptest.NewRecorder()
-	plain.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worklet/items", nil))
-	if httpjson.Sentence(rec.Body.String()) == fromHTTP.detail() {
-		t.Fatal("the control read the same as the tools, so this test cannot " +
-			"tell a surface that wrote its own sentence from one that did not")
+	if detail := fromHTTP.detail(); detail != "" {
+		t.Errorf("the route answered a person a sentence: %q", detail)
+	}
+	if strings.Contains(fmt.Sprint(fromHTTP.body), builtin.CreateWorkItemTool+" didn't run") {
+		t.Errorf("the route answered the models' sentence: %v", fromHTTP.body)
 	}
 }

@@ -3110,12 +3110,13 @@ var session = new SessionFloors();
 * read — the browser's session cookie is the whole of it — so a person is
 * told to sign in again, never to set anything.
 *
-* THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
-* which means "show the tool's own `detail`". Those are the two classes whose
-* sentence names the argument that was wrong (`invalid`) or the rule that
-* forbade it (`forbidden`); every other class's sentence is written for a
-* model reading a tool result, and a person reading it would be told about
-* `if_match` and record ids.
+* THE SENTENCE IS SECOND PERSON, and it is ours, except where it is `null`,
+* which means "show the engine's own words". Those are the two classes whose
+* words say what to change (`invalid`) or whom to ask (`forbidden`). The
+* engine answers them as a `detail` worded for a person, or, where nobody has
+* worded that refusal for one yet, with no detail and its code's own
+* `message` (ADR-0060): never the tool's sentence, which is written for a
+* model and names arguments and record ids.
 */
 var ACT_ERRORS = {
 	invalid_token: "Signed out. Sign in again.",
@@ -3152,6 +3153,21 @@ var ACT_ERRORS = {
 	internal_error: "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose."
 };
 //#endregion
+//#region src/contract/caveats.ts
+/**
+* What a caveat on a landed write asks of the person who reads it, as the
+* engine names it (`internal/caveat`, ADR-0060).
+*
+* `none` is something to know: shown, and gone by itself. `required` is
+* something somebody has to act on: shown until it is dismissed. The engine
+* states the action per caveat code, so a screen never guesses it from the
+* sentence. HELD AGAINST `caveat.Actions` by
+* `internal/caveat.TestTheDashboardReadsWhatACaveatAsks`: an action copied
+* here and renamed there would render a caveat that needs a person as one that
+* goes by itself.
+*/
+var CAVEAT_ACTIONS = ["none", "required"];
+//#endregion
 //#region src/protocol/writeOutcome.ts
 /**
 * What a write's answer means: the one interpreter of "did it land", shared by
@@ -3173,13 +3189,51 @@ var ACT_ERRORS = {
 *    retry is the person's decision, made under the same operation;
 *  - `refused`: the engine said no, with a code from `contract/errors.ts` and
 *    the sentence a person is shown for it.
+*
+* # Every sentence drawn is a person's (ADR-0060)
+*
+* The engine answers a refusal's `detail` in a person's words, or with none
+* where nobody has worded it yet, and then its `message` (the code's own
+* sentence) is what is drawn. An answer from an older node during a rolling
+* upgrade may lack `caveats` (read as none) or carry no detail (its message
+* stands); neither is an error.
 */
+/**
+* The caveats an answer carries, as this build reads them: each with a code
+* and a sentence, and an action this build knows. An action it does not know
+* (a newer engine's) is read as `none`, the engine's own rule for a caveat it
+* cannot explain: a toast nobody can say why it stays must not demand
+* dismissal. Anything that is not a caveat is dropped.
+*/
+function caveatsOf(raw) {
+	if (!Array.isArray(raw)) return [];
+	const known = new Set(CAVEAT_ACTIONS);
+	const out = [];
+	for (const item of raw) {
+		const c = item ?? {};
+		if (typeof c.code !== "string" || typeof c.message !== "string") continue;
+		if (c.message.trim() === "") continue;
+		const action = typeof c.action === "string" && known.has(c.action) ? c.action : "none";
+		out.push({
+			code: c.code,
+			message: c.message,
+			action
+		});
+	}
+	return out;
+}
+/**
+* What a person is told of a change nobody could confirm: the engine's own
+* `detail` on an unknown is the operation key's retry rule, written for a
+* client sending the header, and a person never sees the key (ADR-0060).
+*/
+var UNCONFIRMED_SENTENCE = "Nobody could confirm it was saved. Look again to see whether it was.";
 /** Whether a code off the wire is one this build knows. */
 function isActErrorCode(code) {
 	return Object.hasOwn(ACT_ERRORS, code);
 }
 /**
-* The 2xx answer `{outcome, position, receipt}` a write returns.
+* The 2xx answer `{outcome, position, receipt, caveats}` a write returns.
 *
 * AN OUTCOME THIS BUILD DOES NOT KNOW IS NOT A SUCCESS, the engine's own rule
 * for its own answer (`receiptOf`), for the same reason: it is the one reading
@@ -3194,7 +3248,8 @@ function writeLanded(body) {
 	return {
 		kind: answer.outcome,
 		position: typeof answer.position === "string" ? answer.position : null,
-		receipt: answer.receipt
+		receipt: answer.receipt,
+		caveats: caveatsOf(answer.caveats)
 	};
 }
 /**
@@ -3219,7 +3274,7 @@ var LOOK_AGAIN = /* @__PURE__ */ new Set([
 function writeFailed(err) {
 	if (err.body.outcome === "unknown") return {
 		kind: "unknown",
-		reason: err.detail || err.code
+		reason: UNCONFIRMED_SENTENCE
 	};
 	const code = isActErrorCode(err.code) ? err.code : "";
 	if (err.unanswered || err.status >= 500 && code === "") return {
@@ -3340,7 +3395,8 @@ async function act(tool, args, options = {}) {
 		opId,
 		position: landed.position,
 		domain,
-		receipt: landed.receipt
+		receipt: landed.receipt,
+		caveats: landed.caveats
 	};
 }
 /** What a refusal, or a request that never got an answer, came to. */
