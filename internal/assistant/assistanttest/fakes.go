@@ -26,7 +26,12 @@ func Tool(t testing.TB, name string) catalog.Tool {
 
 // FullMeter is a meter whose company window is already full: every call is
 // refused before it is made.
-type FullMeter struct{ ResetsAt time.Time }
+type FullMeter struct {
+	ResetsAt time.Time
+	// Scope is the scope the full window is the company's or a person's
+	// ([assistant.PersonBudgetScope]) in; empty is the company's, "org".
+	Scope string
+}
 
 // Spend implements [toolloop.BudgetMeter].
 func (m FullMeter) Spend(context.Context, int) (toolloop.SpendOutcome, error) {
@@ -39,7 +44,11 @@ func (m FullMeter) Refused(context.Context) (toolloop.SpendOutcome, bool) {
 }
 
 func (m FullMeter) outcome() toolloop.SpendOutcome {
-	return toolloop.SpendOutcome{Scope: "org", Used: 1000, Limit: 1000, Period: "day",
+	scope := m.Scope
+	if scope == "" {
+		scope = "org"
+	}
+	return toolloop.SpendOutcome{Scope: scope, Used: 1000, Limit: 1000, Period: "day",
 		Window: "2026-10-24", ResetsAt: m.ResetsAt}
 }
 

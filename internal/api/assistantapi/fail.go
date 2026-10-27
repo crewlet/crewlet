@@ -34,6 +34,11 @@ func (s *Surface) fail(w http.ResponseWriter, r *http.Request, err error) {
 			httpjson.Detail{"detail": busy.Reason})
 	case errors.As(err, &budget):
 		detail := httpjson.Detail{"scope": budget.Scope, "window": budget.Window}
+		// WHERE THE CEILING THAT REFUSED IT IS RAISED (ADR-0060), so the
+		// drawer offers the way there rather than only the wait.
+		if remedy := budget.Remedy(); !remedy.IsZero() {
+			detail["remedy"] = remedy
+		}
 		wait := time.Minute
 		if !budget.ResetsAt.IsZero() {
 			detail["resets_at"] = budget.ResetsAt.UTC().Format(time.RFC3339)

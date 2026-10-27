@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/caveat"
 )
 
 // ErrInvalid is wrapped by every refusal of a value this package validates.
@@ -213,6 +215,10 @@ type ErrorEvent struct {
 	Hint              string    `json:"hint,omitempty"`
 	Retryable         bool      `json:"retryable"`
 	RetryAfterSeconds int       `json:"retry_after_seconds,omitempty"`
+	// Remedy names the setting a person changes to clear an error a
+	// configurable limit caused (a token budget spent), absent for every
+	// other (ADR-0060).
+	Remedy *caveat.Remedy `json:"remedy,omitempty"`
 }
 
 // SnapshotEvent replaces what a resuming client drew of this turn: its

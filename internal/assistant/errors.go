@@ -7,6 +7,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // The sentinels the HTTP surface maps to the engine's codes
@@ -110,6 +112,24 @@ func (e *BudgetRefused) Error() string {
 
 // Unwrap makes [BudgetRefused] errors.Is-comparable with [ErrBudget].
 func (e *BudgetRefused) Unwrap() error { return ErrBudget }
+
+// Remedy is where the ceiling that refused the turn is changed, or the zero
+// [caveat.Remedy] where the refusal names no scope it knows.
+func (e *BudgetRefused) Remedy() caveat.Remedy { return budgetRemedy(e.Scope) }
+
+// budgetRemedy is the setting whose ceiling a refusal by scope was, for every
+// scope an assistant turn's meter refuses by: the company's own, or a
+// person's ([PersonBudgetScope]). The brief's cap ([BriefBudgetScope]) is a
+// constant of the turn rather than a setting, and names none.
+func budgetRemedy(scope string) caveat.Remedy {
+	switch scope {
+	case string(types.BudgetScopeOrg):
+		return caveat.CompanyTokenBudget()
+	case PersonBudgetScope:
+		return caveat.AssistantTokenBudget()
+	}
+	return caveat.Remedy{}
+}
 
 // invalid is an [ErrInvalid] naming what to change.
 func invalid(format string, args ...any) error {
