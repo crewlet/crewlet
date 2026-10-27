@@ -309,8 +309,8 @@ The engine runs **genuinely parallel** work within a single process:
 
 - Each delivery is handled in its own goroutine, so seats make progress independently rather than taking turns
 - Multiple agents can be in the `Working` state simultaneously
-- A **per-node concurrency gate** limits how many agent turn segments run at once: Tier A's `node.max_concurrent` (default 32)
-- A turn segment takes a slot after the ownership check and before its first model round-trip, and releases it when the segment ends: at the park once its executor has launched, and again for the segment that collects the run. An executor run in its box holds no slot; each seat runs at most one at a time, so the seats a node holds are what bound the boxes at work
+- A **per-node concurrency gate** limits how many inbox deliveries run a turn segment at once: Tier A's `node.max_concurrent` (default 32)
+- A delivery takes a slot after the ownership check and before its first model round-trip, and releases it when its segment ends: a new turn at the park once its executor has launched, and a person's answer carrying a parked run on once that first attempt returns. A run's completion arrives on the seat's control topic instead, and the segment that collects it — the review, and any relaunch the review sends back — takes no slot, nor do an answer's later attempts, which the coordinator retries on its own schedule. An executor run in its box holds no slot either; each seat runs at most one at a time, so the seats a node holds are what bound the boxes at work
 
 **What the gate is for, and what already bounds itself.** A seat's mailbox is a durable subscription whose handler runs one batch at a time, so a *seat* is already serial — it never runs two turns at once. What is not bounded is how many seats run at once: that is [placement](seat-ownership.md)'s arithmetic over the company's seat count and the live node count, not a statement about the machine this process is on. A node handed forty seats would open forty simultaneous model round-trips and their tool loops. `max_concurrent` is the knob that says how many the host can actually take.
 

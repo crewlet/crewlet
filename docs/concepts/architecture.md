@@ -222,7 +222,7 @@ flowchart TB
         CLAIM["<b>Seat host</b><br/>claims seat leases, attaches the mailbox<br/><i>acquire → equip → THEN attach</i>"]
         MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.SEAT-ID.inbox<br/>+ .control for sandbox resumes<br/>+ .reflect for post-turn reflection"]
         BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
-        TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn segment, gated by<br/>node.max_concurrent</i>"]
+        TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>node.max_concurrent gates an inbox<br/>delivery's segment; a run's collection,<br/>off .control, takes no slot</i>"]
         REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]
         PROV["<b>Provider chain</b><br/>fallback chain over<br/>the seat's coding CLIs"]
     end

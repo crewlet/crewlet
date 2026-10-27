@@ -1560,11 +1560,12 @@ other route exactly as it answers a path nothing serves, with no hint, so the
 published socket says nothing about an admin port behind it, and it does so
 whatever credential is sent, since it requires none. Its own outside address is
 **`api.public.external_url`**, required once the port is set on an ingress
-node: every webhook URL, vendor app manifest and per-run sandbox endpoint is
-built on it, while every link a person follows stays on `api.external_url`.
-Publish `api.public.port`, keep `api.port` private, and point
-`CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL` for remote
-sandboxes at the public address (a `direct` box dials the public listener on
+node: every webhook URL and vendor app manifest is built on it, while every
+link a person follows stays on `api.external_url`. The per-run sandbox
+endpoints are not: a box is handed its bridge at `CREWLET_MCP_BRIDGE_URL` and
+its telemetry receiver at `CREWLET_SANDBOX_OTEL_RECEIVER_URL`. Publish
+`api.public.port`, keep `api.port` private, and point both variables at the
+public address (a `direct` box on an ingress node dials the public listener on
 loopback, with nothing to set) — see
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 A node without the `ingress` role binds no public listener at all, so one file

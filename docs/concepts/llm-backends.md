@@ -1110,17 +1110,20 @@ set from the seat's `role.sandbox.max_turns`, else
 The seat's tools cannot be shipped into the box: most are MCP children
 holding the **seat's** credentials, several are engine control, and the
 whole point of a sandbox is that its credentials are not the company's.
-So the box gets exactly one MCP server — on the engine, named `crewlet` —
-and every call comes back out through the *same* `tools.Surface` a phase on
-this host calls. A tool denied there is denied here; the skill guard, the
-recording and the failure shape are the ones already tested. That name is
-**reserved**: an `mcp_servers` entry may not use it, because the bridge is
-written into every executor run's server list under it and would replace the
-entry there. The server behind the route is the one a phase on this host
-reaches through its relay (`internal/toolsession`), kept in step with the
-seat's *live* tool set: a tool the coding agent activates mid-run with
-`activate_tool` is listed on its next request, the answer to the activation
-held until the CLI has re-read the list, up to two seconds.
+So the box gets one server on the engine, the bridge, named `crewlet`,
+beside whatever servers the seat's `role.sandbox.mcp.servers` scopes into it
+([MCP inside the sandbox](code-sandbox.md#mcp-inside-the-sandbox)) — and the
+seat's own tool surface reaches the run through the bridge, each call coming
+back out through the *same* `tools.Surface` a phase on this host calls. A
+tool denied there is denied here; the skill guard, the recording and the
+failure shape are the ones already tested. That name is **reserved**: an
+`mcp_servers` entry may not use it, because the bridge is written into every
+executor run's server list under it and would replace the entry there. The
+server behind the route is the one a phase on this host reaches through its
+relay (`internal/toolsession`), kept in step with the seat's *live* tool set:
+a tool the coding agent activates mid-run with `activate_tool` is listed on
+its next request, the answer to the activation held until the CLI has re-read
+the list, up to two seconds.
 
 What the bridge owes a detached run's calls, each one, is what a phase owes its
 own — less the rounds, the terminator, the per-request budget and a person's

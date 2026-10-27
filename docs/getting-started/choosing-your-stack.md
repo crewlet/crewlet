@@ -379,8 +379,8 @@ page.
 | Option | How | Notes |
 |---|---|---|
 | **None** | omit `providers.sandbox` | Only for a company with no agent seat, or no `providers.llm` entry yet; any other is refused at `providers.sandbox`. |
-| **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` | Sign up at <https://e2b.dev>, create an API key in the dashboard. Fastest path. |
-| **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`. |
+| **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` + `CREWLET_MCP_BRIDGE_URL` | Sign up at <https://e2b.dev>, create an API key in the dashboard. The run is on E2B's network and calls its seat's tools back at `CREWLET_MCP_BRIDGE_URL`, so the engine's API has to be published where E2B's cloud reaches it — see the caveat below. |
+| **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` + `CREWLET_MCP_BRIDGE_URL` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`, and the bridge address has to be one your cluster reaches. |
 | **Local — container** | `local: {image: …}` + an entry's `run_in: container` (or `default_run_in`) | Docker/Podman on the engine host. Real host isolation, no E2B account. You supply an image with the coding CLI installed. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
 | **Local — direct** | `local: {}` + an entry's `run_in: direct` (or `default_run_in`) | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the coding agent runs fully permissioned as the engine user, so it isolates *state*, not the host. Workstation or dedicated VM only; on a shared host use `container` or `e2b`. |
 
@@ -408,9 +408,18 @@ token, say — counts toward the check that refuses a remote box its entry's log
 cannot follow.
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot
-reach services on your laptop (`localhost` GitLab) — in-sandbox tool
-access to those needs a reachable deployment, a tunnel, or self-hosted E2B on
-the same network.
+reach anything on your laptop, and that includes the engine. Every `e2b` run
+calls all of its seat's tools back through the bridge at
+`CREWLET_MCP_BRIDGE_URL`, so that has to be an address E2B's cloud reaches —
+the engine's API published to the internet, its
+[public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api)
+behind your proxy, or a tunnel to it — and never `localhost` or `127.0.0.1`.
+Left unset, every `e2b` launch is refused; set to an address the VM cannot
+reach, every call the run makes over the bridge fails, so the run has none of
+its seat's tools, cannot call `submit_work`, and is rescued as `incomplete`.
+Services on your laptop the run would use directly (`localhost` GitLab) need
+the same: a reachable deployment, a tunnel, or self-hosted E2B on the same
+network.
 
 ---
 

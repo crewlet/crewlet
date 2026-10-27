@@ -5130,7 +5130,7 @@ answers any parked run by naming it:
 | Argument | |
 |---|---|
 | `turn_id` | The parked run's `turn_id`, as [`GET /sandbox-runs`](#get-sandbox-runs) lists it. |
-| `answer` | What the coding agent should be told, at most 32 KiB. It carries the run on: the coding CLI is launched again in the box the run kept, continuing its own session with the answer as its next message, or, where that box was reclaimed, afresh from the run's pushed branch, told the question and the answer. |
+| `answer` | What the coding agent should be told, at most 32 KiB. It carries the run on: the coding CLI is launched again in the box the run kept, continuing its own session with the answer as its next message, where the relaunch reuses that box (the box was kept, the member picked runs the same CLI in the same cell, and the box is the resuming node's to drive); otherwise afresh in a new box from the run's pushed branch, told the question and the answer. |
 
 It answers `{"turn_id", "agent_handle", "question", "outcome": "pending"}`:
 the answer is on the inbox of the seat holding the run, and **that** node

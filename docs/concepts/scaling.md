@@ -27,7 +27,7 @@ node:
   id: "${CREWLET_NODE_ID}"           # distinct and stable, per process
   roles: [data, ingress, seats, workers]   # the default; omit the key
   labels: {zone: eu}                 # optional, matched by role.placement
-  max_concurrent: 32                 # agent turns this process runs at once
+  max_concurrent: 32                 # turns this process starts at once, each up to its park
 ```
 
 | Role | What it does |

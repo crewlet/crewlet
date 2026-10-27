@@ -1022,8 +1022,11 @@ What to point where:
 - **`api.public.external_url`** is where vendors and sandboxes reach this
   deployment: the **public** listener's address as your proxy or load balancer
   publishes it, required once `api.public.port` is set on an `ingress` node.
-  Every webhook the engine registers, every vendor app it provisions and every
-  per-run sandbox endpoint it hands out is built on it.
+  Every webhook the engine registers and every vendor app it provisions is
+  built on it. The per-run sandbox endpoints a box is handed are not: they are
+  built on `CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL`,
+  which name the same public address (a `direct` box on an `ingress` node
+  dials its public listener on loopback).
 - **`api.external_url`** is where people reach the dashboard — `api.port`'s
   address as your private network or VPN reaches it. It names the session
   cookie and is the only `Origin` a write is accepted from, and every link an
@@ -1480,12 +1483,14 @@ What a fleet gets right, each of which was a real defect before:
 - *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 Two things are still per-process. `max_concurrent`: Tier A's
-`node.max_concurrent` (default 32) is the gate every turn segment — the
-onboarding pass, a launch, a collect, the review — takes a slot from, and not
-the executor runs between them (a turn frees its slot when it parks at its
-executor's launch, and each seat runs at most one run at a time); it is per
-node — so an org's ceiling becomes N × the configured value. Size it per
-node, not per company. And a spent plan: an entry whose CLI reported its
+`node.max_concurrent` (default 32) gates what a delivery on a seat's inbox
+starts — a new turn, from its onboarding pass to the park at its executor's
+launch, and a person's answer carrying a parked run on, on its first attempt.
+A run's completion arrives on the seat's control topic instead, and its
+collection, the review and any relaunch the review sends back take no slot;
+nor does the executor run in its box, of which each seat runs at most one at
+a time. It is per node — so an org's ceiling becomes N × the configured
+value. Size it per node, not per company. And a spent plan: an entry whose CLI reported its
 vendor's rate limit sits out on the node that heard it — until the reset the
 CLI named, an hour at most, or for a minute — while every other node learns
 the same thing from its own calls once per window.
