@@ -323,11 +323,11 @@ func (t *steerTurn) answered(turnID, noteID string, status steer.Status, reads s
 			"it has ended, so nothing will read a note. Nothing was sent.",
 			clip(turnID))), nil
 	case steer.StatusFull:
-		return refused(tools.RefusalConflict, fmt.Sprintf("Turn %s already holds %d "+
+		return refused(tools.RefusalNotesFull, fmt.Sprintf("Turn %s already holds %d "+
 			"notes it has not read yet. Nothing was sent: once it has read them — at "+
 			"its next step — this note may be sent again.", clip(turnID), steer.MaxPendingNotes)), nil
 	case steer.StatusSpent:
-		return refused(tools.RefusalConflict, fmt.Sprintf("Turn %s has been sent the %d "+
+		return refused(tools.RefusalNotesSpent, fmt.Sprintf("Turn %s has been sent the %d "+
 			"notes a turn takes. Nothing was sent: put the rest on the work item, where "+
 			"this turn and every later one can read it.", clip(turnID), steer.MaxTurnNotes)), nil
 	}

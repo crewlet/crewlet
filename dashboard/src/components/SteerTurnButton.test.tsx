@@ -9,14 +9,16 @@
  * what the toast says.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { SteerTurnButton } from "./writes.tsx";
 import { steerReadsSentence } from "~/lib/steer.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { STEER_NOTE_MAX_RUNES, STEER_READS } from "~/contract/steer.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
   useConnection: vi.fn(),
@@ -55,6 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -100,6 +103,43 @@ describe("SteerTurnButton", () => {
     expect(heldBecause(steer)).toMatch(/The turn has ended\./);
     fireEvent.click(steer);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+// A NOTE THE TURN REFUSES ON ITS BOUNDS SAYS WHICH BOUND, in the words that
+// tell a person what to do next: one that holds as many unread notes as it may
+// takes this note once it has read them, and one that has taken all it takes
+// never will. Neither is a write that collided with another, which "look again,
+// then retry" would tell them it was.
+describe("a note the turn refuses on its bounds", () => {
+  test.each([
+    ["notes_full", "Turn t-1 already holds 5 notes it has not read yet."],
+    ["notes_spent", "Turn t-1 has been sent the 10 notes a turn takes."],
+  ] as const)("%s is said in its own words", async (code, detail) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: code, detail }), {
+            status: 409,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+    render(
+      <LayerHost>
+        <ToastProvider>
+          <SteerTurnButton turnId="t-1" seat="CEO" running />
+        </ToastProvider>
+      </LayerHost>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Steer/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Steer CEO's turn" });
+    fireEvent.change(within(dialog).getByLabelText("Note"), { target: { value: "use staging" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send note" }));
+    await waitFor(() => expect(within(dialog).getByText(ACT_ERRORS[code])).toBeTruthy());
+    expect(within(dialog).queryByText(ACT_ERRORS.conflict)).toBeNull();
+    expect(dialog.textContent).not.toMatch(/collided/);
   });
 });
 

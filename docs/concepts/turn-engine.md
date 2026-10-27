@@ -874,8 +874,9 @@ sequenceDiagram
   naming the keys this node holds).
 - **A note is one note.** Its id is the person's request id, so a retry of one
   request is answered `accepted` without being read twice. A turn holds at most
-  **five** unread notes and takes at most **ten** in all — each refused past its
-  bound with `conflict` and a sentence saying which — and each note is at most
+  **five** unread notes and takes at most **ten** in all — refused past them
+  with `notes_full` (send it again once the turn has read what it holds) and
+  `notes_spent` (nothing more this turn) — and each note is at most
   **2,000 characters**: a paragraph re-points work in flight, and more than that
   is a brief that belongs on the work item.
 - **What became of it is on the record.** A note the turn reads is recorded

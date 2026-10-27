@@ -5236,11 +5236,12 @@ running it, and the note is scattered to that node.
 back is indistinguishable from none, so the note may have been taken; sending it
 again is safe for that reason.
 
-It refuses `not_running` for a turn that has ended, `conflict` for one already
+It refuses `not_running` for a turn that has ended, `notes_full` for one already
 holding five notes it has not read yet (once it reads them, the note may be sent
-again) or one that has taken the ten notes a turn takes (put the rest on the
-work item), `unavailable` where the run's record could not be read or written
-(a retry is the same note), and `invalid` for an empty or oversized note.
+again), `notes_spent` for one that has taken the ten notes a turn takes (sending
+it again changes nothing: put the rest on the work item), `unavailable` where the
+run's record could not be read or written (a retry is the same note), and
+`invalid` for an empty or oversized note.
 
 The note is **signed**: a scattered request and the running node's answer are
 signed under the fleet keyring and bound to that one request, and a note on a
@@ -5634,7 +5635,7 @@ And the tool's own refusal, carrying the tool's sentence as `detail`:
 | `invalid` | `422` |
 | `not_found` | `404` |
 | `forbidden` | `403` |
-| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `budget_exhausted` | `409` |
+| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, `not_running`, `budget_exhausted` | `409` |
 | `unavailable` | `503` |
 | `internal_error` | `500` — a fault of the node's own store or code: a fixed sentence, the error itself only in the node's log, and **no** `Retry-After`, since no wait clears it. It is also the answer for a failure that carried no class |
 
@@ -5770,7 +5771,7 @@ mean the same thing on every write surface:
 | `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `detail`, worded exactly as a seat and your assistant are told it, beside `reason` and `grants` (or the window) |
 | `403` | `forbidden` | The domain forbids this caller the gesture — rewriting somebody else's remark | `detail`: the domain's own sentence |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `If-Match`, a title taken, a race lost — or the state the request needs is not there | `detail`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, … | Somebody changed it after you read it — a stale `If-Match`, a title taken, a race lost — or the state the request needs is not there | `detail`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `422` | `invalid` | The domain refused the write on its own rules — a purge whose `?confirm=` names another item among them | `detail`: the domain's own sentence |
 | `500` | `internal_error` | The engine failed at something of its own | nothing a retry changes; the detail is in the node's log |

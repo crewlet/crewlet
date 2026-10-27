@@ -419,6 +419,8 @@ a model acts on:
 | `already_answered` | The question this answers has an answer | Read the answer |
 | `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
+| `notes_full` | The running turn a note is for already holds as many notes as may wait unread | Send it again once the turn has read them, at its next step |
+| `notes_spent` | The running turn has taken as many notes as a turn takes | Do not send it again; put the rest on the work item |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
 | `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent | Wait for the window the sentence names to turn over, or raise its ceiling |
 | `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — the node is behind its log, the log refused the read or the append (a maintenance or sealed fleet included), the coordination store did not answer, the event broker did not answer or this node's connection to it is reconnecting, this node's store was busy with other writes, the backend is not configured. A **condition**, which waiting clears. **Never** "it does not exist" | Retry, or use the backend the company does run |

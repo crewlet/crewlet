@@ -78,9 +78,8 @@ const (
 	RefusalStaleVersion Refusal = "stale_version"
 
 	// RefusalConflict — the write lost its race against other writers for
-	// its whole round budget, or another bulk gesture holds the object, or
-	// the running turn a note is for already holds as many unread notes as
-	// it takes. Each clears on its own: try again shortly.
+	// its whole round budget, or another bulk gesture holds the object. Each
+	// clears on its own: try again shortly.
 	RefusalConflict Refusal = "conflict"
 
 	// RefusalExists — the object this call would create already exists.
@@ -95,6 +94,17 @@ const (
 
 	// RefusalInboxFull — a person's inbox list is at its ceiling.
 	RefusalInboxFull Refusal = "inbox_full"
+
+	// RefusalNotesFull — the running turn a note is for already holds as
+	// many notes as may wait unread. It clears when the turn reads them, at
+	// its next step; nothing else changes it.
+	RefusalNotesFull Refusal = "notes_full"
+
+	// RefusalNotesSpent — the running turn has taken as many notes as a turn
+	// takes, read or not. Like [RefusalReassignmentBudget], the class that
+	// must NOT invite another attempt: nothing clears it for that turn, and
+	// what is left to say belongs on the work item.
+	RefusalNotesSpent Refusal = "notes_spent"
 
 	// RefusalNotRunning — the run or turn the call addresses is not
 	// running, or not waiting for what the call supplies.
@@ -145,6 +155,7 @@ var Refusals = []Refusal{
 	RefusalInvalid, RefusalNotFound, RefusalForbidden,
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
+	RefusalNotesFull, RefusalNotesSpent,
 	RefusalNotRunning, RefusalBudgetExhausted,
 	RefusalUnavailable, RefusalInternalError,
 }

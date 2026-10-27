@@ -49,6 +49,8 @@ const (
 	RefusalAlreadyAnswered    = mcp.RefusalAlreadyAnswered
 	RefusalReassignmentBudget = mcp.RefusalReassignmentBudget
 	RefusalInboxFull          = mcp.RefusalInboxFull
+	RefusalNotesFull          = mcp.RefusalNotesFull
+	RefusalNotesSpent         = mcp.RefusalNotesSpent
 	RefusalNotRunning         = mcp.RefusalNotRunning
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalUnavailable        = mcp.RefusalUnavailable

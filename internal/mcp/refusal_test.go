@@ -54,8 +54,8 @@ func TestEveryRefusalClassIsKnownOnce(t *testing.T) {
 			}
 		}
 	}
-	if len(Refusals) != 13 {
-		t.Errorf("%d classes, want the 13 the write surface's status table maps", len(Refusals))
+	if len(Refusals) != 15 {
+		t.Errorf("%d classes, want the 15 the write surface's status table maps", len(Refusals))
 	}
 }
 

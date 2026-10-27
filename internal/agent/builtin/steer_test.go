@@ -360,8 +360,8 @@ func TestSteerTurnRefusesWhatTheRunningNodeRefused(t *testing.T) {
 	t.Parallel()
 	for status, want := range map[steer.Status]tools.Refusal{
 		steer.StatusClosed: tools.RefusalNotRunning,
-		steer.StatusFull:   tools.RefusalConflict,
-		steer.StatusSpent:  tools.RefusalConflict,
+		steer.StatusFull:   tools.RefusalNotesFull,
+		steer.StatusSpent:  tools.RefusalNotesSpent,
 	} {
 		asker := &fleetAsker{replies: []steer.Reply{{TurnID: "run-1", AgentHandle: "swe", Status: status}}}
 		res, _ := steerCall(t, steerTool(t, asker, requestKey()), "run-1", "use staging")
@@ -666,10 +666,10 @@ func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 	}{
 		{"full", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusFull})
-		}, tools.RefusalConflict, "notes it has not read yet"},
+		}, tools.RefusalNotesFull, "notes it has not read yet"},
 		{"spent", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusSpent})
-		}, tools.RefusalConflict, "put the rest on the work item"},
+		}, tools.RefusalNotesSpent, "put the rest on the work item"},
 		{"closed", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusClosed})
 		}, tools.RefusalNotRunning, "is not running"},
