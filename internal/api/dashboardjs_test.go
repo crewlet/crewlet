@@ -1120,8 +1120,13 @@ const (
 	// it to 346.6 KiB with the same dashboard source: each mark now carries a
 	// 16 grid drawing beside its master, and the Ask button draws the
 	// assistant's spark, whose motion and soon rules ride the one sheet. 347
+	// KiB, still under two seconds on that link. uilet 0.69.0 took it to 348.3
+	// KiB while the entry's own script shrank by 2 KiB (the drawer's Needs you
+	// reads gone): BriefCard's rules ride the one sheet, and the release splits
+	// the status card and suggestion row code BriefCard shares into chunks of
+	// their own, each one more request's overhead in the entry's graph. 349
 	// KiB, still under two seconds on that link.
-	initialBudget = 347 << 10
+	initialBudget = 349 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1250,8 +1255,11 @@ const (
 	// group of the last week's answers and the answered ask's pane with its
 	// four steps, on uilet 0.68.0's inbox row outcome and status and its
 	// collapsible group, took it to 4566.4 KiB. 4567 KiB, which still refuses
-	// a doubled baseline.
-	treeBudget = 4<<20 + 471<<10
+	// a doubled baseline. A brief of the page or its open record in the
+	// drawer, drawn by uilet 0.69.0's BriefCard, with the record each screen
+	// has open reported to the assistant, took it to 4574.6 KiB. 4575 KiB,
+	// which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 479<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
