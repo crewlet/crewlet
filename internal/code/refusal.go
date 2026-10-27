@@ -16,7 +16,7 @@ import (
 type Refusal string
 
 // The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
-// the last seven are answers ABOUT a push, never part of one.
+// the last eight are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
 	RefusalStale Refusal = "stale"
@@ -88,6 +88,25 @@ const (
 	// the receiver in [PushAnswer.Refused], where a build that does not know
 	// the code says it by its name, beside the decide's sentence.
 	RefusalCompactionBehind Refusal = "compaction_behind"
+	// RefusalExpunging is a push its receiver checked against the
+	// repository at another drop epoch than the repository's
+	// ([Proposal.DropEpoch]): an expunge began on it since ([ExpungeBegin]),
+	// leaving dropping what the receiver's copy held live, so a command of
+	// the push may name an object the expunge's commit retires. Nothing of
+	// the push was decided, and it lands when it is run again, checked
+	// against the repository as the begin left it — a deletion too, since
+	// the refusal is of the copy the push was checked against, never of a
+	// command.
+	//
+	// The push decide refuses it, from the epoch the proposal carries
+	// against the row's, after the repository's status and before any rule
+	// of the push's own ([ExpungingDetail]).
+	//
+	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]),
+	// as compaction_behind is: no field of the code domain's records and no
+	// versionedFields row, carried by the estate router in
+	// [PushAnswer.Refused].
+	RefusalExpunging Refusal = "expunging"
 	// RefusalUnavailable is the code log or the object store refusing.
 	RefusalUnavailable Refusal = "unavailable"
 	// RefusalStoreFull is a push whose bundle the object store refused
@@ -122,8 +141,8 @@ func Refusals() []Refusal {
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
 		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
-		RefusalBusy, RefusalCompactionBehind, RefusalUnavailable, RefusalStoreFull, RefusalNotApplied,
-		RefusalUnknown, RefusalPending,
+		RefusalBusy, RefusalCompactionBehind, RefusalExpunging, RefusalUnavailable, RefusalStoreFull,
+		RefusalNotApplied, RefusalUnknown, RefusalPending,
 	}
 }
 
@@ -131,12 +150,12 @@ func Refusals() []Refusal {
 func (r Refusal) Valid() bool { return slices.Contains(Refusals(), r) }
 
 // Recorded reports a code that may appear on a recorded command: every one but
-// the seven that are answers ABOUT a push — whether it could be committed at
+// the eight that are answers ABOUT a push — whether it could be committed at
 // all — rather than a verdict on one of its commands.
 func (r Refusal) Recorded() bool {
 	switch r {
-	case RefusalBusy, RefusalCompactionBehind, RefusalUnavailable, RefusalStoreFull, RefusalNotApplied,
-		RefusalUnknown, RefusalPending:
+	case RefusalBusy, RefusalCompactionBehind, RefusalExpunging, RefusalUnavailable, RefusalStoreFull,
+		RefusalNotApplied, RefusalUnknown, RefusalPending:
 		return false
 	}
 	return r.Valid()
@@ -168,6 +187,8 @@ var sentences = map[Refusal]string{
 	RefusalBusy: "the repository is taking pushes faster than they are committed; run git push again",
 	RefusalCompactionBehind: "the repository holds as many live packs as one may until compaction catches up, " +
 		"and nothing was decided; run git push again in a minute",
+	RefusalExpunging: "an expunge of the repository's unreachable objects began after the push was checked, " +
+		"and nothing was decided; run git push again",
 	RefusalUnavailable: "the code log or the object store refused the write; run git push again",
 	RefusalNotApplied:  "the push was durable and applied nowhere; run git push again",
 	RefusalUnknown:     "the push's outcome is unknown; fetch, then run git push again",
@@ -277,6 +298,27 @@ func ArchivedDetail(name string) string {
 func BehindDetail(name string, held int64) string {
 	return fmt.Sprintf("%s holds %d live packs, and a push adds none past %d until compaction catches up: "+
 		"nothing was decided; run git push again in a minute", name, held, MaxPacksPerRepo)
+}
+
+// ExpungingDetail is the sentence of a push refused expunging: which
+// repository, the drop epoch its receiver checked it at and the one the
+// repository is at, and that nothing was decided. Formed by the push decide
+// alone: the epoch a receiver carries is its own copy's, so it has nothing to
+// compare it with.
+//
+// It asks for the push again at once, as busy does and compaction_behind does
+// not: the next receive syncs its copy to the repository as the begin left it,
+// and a second begin waits for the first expunge's commit, so a retry meets
+// the refusal again only past another whole expunge. A push checked at an
+// epoch PAST the repository's is no expunge begun since — the rows it was
+// checked against are not the ones deciding it — and is said as it is.
+func ExpungingDetail(name string, checked, holds int64) string {
+	if checked < holds {
+		return fmt.Sprintf("an expunge of %s's unreachable objects began after this push was checked "+
+			"against it (drop epoch %d, now %d): nothing was decided; run git push again", name, checked, holds)
+	}
+	return fmt.Sprintf("this push was checked against %s at drop epoch %d, and it is at %d: nothing was "+
+		"decided; run git push again", name, checked, holds)
 }
 
 // StatelessRefusal is the rules of the push decide that no state decides —

@@ -44,7 +44,10 @@ type landing struct {
 	// Synced is the pinned incarnation Scratch leans on. Its Repo is the
 	// linearizable row the push is judged on — its status, its protections
 	// and its live packs included, the last read again before it refuses
-	// anything (behind) — and its Position is the proposal's Seen.
+	// anything (behind) — its Position is the proposal's Seen, and its
+	// Repo's drop epoch the proposal's DropEpoch: the epoch of the copy
+	// receive-pack checked the push's objects over, which its committer
+	// refuses expunging once an expunge has begun since.
 	Synced cache.Synced
 	// Scratch is the repository the push's objects were written into,
 	// leaning on Synced (cache.Cache.NewScratch, named PushID): it holds
@@ -307,7 +310,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		return code.Proposal{
 			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Via: l.Via, Node: s.o.NodeID,
 			Atomic: l.Atomic, Commands: proposed, Pack: pack, Introduced: introduced, IntroducedCount: count,
-			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position,
+			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.Repo.DropEpoch,
 		}
 	}
 	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref,

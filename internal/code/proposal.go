@@ -70,6 +70,16 @@ type Proposal struct {
 	// recorded — a push row says what the push did, not what was read to
 	// receive it.
 	Seen statelog.Position `json:"seen,omitzero"`
+	// DropEpoch is the repository's drop epoch as the receiving node checked
+	// the push against it — its synced row's ([RepoRef.DropEpoch]), read with
+	// the copy receive-pack checked the push's objects over. The committer
+	// refuses the push `expunging` WHOLE where the repository's epoch is
+	// another ([RefusalExpunging]): an expunge's begin since has left
+	// dropping objects that copy held live, and a ref landed onto one would
+	// name an object the expunge's commit retires. The snapshot that synced
+	// the copy reads every page at one epoch (Reader.Snapshot), so the epoch
+	// is the copy's. Never recorded, as Seen is not.
+	DropEpoch int64 `json:"drop_epoch,omitempty"`
 }
 
 // ProposeResult is what became of one proposal.
@@ -101,13 +111,14 @@ type PushAnswer struct {
 	// is the decision's, tentative until the record resolves.
 	Commands []Command `json:"commands"`
 	// Refused is a refusal of the whole push — busy, compaction_behind,
-	// unavailable, not_applied, repo_deleted, repo_archived — with every
-	// command it covers ng under the same code.
+	// expunging, unavailable, not_applied, repo_deleted, repo_archived —
+	// with every command it covers ng under the same code.
 	Refused Refusal `json:"refused,omitempty"`
 	// Detail is a whole-push refusal's one sentence of specifics, and every
 	// command the refusal covers carries the SAME sentence as its own
 	// Detail — one placement whichever path formed the refusal (the decide,
-	// for a repository deleted or archived, or at its pack bound; the
+	// for a repository deleted or archived, at its pack bound, or at another
+	// drop epoch than the push was checked at; the
 	// committer, for busy, unavailable, not_applied and a deletion the log
 	// refused), so a reader of the answer or of a command finds it. A
 	// command the receiver had already refused keeps its own. Empty when
@@ -346,6 +357,9 @@ func (p Proposal) validFields() error {
 			ErrInvalidProposal, p.Seen, topics.CodeLogStream)
 	case !p.Seen.IsZero() && p.Seen.Valid() != nil:
 		return fmt.Errorf("%w: seen: %w", ErrInvalidProposal, p.Seen.Valid())
+	case p.DropEpoch < 0:
+		return fmt.Errorf("%w: drop_epoch: %d — a drop epoch counts the expunges begun on a "+
+			"repository, from 0", ErrInvalidProposal, p.DropEpoch)
 	case len(p.Commands) == 0:
 		return fmt.Errorf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
 	case len(p.Commands) > MaxCommandsPerPush:

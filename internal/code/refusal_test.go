@@ -10,15 +10,15 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// EVERY REFUSAL HAS ITS SENTENCE, and the seven answers ABOUT a push are never
+// EVERY REFUSAL HAS ITS SENTENCE, and the eight answers ABOUT a push are never
 // recorded on one of its commands: a client sees "<code>: <sentence>", and a
 // code with no sentence is a client reading its own name back.
 func TestEveryRefusalHasItsSentence(t *testing.T) {
 	t.Parallel()
 	about := map[code.Refusal]bool{
-		code.RefusalBusy: true, code.RefusalCompactionBehind: true, code.RefusalUnavailable: true,
-		code.RefusalStoreFull: true, code.RefusalNotApplied: true, code.RefusalUnknown: true,
-		code.RefusalPending: true,
+		code.RefusalBusy: true, code.RefusalCompactionBehind: true, code.RefusalExpunging: true,
+		code.RefusalUnavailable: true, code.RefusalStoreFull: true, code.RefusalNotApplied: true,
+		code.RefusalUnknown: true, code.RefusalPending: true,
 	}
 	seen := map[code.Refusal]bool{}
 	for _, r := range code.Refusals() {
@@ -42,8 +42,8 @@ func TestEveryRefusalHasItsSentence(t *testing.T) {
 				"about a push never is", r, r.Recorded())
 		}
 	}
-	if len(seen) != 24 {
-		t.Errorf("%d refusal codes, and the closed set is twenty-four", len(seen))
+	if len(seen) != 25 {
+		t.Errorf("%d refusal codes, and the closed set is twenty-five", len(seen))
 	}
 	if unknown := code.Refusal("something_new"); unknown.Valid() || unknown.Recorded() ||
 		unknown.Sentence() != "something_new" {

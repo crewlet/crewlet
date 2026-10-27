@@ -47,7 +47,31 @@ import (
 // past code.limits.repo_max_bytes repo_size; and an --atomic push with any
 // refusal is refused whole ([Atomic]). A push with an ok command left is an
 // entry of the record — unless the pack bound refuses it whole (below); one
-// with none is answered here and writes nothing.
+// with none is answered here and writes nothing. A push checked at another
+// drop epoch than the repository's meets none of these rules: it is refused
+// whole before them (below).
+//
+// # A push checked before an expunge began is refused whole, before any rule
+//
+// An expunge's begin leaves dropping what no ref reached at its scan, and its
+// commit retires those packs but for the rescue its builder read off the refs
+// at a sync of its own ([ExpungeBegin], [ExpungeCommit]); the commit's decide
+// reads no ref, so a ref landed onto a dropping object after that sync names
+// an object the commit retires. A receiver checks a push's objects against
+// its synced copy, and a copy synced before the begin holds those packs'
+// objects live, so a command of a push checked against it may move a ref onto
+// one of them. The copy's drop epoch rides the proposal ([Proposal.DropEpoch]),
+// and a push carrying another than the row's is refused WHOLE, expunging,
+// every command the receiver did not refuse under one sentence
+// ([ExpungingDetail]): it is no entry, nothing of it is decided, and it lands
+// when it is run again against a copy synced past the begin. Judged once the
+// repository's status admits pushes — an archived or gone repository refuses
+// the push whatever copy checked it — and BEFORE every rule of the push's
+// own, because those would judge commands checked against objects the
+// repository no longer offers a push; a deletion relies on no object, but
+// the refusal is of the copy, not of a command, and a push is one answer. A
+// begin is rare — one an expunge, and a second waits for the first's commit —
+// so a retry meets it again only past another whole expunge.
 //
 // # The pack bound refuses a push whole, and decides nothing of it
 //
@@ -272,8 +296,8 @@ type decided struct {
 	// collapsed is the row an earlier record applied this push as.
 	collapsed *PushRow
 	// refused is a refusal of the whole push — repo_deleted, repo_archived,
-	// compaction_behind — and detail its sentence, which every command it
-	// covers carries too.
+	// expunging, compaction_behind — and detail its sentence, which every
+	// command it covers carries too.
 	refused Refusal
 	detail  string
 	// err is a proposal no rule decides: its push id names a push to
@@ -354,6 +378,19 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		}
 		return nil, answers, repo.version, nil
 	}
+	// THE DROP EPOCH, before every rule of the push's own: a push checked
+	// against a copy at another epoch is refused whole, and the rest of the
+	// round reads nothing of it.
+	open = slices.DeleteFunc(open, func(i int) bool {
+		p := batch[i]
+		if p.DropEpoch == repo.dropEpoch {
+			return false
+		}
+		detail := ExpungingDetail(repo.name, p.DropEpoch, repo.dropEpoch)
+		answers[i].refused, answers[i].detail = RefusalExpunging, detail
+		answers[i].commands = refuseEvery(p.Commands, RefusalExpunging, detail)
+		return true
+	})
 
 	stored, err := protectionsIn(ctx, tx, repoID)
 	if err != nil {

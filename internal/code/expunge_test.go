@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -130,6 +132,84 @@ func TestAnExpungeIsDecidedInItsRepositorysQueue(t *testing.T) {
 	if again.Position != first.Position || again.Request != asked.RequestID || n.end() != before {
 		t.Fatalf("the request asked again answered %+v, and %d records were appended; want its record at %s",
 			again, n.end()-before, first.Position)
+	}
+}
+
+// A PUSH CHECKED BEFORE A BEGIN IS REFUSED EXPUNGING: once an expunge's begin
+// has moved its repository's drop epoch, a push its receiver checked at the
+// epoch before — against a copy holding live what the begin left dropping — is
+// refused WHOLE: every command the receiver did not refuse, a deletion among
+// them, under the one sentence naming both epochs, and a command it refused
+// keeping its own refusal; nothing of it decided and nothing appended. The
+// same push checked at the begin's epoch lands. A push the repository's status
+// refuses is told that first, whatever epoch it was checked at.
+//
+// Mutation: drop the decide's comparison of the epochs, and the push checked
+// before the begin lands a ref the begin's commit could leave naming an object
+// it retired.
+func TestAPushCheckedBeforeABeginIsRefusedExpunging(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := repoOn(t, n, "web")
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/old", code.ZeroOID, oidOf("O"))))
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	b := beginFor(n, repo, 1, n.livePacks(repo), 1, 1)
+	res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+
+	tag := code.Command{Ref: "refs/tags/v1", Old: oidOf("T"), New: oidOf("U"), Result: code.ResultNG,
+		Reason: code.RefusalTagMoved, Detail: "a tag does not move: delete it and push it again"}
+	checked := proposal(repo, update("refs/heads/feature", code.ZeroOID, oidOf("F")),
+		update("refs/heads/old", oidOf("O"), code.ZeroOID), tag)
+	before := n.end()
+	got, err := c.Propose(ctx, checked)
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	detail := code.ExpungingDetail("web", 0, 1)
+	if got.Outcome != "" || !got.Position.IsZero() || got.Answer.Refused != code.RefusalExpunging ||
+		got.Answer.Detail != detail || !strings.Contains(detail, "(drop epoch 0, now 1)") {
+		t.Fatalf("a push checked at drop epoch 0 after the begin answered %+v, want refused expunging, "+
+			"undecided, saying %q", got, detail)
+	}
+	for _, cmd := range got.Answer.Commands {
+		want := code.Command{Ref: cmd.Ref, Old: cmd.Old, New: cmd.New, Result: code.ResultNG,
+			Reason: code.RefusalExpunging, Detail: detail}
+		if cmd.Ref == tag.Ref {
+			want = tag
+		}
+		if cmd != want {
+			t.Errorf("command %s answered %+v, want %+v", cmd.Ref, cmd, want)
+		}
+	}
+	if len(got.Answer.Commands) != 3 {
+		t.Fatalf("the refusal answered %d commands, want the push's 3", len(got.Answer.Commands))
+	}
+	if end := n.end(); end != before {
+		t.Fatalf("the refused push appended %d records, want none", end-before)
+	}
+	if n.target(repo, "refs/heads/feature") != "" || n.target(repo, "refs/heads/old") != oidOf("O") {
+		t.Fatal("the refused push moved a ref")
+	}
+
+	checked.DropEpoch = 1
+	got, err = c.Propose(ctx, checked)
+	if err != nil || got.Outcome != statelog.OutcomeApplied || got.Answer.Refused != "" {
+		t.Fatalf("the push checked at the begin's epoch answered %+v, %v; want applied", got, err)
+	}
+	if n.target(repo, "refs/heads/feature") != oidOf("F") || n.target(repo, "refs/heads/old") != "" {
+		t.Fatal("the push checked at the begin's epoch did not move its refs")
+	}
+
+	s := suiteSettings()
+	s.Archived = true
+	n.ensure("web", s, t2)
+	late := proposal(repo, update("refs/heads/late", code.ZeroOID, oidOf("L")))
+	got, err = c.Propose(ctx, late)
+	if err != nil || got.Answer.Refused != code.RefusalRepoArchived {
+		t.Fatalf("a push to the archived repository checked at another epoch answered %+v, %v; want "+
+			"repo_archived, its status first", got, err)
 	}
 }
 

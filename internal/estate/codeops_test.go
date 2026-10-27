@@ -236,7 +236,8 @@ func proposalTo(repo, pushID string) code.Proposal {
 
 // richProposal is a push to repo carrying every field a proposal has: two
 // commands, one the receiver already refused, a pack bundle, the objects it
-// introduced and the code log's position the receiver checked it against.
+// introduced, and the code log's position and the drop epoch the receiver
+// checked it against.
 func richProposal(repo string) code.Proposal {
 	p := proposalTo(repo, "019a0c2e-0000-7000-8000-00000000a11d")
 	p.Atomic = true
@@ -254,6 +255,7 @@ func richProposal(repo string) code.Proposal {
 		"4444444444444444444444444444444444444444"}
 	p.IntroducedCount = 3
 	p.Seen = statelog.Position{Stream: codeStream, Generation: 2, Seq: 40}
+	p.DropEpoch = 3
 	return p
 }
 
@@ -404,7 +406,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		Objects: 2, Kind: "push", State: "live", Added: at,
 	}
 	cursor := &code.StateCursor{Phase: "pushes", Pushes: true, From: at, Since: at, Seen: at, Stream: created,
-		RetiredFrom: at, After: "1000041/push-1"}
+		RetiredFrom: at, DropEpoch: 3, After: "1000041/push-1"}
 	retired := code.RetiredRow{PackID: "push-0", Part: "pack",
 		GitChecksum: "7777777777777777777777777777777777777777", RetiredAt: created, Position: at}
 	introduced := code.IntroducedRow{

@@ -374,10 +374,13 @@ func (p *page) left() int { return p.maxRows - p.rows }
 //     checkpoint, which the tail serves.
 //   - A later page re-checks, in its own transaction, that the history did
 //     not move under the snapshot: the same stream, the same generation, for
-//     a delta no tombstone above its floor swept, and no retirement above
-//     the retired phase's floor swept. Any failure is [ErrSnapshotMoved], and
-//     the consumer reads the snapshot again from its first page, which
-//     decides full or delta afresh.
+//     a delta no tombstone above its floor swept, no retirement above the
+//     retired phase's floor swept, and the same drop epoch — pages spanning
+//     an expunge's begin would serve, live, the packs it rewrote beside a row
+//     carrying its epoch, and a push checked against that copy would carry
+//     an epoch its objects were not read at ([Proposal.DropEpoch]). Any
+//     failure is [ErrSnapshotMoved], and the consumer reads the snapshot
+//     again from its first page, which decides full or delta afresh.
 //
 // The answer's Position is ALWAYS page 1's checkpoint — the position the whole
 // snapshot is complete as of, which a cache records once it applied every page.
@@ -415,7 +418,8 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 		}
 		var cur StateCursor
 		if first {
-			cur = StateCursor{Phase: phasePacks, From: cp.At, Seen: cp.At, Stream: cp.KeyedTo}
+			cur = StateCursor{Phase: phasePacks, From: cp.At, Seen: cp.At, Stream: cp.KeyedTo,
+				DropEpoch: v.ref.DropEpoch}
 			if cur.Full, cur.RetiredFrom, err = choose(ctx, tx, q, cp.At, v); err != nil {
 				return err
 			}
@@ -431,6 +435,9 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 				return fmt.Errorf("%w: a deletion %s's delta needed was swept", ErrSnapshotMoved, q.RepoID)
 			case !cur.RetiredFrom.IsZero() && cur.RetiredFrom.Packed() < v.retiredThrough:
 				return fmt.Errorf("%w: a retirement %s's snapshot serves was swept", ErrSnapshotMoved, q.RepoID)
+			case v.ref.DropEpoch != cur.DropEpoch:
+				return fmt.Errorf("%w: an expunge began on %s under the snapshot (drop epoch %d, now %d)",
+					ErrSnapshotMoved, q.RepoID, cur.DropEpoch, v.ref.DropEpoch)
 			}
 			cur.Seen = cp.At
 		}
@@ -1032,6 +1039,8 @@ func checkCursor(c *StateCursor) error {
 		return bad("it was read below where it began")
 	case c.Stream.IsZero():
 		return bad("it names no stream")
+	case c.DropEpoch < 0:
+		return bad("it names a drop epoch below 0")
 	case c.Full != c.Since.IsZero():
 		return bad("a full snapshot has no delta floor, and a delta has one")
 	case !c.Full && c.Since.Stream != topics.CodeLogStream:

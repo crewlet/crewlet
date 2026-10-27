@@ -748,11 +748,14 @@
 //     which stay live (kind expunge), and packs holding the rest, which are
 //     DROPPING (kind cruft, [PackDropping]): still rows of code_packs naming
 //     their objects, still served, and never a pack a new push may rely on.
-//     It keeps every object of its inputs, so it needs no fence; it moves the
-//     repository's DROP EPOCH, which every push carries as its receiver read
-//     it, so a push checked before the begin is refused rather than land a
-//     ref onto an object the begin made dropping; and it removes the
-//     published layers over its inputs, from the lowest naming one up;
+//     It keeps every object of its inputs, so no push decided against them
+//     loses one to it; it moves the repository's DROP EPOCH, which every push
+//     carries as its receiver's copy held it ([Proposal.DropEpoch]), so a
+//     push checked before the begin is refused expunging
+//     ([RefusalExpunging]), whole and undecided, rather than land a ref onto
+//     an object the begin made dropping and the commit retires; and it
+//     removes the published layers over its inputs, from the lowest naming
+//     one up;
 //   - its COMMIT ([ExpungeCommit]) retires the dropping packs into
 //     code_packs_retired, where each keeps its object for [RetireGrace], and
 //     keeps as a live RESCUE (kind rescue) whatever of them a push that

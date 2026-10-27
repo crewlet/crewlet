@@ -669,6 +669,7 @@ func TestAReanchorUnderASnapshotRestartsIt(t *testing.T) {
 		"retiring past a key of another shape": func(c *code.StateCursor) {
 			c.Phase, c.RetiredFrom, c.After = "retired", c.From, "not-a-key"
 		},
+		"at a drop epoch below 0": func(c *code.StateCursor) { c.DropEpoch = -1 },
 	} {
 		bad := *page.Next
 		mangle(&bad)
@@ -696,6 +697,45 @@ func TestAReanchorUnderASnapshotRestartsIt(t *testing.T) {
 	n.waiter.reach(moved)
 	if _, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Cursor: page.Next}); !errors.Is(err, code.ErrSnapshotMoved) {
 		t.Fatalf("a later page after a reanchor = %v, want ErrSnapshotMoved", err)
+	}
+}
+
+// AN EXPUNGE'S BEGIN UNDER A SNAPSHOT RESTARTS IT: every page of one snapshot
+// is read at one drop epoch, because pages spanning a begin would leave a
+// copy holding, live, the packs the begin rewrote — every object of them,
+// those it left dropping too — beside a row at the begin's epoch, and a push
+// checked against that copy would carry an epoch its objects were not read at.
+// So a later page read after a begin answers ErrSnapshotMoved, and the
+// snapshot asked again reads every page at the begin's epoch.
+//
+// Mutation: drop the later page's comparison of the epochs, and that page is
+// served.
+func TestABeginUnderASnapshotRestartsIt(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id, ids := packedRepo(t, n, "app", 4)
+	code.SetPageLimits(n.reader, 2, code.MaxPageBytes)
+	page, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Fresh: stale})
+	if err != nil || page.Next == nil || page.Repo.DropEpoch != 0 || page.Next.DropEpoch != 0 {
+		t.Fatalf("page 1 = drop epoch %d, next %+v, %v; want epoch 0 with more to come", page.Repo.DropEpoch,
+			page.Next, err)
+	}
+	c, _ := committerOn(t, n, n.pub)
+	b := beginFor(n, id, 1, ids, 1, 1)
+	res, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	if _, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Cursor: page.Next}); !errors.Is(err, code.ErrSnapshotMoved) {
+		t.Fatalf("a later page after a begin = %v, want ErrSnapshotMoved", err)
+	}
+	again := snapshot(t, n.reader, id, statelog.Position{})
+	if len(again) < 2 {
+		t.Fatalf("the snapshot asked again took %d pages, want more than one", len(again))
+	}
+	for i, p := range again {
+		if p.Repo.DropEpoch != 1 {
+			t.Fatalf("page %d of the snapshot asked again is at drop epoch %d, want the begin's 1", i+1,
+				p.Repo.DropEpoch)
+		}
 	}
 }
 

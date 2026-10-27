@@ -136,6 +136,12 @@ type StateCursor struct {
 	// Stream is page 1's checkpoint's stream identity: a later page keyed to
 	// another stream answers ErrSnapshotMoved.
 	Stream time.Time `json:"stream"`
+	// DropEpoch is the repository's drop epoch as page 1 read it: a later
+	// page reading another answers ErrSnapshotMoved, so every page of one
+	// snapshot is read at one epoch — the one its Repo carries, which a
+	// push checked against the copy the snapshot synced is decided by
+	// ([Proposal.DropEpoch]).
+	DropEpoch int64 `json:"drop_epoch,omitempty"`
 	// After is the last key served in this phase.
 	After string `json:"after"`
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,65 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
+
+// A ROUND COMPARES EVERY FIELD OF A REPOSITORY'S ROW but the position it was
+// read at (sameRepo): a row that changed only in a field it skipped is a round
+// that writes no state, so the state a restart reads names the row as it was.
+// Each field of code.RepoRef is set alone, by reflection, so a field the row
+// gains is compared or this fails naming it: a list kept by hand beside the
+// row is one every new field of it slips past.
+//
+// Mutation: drop DropEpoch from sameRepo, and this fails naming it.
+func TestARoundComparesEveryFieldOfARepositorysRow(t *testing.T) {
+	t.Parallel()
+	row := reflect.TypeFor[code.RepoRef]()
+	for i := range row.NumField() {
+		var changed code.RepoRef
+		field := reflect.ValueOf(&changed).Elem().Field(i)
+		if !setSome(field) {
+			t.Fatalf("RepoRef.%s is a %s this case cannot set: teach setSome its kind", row.Field(i).Name,
+				field.Type())
+		}
+		same := sameRepo(code.RepoRef{}, changed)
+		switch name := row.Field(i).Name; {
+		case name == "Position" && !same:
+			t.Error("two reads of one row at two positions are found different")
+		case name != "Position" && same:
+			t.Errorf("two rows differing in %s alone are found the same", name)
+		}
+	}
+}
+
+// setSome sets v, a zero value, to another value of its type — a struct
+// through its first exported field it can set — and reports whether it could.
+func setSome(v reflect.Value) bool {
+	if v.Type() == reflect.TypeFor[time.Time]() {
+		v.Set(reflect.ValueOf(time.Unix(1, 0)))
+		return true
+	}
+	switch v.Kind() {
+	case reflect.String:
+		v.SetString("x")
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		v.SetInt(1)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v.SetUint(1)
+	case reflect.Bool:
+		v.SetBool(true)
+	case reflect.Slice:
+		v.Set(reflect.MakeSlice(v.Type(), 1, 1))
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() && setSome(v.Field(i)) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+	return true
+}
 
 // A DERIVED FILE NO RECORDED WRITE MADE COVERS NOTHING, whatever its entry's
 // Covers says: what an index covers is the maintainer's reason not to write
