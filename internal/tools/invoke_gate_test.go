@@ -1,6 +1,7 @@
 package tools_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -56,30 +57,8 @@ func TestEveryToolIsCalledThroughInvoke(t *testing.T) {
 			return err
 		}
 		walked++
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			receiver, receiverType := receiverOf(fn)
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok || !toolCall(call) {
-					return true
-				}
-				sel := call.Fun.(*ast.SelectorExpr)
-				switch {
-				case rel == "internal/tools/invoke.go" && fn.Name.Name == "call":
-				case isIdent(sel.X, receiver) && strings.HasPrefix(fn.Name.Name, "Call"):
-					// A tool delegating to its own other variant.
-				case slices.Contains(forwarders[rel], receiverType):
-					// A wrapper forwarding to the tool it wraps.
-				default:
-					t.Errorf("%s: a tool's %s is called outside tools.Invoke, which skips the check of "+
-						"the call against its schema", fset.Position(call.Pos()), sel.Sel.Name)
-				}
-				return true
-			})
+		for _, found := range outsideInvoke(fset, file, rel) {
+			t.Error(found)
 		}
 		return nil
 	})
@@ -91,20 +70,157 @@ func TestEveryToolIsCalledThroughInvoke(t *testing.T) {
 	}
 }
 
-// toolCall reports a call shaped as a tool's own call: Call(ctx, args),
-// CallForTurn(ctx, turn, args) or CallDetached(ctx, turn, args).
-func toolCall(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
+// outsideInvoke is every place file reaches a tool's own call other than
+// through [tools.Invoke], in each shape Go has for it: a call
+// (`t.Call(ctx, a)`), a method value (`f := t.Call; f(ctx, a)`) and a method
+// expression (`tools.Callable.Call(t, ctx, a)`).
+func outsideInvoke(fset *token.FileSet, file *ast.File, rel string) []string {
+	var found []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		receiver, receiverType := receiverOf(fn)
+		// called is each selector a call is made through; bound is each
+		// name a tool's method value is bound to, and boundCalled the calls
+		// later made through that name, by the tool's arity.
+		called := map[*ast.SelectorExpr]*ast.CallExpr{}
+		bound := map[string]*ast.SelectorExpr{}
+		boundCalled := map[*ast.SelectorExpr]bool{}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.CallExpr:
+				if sel, ok := n.Fun.(*ast.SelectorExpr); ok {
+					called[sel] = n
+				}
+			case *ast.AssignStmt:
+				for i, rhs := range n.Rhs {
+					sel, ok := rhs.(*ast.SelectorExpr)
+					if !ok || i >= len(n.Lhs) {
+						continue
+					}
+					if _, named := toolMethods[sel.Sel.Name]; !named {
+						continue
+					}
+					if id, ok := n.Lhs[i].(*ast.Ident); ok {
+						bound[id.Name] = sel
+					}
+				}
+			}
+			return true
+		})
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok {
+				if sel, held := bound[id.Name]; held && len(call.Args) == toolMethods[sel.Sel.Name] {
+					boundCalled[sel] = true
+				}
+			}
+			return true
+		})
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			arity, named := toolMethods[sel.Sel.Name]
+			if !named {
+				return true
+			}
+			shape := "method value"
+			if call, isCall := called[sel]; isCall {
+				switch {
+				case len(call.Args) == arity:
+					shape = "call"
+				case len(call.Args) == arity+1 && typeExpr(sel.X):
+					shape = "method expression"
+				default:
+					return true // another API's method of the same name
+				}
+			} else if sel.Sel.Name == "Call" && !boundCalled[sel] {
+				// A field or another API's method named Call, read as a
+				// value: a tool's Call is a method value only where the
+				// value is called as one.
+				return true
+			}
+			switch {
+			case rel == "internal/tools/invoke.go" && fn.Name.Name == "call" && shape == "call":
+			case shape == "call" && isIdent(sel.X, receiver) && strings.HasPrefix(fn.Name.Name, "Call"):
+				// A tool delegating to its own other variant.
+			case shape == "call" && slices.Contains(forwarders[rel], receiverType):
+				// A wrapper forwarding to the tool it wraps.
+			default:
+				found = append(found, fmt.Sprintf("%s: a tool's %s is reached as a %s outside "+
+					"tools.Invoke, which skips the check of the call against its schema",
+					fset.Position(sel.Pos()), sel.Sel.Name, shape))
+			}
+			return true
+		})
 	}
-	switch sel.Sel.Name {
-	case "Call":
-		return len(call.Args) == 2
-	case "CallForTurn", "CallDetached":
-		return len(call.Args) == 3
+	return found
+}
+
+// toolMethods are a tool's own calls by the arguments each takes:
+// Call(ctx, args), CallForTurn(ctx, turn, args), CallDetached(ctx, turn, args).
+var toolMethods = map[string]int{"Call": 2, "CallForTurn": 3, "CallDetached": 3}
+
+// typeExpr reports x names a type, as a method expression's receiver does:
+// an exported name (`Callable`, `tools.Callable`), a pointer type or a
+// parenthesised one.
+func typeExpr(x ast.Expr) bool {
+	switch x := x.(type) {
+	case *ast.Ident:
+		return ast.IsExported(x.Name)
+	case *ast.SelectorExpr:
+		return ast.IsExported(x.Sel.Name)
+	case *ast.ParenExpr:
+		return typeExpr(x.X)
+	case *ast.StarExpr:
+		return true
+	case *ast.InterfaceType:
+		return true
 	}
 	return false
+}
+
+// THE GATE SEES EVERY SHAPE (#423 review): a method value and a method
+// expression reach a tool's call as surely as a call does, and the first
+// version of the gate matched only the call.
+//
+// Mutation: drop the method value or the method expression from
+// outsideInvoke and its fixture is not named.
+func TestTheInvokeGateSeesEveryShape(t *testing.T) {
+	t.Parallel()
+	for name, src := range map[string]string{
+		"call":              `t.Call(ctx, args)`,
+		"method value":      `f := t.Call; f(ctx, args)`,
+		"method expression": `tools.Callable.Call(t, ctx, args)`,
+		"seat method value": `g := t.CallForTurn; g(ctx, turn, args)`,
+		"pointer method":    `(*tool).CallDetached(t, ctx, turn, args)`,
+	} {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "fixture.go",
+			"package fixture\nfunc run() {\n"+src+"\n}\n", 0)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if found := outsideInvoke(fset, file, "internal/fixture/fixture.go"); len(found) != 1 {
+			t.Errorf("%s (%s) was named %d times: %v", name, src, len(found), found)
+		}
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go",
+		"package fixture\nfunc run() { client.Call(a, b, c); rpc.Call(a) }\n", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found := outsideInvoke(fset, file, "internal/fixture/fixture.go"); len(found) != 0 {
+		t.Errorf("another API's Call was named: %v", found)
+	}
 }
 
 // receiverOf is a method's receiver name and its type's name.

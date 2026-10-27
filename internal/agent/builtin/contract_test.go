@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -230,22 +231,74 @@ func TestNoArgumentIsReadByARuleOfItsOwn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			assert, ok := n.(*ast.TypeAssertExpr)
-			if !ok || assert.Type == nil {
-				return true
+		if _, allowed := notArguments[f]; allowed {
+			continue
+		}
+		for _, found := range ownReads(fset, file) {
+			t.Error(found)
+		}
+	}
+}
+
+// ownReads is every place file reads a value as one of [readKinds] by a type
+// assertion of its own, in both shapes Go has: `v.(string)` and a case of a
+// type switch (`switch v := raw.(type) { case string: ... }`).
+func ownReads(fset *token.FileSet, file *ast.File) []string {
+	var found []string
+	name := func(at token.Pos, kind, shape string) {
+		found = append(found, fmt.Sprintf("%s: %s %s reads a value by a rule of its own; "+
+			"read an argument through argval", fset.Position(at), shape, kind))
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.TypeAssertExpr:
+			if n.Type == nil {
+				return true // a type switch's guard: its cases are read below
 			}
-			kind := types.ExprString(assert.Type)
-			if !slices.Contains(readKinds, kind) {
-				return true
+			if kind := types.ExprString(n.Type); slices.Contains(readKinds, kind) {
+				name(n.Pos(), kind, ".("+kind+")")
 			}
-			if _, allowed := notArguments[f]; allowed {
-				return true
+		case *ast.TypeSwitchStmt:
+			for _, stmt := range n.Body.List {
+				clause, ok := stmt.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, typ := range clause.List {
+					if kind := types.ExprString(typ); slices.Contains(readKinds, kind) {
+						name(typ.Pos(), kind, "case")
+					}
+				}
 			}
-			t.Errorf("%s: .(%s) reads a value by a rule of its own; read an argument through argval",
-				fset.Position(assert.Pos()), kind)
-			return true
-		})
+		}
+		return true
+	})
+	return found
+}
+
+// THE ARGUMENT GATE SEES EVERY SHAPE (#423 review): a type switch reads a value
+// by its cases as surely as an assertion does, and the first version of the
+// gate skipped it.
+//
+// Mutation: drop the type switch from ownReads and its fixture is not named.
+func TestTheArgumentGateSeesEveryShape(t *testing.T) {
+	t.Parallel()
+	for name, src := range map[string]string{
+		"an assertion": `s, _ := args["set"].([]any); _ = s`,
+		"a type switch": `switch v := args["set"].(type) {
+case []any:
+	_ = v
+}`,
+	} {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "fixture.go",
+			"package fixture\nfunc run(args map[string]any) {\n"+src+"\n}\n", 0)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if found := ownReads(fset, file); len(found) != 1 {
+			t.Errorf("%s was named %d times: %v", name, len(found), found)
+		}
 	}
 }
 
