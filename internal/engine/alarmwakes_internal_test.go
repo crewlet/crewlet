@@ -318,3 +318,32 @@ func TestAFullAlarmOutboxDropsItsOldestFirst(t *testing.T) {
 		t.Errorf("the outbox counted %d dropped transitions, want 2", dropped)
 	}
 }
+
+// THE ALARM OUTBOX HOLDS SIX FLAPS OF THE WHOLE TABLE — its bound's own
+// derivation ([alarmOutboxCap]), computed from the table and the register
+// rather than restated beside it: every instance the table can raise on a
+// data node — one per node-wide kind, and one a log per per-log kind on every
+// log a data node runs — fired and cleared six times over fits in the bound.
+// A kind added to the table moves the count, as the compaction alarm did when
+// it landed beside the outbox, and so does a log added to the register; this
+// fails once the count moves past what the bound promises, which then has to
+// be raised or its promise restated.
+//
+// Mutation: halve alarmOutboxCap, and the case is red.
+func TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable(t *testing.T) {
+	t.Parallel()
+	const flaps = 6
+	logs := len(registeredDomains())
+	perLog := len(statelog.PerLogKinds())
+	nodeWide := len(statelog.Kinds()) - perLog
+	if logs == 0 || perLog == 0 || nodeWide <= 0 {
+		t.Fatalf("the premise: a data node runs %d logs, and the table has %d node-wide and %d per-log kinds",
+			logs, nodeWide, perLog)
+	}
+	instances := nodeWide + perLog*logs
+	if need := flaps * 2 * instances; need > alarmOutboxCap {
+		t.Errorf("%d fires and clears of every instance on a data node of %d logs — %d node-wide kinds "+
+			"and %d per log, %d instances — are %d transitions, past the outbox's %d: raise the bound "+
+			"or restate what it holds", flaps, logs, nodeWide, perLog, instances, need, alarmOutboxCap)
+	}
+}

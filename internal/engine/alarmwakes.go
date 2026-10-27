@@ -35,12 +35,17 @@ import (
 // alarmOutboxCap is how many transitions a node holds unpublished before it
 // drops the oldest.
 //
-// 1024: the table raises at most 22 node-wide instances and 6 more per log,
-// so on a data node of ten logs a fire and a clear of EVERY instance is 164
-// transitions, and the bound holds six such flaps of the whole table across a
-// broker outage — while a transition is a few hundred bytes, so the outbox
-// stays under half a megabyte. Past it the oldest go first: the newest are
-// nearest the state a woken seat reads anyway.
+// 1024: the table raises at most one instance of each node-wide kind and one
+// a log of each per-log kind ([statelog.PerLogKinds]), and a data node runs
+// every registered log ([registeredDomains]), so a fire and a clear of EVERY
+// instance on one fits in the bound at least six times over — six flaps of
+// the whole table across a broker outage, which
+// TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable computes from the table and
+// the register rather than restating a count here, so a kind or a log added
+// past what the bound holds fails there instead of leaving this figure untrue
+// — while a transition is a few hundred bytes, so the outbox stays under half
+// a megabyte. Past it the oldest go first: the newest are nearest the state a
+// woken seat reads anyway.
 const alarmOutboxCap = 1024
 
 // alarmRetryBase and alarmRetryCeiling pace a publish the broker refused.
