@@ -1314,17 +1314,18 @@ describe("problems", () => {
   // one: it would be reported nowhere a reader can see it.
   test("a problem about a field the form does not draw is listed at the top", () => {
     // The fixture company has not connected GitHub, so the seat's GitHub
-    // fields are not drawn at all.
+    // fields are not drawn at all: a repository the engine refuses there,
+    // in the words its validator refuses it with, has no field to sit under.
     const state = checkWithProblems(keyedState(fixtureCompany()), [
       problemAt(
-        ["units", 0, "roles", 1, "integrations", "github", "tier"],
-        "units[0].roles[1].integrations.github.tier: names no tier",
+        ["units", 0, "roles", 1, "integrations", "github", "repos", 0],
+        'units[0].roles[1].integrations.github.repos[0]: value not in the allowed set: "acme" is not a repository; give it as owner/name, which is how GitHub addresses one and how an installation lists them',
       ),
     ]);
     edit(state, "seat:dev");
     const alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(1);
-    expect(alerts[0]!.textContent).toContain("names no tier");
+    expect(alerts[0]!.textContent).toContain("is not a repository");
     expect(describesAControl(alerts[0]!)).toBe(false);
     cleanup();
 
