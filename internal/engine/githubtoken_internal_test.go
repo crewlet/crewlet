@@ -392,16 +392,32 @@ func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 // refresh rides the poll, so a waiter built without it leaves every box of
 // its kind holding the token it launched with, which GitHub refuses within
 // the hour, halfway through a long run's work.
+//
+// THROUGH THE NODE'S OWN WIRING, [Engine.startSandboxWaiter], and the waiters
+// it publishes, each ticked alone: a waiter built there without the refresh —
+// from options of its own rather than the shared constructor — goes red here,
+// and so does one that refreshed the other waiter's box.
 func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
 	c := appCompany(t, gh.url, true)
 	e := appEngine(t, c)
-	e.backends = &Backends{}
+	e.id = "node-a"
+	e.backends = &Backends{Queue: memory.New()}
+	e.answers = testAnswers()
+	// AN HOUR TO EACH LOOP'S FIRST PASS, so the loops the waiters start
+	// never poll beside the passes this case runs itself.
+	e.sandboxPollInterval = time.Hour
 	const path = ".config/crewlet/github-token"
+	providers := map[sandbox.Placement]*sandbox.FakeProvider{
+		sandbox.Direct: sandbox.NewFakeProvider(), sandbox.E2B: sandbox.NewFakeProvider(),
+	}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
-		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Providers: map[sandbox.Placement]sandbox.Provider{
+			sandbox.Direct: providers[sandbox.Direct], sandbox.E2B: providers[sandbox.E2B],
+		},
+		DefaultPlacement: sandbox.Direct,
+		Runners:          map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
 		DefaultSetup: []sandbox.SetupStep{{
 			Name: "git-auth", Files: map[string]string{path: "${GITHUB_APP_TOKEN_BUILDER}"},
 		}},
@@ -409,23 +425,73 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	for _, drives := range sandbox.AllDrives {
-		opts := e.sandboxWaiterOptions(&sandboxRuntime{}, drives, time.Second)
-		if opts.Drives != drives {
-			t.Fatalf("the options built for the %s waiter drive %s", drives, opts.Drives)
+	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
+	rt, err := e.sandboxRuntimeOn(pending, manager)
+	if err != nil {
+		t.Fatalf("sandboxRuntimeOn: %v", err)
+	}
+	e.useSandbox(rt.pending, rt.coordinator)
+	t.Cleanup(e.stopSandbox)
+
+	// ONE RUNNING JOB IN EACH KIND OF CELL, each box holding the token its
+	// launch was handed, since expired; the direct one launched here.
+	ctx := t.Context()
+	boxes := map[sandbox.Placement]*sandbox.FakeSandbox{}
+	for _, cell := range []sandbox.Placement{sandbox.Direct, sandbox.E2B} {
+		created, err := providers[cell].Create(ctx, sandbox.Spec{Placement: cell})
+		if err != nil {
+			t.Fatalf("Create %s: %v", cell, err)
 		}
-		if opts.Refresh == nil {
-			t.Errorf("the %s waiter refreshes nothing it polls", drives)
-			continue
-		}
-		box := sandbox.NewFakeSandbox("box-" + string(drives))
+		box := providers[cell].Box(created.ID())
 		box.Put(path, "ghs_expired")
-		opts.Refresh(t.Context(), manager, sandbox.PendingRun{
-			TurnID: "turn-" + string(drives), LaunchID: "job-1", AgentHandle: "builder",
-		}, box)
-		if held, _ := box.ReadFile(t.Context(), path); !strings.HasPrefix(string(held), "ghs_test_") {
-			t.Errorf("the %s waiter's refresh left the token file holding %q", drives, held)
+		boxes[cell] = box
+		turn := "turn-" + string(cell)
+		if _, err := pending.BeginLaunch(ctx, sandbox.PendingRun{
+			TurnID: turn, AgentHandle: "builder", Role: "Builder",
+			Placement: string(cell), CodingAgent: "claude-code", LaunchNode: e.id,
+		}, sandbox.Fence{}); err != nil {
+			t.Fatalf("BeginLaunch %s: %v", cell, err)
 		}
+		if err := pending.AttachSandbox(ctx, turn, sandbox.BoxRef{
+			SandboxID: box.ID(), CommandID: "cmd-1", Placement: string(cell), Node: e.id,
+			CodingAgent: "claude-code",
+		}, sandbox.Fence{}); err != nil {
+			t.Fatalf("AttachSandbox %s: %v", cell, err)
+		}
+		if ok, err := pending.MarkSuspended(ctx, turn, sandbox.Suspension{
+			State: json.RawMessage(`{"version":4,"iteration":1}`), Iteration: 1,
+		}); err != nil || !ok {
+			t.Fatalf("MarkSuspended %s = %v, %v", cell, ok, err)
+		}
+	}
+
+	if err := e.startSandboxWaiter(ctx); err != nil {
+		t.Fatalf("startSandboxWaiter: %v", err)
+	}
+	host, fleet := e.sandboxHostWaiter.Load(), e.sandboxWaiter.Load()
+	if host == nil || fleet == nil {
+		t.Fatalf("the node started host waiter %v and fleet waiter %v, want both", host, fleet)
+	}
+	issued := func(cell sandbox.Placement) bool {
+		held, _ := boxes[cell].ReadFile(ctx, path)
+		return strings.HasPrefix(string(held), "ghs_test_")
+	}
+	tick := func(name string, w *sandbox.Waiter) {
+		if _, err := w.Tick(ctx); err != nil {
+			t.Fatalf("the %s waiter's pass: %v", name, err)
+		}
+	}
+
+	tick("node's own", host)
+	if !issued(sandbox.Direct) {
+		t.Error("the node's own waiter left its direct box's token file holding the launch's token")
+	}
+	if issued(sandbox.E2B) {
+		t.Fatal("the node's own waiter refreshed an e2b box, which only the fleet's polls")
+	}
+	tick("fleet's", fleet)
+	if !issued(sandbox.E2B) {
+		t.Error("the fleet's waiter left its e2b box's token file holding the launch's token")
 	}
 }
 
