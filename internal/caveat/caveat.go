@@ -37,17 +37,19 @@
 // one that goes by itself, so the decision is a property of the code, stated
 // once in [actions] and never guessed by a renderer from the sentence.
 //
-// # Constructed here only
+// # Constructed here, or rebuilt from a peer at one boundary
 //
-// A caveat's fields are unexported, so the only way to make one is a
-// constructor in this package. That is what makes the walk in its suite
-// complete: every caveat any surface can answer is one of these, and every
-// one of these has its person phrasing checked.
+// A caveat's fields are unexported and it does not decode from JSON, so the
+// only ways to make one are a constructor in this package's catalog and
+// [RebuildFromPeer], which rebuilds what a peer's catalog wrote and which only
+// the estate router calls (a gate in the suite holds both). That is what
+// makes the walk in its suite complete: every caveat any surface can answer
+// was written by a catalog constructor, this build's or a peer's, and this
+// build's have their person phrasing checked.
 package caveat
 
 import (
 	"encoding/json"
-	"fmt"
 	"slices"
 )
 
@@ -163,7 +165,8 @@ func Codes() []Code {
 }
 
 // Caveat is one caveat, in the words of each reader. The zero value is no
-// caveat, and only this package's constructors make another.
+// caveat, and only this package's catalog (or the estate router, rebuilding a
+// peer's) makes another.
 type Caveat struct {
 	code   Code
 	agent  string
@@ -203,31 +206,21 @@ func (c Caveat) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire{Code: c.code, Agent: c.agent, Person: c.person})
 }
 
-// UnmarshalJSON reads a caveat a peer wrote. A code this build does not know
-// is kept as written, words and all: a newer peer's caveat is still true, and
-// dropping it would tell the caller less than the write said.
-func (c *Caveat) UnmarshalJSON(raw []byte) error {
-	var w wire
-	if err := json.Unmarshal(raw, &w); err != nil {
-		return fmt.Errorf("caveat: %w", err)
-	}
-	if w.Code == "" || w.Agent == "" || w.Person == "" {
-		return fmt.Errorf("caveat: a caveat needs a code and both phrasings, "+
-			"and this one has code %q", w.Code)
-	}
-	*c = Caveat{code: w.Code, agent: w.Agent, person: w.Person}
-	return nil
-}
+// NO UnmarshalJSON, deliberately: decoding JSON into a Caveat leaves it the
+// zero value, which no surface answers. A caveat a peer wrote is rebuilt only
+// by the estate router, through [RebuildFromPeer] (peer.go), so text from
+// anywhere else (a tool's output, a request body) can never become words a
+// person is shown.
 
 // Agents is the model's words for each caveat, in order: what a tool's answer
 // carries as `warnings`. Nil for none.
 func Agents(cs []Caveat) []string {
-	if len(cs) == 0 {
-		return nil
-	}
-	out := make([]string, len(cs))
-	for i, c := range cs {
-		out[i] = c.agent
+	var out []string
+	for _, c := range cs {
+		if c.IsZero() {
+			continue
+		}
+		out = append(out, c.agent)
 	}
 	return out
 }

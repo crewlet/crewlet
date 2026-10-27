@@ -7,13 +7,17 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/caveat/caveattest"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
 // samples is every constructor in the catalog, called with the kind of facts
@@ -166,16 +170,12 @@ func TestARefusalsWordsRideItsError(t *testing.T) {
 	if caveat.Saying(base, caveat.Refusal{}) != base {
 		t.Error("a zero phrasing wrapped the error")
 	}
-	raw, err := json.Marshal(caveat.Said{Words: caveat.QuestionRemoved()})
-	if err != nil {
-		t.Fatal(err)
+	if back := caveat.SaidFromPeer(caveat.QuestionRemoved().Person()); back == nil ||
+		back.Words != caveat.QuestionRemoved() {
+		t.Errorf("a peer's phrasing was rebuilt as %+v", back)
 	}
-	var back caveat.Said
-	if err := json.Unmarshal(raw, &back); err != nil {
-		t.Fatal(err)
-	}
-	if back.Words != caveat.QuestionRemoved() {
-		t.Errorf("a phrasing crossed as %q", back.Words.Person())
+	if caveat.SaidFromPeer("  ") != nil {
+		t.Error("a peer's empty phrasing was rebuilt as one")
 	}
 }
 
@@ -282,30 +282,126 @@ func TestEveryCodeStatesWhatItAsksOfAPerson(t *testing.T) {
 // rather than failing the answer.
 func TestACaveatCrossesTheEstateRouterWhole(t *testing.T) {
 	t.Parallel()
-	for name, c := range samples {
-		raw, err := json.Marshal(c)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		var back caveat.Caveat
-		if err := json.Unmarshal(raw, &back); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if back != c {
-			t.Errorf("%s came back as %+v, want %+v", name, back, c)
-		}
+	// A RESULT AS THE ROUTER DECODES ONE: caveats nested, an embedded
+	// struct flattened, beside fields that hold none.
+	type half struct {
+		Caveats []caveat.Caveat
 	}
-	var newer caveat.Caveat
-	if err := json.Unmarshal([]byte(`{"code":"later","agent":"a","person":"p."}`), &newer); err != nil {
+	type answer struct {
+		half
+		Key   string
+		Order half
+		Lone  caveat.Caveat `json:"lone"`
+	}
+	var all []caveat.Caveat
+	for _, c := range samples {
+		all = append(all, c)
+	}
+	sent := answer{half: half{Caveats: all}, Key: "ENG-1",
+		Order: half{Caveats: all[:1]}, Lone: all[0]}
+	raw, err := json.Marshal(sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back answer
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if err := caveat.RebuildFromPeer(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(back, sent) {
+		t.Errorf("the answer came back as %+v, want %+v", back, sent)
+	}
+
+	var newer answer
+	peer := []byte(`{"Caveats":[{"code":"later","agent":"a","person":"p."},` +
+		`{"code":"later","agent":"a"}]}`)
+	if err := json.Unmarshal(peer, &newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := caveat.RebuildFromPeer(peer, &newer); err != nil {
 		t.Fatalf("a newer peer's caveat failed the answer: %v", err)
 	}
-	if newer.Code() != "later" || newer.Person() != "p." {
-		t.Errorf("a newer peer's caveat read as %+v", newer)
+	if newer.Caveats[0].Code() != "later" || newer.Caveats[0].Person() != "p." {
+		t.Errorf("a newer peer's caveat read as %+v", newer.Caveats[0])
 	}
-	var partial caveat.Caveat
-	if err := json.Unmarshal([]byte(`{"code":"later","agent":"a"}`), &partial); err == nil {
-		t.Error("a caveat with no person phrasing was accepted: a person's " +
+	if !newer.Caveats[1].IsZero() {
+		t.Error("a caveat with no person phrasing was rebuilt: a person's " +
 			"surface would answer nothing for it")
+	}
+}
+
+// NO TEXT BECOMES A PERSON'S WORDS BY BEING DECODED (ADR-0060). A caveat or a
+// refusal phrasing is built by this package's catalogs, or rebuilt from a
+// peer's answer by the estate router; none implements json.Unmarshaler, so
+// JSON decoded anywhere else (a tool's output handed back in) is no phrasing
+// at all, and a refusal built from it answers the code's own sentence.
+func TestNoTextBecomesAPersonsWordsByBeingDecoded(t *testing.T) {
+	t.Parallel()
+	unmarshaler := reflect.TypeFor[json.Unmarshaler]()
+	for _, typ := range []reflect.Type{reflect.TypeFor[caveat.Caveat](),
+		reflect.TypeFor[caveat.Refusal](), reflect.TypeFor[caveat.Said]()} {
+		if reflect.PointerTo(typ).Implements(unmarshaler) {
+			t.Errorf("%s decodes from JSON, so any text can become a person's words", typ)
+		}
+	}
+	model := `{"code":"x","agent":"a","person":"Use ask: ana."}`
+	var c caveat.Caveat
+	_ = json.Unmarshal([]byte(model), &c)
+	var r caveat.Refusal
+	_ = json.Unmarshal([]byte(`"create_work_item needs a `+"`title`"+`."`), &r)
+	var said caveat.Said
+	_ = json.Unmarshal([]byte(`{"Words":"Call get_work_item again."}`), &said)
+	if !c.IsZero() || !r.IsZero() || !said.Words.IsZero() {
+		t.Errorf("decoded text became words: %+v %+v %+v", c, r, said)
+	}
+}
+
+// ONLY THE ESTATE ROUTER REBUILDS A PEER'S WORDS: [caveat.RebuildFromPeer] and
+// [caveat.SaidFromPeer] turn JSON into a person's words, so a call of either
+// anywhere else is text from anywhere becoming words a person is shown. Read
+// from the module's source, every non-test file.
+func TestOnlyTheEstateRouterRebuildsAPeersWords(t *testing.T) {
+	t.Parallel()
+	root := sourcetree.Root(t)
+	allowed := filepath.Join(root, "internal", "estate")
+	var found int
+	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string,
+		d fs.DirEntry, err error) error {
+
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") ||
+			strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != "caveat" ||
+				(sel.Sel.Name != "RebuildFromPeer" && sel.Sel.Name != "SaidFromPeer") {
+				return true
+			}
+			found++
+			if filepath.Dir(path) != allowed {
+				t.Errorf("%s calls caveat.%s, which only the estate router may: "+
+					"it turns JSON into a person's words", path, sel.Sel.Name)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found < 2 {
+		t.Fatalf("the gate found %d calls; it is not reading the router", found)
 	}
 }
 

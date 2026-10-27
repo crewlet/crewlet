@@ -3,8 +3,6 @@ package caveat
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
 )
 
 // # A refusal, worded for a person (ADR-0060)
@@ -26,10 +24,12 @@ import (
 // `detail`. A site without a phrasing tells a person less, and never tells
 // them a model's words.
 //
-// # Constructed here only
+// # Constructed here, or rebuilt from a peer at one boundary
 //
-// A Refusal's field is unexported, so the walk over this package's catalog is
-// a walk over every refusal sentence any surface can show a person, the same
+// A Refusal's field is unexported and it does not decode from JSON, so it is
+// made by this package's refusal catalog, or rebuilt from a peer's by the
+// estate router alone ([SaidFromPeer]): the walk over the catalog is a walk
+// over every refusal sentence this build can show a person, the same
 // guarantee [Caveat] makes.
 
 // Refusal is a refused call's words for a person: what was refused and, where
@@ -47,19 +47,9 @@ func (r Refusal) Person() string { return r.person }
 func (r Refusal) IsZero() bool { return r.person == "" }
 
 // MarshalJSON writes the refusal as it crosses between nodes: its sentence.
+// There is no UnmarshalJSON, for [Caveat]'s reason: a peer's phrasing is
+// rebuilt only by the estate router ([SaidFromPeer]).
 func (r Refusal) MarshalJSON() ([]byte, error) { return json.Marshal(r.person) }
-
-// UnmarshalJSON reads a refusal a peer wrote. Its words are kept as written: a
-// newer peer's phrasing is still a person's phrasing, held by that peer's own
-// walk.
-func (r *Refusal) UnmarshalJSON(raw []byte) error {
-	var person string
-	if err := json.Unmarshal(raw, &person); err != nil {
-		return fmt.Errorf("caveat: a refusal's phrasing: %w", err)
-	}
-	*r = Refusal{person: strings.TrimSpace(person)}
-	return nil
-}
 
 // Said carries a [Refusal] in an error chain, so a domain writer's refusal
 // reaches the tool that answers it with its person's words still on it, on

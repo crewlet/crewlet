@@ -200,6 +200,13 @@ type typedKind struct {
 	typ  reflect.Type
 }
 
+// rebuiltByPeer are the typed kinds that cannot be set field by field, each
+// with what rebuilds it. A refusal's person phrasing is the one: its words are
+// rebuilt only here ([caveat.SaidFromPeer]).
+var rebuiltByPeer = map[string]func(typedError) (reflect.Value, bool){
+	"caveat.Said": saidFromPeer,
+}
+
 // typedKinds are every error TYPE a caller may unwrap with errors.As, keyed
 // by the Go identifier for the reason [sentinels] is.
 //
@@ -413,6 +420,9 @@ func decodeTyped(t typedError) (reflect.Value, bool) {
 	if kind == nil {
 		return reflect.Value{}, false
 	}
+	if rebuilt, ok := rebuiltByPeer[t.Code]; ok {
+		return rebuilt(t)
+	}
 	structType := kind.typ
 	if structType.Kind() == reflect.Pointer {
 		structType = structType.Elem()
@@ -441,4 +451,18 @@ func decodeTyped(t typedError) (reflect.Value, bool) {
 		return ptr, true
 	}
 	return v, true
+}
+
+// saidFromPeer rebuilds a refusal's person phrasing a peer carried as
+// `{"Words": "<sentence>"}`, or reports false for one with no words.
+func saidFromPeer(t typedError) (reflect.Value, bool) {
+	var person string
+	if raw, ok := t.Fields["Words"]; !ok || json.Unmarshal(raw, &person) != nil {
+		return reflect.Value{}, false
+	}
+	said := caveat.SaidFromPeer(person)
+	if said == nil {
+		return reflect.Value{}, false
+	}
+	return reflect.ValueOf(said), true
 }

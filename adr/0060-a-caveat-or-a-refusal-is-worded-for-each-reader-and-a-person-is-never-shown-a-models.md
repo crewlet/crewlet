@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/caveat`
-- **Enforced-by:** `internal/caveat.TestEveryCaveatAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheWalkCoversEveryConstructorAndCode`, `internal/caveat.TestEveryCodeStatesWhatItAsksOfAPerson`, `internal/caveat.TestTheDashboardReadsWhatACaveatAsks`, `internal/agent/builtin.TestOnlyTheCaveatHelperWritesAToolsWarnings`, `internal/api/operator.TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels`, `internal/caveat.TestEveryRefusalAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheCheckRefusesAModelsRefusal`, `internal/caveat.TestARefusalsWordsRideItsError`, `internal/api/operator.TestEveryRefusalTheActRouteAnswersIsWordedForAPerson`, `internal/api/operator.TestAnActRefusalIsAPersonsWordsOrItsCodes`, `internal/estate.TestARefusalsPersonWordsCrossTheRouter`, and the compile errors a caveat or a refusal phrasing built outside its package meets (their fields are unexported), and a free sentence handed to `operator.Fail` meets (it takes a `caveat.Refusal`)
+- **Enforced-by:** `internal/caveat.TestEveryCaveatAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheWalkCoversEveryConstructorAndCode`, `internal/caveat.TestEveryCodeStatesWhatItAsksOfAPerson`, `internal/caveat.TestTheDashboardReadsWhatACaveatAsks`, `internal/agent/builtin.TestOnlyTheCaveatHelperWritesAToolsWarnings`, `internal/api/operator.TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels`, `internal/caveat.TestEveryRefusalAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheCheckRefusesAModelsRefusal`, `internal/caveat.TestARefusalsWordsRideItsError`, `internal/api/operator.TestEveryRefusalTheActRouteAnswersIsWordedForAPerson`, `internal/api/operator.TestAnActRefusalIsAPersonsWordsOrItsCodes`, `internal/estate.TestARefusalsPersonWordsCrossTheRouter`, `internal/caveat.TestNoTextBecomesAPersonsWordsByBeingDecoded`, `internal/caveat.TestOnlyTheEstateRouterRebuildsAPeersWords`, `internal/caveat.TestACaveatCrossesTheEstateRouterWhole`, `internal/api/operator.TestEveryAnswerTheActRouteGivesIsWordedForAPerson`, `internal/api/workapi.TestTheWorkSurfaceAnswersAPersonInAPersonsWords`, `internal/api.TestARefusedAssistedWriteTellsTheModelAndNeverTheAnswer`, and the compile errors a caveat or a refusal phrasing built outside its package meets (their fields are unexported), and a free sentence handed to `operator.Fail` meets (it takes a `caveat.Refusal`)
 - **Cost-when-tried:** answering a decision in the dashboard Inbox left a warning toast that never went away, telling a person "backend-engineer is woken by this but is not asked to answer it. Use ask: backend-engineer, or @-mention them, if you are expecting a reply." The sentence was `comment_on_work_item`'s `warnings`, written for a model, and `useAct` showed every receipt warning verbatim as a sticky toast. The same path carried a project's default-assignee advice naming `write_project` and `default_assignee`, internal task ids from a retried create, and a near-duplicate tag sentence appended into the `labels_created` list of slugs. PR #408 fixed the one branch that fired on an answer, and the class stayed open. Refusals took the same route: `operator.Fail` put the tool's sentence in `detail` and the dashboard's `RefusalNote` drew it, so a decision answered with a choice the question did not offer was refused with "comment_on_work_item was refused: … change the argument this names (`answers`, or `choice`) and comment again".
 - **Tag-status:** unreleased
 
@@ -11,7 +11,12 @@
 **A caveat (something a write that landed tells its caller, and was not
 refused for) is one value carrying a model's phrasing and a person's.** Both
 are written together, by one constructor per code in `internal/caveat`, from
-the same facts; nothing outside the package can construct one. Each code also
+the same facts. Nothing outside the package can construct one, and none
+decodes from JSON: the one other source is a peer's catalog, whose caveats the
+estate router alone rebuilds from the answer it routed
+(`caveat.RebuildFromPeer`, held to `internal/estate` by a gate), so text from
+anywhere else, a tool's output or a request body, can never become words a
+person is shown. Each code also
 states what it asks of a person: `required` (something stays broken until
 somebody acts) or `none` (something to know).
 
@@ -28,10 +33,12 @@ itself otherwise, by the kit Toaster's own variant defaults.
 **A refusal is answered to a person in a person's words, or in its code's.**
 A tool's refusal keeps its model sentence as `Output`, untouched. Beside it,
 `mcp.Result.PersonRefusal` carries a `caveat.Refusal`, a person's phrasing
-constructed only in `internal/caveat`'s refusal catalog, and never rendered to
-a model. A domain writer that refuses with a person's phrasing puts it beside
-its error (`caveat.Saying`, or a typed refusal whose chain carries a
-`caveat.Said`), it crosses the estate router as a typed value, and
+constructed only in `internal/caveat`'s refusal catalog (or rebuilt from a
+peer's by the estate router, `caveat.SaidFromPeer`, under the same gate as a
+caveat), and never rendered to a model. A domain writer that refuses with a
+person's phrasing puts it beside its error (`caveat.Saying`, or a typed
+refusal whose chain carries a `caveat.Said`), it crosses the estate router as
+a typed value, and
 `builtin.refusedBy` lifts it onto the result, so no tool answering that error
 has to remember it. `operator.Fail`, the one refusal mapping every person's
 surface answers through (the act route, the human write surface's tool-backed
