@@ -110,6 +110,8 @@ import {
   undoAction,
   useConversation,
   conversation,
+  recordRestore,
+  restoreOf,
 } from "./session.ts";
 import { AskComposer, useDraftBox } from "./AskComposer.tsx";
 import { ATTACH_ACCEPT, ATTACH_HINT, useAttachments } from "./attachments.ts";
@@ -234,18 +236,21 @@ export function Drawer({
   // A QUESTION THE ENGINE TURNED AWAY UNSENT is put back in the box, so the
   // reader's words are not lost to the refusal (`bounce.ts`, the one rule the
   // notice and the box's wait read too). Into an EMPTY box only, never over
-  // what the reader typed since; and the notice says the question is back
-  // only where it is, by the key recorded here.
+  // what the reader typed since, and ONCE per turn (`recordRestore`): a drawer
+  // closed and opened again does not put back a question the reader deleted.
+  // The notice says the question is back only where it went.
   const last = view.turns.at(-1);
   const bounced = bouncedOf(view.turns);
-  const [restored, setRestored] = useState<string | null>(null);
+  // The decision is the session's; this only draws the drawer again once made.
+  const [, decided] = useState(0);
   useEffect(() => {
-    if (!bounced) return;
+    if (!bounced || restoreOf(bounced.key) !== undefined) return;
     const held = draft.read();
     if (held === "") draft.write(bounced.question);
-    if (held === "" || held === bounced.question) setRestored(bounced.key);
+    recordRestore(bounced.key, held === "" || held === bounced.question);
+    decided((n) => n + 1);
   }, [bounced, draft]);
-  const inBox = bounced !== null && restored === bounced.key ? bounced.key : null;
+  const inBox = bounced !== null && restoreOf(bounced.key) === true ? bounced.key : null;
 
   const waitSeconds =
     bounced?.refusal && locksTheBox(bounced.refusal) ? (waitLeft(bounced, now) ?? 0) : 0;

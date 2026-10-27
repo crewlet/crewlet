@@ -628,9 +628,29 @@ export function pageMoved(revision: string, revisions: Readonly<Record<string, s
 }
 
 /** Test seam: a fresh store, as a fresh page has. */
+/**
+ * The refused questions the drawer has decided about, by turn key, and whether
+ * the question went back in the box: decided ONCE per turn for the life of the
+ * tab, here rather than in the drawer, which is unmounted when it closes. A
+ * drawer opened again never puts back a question the reader deleted, and still
+ * says it is in the box where it went there.
+ */
+const restores = new Map<string, boolean>();
+
+/** Whether a refused turn's question went back in the box, or undefined before the drawer decided. */
+export function restoreOf(turnKey: string): boolean | undefined {
+  return restores.get(turnKey);
+}
+
+/** Record that the drawer decided about a refused turn's question, and whether it went back. */
+export function recordRestore(turnKey: string, inBox: boolean): void {
+  restores.set(turnKey, inBox);
+}
+
 export function resetSessionForTest(): void {
   generation += 1;
   creating = null;
+  restores.clear();
   asked.clear();
   approvals.clear();
   declines.clear();

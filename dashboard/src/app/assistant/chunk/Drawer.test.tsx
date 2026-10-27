@@ -796,3 +796,35 @@ test("a refused question is not put back over a new one, and the notice does not
   expect(screen.getByText("The company's token budget for this window is spent.")).toBeDefined();
   expect(document.body.textContent).not.toContain("back in the box");
 });
+
+// A QUESTION IS PUT BACK ONCE PER TURN, not once per drawer: closing the
+// drawer unmounts it, and a question the reader deleted must not come back
+// when they open it again. The notice still says where it went.
+//
+// Mutation: keep the decision in the drawer's own state, and the reopened box
+// holds the deleted question again.
+test("a restored question the reader deleted stays deleted when the drawer opens again", async () => {
+  engine(
+    () =>
+      new Response(
+        JSON.stringify({ error: "budget_exhausted", remedy: { setting: "company_token_budget" } }),
+        { status: 429, headers: { "Content-Type": "application/json", "Retry-After": "60" } },
+      ),
+  );
+  const first = mount();
+  const box = () =>
+    screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box(), { target: { value: "Who spent most this week?" } });
+  await act(async () => {
+    fireEvent.keyDown(box(), { key: "Enter" });
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("refused"));
+  expect(box().value).toBe("Who spent most this week?");
+  fireEvent.change(box(), { target: { value: "" } });
+
+  first.unmount();
+  mount();
+  await act(async () => {});
+  expect(box().value).toBe("");
+  expect(document.body.textContent).toContain("Your question is back in the box below.");
+});
