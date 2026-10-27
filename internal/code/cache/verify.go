@@ -1018,13 +1018,25 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 // read (chainVerdict). No read slot is taken a piece at a time: the check
 // holds its maintenance slot across the whole of it. A declaration whose
 // every read holds its files (Check.hashed: the memo's tree, admitted whole)
-// has nothing for a hash to add, and is passed over.
+// has nothing for a hash to add, and is passed over; and so is every file of
+// a layer the incarnation installed, which the layer pass reads once
+// (checkLayers: code.CheckLayer holds each file to its trailer as it holds it
+// to its row) — read here as well, a layer's every byte was read and hashed
+// twice, some 2.6 GB more for the root layer of the largest repository the
+// defaults admit. A chain file, which carries no trailer, and a layer file no
+// installed layer names are this pass's.
 func (c *Cache) checkDerived(ctx context.Context, e *entry, inc *incarnation, l *listing) ([]string, error) {
 	var problems []string
 	p := c.pieces(nil)
 	dir := inc.dir
+	layered := map[string]bool{}
+	for _, row := range l.installed {
+		for _, rel := range layerRels(row.Layer) {
+			layered[rel] = rel != ""
+		}
+	}
 	for _, f := range l.derived {
-		if !f.of.Check.hashed() {
+		if !f.of.Check.hashed() || layered[f.rel] {
 			continue
 		}
 		_, want, err := f.held(l.chains)
@@ -1051,9 +1063,10 @@ func (c *Cache) checkDerived(ctx context.Context, e *entry, inc *incarnation, l 
 
 // checkLayers is the LAYER PASS, after the packs' hashes and before the fsck:
 // every layer the incarnation installed held to the row it was installed from
-// (code.CheckLayer — each of its files read once, its sections, its packs, its
-// counts and its base's graph layers), which a trailer cannot see: a file
-// whose hashfile trailer is sound over bytes the row does not describe. Each
+// (code.CheckLayer — each of its files read once, by this pass alone, its
+// trailers, its sections, its packs, its counts and its base's graph layers),
+// beside what a trailer can see: a file whose hashfile trailer is sound over
+// bytes the row does not describe. Each
 // finding names the layer and what differed, and is damage: a rebuild seeds
 // every layer that passes and fetches the rest (seedRebuild). A file gone is
 // one finding, as the listing would name it. Its bytes are within the pass's
@@ -1066,6 +1079,13 @@ func (c *Cache) checkLayers(ctx context.Context, dir string, l *listing) ([]stri
 	for i, row := range l.installed {
 		if err := ctx.Err(); err != nil {
 			return problems, context.Cause(ctx)
+		}
+		if c.knobs != nil && c.knobs.hashing != nil {
+			for _, rel := range layerRels(row.Layer) {
+				if rel != "" {
+					c.knobs.hashing(filepath.Join(dir, rel))
+				}
+			}
 		}
 		err := checkLayerAt(ctx, dir, row, baseOf(l.installed, i), p)
 		switch {

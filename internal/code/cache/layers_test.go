@@ -1587,9 +1587,16 @@ func TestALayersGitIsReadAsItIsWritten(t *testing.T) {
 // VERIFY NAMES A DAMAGED LAYER: every layer the copy installed is held to the
 // row it was installed from, beside the trailers — so a bitmap whose header
 // names another multi-pack-index, its own trailer made whole over it, is a
-// finding naming the layer, which no trailer can see.
+// finding naming the layer, which no trailer can see. And it reads each of a
+// layer's files ONCE: the layer pass holds every file to its trailer as it
+// holds it to its row, so the pass of the other derived files leaves an
+// installed layer's files to it — read twice, the root layer of the largest
+// repository the defaults admit is some 2.6 GB more read and hashed while the
+// check holds its maintenance slot.
 //
-// Mutation: skip the layer pass (check's checkLayers) — nothing is found.
+// Mutations: skip the layer pass (check's checkLayers) — nothing is found;
+// hash an installed layer's files in the derived files' pass too
+// (checkDerived's skip dropped) — each is hashed twice.
 func TestVerifyNamesADamagedLayer(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1597,16 +1604,38 @@ func TestVerifyNamesADamagedLayer(t *testing.T) {
 	p := w.pushN(t, repo, 3)
 	chain := w.buildChain(t, p[:1], p[1:2])
 	w.log.publish(repo, chain, nil)
-	c := w.open(t)
+	var mu sync.Mutex
+	hashed := map[string]int{}
+	c := w.open(t, func(o *cache.Options) {
+		cache.WhileHashing(o, func(path string) {
+			mu.Lock()
+			hashed[path]++
+			mu.Unlock()
+		})
+	})
 	s := w.sync(t, c, repo)
 	bitmap := filepath.Join(s.Dir, "objects", "pack", "multi-pack-index.d",
 		"multi-pack-index-"+chain[1].LayerID+".bitmap")
 	s.Release()
 	// A chained copy as installed is exactly its rows: the chain's
 	// directories and files are the image's, and every layer its row.
+	mu.Lock()
+	clear(hashed)
+	mu.Unlock()
 	if report, err := verify(t.Context(), c, repo, false); err != nil || len(report.Problems) != 0 {
 		t.Fatalf("Verify of the copy as installed found %q (%v), want nothing", report.Problems, err)
 	}
+	mu.Lock()
+	for _, l := range chain {
+		for _, rel := range []string{"objects/pack/multi-pack-index.d/multi-pack-index-" + l.LayerID + ".midx",
+			"objects/pack/multi-pack-index.d/multi-pack-index-" + l.LayerID + ".bitmap",
+			"objects/info/commit-graphs/graph-" + l.GraphID + ".graph"} {
+			if got := hashed[filepath.Join(s.Dir, filepath.FromSlash(rel))]; got != 1 {
+				t.Errorf("Verify hashed %s %d times, want once", rel, got)
+			}
+		}
+	}
+	mu.Unlock()
 	// The bitmap's header names its multi-pack-index by checksum, the twenty
 	// bytes after its signature, version, flags and count (git's
 	// bitmap_disk_header): one of them flipped, and the trailer resealed.
