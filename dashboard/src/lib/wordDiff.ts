@@ -92,7 +92,9 @@ export function changedRuns(before: string, after: string): ChangedRuns {
   let head = 0;
   while (head < a.length && head < b.length && a[head]!.text === b[head]!.text) head++;
   // The shared end stops where the shared start began, so a token is never
-  // counted on both: "aa" against "aaa" shares two letters, not four.
+  // counted on both: "go go" against "go go go" shares all three of the first
+  // line's tokens at the start, and an end walked on past them would count the
+  // same three again and leave the " go" the second line added unmarked.
   let tail = 0;
   while (
     tail < a.length - head &&
