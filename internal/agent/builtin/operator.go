@@ -51,6 +51,11 @@ type OperatorDeps struct {
 	// omits them: a company that hosts no code.
 	Code CodeDeps
 
+	// Readers is `code_repo_readers`' half beside Code — who read a
+	// `visibility: unit` repository — served only with Code. A nil reader
+	// omits the tool.
+	Readers ReadersDeps
+
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
 	// org to read from one, so search_knowledge takes it from here — and
@@ -177,6 +182,13 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// company's expense, and a seat has search_knowledge and a model
 		// of its own — see answerknowledge.go.
 		{newAnswerKnowledge(deps), answerable(deps)},
+		// NOR THIS: who read a unit's repository names the people, the
+		// credentials and the seats that read its code — an audit, and
+		// admin's (authz.ActionCodeRepoReaders) — and a seat that could
+		// ask it would be a model watching the people it works for. See
+		// codereaders.go.
+		{&codeRepoReaders{code: deps.Code, deps: deps.Readers},
+			deps.Code.Code != nil && deps.Readers.Readers != nil},
 	}
 	candidates = slices.Concat(candidates,
 		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps),

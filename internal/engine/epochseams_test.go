@@ -190,6 +190,8 @@ var classified = map[string]struct {
 		"judged by on the git node that answers it"},
 	"query.Options.Current": {seamGate, "whether this node serves the company's configuration: a " +
 		"seat's read behind it is answered unready, behind_config, and judged nowhere here"},
+	"query.Options.Fetched": {seamNone, "where a read the node answered of a visibility: unit " +
+		"repository is recorded: the node's own event log, which no decide reads"},
 
 	"pages.SearcherOptions.Index":  {seamNone, "the node's lexical index"},
 	"pages.SearcherOptions.Node":   {seamNone, "this node's name in the fan-out's assignment table"},

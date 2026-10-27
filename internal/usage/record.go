@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -8,12 +9,14 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The USAGE RECORD: one node's day for one seat, one schedule or one person,
-// whole.
+// The USAGE RECORD: one node's day for one seat, one schedule, one person or
+// one unit repository's readers, whole.
 //
 // # A record is the object's current value, never a delta
 //
@@ -30,16 +33,16 @@ import (
 // [versionedFields] names, which the conformance suite holds it to.
 //
 // A record above it is RETAINED at its position rather than skipped, so a
-// newer peer's shape survives a rolling upgrade in both directions. Every
-// kind this build writes — a seat's, a schedule's and a person's day — is the
-// base format, version 1.
+// newer peer's shape survives a rolling upgrade in both directions. A seat's,
+// a schedule's and a person's day are the base format, version 1; a unit
+// repository's readers ([KindRepoRead]) are version 2.
 //
 // IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES: a record is stamped
 // with the lowest version that reads what it carries ([Record.Encode], over
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
 // highest version.
-const RecordVersion = 1
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
@@ -47,7 +50,11 @@ const baseRecordVersion = 1
 
 // versionedFields is every field a usage record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it:
-// NONE YET, since every kind this build writes is in the base format.
+// the repo_read kind and the four fields only it carries, at version 2. A
+// build at version 1 RETAINS a repository's readers — under the identity their
+// writer stated ([RecordEnvelope.SubjectID]) — rather than faulting at a kind
+// it has no applier for, and applies them once it is upgraded; every other
+// record stays at 1 and every build applies it.
 //
 // ADDING A FIELD TO A RECORD IS ADDING A ROW HERE, on the tracker's terms: an
 // older build decodes a field it has no home for AROUND — it reads the
@@ -62,7 +69,18 @@ const baseRecordVersion = 1
 // A NEW KIND IS A VALUE of a field every record carries, so its row names the
 // key and the value (`subject.kind` equal to the new kind's name): a row
 // naming only the key would stamp every record the domain writes.
-var versionedFields = statelog.RecordFields{}
+//
+// THE KIND'S OWN FIELDS HAVE ROWS BESIDE IT, though today only records of that
+// kind carry them: a row states one FIELD's version, by the rule above, so a
+// field that a later change lets another kind carry is already stamped by its
+// own row rather than relying on a kind it no longer rides with.
+var versionedFields = statelog.RecordFields{
+	{Name: "Subject.Kind repo_read", Since: 2, Path: []string{"subject", "kind"}, Equals: string(KindRepoRead)},
+	{Name: "Subject.Repo", Since: 2, Path: []string{"subject", "repo"}},
+	{Name: "Record.RepoName", Since: 2, Path: []string{"repo_name"}},
+	{Name: "Record.RepoReads", Since: 2, Path: []string{"repo_reads"}},
+	{Name: "Record.RepoReadersElided", Since: 2, Path: []string{"repo_readers_elided"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -91,10 +109,19 @@ const (
 	// so its spend was in no seat's day and therefore in no named spend
 	// window.
 	KindPerson Kind = "person"
+
+	// KindRepoRead is one `visibility: unit` repository's READERS on one
+	// node's day: every credential and seat that read its contents there —
+	// a git fetch that carried a pack, a code tool's answer — and how much
+	// (types.CodeFetched). ONE SUBJECT PER (node, day, repository), carrying
+	// every reader, rather than one per reader: the compacted stream keeps a
+	// subject index every broker member holds in memory, so its subjects are
+	// counted in repositories × nodes × days and never in readers × that.
+	KindRepoRead Kind = "repo_read"
 )
 
 // Kinds is every kind this build writes.
-var Kinds = []Kind{KindSeat, KindSchedule, KindPerson}
+var Kinds = []Kind{KindSeat, KindSchedule, KindPerson, KindRepoRead}
 
 // Valid reports whether a kind off the wire is one this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
@@ -133,6 +160,10 @@ type Subject struct {
 	ScopeType string `json:"scope_type,omitempty"`
 	ScopeID   string `json:"scope_id,omitempty"`
 	Schedule  string `json:"schedule,omitempty"`
+
+	// Repo is the repository's id, on a repo_read record: the identity that
+	// outlives its name, which a rename moves and a deletion frees.
+	Repo string `json:"repo,omitempty"`
 }
 
 // Validate refuses a subject that cannot address an object.
@@ -148,15 +179,15 @@ func (s Subject) Validate() error {
 		if strings.TrimSpace(s.Seat) == "" {
 			return fmt.Errorf("usage: a seat record names no seat")
 		}
-		if s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" || s.Person != "" {
-			return fmt.Errorf("usage: a seat record names a schedule or a person")
+		if s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" || s.Person != "" || s.Repo != "" {
+			return fmt.Errorf("usage: a seat record names a schedule, a person or a repository")
 		}
 	case KindPerson:
 		if strings.TrimSpace(s.Person) == "" {
 			return fmt.Errorf("usage: a person record names no person")
 		}
-		if s.Seat != "" || s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" {
-			return fmt.Errorf("usage: a person record names a seat or a schedule")
+		if s.Seat != "" || s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" || s.Repo != "" {
+			return fmt.Errorf("usage: a person record names a seat, a schedule or a repository")
 		}
 	case KindSchedule:
 		if strings.TrimSpace(s.ScopeType) == "" || strings.TrimSpace(s.ScopeID) == "" ||
@@ -165,8 +196,16 @@ func (s Subject) Validate() error {
 				"scope id and schedule, and names %q/%q/%q",
 				s.ScopeType, s.ScopeID, s.Schedule)
 		}
-		if s.Seat != "" || s.Person != "" {
-			return fmt.Errorf("usage: a schedule record names a seat or a person")
+		if s.Seat != "" || s.Person != "" || s.Repo != "" {
+			return fmt.Errorf("usage: a schedule record names a seat, a person or a repository")
+		}
+	case KindRepoRead:
+		if strings.TrimSpace(s.Repo) == "" {
+			return fmt.Errorf("usage: a repo_read record names no repository")
+		}
+		if s.Seat != "" || s.Person != "" || s.ScopeType != "" || s.ScopeID != "" || s.Schedule != "" {
+			return fmt.Errorf("usage: a repo_read record names a seat, a person or a schedule — " +
+				"its readers are its body, and its object is the repository alone")
 		}
 	}
 	return nil
@@ -221,6 +260,8 @@ func (s Subject) segments() []string {
 		return []string{s.Node, s.Day, s.ScopeType, s.ScopeID, s.Schedule}
 	case KindPerson:
 		return []string{s.Node, s.Day, s.Person}
+	case KindRepoRead:
+		return []string{s.Node, s.Day, s.Repo}
 	}
 	return []string{s.Node, s.Day, s.Seat}
 }
@@ -362,10 +403,74 @@ type Record struct {
 	// Fires are a schedule's dispatches.
 	Fires []Fire `json:"fires,omitempty"`
 
+	// RepoName names a repo_read record's repository as its day's newest
+	// read did: a label beside the id, which outlives it.
+	RepoName string `json:"repo_name,omitempty"`
+
+	// RepoReads are a unit repository's readers on its day, the most-read
+	// [ReadersPerRepoDay] of them, in reader order ([RepoRead.Key]);
+	// RepoReadersElided counts the rest, so an answer that lost readers says
+	// so.
+	RepoReads         []RepoRead `json:"repo_reads,omitempty"`
+	RepoReadersElided int        `json:"repo_readers_elided,omitempty"`
+
 	// Extra carries fields a newer build wrote, so a record round-trips
 	// losslessly through a node that cannot interpret them.
 	Extra map[string]json.RawMessage `json:"-"`
 }
+
+// RepoRead is one reader's reads of a unit repository on a day, by one way.
+//
+// THE READER IS ITS KIND, ITS PRINCIPAL AND THE SEAT IT ACTED AS: a person reads
+// through several credentials of theirs, each its own reader naming their one
+// seat, and a token bound to one seat and then another is two readers — never
+// one whose earlier reads are filed under the seat it holds now.
+type RepoRead struct {
+	// PrincipalKind is `operator` (a credential) or `agent` (a seat), the
+	// code host's spelling (types.CodeReaderKind).
+	PrincipalKind string `json:"principal_kind"`
+
+	// Principal is the credential as every record names it (iam.ActorFor),
+	// or the agent's handle.
+	Principal string `json:"principal"`
+
+	// Seat is the human seat the credential is bound to, or the agent's own
+	// handle; empty for a token bound to nobody.
+	Seat string `json:"seat,omitempty"`
+
+	// Via is how it was read: `git` or `tool` (types.CodeFetchedVia).
+	Via string `json:"via"`
+
+	// Reads is how many reads, Bytes what they were sent, LastAt the newest.
+	Reads  int64     `json:"reads"`
+	Bytes  int64     `json:"bytes"`
+	LastAt time.Time `json:"last_at,omitzero"`
+}
+
+// RepoReaderKey is a reader's identity within its repository's day.
+type RepoReaderKey struct{ PrincipalKind, Principal, Via, Seat string }
+
+// Key is r's reader.
+func (r RepoRead) Key() RepoReaderKey {
+	return RepoReaderKey{PrincipalKind: r.PrincipalKind, Principal: r.Principal, Via: r.Via, Seat: r.Seat}
+}
+
+// compareRepoReader is the reader order a record's readers and every read of
+// them are in: the principal kind, the principal, the way, the seat — the
+// estate's own key below the repository's day.
+func compareRepoReader(a, b RepoRead) int {
+	return cmp.Or(cmp.Compare(a.PrincipalKind, b.PrincipalKind), cmp.Compare(a.Principal, b.Principal),
+		cmp.Compare(a.Via, b.Via), cmp.Compare(a.Seat, b.Seat))
+}
+
+// maxReaderBytes is the longest principal a reader may name — a credential's
+// name or a handle, both far shorter — and maxSeatBytes the longest seat, a
+// handle's own bound ([iam.MaxLogin]): the figures the record's bound
+// ([ReadersPerRepoDay]) is measured at.
+const (
+	maxReaderBytes = 255
+	maxSeatBytes   = iam.MaxLogin
+)
 
 // Tokens is one spend cell. The cache counts are a BREAKDOWN of Input, never
 // an addition: Total is Input plus Output.
@@ -425,6 +530,7 @@ type Fire struct {
 var knownKeys = []string{
 	"v", "op_id", "subject", "subject_id", "created_at", "gen", "writer", "scope",
 	"handle", "role", "tokens", "turns", "reads", "reads_elided", "fires",
+	"repo_name", "repo_reads", "repo_readers_elided",
 }
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
@@ -502,7 +608,12 @@ func Decode(payload []byte) (Record, error) {
 // one this build reads in full — and applying it would write rows under an
 // object that does not own them.
 func (r Record) validateBody() error {
+	if r.Subject.Kind != KindRepoRead && (r.RepoName != "" || len(r.RepoReads) > 0 || r.RepoReadersElided != 0) {
+		return fmt.Errorf("usage: the %s record on %s carries a repository's readers", r.Subject.Kind, r.Subject)
+	}
 	switch r.Subject.Kind {
+	case KindRepoRead:
+		return r.validateRepoReads()
 	case KindSeat:
 		if r.Turns == nil {
 			return fmt.Errorf("usage: the seat record on %s carries no turns — "+
@@ -532,6 +643,54 @@ func (r Record) validateBody() error {
 				"reads or handle, or a schedule's fires — a person's day is its spend "+
 				"alone, named by its subject", r.Subject)
 		}
+	}
+	return nil
+}
+
+// validateRepoReads refuses a repo_read body its kind cannot carry: no reader,
+// more than a day holds ([ReadersPerRepoDay]), a reader this build cannot name
+// — an unknown principal kind or way, a principal past [maxReaderBytes] or a
+// seat past [maxSeatBytes], no read — one named twice, or a seat's, a
+// schedule's or a person's day beside it. A reader named twice is refused rather than summed:
+// the publisher folds each reader once, so a second entry is a writer fault,
+// and the apply would fail on the readers' key at whatever node applied it.
+func (r Record) validateRepoReads() error {
+	if r.Turns != nil || len(r.Tokens) > 0 || len(r.Reads) > 0 || r.ReadsElided != 0 ||
+		len(r.Fires) > 0 || r.Handle != "" || r.Role != "" {
+		return fmt.Errorf("usage: the repo_read record on %s carries a seat's spend, turns or reads, "+
+			"or a schedule's fires — a repository's day is its readers alone", r.Subject)
+	}
+	switch {
+	case len(r.RepoReads) == 0:
+		return fmt.Errorf("usage: the repo_read record on %s names no reader — a day nobody read the "+
+			"repository on is no record", r.Subject)
+	case len(r.RepoReads) > ReadersPerRepoDay:
+		return fmt.Errorf("usage: the repo_read record on %s carries %d readers and a repository's day "+
+			"holds at most %d — the writer elides past the cap and counts what it dropped",
+			r.Subject, len(r.RepoReads), ReadersPerRepoDay)
+	case r.RepoReadersElided < 0:
+		return fmt.Errorf("usage: the repo_read record on %s elides %d readers", r.Subject, r.RepoReadersElided)
+	}
+	seen := make(map[RepoReaderKey]bool, len(r.RepoReads))
+	for _, rd := range r.RepoReads {
+		switch {
+		case !types.CodeReaderKind(rd.PrincipalKind).Valid():
+			return fmt.Errorf("usage: a reader on %s is a %q, which is not a principal kind this build "+
+				"reads (%v)", r.Subject, rd.PrincipalKind, types.CodeReaderKinds())
+		case !types.CodeFetchedVia(rd.Via).Valid():
+			return fmt.Errorf("usage: a reader on %s read it by %q, which is not a way this build reads "+
+				"(%v)", r.Subject, rd.Via, types.CodeFetchedVias())
+		case rd.Principal == "" || len(rd.Principal) > maxReaderBytes || len(rd.Seat) > maxSeatBytes:
+			return fmt.Errorf("usage: a reader on %s names principal %q and seat %q — a principal is 1 to "+
+				"%d bytes and a seat at most %d", r.Subject, rd.Principal, rd.Seat, maxReaderBytes,
+				maxSeatBytes)
+		case rd.Reads < 1 || rd.Bytes < 0:
+			return fmt.Errorf("usage: reader %s on %s read it %d times for %d bytes — a reader read it "+
+				"at least once", rd.Principal, r.Subject, rd.Reads, rd.Bytes)
+		case seen[rd.Key()]:
+			return fmt.Errorf("usage: the repo_read record on %s names reader %+v twice", r.Subject, rd.Key())
+		}
+		seen[rd.Key()] = true
 	}
 	return nil
 }

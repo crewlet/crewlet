@@ -1,0 +1,80 @@
+package query_test
+
+import (
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/events/types"
+)
+
+// A UNIT REPOSITORY'S TOOL READ IS RECORDED — every read the node answered of a
+// `visibility: unit` repository, as its asker, by its kind, its bytes the
+// answer's encoding — and a memo hit as a miss: the memo is the copy's, shared
+// by every asker, so a second seat's read of a page the first one's read cut is
+// a read of the repository too. A refused read records nothing, and neither
+// does any read of a `visibility: company` repository, which every seat reads
+// by declaration.
+//
+// Mutation: drop the visibility check, and the company repository's read is
+// recorded; answer a memo hit at once, as an early return, and the second
+// seat's read is missing.
+func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	x := newFixture(t, codetest.SoloOptions{}, settings)
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	rec := &fetches{}
+	runs := &recording{}
+	s := x.server(0, query.Options{Git: runs.on(x, 0), Roster: company, Fetched: rec.record})
+
+	read := func(who code.Principal) code.GitAnswer {
+		t.Helper()
+		q := treeQ(repo, code.TreeQuery{Rev: head})
+		q.Asker = who
+		return mustRead(t, s, q)
+	}
+	first := read(seat("eng-dev"))
+	// THE SAME PAGE again, for another seat: the memo answers it, and no git
+	// runs for it.
+	ran := len(runs.ran())
+	again := read(seat("eng-lead"))
+	if more := runs.ran()[ran:]; len(more) != 0 {
+		t.Fatalf("the premise: the second seat's read of the same page ran git %v, want the memo's answer", more)
+	}
+	theirs := read(person)
+	outside := treeQ(repo, code.TreeQuery{Rev: head})
+	outside.Asker = seat("sales-rep")
+	if _, err := s.Read(t.Context(), outside); err == nil {
+		t.Fatal("the premise: a seat outside the owning unit was served")
+	}
+	got := rec.all()
+	want := []types.CodeFetched{
+		{RepoID: repo, RepoName: codetest.RepoName, PrincipalKind: types.CodeReaderAgent, Principal: "eng-dev",
+			Seat: "eng-dev", Via: types.FetchedViaTool, Kind: string(code.GitTree), Bytes: int64(encoded(t, first))},
+		{RepoID: repo, RepoName: codetest.RepoName, PrincipalKind: types.CodeReaderAgent, Principal: "eng-lead",
+			Seat: "eng-lead", Via: types.FetchedViaTool, Kind: string(code.GitTree), Bytes: int64(encoded(t, again))},
+		{RepoID: repo, RepoName: codetest.RepoName, PrincipalKind: types.CodeReaderOperator,
+			Principal: person.OperatorID, Seat: person.Seat, Via: types.FetchedViaTool, Kind: string(code.GitTree),
+			Bytes: int64(encoded(t, theirs))},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("the reads recorded are %+v, want the two seats' and the person's", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("read %d is recorded as %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// A COMPANY REPOSITORY'S READS ARE NOBODY'S AUDIT.
+	x.f.Declare(t, code.Declared{Name: "open", Settings: codetest.Settings()})
+	x.push("open", "main")
+	mustRead(t, s, treeQ(x.repo("open"), code.TreeQuery{Rev: head}))
+	if after := rec.all(); len(after) != len(want) {
+		t.Errorf("a read of a visibility: company repository was recorded: %+v", after[len(want):])
+	}
+}

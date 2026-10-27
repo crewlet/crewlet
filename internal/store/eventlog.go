@@ -482,9 +482,11 @@ INSERT INTO crewlet_events (
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, provider_key, work_item,
-	calls, spend_stage
+	calls, spend_stage,
+	read_repo_id, read_principal_kind, read_principal, read_via, read_seat, read_bytes
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -520,6 +522,7 @@ type eventRow struct {
 	tagJSON string
 	payload string
 	spend   Spend
+	read    repoRead
 	parties []string
 }
 
@@ -614,8 +617,38 @@ func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 		spend.WorkKey = tags["work_key"]
 	}
 	return eventRow{rec: rec, tags: tags, tagJSON: string(tagJSON),
-		payload: string(payload), spend: spend,
+		payload: string(payload), spend: spend, read: repoReadFor(rec.Type, payload),
 		parties: partiesOf(tags, seats)}, nil
+}
+
+// repoRead is what a repository read's columns hold (node/0052): who read
+// which repository, how, and what they were sent — the fields the usage day
+// groups and sums a day of reads by ([DB.usageRepoReads]), filled when the row
+// is written so the derivation, paid on every tick its day moves, reads no
+// JSON. The zero value writes the columns' defaults, which is every other
+// row's.
+type repoRead struct {
+	repo, kind, principal, via, seat string
+	bytes                            int
+}
+
+// repoReadFor is a row's repository read: a `code_fetched` record's fields,
+// and the zero value for every other type. Read from the payload's JSON keys,
+// as [ExtractTags] reads its, so a newer peer's record carrying a value this
+// build does not know is counted as written rather than refused.
+func repoReadFor(eventType string, payload []byte) repoRead {
+	if eventType != repoReadType {
+		return repoRead{}
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return repoRead{}
+	}
+	return repoRead{
+		repo: jsonString(body["repo_id"]), kind: jsonString(body["principal_kind"]),
+		principal: jsonString(body["principal"]), via: jsonString(body["via"]),
+		seat: jsonString(body["seat"]), bytes: jsonInt(body["bytes"]),
+	}
 }
 
 // insert writes the row and its party rows inside tx.
@@ -626,7 +659,7 @@ func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 // permanently and with nothing to say so. The cost is a begin and a commit on
 // a path that runs a handful of times a second.
 func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
-	rec, tags, spend := r.rec, r.tags, r.spend
+	rec, tags, spend, read := r.rec, r.tags, r.spend, r.read
 	if _, err := tx.ExecContext(ctx, eventInsertSQL,
 		EncodeTime(rec.Time), rec.ID, rec.Type, rec.Source, rec.Category,
 		rec.TraceID, rec.SpanID, rec.ParentSpanID,
@@ -643,6 +676,7 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// name two different items. See schema/0033.
 		tags["work_item"],
 		spend.Calls, spend.Stage,
+		read.repo, read.kind, read.principal, read.via, read.seat, read.bytes,
 	); err != nil {
 		return err
 	}

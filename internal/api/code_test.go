@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -33,12 +34,14 @@ import (
 )
 
 // fixedCode is a code surface answering what it holds for good: a git host,
-// and the code domain's reads — each absent where it holds nil, for the reason
-// why (the company hosts no code where why is nil).
+// the code domain's reads and who read a unit's repository — each absent where
+// it holds nil, for the reason why (the company hosts no code where why is
+// nil).
 type fixedCode struct {
-	git   api.GitRoutes
-	reads api.CodeReads
-	why   error
+	git     api.GitRoutes
+	reads   api.CodeReads
+	readers builtin.ReadersDeps
+	why     error
 }
 
 func (f fixedCode) unserved() error {
@@ -62,6 +65,13 @@ func (f fixedCode) CodeReads() (api.CodeReads, error) {
 	return f.reads, nil
 }
 
+func (f fixedCode) RepoReaders() (builtin.ReadersDeps, error) {
+	if f.readers.Readers == nil {
+		return builtin.ReadersDeps{}, f.unserved()
+	}
+	return f.readers, nil
+}
+
 // switchedCode is a code surface whose answer a case moves: not hosted until
 // present is set, then the fixed one.
 type switchedCode struct {
@@ -81,6 +91,13 @@ func (s *switchedCode) CodeReads() (api.CodeReads, error) {
 		return nil, engine.ErrCodeNotHosted
 	}
 	return s.fixedCode.CodeReads()
+}
+
+func (s *switchedCode) RepoReaders() (builtin.ReadersDeps, error) {
+	if !s.present.Load() {
+		return builtin.ReadersDeps{}, engine.ErrCodeNotHosted
+	}
+	return s.fixedCode.RepoReaders()
 }
 
 // fakeGitRoutes is a git host whose handlers answer `served <what>`, whose
@@ -380,6 +397,7 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 			}
 			for _, req := range []struct{ method, path string }{
 				{http.MethodGet, "/code/repos"},
+				{http.MethodGet, "/code/repos/web/readers"},
 				{http.MethodPost, "/code/repos/web/verify"},
 				{http.MethodGet, "/code/repos/web/verify/" + uuid.Must(uuid.NewV7()).String()},
 			} {

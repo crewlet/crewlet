@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -93,11 +94,36 @@ func (x *fixture) server(i int, o query.Options) *query.Server {
 	if o.Roster == nil {
 		o.Roster = func() code.Roster { return nil }
 	}
+	if o.Fetched == nil {
+		o.Fetched = noFetched
+	}
 	s, err := query.New(o)
 	if err != nil {
 		x.t.Fatal(err)
 	}
 	return s
+}
+
+// noFetched keeps no read a server records.
+func noFetched(context.Context, types.CodeFetched) {}
+
+// fetches is a server's recorder of the reads it records (query.Options.Fetched).
+type fetches struct {
+	mu   sync.Mutex
+	seen []types.CodeFetched
+}
+
+func (f *fetches) record(_ context.Context, e types.CodeFetched) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seen = append(f.seen, e)
+}
+
+// all is every read recorded so far.
+func (f *fetches) all() []types.CodeFetched {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.seen)
 }
 
 // synced brings the i-th git node's copy of repo to the log's head, folding

@@ -200,7 +200,7 @@ func (r *landedRig) coldIndexed(b *testing.B) *query.Server {
 	}
 	s, err := query.New(query.Options{NodeID: n.ID(), Cache: c, Git: n.Pool(),
 		Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
-		Roster: func() code.Roster { return nil }})
+		Roster: func() code.Roster { return nil }, Fetched: noFetched})
 	if err != nil {
 		b.Fatal(err)
 	}

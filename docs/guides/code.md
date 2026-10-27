@@ -284,6 +284,31 @@ every read of it refused. Your own assistant reads through the same tools on
 as you, which reads every repository; asked by you, `code_get_repo` also hands
 out the URL to clone from, on `api.external_url`.
 
+## Who read a unit's repository
+
+Every clone and fetch that sends a `visibility: unit` repository's contents,
+and every server-side read of one, is recorded — whoever made it: a person, a
+token or a seat. An admin asks who read one, from a script with a token that
+carries `admin`, or from their own assistant with `code_repo_readers`, a page
+at a time:
+
+```sh
+curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
+  "https://crewlet.example.com/code/repos/payments/readers"
+curl -s -H "Authorization: Bearer $CREWLET_TOKEN" \
+  "https://crewlet.example.com/code/repos/payments/readers?from=2026-07-01&to=2026-09-30"
+```
+
+Each reader — a credential and the person it acted as, or a seat — comes with
+how it read (`git` or `tool`), how often, how many bytes it was sent and when
+it last read, summed over every node and every day of the range: the thirty
+company days ending today unless you name `from` and `to`, and at most 181.
+Hand a page's `next` back as `?cursor=` for the page after it. A
+`visibility: company` repository's readers are every seat and nobody records
+them; its answer says so. What counts as a read, how long it is kept and why
+only an admin may ask are in [Who read
+it](../concepts/code-host.md#who-read-it).
+
 ## Import from GitHub or GitLab
 
 Declare the repository first — the import fills one that `code.repos`

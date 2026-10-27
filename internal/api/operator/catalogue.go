@@ -163,6 +163,10 @@ type Halves struct {
 	// them from the next. Its Actor is set per call.
 	Code builtin.CodeDeps
 
+	// Readers is `code_repo_readers`' half — who read a `visibility: unit`
+	// repository, from the usage domain — served only with Code.
+	Readers builtin.ReadersDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -329,7 +333,7 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Knowledge: halves.Knowledge, Artifacts: arts,
-		ArtifactData: halves.ArtifactData, Code: repos, Org: s.org,
+		ArtifactData: halves.ArtifactData, Code: repos, Readers: halves.Readers, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

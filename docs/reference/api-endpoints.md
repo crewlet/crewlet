@@ -436,6 +436,7 @@ every other route.
 | `GET` | `/code/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a credential** (see [The code reads](#the-code-reads)) |
 | `GET` | `/code/repos/{name}` | One repository in detail (same) |
 | `GET` | `/code/repos/{name}/pushes` | One repository's push history, newest first in the order the pushes landed, each push naming who made it — a person by their credential and seat, a seat by its handle and the turn behind its push — and how its pack was built (same) |
+| `GET` | `/code/repos/{name}/readers` | Who read a `visibility: unit` repository's contents over a range of company days — every credential and the person it acted as, and every seat, with how often and how many bytes — a page at a time. **An admin's** (see [below](#get-codereposnamereaders)) |
 | `POST` | `/code/repos/{name}/verify` | Begin a check of this git node's copy of one repository against its rows, `?repair=true` to repair what it finds — in place, or by a rebuild: answered `200` with its report where the check ends within a quarter of a second, else `202`, the check running on (see [below](#post-codereposnameverify)) |
 | `GET` | `/code/repos/{name}/verify/{id}` | A check begun above: running, done with its report, or failed with why and what it found (see [below](#get-codereposnameverifyid)) |
 
@@ -5076,15 +5077,17 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **sixteen no seat is given**: `list_work_views`, `save_work_view`,
+Plus **seventeen no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
 [`place_work_item`](#moving-a-card-on-a-board),
 [`answer_run`](#answering-a-parked-coding-run),
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
-[`steer_turn`](#steering-a-running-turn), and
-[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge). A view is furniture — a name, a shape
+[`steer_turn`](#steering-a-running-turn),
+[`answer_knowledge`](#answering-a-question-from-the-companys-knowledge), and
+— beside the code reads, on their terms — [`code_repo_readers`](#get-codereposnamereaders),
+who read a `visibility: unit` repository. A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own
@@ -5105,7 +5108,9 @@ seat works at all is a person's decision about it too: a seat that could pause
 a colleague, or resume itself, would be overruling the people who run the
 company. And a note to a running turn is a person redirecting the work: a seat
 that could steer a colleague's turn would be directing it past the person who
-asked for the work.
+asked for the work. And who read a unit's code is an audit of the people who
+read it — an admin's, which no other person is answered either: a seat that
+could ask would be a model watching the people it works for.
 
 ### Moving a card on a board
 
@@ -7057,7 +7062,9 @@ A company that sets [`code.native`](../concepts/code-host.md) hosts its git
 repositories in the engine. A person reaches them with git's own smart HTTP
 under `/git/`, on any node whose `node.roles` name `git` (by default a node
 has every role), and anybody the guard resolves reads the rows under `/code/`
-on every node, each answer holding to the repositories they may read. Both
+on every node, each answer holding to the repositories they may read — all but
+who read a `visibility: unit` repository, which is an admin's
+([below](#get-codereposnamereaders)). Both
 prefixes are **guarded**, reads included, and **neither is ever on the
 [public listener](#which-listener-serves-what)**: a person's own credential —
 for git, a [machine token](#post-iamcredentials-mints-a-machine-token) acting
@@ -7182,6 +7189,52 @@ before the node could read the configuration, the `detail` naming what it
 could not read) or `native_backend_needs_restart` — the last three with no
 `Retry-After`, since waiting clears none of them and another node serves the
 read. Every one of them is served through a drain.
+
+### `GET /code/repos/{name}/readers`
+
+Who read a `visibility: unit` repository's **contents** over a range of company
+days — every clone and fetch whose answer carried a pack, and every server-side
+read that answered, through a seat's code tools or a person's assistant —
+summed over every node and every day of the range, one row per reader: a
+credential and the human seat it acted as, or a seat, and how it read. What
+counts as a read and how it is kept are in
+[Who read it](../concepts/code-host.md#who-read-it); the operator tool
+`code_repo_readers` answers the same pages.
+
+| Parameter | |
+|---|---|
+| `from`, `to` | Company days on the company's clock, `YYYY-MM-DD`, both inclusive: the thirty ending today where neither is named, the thirty ending at `to` where only `to` is, and at most 181 days apart — the days the records keep |
+| `cursor` | The `next` of the page before; left out for the first page |
+
+**An admin's, and a person's** (`code_repo_readers`, the operator tool's own
+verb): any other caller is refused `403 unauthorized` naming `admin` before
+anything is read. The answer names people and their credentials, so no
+repository's grant gives it — reading a repository is not auditing who else
+did.
+
+A unit's repository answers `200`:
+
+| Field | |
+|---|---|
+| `repo` | The repository's name |
+| `recorded` | `true` |
+| `from`, `to` | The range read |
+| `readers` | The page's readers, ordered by `principal_kind`, `principal`, `via` and `seat`: `principal_kind` (`operator` for a credential, `agent` for a seat), `principal` (the credential's login — `pat:<credential id>`, `session:<lineage>`, `token:<id>` — or the seat's handle), `seat` (the human seat a credential acted as, or the seat's own handle; absent for a credential bound to nobody), `via` (`git` or `tool`), `reads`, `bytes` (what the reader was sent) and `last_at` (its newest read). Present, and empty, where nobody read the repository in the range |
+| `readers_elided` | On the first page only: how many readers the per-day cap left out over the range — one node's day names at most 1 024 — and `0` where the answer is complete |
+| `next` | The cursor of the page after this one, absent on the last |
+
+A page holds at most 32 KiB of readers. A `visibility: company` repository's
+readers are not recorded, and it answers `200` with `"recorded": false` and a
+`detail` saying so and how to have them recorded.
+
+The repository is read by name as the caller at `linearizable`, so one declared
+a moment ago is never answered undeclared from an old copy; the readers come
+from the usage log, which takes none of the freshness keys above, so the answer
+carries no `position`. A refusal is the code reads' — `404 not_found` for a
+repository nobody declared and for a company that hosts no code, `503` for a
+node that serves none of the code host now and for a usage log no data node
+serves — and `400 bad_params` naming what to change for a range or a cursor the
+read cannot take.
 
 ### `POST /code/repos/{name}/verify`
 

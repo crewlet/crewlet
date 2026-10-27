@@ -784,13 +784,13 @@ BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/jsapi ./internal/coord/kv ./internal/code/gitproc \
                  ./internal/code/cache ./internal/code \
                  ./internal/code/codecluster ./internal/code/host ./internal/code/query \
-                 ./internal/api/paced ./cmd/crewlet
+                 ./internal/usage ./internal/api/paced ./cmd/crewlet
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 8h
 
-bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, the code host's pushes and clones, a seat's reads by object id, a client's pace and the push hook's start (not a gate)
+bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, the code host's pushes and clones, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

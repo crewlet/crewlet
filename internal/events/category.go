@@ -311,6 +311,14 @@ var categories = map[string]placement{
 	// What the auxiliary model cost, coalesced per key per flush — PERSISTED
 	// and NOT FED: see [unfed].
 	"auxiliary_spend": {"system", RateEngine},
+	// A read of a `visibility: unit` repository's contents — a fetch that
+	// carried a pack, a code tool's answer — PERSISTED, since the usage
+	// domain derives "who read it" from these rows, and NOT FED: see
+	// [unfed]. AUTHENTICATED-rated: every one is a read the guard admitted
+	// and the repository's grant allowed, so its pace is set by the
+	// credentials and seats the company holds — a token's builds, a seat's
+	// turns — never by a stranger.
+	"code_fetched": {"system", RateAuthenticated},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
@@ -475,6 +483,15 @@ var unfed = map[string]string{
 		"reader watches out of a ring that holds the whole company's last " +
 		"few hundred events; their spend reaches every spend figure through " +
 		"the rollups, and a turn's page reads them by its turn id",
+	"code_fetched": "AN AUDIT, NOT ACTIVITY: one record per read of a " +
+		"`visibility: unit` repository's contents, and a CI token fetching " +
+		"on every build — or a seat reading a file a line range at a time — " +
+		"writes them faster than a person reads a feed, pushing the turns, " +
+		"failures and deliveries a reader watches out of a ring that holds " +
+		"the whole company's last few hundred events. Who read a repository " +
+		"is answered where it is asked: the code host's readers route and " +
+		"`code_repo_readers`, summed across the fleet from the usage domain " +
+		"these rows are derived into",
 }
 
 // liveOnly is the subset of [excluded] that still drives the live projection.

@@ -149,6 +149,20 @@
 // code.ErrNotPermitted (TestAUnitRepositoryRefusesASeatOutsideIt). A deleted or
 // purging repository is code.ErrRepoNotFound with the domain's sentence for it.
 //
+// # Who read it
+//
+// A read that answered a `visibility: unit` repository is recorded once, as
+// its asker read it (Options.Fetched, types.CodeFetched via `tool`): by its
+// kind, with the answer's encoded size — what the asker is sent beside its
+// envelope. A page from the memo included: what an audit asks is who was handed
+// the repository's contents, not who cost a git run, and a memo hit skipping
+// the record would let a second reader of a page go unrecorded
+// (TestAUnitRepositorysToolReadIsRecorded). A read of a `visibility: company`
+// repository records nothing — every seat reads it by declaration — and nor
+// does a read refused or unready, which handed nothing over. The engine
+// publishes the record as an event of this node's own log, which its usage
+// publisher derives into the day's repo_read record (internal/usage).
+//
 // # Pages
 //
 // A page is measured as its JSON, in encoding/json's own terms (page.go), and

@@ -5,7 +5,11 @@ import (
 )
 
 // AN UPLOAD-PACK ANSWER, READ AS GIT WRITES IT, for the one fact the host
-// needs before it lets a fetch's answer start: whether its PACK has begun.
+// needs twice: whether its PACK has begun — before it lets a fetch's answer
+// start (below), and once the answer has ended, whether it sent the
+// repository's contents at all, which the fetch audit records (fetch.go). ONE
+// READING for both, so the answer the hold released at its pack and the answer
+// the audit counts as one that carried a pack are the same answers.
 //
 // A fetch's pack-objects runs AFTER upload-pack has written its answer's first
 // line — protocol v2's `packfile`, v0's NAK or ACK — and when it meets a

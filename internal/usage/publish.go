@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1124,6 +1125,7 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 		}
 		out = append(out, rec)
 	}
+	out = append(out, p.repoReadRecords(day, d.RepoReads)...)
 	for i := range out {
 		// IN THE ORDER [Join] WRITES THEM, which is the order the store
 		// derives them in — so the join of a day with an earlier derivation
@@ -1136,6 +1138,74 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 		}
 	}
 	return out, nil
+}
+
+// repoReadRecords is one record per unit repository the day's reads name — its
+// readers, the most-read [ReadersPerRepoDay] of them, and its name as the
+// day's newest read gave it — from the store's entries, which come in
+// (repository, reader) order.
+//
+// A READER THIS BUILD CANNOT NAME — a principal kind or a way a newer peer's
+// code host recorded in a custody batch this node keeps — is counted with the
+// elided rather than written: this build cannot stamp a record carrying it at
+// the version that holds back the builds it would be lost on, and an answer
+// that names fewer readers than the day had must say so.
+func (p *Publisher) repoReadRecords(day string, reads []store.UsageRepoRead) []Record {
+	var out []Record
+	for i := 0; i < len(reads); {
+		repo := reads[i].RepoID
+		rec := Record{
+			RecordEnvelope: RecordEnvelope{
+				Subject: Subject{Kind: KindRepoRead, Node: p.deps.NodeID, Day: day, Repo: repo},
+				Writer:  p.deps.NodeID,
+			},
+			RepoName: reads[i].RepoName,
+		}
+		unnamed := 0
+		for ; i < len(reads) && reads[i].RepoID == repo; i++ {
+			r := reads[i]
+			if !types.CodeReaderKind(r.PrincipalKind).Valid() || !types.CodeFetchedVia(r.Via).Valid() ||
+				len(r.Principal) > maxReaderBytes || len(r.Seat) > maxSeatBytes {
+				unnamed++
+				continue
+			}
+			rec.RepoReads = append(rec.RepoReads, RepoRead{PrincipalKind: r.PrincipalKind,
+				Principal: r.Principal, Seat: r.Seat, Via: r.Via, Reads: r.Reads, Bytes: r.Bytes,
+				LastAt: r.LastAt})
+		}
+		if len(rec.RepoReads) == 0 {
+			// EVERY READER UNNAMED: no record this build can write, and a
+			// day of none is no record (validateRepoReads).
+			continue
+		}
+		rec.RepoReads, rec.RepoReadersElided = capRepoReads(rec.RepoReads)
+		rec.RepoReadersElided += unnamed
+		out = append(out, rec)
+	}
+	return out
+}
+
+// capRepoReads keeps the [ReadersPerRepoDay] most-read readers and counts the
+// rest.
+//
+// THE MOST-READ SURVIVE, a tie broken by the reader's key, so two derivations
+// of one day are equal value for value — the publisher's no-change rule — and
+// the survivors are put back in reader order, so a record's bytes do not move
+// when two readers swap rank. It takes the slice it is handed as its own.
+func capRepoReads(reads []RepoRead) ([]RepoRead, int) {
+	elided := 0
+	if len(reads) > ReadersPerRepoDay {
+		slices.SortStableFunc(reads, func(a, b RepoRead) int {
+			if c := cmp.Compare(b.Reads, a.Reads); c != 0 {
+				return c
+			}
+			return compareRepoReader(a, b)
+		})
+		elided = len(reads) - ReadersPerRepoDay
+		reads = reads[:ReadersPerRepoDay]
+	}
+	slices.SortFunc(reads, compareRepoReader)
+	return reads, elided
 }
 
 // capReads keeps the [ReadsPerSeatDay] most-read entries and counts the rest.
@@ -1207,7 +1277,7 @@ func (p *Publisher) publish(ctx context.Context, day string, rec Record) (bool, 
 		// stays the bare derivation's digest, so an unchanged derivation is
 		// still skipped on the next tick.
 		labelled := rec
-		labelled.Handle, labelled.Role = joined.Handle, joined.Role
+		labelled.Handle, labelled.Role, labelled.RepoName = joined.Handle, joined.Role, joined.RepoName
 		var plain []byte
 		if plain, err = labelled.Encode(); err != nil {
 			return false, fmt.Errorf("usage: encode %s: %w", rec.Subject, err)
@@ -1380,6 +1450,14 @@ func summary(r Record) string {
 	}
 	if len(r.Fires) > 0 {
 		out += fmt.Sprintf(" fires=%d", len(r.Fires))
+	}
+	if len(r.RepoReads) > 0 || r.RepoReadersElided > 0 {
+		var reads, bytes int64
+		for _, rd := range r.RepoReads {
+			reads, bytes = reads+rd.Reads, bytes+rd.Bytes
+		}
+		out += fmt.Sprintf(" readers=%d repo_reads=%d repo_bytes=%d",
+			len(r.RepoReads)+r.RepoReadersElided, reads, bytes)
 	}
 	return out
 }

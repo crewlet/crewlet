@@ -333,7 +333,7 @@ func newReadRig(b *testing.B, src *readSource, objects objstore.Backend) *readRi
 	server := func(c query.Cache) *query.Server {
 		s, err := query.New(query.Options{NodeID: n.ID(), Cache: c, Git: n.Pool(),
 			Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
-			Roster: func() code.Roster { return nil }})
+			Roster: func() code.Roster { return nil }, Fetched: noFetched})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -518,7 +518,7 @@ func (r *readRig) server() *query.Server {
 	n := r.f.Nodes()[0]
 	s, err := query.New(query.Options{NodeID: n.ID(), Cache: n.Cache(), Git: n.Pool(),
 		Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
-		Roster: func() code.Roster { return nil }})
+		Roster: func() code.Roster { return nil }, Fetched: noFetched})
 	if err != nil {
 		panic(err) // the options are the rig's own, valid once
 	}
@@ -542,7 +542,7 @@ func (r *readRig) cold(b *testing.B) {
 		n := g.Node()
 		s, err := query.New(query.Options{NodeID: n.ID(), Cache: n.Cache(), Git: n.Pool(),
 			Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
-			Roster: func() code.Roster { return nil }})
+			Roster: func() code.Roster { return nil }, Fetched: noFetched})
 		if err != nil {
 			b.Fatal(err)
 		}

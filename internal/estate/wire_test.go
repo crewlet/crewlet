@@ -200,12 +200,14 @@ var floorless = map[string]string{
 
 	"usage.spend": "reads the usage domain, whose log no write of the asker's lands " +
 		"on: every node publishes its own days, so there is no position to see",
-	"usage.seat_turns":    "reads the usage domain, as usage.spend does",
-	"usage.person_spend":  "reads the usage domain, as usage.spend does",
-	"usage.seat_days":     "reads the usage domain, as usage.spend does",
-	"usage.schedule_runs": "reads the usage domain, as usage.spend does",
-	"usage.page_reads":    "reads the usage domain, as usage.spend does",
-	"usage.reads_elided":  "reads the usage domain, as usage.spend does",
+	"usage.seat_turns":        "reads the usage domain, as usage.spend does",
+	"usage.person_spend":      "reads the usage domain, as usage.spend does",
+	"usage.seat_days":         "reads the usage domain, as usage.spend does",
+	"usage.schedule_runs":     "reads the usage domain, as usage.spend does",
+	"usage.page_reads":        "reads the usage domain, as usage.spend does",
+	"usage.reads_elided":      "reads the usage domain, as usage.spend does",
+	"usage.repo_reads":        "reads the usage domain, as usage.spend does",
+	"usage.repo_reads_elided": "reads the usage domain, as usage.spend does",
 }
 
 // EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that carries a

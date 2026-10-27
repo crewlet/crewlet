@@ -100,6 +100,11 @@ var sentinels = []sentinel{
 	{"search.ErrIndexBuilding", search.ErrIndexBuilding},
 	{"search.ErrNoMethods", search.ErrNoMethods},
 
+	// A REPOSITORY'S READERS refuse a cursor or a range their asker formed —
+	// the asker's mistake, answered by name whichever data node read it.
+	{"usage.ErrBadCursor", usage.ErrBadCursor},
+	{"usage.ErrBadRange", usage.ErrBadRange},
+
 	// THE CODE HOST'S, every one of them — ErrBadBundle, ErrBadLayer,
 	// ErrSuperseded and ErrAnswerDue included, though none is answered across
 	// the wire today (a bad bundle never leaves the receiving node, nor a bad

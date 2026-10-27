@@ -88,6 +88,11 @@ type fakeNode struct {
 	spendBudgets []int
 	stuckPages   bool
 
+	// repoBudgets is the budget every page of a repository's readers was
+	// asked at, and repoElided how many times its elided count was.
+	repoBudgets []int
+	repoElided  int
+
 	// unvouched answers every create `unknown`, unvouched by its ledger,
 	// and refusal answers every create with itself.
 	unvouched bool
@@ -336,6 +341,45 @@ func (f fakeUsage) PageReadsPage(context.Context, usage.PageReadsQuery, usage.Gr
 }
 
 func (f fakeUsage) ReadsElided(context.Context, string, string) (int64, error) { return 3, nil }
+
+// fakeReaders are the readers every node's fake usage half holds of a
+// repository: three, in reader order.
+var fakeReaders = []usage.RepoReader{
+	{PrincipalKind: "agent", Principal: "dev", Seat: "dev", Via: "tool", Reads: 4},
+	{PrincipalKind: "operator", Principal: "pat:1", Seat: "maya", Via: "git", Reads: 2},
+	{PrincipalKind: "operator", Principal: "token:ci", Via: "git", Reads: 9},
+}
+
+// RepoReadsPage answers ONE READER A PAGE whatever the budget, after the
+// reader after, noting the budget the page was asked at.
+func (f fakeUsage) RepoReadsPage(_ context.Context, _ usage.RepoReadsQuery, after usage.Group,
+	budget int) (usage.Page[usage.RepoReader], error) {
+
+	f.note("usage.repo_reads")
+	f.mu.Lock()
+	f.repoBudgets = append(f.repoBudgets, budget)
+	f.mu.Unlock()
+	var page usage.Page[usage.RepoReader]
+	for _, r := range fakeReaders {
+		if !after.Before(r.Group()) {
+			continue
+		}
+		if len(page.Rows) == 1 {
+			page.Next = page.Rows[0].Group()
+			return page, nil
+		}
+		page.Rows = append(page.Rows, r)
+	}
+	page.Done = true
+	return page, nil
+}
+
+func (f fakeUsage) RepoReadsElided(context.Context, usage.RepoReadsQuery) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.repoElided++
+	return 5, nil
+}
 
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
@@ -2695,6 +2739,73 @@ func TestAUsageReadThisNodeAnswersIsOnePageAndAPeersIsPaged(t *testing.T) {
 	}
 	if wrong.askedFor("usage.spend") {
 		t.Fatal("a usage copy out of service answered a page")
+	}
+}
+
+// A REPOSITORY'S READERS ARE PAGED BY THEIR ASKER: each page is one routed
+// call at the budget the asker names — the wire's own where that is the
+// smaller — resumed from the cursor the page before handed back, so walked a
+// page at a time every reader arrives once and in order; the count of readers
+// the per-day cap dropped comes with the first page alone; and a cursor or a
+// range the read cannot take is refused naming why before anything is asked.
+//
+// Mutation: ask the elided count on every page, and the walk asks it three
+// times.
+func TestARepositorysReadersArePagedByTheirAsker(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	wrong := &fakeNode{name: "data-wrong", units: chartOf("self"),
+		outOfServiceOn: map[string]bool{usageDomain: true}}
+	u := f.router(t, "data-wrong", wrong).Usage()
+	q := usage.RepoReadsQuery{RepoID: "repo-1", From: "2026-10-01", To: "2026-10-30"}
+	var walked []usage.RepoReader
+	cursor, pages := "", 0
+	for {
+		a, err := u.RepoReaders(t.Context(), q, cursor, 4096)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (pages == 0) != (a.Elided != nil) || a.Elided != nil && *a.Elided != 5 {
+			t.Fatalf("page %d carries the elided count %v, want 5 on the first page alone", pages, a.Elided)
+		}
+		walked = append(walked, a.Readers...)
+		pages++
+		if a.Next == "" {
+			break
+		}
+		cursor = a.Next
+	}
+	if !slices.Equal(walked, fakeReaders) || pages != len(fakeReaders) {
+		t.Fatalf("walked in %d pages the readers are %+v, want %+v a page each", pages, walked, fakeReaders)
+	}
+	peer := f.nodes["data-a"]
+	peer.mu.Lock()
+	budgets, elided := slices.Clone(peer.repoBudgets), peer.repoElided
+	peer.mu.Unlock()
+	if !slices.Equal(budgets, []int{4096, 4096, 4096}) || elided != 1 {
+		t.Fatalf("the peer was asked pages at %v and the elided count %d times, want the asker's 4096 "+
+			"three times and the count once", budgets, elided)
+	}
+	if _, err := u.RepoReaders(t.Context(), q, "", 64<<20); err != nil {
+		t.Fatal(err)
+	}
+	peer.mu.Lock()
+	last := peer.repoBudgets[len(peer.repoBudgets)-1]
+	peer.mu.Unlock()
+	if last != usagePageBytes {
+		t.Fatalf("a page asked past the wire's budget was asked at %d, want the wire's %d", last, usagePageBytes)
+	}
+	if wrong.askedFor("usage.repo_reads") {
+		t.Fatal("a usage copy out of service answered a page of readers")
+	}
+
+	if _, err := u.RepoReaders(t.Context(), q, "not a cursor!", 4096); !errors.Is(err, usage.ErrBadCursor) {
+		t.Errorf("a cursor no page issued = %v, want usage.ErrBadCursor", err)
+	}
+	long := q
+	long.From = "2026-01-01"
+	if _, err := u.RepoReaders(t.Context(), long, "", 4096); !errors.Is(err, usage.ErrBadRange) {
+		t.Errorf("a range past the history = %v, want usage.ErrBadRange", err)
 	}
 }
 

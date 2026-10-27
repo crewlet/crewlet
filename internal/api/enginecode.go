@@ -1,10 +1,13 @@
 package api
 
-import "github.com/crewlet/crewlet/internal/engine"
+import (
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/engine"
+)
 
-// EngineCode is [CodeSurface] over a running engine — its git host and the
-// code domain's reads, each resolved on EVERY CALL — or nil for a nil engine,
-// which [New] refuses by name.
+// EngineCode is [CodeSurface] over a running engine — its git host, the code
+// domain's reads and who read a unit's repository, each resolved on EVERY
+// CALL — or nil for a nil engine, which [New] refuses by name.
 //
 // HERE, beside the seam it satisfies, so `crewlet run` and any harness serving
 // an engine's API reach the code host through the same adapter, and a case
@@ -59,4 +62,19 @@ func (c engineCode) CodeReads() (CodeReads, error) {
 		return seam, nil
 	}
 	return nil, why
+}
+
+// RepoReaders is who read a unit's repository — the usage domain's readers
+// through this node's estate router, with the company's clock — on CodeReads'
+// terms ([engine.CodeReaderDeps]): where this node's running runtime serves no
+// code host, why, asked again after the reason for GitRoutes' reason.
+func (c engineCode) RepoReaders() (builtin.ReadersDeps, error) {
+	if deps := engine.CodeReaderDeps(c.e); deps.Readers != nil {
+		return deps, nil
+	}
+	why := c.e.CodeUnserved()
+	if deps := engine.CodeReaderDeps(c.e); deps.Readers != nil {
+		return deps, nil
+	}
+	return builtin.ReadersDeps{}, why
 }

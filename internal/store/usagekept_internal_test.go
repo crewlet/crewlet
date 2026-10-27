@@ -59,6 +59,7 @@ func TestEveryUsageCountSeeksItsWindow(t *testing.T) {
 		{"a person's spend", usagePeopleSQL},
 		{"the ended turns", usageEndedTurnsSQL},
 		{"the reads", usageReadsSQL},
+		{"the repository reads", usageRepoReadsSQL},
 	} {
 		query, args := s.sql(w)
 		plan := planOf(t, db, query, args)
@@ -123,6 +124,31 @@ func TestEveryUsageCountSeeksItsWindow(t *testing.T) {
 	if turnSeeks != 1 || turnProbes != 1 {
 		t.Errorf("an untallied turn's records: the plan is %q — want one seek of the turn "+
 			"index and one probe of the batches in flight", plan)
+	}
+
+	// A REPOSITORY'S NAME is a label read once per repository, off the row of
+	// its newest read — found by that read's INSTANT, a seek of the log's key
+	// rather than of the window — and the row it reads is one this node keeps.
+	name, nameArgs := usageRepoNameSQL("repo-1", EncodeTime(at))
+	plan = planOf(t, db, name, nameArgs)
+	nameSeeks, nameProbes := 0, 0
+	for _, step := range strings.Split(plan, "\n") {
+		switch {
+		case scansLog(step), strings.HasPrefix(step, "SCAN u"), strings.Contains(step, "LIST SUBQUERY"):
+			t.Errorf("a repository's name: the plan is %q — step %q walks what it should seek", plan, step)
+		case strings.HasPrefix(step, "SEARCH e "):
+			nameSeeks++
+			if !strings.Contains(step, "event_time=?") {
+				t.Errorf("a repository's name: the plan is %q — step %q does not seek the read's "+
+					"instant", plan, step)
+			}
+		case strings.HasPrefix(step, "SEARCH u "):
+			nameProbes++
+		}
+	}
+	if nameSeeks != 1 || nameProbes != 1 {
+		t.Errorf("a repository's name: the plan is %q — want one seek of the log by the read's "+
+			"instant and one probe of the batches in flight", plan)
 	}
 
 	query, args := markUsageRederiveSQL("batch-1")

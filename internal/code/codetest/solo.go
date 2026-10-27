@@ -269,7 +269,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 		f.git = append(f.git, StartGitNode(t, GitOptions{
 			ID: id, Dir: filepath.Join(f.dir, id, "git"), Estate: estate, Reads: reads,
 			Objects: func() objstore.Backend { return o.Objects }, Limits: o.Limits, Timing: o.Timing,
-			Faults: o.Faults, Credentials: f.creds, Audit: f.record,
+			Faults: o.Faults, Credentials: f.creds, Audit: f.record, Fetched: f.recordFetched,
 			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,
 			GitPath: o.GitPath, Logger: o.Logger, Roster: o.Roster, Current: o.Current, QueryPool: o.QueryPool,
 		}))
@@ -408,6 +408,7 @@ type SoloFleet struct {
 	brokers     []*js.Queue
 	activations int
 	audited     []types.OperatorActed
+	fetched     []types.CodeFetched
 }
 
 // openBroker opens the node's embedded broker over its own directory — the one
@@ -436,6 +437,22 @@ func (f *SoloFleet) record(_ context.Context, e types.OperatorActed) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.audited = append(f.audited, e)
+}
+
+// recordFetched keeps every read of a unit repository a host or a query server
+// recorded.
+func (f *SoloFleet) recordFetched(_ context.Context, e types.CodeFetched) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fetched = append(f.fetched, e)
+}
+
+// Fetched is every read of a `visibility: unit` repository the fleet's hosts
+// and query servers recorded, in order.
+func (f *SoloFleet) Fetched() []types.CodeFetched {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.fetched)
 }
 
 // Nodes is every serving node the fleet runs now, in order (Fleet).

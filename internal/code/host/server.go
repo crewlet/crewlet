@@ -101,6 +101,10 @@ const keepalive = 5 * time.Second
 
 // Options are how a Server is built. Every field but Faults, Logger, Metrics
 // and Now is required, and New refuses a missing one by name.
+//
+// FETCHED IS REQUIRED LIKE AUDIT: a code host that served a `visibility: unit`
+// repository's contents to somebody and recorded nothing would answer "who
+// read it" short, and an optional seam is exactly the one a caller forgets.
 type Options struct {
 	// Cache is this node's git cache: every directory a git process here
 	// reads, and the scratch repositories a push is received in.
@@ -116,6 +120,12 @@ type Options struct {
 	// Audit records one push — published by the engine through the operator
 	// surface's audit, which outlives the request.
 	Audit func(ctx context.Context, e types.OperatorActed)
+	// Fetched records one fetch of a `visibility: unit` repository whose
+	// answer carried a pack (fetch.go) — published by the engine into the
+	// node's event log, from which the usage domain derives who read it. Its
+	// publish outlives the request: a client that hung up after its pack
+	// still read the repository.
+	Fetched func(ctx context.Context, e types.CodeFetched)
 	// Limits is the CURRENT epoch's code.limits.
 	Limits func() code.Limits
 	// DeletedRetention is the CURRENT epoch's code.deleted_retention_days —
@@ -199,6 +209,7 @@ func New(o Options) (*Server, error) {
 	need(o.Estate == nil, "Estate")
 	need(o.Objects == nil, "Objects")
 	need(o.Audit == nil, "Audit")
+	need(o.Fetched == nil, "Fetched")
 	need(o.Limits == nil, "Limits")
 	need(o.DeletedRetention == nil, "DeletedRetention")
 	need(strings.TrimSpace(o.NodeID) == "", "NodeID")

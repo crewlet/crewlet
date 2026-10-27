@@ -153,6 +153,9 @@ type GitOptions struct {
 	Credentials *Credentials
 	// Audit is handed every push record the host publishes; nil keeps none.
 	Audit func(context.Context, types.OperatorActed)
+	// Fetched is handed every read of a `visibility: unit` repository the
+	// host and the query server record; nil keeps none.
+	Fetched func(context.Context, types.CodeFetched)
 	// MaxTransfers and MaxProcesses are the pool's transfer and read lanes;
 	// 0 is the pool's default.
 	MaxTransfers, MaxProcesses int
@@ -314,9 +317,13 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	if audit == nil {
 		audit = func(context.Context, types.OperatorActed) {}
 	}
+	fetched := g.o.Fetched
+	if fetched == nil {
+		fetched = func(context.Context, types.CodeFetched) {}
+	}
 	if n.host, err = host.New(host.Options{
 		Cache: n.cache, Git: n.pool, Estate: g.o.Estate, Objects: objects,
-		Audit: audit, Limits: limits,
+		Audit: audit, Fetched: fetched, Limits: limits,
 		DeletedRetention: func() time.Duration { return deletedRetention },
 		NodeID:           n.id, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
 	}); err != nil {
@@ -337,7 +344,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		roster = func() code.Roster { return nil }
 	}
 	if n.query, err = query.New(query.Options{NodeID: n.id, Cache: n.cache, Git: reads, Share: n.share,
-		Roster: roster, Current: g.o.Current}); err != nil {
+		Roster: roster, Current: g.o.Current, Fetched: fetched}); err != nil {
 		t.Fatalf("codetest: build %s's query server: %v", n.id, err)
 	}
 	mux := http.NewServeMux()

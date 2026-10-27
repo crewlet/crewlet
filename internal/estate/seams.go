@@ -773,6 +773,63 @@ func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) 
 	return call(ctx, u.r, opUsageReadsElided, nil, readsElidedArgs{From: from, To: to})
 }
 
+// RepoReadersAnswer is one page of a repository's readers, summed across every
+// node and day of the range ([usage.RepoReadsPage]).
+type RepoReadersAnswer struct {
+	// Readers are the page's readers, in reader order.
+	Readers []usage.RepoReader
+
+	// Elided is how many readers the per-day cap dropped over the range on
+	// every node — on the FIRST page alone, the one a reader starts from; nil
+	// on every page after it, which a cursor already ties to that answer.
+	Elided *int64
+
+	// Next is the cursor of the page after this one, "" on the last.
+	Next string
+}
+
+// RepoReaders answers one page of a repository's readers over a range of
+// company days, cut at pageBytes and resuming at cursor — "" for the first
+// page, and otherwise a page's own [RepoReadersAnswer.Next] — and with the
+// first page how many readers the per-day cap dropped over the range.
+//
+// A PAGE A ROUTED CALL: each is asked of whichever data node serves the usage
+// copy now, and every data node cuts and resumes by the one rule
+// ([usage.Fill]), so a reader walked across a failover reads every reader once.
+// A cursor or a range the read cannot take is refused naming why
+// ([usage.ErrBadCursor], [usage.ErrBadRange]).
+func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor string,
+	pageBytes int) (RepoReadersAnswer, error) {
+
+	if err := q.Validate(); err != nil {
+		return RepoReadersAnswer{}, err
+	}
+	after, err := usage.ParseCursor(cursor)
+	if err != nil {
+		return RepoReadersAnswer{}, err
+	}
+	page, err := call(ctx, u.r, opUsageRepoReads, nil, repoReadsArgs{Query: q, After: after, Budget: pageBytes})
+	if err != nil {
+		return RepoReadersAnswer{}, err
+	}
+	out := RepoReadersAnswer{Readers: page.Rows}
+	if !page.Done {
+		if !after.Before(page.Next) {
+			return RepoReadersAnswer{}, fmt.Errorf("estate: a page of readers ended at %v, which is not "+
+				"after %v — the answering node pages by another rule", page.Next, after)
+		}
+		out.Next = page.Next.Cursor()
+	}
+	if cursor == "" {
+		elided, err := call(ctx, u.r, opUsageRepoReadsElided, nil, q)
+		if err != nil {
+			return RepoReadersAnswer{}, err
+		}
+		out.Elided = &elided
+	}
+	return out, nil
+}
+
 // CodeSeam is the code host's reach into the estate, from every node: a push's
 // proposal, a compaction's and an expunge record's to their repository's
 // committer, and the reads the host's admission, a cache's sync and the REST

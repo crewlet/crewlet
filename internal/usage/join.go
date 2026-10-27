@@ -42,8 +42,8 @@ import (
 // # The order each figure grows in
 //
 // Every counter — a spend cell's six figures, a seat's turns, failures,
-// reviewed turns, send-backs, a read entry's count — grows by addition, so it
-// joins by MAX. A seat's first-pass turns do NOT grow (a review that sends a
+// reviewed turns, send-backs, a read entry's count, a repository reader's reads
+// and the bytes they were sent — grows by addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review that sends a
 // turn back takes it out of them), and what does is its turns with an
 // unaccepted review, so it is that count that joins by max and the first-pass
 // figure is read back from it ([joinTurns]). A turn duration can move UP a bin
@@ -111,6 +111,19 @@ const (
 		SELECT fired_at, target, outcome, trace_id, turn_id
 		  FROM usage_schedule_runs
 		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
+	// A REPOSITORY'S READERS name the key for the reason the spend reads do:
+	// the reader index (usage_repo_reads_repo_idx) COVERS every column read
+	// here and leads with the repository, so taken on its own it walks the
+	// repository's every reader on every node and day to read one day of one
+	// node's.
+	appliedRepoReadHeadSQL = `
+		SELECT repo_name, readers_elided
+		  FROM usage_repo_read_days INDEXED BY sqlite_autoindex_usage_repo_read_days_1
+		 WHERE day = ? AND node = ? AND repo_id = ?`
+	appliedRepoReadsSQL = `
+		SELECT principal_kind, principal, via, seat, reads, bytes, last_at
+		  FROM usage_repo_reads INDEXED BY sqlite_autoindex_usage_repo_reads_1
+		 WHERE day = ? AND node = ? AND repo_id = ?`
 )
 
 // Applied reads the record the rows `estate` holds for one subject — what the
@@ -167,6 +180,18 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 			var err error
 			rec.Fires, err = appliedFires(ctx, tx, s)
 			held = len(rec.Fires) > 0
+			return err
+		case KindRepoRead:
+			switch err := tx.QueryRowContext(ctx, appliedRepoReadHeadSQL, s.Day, s.Node, s.Repo).Scan(
+				&rec.RepoName, &rec.RepoReadersElided); {
+			case errors.Is(err, sql.ErrNoRows):
+				return nil
+			case err != nil:
+				return err
+			}
+			held = true
+			var err error
+			rec.RepoReads, err = appliedRepoReads(ctx, tx, s)
 			return err
 		}
 		return fmt.Errorf("%s is a kind this build holds no rows of", s)
@@ -234,6 +259,32 @@ func appliedReads(ctx context.Context, tx *sql.Tx, s Subject) ([]Read, error) {
 	return out, rows.Err()
 }
 
+// appliedRepoReads reads a repository-day's readers, in reader order.
+func appliedRepoReads(ctx context.Context, tx *sql.Tx, s Subject) ([]RepoRead, error) {
+	rows, err := tx.QueryContext(ctx, appliedRepoReadsSQL, s.Day, s.Node, s.Repo)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RepoRead
+	for rows.Next() {
+		var (
+			r    RepoRead
+			last int64
+		)
+		if err := rows.Scan(&r.PrincipalKind, &r.Principal, &r.Via, &r.Seat, &r.Reads, &r.Bytes,
+			&last); err != nil {
+			return nil, err
+		}
+		if last != 0 {
+			r.LastAt = store.DecodeTime(last)
+		}
+		out = append(out, r)
+	}
+	slices.SortFunc(out, compareRepoReader)
+	return out, rows.Err()
+}
+
 // appliedFires reads a schedule-day's fires, in fire order.
 func appliedFires(ctx context.Context, tx *sql.Tx, s Subject) ([]Fire, error) {
 	rows, err := tx.QueryContext(ctx, appliedScheduleSQL, s.Day, s.Node, s.ScopeType,
@@ -285,8 +336,48 @@ func Join(derived, applied Record) Record {
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 	case KindSchedule:
 		out.Fires = joinFires(derived.Fires, applied.Fires)
+	case KindRepoRead:
+		// THE NAME IS A LABEL, the derivation's where it states one — the
+		// newest read's — and the fleet's where it states none.
+		out.RepoName = cmp.Or(derived.RepoName, applied.RepoName)
+		out.RepoReads, out.RepoReadersElided = joinRepoReads(derived.RepoReads,
+			derived.RepoReadersElided, applied.RepoReads, applied.RepoReadersElided)
 	}
 	return out
+}
+
+// joinRepoReads joins two repository-days' readers and what each cap dropped,
+// as [joinReads] joins a seat's page reads: the union keyed by reader, each
+// reader's reads and bytes the larger of the two and its newest read the
+// later, capped again by the rule the derivation is ([capRepoReads]), and the
+// elided count what the larger side says the day held less what survives the
+// cap. On the ordinary day the fleet's record is an earlier derivation of the
+// same rows, every reader of it at or below the new one's, and the join is the
+// derivation.
+func joinRepoReads(d []RepoRead, dElided int, a []RepoRead, aElided int) ([]RepoRead, int) {
+	if len(a) == 0 && aElided == 0 {
+		return d, dElided
+	}
+	all := slices.Clone(d)
+	at := make(map[RepoReaderKey]int, len(all))
+	for i, r := range all {
+		at[r.Key()] = i
+	}
+	for _, r := range a {
+		i, ok := at[r.Key()]
+		if !ok {
+			all = append(all, r)
+			continue
+		}
+		c := &all[i]
+		c.Reads, c.Bytes = max(c.Reads, r.Reads), max(c.Bytes, r.Bytes)
+		if r.LastAt.After(c.LastAt) {
+			c.LastAt = r.LastAt
+		}
+	}
+	held := max(len(d)+dElided, len(a)+aElided, len(all))
+	kept, _ := capRepoReads(all)
+	return kept, held - len(kept)
 }
 
 // joinTurns joins a seat's turn figures.

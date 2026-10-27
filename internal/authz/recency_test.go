@@ -203,6 +203,9 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 			"knowledge surface the design leaves out of step-up",
 		authz.ActionArtifactUsage: "a read of what the company's artifacts " +
 			"hold against their quotas changes nothing",
+		authz.ActionCodeRepoReaders: "a read of who read a unit's repository " +
+			"changes nothing, and it is a tool too — asked through the " +
+			"operator MCP beside the route — which no step-up reaches",
 	}
 	walked := 0
 	for _, a := range authz.Actions() {

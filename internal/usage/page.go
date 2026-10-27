@@ -3,7 +3,9 @@ package usage
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
@@ -44,6 +46,44 @@ import (
 // cells of one version of a seat's day and the rest of the next, a total
 // neither version ever had.
 type Group []string
+
+// ErrBadCursor is a page's resumption no read of this domain issued: a cursor
+// that does not decode, or a group of another shape than the read it resumes
+// is cut by.
+var ErrBadCursor = errors.New("usage: the cursor is not one this read issued")
+
+// Cursor is g as a surface hands its reader the next page's resumption:
+// opaque and URL-safe, so a client carries it back as it came.
+func (g Group) Cursor() string {
+	raw, err := json.Marshal([]string(g))
+	if err != nil {
+		// A slice of strings always encodes.
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// ParseCursor is the group a [Group.Cursor] encodes, and the start of a read
+// for "". Whether its shape is the read's is the read's to judge
+// ([resumeAfter]).
+func ParseCursor(s string) (Group, error) {
+	if s == "" {
+		return nil, nil
+	}
+	// EACH REFUSAL A SENTENCE FOR THE CALLER past the sentinel, which a
+	// surface quotes alone: what is wrong with the cursor they handed back.
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the cursor does not decode (%v) — hand back a page's `next` unchanged",
+			ErrBadCursor, err)
+	}
+	var g []string
+	if err := json.Unmarshal(raw, &g); err != nil || len(g) == 0 {
+		return nil, fmt.Errorf("%w: the cursor names no page's end — hand back a page's `next` unchanged",
+			ErrBadCursor)
+	}
+	return Group(g), nil
+}
 
 // Before reports whether g sorts before h, column by column, each column
 // compared byte-wise — the order the statements' BINARY collation sorts the
@@ -221,8 +261,8 @@ func resumeAfter(read string, rest []string, after Group) (resumption, error) {
 		return resumption{}, nil
 	}
 	if len(after) != 1+len(rest) {
-		return resumption{}, fmt.Errorf("usage: a %s page resumes after a group of %d columns, not %d",
-			read, 1+len(rest), len(after))
+		return resumption{}, fmt.Errorf("%w: a %s page resumes after a group of %d columns, not %d",
+			ErrBadCursor, read, 1+len(rest), len(after))
 	}
 	past, args := keyset(rest, after[1:])
 	return resumption{after: after, past: past, args: args}, nil

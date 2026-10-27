@@ -25,6 +25,10 @@ import (
 // failure, when the run's answer stands (release) — so a run that met damage
 // before its pack has shown the client nothing and is run again over the
 // repaired cache.
+//
+// AND IT READS ON PAST THE HOLD (tap): whether the answer carried a pack is
+// what the fetch audit asks once the request has ended (fetch.go), and an
+// answer whose acknowledgments outgrew the hold has not said yet.
 type sink struct {
 	w           http.ResponseWriter
 	contentType string
@@ -38,6 +42,13 @@ type sink struct {
 	// hold, while a fetch's answer has not started, is what it holds of
 	// it (holdPack); nil for any other answer, and once it has started.
 	hold *preamble
+	// tap is a fetch's answer read for its pack's beginning (band.go) — the
+	// hold's release rule while the answer is held, and past the hold whether
+	// the answer carried a pack at all ([sink.PackSent]): read on through
+	// every write until the pack begins or the answer ends, after the hold
+	// gives up at preambleHoldBytes, keeping nothing of what it reads and
+	// delaying no write. Nil for any other answer.
+	tap *answerScan
 	// sent is every byte of the answer the client was written — the service
 	// prefix, what was held and released, and everything after — as the
 	// paced writer took it: what the repository's heat counts as bytes out
@@ -46,9 +57,8 @@ type sink struct {
 }
 
 // preamble is what a fetch's sink holds of an upload-pack answer before its
-// pack begins, and its reading of it.
+// pack begins.
 type preamble struct {
-	scan answerScan
 	held []byte
 }
 
@@ -75,7 +85,7 @@ func newSink(w http.ResponseWriter, contentType string, now func() time.Time) *s
 func (s *sink) holdPack() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.hold = &preamble{}
+	s.hold, s.tap = &preamble{}, &answerScan{}
 }
 
 // again readies a held answer for another run over the same request: what the
@@ -85,8 +95,18 @@ func (s *sink) again() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.out == nil && s.hold != nil {
-		s.hold = &preamble{}
+		s.hold, s.tap = &preamble{}, &answerScan{}
 	}
+}
+
+// PackSent reports whether a fetch's answer carried a pack — its pack began
+// (band.go) — as far as it has been written: false for an answer of
+// acknowledgments alone, a negotiation round that sent no object, and for
+// any answer but a fetch's.
+func (s *sink) PackSent() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tap != nil && s.tap.begun
 }
 
 // Write starts the response at its first byte and writes p — for a held
@@ -98,10 +118,16 @@ func (s *sink) Write(p []byte) (int, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// READ ON PAST THE HOLD until the pack begins, so a fetch whose
+	// acknowledgments outgrew the hold is still told apart from a
+	// negotiation round that sent no object. Once begun, nothing more is
+	// read.
+	if t := s.tap; t != nil && !t.begun {
+		t.scan(p)
+	}
 	if s.out == nil {
 		if h := s.hold; h != nil {
-			h.scan.scan(p)
-			if !h.scan.begun && len(h.held)+len(p) <= preambleHoldBytes {
+			if !s.tap.begun && len(h.held)+len(p) <= preambleHoldBytes {
 				h.held = append(h.held, p...)
 				return len(p), nil
 			}

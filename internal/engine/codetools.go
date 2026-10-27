@@ -40,6 +40,25 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	return builtin.CodeDeps{Code: seam, CloneURL: e.cloneURL}
 }
 
+// CodeReaderDeps are `code_repo_readers`' dependencies on this node — who read
+// a `visibility: unit` repository, from the usage domain through this node's
+// estate router (whichever data node's usage copy serves), and the company's
+// clock a range is cut on, read per call ([Engine.Zone]) — or the zero value,
+// which serves no tool, on [CodeToolDeps]' terms: where this node's running
+// runtime serves no code host, the tool is not offered beside the code reads it
+// stands with.
+//
+// EXPORTED for the operator surface, which builds its catalogue for every call.
+func CodeReaderDeps(e *Engine) builtin.ReadersDeps {
+	if e == nil {
+		return builtin.ReadersDeps{}
+	}
+	if _, ok := OperatorCode(e); !ok {
+		return builtin.ReadersDeps{}
+	}
+	return builtin.ReadersDeps{Readers: e.router.Usage(), Zone: e.Zone}
+}
+
 // cloneURL is the address a person's git clones repository name from: the
 // deployment's `api.external_url` — the listener /git/ is served on — and the
 // one path a repository is served at, or empty where the deployment names no

@@ -92,6 +92,12 @@ type CodeSurface interface {
 
 	// CodeReads is the code domain's read, or why this node serves none.
 	CodeReads() (CodeReads, error)
+
+	// RepoReaders is who read a `visibility: unit` repository — the usage
+	// domain's readers, wherever its rows are served, and the company's
+	// clock a range that names no end is cut on — or why this node serves
+	// none, on CodeReads' terms: the readers stand with the code reads.
+	RepoReaders() (builtin.ReadersDeps, error)
 }
 
 // notHosted is what a code route answers where the company hosts no code: ONE
@@ -234,6 +240,11 @@ func servesGit(b *config.Bootstrap) bool {
 //     that reads every byte of it and holds a maintenance slot, and with a
 //     repair rewrites what every fetch on the node is served from: an
 //     operation on the node, which no repository's grant decides.
+//   - WHO READ A REPOSITORY is admin's and a person's
+//     ([authz.ActionCodeRepoReaders]), the one verb the operator tool
+//     `code_repo_readers` is decided by: its answer names the people, the
+//     credentials and the seats that read a unit's code, an audit no
+//     repository's grant gives.
 //
 // A GIT ROUTE'S REFUSAL IS IN GIT'S FORM ([gitRefusal]): git prints one line
 // of text and nothing of the JSON envelope a REST route answers.
@@ -272,6 +283,8 @@ func (a *App) mountCode(mux authz.Mux) error {
 	mount(rest, "GET /code/repos", read, a.serveCodeRead(code.ReadRepos, "code_repos"))
 	mount(rest, "GET /code/repos/{name}", read, a.serveCodeRead(code.ReadRepo, "code_repo"))
 	mount(rest, "GET /code/repos/{name}/pushes", read, a.serveCodeRead(code.ReadPushes, "code_pushes"))
+	mount(rest, "GET /code/repos/{name}/readers", authz.Policy{Action: authz.ActionCodeRepoReaders},
+		http.HandlerFunc(a.serveCodeRepoReaders))
 	return errors.Join(failures...)
 }
 
@@ -476,6 +489,57 @@ func refusalSentence(err, sentinel error) string {
 		return sentence
 	}
 	return err.Error()
+}
+
+// serveCodeRepoReaders answers who read a `visibility: unit` repository over a
+// range of company days, a page at a time: `?from=` and `?to=` (company days,
+// both inclusive — the [builtin.RepoReadersDefaultDays] ending today where the
+// request names neither), and `?cursor=` (the `next` of the page before).
+//
+// THE OPERATOR TOOL'S ONE ANSWER ([builtin.ReadersOf]), so a person's script
+// and their assistant are told the same thing in the same pages: the
+// repository read by name as the caller, linearizable — a repository declared
+// a moment ago is never answered undeclared from an old copy, and no read
+// level is the caller's to choose, since what the page is read from is the
+// usage domain and not the code log — and, for a unit's repository, one page
+// of its readers summed over every node, the first page with how many readers
+// the per-day cap left out. A `visibility: company` repository's readers are
+// not recorded, and its answer says so.
+//
+// AN ADMIN'S, decided at the mount ([authz.ActionCodeRepoReaders]) before
+// anything is read. A range or a cursor the read cannot take is `bad_params`
+// in the tool's own words ([builtin.ReadersRefusal]) — this node's judgement,
+// before anything is read, or a peer's; everything else is a code read's
+// refusal ([codeRefusal]).
+func (a *App) serveCodeRepoReaders(w http.ResponseWriter, r *http.Request) {
+	const what = "code_repo_readers"
+	reads, why := a.code.CodeReads()
+	if why != nil {
+		codeNotServed(w, why)
+		return
+	}
+	readers, why := a.code.RepoReaders()
+	if why != nil {
+		codeNotServed(w, why)
+		return
+	}
+	p, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	params := queries.FromQuery(r.URL.Query())
+	q := builtin.ReadersQuery{Repo: r.PathValue("name"), From: params.String("from"), To: params.String("to"),
+		Cursor: params.String("cursor")}
+	answer, err := builtin.ReadersOf(r.Context(), reads, readers.Readers, codeAsker(p), q, readers.Today())
+	if said, refused := builtin.ReadersRefusal(err); refused {
+		writeQueryError(w, what, fmt.Errorf("%w: %s", queries.ErrBadParams, said))
+		return
+	}
+	if err != nil {
+		codeRefusal(w, what, q.Repo, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 // verificationView is a verification as the API answers it: the operation's

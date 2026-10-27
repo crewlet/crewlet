@@ -451,6 +451,8 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		// call after a runtime starts serving code is offered them, and on
 		// exactly the terms this node's `/code/` reads are.
 		halves.Code = engine.CodeToolDeps(e)
+		// AND WHO READ A UNIT'S REPOSITORY, beside them and on their terms.
+		halves.Readers = engine.CodeReaderDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {
 			halves.Company = c.Config.Name
 		}

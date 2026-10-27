@@ -174,6 +174,10 @@ var (
 	auxiliarySpendType = types.AuxiliarySpend{}.EventType()
 )
 
+// repoReadType is the one event the repository-read columns are filled from
+// (node/0052), taken from its payload type for the reason [phaseCompleted] is.
+var repoReadType = types.CodeFetched{}.EventType()
+
 // spendTypes are both, as a SQL `IN (…)` takes them — every read that folds
 // spend lists the same two.
 func spendTypes() (string, []any) {

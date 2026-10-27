@@ -173,9 +173,10 @@ func codeCandidates(deps CodeDeps) []candidate {
 // EVERY ONE IS A PROVEN READ, and idempotent: asking twice costs a round and
 // changes nothing. So a turn that only read code is a turn that delivered
 // nothing (the delivery check), a worker may be handed them (the guard), and
-// the operator catalogue audits no call to one, as it audits no read.
+// the operator catalogue audits no call to one, as it audits no read — the
+// operator's own `code_repo_readers` among them.
 func codeAnnotations(name string) (tools.Annotations, bool) {
-	for _, tool := range CodeToolNames() {
+	for _, tool := range append(CodeToolNames(), CodeRepoReadersTool) {
 		if tool == name {
 			return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}, true
 		}

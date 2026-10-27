@@ -117,6 +117,12 @@ const (
 	ActionCodeDiff      Action = "code_diff"
 	ActionCodeCompare   Action = "code_compare"
 	ActionCodeLandedIn  Action = "code_landed_in"
+	// ActionCodeRepoReaders is WHO READ a `visibility: unit` repository —
+	// the operator tool `code_repo_readers` and `GET
+	// /code/repos/{name}/readers`, ONE verb asked two ways — whose answer
+	// names the persons, the credentials and the seats that read it and how
+	// much.
+	ActionCodeRepoReaders Action = "code_repo_readers"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
@@ -648,6 +654,16 @@ var rules = map[Action]rule{
 	ActionCodeDiff:      {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeCompare:   {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeLandedIn:  {class: ClassEverybody, recency: iam.RecencyAny},
+	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
+	// ([ActionAuditRead]): the answer names every person, credential and
+	// seat that read a unit's code and how much, which is an audit of the
+	// people as much as of the code — and NEVER AN AGENT'S, a seat asking who
+	// read a repository being a model watching the people it works for.
+	// NOT THE OWNING UNIT'S LEADS beside admin, though they read the
+	// repository itself: a lead's view of which colleagues read their unit's
+	// code is an audit of those colleagues, which the company gives with the
+	// admin permission and not with a place on the chart.
+	ActionCodeRepoReaders: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/tracker's own tag rule has always said: adding a label

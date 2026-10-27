@@ -386,6 +386,22 @@ page begins. A page whose text spells so many fence markers that, escaped, it
 outgrows one answer is refused naming a narrower read: a line range, or a
 file's lines in place of its patch.
 
+**And one no seat is given: `code_repo_readers`**, which the operator
+catalogue serves beside the seven, on their terms — who read a
+`visibility: unit` repository's contents over a range of company days (`from`
+and `to`, both inclusive, the thirty days ending today where the call names
+neither, at most 181 apart; `next` back as `cursor`): every credential and the
+person it acted as, and every seat, that fetched the repository or read it
+through these tools, with how often and how many bytes, summed over every node,
+and on the first page how many readers a day's record had no room to name
+([Who read it](../concepts/code-host.md#who-read-it)). A `visibility: company`
+repository's readers are not recorded, and its answer says so. It is an
+**admin's**: its answer names the people who read a unit's code, so a person
+who is not an admin is refused it before anything is read — and a seat is
+never offered it, a seat watching who reads the code being a model watching the
+people it works for. `GET /code/repos/{name}/readers` answers the same pages
+to a script.
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).

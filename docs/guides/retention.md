@@ -1137,8 +1137,13 @@ replication of each node's days. Every data node keeps re-deriving its day and
 retrying on every tick, nothing is lost from any node's own event log, and the
 `log_headroom` alarm names the domain (`log_headroom on usage`) long before the ceiling. Its
 size is a count of node-days rather than a rate — one message per (node, day,
-seat or schedule) for 181 days — so a log that fills has outgrown its census:
-raise `stream.usage_log_max_bytes` as below.
+and seat, person, schedule, or `visibility: unit` repository somebody read that
+day) for 181 days — so a log that fills has outgrown its census: raise
+`stream.usage_log_max_bytes` as below. A unit repository's day is one message
+for each node that served its reads, naming every reader in under two hundred
+bytes each ([Who read it](../concepts/code-host.md#who-read-it)): ten unit
+repositories read every day on three nodes by a dozen readers each are about
+13 MB over the 181 days, some 1 % of the default gibibyte.
 
 The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because

@@ -83,10 +83,22 @@ func personRecord(t *testing.T, id string, at time.Time, seat string, total int)
 		Category: "system", Tags: store.ExtractTags(payload), Payload: payload}
 }
 
+// fetchRecord is one read of a unit repository, as the code host and the
+// query server publish it ([types.CodeFetched]).
+func fetchRecord(t *testing.T, id string, at time.Time, read types.CodeFetched) store.EventRecord {
+	t.Helper()
+	payload, err := json.Marshal(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store.EventRecord{ID: id, Type: read.EventType(), Actor: read.Actor(), Time: at,
+		Category: "system", Tags: store.ExtractTags(payload), Payload: payload}
+}
+
 // usageTally is what a derived day says, reduced to what these cases count.
 type usageTally struct {
-	spend, turns, failed, reviewed, firstPass, sentBack, reads, person int64
-	duration                                                           time.Duration
+	spend, turns, failed, reviewed, firstPass, sentBack, reads, person, repo int64
+	duration                                                                 time.Duration
 }
 
 func tallyOf(t *testing.T, db *store.DB, w store.UsageWindow) (usageTally, store.UsageMark) {
@@ -117,6 +129,9 @@ func tallyOf(t *testing.T, db *store.DB, w store.UsageWindow) (usageTally, store
 			out.person += c.Total
 		}
 	}
+	for _, r := range day.RepoReads {
+		out.repo += r.Reads
+	}
 	mark, err := db.UsageMark(t.Context(), w)
 	if err != nil {
 		t.Fatalf("fingerprint the day: %v", err)
@@ -136,8 +151,8 @@ func tallyOf(t *testing.T, db *store.DB, w store.UsageWindow) (usageTally, store
 // again; not kept, its rows go and nothing ever counted them.
 //
 // Every statement a day is derived from is exercised — the spend, the ended
-// turns, the reads, a person's spend — so leaving the predicate off any one of
-// them fails here.
+// turns, the reads, a person's spend, a unit repository's reads — so leaving
+// the predicate off any one of them fails here.
 func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 	t.Parallel()
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
@@ -151,6 +166,7 @@ func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 			phaseRecord(t, "own-review", at(2), "seat-1", "t-own", "review", "done", 10),
 			readRecord(t, "own-read", at(2), "seat-1", "p-own"),
 			personRecord(t, "own-person", at(2), "maya", 7),
+			fetchRecord(t, "own-fetch", at(2), unitFetch("pat:maya", "maya")),
 			endedTurn(t, "own-end", at(3), "seat-1", "t-own",
 				types.TurnTally{DurationMS: 60_000, Reviews: 1}),
 		} {
@@ -168,14 +184,15 @@ func TestAUsageDayCountsOnlyTheRowsThisNodeKeeps(t *testing.T) {
 			phaseRecord(t, "b-review-own", at(2), "seat-1", "t-own", "review", "self_iterate", 1),
 			readRecord(t, "b-read", at(5), "seat-2", "p-b"),
 			personRecord(t, "b-person", at(5), "maya", 70),
+			fetchRecord(t, "b-fetch", at(5), unitFetch("token:ci", "")),
 			endedTurn(t, "b-end", at(6), "seat-2", "t-b",
 				types.TurnTally{DurationMS: 120_000, Failed: true, Reviews: 2, SentBack: 1, Unaccepted: 1}),
 		}}
 	}
 	ownOnly := usageTally{spend: 100 + 10, turns: 1, reviewed: 1, firstPass: 1, reads: 1,
-		person: 7, duration: time.Minute}
+		person: 7, repo: 1, duration: time.Minute}
 	withBatch := usageTally{spend: 110 + 1000 + 1, turns: 2, failed: 1, reviewed: 2,
-		firstPass: 1, sentBack: 1, reads: 2, person: 77, duration: 3 * time.Minute}
+		firstPass: 1, sentBack: 1, reads: 2, person: 77, repo: 2, duration: 3 * time.Minute}
 
 	for _, kept := range []bool{true, false} {
 		t.Run(fmt.Sprintf("settled kept=%v", kept), func(t *testing.T) {

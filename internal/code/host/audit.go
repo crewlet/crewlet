@@ -19,7 +19,9 @@ import (
 // author — the seat for a person — its kind, and the credential as the
 // operator id) — whatever became of it: a refused push writes no row in the code
 // domain, so this record is the only one that says it happened, and where. A
-// fetch is a proven read and is not audited.
+// fetch is a proven read and is not audited here; a fetch of a `visibility:
+// unit` repository that sent its contents is recorded as a READ instead
+// (code_fetched, fetch.go), which the usage domain counts.
 //
 // EVERY PUSH THE NODE ADMITS, HOWEVER ITS REQUEST ENDS (pushAudit): the record
 // is the REQUEST'S, settled once by whichever way the request ends, never

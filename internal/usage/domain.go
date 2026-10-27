@@ -76,6 +76,23 @@ const (
 	// before an append is refused and `stream.usage_log_max_bytes` raises.
 	ReadsPerSeatDay = 256
 
+	// ReadersPerRepoDay is how many readers one repo_read record carries —
+	// one unit repository's day on one node.
+	//
+	// A THOUSAND AND TWENTY-FOUR, and what it bounds is ONE RECORD. An entry
+	// is a principal of at most 255 bytes, a seat handle of at most 64, two
+	// words and three figures, so under 2 KiB even where JSON escapes every
+	// byte of the principal, and a record at the cap under 2 MiB — a quarter
+	// of the
+	// transport's 8 MiB message and far under the largest record this log
+	// takes ([LogMaxRecordBytes]), as TestAFullRepoReadRecordFitsOneMessage
+	// measures. And it is past the readers any unit's repository has: the
+	// seats of its subtree and its leads, the company's persons through
+	// their credentials, and its tokens. The most-read survive, and what was
+	// dropped is counted on the record, so an answer that lost readers says
+	// so.
+	ReadersPerRepoDay = 1_024
+
 	// LogMaxBytes is the ceiling this domain declares for its stream, which
 	// the framework's own suites provision it with; a node sizes it from
 	// Tier A (`stream.usage_log_max_bytes`) instead.
@@ -85,8 +102,13 @@ const (
 	// three-node fleet of forty seats and twenty schedules, every seat
 	// working every day, is 60 subjects × 3 nodes × 181 days ≈ 32 600
 	// messages; at a busy seat-day's ≈ 6.5 KiB that is about 217 MB, and a
-	// gibibyte is four times it. Crossing it REFUSES an append and raises
-	// the log's headroom alarm rather than dropping the oldest day.
+	// gibibyte is four times it. A unit repository read on a day adds one
+	// message for each node that served it, under two hundred bytes a
+	// reader beside its envelope: ten unit repositories read every day on
+	// three nodes by a dozen readers each are 10 × 3 × 181 ≈ 5 400 messages
+	// of about 2.3 KiB, some 13 MB over the history — about 1 % of the
+	// gibibyte. Crossing it REFUSES an append and raises the log's headroom
+	// alarm rather than dropping the oldest day.
 	LogMaxBytes = 1 << 30
 
 	// LogMaxRecordBytes is the largest record this domain publishes
@@ -97,10 +119,11 @@ const (
 	// no identity and keeps no gate reserve, so the declaration sizes
 	// nothing and only says where the publisher and the broker refuse. A
 	// record is bounded far below it by its own caps — a seat-day's reads
-	// at [ReadsPerSeatDay], and a schedule-day's fires at one per cron
-	// minute, 1 440 fires of about 150 bytes — so a record that does meet
-	// the refusal is one no retry places, and the publisher says so once
-	// rather than every tick ([Publisher]).
+	// at [ReadsPerSeatDay], a schedule-day's fires at one per cron minute,
+	// 1 440 fires of about 150 bytes, and a repository-day's readers at
+	// [ReadersPerRepoDay], under 2 MiB — so a record that does meet the
+	// refusal is one no retry places, and the publisher says so once rather
+	// than every tick ([Publisher]).
 	LogMaxRecordBytes = statelog.MaxTransportRecordBytes
 
 	// LogDuplicates is the window the broker collapses a repeated op id in.
@@ -178,11 +201,13 @@ func (Domain) NodeGate(statelog.Envelope) bool { return false }
 // them is in the identity claim.
 func (Domain) Tables() map[string]statelog.TableClass {
 	return map[string]statelog.TableClass{
-		"usage_turns":         statelog.Divergent,
-		"usage_tokens":        statelog.Divergent,
-		"usage_reads":         statelog.Divergent,
-		"usage_schedule_runs": statelog.Divergent,
-		"usage_person_tokens": statelog.Divergent,
+		"usage_turns":          statelog.Divergent,
+		"usage_tokens":         statelog.Divergent,
+		"usage_reads":          statelog.Divergent,
+		"usage_schedule_runs":  statelog.Divergent,
+		"usage_person_tokens":  statelog.Divergent,
+		"usage_repo_read_days": statelog.Divergent,
+		"usage_repo_reads":     statelog.Divergent,
 
 		"usage_log_deferred":       statelog.Local,
 		"usage_log_deferred_scope": statelog.Local,

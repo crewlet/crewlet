@@ -236,7 +236,11 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		// THE CODE READ TOOLS, over the seam the seat's registry is built
 		// with, read as the request's principal as the surface reads them.
 		Code: builtin.CodeDeps{Code: full.Code.Code, Actor: builtin.PrincipalActor},
-		Org:  orgOf,
+		// WHO READ A UNIT REPOSITORY, an admin's read beside the code
+		// reads it stands with: left nil, it is a verb no seat holds and
+		// this walk would never see.
+		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
+		Org:     orgOf,
 		// The operator-only verbs: a parked run's answer, a seat's pause
 		// and resume, a note to a running turn and an answer from the
 		// company's knowledge. Each is a seam of its own, and each left

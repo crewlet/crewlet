@@ -212,6 +212,8 @@ type UsageReader interface {
 	PageReadsPage(ctx context.Context, q usage.PageReadsQuery, after usage.Group, budget int) (usage.Page[usage.PageRead], error)
 	ScheduleRuns(ctx context.Context, q usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error)
 	ReadsElided(ctx context.Context, from, to string) (int64, error)
+	RepoReadsPage(ctx context.Context, q usage.RepoReadsQuery, after usage.Group, budget int) (usage.Page[usage.RepoReader], error)
+	RepoReadsElided(ctx context.Context, q usage.RepoReadsQuery) (int64, error)
 }
 
 // IdentityReader is the identity directory's read side, as a node holding no
@@ -1707,6 +1709,40 @@ var opUsageReadsElided = define("usage.reads_elided", opRead, usageDomain, false
 			return 0, errNoHalf
 		}
 		return b.Usage.ReadsElided(ctx, a.From, a.To)
+	}).floorless()
+
+// repoReadsArgs is one page of a repository's readers: the read's query, the
+// reader the page before it ended on — empty for the first — and the bytes its
+// ASKER cuts a page at.
+type repoReadsArgs struct {
+	Query  usage.RepoReadsQuery
+	After  usage.Group
+	Budget int
+}
+
+// A REPOSITORY'S READERS ARE PAGED BY THEIR ASKER, unlike the reads above: a
+// person walks them a page at a time through a surface that answers one page
+// per request — a tool answer, a REST page — so the page is the asker's, at the
+// budget it names, and the wire's own ([usagePageBytes]) bounds it only where
+// it is the smaller.
+var opUsageRepoReads = define("usage.repo_reads", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a repoReadsArgs) (usage.Page[usage.RepoReader], error) {
+		if b.Usage == nil {
+			return usage.Page[usage.RepoReader]{}, errNoHalf
+		}
+		budget := a.Budget
+		if b.pageBytes > 0 && (budget <= 0 || budget > b.pageBytes) {
+			budget = b.pageBytes
+		}
+		return b.Usage.RepoReadsPage(ctx, a.Query, a.After, budget)
+	}).floorless()
+
+var opUsageRepoReadsElided = define("usage.repo_reads_elided", opRead, usageDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q usage.RepoReadsQuery) (int64, error) {
+		if b.Usage == nil {
+			return 0, errNoHalf
+		}
+		return b.Usage.RepoReadsElided(ctx, q)
 	}).floorless()
 
 // linkedFromArgs names the page whose backlinks are asked for, by its id.

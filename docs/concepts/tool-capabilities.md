@@ -58,7 +58,11 @@ with `tools.Registry.RegisterWith`, so the same classification works for
 them. The [code tools](../guides/tools-and-mcp.md#the-companys-code), for
 one, are each a proven, idempotent read: a worker may be handed any of them,
 a turn that only read code delivered nothing, and the operator catalogue
-records no call to one.
+records no call to one. So is the operator-only `code_repo_readers` beside
+them, which no seat's registry ever holds: annotations say what a tool does,
+never who may call it, and who read a unit's repository is an admin's — a
+person's — question, decided by the authority table before anything is read
+([Who read it](code-host.md#who-read-it)).
 
 ### Where annotations come from, and where they go
 

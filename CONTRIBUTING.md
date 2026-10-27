@@ -701,7 +701,8 @@ measured rather than derived: the object store on every backend
 (`objstoretest.Bench` — the broker's bucket at three replicas, and an S3 fake
 a provider's round trip away, among them — and the SHA-256 rate under every
 verified byte), one arbitrated write end to end and the applier's drain
-(`internal/statelog`), the store's own drain (`internal/store`), what a
+(`internal/statelog`), the store's own drain and a node's day of usage
+derived from its event log (`internal/store`), what a
 stream's leader takes to list the subjects it holds, a page at a time
 (`internal/jsapi`), the company's token counter charged by many nodes at once, each a leaf of its own,
 and a gated lease claim (`internal/coord/kv`), a git
@@ -715,7 +716,9 @@ snapshot reads and what one push's history costs every data node's disk
 (`internal/code/codecluster`), a person's push, a warm fetch, and cold and
 warm clones of every shape end to end through the code host
 (`internal/code/host`), a seat's reads of a repository by object id on a git
-node, warm and cold (`internal/code/query`), the pace a client's connection
+node, warm and cold (`internal/code/query`), a page of who read a repository
+over the whole history its records keep and the count of the readers they
+left out (`internal/usage`), the pace a client's connection
 is held to, on a real connection (`internal/api/paced`), and what every push
 pays to start its `proc-receive` hook, which is this binary (`cmd/crewlet`).
 
@@ -727,7 +730,7 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/code/query`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/code/query`, `internal/usage`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |

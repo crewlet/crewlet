@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -71,6 +73,12 @@ type Options struct {
 	// seat's grant from the chart the fleet replaced
 	// (code.UnreadyBehindConfig). nil is current.
 	Current func() bool
+	// Fetched records one read this node answered of a `visibility: unit`
+	// repository (step 11) — published by the engine into the node's event
+	// log, from which the usage domain derives who read it. REQUIRED, for
+	// the host's reason: a read answered and recorded by nobody is an audit
+	// short of what the node served.
+	Fetched func(ctx context.Context, e types.CodeFetched)
 }
 
 // Server answers reads of repositories by object id over the node's cache.
@@ -148,6 +156,8 @@ func New(o Options) (*Server, error) {
 		missing = "Share"
 	case o.Roster == nil:
 		missing = "Roster"
+	case o.Fetched == nil:
+		missing = "Fetched"
 	}
 	if missing != "" {
 		return nil, fmt.Errorf("%w: query.Options.%s is required", code.ErrInvalid, missing)
@@ -222,6 +232,13 @@ func New(o Options) (*Server, error) {
 //     marks the repository's history wanted (cache.Cache.WantHistory): the one
 //     node a walk asks first reads it back, once per fleet, and only for a
 //     repository a seat asks about.
+//  11. A read this node answered of a `visibility: unit` repository is
+//     recorded (Options.Fetched) — as its asker, by its kind, with the
+//     answer's encoded size — the memo's answers as its git's: the memo is
+//     the repository's copy's, shared by every asker, and a hit read as no
+//     read would name only the first asker of a page. A read of a
+//     `visibility: company` repository records nothing, since every seat
+//     reads it by declaration, and neither does a refused one.
 //
 // ctx ENDS WHEN THE ANSWER IS DUE (code.AnswerBy): every wait above — the
 // sync, the unit of the share, the read lane's queue before each process, and
@@ -278,7 +295,37 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	if q.Home {
 		s.o.Cache.WantHistory(q.RepoID)
 	}
+	if err := r.audit(ctx, a); err != nil {
+		return code.GitAnswer{}, err
+	}
 	return a, nil
+}
+
+// audit is step 11: a read answered of a `visibility: unit` repository,
+// recorded as its asker read it — the answer's encoding its bytes, which is
+// what the asker is sent beside its envelope.
+func (r *read) audit(ctx context.Context, a code.GitAnswer) error {
+	repo := r.synced.Repo
+	if repo.Visibility != code.VisibilityUnit {
+		return nil
+	}
+	encoded, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("query: measure the answer to a read of repository %s: %w", repo.Name, err)
+	}
+	r.s.o.Fetched(ctx, types.CodeFetched{RepoID: repo.ID, RepoName: repo.Name,
+		PrincipalKind: types.CodeReaderKind(r.q.Asker.Kind), Principal: askerName(r.q.Asker),
+		Seat: r.q.Asker.Seat, Via: types.FetchedViaTool, Kind: string(r.q.Kind), Bytes: int64(len(encoded))})
+	return nil
+}
+
+// askerName is who an asker is as a read of it is recorded: a seat by its
+// handle, a credential by the name every record gives it.
+func askerName(p code.Principal) string {
+	if p.Kind == code.PrincipalAgent {
+		return p.Seat
+	}
+	return p.OperatorID
 }
 
 // compute is steps 7 and 8: the answer of a read the memo did not answer

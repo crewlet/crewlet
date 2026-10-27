@@ -10,11 +10,11 @@ type PagedStatement struct {
 
 // PagedStatements is every statement the paged reads issue — each formatted
 // as a page that RESUMES inside its leading key formats it, after seat on
-// node (person for the people's spend) on company day day, and for the page
-// id page — keyed by what it reads. The resuming shape is the one whose plan
-// matters: a keyset the planner had to read past rather than seek past is
-// what a page re-read.
-func PagedStatements(day, node, seat, person, page string) map[string]PagedStatement {
+// node (person for the people's spend) on company day day, for the page id
+// page, and for repository repo's readers after seat — keyed by what it reads.
+// The resuming shape is the one whose plan matters: a keyset the planner had
+// to read past rather than seek past is what a page re-read.
+func PagedStatements(day, node, seat, person, page, repo string) map[string]PagedStatement {
 	past, pastArgs := keyset([]string{"node", "agent_id"}, Group{node, seat})
 	byDay := func(statement, filter string, past string, pastArgs []any) PagedStatement {
 		return PagedStatement{Text: fmt.Sprintf(statement, past),
@@ -44,5 +44,22 @@ func PagedStatements(day, node, seat, person, page string) map[string]PagedState
 				Text: nextDayStatement(table, inclusive), Args: []any{day, "2999-12-31"}}
 		}
 	}
+	// A REPOSITORY'S READERS, resumed inside a principal — the keyset over the
+	// rest of its readers — and from the start of a kind; and the walk's seek
+	// to the next kind.
+	readersPast, readersArgs := keyset([]string{"principal", "via", "seat"}, Group{seat, "git", seat})
+	statements["a repository's readers, resumed"] = PagedStatement{
+		Text: fmt.Sprintf(repoReadersStatement, readersPast),
+		Args: append([]any{repo, "operator", seat, day, "2999-12-31"}, readersArgs...)}
+	statements["a repository's readers, a kind from its start"] = PagedStatement{
+		Text: fmt.Sprintf(repoReadersStatement, "1 = 1"),
+		Args: []any{repo, "agent", "", day, "2999-12-31"}}
+	for _, inclusive := range []bool{true, false} {
+		statements[fmt.Sprintf("the next principal kind of a repository's readers (inclusive %v)", inclusive)] =
+			PagedStatement{Text: readerKindStatement(inclusive), Args: []any{repo, "agent"}}
+	}
 	return statements
 }
+
+// RepoReadsElidedStatement is [RepoReadsElided]'s statement, for its plan.
+const RepoReadsElidedStatement = repoReadsElidedStatement

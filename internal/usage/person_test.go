@@ -48,7 +48,9 @@ func (e *events) personAsked(at time.Time, handle, role string, input, output in
 	}
 }
 
-// A PERSON'S RECORD IS THE BASE FORMAT, as every kind this build writes is.
+// A PERSON'S RECORD IS THE BASE FORMAT, as a seat's and a schedule's are —
+// every kind this build writes but a unit repository's readers, which arrived
+// at version 2.
 //
 // A record is stamped with the LOWEST version that reads it, and a person's day
 // carries nothing the base format lacks: it is version 1 like a seat's, so

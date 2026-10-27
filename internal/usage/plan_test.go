@@ -44,7 +44,7 @@ func TestEveryPagedStatementSeeksItsKeyAndStreams(t *testing.T) {
 	shape := company{days: 12, nodes: 2, seats: 16, people: 4, cells: 3, pages: 4}
 	shape.seed(t, db)
 	day := shape.span().From
-	statements := usage.PagedStatements(day, "node-01", "seat-0007", "person-02", "page-002")
+	statements := usage.PagedStatements(day, "node-01", "seat-0007", "person-02", "page-002", "repo-03")
 	ctx := t.Context()
 	err := db.Replicated().Read(ctx, func(tx *sql.Tx) error {
 		for _, name := range slices.Sorted(maps.Keys(statements)) {
@@ -56,6 +56,12 @@ func TestEveryPagedStatementSeeksItsKeyAndStreams(t *testing.T) {
 				seek = "AND day<=?)"
 			case strings.HasPrefix(name, "a page's reads"):
 				seek = "USING INDEX usage_reads_page_idx (page_id=? AND day>=? AND day<=?)"
+			case strings.HasPrefix(name, "the next principal kind"):
+				seek = "usage_repo_reads_repo_idx (repo_id=? AND principal_kind>"
+			case strings.HasPrefix(name, "a repository's readers"):
+				// THE PRINCIPAL THE PAGE RESUMES AT IS SOUGHT, never a
+				// filter over every reader before it.
+				seek = "usage_repo_reads_repo_idx (repo_id=? AND principal_kind=? AND principal>"
 			}
 			if !strings.Contains(plan[0], "SEARCH") || !strings.Contains(plan[0], seek) {
 				t.Errorf("%s does not seek its key %s:\n%s", name, seek, strings.Join(plan, "\n"))
@@ -66,6 +72,30 @@ func TestEveryPagedStatementSeeksItsKeyAndStreams(t *testing.T) {
 						"has read past its own rows:\n%s", name, strings.Join(plan, "\n"))
 				}
 			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A REPOSITORY'S ELIDED READERS ARE COUNTED OFF ITS OWN DAYS: a seek of the
+// repository and the range on the head rows' repository index, never a walk of
+// every repository's days in the range, which is what the head rows' day-first
+// key alone would read.
+//
+// Mutation: drop usage_repo_read_days_repo_idx (replicated 0063), and the plan
+// seeks the primary key's days and reads every repository's head rows in them.
+func TestARepositorysElidedReadersAreCountedOffItsOwnDays(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		plan := explain(t, tx, usage.RepoReadsElidedStatement, []any{"repo-03", "2026-09-01", "2026-09-30"})
+		if len(plan) != 1 || !strings.Contains(plan[0],
+			"usage_repo_read_days_repo_idx (repo_id=? AND day>") {
+			t.Errorf("the elided count's plan is\n%s\nwant one seek of the repository's days",
+				strings.Join(plan, "\n"))
 		}
 		return nil
 	})

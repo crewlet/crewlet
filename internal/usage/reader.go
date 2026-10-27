@@ -77,3 +77,13 @@ func (r Reader) PageReads(ctx context.Context, q PageReadsQuery) ([]PageRead, er
 func (r Reader) ReadsElided(ctx context.Context, from, to string) (int64, error) {
 	return ReadsElided(ctx, r.Estate, from, to)
 }
+
+// RepoReadsPage is [RepoReadsPage] over r's estate.
+func (r Reader) RepoReadsPage(ctx context.Context, q RepoReadsQuery, after Group, budget int) (Page[RepoReader], error) {
+	return RepoReadsPage(ctx, r.Estate, q, after, budget)
+}
+
+// RepoReadsElided is [RepoReadsElided] over r's estate.
+func (r Reader) RepoReadsElided(ctx context.Context, q RepoReadsQuery) (int64, error) {
+	return RepoReadsElided(ctx, r.Estate, q)
+}

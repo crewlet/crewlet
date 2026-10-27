@@ -316,6 +316,25 @@
 // and one repository asked about by id — and the engine answers its peers
 // with it on topics.CodeStatus; this package imports no queue.
 //
+// # Who read a unit's repository is recorded where its pack was sent
+//
+// A fetch of a `visibility: unit` repository is recorded ONCE
+// (Options.Fetched, types.CodeFetched via `git`) — the reader as its
+// admission names it, and the bytes its answer carried — where the request
+// ENDED WELL and its answer CARRIED A PACK, because what an audit asks is who
+// was sent the repository's contents. The fetch sink's own answerScan, the one
+// that decides when a held preamble may go, decides that the pack began, and
+// scans on past preambleHoldBytes where the hold gives up — passively,
+// buffering nothing and delaying no write, never a second pkt-line decoder
+// (ADR-0008). So a stateless negotiation of several rounds is ONE read,
+// counted by the round whose answer carried the pack, and its other rounds,
+// an ls-refs, the advertisement and a fetch the node ended record nothing
+// (TestAUnitRepositorysFetchIsRecorded, TestAFetchTheNodeEndedIsNoRecord);
+// nor does any read of a `visibility: company` repository, whose readers are
+// every seat by declaration. The engine publishes the record as an event of
+// the node's own log, which its usage publisher derives into the day's
+// repo_read record (internal/usage).
+//
 // # The hook relay cannot end the process
 //
 // The relay's accept loop and its connections run outside net/http's

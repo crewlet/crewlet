@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -157,7 +158,33 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	if err == nil && n.clone() {
 		use.Clones = 1
 	}
+	if err == nil && n.recorded() == commandFetch {
+		s.fetched(ctx, adm, out)
+	}
 	s.finishFetch(w, r, adm.name, n.recorded(), synced.Kind, start, out, err)
+}
+
+// fetched records a fetch of a `visibility: unit` repository that sent its
+// contents (Options.Fetched): its request ended well and its answer carried a
+// pack — read by the sink's own reading of the answer (sink.PackSent), the
+// reading the hold releases the answer by. As the principal its admission
+// resolved (admission.principal), and the bytes the client was written.
+//
+// FETCHES THAT SENT CONTENTS, NOT REQUESTS: over a stateless transport a fetch
+// negotiates in rounds, each a request of its own whose answer is
+// acknowledgments and no object, so a clone or a fetch is one record however
+// many rounds it took. An `ls-refs`, an advertisement and a fetch the node
+// ended before its answer was whole are none — they did not send the
+// repository, or not all of it — and neither is any read of a `visibility:
+// company` repository, which every seat reads by declaration.
+func (s *Server) fetched(ctx context.Context, adm admission, out *sink) {
+	if adm.repo.Visibility != code.VisibilityUnit || !out.PackSent() {
+		return
+	}
+	p := adm.principal()
+	s.o.Fetched(ctx, types.CodeFetched{RepoID: adm.repo.ID, RepoName: adm.name,
+		PrincipalKind: types.CodeReaderKind(p.Kind), Principal: p.OperatorID, Seat: p.Seat,
+		Via: types.FetchedViaGit, Bytes: out.Sent()})
 }
 
 // gitsAnswer reports whether a fetch's last run ended in an answer of git's

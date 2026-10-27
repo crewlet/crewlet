@@ -1286,7 +1286,9 @@ says, and so does a credential bound to no seat: the people who run the company
 are never shut out of its code by a setting that exists to keep one team's
 seats out of another's. A seat's own branches are only on the repositories it
 may read, so a `full_access` seat outside the unit has none on a `unit`
-repository.
+repository. What does read a `unit` repository's contents — a person, a
+credential or a seat — is recorded, for an admin to ask
+([Who read it](#who-read-it)).
 
 A `unit` repository owned by a unit with **no lead** — neither its own nor one
 above it — is read only by persons and the unit's members, and `crewlet
@@ -1584,6 +1586,84 @@ read harder than half of those nodes' read lanes is answered unavailable for
 the rest: give its git nodes more cores and a wider `git.max_processes`, which
 widens the share with the lane, or let a second git node hold a copy, as a
 person's fetch through it does.
+
+## Who read it
+
+Every read of a `visibility: unit` repository's **contents** is recorded by
+the node that served it, and an admin asks who read one over a range of
+company days: `GET /code/repos/{name}/readers`
+([the readers route](../reference/api-endpoints.md#get-codereposnamereaders)), or the
+operator tool `code_repo_readers` from their own assistant — one answer, in
+the same pages. A `visibility: company` repository's readers are every seat of
+the company by declaration, so nothing records them, and its answer says so and
+how to have them recorded: declare it `visibility: unit`, and reads are
+recorded from that activation on.
+
+| A read of the repository | Recorded | As |
+|---|---|---|
+| A clone or a fetch whose answer carried a pack | yes, `via: git` | one read, and the bytes of the answer the reader was sent |
+| A fetch's negotiation round that ended with no pack, an `ls-refs`, the advertisement | no | — |
+| A fetch the node ended before its answer did — a deadline, a stop | no | — |
+| A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in` — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
+| Its row — a listing, its detail, its push history, what a ref points at | no | — |
+
+So the count is of reads that sent the repository's contents, which is what
+an audit asks: a stateless fetch that negotiates over several rounds is one
+read, counted by the round whose answer carried the pack, and that a
+repository exists and what its branches point at are no secret
+([Visibility](#visibility)).
+
+**A reader** is a credential and the human seat it acted as — a person's
+machine token (`pat:<credential id>`), a signed-in session
+(`session:<lineage>`), a Tier A token (`token:<id>`, with no seat unless the
+identity directory binds it to one) — or a seat, by its handle, each with how
+it read (`git` or `tool`). The answer sums each reader's reads, bytes and
+newest read over every node and every day of the range:
+
+```json
+{
+  "repo": "payments",
+  "recorded": true,
+  "from": "2026-08-25",
+  "to": "2026-09-23",
+  "readers": [
+    {"principal_kind": "agent", "principal": "dev", "seat": "dev", "via": "tool",
+     "reads": 41, "bytes": 380112, "last_at": "2026-09-23T14:02:11Z"},
+    {"principal_kind": "operator", "principal": "pat:0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e",
+     "seat": "jane-founder", "via": "git", "reads": 3, "bytes": 18874368,
+     "last_at": "2026-09-22T18:04:00Z"}
+  ],
+  "readers_elided": 0
+}
+```
+
+The range is `from` and `to`, company days on the company's clock, both
+inclusive — the thirty days ending today where it names neither — and at most
+181 days long, which is what the records keep. A page holds at most 32 KiB of
+readers, in the order of their kind, their principal, how they read and the
+seat; the `next` it carries, handed back as `cursor`, is the page after it,
+and the last page carries none.
+
+**How it is kept.** Each read is a `code_fetched` event in the serving node's
+own event log, kept out of the activity feed — a CI token fetching on every
+build would bury it there. The node's usage publisher derives each day of
+them, every fifteen seconds, into one record per repository naming every
+reader that day: the `repo_read` kind of the usage log, kept
+[181 days](../guides/retention.md) like the rest of it
+([ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md)).
+A question is answered from those records, every node's at once, by whichever
+data node serves the usage log, so the readers of a repository include those
+of a node that has since left the fleet. One record names at most **1 024
+readers** — the most-read of that node's day — and counts the rest: the first
+page's `readers_elided` is how many readers that cap left out over the range,
+and zero says the answer is complete.
+
+**Who may ask** is an admin, and a person: the answer names the people, the
+credentials and the seats that read a unit's code and how much — an audit of
+those people as much as of the code. A unit's lead who is not an admin is not
+given it, though they read the repository itself, and no seat ever is: a seat
+asking who read a repository would be a model watching the people it works
+for ([Identity and access](identity-and-access.md)).
 
 ## Which push landed a commit
 

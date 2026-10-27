@@ -119,6 +119,34 @@ type UsageDay struct {
 	// person leads — ordered by handle. A person is no seat: no agent id,
 	// no turns, no reads, only spend.
 	People []UsagePerson
+
+	// RepoReads are the reads of `visibility: unit` repositories this node
+	// served in the window ([types.CodeFetched]) — one per (repository,
+	// principal kind, principal, via, seat), in that order.
+	RepoReads []UsageRepoRead
+}
+
+// UsageRepoRead is one reader's reads of one `visibility: unit` repository by
+// one way, on this node in the window.
+//
+// THE READER IS THE CREDENTIAL OR THE SEAT, AND THE SEAT IT ACTED AS: a
+// person reads through several credentials of theirs, each its own reader,
+// all naming their one seat; and a token the identity directory binds to a
+// seat, and later to another, is two readers rather than one whose earlier
+// reads are filed under whichever seat it holds now — the attribution an
+// audit exists to get right.
+type UsageRepoRead struct {
+	// RepoID is the repository, by the id that outlives its name; RepoName
+	// its name as the newest of these reads named it.
+	RepoID, RepoName string
+
+	// PrincipalKind, Principal and Seat are who read it
+	// ([types.CodeFetched]); Via how.
+	PrincipalKind, Principal, Via, Seat string
+
+	// Reads is how many reads, Bytes what they were sent, LastAt the newest.
+	Reads, Bytes int64
+	LastAt       time.Time
 }
 
 // UsagePerson is one person's auxiliary spend on this node in one day: the
@@ -235,18 +263,19 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the five records a day is derived from, taken from their
+// usageEventTypes are the six records a day is derived from, taken from their
 // payload types for the reason [phaseCompleted] is: the phase completions and
 // the auxiliary records the spend is summed from, the completions a turn's
 // figures are read off, the turn's SUMMARY record (`agent_turn_completed`),
-// and the knowledge reads. The auxiliary record is one of them so the
-// fingerprint moves when it lands: a flush writes it up to one ledger interval
-// after its last call, stamped with that call's instant, and a day whose only
-// change was that row would otherwise never be re-derived. The summary record
-// is one for the same reason: a turn whose ending record states no tally is
-// read off its records ([DB.usageLegacyTurns]), whether it failed off the
-// summary, and a summary row that lands in a later custody batch than its
-// turn's end must move the fingerprint — and the settle's mark — when it does.
+// the knowledge reads, and the reads of unit repositories. The auxiliary
+// record is one of them so the fingerprint moves when it lands: a flush writes
+// it up to one ledger interval after its last call, stamped with that call's
+// instant, and a day whose only change was that row would otherwise never be
+// re-derived. The summary record is one for the same reason: a turn whose
+// ending record states no tally is read off its records
+// ([DB.usageLegacyTurns]), whether it failed off the summary, and a summary
+// row that lands in a later custody batch than its turn's end must move the
+// fingerprint — and the settle's mark — when it does.
 func usageEventTypes() []any {
 	return []any{
 		phaseCompleted,
@@ -254,6 +283,7 @@ func usageEventTypes() []any {
 		turnCompleted,
 		types.AgentTurnCompleted{}.EventType(),
 		types.KnowledgeRead{}.EventType(),
+		types.CodeFetched{}.EventType(),
 	}
 }
 
@@ -609,8 +639,12 @@ func (d *DB) UsageForDay(ctx context.Context, w UsageWindow) (UsageDay, error) {
 	if err != nil {
 		return UsageDay{}, err
 	}
+	repoReads, err := d.usageRepoReads(ctx, w)
+	if err != nil {
+		return UsageDay{}, err
+	}
 
-	out := UsageDay{Schedules: schedules, People: people}
+	out := UsageDay{Schedules: schedules, People: people, RepoReads: repoReads}
 	for _, id := range slices.Sorted(maps.Keys(seats)) {
 		out.Seats = append(out.Seats, *seats[id])
 	}
@@ -1045,6 +1079,114 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 		   AND e.agent_id != '' AND ` + keptRowSQL + `
 		 ORDER BY e.event_time, e.event_id`,
 		[]any{types.KnowledgeRead{}.EventType(), EncodeTime(w.Start), EncodeTime(w.End)}
+}
+
+// usageRepoReads folds the window's reads of `visibility: unit` repositories
+// ([types.CodeFetched]) into one entry per (repository, principal kind,
+// principal, via, seat): how many, what they were sent, the newest, and the
+// repository's name as the newest of its reads named it.
+//
+// OFF THE COLUMNS node/0052 promoted, never the payload: a day is derived
+// again on every tick it moves, and read out of each row's JSON the grouping
+// cost more than the rest of the day did — 272 ms a busy day of 50 000 reads,
+// past the 150 ms (1 % of the publisher's 15 s tick) a derived day may add
+// (BenchmarkUsageForDay; the migration states the measurement). On the
+// columns the same day's reads add 86 ms (151 ms the day, 65 ms without them;
+// `-benchtime 5x -count 1`, two cores of an Intel Core Ultra 7 265U) — the
+// grouping's sort of 50 000 rows, which no index serves without giving up the
+// seek of the window every derivation takes.
+//
+// THE NAME IS A LABEL, read once per repository rather than once per read:
+// off the row of its newest read, found by that read's instant
+// ([usageRepoNameSQL]). A repository renamed within the day is one entry of
+// each reader under its newest name, since the id is what the entries are
+// keyed on.
+func (d *DB) usageRepoReads(ctx context.Context, w UsageWindow) ([]UsageRepoRead, error) {
+	query, args := usageRepoReadsSQL(w)
+	rows, err := d.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read the usage day's repository reads: %w", err)
+	}
+	var out []UsageRepoRead
+	// newest is each repository's newest read, whose row names it.
+	newest := map[string]int64{}
+	for rows.Next() {
+		var (
+			r  UsageRepoRead
+			at int64
+		)
+		if err := rows.Scan(&r.RepoID, &r.PrincipalKind, &r.Principal, &r.Via, &r.Seat,
+			&r.Reads, &r.Bytes, &at); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("store: scan the usage day's repository reads: %w", err)
+		}
+		if r.Principal == "" || r.PrincipalKind == "" || r.Via == "" {
+			// A READ NOBODY CAN ATTRIBUTE is not a read any reader can
+			// count, which is the producer's own rule; a row that slipped
+			// past it is skipped rather than keyed on nothing.
+			continue
+		}
+		r.LastAt = DecodeTime(at)
+		newest[r.RepoID] = max(newest[r.RepoID], at)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	// CLOSED BEFORE THE NAMES ARE READ, so the statement's cursor is not
+	// held open across the reads that follow it.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	names := make(map[string]string, len(newest))
+	for repo, at := range newest {
+		query, args := usageRepoNameSQL(repo, at)
+		var name string
+		switch err := d.sql.QueryRowContext(ctx, query, args...).Scan(&name); {
+		case errors.Is(err, sql.ErrNoRows):
+			// The newest read settled away between the two statements — a
+			// custody batch another data node kept took its rows. The next
+			// derivation names it; this one leaves the label empty, which
+			// the publisher's join fills from what the fleet holds.
+		case err != nil:
+			return nil, fmt.Errorf("store: read the name of repository %s: %w", repo, err)
+		}
+		names[repo] = name
+	}
+	for i := range out {
+		out[i].RepoName = names[out[i].RepoID]
+	}
+	return out, nil
+}
+
+// usageRepoReadsSQL is [DB.usageRepoReads]'s statement and its arguments: the
+// window's reads, grouped by everything a reader is, in that order — each row a
+// seek of the window that probes the in-flight key
+// (TestEveryUsageCountSeeksItsWindow) — and no JSON read.
+func usageRepoReadsSQL(w UsageWindow) (string, []any) {
+	return `
+		SELECT e.read_repo_id, e.read_principal_kind, e.read_principal, e.read_via, e.read_seat,
+		       COUNT(*), SUM(e.read_bytes), MAX(e.event_time)
+		  FROM crewlet_events AS e
+		 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+		   AND e.read_repo_id != '' AND ` + keptRowSQL + `
+		 GROUP BY e.read_repo_id, e.read_principal_kind, e.read_principal, e.read_via, e.read_seat
+		 ORDER BY e.read_repo_id, e.read_principal_kind, e.read_principal, e.read_via, e.read_seat`,
+		[]any{repoReadType, EncodeTime(w.Start), EncodeTime(w.End)}
+}
+
+// usageRepoNameSQL is the statement a repository's name is read with: the
+// newest of its reads, by that read's instant — a seek of the log's own key —
+// the larger id breaking a tie, so two derivations of one day name it alike.
+func usageRepoNameSQL(repo string, at int64) (string, []any) {
+	return `
+		SELECT COALESCE(json_extract(e.payload, '$.repo_name'), '')
+		  FROM crewlet_events AS e
+		 WHERE e.event_time = ? AND e.event_type = ? AND e.read_repo_id = ? AND ` + keptRowSQL + `
+		 ORDER BY e.event_id DESC
+		 LIMIT 1`,
+		[]any{at, repoReadType, repo}
 }
 
 // usageSchedules reads the fires this node's scheduler recorded in the window.

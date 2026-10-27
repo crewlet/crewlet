@@ -218,11 +218,14 @@ func TestAJoinRaisesEveryFigureTheFleetHoldsMoreOf(t *testing.T) {
 // whose parked segment arrives late (moving it UP a duration bin) along with a
 // review that sends it back (taking it OUT of first-pass), reads that push
 // entries the cap kept past it, an entry the cap kept read again with a newer
-// turn and query, a fire, a fire's turn label, a person's spend.
+// turn and query, a fire, a fire's turn label, a person's spend, and a unit
+// repository's readers the cap elided read again until they outrank readers
+// it kept.
 //
 // Mutation: join first-pass by its own larger, or a histogram bin by bin, or
-// count elided reads off one side alone, or keep a read entry's older context
-// over the derivation's newer one, and the joined day differs from the day.
+// count elided reads or readers off one side alone, or keep a read entry's
+// older context over the derivation's newer one, and the joined day differs
+// from the day.
 func TestTheJoinOfADayWithAnEarlierDerivationOfItIsTheDay(t *testing.T) {
 	t.Parallel()
 	own := openStore(t)
@@ -257,6 +260,12 @@ func TestTheJoinOfADayWithAnEarlierDerivationOfItIsTheDay(t *testing.T) {
 	ev.read(noon.Add(-5*time.Hour), "seat-1", "t-a", "search", "first", pages("p", usage.ReadsPerSeatDay+40)...)
 	fire(noon.Add(-6*time.Hour), "trace-6")
 	ev.personAsked(noon.Add(-time.Hour), "maya", "Founder", 400, 20)
+	// A unit repository read by more readers than its day keeps: the last
+	// three by key are elided.
+	for i := range usage.ReadersPerRepoDay + 3 {
+		ev.fetched(noon.Add(-4*time.Hour+time.Duration(i)*time.Millisecond),
+			gitFetch("repo-1", fmt.Sprintf("pat:%04d", i), "maya", 10))
+	}
 	p, _ := newPublisher(t, "node-a", own, own, noon)
 	if err := p.Flush(t.Context()); err != nil {
 		t.Fatal(err)
@@ -286,6 +295,10 @@ func TestTheJoinOfADayWithAnEarlierDerivationOfItIsTheDay(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev.personAsked(noon.Add(-time.Minute), "maya", "Founder", 300, 20)
+	// Readers the cap elided read again, so they outrank readers it kept.
+	for i := usage.ReadersPerRepoDay; i < usage.ReadersPerRepoDay+3; i++ {
+		ev.fetched(noon.Add(-8*time.Minute), gitFetch("repo-1", fmt.Sprintf("pat:%04d", i), "maya", 10))
+	}
 
 	window := period.At(period.Day, noon, santiago)
 	derived, err := own.UsageForDay(t.Context(), store.UsageWindow{Start: window.Start, End: window.End,
