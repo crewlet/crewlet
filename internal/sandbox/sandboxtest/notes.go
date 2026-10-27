@@ -56,6 +56,7 @@ var noteRawCases = []struct {
 	{"NotesSurviveEveryWriteThatIsNotTheirs", testNotesSurviveEveryWriteThatIsNotTheirs},
 	{"AKeyALaterBuildAddsInsideASectionSurvivesEveryWrite",
 		testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite},
+	{"AStateTheNoteViewCannotReadIsPassedOver", testAStateTheNoteViewCannotReadIsPassedOver},
 }
 
 // The turn's bounds every filing here is held to: internal/agent/steer's,
@@ -956,4 +957,81 @@ func compact(t *testing.T, text string) string {
 		t.Fatalf("compact %q: %v", text, err)
 	}
 	return b.String()
+}
+
+// A STATE THE NOTE VIEW CANNOT READ IS PASSED OVER, never delivered as an empty
+// record: a reader following a run's notes — the bridge serving its CLI, a
+// resumed segment's source — that were handed "no record" would answer every
+// step with nothing until the next write it could read. It keeps what it last
+// knew, and the next state it can read replaces it.
+func testAStateTheNoteViewCannotReadIsPassedOver(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	const turn = "t-unread-view"
+	mustLaunched(t, s, run(turn))
+	mustFile(t, s, turn, "n-1")
+	views, err := s.WatchNotes(ctx, turn)
+	if err != nil {
+		t.Fatalf("WatchNotes: %v", err)
+	}
+	next := func(within time.Duration) (sandbox.NotesView, bool) {
+		t.Helper()
+		timer := time.NewTimer(within)
+		defer timer.Stop()
+		select {
+		case view, open := <-views:
+			if !open {
+				t.Fatal("the watch closed")
+			}
+			return view, true
+		case <-timer.C:
+			return sandbox.NotesView{}, false
+		}
+	}
+	for {
+		view, ok := next(30 * time.Second)
+		if !ok {
+			t.Fatal("the watch never saw the filed note")
+		}
+		if view.Found && len(view.Steer.Notes) == 1 {
+			break
+		}
+	}
+	readable, found, err := runs.SandboxRun(ctx, turn)
+	if err != nil || !found {
+		t.Fatalf("read the raw row: %v %v", found, err)
+	}
+	put := func(value func(row map[string]any)) {
+		t.Helper()
+		if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
+			var row map[string]any
+			if err := json.Unmarshal(readable.Value, &row); err != nil {
+				return coord.SandboxRunChange{}, err
+			}
+			value(row)
+			raw, err := json.Marshal(row)
+			return coord.SandboxRunChange{Put: raw}, err
+		}); err != nil || !ok {
+			t.Fatalf("write the raw row: %v %v", ok, err)
+		}
+	}
+	// A STATE NO VIEW CAN READ: its notes are not a notes section at all.
+	put(func(row map[string]any) { row["steer"] = 5 })
+	if view, ok := next(500 * time.Millisecond); ok {
+		t.Fatalf("a state the view cannot read was delivered as %+v", view)
+	}
+	// THE NEXT READABLE STATE replaces what the view knew.
+	put(func(map[string]any) {})
+	mustFile(t, s, turn, "n-2")
+	for {
+		view, ok := next(30 * time.Second)
+		switch {
+		case !ok:
+			t.Fatal("the watch never saw the state after the unreadable one")
+		case !view.Found || len(view.Steer.Notes) == 0:
+			t.Fatalf("the watch delivered %+v after a state it could not read", view)
+		case len(view.Steer.Notes) == 2:
+			return
+		}
+	}
 }
