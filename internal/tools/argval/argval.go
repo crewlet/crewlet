@@ -35,10 +35,15 @@ func String(v any) (string, bool) {
 	case nil:
 		return "", true
 	case float64:
-		// THE DIGITS, never an exponent: 1000000 is "1000000", where `%g`
-		// wrote "1e+06", which no grammar a string argument feeds reads as
-		// the number the model wrote.
-		return strconv.FormatFloat(v, 'f', -1, 64), true
+		// AS JSON WRITES IT, the JavaScript rule a model's JSON intends
+		// (encoding/json is that rule): digits from 1e-6 to below 1e21, the
+		// exponent form outside them, the shortest spelling that reads back
+		// as the same number. So 1000000 is "1000000", where `%g` wrote
+		// "1e+06", and 1e300 is "1e+300", never 301 digits.
+		if text, err := json.Marshal(v); err == nil {
+			return string(text), true
+		}
+		return strconv.FormatFloat(v, 'g', -1, 64), true
 	case json.Number:
 		// THE LITERAL, not a rendering of it: this is the spelling the model
 		// sent, and it is exact where the float rendering is not.

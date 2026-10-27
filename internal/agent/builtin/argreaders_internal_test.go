@@ -167,7 +167,9 @@ func spelt(v any) string {
 	case bool:
 		return strconv.FormatBool(v)
 	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64)
+		// AS JSON WRITES IT (argval.String's rule), which reads back as v.
+		text, _ := json.Marshal(v)
+		return string(text)
 	}
 	return ""
 }
