@@ -721,7 +721,9 @@ func steerPreview(t Tool) proposal.Previewer {
 		c.fact("turn", "Turn", a.String("turn_id"))
 		c.move("note", "Note", "", a.String("note"))
 		return proposal.Preview{Title: "Steer turn", Target: a.String("turn_id"),
-			Note:         "The note becomes the running agent's input at its next round.",
+			Note: "The turn reads the note at its next step — a round of the engine's own loop, " +
+				"or a step of the coding run it has out — and keeps to it for the rest of the turn; " +
+				"a run waiting on a person's answer reads it once that is answered.",
 			ApproveLabel: "Approve and send", Changes: c.rows(), Request: req}, nil
 	}
 }
