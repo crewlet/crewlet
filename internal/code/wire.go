@@ -457,12 +457,15 @@ const (
 	// the repositories a compaction may be due in — the engine's own read,
 	// which no principal makes, as `introduced` is.
 	ReadCompactionDue ReadKind = "compaction_due"
-	// ReadPublicationDue is the repositories holding a live pack no
-	// published layer covers, LEAST RECENTLY PUBLISHED FIRST — one never
-	// published before any other — each with what a publication is due by:
-	// the listing a repository's maintainer polls for the repositories a
-	// publication may be due in. The engine's own read, as `compaction_due`
-	// is.
+	// ReadPublicationDue is the repositories whose live packs are past the
+	// ones their last publication's recount found a layer covering — every
+	// one holding a live pack no published layer covers, and one holding
+	// only a pack pushed since that recount that is byte-identical to a
+	// published one, which has nothing to publish ([PublicationCandidate])
+	// — LEAST RECENTLY PUBLISHED FIRST, one never published before any
+	// other, each with what a publication is due by: the listing a
+	// repository's maintainer polls for the repositories a publication may
+	// be due in. The engine's own read, as `compaction_due` is.
 	ReadPublicationDue ReadKind = "publication_due"
 )
 
@@ -542,9 +545,19 @@ type CompactionCandidate struct {
 
 // PublicationCandidate is one repository a `publication_due` read lists: what
 // a publication's due rule reads before anything is synced — the live packs
-// and objects beside the published ones, so the tail no layer covers is their
-// difference, the last push and the last publication with how long its build
-// took, which paces the next — and the version its row was read at.
+// and objects beside the published ones, the last push and the last
+// publication with how long its build took, which paces the next — and the
+// version its row was read at.
+//
+// THEIR DIFFERENCE NEVER FALLS SHORT OF THE PACKS NO LAYER COVERS, AND MAY
+// EXCEED THEM: PublishedPacks and PublishedObjects are the live packs a layer
+// covered, and their objects, as the last publication recounted them, and a
+// push since moves only the live counts — so a pack pushed since then that is
+// byte-identical to a published one (its git checksum one a layer names)
+// counts in the difference until the next publication recounts it. A
+// candidate can therefore have nothing to publish, which only a plan over its
+// packs can tell: a due rule that reads these counts alone would sync and plan
+// it again at every poll.
 type PublicationCandidate struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`

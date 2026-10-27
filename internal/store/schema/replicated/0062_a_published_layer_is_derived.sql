@@ -37,11 +37,19 @@
 -- layer it can no longer fetch reads the rows again for what replaced it.
 --
 -- The five code_repos columns are what the code host's publication due listing
--- needs without a sum over code_packs: published_packs and published_objects
--- count the repository's live packs a layer covers and the objects they hold,
--- recounted from the rows by every record that writes code_layers (a push only
--- ever adds to what no layer covers); published_at is the last publication's
--- broker instant as store.EncodeTime writes it (unix microseconds), 0 for a
+-- needs without a sum over code_packs. published_packs and published_objects
+-- are the live pack rows the chain covered, and the objects they held, as the
+-- last publication RECOUNTED them from the rows: every row whose git checksum
+-- a layer names, so two rows of one checksum count twice. Nothing else moves
+-- them. A push raises live_packs and live_objects alone, so a pack pushed
+-- since that recount counts in the tail (live_packs − published_packs) even
+-- where it is byte-identical to a published one, until the next publication
+-- recounts it: an active or archived repository's tail is the packs no layer
+-- covers or more, never fewer. Keeping it exact would make every push's apply
+-- read the chain's checksums, up to code.MaxPacksPerRepo of them, to correct a
+-- count whose error costs a listing row and a plan that finds nothing to
+-- publish (the index below). published_at is the last publication's broker
+-- instant as store.EncodeTime writes it (unix microseconds), 0 for a
 -- repository never published; publish_took_ms is how long that publication's
 -- build took; and layers_position is the packed position of the last record
 -- that changed code_layers — a snapshot's delta from below it serves the chain
@@ -88,11 +96,16 @@ ALTER TABLE code_repos ADD COLUMN publish_took_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE code_repos ADD COLUMN layers_position INTEGER NOT NULL DEFAULT 0;
 
 -- PARTIAL, ON THE PREDICATE THE LISTING REPEATS VERBATIM: a repository whose
--- every live pack a layer covers has nothing to publish, and a deleted or
--- purging one is nobody's to publish, so the listing never pays for either.
--- (published_at, id) is its order — least recently published first, a
--- repository never published (0) before every other — and its cursor the last
--- row's pair. What it costs is a publication's own row update, which moves the
--- key, and the row update a push already makes, which moves a repository into
--- the index when it adds a pack no layer covers.
+-- every live pack its last publication's recount found covered, and none
+-- added since, has nothing to publish, and a deleted or purging one is
+-- nobody's to publish, so the listing never pays for either. A pack pushed
+-- since the recount puts its repository in the index even where a layer
+-- already names its checksum (published_packs above): listed with nothing to
+-- publish — which only a plan over its packs can tell, answering it not due —
+-- until the next publication recounts. (published_at, id) is its order —
+-- least recently published first, a repository never published (0) before
+-- every other — and its cursor the last row's pair. What it costs is a
+-- publication's own row update, which moves the key, and the row update a
+-- push already makes, which moves a repository into the index with the first
+-- pack it adds since the recount.
 CREATE INDEX code_repos_unpublished_idx ON code_repos (published_at, id) WHERE live_packs > published_packs AND status IN ('active', 'archived');    -- the publication due listing (Reader.Read publication_due): least recently published first

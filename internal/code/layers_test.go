@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -388,5 +390,67 @@ func TestThePublicationDueListingIsLeastRecentlyPublishedFirst(t *testing.T) {
 	}
 	if pages < 3 {
 		t.Fatalf("the listing took %d pages of two, want at least three", pages)
+	}
+}
+
+// A PACK PUSHED BYTE-IDENTICAL TO A PUBLISHED ONE IS LISTED UNTIL THE NEXT
+// RECOUNT: published_packs is the live pack rows the last publication's
+// recount found covered, and a push moves only live_packs, so a pack whose git
+// checksum a layer already names — two rows, one checksum — lists its
+// repository with a tail of one and nothing a plan could publish; the next
+// publication, over a pack that is new, recounts both rows of that checksum as
+// covered and the repository leaves the listing.
+//
+// Mutation: recount a publication by checksum rather than by row — each
+// covered checksum counted once — and the repository is still listed after the
+// publication that covers every row it holds.
+func TestAPackPushedLikeAPublishedOneIsListedUntilTheNextRecount(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, _ := packedRepo(t, n, "web", 3)
+	listed := func() (code.PublicationCandidate, bool) {
+		t.Helper()
+		page, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadPublicationDue, Fresh: stale})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range page.Publish {
+			if c.ID == repo {
+				return c, true
+			}
+		}
+		return code.PublicationCandidate{}, false
+	}
+	root := layerNamed("root", "", harnessAt, n.liveChecksums(repo)...)
+	n.publishLayer(repo, root)
+	if c, ok := listed(); ok {
+		t.Fatalf("a repository whose every pack the root covers is listed: %+v", c)
+	}
+
+	// A PUSH OF A PACK BYTE-IDENTICAL TO ONE THE ROOT COVERS: a row of its
+	// own, under a checksum the root names.
+	again := entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/again", code.ZeroOID, oidOf("again")))
+	again.Pack.GitChecksum = root.Packs[0]
+	n.push(repo, again)
+	if c, ok := listed(); !ok || c.LivePacks != 4 || c.PublishedPacks != 3 {
+		t.Fatalf("after a push of a pack the root names, the listing holds %+v (listed %v); want the repository "+
+			"with 4 live packs and 3 published — a push moves the live count alone", c, ok)
+	}
+
+	// THE NEXT PUBLICATION, over a pack that is new.
+	pushPacks(t, n, repo, 1)
+	var fresh []string
+	for _, sum := range n.liveChecksums(repo) {
+		if !slices.Contains(root.Packs, sum) {
+			fresh = append(fresh, sum)
+		}
+	}
+	n.publishLayer(repo, layerNamed("upper", root.LayerID, harnessAt, fresh...))
+	if c, ok := listed(); ok {
+		t.Fatalf("after the publication over the new pack the repository is still listed: %+v; want both rows of "+
+			"the root's checksum recounted as covered", c)
+	}
+	if got := n.count(`SELECT published_packs FROM code_repos WHERE id = ?`, repo); got != 5 {
+		t.Fatalf("the recount found %d published packs, want all 5 rows", got)
 	}
 }

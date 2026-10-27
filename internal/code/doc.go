@@ -669,17 +669,22 @@
 // THE APPLY REPLACES THE TOP: the replaced layers and their parts go — at
 // once, a derived row owes no grace — the layer takes its base's place plus
 // one, and the repository's published packs and objects are RECOUNTED from the
-// rows, so live_packs − published_packs is the tail no layer covers. A
-// publication that does not fit the chain it meets applies as nothing, whole,
-// on every node; one applied already finds its layer and changes nothing. A
-// snapshot serves the chain WHOLE on page 1, first, whenever it moved above
-// the delta's floor ([RepoSnapshot.Layers]), and the publisher finds the
+// rows, so live_packs − published_packs is the tail no layer covers — as of
+// that recount: a push moves only the live counts, so a pack pushed since that
+// is byte-identical to a published one is in the tail until the next
+// publication's (replicated 0062 says why no push recounts). A publication
+// that does not fit the chain it meets applies as nothing, whole, on every
+// node; one applied already finds its layer and changes nothing. A snapshot
+// serves the chain WHOLE on page 1, first, whenever it moved above the
+// delta's floor ([RepoSnapshot.Layers]), and the publisher finds the
 // repositories a publication may be due in by the [ReadPublicationDue]
-// listing — every active and archived repository holding a pack no layer
-// covers, LEAST RECENTLY PUBLISHED FIRST, one walk of
-// code_repos_unpublished_idx (replicated 0062), the engine's own read. A purge
-// removes the chain with the rest of a repository, in its final record: the
-// chain is bounded apart from what a part counts.
+// listing — every active and archived repository whose tail is not empty:
+// each holding a pack no layer covers, and any holding only such a
+// byte-identical pack, which has nothing to publish — LEAST RECENTLY
+// PUBLISHED FIRST, one walk of code_repos_unpublished_idx (replicated 0062),
+// the engine's own read. A purge removes the chain with the rest of a
+// repository, in its final record: the chain is bounded apart from what a
+// part counts.
 //
 // # A layer's files are git's, read without git
 //

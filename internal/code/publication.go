@@ -68,9 +68,11 @@ import (
 // their parts, adds the new one above its base, and RECOUNTS the repository's
 // published packs from the rows — never arithmetic, which a pack row
 // byte-identical to a published one (two rows, one checksum) would make drift
-// from what git reads. Every pack a layer row of an active or archived
-// repository names is then a live pack's: rule 2 retires none a layer that
-// stays names, and 6c names none that is not live.
+// from what git reads; a push's arithmetic carries exactly that drift, in the
+// tail, until the next recount (replicated 0062 says why no push recounts).
+// Every pack a layer row of an active or archived repository names is then a
+// live pack's: rule 2 retires none a layer that stays names, and 6c names none
+// that is not live.
 
 // Check is what every layer row must be before any byte moves — the
 // committer's decide and a git node's install alike — each refusal

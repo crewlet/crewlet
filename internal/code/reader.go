@@ -1947,18 +1947,28 @@ func cutDueCursor(s string) (int64, string, bool) {
 }
 
 // publicationDue serves one page of a `publication_due` read: the active and
-// archived repositories holding a live pack no published layer covers — their
-// live packs past their published ones — LEAST RECENTLY PUBLISHED FIRST, one
-// never published before every other, then by id, each with what a
-// publication's due rule reads and the version its row was read at.
+// archived repositories whose live packs are past their published ones —
+// every one holding a live pack no published layer covers — LEAST RECENTLY
+// PUBLISHED FIRST, one never published before every other, then by id, each
+// with what a publication's due rule reads and the version its row was read
+// at.
+//
+// THE PUBLISHED COUNTS ARE THE LAST PUBLICATION'S RECOUNT, and a push moves
+// only the live ones: a pack pushed since that is byte-identical to a
+// published one — its git checksum one a layer names — counts in the tail
+// until the next publication recounts it, so the listing can name a
+// repository with nothing to publish — which only a plan over its packs can
+// tell, answering it not due ([PublicationCandidate]; replicated 0062 says
+// why no push recounts).
 //
 // ONE WALK of code_repos_unpublished_idx (replicated 0062), its partial
 // predicate repeated verbatim, which holds exactly the repositories it lists:
-// a repository whose every pack a layer covers costs the listing nothing,
-// however many there are. LEAST RECENTLY PUBLISHED FIRST, so the repository
-// that has waited longest is planned first, and a page cut at MaxSnapshotItems
-// ends at the most recently published. A FULL LISTING, never a delta from the
-// last poll's, for the compaction's listing's reason.
+// a repository whose every pack its last recount found covered, and none
+// added since, costs the listing nothing, however many there are. LEAST
+// RECENTLY PUBLISHED FIRST, so the repository that has waited longest is
+// planned first, and a page cut at MaxSnapshotItems ends at the most recently
+// published. A FULL LISTING, never a delta from the last poll's, for the
+// compaction's listing's reason.
 func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	var (
 		rows *sql.Rows
