@@ -38,7 +38,9 @@ import (
 //     so a layer covering them may cover no history git can bitmap, and one
 //     covering a dropping pack would be over a pack the commit retires. Held
 //     off until the commit, every layer the chain holds names live packs
-//     alone, and the commit keeps every one;
+//     alone, and the commit keeps every one. The publication due listing
+//     ([ReadPublicationDue]) names no repository with an expunge open, so no
+//     publisher builds a layer this rule would refuse;
 //   - THE INPUTS (rule 2, amended for every compaction): an input's pack is
 //     named by NO layer of the chain unless the record replaces that layer —
 //     else stale. A layer names its packs by checksum, and a node's chain is

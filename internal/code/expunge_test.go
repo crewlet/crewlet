@@ -356,3 +356,42 @@ func TestTheExpungeListingNamesTheExpungesOwed(t *testing.T) {
 		t.Fatalf("the listing named %v, want %v by id", listed, order)
 	}
 }
+
+// A REPOSITORY MID-EXPUNGE IS LISTED FOR NO PUBLICATION: rule 6g refuses every
+// publication between an expunge's begin and its commit, so the publication
+// due listing leaves out a repository with an expunge open — however many of
+// its packs no layer covers, the kept pack its begin wrote among them — and
+// names it again once the commit lands. A publisher polling it builds no
+// layer the committer would refuse stale at every poll until the commit.
+//
+// Mutation: drop the listing's open-expunge predicate, and the repository is
+// listed between its begin and its commit.
+func TestARepositoryMidExpungeIsListedForNoPublication(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 3)
+	c, _ := committerOn(t, n, n.pub)
+	listed := func() bool {
+		t.Helper()
+		page, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadPublicationDue, Fresh: stale})
+		if err != nil {
+			t.Fatalf("list the publications due: %v", err)
+		}
+		return slices.ContainsFunc(page.Publish, func(p code.PublicationCandidate) bool { return p.ID == repo })
+	}
+	if !listed() {
+		t.Fatal("a repository of three packs no layer covers is not listed")
+	}
+	b := beginFor(n, repo, 1, ids, 2, 1)
+	res, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	if listed() {
+		t.Fatalf("the repository is listed with expunge %s open, whose publication rule 6g refuses", b.ExpungeID)
+	}
+	cm := commitFor(n, b, 0)
+	res, err = c.ProposeExpunge(t.Context(), code.ExpungeProposal{Commit: &cm})
+	requireExpunged(t, res, err)
+	if !listed() {
+		t.Fatal("once its expunge committed, the repository whose kept pack no layer covers is not listed")
+	}
+}

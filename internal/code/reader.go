@@ -2022,6 +2022,17 @@ func cutDueCursor(s string) (int64, string, bool) {
 // planned first, and a page cut at MaxSnapshotItems ends at the most recently
 // published. A FULL LISTING, never a delta from the last poll's, for the
 // compaction's listing's reason.
+//
+// AND NONE WITH AN EXPUNGE OPEN: rule 6g refuses every publication between an
+// expunge's begin and its commit (publication.go), so a repository mid-expunge
+// is left out — however many of its packs no layer covers, the kept packs its
+// begin wrote among them, since a begin that drops layers recounts the
+// published ones down — and listed again once its commit lands. Listed, it
+// would have its publisher plan and build a layer for the committer to refuse
+// stale, at every poll until the commit: where the begin dropped the chain's
+// root, a whole base layer with its bitmap, the costliest build a git node
+// makes. A residual predicate on the same walk, over the row the listing reads
+// for its columns anyway: the expunges open are a handful in any fleet.
 func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	var (
 		rows *sql.Rows
@@ -2662,16 +2673,19 @@ const (
 	// id, over code_repos_unpublished_idx — its partial predicate repeated
 	// verbatim — from the index's start, the column's floor (0, a repository
 	// never published: no row holds less), and after a cursor with the >=
-	// beside the OR that keeps the range seek (planner.go).
+	// beside the OR that keeps the range seek (planner.go). No repository with
+	// an expunge open, whose publication rule 6g refuses: a residual predicate
+	// on the same walk, over the row the listing reads anyway.
 	publicationDueColumns = `id, name, live_packs, published_packs, live_objects, published_objects,
 		last_push_at, published_at, publish_took_ms, version`
 	publicationDueFirstSQL = `SELECT ` + publicationDueColumns + ` FROM code_repos
 		INDEXED BY code_repos_unpublished_idx
-		WHERE live_packs > published_packs AND status IN ('active', 'archived') AND published_at >= 0
+		WHERE live_packs > published_packs AND status IN ('active', 'archived') AND expunge_id = ''
+			AND published_at >= 0
 		ORDER BY published_at, id LIMIT ?`
 	publicationDueAfterSQL = `SELECT ` + publicationDueColumns + ` FROM code_repos
 		INDEXED BY code_repos_unpublished_idx
-		WHERE live_packs > published_packs AND status IN ('active', 'archived')
+		WHERE live_packs > published_packs AND status IN ('active', 'archived') AND expunge_id = ''
 			AND published_at >= ? AND (published_at > ? OR id > ?)
 		ORDER BY published_at, id LIMIT ?`
 	// THE EXPUNGES OWED, by id over code_repos_expunging_idx — its partial

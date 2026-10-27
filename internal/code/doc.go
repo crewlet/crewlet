@@ -778,7 +778,8 @@
 // each holding a pack no layer covers, and any holding only such a
 // byte-identical pack, which has nothing to publish — LEAST RECENTLY
 // PUBLISHED FIRST, one walk of code_repos_unpublished_idx (replicated 0062),
-// the engine's own read. A purge removes the chain with the rest of a
+// the engine's own read; it names none with an expunge open, whose
+// publication the expunge's rule refuses until its commit (below). A purge removes the chain with the rest of a
 // repository, in its final record: the chain is bounded apart from what a
 // part counts.
 //

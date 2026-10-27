@@ -548,7 +548,9 @@ const (
 	// — LEAST RECENTLY PUBLISHED FIRST, one never published before any
 	// other, each with what a publication is due by: the listing a
 	// repository's maintainer polls for the repositories a publication may
-	// be due in. The engine's own read, as `compaction_due` is.
+	// be due in. None with an expunge open, whose publication rule 6g
+	// refuses until its commit. The engine's own read, as `compaction_due`
+	// is.
 	ReadPublicationDue ReadKind = "publication_due"
 	// ReadExpungeDue is the active and archived repositories with an
 	// expunge open or a purge requested, by id, each with what its
