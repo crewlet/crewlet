@@ -18,10 +18,11 @@ func (a attrsSeen) Add(name string, _ uint64, attrs metrics.Attrs) {
 // A COUNTER'S LABELS ARE THE CATALOGUE'S (#423 review): the recorder drops a
 // label the catalogue does not declare without a word, so a "paths" label
 // added to a recording stayed green. Each counter here is held to the
-// catalogue when the package loads, and records exactly the declared labels.
+// catalogue when the package loads, and records exactly the declared labels
+// through a typed method, so a recording of the wrong arity does not compile.
 //
-// Mutation: declare argsOutsideSchema with ("tool", "paths") and the package
-// refuses to load; record without a value for "tool" and add panics.
+// Mutation: declare a counter with ("tool", "paths") and the package refuses
+// to load; record a second label in toolCounted.add and this names it.
 func TestEveryCounterRecordsTheCataloguesLabels(t *testing.T) {
 	t.Parallel()
 	seen := attrsSeen{}
@@ -43,7 +44,7 @@ func TestEveryCounterRecordsTheCataloguesLabels(t *testing.T) {
 		func() { mustCount(metrics.ToolArgsOutsideSchema, "tool", "paths") },
 		func() { mustCount(metrics.ToolArgsOutsideSchema) },
 		func() { mustCount("crewlet.tools.nothing", "tool") },
-		func() { argsOutsideSchema.add(seen) },
+		func() { countedByTool(metrics.ToolArgsOutsideSchema + ".unknown") },
 	} {
 		func() {
 			defer func() {

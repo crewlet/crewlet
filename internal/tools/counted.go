@@ -8,14 +8,14 @@ import (
 )
 
 // counted is one counter of the metrics catalogue as this package records
-// into it: its name and its attributes, IN THE CATALOGUE'S ORDER, held to the
-// catalogue's declaration when the package loads. A recording names a value
-// for each attribute by position, so it can neither carry a label the
-// catalogue does not declare (which the recorder would drop without a word)
-// nor leave one out.
+// into it: its name, held to the catalogue's declaration of it when the
+// package loads ([mustCount]). A recording goes through a typed method per
+// attribute set ([toolCounted.add]), so a recording with the wrong labels, or
+// the wrong number of them, does not compile, and one the catalogue declares
+// otherwise does not load. The recorder drops a label the catalogue does not
+// declare without a word, which is why neither may be left to a test.
 type counted struct {
-	name  string
-	attrs []string
+	name string
 }
 
 // mustCount is the counter name with attrs, refusing to load when the
@@ -30,27 +30,31 @@ func mustCount(name string, attrs ...string) counted {
 		panic(fmt.Sprintf("tools: %s records %v, and the catalogue declares a %s with %v",
 			name, attrs, inst.Kind, inst.Attributes))
 	}
-	return counted{name: name, attrs: attrs}
+	return counted{name: name}
 }
 
-// add counts one, with a value for each attribute, in order.
-func (k counted) add(c Counter, values ...string) {
+// attrTool is the one attribute a [toolCounted] counter records.
+const attrTool = "tool"
+
+// toolCounted is a counter whose one attribute is the tool.
+type toolCounted struct{ counted }
+
+// countedByTool is the counter name, held to a catalogue declaration of
+// exactly one attribute, the tool.
+func countedByTool(name string) toolCounted {
+	return toolCounted{mustCount(name, attrTool)}
+}
+
+// add counts one call to tool.
+func (k toolCounted) add(c Counter, tool string) {
 	if c == nil {
 		return
 	}
-	if len(values) != len(k.attrs) {
-		panic(fmt.Sprintf("tools: %s takes %d attribute values, and was given %d", k.name,
-			len(k.attrs), len(values)))
-	}
-	attrs := make(metrics.Attrs, len(values))
-	for i, a := range k.attrs {
-		attrs[a] = values[i]
-	}
-	c.Add(k.name, 1, attrs)
+	c.Add(k.name, 1, metrics.Attrs{attrTool: tool})
 }
 
 // The counters this package records.
 var (
-	argsOutsideSchema  = mustCount(metrics.ToolArgsOutsideSchema, "tool")
-	policyRefusalLoops = mustCount(metrics.ToolPolicyRefusalLoops, "tool")
+	argsOutsideSchema  = countedByTool(metrics.ToolArgsOutsideSchema)
+	policyRefusalLoops = countedByTool(metrics.ToolPolicyRefusalLoops)
 )
