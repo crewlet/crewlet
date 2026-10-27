@@ -880,8 +880,8 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	}
 }
 
-// AN ACT ANSWER IS THE TOOL'S RECEIPT AND NEVER THE MODEL'S NOTE (ADR-0059,
-// ADR-0060): the note on a call's arguments is worded for the model that
+// AN ACT ANSWER IS THE TOOL'S RECEIPT AND NEVER THE MODEL'S NOTE (ADR-0059):
+// the note on a call's arguments is worded for the model that
 // wrote the call, and a person reads this answer, so it carries neither the
 // note nor a field for it.
 //

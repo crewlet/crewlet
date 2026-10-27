@@ -676,8 +676,8 @@ func (s *served) answerDispatched(w http.ResponseWriter, r *http.Request, key,
 // receiptOf is a tool's successful result as the work API answers it: the
 // tool's JSON, and nothing else. THE NOTE ON THE CALL'S ARGUMENTS
 // ([tools.Result.Note]) IS THE MODEL'S, worded for the model that wrote the
-// call, and a person reads this answer, so it is never carried here (ADR-0059;
-// ADR-0060 keeps model-worded text out of what a person reads).
+// call, and a person reads this answer, so it is never carried here: a person
+// never reads text worded for a model (ADR-0059).
 func receiptOf(result tools.Result) (map[string]any, error) {
 	var receipt map[string]any
 	if err := json.Unmarshal([]byte(result.Output), &receipt); err != nil {

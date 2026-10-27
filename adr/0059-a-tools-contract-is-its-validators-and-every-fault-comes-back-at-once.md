@@ -106,8 +106,8 @@ through `operator.Server.run`, skipped it.
   `Result.Note`, never in `Output`, which a caller may decode as a JSON
   receipt. The note is worded for the model, so the model and an MCP client
   read it after the answer, and the act and work API answers, which a person
-  reads, never carry it (ADR-0060 keeps model-worded text out of what a
-  person reads). It is logged (`tool_args_outside_schema`) and counted
+  reads, never carry it: a person never reads text worded for a model. It is
+  logged (`tool_args_outside_schema`) and counted
   (`crewlet.tools.args_outside_schema`). That count is the drift signal for a
   later decision, per tool, to refuse before the tool runs.
 - **The lossless leniencies stay accepted, exactly as the tools read them.**

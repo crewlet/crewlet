@@ -349,8 +349,8 @@ func decodeAct(raw []byte) (actRequest, error) {
 // answerOf is a tool's successful result as the act transport answers it: the
 // receipt the tool's JSON is, and nothing else. THE NOTE ON THE CALL'S
 // ARGUMENTS ([tools.Result.Note]) IS THE MODEL'S, worded for the model that
-// wrote the call, and a person reads this answer, so it is never carried here
-// (ADR-0059; ADR-0060 keeps model-worded text out of what a person reads).
+// wrote the call, and a person reads this answer, so it is never carried here:
+// a person never reads text worded for a model (ADR-0059).
 func answerOf(name string, result tools.Result) ActAnswer {
 	return receiptOf(name, result.Output)
 }
