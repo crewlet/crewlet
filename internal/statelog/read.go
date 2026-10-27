@@ -615,7 +615,13 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 //     could not terminate.
 //  3. The freshness target, by level. Only linearizable appends.
 //  4. The WAIT, on this node's own checkpoint, holding no connection and no
-//     transaction.
+//     transaction. A linearizable read waits for every record BEFORE its
+//     barrier ([waitsThrough]) and never for the barrier itself: a barrier
+//     writes no row on any node ([FrameworkScope]), so its own commit is a
+//     checkpoint and an fsync that change nothing the read reads. EVERY
+//     linearizable read takes this step, its predecessor the zero position
+//     included, because the step is also where its answer is stamped and its
+//     staleness bound checked against a health read after the wait.
 //  5. ONE read transaction, whose FIRST statement is the coverage probe
 //     again — a deferred record landing between the two is the same hole
 //     through another door — and then the answer.
@@ -710,7 +716,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 	// so a router asking another node for this read hands it on rather than
 	// have that node append a barrier of its own.
 	spent := spentOf(ctx)
-	target, index, err := r.target(ctx, q, floor, h, spent)
+	target, index, waits, err := r.target(ctx, q, floor, h, spent)
 	if err != nil {
 		var refusal *Refused
 		if errors.As(err, &refusal) {
@@ -723,8 +729,12 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		paid.Index = []Position{index}
 	}
 
-	// 4. The wait, holding nothing.
-	if !target.IsZero() {
+	// 4. The wait, holding nothing — keyed on what the target SAYS rather than
+	// on its being non-zero: a barrier at the very start of a log (the code
+	// log's first record is @0:1) has the zero position before it, and a
+	// linearizable read is stamped and bounded on the path below whatever its
+	// barrier's sequence.
+	if waits {
 		// THE CALLER'S FLOOR WAS HELD TO THIS LOG in step 0, so what
 		// can still name another here is a position this node derived
 		// for the read — a session mark, a barrier — which is this
@@ -761,13 +771,8 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 			if errors.Is(err, context.DeadlineExceeded) {
 				paid.Waited = []Position{target}
 			}
-			detail := fmt.Sprintf("this node has not reached %s within %s", target, bound)
-			if waited {
-				detail = fmt.Sprintf("this node has not reached %s, which a node asked "+
-					"for this read before it already waited a whole bound for — so it "+
-					"waited for nothing", target)
-			}
-			return r.refusePaid(h, q, RefuseBehind, detail, started, paid)
+			return r.refusePaid(h, q, RefuseBehind,
+				r.behindDetail(target, index, spent, bound, waited), started, paid)
 		}
 		answer.Position = r.waiter.Committed()
 
@@ -919,11 +924,74 @@ func (r *Reader) scopeUnread(err error) string {
 		"reason is in this node's log"
 }
 
-// target is the position this read must wait for, by level, and — for a
-// linearizable read — the read index it rests on: the barrier it appended, or
-// the one a node asked for the same read before it established ([Spent]).
-// floor is the caller's own on this log, zero where it named none.
-func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, spent Spent) (Position, Position, error) {
+// behindDetail is what a read whose wait ran out is told: the position it
+// waited for and, where that is the record before its read index, the barrier
+// too — so a caller reading `behind` sees both what this node lacked and the
+// barrier that is NOT what it waited for. waited is a position a node asked
+// before this one already waited a whole bound for ([Spent.Waited]).
+func (r *Reader) behindDetail(target, index Position, spent Spent, bound WaitBound,
+	waited bool) string {
+
+	// THE APPOSITIVE, where the position waited for is the record before the
+	// read index — and not where a caller's floor past it is what was waited
+	// for, which names a position of its own.
+	what := target.String()
+	if !index.IsZero() && target == waitsThrough(index) {
+		barrier := "the barrier this read appended"
+		if held, ok := spent.IndexOn(r.stream); ok && held == index {
+			barrier = "the barrier a node asked for this read before this one appended"
+		}
+		what = fmt.Sprintf("%s, the record before %s at %s,", target, barrier, index)
+	} else if waited {
+		what += ","
+	}
+	if waited {
+		return fmt.Sprintf("this node has not committed %s which a node asked for "+
+			"this read before it already waited a whole bound for — so it waited "+
+			"for nothing", what)
+	}
+	return fmt.Sprintf("this node has not committed %s within %s", what, bound)
+}
+
+// waitsThrough is the position a linearizable read resting on the read index
+// at waits for: the record BEFORE the barrier, never the barrier itself.
+//
+// # Why the record before it
+//
+// Everything a linearizable read must see was acknowledged before the read
+// arrived, so it is below a barrier appended after that ([ReadIndex.Read]) —
+// and the barrier itself writes no row on any node ([FrameworkScope]): its
+// apply is the checkpoint and the commit's fsync, which change nothing the read
+// reads. Waiting for it put that fsync in front of every linearizable read, and
+// on a disk whose fsyncs stall for seconds it held reads for the whole of
+// [ReadBudget] behind a commit that wrote no row.
+//
+// ONE DERIVATION for both of a read's indexes — its own barrier, and the one a
+// node asked before it established ([Spent.Index]) — so every node a walk asks
+// derives the same target from the same index, and [Spent.WaitedFor] compares
+// like with like.
+//
+// A READ INDEX AT SEQUENCE 0 IS WAITED FOR AS ITSELF. The broker never
+// acknowledges an append there, but a [Spent] arrives off the wire, and the
+// subtraction must not wrap round to the end of the number space.
+func waitsThrough(at Position) Position {
+	if at.Seq == 0 {
+		return at
+	}
+	return at.At(at.Seq - 1)
+}
+
+// target is the position this read must wait for, by level, whether it waits
+// at all, and — for a linearizable read — the read index it rests on: the
+// barrier it appended, or the one a node asked for the same read before it
+// established ([Spent]). floor is the caller's own on this log, zero where it
+// named none.
+//
+// WHETHER IT WAITS IS ITS OWN ANSWER, never read off the target being non-zero:
+// a linearizable read always waits ([Reader.Read]'s step 4), and the record
+// before a barrier at the start of a log is the zero position.
+func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health,
+	spent Spent) (target, index Position, waits bool, err error) {
 	// THE CALLER'S FLOOR IS ON THIS LOG: [Reader.Read] refused one that is
 	// not before it got here, because comparing a foreign floor against a
 	// local target is comparing coordinates from two number spaces — see
@@ -931,7 +999,7 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, 
 	switch q.Level {
 	case ReadLinearizable:
 		// A READ INDEX THIS READ ALREADY HOLDS — established by a node
-		// asked for it before this one — IS WAITED FOR AND NOTHING IS
+		// asked for it before this one — IS WAITED THROUGH AND NOTHING IS
 		// APPENDED: as linearizable as a barrier of this node's own, since
 		// that barrier started after the request reached a node and the
 		// broker committed it ([Spent]). And so whatever this node's mode,
@@ -942,10 +1010,10 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, 
 		// own.
 		if at, held := spent.IndexOn(r.stream); held &&
 			at.Generation >= r.waiter.Committed().Generation {
-			return furthest(at, floor), at, nil
+			return furthest(waitsThrough(at), floor), at, true, nil
 		}
 		if !r.mode.Publishes() {
-			return Position{}, Position{}, &Refused{
+			return Position{}, Position{}, false, &Refused{
 				Code: RefuseMaintenance, Level: q.Level,
 				Detail: fmt.Sprintf("this node runs in %s mode, which publishes "+
 					"nothing, and a linearizable read establishes the log's end "+
@@ -956,7 +1024,7 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, 
 			}
 		}
 		if r.index == nil {
-			return Position{}, Position{}, &Refused{
+			return Position{}, Position{}, false, &Refused{
 				Code: RefuseBrokerUnreachable, Level: q.Level,
 				Detail: "this node has no read index, so no position can be " +
 					"established as the log's end",
@@ -966,7 +1034,7 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, 
 		// BARRIER'S WHOLE BUDGET ON: every node's goes to the one log's
 		// leader, which has no quorum ([Spent.NoQuorum]).
 		if spent.NoQuorumOn(r.stream) {
-			return Position{}, Position{}, &Refused{
+			return Position{}, Position{}, false, &Refused{
 				Code: RefuseNoQuorum, Level: q.Level,
 				Detail: "a node asked for this read before this one spent a barrier's " +
 					"whole budget without it committing — the log has no quorum — so " +
@@ -999,9 +1067,9 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, 
 				// counted as a refusal, handed an election's retry hint
 				// and drawn as a majority failing to agree on every
 				// operator's graph.
-				return Position{}, Position{}, ctx.Err()
+				return Position{}, Position{}, false, ctx.Err()
 			case ranOut:
-				return Position{}, Position{}, &Refused{
+				return Position{}, Position{}, false, &Refused{
 					Code: RefuseNoQuorum, Level: q.Level,
 					Detail: fmt.Sprintf("the barrier this read appended to establish the "+
 						"log's end had not committed after %s, all its asker's attempt left",
@@ -1017,16 +1085,17 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, 
 			if refusal.Code == RefuseNoQuorum && errors.Is(err, context.DeadlineExceeded) {
 				refusal.Spent = Spent{NoQuorum: []string{r.stream}}
 			}
-			return Position{}, Position{}, refusal
+			return Position{}, Position{}, false, refusal
 		}
-		// THE FLOOR CANNOT BE PAST THE BARRIER on the stream the barrier
-		// was appended to — a position a write returned was acknowledged
-		// before this append was — so on the honest path this is the
-		// barrier. On the other path the floor names a sequence this
-		// stream has not reached, and waiting for it is what turns a
-		// pasted position into a `behind` refusal the caller can read
-		// rather than an answer served from before it.
-		return furthest(at, floor), at, nil
+		// THE FLOOR CANNOT BE PAST THE BARRIER'S PREDECESSOR on the stream
+		// the barrier was appended to — a position a write returned was
+		// acknowledged before this append was, so it is BELOW the barrier —
+		// and on the honest path this is the record before the barrier. On
+		// the other path the floor names a sequence this stream has not
+		// reached, and waiting for it is what turns a pasted position into
+		// a `behind` refusal the caller can read rather than an answer
+		// served from before it.
+		return furthest(waitsThrough(at), floor), at, true, nil
 
 	case ReadSession:
 		// THE STRONGEST OF WHAT THE CALLER ALREADY KNOWS. A session
@@ -1034,19 +1103,20 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health, 
 		// stronger name, so it waits for nothing rather than appending
 		// a barrier nobody asked for — which is why the grammars refuse
 		// the level to a caller that named no position.
-		return furthest(q.Session, floor), Position{}, nil
+		session := furthest(q.Session, floor)
+		return session, Position{}, !session.IsZero(), nil
 
 	case ReadStale, ReadConsistentPrefix:
 		if refusal := r.pastBound(q, h); refusal != nil {
-			return Position{}, Position{}, refusal
+			return Position{}, Position{}, false, refusal
 		}
 		// AND THE FLOOR STILL HOLDS. A stale read with a position is
 		// "whatever this node holds, from here on": the lag is checked
 		// above and reported on the answer, and the wait below is for
 		// the caller's own write rather than for the log's end.
-		return floor, Position{}, nil
+		return floor, Position{}, !floor.IsZero(), nil
 	}
-	return Position{}, Position{}, fmt.Errorf("statelog: unreachable read level %q", q.Level)
+	return Position{}, Position{}, false, fmt.Errorf("statelog: unreachable read level %q", q.Level)
 }
 
 // pastBound is the staleness bound's whole rule, against ONE health snapshot.

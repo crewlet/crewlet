@@ -52,6 +52,9 @@ type wiredNode struct {
 	// eviction row into to see the fence read it.
 	estate store.ReplicatedHandle
 
+	// spec is the probe log as this node runs it.
+	spec statelog.StreamSpec
+
 	// start runs the applier until the case ends. Apart from building the
 	// node, because the drain benchmark builds the node — its estate, its
 	// migrations — outside its timer and starts the applier inside it.
@@ -102,6 +105,13 @@ func ensureWiredLog(tb testing.TB, q *js.Queue) statelog.StreamSpec {
 // running ([running] starts it).
 func newWiredNode(tb testing.TB, q *js.Queue, nodeID string) *wiredNode {
 	tb.Helper()
+	return newWiredNodeWith(tb, q, nodeID, store.Options{})
+}
+
+// newWiredNodeWith is [newWiredNode] over a store opened with opts — a driver a
+// case wraps to hold or fail the node's commits.
+func newWiredNodeWith(tb testing.TB, q *js.Queue, nodeID string, opts store.Options) *wiredNode {
+	tb.Helper()
 	spec := ensureWiredLog(tb, q)
 	log, err := q.DomainLog(tb.Context(), spec.Name)
 	if err != nil {
@@ -116,7 +126,7 @@ func newWiredNode(tb testing.TB, q *js.Queue, nodeID string) *wiredNode {
 		tb.Fatalf("open the consumer: %v", err)
 	}
 	tb.Cleanup(consumer.Close)
-	db, estate := storetest.OpenEstate(tb, filepath.Join(tb.TempDir(), "node.db"), store.Options{}, 1)
+	db, estate := storetest.OpenEstate(tb, filepath.Join(tb.TempDir(), "node.db"), opts, 1)
 	tb.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			tb.Errorf("close the store: %v", err)
@@ -178,7 +188,7 @@ func newWiredNode(tb testing.TB, q *js.Queue, nodeID string) *wiredNode {
 	if err != nil {
 		tb.Fatalf("NewReadIndex: %v", err)
 	}
-	n := &wiredNode{pub: pub, runner: runner, index: index, log: log, estate: estate}
+	n := &wiredNode{pub: pub, runner: runner, index: index, log: log, estate: estate, spec: spec}
 	n.start = func() {
 		// THE CASE'S CONTEXT'S VALUES, NOT ITS END: the loop is stopped by
 		// [wiredNode.stop], which then says how it stopped — under the
@@ -285,7 +295,9 @@ func (n *wiredNode) barrier(ctx context.Context) (statelog.Position, error) {
 }
 
 // read is what a linearizable read waits through before it reads its rows:
-// the barrier, and this node's applier reaching it.
+// the barrier, and this node's applier committing every record before it —
+// derived as [statelog.Reader] derives it ([statelog.WaitsThrough]), so a case
+// and a benchmark reading through this measure what a read waits for.
 func (n *wiredNode) read(ctx context.Context) (statelog.Position, error) {
 	ctx, cancel := context.WithTimeout(ctx, wiredOpBudget)
 	defer cancel()
@@ -293,7 +305,119 @@ func (n *wiredNode) read(ctx context.Context) (statelog.Position, error) {
 	if err != nil {
 		return at, err
 	}
-	return at, n.runner.WaitCommitted(ctx, at)
+	return at, n.runner.WaitCommitted(ctx, statelog.WaitsThrough(at))
+}
+
+// reader is a read authority over n's log that waits through waiter — n's own
+// runner, or a wrapper a case watches it through — on a node that reports
+// itself level and sound, as one serving reads does.
+func (n *wiredNode) reader(tb testing.TB, waiter statelog.Waiter) *statelog.Reader {
+	tb.Helper()
+	r, err := statelog.NewReader(statelog.ReaderDeps{
+		Domain: probeDomain{}, Spec: n.spec, Mode: statelog.ModeNormal,
+		DB: n.estate, Index: n.index, Waiter: waiter,
+		Health: func() (statelog.Health, error) {
+			h := healthy()
+			h.Position = n.runner.Committed()
+			return h, nil
+		},
+	})
+	if err != nil {
+		tb.Fatalf("NewReader: %v", err)
+	}
+	return r
+}
+
+// objects is how many probe records' rows a read's transaction sees: the
+// writes, and none of the barriers between them.
+func objects(ctx context.Context, tx *sql.Tx) (int, error) {
+	var n int
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM probe_rows WHERE kind = 'object'`).Scan(&n)
+	return n, err
+}
+
+// enteringWaiter is a node's waiter that says when the first wait through it
+// begins: the moment a read found it had to wait, and so was not served.
+type enteringWaiter struct {
+	statelog.Waiter
+	entered chan struct{}
+	once    sync.Once
+}
+
+func newEnteringWaiter(inner statelog.Waiter) *enteringWaiter {
+	return &enteringWaiter{Waiter: inner, entered: make(chan struct{})}
+}
+
+func (w *enteringWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+	w.once.Do(func() { close(w.entered) })
+	return w.Waiter.WaitCommitted(ctx, p)
+}
+
+// A LINEARIZABLE READ STILL WAITS FOR THE RECORD BEFORE ITS BARRIER — here a
+// write, whose rows the read must see. Held at its commit, it leaves the read
+// appended after it waiting; released, the read is served WITH the write's
+// row. A read that waited for nothing, or for any record before the write,
+// would be served from the rows without it.
+func TestALinearizableReadStillWaitsForTheRecordBeforeItsBarrier(t *testing.T) {
+	t.Parallel()
+	hold := storetest.HoldCommits(t)
+	n := running(newWiredNodeWith(t, soloBroker(t, js.Config{SyncAlways: true}), "node-w",
+		store.Options{WrapDriver: hold.Wrap}))
+	ctx, cancel := context.WithTimeout(t.Context(), wiredOpBudget)
+	defer cancel()
+	subject := probeSubject("held")
+	first, err := n.write(ctx, subject, statelog.Position{})
+	if err != nil {
+		t.Fatalf("a write before the hold: %v", err)
+	}
+
+	hold.Arm()
+	// RELEASED ON EVERY WAY OUT, before the node's own cleanup stops an applier
+	// that would otherwise wait on the held commit for ever.
+	defer hold.Release()
+	written := make(chan error, 1)
+	go func() {
+		_, err := n.write(ctx, subject, first.Position)
+		written <- err
+	}()
+	if err := hold.AwaitHeld(ctx, 1); err != nil {
+		t.Fatalf("the second write never reached its commit: %v", err)
+	}
+	type answer struct {
+		rows int
+		err  error
+	}
+	waiter := newEnteringWaiter(n.runner)
+	served := make(chan answer, 1)
+	go func() {
+		var rows int
+		_, err := n.reader(t, waiter).Read(ctx, statelog.Query{
+			Level: statelog.ReadLinearizable,
+			Scope: statelog.ScopeSet{Paths: []string{subject.String()}},
+		}, func(tx *sql.Tx) error {
+			var err error
+			rows, err = objects(ctx, tx)
+			return err
+		})
+		served <- answer{rows: rows, err: err}
+	}()
+	select {
+	case <-waiter.entered:
+	case got := <-served:
+		t.Fatalf("the read was answered (%d rows, %v) before it waited", got.rows, got.err)
+	}
+	hold.Release()
+	got := <-served
+	if got.err != nil {
+		t.Fatalf("the read, once the write committed: %v", got.err)
+	}
+	if got.rows != 2 {
+		t.Errorf("the read saw %d writes, want both — it was served from rows without "+
+			"the record before its barrier", got.rows)
+	}
+	if err := <-written; err != nil {
+		t.Fatalf("the held write, released: %v", err)
+	}
 }
 
 // A WRITE RUNS THE WHOLE WRITE PATH ON A REAL APPLIER — the one case in this

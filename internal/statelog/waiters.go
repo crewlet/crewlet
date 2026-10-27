@@ -29,13 +29,14 @@ var ErrWaitAbandoned = errors.New("statelog: the applier stopped while this " +
 // to turn a context deadline into a wake. At a fraction of a read per second
 // that costs nothing.
 //
-// It stops being free at the rate this framework creates: a linearizable read
-// appends a barrier and the applier yields its batch to serve it, so commits
-// become roughly one-to-one with reads, and every commit then wakes EVERY
-// waiter to re-test a target most of them have not reached. The goroutine per
-// wait is the other half — a goroutine whose only job is to watch somebody
-// else's deadline is the shape this engine's concurrency rule exists to
-// refuse.
+// It stops being free at the rate this framework creates: every write waits
+// for its own record and every linearizable read for the record before its
+// barrier, a busy node holds many such callers at once, and the applier yields
+// its batch the moment one of them waits on a record it holds — so the
+// position moves many times a second, and every move then woke EVERY waiter to
+// re-test a target most of them have not reached. The goroutine per wait is
+// the other half — a goroutine whose only job is to watch somebody else's
+// deadline is the shape this engine's concurrency rule exists to refuse.
 //
 // A min-heap keyed on the target inverts it: the applier pops while the
 // minimum is at or below its checkpoint and closes those channels, so a waiter

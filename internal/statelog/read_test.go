@@ -646,28 +646,164 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	}
 }
 
-// A LINEARIZABLE READ WAITS FOR ITS OWN BARRIER.
-func TestALinearizableReadWaitsForThePositionItsBarrierEstablished(t *testing.T) {
+// A LINEARIZABLE READ WAITS FOR THE RECORD BEFORE ITS BARRIER, never for the
+// barrier itself: a barrier writes no row on any node, so its own commit is a
+// checkpoint and an fsync that change nothing the read reads. A read handed the
+// barrier by a node asked before it waits for that same record and appends
+// nothing, and a refusal still carries the BARRIER as what the read paid for —
+// so every node a walk asks derives the one position from the one index.
+func TestALinearizableReadWaitsForTheRecordBeforeItsBarrier(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+	var appends atomic.Int64
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
+		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}),
+		noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
-	w := &stubWaiter{at: healthy().Position}
-	r := newReader(t, newStubStore(t), healthy, w, index)
+	estate := newStubStore(t)
+	// lastBarrier is the barrier the reads have appended so far: nothing else
+	// appends to this log.
+	lastBarrier := func() statelog.Position {
+		t.Helper()
+		_, last, err := h.log.Bounds(t.Context())
+		if err != nil {
+			t.Fatalf("read the log's end: %v", err)
+		}
+		return statelog.Position{Stream: probeStream, Generation: h.gen.Load(), Seq: last}
+	}
+	before := func(p statelog.Position) statelog.Position { return p.At(p.Seq - 1) }
+	read := func(ctx context.Context, w *stubWaiter) error {
+		_, err := newReader(t, estate, healthy, w, index).Read(ctx,
+			pointQuery(statelog.ReadLinearizable), func(*sql.Tx) error { return nil })
+		return err
+	}
 
-	if _, err := r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
-		func(*sql.Tx) error { return nil }); err != nil {
+	own := &stubWaiter{at: healthy().Position}
+	if err := read(t.Context(), own); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if got := w.waited.Load(); got != 1 {
-		t.Fatalf("a linearizable read waited %d time(s), want exactly 1 — a "+
-			"barrier creates a record this node has not applied, so it ALWAYS "+
-			"waits for one", got)
+	barrier := lastBarrier()
+	if got := appends.Load(); got != 1 {
+		t.Fatalf("the read appended %d barrier(s), want 1", got)
 	}
-	if w.last.Load() == 0 {
-		t.Fatal("the read waited for the zero position")
+	if got, want := own.last.Load(), before(barrier).Packed(); got != want {
+		t.Fatalf("the read waited for packed %d, want the record before its barrier "+
+			"at %s (packed %d) — the barrier itself writes no row, and waiting for "+
+			"its commit is waiting for an fsync that changes nothing the read reads",
+			got, barrier, want)
+	}
+
+	// HANDED THE BARRIER, a node waits for the same record and appends nothing.
+	handed := statelog.WithSpent(t.Context(), statelog.Spent{Index: []statelog.Position{barrier}})
+	peer := &stubWaiter{at: healthy().Position}
+	if err := read(handed, peer); err != nil {
+		t.Fatalf("a read handed the barrier: %v", err)
+	}
+	if got := appends.Load(); got != 1 {
+		t.Fatalf("a read handed the barrier appended one of its own (%d appends)", got)
+	}
+	if got, want := peer.last.Load(), before(barrier).Packed(); got != want {
+		t.Fatalf("a read handed the barrier at %s waited for packed %d, want %d — "+
+			"every node derives one position from one read index", barrier, got, want)
+	}
+
+	// AND A REFUSAL STILL CARRIES THE BARRIER as what the read paid for, beside
+	// the record it waited its whole bound for.
+	behind := &stubWaiter{at: healthy().Position, err: context.DeadlineExceeded}
+	err = read(t.Context(), behind)
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
+		t.Fatalf("a read whose wait ran out = %v, want refused %s", err, statelog.RefuseBehind)
+	}
+	refused := lastBarrier()
+	if !slices.Equal(refusal.Spent.Index, []statelog.Position{refused}) {
+		t.Errorf("the refusal carries the read index %v, want the barrier %s — a node "+
+			"asked next derives its own wait from the barrier", refusal.Spent.Index, refused)
+	}
+	if !slices.Equal(refusal.Spent.Waited, []statelog.Position{before(refused)}) {
+		t.Errorf("the refusal says it waited for %v, want the record before its "+
+			"barrier, %s", refusal.Spent.Waited, before(refused))
+	}
+	if !strings.Contains(refusal.Detail, before(refused).String()) ||
+		!strings.Contains(refusal.Detail, refused.String()) {
+		t.Errorf("the refusal's detail %q names neither the record the read waited "+
+			"for nor the barrier it appended", refusal.Detail)
+	}
+}
+
+// A BARRIER AT THE START OF A LOG STILL TAKES THE WAIT'S PATH. The code log's
+// first record is @0:1, so a read whose barrier lands there has the zero
+// position before it — and the path after the wait is where an answer is
+// stamped from this node's applier and its staleness bound held to a health read
+// AFTER the wait, whatever the barrier's sequence. Keyed on the target being
+// non-zero, that read was stamped from the health read before it and never
+// bounded at all.
+func TestALinearizableReadAtTheStartOfALogIsStampedAndBounded(t *testing.T) {
+	t.Parallel()
+	// The waiter's position, which the health's is not, so an answer stamped
+	// from the health read before the wait is told apart.
+	stamped := statelog.Position{Stream: probeStream, Seq: 7}
+	for name, tc := range map[string]struct {
+		maxLagSeq uint64
+		refused   bool
+	}{
+		"served, stamped from the applier":           {},
+		"bounded, against the health after the wait": {maxLagSeq: 100, refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.gen.Store(0)
+			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log,
+				testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+			if err != nil {
+				t.Fatalf("NewReadIndex: %v", err)
+			}
+			// LEVEL BEFORE THE WAIT AND FIVE HUNDRED BEHIND AFTER IT: the
+			// log ran on while this node caught up.
+			var healths atomic.Int64
+			health := func() statelog.Health {
+				hl := healthy()
+				hl.Position = statelog.Position{Stream: probeStream}
+				if healths.Add(1) > 1 {
+					lag := uint64(500)
+					hl.Lag = &lag
+				}
+				return hl
+			}
+			w := &stubWaiter{at: stamped}
+			q := pointQuery(statelog.ReadLinearizable)
+			q.MaxLagSeq = tc.maxLagSeq
+			answer, err := newReader(t, newStubStore(t), health, w, index).Read(t.Context(), q,
+				func(*sql.Tx) error { return nil })
+			if _, last, berr := h.log.Bounds(t.Context()); berr != nil || last != 1 {
+				t.Fatalf("the read's barrier is at %d (%v), want the log's first record", last, berr)
+			}
+			if got := w.waited.Load(); got != 1 {
+				t.Fatalf("the read waited %d time(s), want 1 — for the zero position "+
+					"before its barrier, which is the step that stamps and bounds it", got)
+			}
+			if tc.refused {
+				var refusal *statelog.Refused
+				if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseTooStale {
+					t.Fatalf("a read bounded at %d records over a health 500 behind after "+
+						"its wait = %v, want refused %s", tc.maxLagSeq, err, statelog.RefuseTooStale)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			if answer.Position != stamped {
+				t.Errorf("the answer is stamped %s, want the applier's %s — not the "+
+					"position the health read before the wait reported", answer.Position, stamped)
+			}
+			if answer.Lag == nil || *answer.Lag != 500 {
+				t.Errorf("the answer reports lag %v, want the 500 read after the wait", answer.Lag)
+			}
+		})
 	}
 }
 

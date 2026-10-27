@@ -30,6 +30,14 @@ func RankOffersForTest(offers []Offer, seed uint64) []Offer {
 // can state.
 func MeasureVolumesWith(s *Snapshotter, fn func(dir string) (int64, error)) { s.volumeFree = fn }
 
+// WaitsThrough is what a linearizable read resting on the read index at waits
+// for ([waitsThrough]).
+//
+// EXPORTED FOR A TEST so the wired node's read — which the benchmarks measure
+// a linearizable read through — waits for what a read does, by the same
+// derivation rather than a copy of it.
+func WaitsThrough(at Position) Position { return waitsThrough(at) }
+
 // LogTrackerTo points a tracker's transition lines at a logger a case reads.
 //
 // EXPORTED FOR A TEST because the two lines are half of what a tracker is for

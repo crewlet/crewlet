@@ -530,10 +530,12 @@
 //     one subject; sixteen subjects, 520–570 a second. With the fsync
 //     declined the chain took 4.1–5.1 ms, 183–228 a second.
 //   - A LINEARIZABLE READ is a barrier append — 0.57–0.59 ms solo,
-//     3.5–3.9 ms at three replicas — and then this node's applier reaching
-//     it: the whole wait 1.7–1.8 / 4.3–4.6 ms solo and 4.8–5.5 / 10–12.5 ms at
-//     three, 535–555 reads a second from one reader solo and 171–197 at
-//     three.
+//     3.5–3.9 ms at three replicas — and then this node's applier committing
+//     every record before the barrier, never the barrier itself, which writes
+//     no row on any node. Measured while a read still waited for its own
+//     barrier's commit, and so an upper bound on today's: the whole wait
+//     1.7–1.8 / 4.3–4.6 ms solo and 4.8–5.5 / 10–12.5 ms at three, 535–555
+//     reads a second from one reader solo and 171–197 at three.
 //   - SIXTEEN READERS AT ONCE on one node SHARE their barriers
 //     ([ReadIndex.Read]): 0.12 appends a read for the barrier alone, and
 //     0.14–0.23 for whole reads, whose waits for the applier spread their

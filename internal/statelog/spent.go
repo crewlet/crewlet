@@ -22,12 +22,14 @@ import (
 //
 //   - Index is the READ INDEX a node established for the read on a log: the
 //     position of a barrier it appended, which the broker committed. A
-//     linearizable read handed one on its own log WAITS FOR IT AND APPENDS
-//     NOTHING. That is equally linearizable: the read index takes only a
-//     barrier that started after its reader arrived ([ReadIndex.Read]), and
-//     that reader is this same request, reaching a node after it began — so
-//     every write acknowledged before the request began is below the
-//     barrier, whichever node's applier the request is then served from.
+//     linearizable read handed one on its own log WAITS FOR THE RECORDS
+//     BEFORE IT AND APPENDS NOTHING — every node derives the same position to
+//     wait for from it ([waitsThrough]). That is equally linearizable: the
+//     read index takes only a barrier that started after its reader arrived
+//     ([ReadIndex.Read]), and that reader is this same request, reaching a
+//     node after it began — so every write acknowledged before the request
+//     began is below the barrier, whichever node's applier the request is
+//     then served from.
 //   - Waited is the furthest position on a log a node already waited its
 //     whole bound for and did not reach. A node waits for no position at or
 //     below it — it serves the read if it already holds it, and refuses

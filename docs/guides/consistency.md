@@ -235,11 +235,14 @@ could ask that board to include.
 It is a **barrier append**, not a field check.
 
 The reader publishes one record onto the domain's `barrier` subject and waits
-for its own applier to reach it. The acknowledgement is what carries the
-proof: at `replicas: 3` a `PubAck` means a majority of the raft group has the
-record durably, so any position at or below it is one the whole group agrees
-on. At `replicas: 1` there is no group and the acknowledgement proves only
-that the one member has it — which is exactly as strong as that deployment is.
+until its own node has committed every record before it. The acknowledgement
+is what carries the proof: at `replicas: 3` a `PubAck` means a majority of the
+raft group has the record durably, so any position at or below it is one the
+whole group agrees on. At `replicas: 1` there is no group and the
+acknowledgement proves only that the one member has it — which is exactly as
+strong as that deployment is. The barrier itself is never waited for: it
+writes no row on any node, so its own commit changes nothing the read reads,
+and waiting for it put a checkpoint's fsync in front of every read.
 
 The barrier is a real record with a real cost, and every `linearizable` read
 waits for one to come back — but concurrent reads on one node **share** them.
@@ -251,7 +254,8 @@ the meantime. So a lone read costs one append, and a read on a busy node waits
 for at most two and appends none of its own.
 
 Measured by `make bench` on one four-vCPU machine holding all three members,
-with `stream.sync: always`:
+with `stream.sync: always`. The whole-read rows were measured while a read
+still waited for its own barrier's commit, so they bound today's from above:
 
 | | solo | three replicas |
 |---|---|---|
@@ -333,14 +337,14 @@ does. The estate's router therefore asks the next data node a read refused
 for any of them, and answers with the refusal only where no node does better.
 Asking costs a question per node and nothing more, because the refusal says
 what the read already paid for and the router hands it to every node it asks
-next: a `linearizable` read waits for the barrier the first node appended
-rather than appending one of its own — as linearizable, since that barrier
-was appended after the read began — a position one node waited its whole
-read budget for is not waited for again (served if the node holds it,
-`behind` at once if not), and a log whose barrier ran its whole five seconds
-without committing gets no second one (`no_quorum` at once). So a fleet that
-one burst put behind together refuses a read after one barrier and one read
-budget, rather than a barrier and two seconds per data node.
+next: a `linearizable` read waits for the records before the barrier the
+first node appended rather than appending one of its own — as linearizable,
+since that barrier was appended after the read began — a position one node
+waited its whole read budget for is not waited for again (served if the node
+holds it, `behind` at once if not), and a log whose barrier ran its whole five
+seconds without committing gets no second one (`no_quorum` at once). So a
+fleet that one burst put behind together refuses a read after one barrier and
+one read budget, rather than a barrier and two seconds per data node.
 Three are about **the whole fleet** — `log_full`, since every node appends its
 barrier to the one log at the one ceiling, `broker_refused`, since the broker
 that refuses one node's barrier on a log — a sealed stream, a store with no

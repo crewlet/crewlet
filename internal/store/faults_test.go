@@ -138,6 +138,78 @@ func TestALostAcknowledgementIsDurableAcrossAReopen(t *testing.T) {
 	}
 }
 
+// A HELD COMMIT IS ONE THAT HAS NOT RETURNED: its rows are invisible to a reader
+// until it is released, a read beside it is never held, and one released
+// failing leaves nothing — so a case staging a stalled disk sees what a stalled
+// disk leaves, and not what a hold that did not hold leaves.
+func TestAHeldCommitIsInvisibleUntilItIsReleased(t *testing.T) {
+	t.Parallel()
+	hold := storetest.HoldCommits(t)
+	db, err := store.OpenNode(t.Context(), filepath.Join(t.TempDir(), "held.db"),
+		store.Options{WrapDriver: hold.Wrap})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := t.Context()
+	insert := func(mark string) error {
+		return db.Tx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `INSERT INTO crewlet_commit_probe (mark) VALUES (?)`, mark)
+			return err
+		})
+	}
+	if err := db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE crewlet_commit_probe (mark TEXT PRIMARY KEY)`)
+		return err
+	}); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+
+	hold.Arm()
+	done := make(chan error, 1)
+	go func() { done <- insert("held") }()
+	if err := hold.AwaitHeld(ctx, 1); err != nil {
+		t.Fatalf("the armed write never reached its commit: %v", err)
+	}
+	// A READ BESIDE IT IS NOT HELD, and does not see it.
+	var seen int
+	if err := db.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM crewlet_commit_probe WHERE mark = 'held'`).Scan(&seen)
+	}); err != nil {
+		t.Fatalf("a read beside the held commit: %v", err)
+	}
+	if seen != 0 {
+		t.Fatal("a reader saw the rows of a commit that has not returned")
+	}
+	if got := hold.Begun(); got != 1 {
+		t.Fatalf("%d write transactions began under the hold, want the 1 it holds", got)
+	}
+	hold.Release()
+	if err := <-done; err != nil {
+		t.Fatalf("the released commit: %v", err)
+	}
+	if !present(t, db, "held") || hold.Committed() != 1 {
+		t.Fatalf("the released commit left present=%v after %d commit(s): a release "+
+			"commits what was held", present(t, db, "held"), hold.Committed())
+	}
+
+	// RELEASED FAILING, IT NEVER LANDED.
+	hold.Arm()
+	go func() { done <- insert("crashed") }()
+	if err := hold.AwaitHeld(ctx, 1); err != nil {
+		t.Fatalf("the second armed write never reached its commit: %v", err)
+	}
+	crash := errors.New("the process stopped before the commit landed")
+	hold.ReleaseFailing(crash)
+	if err := <-done; !errors.Is(err, crash) {
+		t.Fatalf("the commit released failing answered %v, want the injected failure", err)
+	}
+	if present(t, db, "crashed") {
+		t.Fatal("a commit released failing left its rows: it must leave nothing")
+	}
+}
+
 func present(t *testing.T, db *store.DB, mark string) bool {
 	t.Helper()
 	var n int

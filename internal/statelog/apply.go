@@ -2418,11 +2418,12 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 		}
 		if len(run) > 0 {
 			// A PARTIAL RUN LINGERS, and gives it up the instant
-			// somebody is waiting: a caller that appended a barrier
-			// and is waiting for it would otherwise pay the whole
-			// linger for a record already in hand — a hundred times
-			// the append itself, and on an idle company every barrier
-			// is a partial batch.
+			// somebody is waiting on a record it holds: a linearizable
+			// read waiting for the record before its barrier, a write
+			// for its own, would otherwise pay the whole linger for a
+			// record already in hand — a hundred times the append
+			// itself, and on an idle company every record is a partial
+			// batch.
 			wait = ApplyLinger
 			if target, waiting := r.waiters.minimum(); waiting && r.have(run, target) {
 				r.count(metrics.StatelogLingerYields)
