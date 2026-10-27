@@ -764,7 +764,7 @@ sequenceDiagram
     N->>C: the launch writes the record, the seat anchor, and the box's notes
     P->>C: steer_turn{turn_id, note} — filed sealed, by the asking node
     C-->>P: accepted → outcome "pending", reads "next_step"
-    B->>C: the run's CLI takes the note between its steps (where it takes notes)
+    B->>C: the run's CLI takes the note between its steps (Claude Code: after a tool batch, or at its finish)
     C-->>B: recorded read by the run's job
     Note over R: the run finishes, and the turn resumes
     R->>C: the review takes any note still waiting, at its first round
@@ -794,7 +794,13 @@ sequenceDiagram
   notes](code-sandbox.md#notes-to-a-running-run) to its coding CLI, and a CLI
   that takes them there reads a note after its current step; the take is
   recorded on the record by the write that hands it over, so a note is never
-  handed to a model twice.
+  handed to a model twice. **Claude Code** takes them through hooks the run is
+  started with: once every tool call of a batch the main agent made has its
+  result (`tool_batch`) — the model reads the note after those results — and
+  as the run is about to finish (`finish`), when a note continues the turn and
+  the run's result is the answer given after it. A subagent's batch takes
+  nothing, because a note handed to a delegated loop binds that piece of work
+  alone; the note waits for the main agent's next step.
 - **The review's first round.** A note the run never took is read by the
   segment that reviews the run, before its first provider call — so the work
   is always judged against the note.

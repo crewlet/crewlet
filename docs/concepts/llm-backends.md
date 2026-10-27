@@ -154,6 +154,11 @@ vendor's current model (`sonnet`, `opus`, `haiku`) or an exact id
 Claude Code's to decide, as they are at a terminal; see
 [What an entry does not set](#what-an-entry-does-not-set).
 
+A seat's executor run on a Claude Code entry takes a person's notes between its
+own steps, through hooks the run is started with; that needs Claude Code 2.1.163
+or later, and was measured on 2.1.263 and 2.1.310 — see [The executor's run in
+a box](#the-executors-run-in-a-box).
+
 ### OpenAI's models: Codex
 
 ```yaml
@@ -1080,6 +1085,19 @@ on the same channel. Claude Code takes the text with
 configuration the run writes, each from a private file in the box, never from
 argv: see [What a coding agent is told](code-sandbox.md#what-a-coding-agent-is-told).
 
+**A person's notes reach a Claude Code run between its steps.** The run is
+started with `-p` and no prompt, reading its brief on standard input from a
+file in the box — a brief carries every note the turn has read, and one
+argument is capped at 128 KiB — and with `--settings` naming a file of two
+`mcp_tool` hooks, which call the bridge's unlisted `steer_take` tool after each
+batch of the main agent's tool calls and as the run is about to finish. The
+wrapper unsets `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since
+either switches those hooks off. Measured on Claude Code 2.1.263 and 2.1.310;
+it needs 2.1.163 or later. A CLI run on this host gets no hooks: the engine's
+own loop puts a note before the next run it opens, so a phase here reads one
+only at its loop's run boundaries. See [Claude Code's
+hooks](code-sandbox.md#claude-codes-hooks).
+
 **The engine's correctives do not reach the run.** The rounds are the CLI's
 own, so the engine's tool loop never sees one end in prose and cannot ask the
 model again: a run whose model writes its report as text instead of calling
@@ -1110,9 +1128,11 @@ seat's *live* tool set: a tool the coding agent activates mid-run with
 held until the CLI has re-read the list, up to two seconds.
 
 What the bridge owes a detached run's calls, each one, is what a phase owes its
-own — less the rounds, the terminator, the per-request budget and a person's
-notes, which belong to a loop the box's CLI runs itself and are settled when the
-run is collected and its turn resumes:
+own — less the rounds, the terminator and the per-request budget, which belong
+to a loop the box's CLI runs itself and are settled when the run is collected
+and its turn resumes (a person's notes reach the run over the bridge too, by a
+tool no model is offered: see [Notes to a running
+run](code-sandbox.md#notes-to-a-running-run)):
 
 - **The seat's fence**, before and after the call. The run outlives the turn
   that launched it; once this node stops holding the seat, or a person asks the

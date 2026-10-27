@@ -173,8 +173,9 @@ func (t *steerTurn) Description() string {
 	return "Send a short note to an agent's turn while it is running. The turn " +
 		"reads it at its next step, as a correction or addition to the work it " +
 		"has in hand, and keeps to it for the rest of the turn: a note sent while " +
-		"the turn's coding run works is read by the review that judges the run " +
-		"and by every run the turn launches after it, and one sent while the run " +
+		"the turn's coding run works reaches the run between its steps where its " +
+		"coding CLI takes notes there (Claude Code does), and is read by the review " +
+		"that judges the run and by every run the turn launches after it; one sent while the run " +
 		"waits on a person's answer is read once the turn resumes. Use it to " +
 		"redirect work you can see going the wrong way; for anything longer than " +
 		"a paragraph, or for work the turn has not started, write on the work " +

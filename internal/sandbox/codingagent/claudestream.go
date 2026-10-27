@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -30,12 +31,24 @@ import (
 // through redaction. Thinking is not shown either: it is the model's working,
 // not what the run did. A message type this build does not know is skipped,
 // because a CLI release adds them (the SDK's union has dozens).
+//
+// ONE SYSTEM LINE IS SHOWN: the line the run's own hooks print when they hand
+// its model a person's note ([ClaudeHookAnswer]'s transcript line), which the
+// CLI streams as `system/informational`, its content `<event> says: <line>`
+// (measured on 2.1.263 and 2.1.310), and which becomes a `[steer]` line — the
+// one place a person watching the run sees the note arrive. Every other system
+// line — the session's init, a retry, a hook's own start and end — is skipped,
+// as before.
 
 // claudeEvent is the part of one stream message this decoder reads: the
 // result message's fields, which the last line carries, and a message's
 // content, which every assistant and user line does.
 type claudeEvent struct {
 	claudeResult
+	// Content is a system line's text — an informational line's, which is
+	// the only one read ([claudeSteerLine]). Raw, because a system subtype
+	// this build does not know may carry anything there.
+	Content json.RawMessage `json:"content"`
 	Message struct {
 		// Content is an array of blocks on an assistant message and on a
 		// tool result's user message, and a plain string on a user
@@ -152,6 +165,10 @@ func (d *claudeEvents) Line(line []byte) {
 		}
 	}
 	switch ev.Type {
+	case "system":
+		if line, ok := claudeSteerLine(ev.Subtype, ev.Content); ok {
+			d.transcript.add(line)
+		}
 	case "assistant":
 		d.count(ev.Message.ID, ev.Message.Usage)
 		for _, block := range claudeBlocks(ev.Message.Content) {
@@ -203,6 +220,34 @@ func (d *claudeEvents) Entries() []string { return d.transcript.take() }
 
 func (d *claudeEvents) Result() sandbox.Result {
 	return sandbox.Result{Transcript: d.transcript.String()}
+}
+
+// claudeSteerPrefix is how the CLI opens the informational line a hook of the
+// run's own prints — the event that fired it and the line's own opening
+// ([ClaudeHookAnswer]) — and which events those are.
+var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
+	claudeEventFinish + `) says: crewlet: `)
+
+// claudeSteerLine is the transcript line for a system message of subtype, its
+// content raw: `[steer]` and what the run's own hook said, for the line it
+// prints as it hands the model a note, and nothing for any other.
+func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
+	if subtype != "informational" {
+		return "", false
+	}
+	var content string
+	if json.Unmarshal(raw, &content) != nil {
+		return "", false
+	}
+	loc := claudeSteerPrefix.FindStringIndex(content)
+	if loc == nil {
+		return "", false
+	}
+	said := firstLine(content[loc[1]:], transcriptDetailLimit)
+	if said == "" {
+		return "", false
+	}
+	return "[steer] " + said, true
 }
 
 // claudeBlocks is a message's content as blocks; a plain-string content (a

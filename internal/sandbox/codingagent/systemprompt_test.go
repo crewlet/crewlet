@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -163,10 +164,12 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 
-	// The stand-in records each argument on a line of its own and prints a
-	// result, from the shim directory the wrapper puts first on PATH.
-	argv := p.WorkDir() + "/argv"
+	// The stand-in records each argument on a line of its own, and what it
+	// read on stdin, and prints a result, from the shim directory the wrapper
+	// puts first on PATH.
+	argv, stdin := p.WorkDir()+"/argv", p.WorkDir()+"/stdin"
 	fake := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" + argv + "'\n" +
+		"cat > '" + stdin + "'\n" +
 		`echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'` + "\n"
 	if err = box.WriteFile(t.Context(), p.BinDir()+"/claude", []byte(fake)); err != nil {
 		t.Fatalf("write the stand-in: %v", err)
@@ -195,8 +198,9 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 		t.Fatalf("the stand-in recorded nothing: %v", err)
 	}
 	lines := strings.Split(strings.TrimSuffix(string(args), "\n"), "\n")
-	if len(lines) < 2 || lines[0] != "-p" || lines[1] != "fix the flake" {
-		t.Fatalf("the CLI's prompt is not the task alone: %q", lines)
+	if prompt, err := os.ReadFile(stdin); len(lines) < 1 || lines[0] != "-p" ||
+		err != nil || string(prompt) != "fix the flake" {
+		t.Fatalf("the CLI's prompt is not the task alone: argv %q, stdin %q (%v)", lines, prompt, err)
 	}
 	named := ""
 	for i, arg := range lines {
@@ -217,5 +221,62 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	text, err := os.ReadFile(named)
 	if err != nil || !strings.HasPrefix(string(text), seatSystem) || strings.Contains(string(text), "the last run's") {
 		t.Errorf("the file the CLI read holds %q (%v), want this run's system text", text, err)
+	}
+}
+
+// THE STANDING INSTRUCTION ABOUT NOTES IS GIVEN EXACTLY WHEN A RUN READS THEM:
+// to a run whose launch wired it to its turn's notes and whose CLI takes them
+// between its steps, after the report instruction — and to no other. Told to a
+// run its launch gave nothing to ask for (the assistant's deep work), or to one
+// whose CLI is not taught to take notes yet, it would describe a channel that
+// never opens.
+//
+// Mutation: append the instruction whenever Steer is set and the OpenCode and
+// unreading rows go red; drop the reader's check and so do they.
+func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		runner *codingagent.Runner
+		steer  sandbox.SteerWiring
+		want   bool
+	}{
+		"claude code, wired to its notes": {codingagent.NewClaudeCode(), steerWiring, true},
+		"claude code, wired to none":      {codingagent.NewClaudeCode(), sandbox.SteerWiring{}, false},
+		"a CLI that reads no notes":       {codingagent.New(unreading{codingagent.ClaudeCode{}}), steerWiring, false},
+		"opencode, not taught to yet":     {codingagent.NewOpenCode(), steerWiring, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b, system, _ := systemOfRun(t, tc.runner, sandbox.RunRequest{
+				System: seatSystem, Brief: "fix the flake", Steer: tc.steer,
+			})
+			at := strings.Index(system, codingagent.SteerInstruction)
+			if got := at >= 0; got != tc.want {
+				t.Fatalf("the instruction is given: %v, want %v:\n%s", got, tc.want, system)
+			}
+			if tc.want && at < strings.Index(system, paths(b).Findings()) {
+				t.Errorf("the note instruction precedes the report instruction:\n%s", system)
+			}
+		})
+	}
+}
+
+// unreading is a CLI that takes no notes: Claude Code's with its ReadsNotes
+// hidden, as a CLI not taught to would be.
+type unreading struct{ codingagent.CLI }
+
+// THE INSTRUCTION QUOTES THE HEADING EVERY NOTE OPENS WITH, which is the agent
+// layer's to render (prompts.SteerMessage) and which this package cannot
+// import: a model told notes open one way and handed one that opens another
+// cannot tell a note from text imitating one.
+//
+// Mutation: reword either heading and this goes red.
+func TestTheStandingInstructionQuotesTheHeadingANoteOpensWith(t *testing.T) {
+	t.Parallel()
+	rendered := prompts.SteerMessage("<name>", "x")
+	heading, _, _ := strings.Cut(rendered, "\n")
+	if !strings.Contains(codingagent.SteerInstruction, `"`+heading+`"`) {
+		t.Fatalf("the instruction does not quote the heading a note opens with (%q):\n%s",
+			heading, codingagent.SteerInstruction)
 	}
 }

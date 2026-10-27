@@ -159,6 +159,15 @@ type CLI interface {
 // resumer is a CLI that continues a session an earlier run reported.
 type resumer interface{ Resumes() bool }
 
+// noteReader is a CLI that takes a person's notes to its run's turn between its
+// own steps, where its launch wires it to them ([sandbox.RunRequest.Steer]).
+//
+// OPTIONAL, as [resumer] is, because a CLI is taught to read notes in its own
+// way — hooks, a plugin — and one not taught yet must not be claimed to: the
+// standing instruction that tells a model notes arrive ([SteerInstruction]),
+// and the warning that a run never asked for any, both follow it.
+type noteReader interface{ ReadsNotes() bool }
+
 // Output is how the wrapper connects a CLI's standard streams in the box —
 // where its stdout lands, what its stdin reads — and how its result is read
 // back.
@@ -188,6 +197,14 @@ type Output struct {
 	// brief on stdin arrived byte for byte. Unset, the CLI's stdin is
 	// /dev/null, so a headless agent can never block waiting for input.
 	BriefOnStdin bool
+
+	// Unset is every variable the wrapper removes from the CLI's environment
+	// before it starts: one that, from wherever it came — the seat's
+	// role.sandbox.env, the image, a profile the login shell sources —
+	// switches off something the run depends on. Removed IN the wrapper,
+	// after the login shell has sourced its profile, because that is the
+	// one place every source has already been read.
+	Unset []string
 }
 
 // Runner drives one CLI through the detached lifecycle.
@@ -235,6 +252,14 @@ func New(cli CLI) *Runner {
 // Name is the coding agent's config name.
 func (r *Runner) Name() string { return r.cli.Name() }
 
+// ReadsNotes reports whether this runner's CLI takes a person's notes between
+// its steps — see [noteReader]. The coordinator asks it before it says a run
+// that succeeded never asked for its notes (internal/sandbox).
+func (r *Runner) ReadsNotes() bool {
+	reader, ok := r.cli.(noteReader)
+	return ok && reader.ReadsNotes()
+}
+
 // Install prepares the box: the artefact directory and the ask shim.
 //
 // The CLI itself is NOT installed here — it ships in the image, which is what
@@ -260,15 +285,17 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 //
 // A reused box still carries the prior run's done marker, result, findings and
 // ask file. Without clearing them the completion poll fires immediately on the
-// stale marker and Collect reads the old result. Its brief and system text go
-// too: a run's instructions are its own, and a file this run writes is then
-// always created fresh, at the mode a backend creates a file with. THE
+// stale marker and Collect reads the old result. Its brief, system text and
+// settings go too: a run's instructions are its own — a previous job's hooks
+// name a bridge session that job's end closed — and a file this run writes is
+// then always created fresh, at the mode a backend creates a file with. THE
 // CHECKOUT IS LEFT INTACT — that disk state is the continued context, and it is
 // the whole reason to reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
-	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System()}
+	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System(),
+		p.ClaudeSettings()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -309,7 +336,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
 	// system text from.
-	req.System = finalSystem(req.System, paths)
+	req.System = finalSystem(req.System, paths, req.Steer.Set() && r.ReadsNotes())
 	configPath, err := r.cli.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -355,6 +382,11 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 		stdin = shellQuote(paths.Brief())
 	}
 	var b strings.Builder
+	// A STATEMENT OF ITS OWN, before the CLI's: an assignment prefix on the
+	// command could only add to its environment, never remove from it.
+	if len(out.Unset) > 0 {
+		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
+	}
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
 		inner, stdin, shellQuote(out.Stdout), shellQuote(paths.Err()))
 	if out.Result != "" && out.Result != out.Stdout {
@@ -366,18 +398,26 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 }
 
 // finalSystem appends the report instruction, addressed at THIS box, to the
-// run's standing instructions.
+// run's standing instructions — and, for a run whose CLI takes a person's notes
+// between its steps (notes), what a note is ([SteerInstruction]).
 //
 // Composed here rather than at the launch because the findings path is a
 // property of the box the run lands in, which the caller does not know when it
-// builds the request. On the system side, because it is not part of the task:
-// it is how every run ends, whatever it was asked.
-func finalSystem(system string, paths Paths) string {
-	findings := strings.TrimSpace(FindingsInstruction(paths.Findings()))
-	if system = strings.TrimSpace(system); system == "" {
-		return findings
+// builds the request — and whether the CLI reads notes is the runner's to know.
+// On the system side, because neither is part of the task: each is how every
+// such run works, whatever it was asked. The note instruction only where a note
+// can arrive: told to a run whose CLI takes none, or a run wired to none, it
+// would describe a channel that never opens.
+func finalSystem(system string, paths Paths, notes bool) string {
+	parts := make([]string, 0, 3)
+	if system = strings.TrimSpace(system); system != "" {
+		parts = append(parts, system)
 	}
-	return system + "\n\n" + findings
+	parts = append(parts, strings.TrimSpace(FindingsInstruction(paths.Findings())))
+	if notes {
+		parts = append(parts, SteerInstruction)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // withShimPath prepends the box's shim directory to PATH for one command.

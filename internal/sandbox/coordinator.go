@@ -1353,9 +1353,56 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	if ended {
 		result = endedAtDeadline(result, run.Deadline)
 	}
+	c.warnNotesUnasked(ctx, run, result)
 	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
 	// so the phase record, the park and the resumed executor carry one text.
 	return c.fitText(ctx, run, result), ended, nil
+}
+
+// noteReader is a [Runner] whose CLI takes a person's notes to its run's turn
+// between its own steps (internal/sandbox/codingagent's Runner, for a CLI it
+// has taught to). Optional, as a runner that reads none — a CLI not yet taught,
+// a test's — says nothing about notes at all.
+type noteReader interface{ ReadsNotes() bool }
+
+// warnNotesUnasked says, as steer_reader_never_ran, that a run which succeeded
+// never once asked for its turn's notes ([RunSteer.Pulled]) — what tells a run
+// whose CLI's reading was switched off from one that had nothing to read.
+//
+// A RELIABLE SIGNAL, for a CLI that reads notes: a Claude Code run that
+// finishes reaches its Stop hook, which asks whatever waits. So a run that
+// succeeded without asking is one whose hooks never ran — a managed policy
+// that allows only managed hooks or disables them all, or a release that
+// ignored the run's settings file — and every note sent while it worked waited
+// for its review, which a person sending one is told reads at its next step.
+// Only for a run whose record names its seat: that anchor is what a launch
+// wired to its turn's notes writes ([LaunchRequest.SteerSeat]), and a run its
+// launch gave nothing to ask for is no sign of anything. Logged on the node
+// that collects, which reads the record the claim took.
+func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, result Result) {
+	if !result.Success || len(run.Steer.Seat) == 0 || run.Steer.Pulled == run.LaunchID {
+		return
+	}
+	manager := c.mgr()
+	if manager == nil {
+		return
+	}
+	runner, err := manager.RunnerFor(run.CodingAgent)
+	if err != nil {
+		return
+	}
+	if reader, ok := runner.(noteReader); !ok || !reader.ReadsNotes() {
+		return
+	}
+	log.WarnContext(ctx, "steer_reader_never_ran", "turn_id", run.TurnID,
+		"launch_id", run.LaunchID, "agent", run.CodingAgent,
+		"detail", "the run succeeded and its coding CLI never asked for its turn's notes, so a "+
+			"note sent while it worked waited for its review instead of reaching it between its "+
+			"steps. Something in the box switched the CLI's reading off: for Claude Code, a "+
+			"managed policy that allows only managed hooks (allowManagedHooksOnly, "+
+			"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a "+
+			"release older than 2.1.163, the oldest that reads every field of the run's "+
+			"settings file, whose print mode ignores a file it cannot validate without a word")
 }
 
 // readBox is the part of a collection that touches the box, made on the node

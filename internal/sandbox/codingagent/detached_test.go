@@ -45,7 +45,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	for _, path := range []string{
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.Ask(), p.MCPConfig(), p.Findings(), p.BinDir(), p.AskShim(),
-		p.Brief(), p.System(),
+		p.Brief(), p.System(), p.ClaudeSettings(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -95,12 +95,14 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 	// and the redirections around them.
 	script := lastBackground(t, b)
 	for _, want := range []string{
-		"< /dev/null", // a headless agent must never block on input
-		p.Stream(),    // stdout is the event stream
-		p.Result(),    // its last line is the result
-		p.Err(),       // stderr is the transcript fallback
-		p.ExitCode(),  // the crash explanation
-		p.Done(),      // the completion signal
+		// A headless agent must never block on input: its stdin is the
+		// brief's file, which ends.
+		`< '\''` + p.Brief() + `'\''`,
+		p.Stream(),   // stdout is the event stream
+		p.Result(),   // its last line is the result
+		p.Err(),      // stderr is the transcript fallback
+		p.ExitCode(), // the crash explanation
+		p.Done(),     // the completion signal
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("the launch script is missing %q:\n%s", want, script)
@@ -139,8 +141,8 @@ func TestTheReportInstructionForThisBoxIsAStandingInstruction(t *testing.T) {
 	p := paths(b)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "fix the flake"})
 
-	if !strings.Contains(script, "'fix the flake'") {
-		t.Fatalf("the brief was lost:\n%s", script)
+	if brief, err := b.ReadFile(t.Context(), p.Brief()); err != nil || string(brief) != "fix the flake" {
+		t.Fatalf("the brief was lost: %q (%v)", brief, err)
 	}
 	system, err := b.ReadFile(t.Context(), p.System())
 	if err != nil || !strings.Contains(string(system), p.Findings()) {
@@ -178,8 +180,9 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	}
 	for _, want := range []string{
 		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask(),
-		// The previous run's instructions, which are not this run's.
-		p.Brief(), p.System(),
+		// The previous run's instructions, which are not this run's — its
+		// hooks name a bridge session its end closed.
+		p.Brief(), p.System(), p.ClaudeSettings(),
 	} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)

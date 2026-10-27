@@ -794,6 +794,20 @@ func (m *scriptedModel) seen() []string {
 	return append([]string(nil), m.calls...)
 }
 
+// promptsOf is the transcript every request of phase ran on, as the CLI read
+// it on stdin — where a note the turn read before the phase opens it.
+func (m *scriptedModel) promptsOf(phase string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for i, seen := range m.calls {
+		if seen == phase {
+			out = append(out, m.prompts[i])
+		}
+	}
+	return out
+}
+
 // systemPrompts is what the model was actually shown, per request.
 func (m *scriptedModel) systemPrompts() []string {
 	m.mu.Lock()

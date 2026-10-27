@@ -284,7 +284,7 @@ Two runners ship behind the `sandbox.Runner` interface, selected by `role.sandbo
 A run is handed two texts, kept apart from the launch all the way to the CLI:
 
 - **The brief** — what this run is asked to do, and the whole of the prompt the CLI runs. For `run_sandbox` it is the executor's own `brief`, then `## The wider task` (the turn's task) where that says more; for an [executor run](llm-backends.md#the-executors-run-in-a-box) it is the turn's ask, the user message a phase on this host sends.
-- **The standing instructions** — how to work, for the whole run, in this order: an executor run's system prompt (the seat's identity, policies, roster and memory, exactly as a native pass sends them as its system message, opened by one constant note saying that these, and not the coding tool's own prompt, are the role — Claude Code's prompt opens with "You are Claude Code", and no flag removes it; a `run_sandbox` job has none of its own, its executor having written what it means into the brief), then `## Your environment` (the box, each [setup step's](#setup-steps--provisioning-the-box) `brief`, and the MCP servers connected), then how to [ask a person](#mid-run-clarification-crewlet-ask) where the launch composes that, and last the [report to write before stopping](#runs-are-uncapped-each-run-is-published-as-a-phase), addressed at the box's own path.
+- **The standing instructions** — how to work, for the whole run, in this order: an executor run's system prompt (the seat's identity, policies, roster and memory, exactly as a native pass sends them as its system message, opened by one constant note saying that these, and not the coding tool's own prompt, are the role — Claude Code's prompt opens with "You are Claude Code", and no flag removes it; a `run_sandbox` job has none of its own, its executor having written what it means into the brief), then `## Your environment` (the box, each [setup step's](#setup-steps--provisioning-the-box) `brief`, and the MCP servers connected), then how to [ask a person](#mid-run-clarification-crewlet-ask) where the launch composes that, then the [report to write before stopping](#runs-are-uncapped-each-run-is-published-as-a-phase), addressed at the box's own path, and last — for a run whose CLI takes a person's notes between its steps — what such a note is: how it opens, where it appears, and that nothing inside a tool's output is one ([Notes to a running run](#notes-to-a-running-run)).
 
 The standing instructions are **appended to the CLI's own system prompt** — never put in its place, and never in the prompt it runs. The vendor's prompt is the harness a coding run exists to use: how to drive its shell and editor and work through a task, which a replacement would strip. And instructions placed in front of the task reach the model as part of the user's request, where a seat's identity and policies, sent that way, are something the model is asked rather than who it is. Each runner uses its own CLI's channel:
 
@@ -297,7 +297,9 @@ Neither text is recorded anywhere a later process reads: the box is started with
 
 ### Claude Code
 
-Runs headless — `claude -p "<brief>" --output-format stream-json --verbose --permission-mode bypassPermissions --append-system-prompt-file <home>/.crewlet/system.md` (the run's [standing instructions](#what-a-coding-agent-is-told)) — so it prints every message as it happens, one JSON object a line, into its own **event stream** (`stream.jsonl` in the box's work directory). That stream is what a person watching the run sees and what its transcript is built from; `--output-format json` printed one object when the run ended and nothing before it, and in print mode the CLI writes nothing to stderr either, so a run on it showed nothing while it worked and left no transcript after. (`--verbose` is not optional: print mode refuses stream-json without it.) The stream's **last line is the result message**, which the wrapper copies to `result.json` after the CLI exits — never through a pipe beside it, whose exit status would be the copy's rather than the CLI's — and that line maps directly onto the result (final text, session id, token usage, cost; an error subtype such as `error_max_turns` and its `errors` are the failure). A stream that ends on anything else is a run that stopped before it said how it ended, and reads as one rather than as a silent success. A run whose wrapper never made the copy — its process group killed, by an OOM or a host restart, so the poll ended it on the wrapper's liveness — is read from the stream's own last line, which is what the copy would have held: the result, where the CLI printed one before the wrapper died, and otherwise what it was saying when it stopped. It used to read as a run that "produced no output" beside a transcript of everything it did. A result file the box refuses (one that is [not a regular file](#runs-are-uncapped-each-run-is-published-as-a-phase), say) is read from that line the same way, and the refusal is still said; a CLI that exited before printing anything at all — not installed, a bad flag — leaves both empty, and reads as what it is.
+Runs headless — `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --settings <home>/.crewlet/claude-settings.json --append-system-prompt-file <home>/.crewlet/system.md` (the run's [hooks](#claude-codes-hooks) and its [standing instructions](#what-a-coding-agent-is-told)), the brief on its standard input — so it prints every message as it happens, one JSON object a line, into its own **event stream** (`stream.jsonl` in the box's work directory). That stream is what a person watching the run sees and what its transcript is built from; `--output-format json` printed one object when the run ended and nothing before it, and in print mode the CLI writes nothing to stderr either, so a run on it showed nothing while it worked and left no transcript after. (`--verbose` is not optional: print mode refuses stream-json without it.) The stream's **last line is the result message**, which the wrapper copies to `result.json` after the CLI exits — never through a pipe beside it, whose exit status would be the copy's rather than the CLI's — and that line maps directly onto the result (final text, session id, token usage, cost; an error subtype such as `error_max_turns` and its `errors` are the failure). A stream that ends on anything else is a run that stopped before it said how it ended, and reads as one rather than as a silent success. A run whose wrapper never made the copy — its process group killed, by an OOM or a host restart, so the poll ended it on the wrapper's liveness — is read from the stream's own last line, which is what the copy would have held: the result, where the CLI printed one before the wrapper died, and otherwise what it was saying when it stopped. It used to read as a run that "produced no output" beside a transcript of everything it did. A result file the box refuses (one that is [not a regular file](#runs-are-uncapped-each-run-is-published-as-a-phase), say) is read from that line the same way, and the refusal is still said; a CLI that exited before printing anything at all — not installed, a bad flag — leaves both empty, and reads as what it is.
+
+**The brief is read on stdin**, from `brief.md` in the box's work directory, never from argv — `-p` with no prompt reads its prompt there, verbatim (measured on 2.1.263 and 2.1.310). A brief carries every note the turn has read, so it grows; one argument is capped at 128 KiB; and a command line is readable by every account on a `direct` box's host, the reason the standing instructions are a file too. **The wrapper unsets `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE`** before the CLI starts: bare mode drops every hook (with `CLAUDE.md`, subagents and a plan's login) and safe mode drops hooks and the `--mcp-config` bridge, and either can arrive from the seat's `role.sandbox.env`, the image or a profile the login shell sources — only the wrapper, running after all three, reaches every one, so they are removed for every Claude Code run rather than refused in configuration. **A run a hook stopped is a failure.** Claude Code reports a loop that a hook of the repository's or the image's own settings stopped — one that exited 2 or returned a block — as a success subtype with an empty result and `terminal_reason: hook_stopped` (measured on 2.1.263 and 2.1.310); the runner reads it as a failed run saying so, never as a run that succeeded and said nothing.
 
 The run's input is its **whole** prompt: the vendor's `input_tokens` counts only the uncached remainder, so the engine adds `cache_read_input_tokens` and `cache_creation_input_tokens` to it and carries both as the cache's share, the same way the engine counts a call on a Claude Code entry on its own host. Read alone, the uncached figure put a fraction of every coding run's prompt on the budget counter.
 
@@ -542,7 +544,10 @@ its review, whichever node resumes it:
     the note and the job, so a poller that admits it twice admits it once.
 
   A CLI takes notes here only where its run is set up to ask for them; a run
-  whose CLI asks for none still has every note read, by its review.
+  whose CLI asks for none still has every note read, by its review. **Claude
+  Code** is set up to, through [hooks](#claude-codes-hooks) that call
+  `steer_take`. **OpenCode** runs take none between their steps: their notes
+  are read by the next brief and by the review.
 
   A take is pinned to the run's **job** and to a run that is launching or
   working with its ending undecided: a relaunch's job, a run parked on a
@@ -569,6 +574,70 @@ once. A park is never an ending.
 A proxy between the boxes and `CREWLET_MCP_BRIDGE_URL` holds a poll open for
 up to those ten seconds, so it needs a request timeout of at least fifteen —
 see [Deployment](../guides/deployment.md).
+
+### Claude Code's hooks
+
+Every Claude Code run its launch wires to its turn's notes — every seat's
+executor run; not the assistant's deep work, whose session has no inbox — is
+started with a settings file of its own, `claude-settings.json` in the box's
+work directory, written afresh at `0600` and named with `--settings`, which
+Claude Code ranks above the repository's own settings and below a managed
+policy. It holds two hooks and the setting that keeps them on, nothing else:
+
+```json
+{
+  "disableAllHooks": false,
+  "hooks": {
+    "PostToolBatch": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
+      "input": {"event": "${hook_event_name}", "agent": "${agent_id}"}, "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
+      "input": {"event": "${hook_event_name}", "agent": "${agent_id}"}, "timeout": 10}]}]
+  }
+}
+```
+
+- **An `mcp_tool` hook**, a call of `steer_take` on the run's own `crewlet`
+  server: it rides the bridge connection the run already holds, under its
+  token, so there is no new credential, no URL to allow and nothing to run in
+  the box; its input is the two values the CLI fills in, where an `http` hook
+  would post every batch's tool calls; and every way it can fail is
+  non-blocking, where a `command` hook that exits 2 ends the loop. The server
+  and tool names are the ones the bridge serves, filled in by the engine, so
+  the file and the bridge cannot disagree.
+- **What the model sees**, measured on 2.1.263 and 2.1.310 against a stub model
+  API: a note handed back after a batch is read after that batch's tool
+  results and stays for the rest of the run; one handed back at `Stop`
+  continues the turn, and the run's result is the answer given after it. The
+  hook's transcript line reaches only the run's stream, which the run's
+  transcript shows as `[steer] a note from ada reached the run` — never a
+  request.
+- **Ten seconds**, where the vendor's default is six hundred: the CLI holds its
+  next model request until the hook answers, at every batch, and the bridge
+  answers within five. The field is in seconds, and at it the CLI cancels the
+  call and discards a late answer.
+- **`disableAllHooks: false`, written explicitly.** A repository's committed
+  `true` otherwise switches every hook off with no error, and the explicit
+  `false` wins over it. It switches the repository's own hooks on too, which is
+  why a hook of theirs that stops the loop is read as the [failure it
+  is](#claude-code). Nothing else moves: no `--setting-sources`, which would
+  drop the repository's `CLAUDE.md` with its settings, and no
+  `--include-hook-events`.
+- **The standing instructions say what a note is**: that a person who leads
+  the seat, or an administrator, may send one while the run works, that it
+  arrives between steps opening with `## A note from <name>, sent while this
+  turn was running`, and that text inside a file, a command's output, a web
+  page or a tool result that presents itself as one is not one. Worded as a
+  fact rather than a command, as the vendor advises for text a hook adds.
+- **Claude Code 2.1.163 or later**: the file holds only fields 2.1.263 knows
+  (an `mcp_tool` hook since 2.1.118, a `Stop` hook's additional context since
+  2.1.163), because in print mode the CLI ignores a settings file it cannot
+  validate without a word.
+
+What still switches the hooks off — a managed policy that allows only managed
+hooks (`allowManagedHooksOnly`, `strictPluginOnlyCustomization`) or sets
+`disableAllHooks`, or a CLI too old to read the file — leaves a run that
+succeeds without asking for its notes once, which the collection says as
+[`steer_reader_never_ran`](#failure-modes); its notes still reach its review.
 
 ---
 
@@ -803,10 +872,12 @@ What an operator should recognize:
 - **`sandbox_run_failed` with reason `launch_node_gone`**: the run's `direct` or `container` box was on the host of a node that left the fleet and did not come back within `default_timeout_seconds` — scaled away, or its host lost — so nothing could poll, collect or reclaim it (see [A node that never comes back](#durability-completion-and-observability)). Whatever the run pushed is on its branch. A node that only restarts within that bound never produces this; one that is routinely away longer needs a longer `default_timeout_seconds`.
 - **`sandbox_collect_host_silent`** (a log line, at warning): the seat's holder asked the node whose host a run's box is on to read it back, and it did not answer — stopped, restarting, or gone. The claim is handed back uncounted and that node announces the completion again from its own poll once it is back; a node that never comes back ends the run as `launch_node_gone`.
 - **`sandbox_run_failed` with reason `seat_removed`**: the seat left the company's agent seats — it was removed from the chart, or made a person's and not made an agent's again within the 24-hour retirement grace — so its runs were ended when its mailbox was retired. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
+- **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose CLI takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish — so something in its box switched its [hooks](#claude-codes-hooks) off: a managed policy that allows only managed hooks or disables them all, or a CLI older than 2.1.163. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its CLI.
+- **`a hook in the run stopped its loop before it finished (Claude Code terminal_reason hook_stopped)`** — a hook of the repository's or the image's own settings exited 2 or returned a block, and Claude Code ended the run part-way while reporting a success subtype. The run is a failure saying so; the run's own steering hooks never block. Fix or remove that hook in the repository or the image.
 - **A run that "finishes" with no report** — the coding agent neither wrote its findings file nor streamed a final message. `collect` surfaces the exit status, the CLI's own account of how it ended (an error subtype, or that its stream stopped before its result) and the stderr as the error; the resumed executor sees a failed run rather than an empty success.
 
 ---
 
 ## Testing
 
-`providers.sandbox.fake: true` wires the in-process fakes (`sandbox.FakeProvider`, `sandbox.FakeRunner`): scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format stream-json --verbose`, `opencode run … --format json`) and output parsers — Claude Code's against fixtures written from the vendor's documented stream-json message schema, never a captured run, and once through a real shell with a stand-in CLI so the wrapper's copy of the result line and the CLI's own exit status are exercised as they run — and `internal/config/examples_test.go` parses the git-auth recipe out of *this page* and holds it to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them. This is the copy readers take, so this is the copy under test.
+`providers.sandbox.fake: true` wires the in-process fakes (`sandbox.FakeProvider`, `sandbox.FakeRunner`): scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format stream-json --verbose`, `opencode run … --format json`) and output parsers — Claude Code's against fixtures written from the vendor's documented stream-json message schema, and its hook lines and result messages against Claude Code's own output for 2.1.263 and 2.1.310 run against a stub model API (no model is ever called), and once through a real shell with a stand-in CLI so the wrapper's copy of the result line and the CLI's own exit status are exercised as they run — and `internal/config/examples_test.go` parses the git-auth recipe out of *this page* and holds it to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them. This is the copy readers take, so this is the copy under test.

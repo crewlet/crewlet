@@ -7,7 +7,9 @@
 // decodes the stream and reads the result,
 // and an ask overlay surfaces a mid-run clarification. This package owns that
 // plumbing so each runner supplies only what is its own: its invocation, its
-// config, where its output lands, and how its stream and result are read.
+// config, where its output lands, and how its stream and result are read —
+// and, for a CLI taught to, how a person's notes to its run's turn reach it
+// between its own steps (steer.go; Claude Code's hooks, [ClaudeCode]).
 //
 // # A run's output is read as a stream
 //
@@ -112,6 +114,19 @@ func (p Paths) Ask() string { return p.WorkDir() + "/ask.json" }
 
 // MCPConfig is where the scoped MCP surface is rendered.
 func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
+
+// ClaudeSettings is where a Claude Code run's own settings file is written —
+// the hooks that hand its main agent a person's notes between its steps
+// ([ClaudeCode.WriteConfig]) — named on its command line with `--settings`.
+//
+// BESIDE mcp.json, never in the checkout's `.claude/`: the checkout is the
+// repository's, which the run edits and a commit carries, and a file there would
+// replace the repository's own project settings rather than sit above them.
+// `--settings` adds a layer the CLI ranks above the repository's settings and
+// below a managed policy, so the repository keeps its own and the run's hooks
+// are there whatever it holds. Under WorkDir, so a `git clean` in the brief
+// cannot remove it from under the run.
+func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
 
 // Findings is the agent's authoritative final report.
 //

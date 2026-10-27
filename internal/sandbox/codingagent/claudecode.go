@@ -33,9 +33,53 @@ var ClaudeCodeCredentialEnv = []string{
 // ClaudeCode drives Claude Code headless.
 //
 // It reaches its model through the run ENVIRONMENT rather than a config file,
-// which is why WriteConfig here only ever renders MCP servers: the credential
-// comes from providers.llm via the sandbox env, and duplicating it into a file
-// inside the box would put the secret somewhere the agent can read it back.
+// which is why WriteConfig here renders only MCP servers and hooks: the
+// credential comes from providers.llm via the sandbox env, and duplicating it
+// into a file inside the box would put the secret somewhere the agent can read
+// it back.
+//
+// # A person's notes, between its steps
+//
+// A run whose launch wired it to its turn's notes ([sandbox.RunRequest.Steer])
+// is started with a settings file of its own ([Paths.ClaudeSettings]) holding
+// two hooks, after each batch of the main agent's tool calls (PostToolBatch)
+// and as it is about to finish (Stop), each a call of the bridge's unlisted
+// `steer_take` tool over the run's own MCP connection; the bridge answers with
+// the notes as the hook's additional context, or with nothing. Measured on
+// 2.1.263 and 2.1.310 against a stub model API:
+//
+//   - a note handed back after a batch reaches the model after that batch's tool
+//     results, and stays in the conversation for the rest of the run;
+//   - a note handed back at Stop continues the turn, and the run's result is the
+//     answer the model gives after it;
+//   - the hook's `timeout` is in seconds, and at it the CLI cancels the call and
+//     discards a late answer ([ClaudeHookTimeout]);
+//   - a call the bridge answers with an error makes the CLI re-initialise the
+//     whole MCP server and tell the model its tools are still connecting — so
+//     the bridge answers every take with text, never an error;
+//   - the hook's `systemMessage` reaches only the run's own stream, as a
+//     `system/informational` line the transcript shows ([claudeEvents]), never
+//     a request.
+//
+// THE POSTURE IS THE SETTINGS FILE'S, and two settings beside it would undo it
+// silently. `disableAllHooks` is written false ([claudeSettings]), because a
+// repository's own `true` switches every hook off with no error, and an
+// explicit false wins over it. And the wrapper UNSETS CLAUDE_CODE_SIMPLE and
+// CLAUDE_CODE_SAFE_MODE before the CLI starts ([ClaudeCode.Output]): bare mode
+// drops every hook (with CLAUDE.md, subagents and a plan's login), safe mode
+// drops hooks and the --mcp-config bridge, and either can arrive from the seat's
+// role.sandbox.env, the image, or a profile the login shell sources — of which
+// only the wrapper, running after all three, reaches every one. Unset rather
+// than refused in config for that reason, and for every run, not only one wired
+// to notes: the bridge is every run's tools.
+//
+// NOTHING ELSE MOVES. No --setting-sources, which would drop the repository's
+// CLAUDE.md along with its settings; no --include-hook-events, since the engine
+// counts what the bridge hands over and a hook that stopped the loop is read
+// off the result line. What still switches the hooks off — a managed policy
+// that allows only managed hooks, or a CLI older than 2.1.163, the oldest that
+// reads every field the file holds — leaves a run that succeeded without asking
+// once, which the collection says (internal/sandbox, steer_reader_never_ran).
 type ClaudeCode struct{}
 
 var _ CLI = ClaudeCode{}
@@ -49,10 +93,21 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // Resumes says Claude Code continues a session it reported (`--resume`).
 func (ClaudeCode) Resumes() bool { return true }
 
+// ReadsNotes says Claude Code takes a person's notes between its steps, through
+// the hooks its settings file holds — see [ClaudeCode].
+func (ClaudeCode) ReadsNotes() bool { return true }
+
 // Command builds the headless `claude -p` invocation.
 //
 // Pure and deterministic so the exact flags can be pinned by a test. Budget
 // caps are appended only when set, so a minimal call stays minimal.
+//
+// THE BRIEF IS NOT ON IT: `-p` with no prompt reads the prompt on stdin, which
+// the wrapper points at the brief's file ([ClaudeCode.Output]) — verbatim,
+// measured on 2.1.263 and 2.1.310. A brief carries every note the turn has
+// read, so it grows; one argument is capped at 128 KiB (MAX_ARG_STRLEN); and a
+// command line is readable by every account on a `direct` box's host, the
+// reason [Paths.System] gives for the system text's file.
 //
 // It runs with permissions bypassed, and that is a deliberate consequence of
 // the scoping model rather than an oversight: the box IS the boundary, and
@@ -80,9 +135,14 @@ func (ClaudeCode) Resumes() bool { return true }
 // text, so a run with none runs on the vendor's prompt alone.
 func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string) string {
 	parts := []string{
-		"claude", "-p", shellQuote(req.Brief),
+		"claude", "-p",
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
+	}
+	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps
+	// — only where its launch wired it to them ([ClaudeCode.WriteConfig]).
+	if req.Steer.Set() {
+		parts = append(parts, "--settings", shellQuote(paths.ClaudeSettings()))
 	}
 	// THE EARLIER RUN'S OWN CONVERSATION, carried on with the brief — an
 	// answer, an approval — as its next prompt ([sandbox.RunRequest.Resume]).
@@ -117,12 +177,28 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 	return strings.Join(parts, " ")
 }
 
-// WriteConfig writes the run's system text where [ClaudeCode.Command] names
-// it, and renders the scoped MCP surface — each only when there is one.
+// WriteConfig writes the run's system text and its settings file where
+// [ClaudeCode.Command] names them, and renders the scoped MCP surface — each
+// only when there is one: the settings for a run wired to its turn's notes
+// ([sandbox.RunRequest.Steer]), which every seat's executor run is, and the
+// assistant's deep work is not.
+//
+// The settings file is written afresh, at the mode a box writes every file with
+// (0600 on a local box): the run's artefacts are cleared before it starts
+// ([Runner.ClearArtifacts]), so a previous run's wider file is never kept.
 func (ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
 	if req.System != "" {
 		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
 			return "", fmt.Errorf("codingagent: writing the system prompt: %w", err)
+		}
+	}
+	if req.Steer.Set() {
+		settings, err := claudeSteerSettings(req.Steer)
+		if err != nil {
+			return "", fmt.Errorf("codingagent: rendering Claude Code's settings: %w", err)
+		}
+		if err := box.WriteFile(ctx, paths.ClaudeSettings(), settings); err != nil {
+			return "", fmt.Errorf("codingagent: writing Claude Code's settings: %w", err)
 		}
 	}
 	if len(req.MCPServers) == 0 {
@@ -167,16 +243,29 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// Output is where a job writes under stream-json.
+// Output is where a job writes under stream-json, and what it reads.
 //
 // The EVENT STREAM goes to its own file, read as a stream and from its end,
 // and the RESULT is the stream's last line, which the wrapper copies to the
 // result file after the CLI exits — so the result is read whole from a file of
 // one line however long the stream grew. It exits cleanly, so the done marker
 // is its only completion signal and the poll reads nothing of the stream.
+//
+// THE BRIEF ON STDIN, for the reasons [ClaudeCode.Command] gives; and the two
+// variables that switch hooks and the bridge off UNSET before the CLI starts
+// ([claudeSwitchesOff]).
 func (ClaudeCode) Output(paths Paths) Output {
-	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result()}
+	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result(),
+		BriefOnStdin: true, Unset: claudeSwitchesOff}
 }
+
+// claudeSwitchesOff is every variable that, set in a run's environment, starts
+// Claude Code without the hooks and the bridge its run is given: bare mode
+// (CLAUDE_CODE_SIMPLE), which also drops CLAUDE.md, subagents and a plan's
+// login, and safe mode (CLAUDE_CODE_SAFE_MODE), which drops hooks and every
+// --mcp-config server. See [ClaudeCode] for why they are unset rather than
+// refused.
+var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }
@@ -280,7 +369,11 @@ type claudeResult struct {
 	// NumTurns is how many turns the run's agent loop took — one model
 	// call each — on every subtype, a run stopped by its turn cap included.
 	NumTurns int `json:"num_turns"`
-	Usage    *struct {
+	// TerminalReason is why the run's loop ended, beside the subtype:
+	// "completed" for a loop that finished, and [claudeHookStopped] for one a
+	// hook stopped. Absent on a CLI that does not report it.
+	TerminalReason string `json:"terminal_reason"`
+	Usage          *struct {
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
@@ -288,17 +381,35 @@ type claudeResult struct {
 	} `json:"usage"`
 }
 
-// succeeded is whether the run finished its work. BOTH FIELDS MUST SAY SO: a
-// run that hit its turn cap reports no is_error but did not finish, and one
-// whose model call failed is a success subtype carrying is_error.
+// claudeHookStopped is the terminal reason of a run whose loop a hook stopped.
+const claudeHookStopped = "hook_stopped"
+
+// succeeded is whether the run finished its work. EVERY FIELD MUST SAY SO: a
+// run that hit its turn cap reports no is_error but did not finish, one whose
+// model call failed is a success subtype carrying is_error, and one a hook
+// stopped is a success subtype with no error and an empty result, its loop
+// ended part-way ([claudeHookStopped]; measured on 2.1.263 and 2.1.310, a
+// repository's PostToolBatch hook that exited 2). Read as it reports itself, a
+// hook's stop was a run that succeeded and said nothing.
 func (r claudeResult) succeeded() bool {
-	return (r.Subtype == "" || r.Subtype == "success") && !r.IsError
+	return (r.Subtype == "" || r.Subtype == "success") && !r.IsError &&
+		r.TerminalReason != claudeHookStopped
 }
 
 // failure says how a run that did not succeed ended: the subtype that names
 // how, and whatever the message says about why — its errors, or the final
-// text it got as far as.
+// text it got as far as — or, for a loop a hook stopped, that.
 func (r claudeResult) failure() string {
+	if r.TerminalReason == claudeHookStopped {
+		stopped := "a hook in the run stopped its loop before it finished (Claude Code " +
+			"terminal_reason hook_stopped): a hook of the repository's, the image's or the box " +
+			"home's own settings exited 2 or returned a block; the run's own steering hooks " +
+			"never block"
+		if why := strings.TrimSpace(firstNonBlank(strings.Join(r.Errors, "\n"), r.Result)); why != "" {
+			stopped += ": " + why
+		}
+		return stopped
+	}
 	how := r.Subtype
 	if how == "success" {
 		how = ""

@@ -27,7 +27,6 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 		// --verbose, without which print mode refuses stream-json.
 		"--output-format stream-json --verbose",
 		"--permission-mode bypassPermissions", // a prompt would hang a headless run
-		"'fix the flake'",                     // the brief, quoted
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("the invocation is missing %q:\n%s", want, cmd)
@@ -39,7 +38,7 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{Brief: "x"}, codingagent.Paths{}, "")
-	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config"} {
+	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config", "--settings"} {
 		if strings.Contains(cmd, absent) {
 			t.Fatalf("%q was added for an unset value:\n%s", absent, cmd)
 		}
@@ -63,18 +62,6 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("the invocation is missing %q:\n%s", want, cmd)
 		}
-	}
-}
-
-// The brief is operator- and model-authored text; it must not be able to end
-// the quoting and append a command.
-func TestABriefCannotEscapeItsQuoting(t *testing.T) {
-	t.Parallel()
-	cmd := claude().Command(sandbox.RunRequest{
-		Brief: `fix it'; rm -rf / #`,
-	}, codingagent.Paths{}, "")
-	if strings.Contains(cmd, "; rm -rf / #") && !strings.Contains(cmd, `'\''`) {
-		t.Fatalf("the brief escaped its quoting:\n%s", cmd)
 	}
 }
 
