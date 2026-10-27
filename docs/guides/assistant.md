@@ -192,11 +192,14 @@ shape rather than in prose. What a person sees is on the
   `assistant_brief`, charged to the person's and the company's windows like
   any turn's, and its own cap below stops a brief that sets out to read the
   company. Its turns are stamped with prompt version `assistant.brief.v3`.
-- **An earlier brief reads as a note.** A brief card recorded in a shape
-  this version no longer accepts (any brief written before prompt version
-  `assistant.brief.v3`) is read back as a notice, "This answer was written in
-  an earlier format and can no longer be shown. Ask again to see it now.",
-  in the transcript, in a card read and in what the model re-reads.
+- **A card it cannot draw reads as a note.** A stored card in a shape this
+  version's contract refuses (any brief written before prompt version
+  `assistant.brief.v3`, or a newer node's card read by an older one during a
+  rolling upgrade) is read back as a notice, "This answer can't be shown
+  here. Ask again to see it now.", in the transcript, in a card read and in
+  what the model re-reads. Each is logged as `assistant_card_shown_as_notice`
+  (the card id, its type and the reason, never its contents) and counted in
+  `crewlet.assistant.cards.shown_as_notice`.
 
 ## Budgets and limits
 

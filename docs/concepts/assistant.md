@@ -35,8 +35,9 @@ you have anything to do: "Nothing needs you", or how many things do ("2 things
 need you"), counted from the rows below it. Its first line says what the page
 is about. Then, only when something needs you, at most three things to do,
 most pressing first, each an instruction naming its record with one fact on
-why now and one press that opens the record or asks about it; the first is
-marked **Do first**. A quiet line of context follows only when a fact from
+why now and one press that opens the record or asks about it. The first is
+the one to do first and has the main button; when there are two or more, it
+is marked **Do first**. A quiet line of context follows only when a fact from
 elsewhere changes what to do, and then up to two questions you may want to
 ask next. When the screen has one record open (a decision open in the Inbox, a
 task, an agent, an artifact), the row says so, "Brief me on this decision",
@@ -50,9 +51,9 @@ is drawn; a row it cannot check is left out rather than shown. A row is drawn
 in red only for a fact the engine read (an agent stopped or whose last turn
 failed, a task marked urgent), never because the model chose to. The brief
 says when it was read: it is a reading of the page at that moment, so ask
-again for a fresh one. A brief written by an earlier version of Crewlet, in a
-shape this one no longer draws, shows as a short note in its place: ask again
-to see it now.
+again for a fresh one. A brief this version of Crewlet cannot draw (one
+written by an earlier version, or by a newer node during an upgrade) shows as
+a short note in its place: ask again to see it now.
 
 **The screen you are on travels with your question.** The chip above the
 message box (for example "Worklet › Tasks") tells the assistant which screen you

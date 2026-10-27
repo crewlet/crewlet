@@ -1,9 +1,11 @@
 package assistantdomain_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -77,6 +80,8 @@ type node struct {
 	writer    *assistantdomain.Writer
 	publisher *statelog.Publisher
 	reader    *assistantdomain.Reader
+	logs      *syncBuffer
+	counts    *counter
 	applier   *assistantdomain.Applier
 	waiter    *testWaiter
 	verifier  *statelog.Verifier
@@ -189,14 +194,16 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 	if err != nil {
 		t.Fatalf("build the read authority: %v", err)
 	}
+	logs, counts := &syncBuffer{}, &counter{}
 	reader, err := assistantdomain.NewReader(assistantdomain.ReaderOptions{
 		DB: db.Reader(), Log: authority, Sealer: sealer,
+		Logger: slog.New(slog.NewJSONHandler(logs, nil)), Metrics: counts,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
 	}
 	n := &node{t: t, id: nodeID, db: db, log: log, writer: writer, publisher: publisher,
-		reader: reader, waiter: waiter, verifier: verifier,
+		reader: reader, logs: logs, counts: counts, waiter: waiter, verifier: verifier,
 		applier: assistantdomain.NewApplier()}
 	waiter.advance = n.drain
 	return n
@@ -515,4 +522,46 @@ func (n *node) rows(table string) int {
 		n.t.Fatalf("count %s: %v", table, err)
 	}
 	return c
+}
+
+// syncBuffer is a log sink a suite reads back while the reader writes to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// counter records what a reader counts, by name and attributes.
+type counter struct {
+	mu   sync.Mutex
+	adds []counted
+}
+
+type counted struct {
+	name  string
+	n     uint64
+	attrs metrics.Attrs
+}
+
+func (c *counter) Add(name string, n uint64, attrs metrics.Attrs) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.adds = append(c.adds, counted{name: name, n: n, attrs: attrs})
+}
+
+func (c *counter) read() []counted {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]counted(nil), c.adds...)
 }

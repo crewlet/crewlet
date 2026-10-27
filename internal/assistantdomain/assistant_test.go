@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -672,7 +673,8 @@ func TestNothingSaidIsStoredInTheClear(t *testing.T) {
 // share, while a card in today's shape and a kind this build does not know
 // are read as they were written. Mutation: drop the check and the earlier
 // brief reads as a brief with no about line, which the dashboard draws empty;
-// replace an unknown kind too and a newer peer's card is lost.
+// replace an unknown kind too and a newer peer's card is lost; drop the log or
+// the count and the case goes red.
 func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -715,7 +717,7 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 		`"as_of":"2026-10-27T08:03:17Z"}}`)
 	store(newer, "timeline", `{"type":"timeline","timeline":{"events":[]}}`)
 
-	want := assistantdomain.EarlierShapeNotice()
+	want := assistantdomain.UnshownCardNotice()
 	got, err := n.reader.Transcript(t.Context(), ada, conversation)
 	if err != nil {
 		t.Fatalf("read the transcript: %v", err)
@@ -740,5 +742,31 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 	one, err := n.reader.Card(t.Context(), ada, earlier)
 	if err != nil || one.Type != wire.CardNotice || one.Card.Notice == nil {
 		t.Errorf("the earlier brief read alone is %+v, %v, want the notice", one.Card, err)
+	}
+
+	// EACH ONE IS SAID AND COUNTED, never its body: the log names the card,
+	// its kind and the contract's reason, and the counter its kind, once per
+	// read (the transcript and the card read above).
+	logged := n.logs.String()
+	for _, want := range []string{`"msg":"assistant_card_shown_as_notice"`,
+		`"card":"` + earlier.String() + `"`, `"type":"brief"`, "about is not one line"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("the log does not carry %s: %s", want, logged)
+		}
+	}
+	for _, said := range []string{"ENG-20", "Product Manager", today.String(), newer.String()} {
+		if strings.Contains(logged, said) {
+			t.Errorf("the log carries %q, which is a card's body or a card that was shown: %s",
+				said, logged)
+		}
+	}
+	adds := n.counts.read()
+	if len(adds) != 2 {
+		t.Fatalf("counted %+v, want the earlier brief once per read", adds)
+	}
+	for _, a := range adds {
+		if a.name != metrics.AssistantCardsShownAsNotice || a.n != 1 || a.attrs["type"] != "brief" {
+			t.Errorf("counted %+v, want one %s of type brief", a, metrics.AssistantCardsShownAsNotice)
+		}
 	}
 }
