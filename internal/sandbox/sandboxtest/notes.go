@@ -42,6 +42,7 @@ var noteCases = []struct {
 		testALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob},
 	{"AResetKeepsTheTurnsNotesAndClearsPulled", testAResetKeepsTheTurnsNotesAndClearsPulled},
 	{"ALaunchFilesTheBoxsNotesWaitingAfterItsBrief", testALaunchFilesTheBoxsNotesWaitingAfterItsBrief},
+	{"EveryWriteThatRecordsAReadTakesTheNextPlace", testEveryWriteThatRecordsAReadTakesTheNextPlace},
 	{"APullIsRecordedOnceAndOnlyForItsJob", testAPullIsRecordedOnceAndOnlyForItsJob},
 	{"NotesRideABridgedCallStorm", testNotesRideABridgedCallStorm},
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
@@ -527,6 +528,42 @@ func testALaunchFilesTheBoxsNotesWaitingAfterItsBrief(t *testing.T, s sandbox.Pe
 	last := steer.Notes[len(steer.Notes)-1]
 	if len(steer.Notes) != 2+maxWaiting || last.ID != "held-new" || last.Seq != steer.Seq || !last.Waiting() {
 		t.Errorf("the reset left notes %+v, want the record's and held-new waiting last", steer.Notes)
+	}
+}
+
+// EVERY WRITE THAT RECORDS A READ TAKES THE NEXT PLACE, stamped on each read it
+// records: the order a turn read its notes in is the record's own count, never
+// the clock of whichever node made the write. A write that records nothing
+// takes no place.
+func testEveryWriteThatRecordsAReadTakesTheNextPlace(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-order")
+	r.BriefNotes = []sandbox.RunNote{
+		{ID: "b-1", Sealed: []byte("sealed:b-1"), Read: &sandbox.NoteRead{Phase: "execute", Boundary: "brief"}},
+		{ID: "b-2", Sealed: []byte("sealed:b-2"), Read: &sandbox.NoteRead{Phase: "execute", Boundary: "brief"}},
+	}
+	launch := mustLaunched(t, s, r)
+	mustFile(t, s, "t-order", "n-1")
+	mustFile(t, s, "t-order", "n-2")
+	if _, err := s.TakeNotes(ctx, "t-order", bridgeTake(launch, "n-2")); err != nil {
+		t.Fatal(err)
+	}
+	if taken, err := s.TakeNotes(ctx, "t-order", bridgeTake(launch, "n-2")); err != nil || len(taken) != 0 {
+		t.Fatalf("a take of a note already read = %v, %v", taken, err)
+	}
+	taken, err := s.TakeNotes(ctx, "t-order", bridgeTake(launch, "n-1"))
+	if err != nil || len(taken) != 1 || taken[0].Read.Order != 3 {
+		t.Fatalf("the third read's take answered %+v, %v, want it read third", taken, err)
+	}
+	steer := mustGet(t, s, "t-order").Steer
+	want := map[string]int{"b-1": 1, "b-2": 1, "n-2": 2, "n-1": 3}
+	for _, n := range steer.Notes {
+		if n.Read == nil || n.Read.Order != want[n.ID] {
+			t.Errorf("note %s was read %+v, want in the record's read %d", n.ID, n.Read, want[n.ID])
+		}
+	}
+	if steer.Reads != 3 {
+		t.Errorf("the record counts %d reads, want 3", steer.Reads)
 	}
 }
 

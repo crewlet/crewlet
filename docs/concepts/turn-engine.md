@@ -832,8 +832,11 @@ sequenceDiagram
   message, into every later phase: the reviewer that judges the work opens with
   it, and so does every executor iteration after it. A segment that resumes the
   turn from its run carries every note the run's record says the turn read —
-  the record is the carry, whichever node resumes it. Without that the
-  reviewer would grade the work against the task the person had corrected.
+  the record is the carry, whichever node resumes it — in the order the
+  record's own writes read them, never by any node's clock: the launch, the
+  run's bridge and the resumed segment can each be on a different node, and a
+  later note is the one that wins. Without that the reviewer would grade the
+  work against the task the person had corrected.
 - **Not every loop reads it.** A [worker](#workers) is a leaf its parent
   directs, so a note offered while a worker runs waits for the executor's next
   round. A coding run's subagents take nothing: a note handed to a delegated

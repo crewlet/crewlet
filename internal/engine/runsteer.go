@@ -405,6 +405,14 @@ func readingOf(read sandbox.NoteRead) steer.Reading {
 // what a segment resuming the turn carries ([runner.Resume.Steered]). A note
 // that does not open is not carried: nobody can say it is a person's.
 //
+// THE ORDER READ IS THE RECORD'S OWN: the place of the write that recorded each
+// read ([sandbox.NoteRead.Order]), and among the reads one write recorded, the
+// order the notes were filed in — never a read's time. The writes that record
+// reads are made by whichever nodes launch the run, serve its bridge and resume
+// the turn, each stamping its own clock, and a note is the later word: two
+// clocks a second apart would otherwise hand the reviewer and every later brief
+// a correction ahead of the note it corrects.
+//
 // THE WAITING NOTES GO BEFORE THE SORT, never into it: a comparison that
 // answered "equal" for any pair with a waiting note in it would not be an
 // order at all — a waiting note between two read ones would tie with both
@@ -418,7 +426,7 @@ func (s *runSteers) carried(run sandbox.PendingRun) []steer.Read {
 	}
 	notes := slices.DeleteFunc(slices.Clone(run.Steer.Notes), sandbox.RunNote.Waiting)
 	slices.SortStableFunc(notes, func(a, b sandbox.RunNote) int {
-		return cmp.Or(a.Read.At.Compare(b.Read.At), cmp.Compare(a.Seq, b.Seq))
+		return cmp.Or(cmp.Compare(a.Read.Order, b.Read.Order), cmp.Compare(a.Seq, b.Seq))
 	})
 	var out []steer.Read
 	for _, n := range notes {

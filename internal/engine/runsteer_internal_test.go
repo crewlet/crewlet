@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"slices"
@@ -382,46 +383,93 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 	}
 }
 
-// A RESUMED TURN CARRIES ITS NOTES IN THE ORDER THEY WERE READ, whatever waits
-// between them. A record holds a waiting note between two read ones whenever a
-// note waits while a later one is read — a seal this node cannot open yet, or a
-// later note a CLI took first — and the carry is what every later phase and
-// brief renders in order: two notes from one person that disagree must reach
-// the reviewer with the later read last, since a note is the later word.
+// A RESUMED TURN CARRIES ITS NOTES IN THE ORDER THEY WERE READ — the record's
+// own order of the writes that read them, whatever waits between them and
+// whatever each writer's clock said. A record holds a waiting note between two
+// read ones whenever a note waits while a later one is read — a seal this node
+// cannot open yet, or a later note a CLI took first — and the writes that read
+// notes are made by whichever nodes launch the run, serve its bridge and resume
+// the turn, each stamping its own time. The carry is what every later phase and
+// brief renders in order: two notes from one person that disagree must reach the
+// reviewer with the later read last, since a note is the later word.
 //
-// Mutation: sort with a comparator that ties every pair with a waiting note in
-// it, as carried did, and the two read notes come back in the order filed.
+// Mutation: sort on the reads' times, or with a comparator that ties every pair
+// with a waiting note in it, as carried did, and the read notes come back out of
+// the order they were read in.
 func TestAResumedTurnCarriesItsNotesInTheOrderRead(t *testing.T) {
 	t.Parallel()
-	store := sandbox.NewCoordStore(coordmem.NewFleet())
-	runs, _ := steersOver(t, steerRing, store)
 	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
-	sealed := func(seq int, id string, read *sandbox.NoteRead) sandbox.RunNote {
-		t.Helper()
-		n, err := runs.seal("run-1", steer.Note{ID: id, Text: "note " + id, By: "founder",
-			ByKind: iam.ActorHuman})
-		if err != nil {
-			t.Fatal(err)
+	carriedIDs := func(runs *runSteers, run sandbox.PendingRun) []string {
+		var got []string
+		for _, r := range runs.carried(run) {
+			got = append(got, r.Note.ID)
 		}
-		n.Seq, n.Read = seq, read
-		return n
+		return got
 	}
-	readAt := func(minute int) *sandbox.NoteRead {
-		return &sandbox.NoteRead{At: at.Add(time.Duration(minute) * time.Minute), Phase: "execute",
-			Iteration: 1, Round: 1, Boundary: string(types.SteerBoundaryStep), Launch: "job-1"}
-	}
-	run := sandbox.PendingRun{TurnID: "run-1", Steer: sandbox.RunSteer{Seq: 3, Notes: []sandbox.RunNote{
-		sealed(1, "use-postgres", readAt(5)),
-		sealed(2, "waits", nil),
-		sealed(3, "use-sqlite", readAt(2)),
-	}}}
-	var got []string
-	for _, r := range runs.carried(run) {
-		got = append(got, r.Note.ID)
-	}
-	if want := []string{"use-sqlite", "use-postgres"}; !slices.Equal(got, want) {
-		t.Errorf("the turn carries %v, want the read notes in the order read, %v", got, want)
-	}
+
+	t.Run("a waiting note between two read ones", func(t *testing.T) {
+		t.Parallel()
+		runs, _ := steersOver(t, steerRing, sandbox.NewCoordStore(coordmem.NewFleet()))
+		sealed := func(seq int, id string, read *sandbox.NoteRead) sandbox.RunNote {
+			t.Helper()
+			n, err := runs.seal("run-1", steer.Note{ID: id, Text: "note " + id, By: "founder",
+				ByKind: iam.ActorHuman})
+			if err != nil {
+				t.Fatal(err)
+			}
+			n.Seq, n.Read = seq, read
+			return n
+		}
+		readIn := func(order int) *sandbox.NoteRead {
+			return &sandbox.NoteRead{At: at, Order: order, Phase: "execute", Iteration: 1, Round: 1,
+				Boundary: string(types.SteerBoundaryStep), Launch: "job-1"}
+		}
+		run := sandbox.PendingRun{TurnID: "run-1", Steer: sandbox.RunSteer{Seq: 3, Reads: 2,
+			Notes: []sandbox.RunNote{
+				sealed(1, "use-postgres", readIn(2)),
+				sealed(2, "waits", nil),
+				sealed(3, "use-sqlite", readIn(1)),
+			}}}
+		if got, want := carriedIDs(runs, run), []string{"use-sqlite", "use-postgres"}; !slices.Equal(got, want) {
+			t.Errorf("the turn carries %v, want the read notes in the order read, %v", got, want)
+		}
+	})
+
+	t.Run("reads two nodes stamped on clocks out of step", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		fleet := coordmem.NewFleet()
+		// THE NODE THAT READ FIRST IS FIVE MINUTES AHEAD of the one that read
+		// second: their reads' times say the opposite of the order they were
+		// made in.
+		ahead := sandbox.NewCoordStore(fleet).WithClock(func() time.Time { return at.Add(5 * time.Minute) })
+		behind := sandbox.NewCoordStore(fleet).WithClock(func() time.Time { return at })
+		runs, _ := steersOver(t, steerRing, ahead)
+		launch := workingRun(t, ahead, runs, "run-1")
+		fileSealed(t, runs, "run-1", steer.Note{ID: "use-postgres", Text: "use postgres", By: "founder"})
+		fileSealed(t, runs, "run-1", steer.Note{ID: "use-sqlite", Text: "actually, sqlite", By: "founder"})
+		for _, read := range []struct {
+			store *sandbox.CoordStore
+			id    string
+		}{{ahead, "use-postgres"}, {behind, "use-sqlite"}} {
+			taken, err := read.store.TakeNotes(ctx, "run-1", sandbox.NoteTake{IDs: []string{read.id},
+				Launch: launch, Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "execute",
+					Iteration: 1, Round: 1, Boundary: string(types.SteerBoundaryToolBatch), Launch: launch}})
+			if err != nil || len(taken) != 1 {
+				t.Fatalf("the take of %s = %v, %v", read.id, taken, err)
+			}
+		}
+		run := mustRow(t, ahead, "run-1")
+		if got, want := carriedIDs(runs, run), []string{"use-postgres", "use-sqlite"}; !slices.Equal(got, want) {
+			var reads []string
+			for _, n := range run.Steer.Notes {
+				reads = append(reads, fmt.Sprintf("%s read %d at %s", n.ID, n.Read.Order,
+					n.Read.At.Format(time.TimeOnly)))
+			}
+			t.Errorf("the turn carries %v, want the notes in the order their writes read them, %v (%v)",
+				got, want, reads)
+		}
+	})
 }
 
 // A NOTE'S INBOX ID IS ITS JOB'S. OpenCode's message ids are unique across a

@@ -75,6 +75,15 @@ type RunSteer struct {
 	// none to read.
 	Pulled string `json:"pulled,omitempty"`
 
+	// Reads is the place of the last write that recorded a note read, from
+	// 1: every such write — a launch's for its brief, a take — numbers itself
+	// one past it, in its own compare-and-swap, and stamps the number on
+	// every read it records ([NoteRead.Order]). The order the turn read its
+	// notes in is that number, and no clock's: the writes are made by
+	// whichever nodes launch, serve the run's bridge and resume the turn,
+	// each stamping its own time.
+	Reads int `json:"reads,omitempty"`
+
 	// Extra is every key of the section this build does not know, kept
 	// verbatim and written back by every write of the record (wirekeys.go).
 	// Filled by the decode, never by a caller.
@@ -154,9 +163,13 @@ func (r PendingRun) unreadNotes() bool { return len(r.UnreadNotes()) > 0 }
 // phase's own scale, the kind of step (the agent layer's vocabulary, carried as
 // text: the record is this package's wire format and imports no agent
 // package), and the job whose CLI read it — empty for a read the engine's own
-// loop made. At is when, on the store's clock.
+// loop made. At is when, on the clock of the node whose write recorded it, for
+// a person to read; Order is the place of that write among the record's reads
+// ([RunSteer.Reads]), which is what orders them — a note's Seq orders the reads
+// one write recorded.
 type NoteRead struct {
 	At        time.Time `json:"at"`
+	Order     int       `json:"order,omitempty"`
 	Phase     string    `json:"phase"`
 	Iteration int       `json:"iteration,omitempty"`
 	Round     int       `json:"round,omitempty"`
@@ -351,7 +364,9 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 			outranked(*run, take.Fence) {
 			return false
 		}
-		read.At = s.clock()
+		// THIS WRITE'S PLACE among the record's reads, stamped on each read
+		// it records — see [RunSteer.Reads].
+		read.At, read.Order = s.clock(), run.Steer.Reads+1
 		notes := slices.Clone(run.Steer.Notes)
 		for i, held := range notes {
 			if !held.Waiting() || !slices.Contains(take.IDs, held.ID) {
@@ -366,6 +381,7 @@ func (s *CoordStore) TakeNotes(ctx context.Context, turnID string, take NoteTake
 			return false
 		}
 		run.Steer.Notes = notes
+		run.Steer.Reads = read.Order
 		return true
 	})
 	if err != nil || !won {
@@ -435,7 +451,8 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 //     a note the record already holds, still waiting, is recorded read; one it
 //     holds already read is left as it was read; and any other — a turn's first
 //     segment's own, which the record has never held — is added already read,
-//     numbered as if filed now;
+//     numbered as if filed now. Every read this write records takes its place
+//     among the record's reads ([RunSteer.Reads]);
 //   - then the notes the first segment's box still held ([PendingRun.HandedNotes])
 //     are filed WAITING, numbered after them — so they are on the record from
 //     the write that creates it, ahead of every note a person files there once
@@ -447,6 +464,7 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 // turn an accepted note into an expiry. They count against the bounds for every
 // filing after them.
 func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
+	order := steer.Reads + 1
 	for _, note := range run.BriefNotes {
 		if note.ID == "" {
 			continue
@@ -456,9 +474,11 @@ func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
 			read = *note.Read
 			read.At, read.Launch = at, launch
 		}
+		read.Order = order
 		if i := slices.IndexFunc(steer.Notes, func(held RunNote) bool { return held.ID == note.ID }); i >= 0 {
 			if steer.Notes[i].Waiting() {
 				steer.Notes[i].Read = &read
+				steer.Reads = order
 			}
 			continue
 		}
@@ -466,6 +486,7 @@ func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
 		steer.Notes = append(steer.Notes, RunNote{
 			ID: note.ID, Seq: steer.Seq, Sealed: bytes.Clone(note.Sealed), At: note.At, Read: &read,
 		})
+		steer.Reads = order
 	}
 	for _, note := range run.HandedNotes {
 		if note.ID == "" || slices.ContainsFunc(steer.Notes, func(held RunNote) bool { return held.ID == note.ID }) {
