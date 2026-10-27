@@ -565,8 +565,9 @@ type ReadQuery struct {
 	// its own, which no ceiling bounds, and a seat is the one requester
 	// whose grant reads the chart — a person maintains every repository
 	// (ADR-0055) and a stranger reads none, both settled where the turn runs
-	// before any read is asked. Refused on `introduced`, `compaction_due`
-	// and `publication_due`, which no principal makes.
+	// before any read is asked. Refused on `introduced` and on the duty
+	// listings `compaction_due`, `publication_due` and `expunge_due`, which
+	// no principal makes.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row — and one a build that predates it would decode

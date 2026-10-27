@@ -1531,8 +1531,9 @@ func (q ReadQuery) validateExpungeDue() error {
 		field string
 		set   bool
 	}{
-		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
-		{"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0},
+		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0},
+		{"limit", q.Limit != 0},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+

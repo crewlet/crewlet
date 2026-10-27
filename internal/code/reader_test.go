@@ -1509,8 +1509,10 @@ func TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant(t *testing.T) {
 // reader does — and the engine's own reads, which name no principal, name no
 // seat they read for either.
 //
-// Mutation: ceilingInvalid accepting a ceiling beside an operator → the
-// person's listing is served.
+// Mutations: ceilingInvalid accepting a ceiling beside an operator → the
+// person's listing is served; an engine's own read accepting one (the
+// `expunge_due` listing's validation naming no ceiling) → that listing is
+// served as though a seat had asked it for another.
 func TestOnlyASeatsReadIsMadeForAnotherSeat(t *testing.T) {
 	t.Parallel()
 	n, _ := unitRepos(t)
@@ -1521,6 +1523,7 @@ func TestOnlyASeatsReadIsMadeForAnotherSeat(t *testing.T) {
 		"a seat for no handle":             {Asker: agent("dev"), CeilingSeat: "Not A Handle", Kind: code.ReadRepos},
 		"a duty listing for a seat":        {CeilingSeat: "dev", Kind: code.ReadCompactionDue, MinPacks: 1},
 		"a publication listing for a seat": {CeilingSeat: "dev", Kind: code.ReadPublicationDue},
+		"an expunge listing for a seat":    {CeilingSeat: "dev", Kind: code.ReadExpungeDue},
 		"an introduced page for a seat": {CeilingSeat: "dev", Kind: code.ReadIntroduced,
 			Introduced: &code.IntroducedQuery{RepoID: "id"}},
 	} {
