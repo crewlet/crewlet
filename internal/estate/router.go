@@ -77,6 +77,15 @@ type RouterOptions struct {
 	// no git node in it, a wiring mistake that reads as a deployment fact.
 	Git Placement
 
+	// GitBudgets is what each git node ADVERTISES it can give its
+	// background work, read off the same watched presence view as Git —
+	// what [Router.Maintainer] places a repository's maintenance by.
+	// Required wherever Git is, which is everywhere: a router built without
+	// one would place every repository's maintenance on its home whatever
+	// any node can hold, a wiring mistake that reads as a fleet of alike
+	// nodes.
+	GitBudgets GitBudgets
+
 	// LocalGit is this node's own git half, resolved PER REQUEST ([LocalGit]:
 	// the code host is built at boot or at the first apply that sets
 	// code.native, after the router) — nil on a node without the `git`
@@ -308,11 +317,14 @@ type Router struct {
 	env       *Envelopes
 	now       func() time.Time
 
-	// gitPlacement is who serves git ([RouterOptions.Git]), and localGit
+	// gitPlacement is who serves git ([RouterOptions.Git]), localGit
 	// this node's own git half, nil on a node without the git role
-	// ([RouterOptions.LocalGit]).
+	// ([RouterOptions.LocalGit]), and gitBudgets what each git node
+	// advertises it can give its background work
+	// ([RouterOptions.GitBudgets]).
 	gitPlacement Placement
 	localGit     LocalGit
+	gitBudgets   GitBudgets
 
 	// timing is how long each attempt waits ([RouterOptions.Timing]).
 	timing Timing
@@ -366,6 +378,11 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		return nil, errors.New("estate: a router needs the git placement it asks a repository's git " +
 			"reads by — every live node with the git role; one with none to name answers an empty " +
 			"list, never a missing placement")
+	case opts.GitBudgets == nil:
+		return nil, errors.New("estate: a router needs the git budgets (RouterOptions.GitBudgets) a " +
+			"repository's maintenance is placed by — what each git node advertises it can give its " +
+			"background work, off the presence view the git nodes are listed from; without them " +
+			"every repository would be maintained by its home, whatever any node can hold")
 	case opts.Session == nil:
 		return nil, errors.New("estate: a router needs this node's session floors — " +
 			"one per node, shared by everything that observes a write")
@@ -385,7 +402,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
 		local: opts.Local, session: opts.Session, seams: opts.Seams, env: opts.Envelopes, now: now,
-		gitPlacement: opts.Git, localGit: opts.LocalGit,
+		gitPlacement: opts.Git, localGit: opts.LocalGit, gitBudgets: opts.GitBudgets,
 		timing: opts.Timing,
 		sticky: map[string]string{}, suspect: map[string]time.Time{},
 		passedOver: map[nodeCopy]time.Time{}, declined: map[nodeOp]time.Time{},
@@ -1349,9 +1366,10 @@ func (r *Router) keyedOrder(spec *opSpec, key string, nodes []string, self bool)
 // keyed is the rendezvous half of every keyed order, before any memory of the
 // router's demotes a node: [rendezvous.Order] on key over nodes — this one
 // included where self says it answers, an empty id never, a node listed twice
-// named once. ONE FUNCTION for [Router.keyedOrder] and [Router.Home], so the
-// node a repository's git reads ask first on a quiet fleet and the node its own
-// git work falls to are one computation and can never be two.
+// named once. ONE FUNCTION for [Router.keyedOrder] and [Router.homeOrder] (the
+// order [Router.Home] and [Router.Maintainer] read), so the node a
+// repository's git reads ask first on a quiet fleet and the node its own git
+// work falls to are one computation and can never be two.
 func (r *Router) keyed(key string, nodes []string, self bool) []string {
 	candidates := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
 		return n == "" || n == r.self

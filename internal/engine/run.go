@@ -3096,6 +3096,10 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
 		MCP: e.mcpStatus(ctx),
+		// WHAT THIS NODE'S GIT CACHE GIVES ITS BACKGROUND WORK, from memory:
+		// what every git node weighs to place a repository's maintenance
+		// ([estate.Router.Maintainer]), and zero on a node with no cache.
+		GitBackgroundBytes: e.gitBackgroundBudget(),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

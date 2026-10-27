@@ -267,8 +267,8 @@ func (c *cluster) record(_ context.Context, e types.OperatorActed) {
 func (m *member) route(t testing.TB) {
 	t.Helper()
 	r, err := estate.NewRouter(estate.RouterOptions{Self: m.id, Queue: m.q, Placement: m.c.placement,
-		Git: m.c.placement, LocalGit: memberGit{m}, Local: memberCopy{m}, Session: estate.NewSession(),
-		Timing: clusterTiming, Envelopes: clusterEnvelopes, Now: m.c.now})
+		Git: m.c.placement, GitBudgets: m.c.budgets(), LocalGit: memberGit{m}, Local: memberCopy{m},
+		Session: estate.NewSession(), Timing: clusterTiming, Envelopes: clusterEnvelopes, Now: m.c.now})
 	if err != nil {
 		t.Fatalf("codecluster: %s's router: %v", m.id, err)
 	}
@@ -281,6 +281,21 @@ func (m *member) route(t testing.TB) {
 		t.Fatalf("codecluster: %s serves the estate: %v", m.id, err)
 	}
 	m.withdraw = withdraw
+}
+
+// budgets is what each member's git node advertises it can give its
+// background work, as the engine's presence status carries it — the routers'
+// git budgets (codetest.GitBudgets): a member whose git node is not started
+// yet, or is killed or stopped, is not saying.
+func (c *cluster) budgets() codetest.GitBudgets {
+	return func(id string) *codetest.GitNode {
+		for _, m := range c.members {
+			if m.id == id {
+				return m.gitNode()
+			}
+		}
+		return nil
+	}
 }
 
 // gitNode is the member's git node, nil before it is started.

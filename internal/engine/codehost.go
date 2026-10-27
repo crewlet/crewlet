@@ -383,6 +383,25 @@ func (e *Engine) codeReading(out *statelog.Reading) {
 	n.gitCache.AlarmReading(out)
 }
 
+// gitBackgroundBudget is what this node's git cache gives its background work
+// now — its maintenance budget ([cache.Cache.BackgroundBudget], the figure its
+// admissions hold every run to) — which [Engine.nodeStatus] advertises on
+// every heartbeat, so the git node a repository's maintenance is placed on is
+// one whose own admissions would hold it. Zero where this node holds no cache:
+// a node without the git role, a company that hosts no code, or a code host
+// not built yet. (Not the cache's DISK budget, [Engine.codeCacheBudget].)
+//
+// Read from the PUBLISHED runtime at each beat, never captured, as
+// [Engine.codeReading] reads it: the code host is built at boot or at the first
+// apply that hosts code, after the heartbeat starts.
+func (e *Engine) gitBackgroundBudget() int64 {
+	n := e.native.Load()
+	if n == nil || n.gitCache == nil {
+		return 0
+	}
+	return n.gitCache.BackgroundBudget()
+}
+
 // cacheVolume is what sizing the code cache reads of this node's disk: the
 // free space on a directory's volume, whether two directories draw on one pool
 // of space, and the embedded broker's claim on the volume it stores its

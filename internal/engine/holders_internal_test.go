@@ -3,12 +3,14 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -151,6 +153,124 @@ func TestTheGitPlacementIsTheLiveGitNodes(t *testing.T) {
 	}
 	if want := []string{"every-a", "git-b"}; !slices.Equal(nodes, want) {
 		t.Errorf("the git placement names %v, want every live node with the git role %v", nodes, want)
+	}
+}
+
+// WHAT EACH GIT NODE ADVERTISES IS READ OFF THE ROUTER'S OWN WATCHED VIEW, as
+// its presence status says it: a budget the status names, across the store's
+// JSON round trip, is said; a status that names none — a node with nothing to
+// give its background work — is said as zero; a lease whose beat carried no
+// status at all is a node NOT SAYING (absent is not zero), and so is a node the
+// view names no lease of; a view that has never listed is UNKNOWN, never a
+// fleet in which nobody says anything — which is what a node with no view, and
+// so no fleet, answers.
+//
+// Mutations: read a lease that carries no status as a node with nothing to
+// give — the quiet node said, red; read a view that has never listed as nobody
+// saying — no error, red.
+func TestTheGitBudgetsAreWhatEachGitNodesStatusSays(t *testing.T) {
+	t.Parallel()
+	const budget = int64(64)<<30 + 12_345
+	backend := coordmem.New()
+	gitRoles := []string{"data", "git", "ingress"}
+	claimMeta(t, backend, map[string]map[string]any{
+		"git-large": {"roles": gitRoles,
+			coord.StatusKey: coord.NodeStatus{InFlight: 1, GitBackgroundBytes: budget}.Meta()},
+		"git-cold":  {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
+		"git-quiet": {"roles": gitRoles},
+	})
+	view, err := coord.NewLeaseView(backend, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgets := (&Engine{dataView: view}).gitBudgets()
+	if got, said, err := budgets.BackgroundBudget("git-large"); !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("a view that has never listed says git-large gives %d (said %v, %v), want unknown", got, said,
+			err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = view.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitUntil(t, 5*time.Second, "the view to list", func() bool { return !view.ListedAt().IsZero() })
+	for node, want := range map[string]struct {
+		budget int64
+		said   bool
+	}{
+		"git-large": {budget, true}, "git-cold": {0, true}, "git-quiet": {0, false}, "git-gone": {0, false},
+	} {
+		got, said, err := budgets.BackgroundBudget(node)
+		if err != nil || got != want.budget || said != want.said {
+			t.Errorf("%s gives its background work %d (said %v, %v), want %d (said %v)", node, got, said, err,
+				want.budget, want.said)
+		}
+	}
+	if got, said, err := (&Engine{}).gitBudgets().BackgroundBudget("git-large"); got != 0 || said || err != nil {
+		t.Errorf("a node with no view says git-large gives %d (said %v, %v), want nobody saying", got, said, err)
+	}
+}
+
+// THE ROUTER A NODE BUILDS PLACES A REPOSITORY'S MAINTENANCE BY WHAT EACH GIT
+// NODE ADVERTISES: over three git nodes whose heartbeats say 8, 64 and 8 GiB,
+// the router [Engine.newRouter] builds — on a node holding nothing, as a seats
+// node's is — places work only the large node holds on it for every one of two
+// hundred repositories, and work every node holds on each repository's home.
+//
+// Mutation: hand newRouter's router git budgets in which nobody says anything —
+// the 40 GiB work stays with each home, red.
+func TestTheRoutersMaintainerWeighsWhatEachGitNodeAdvertises(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1) << 30
+	backend := coordmem.New()
+	gitRoles := []string{"data", "git", "ingress"}
+	claimMeta(t, backend, map[string]map[string]any{
+		"git-a":   {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{GitBackgroundBytes: 8 * gib}.Meta()},
+		"git-b":   {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{GitBackgroundBytes: 64 * gib}.Meta()},
+		"git-c":   {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{GitBackgroundBytes: 8 * gib}.Meta()},
+		"agent-1": {"roles": []string{"seats"}, coord.StatusKey: coord.NodeStatus{}.Meta()},
+	})
+	view, err := coord.NewLeaseView(backend, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = view.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitUntil(t, 5*time.Second, "the view to list", func() bool { return !view.ListedAt().IsZero() })
+	e := &Engine{dataView: view, profile: placement.NodeProfile{ID: "agent-1",
+		Roles: placement.Roles(placement.RoleSeats)}}
+	r, err := e.newRouter(silentAsker{}, "agent-1", routerEnvelopes(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 200 {
+		repo := fmt.Sprintf("019a0c2e-0000-7000-8000-%012x", i)
+		if m, err := r.Maintainer(repo, 40*gib); err != nil || m != "git-b" {
+			t.Fatalf("Maintainer(%s, 40 GiB) = (%s, %v), want git-b, the one node advertising room for it",
+				repo, m, err)
+		}
+		home, err := r.Home(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m, err := r.Maintainer(repo, 4*gib); err != nil || m != home {
+			t.Fatalf("Maintainer(%s, 4 GiB) = (%s, %v), want its home %s", repo, m, err, home)
+		}
+	}
+}
+
+// claimMeta claims a presence lease for every node, carrying its meta.
+func claimMeta(t testing.TB, backend coord.Backend, metas map[string]map[string]any) {
+	t.Helper()
+	for id, meta := range metas {
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(id), coord.AcquireOptions{
+			Owner: id + ":1", TTL: time.Hour, Meta: meta,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

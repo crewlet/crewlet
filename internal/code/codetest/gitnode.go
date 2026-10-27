@@ -364,6 +364,36 @@ func (g *GitNode) Git() (estate.GitServer, bool) {
 	return g.cur.query, true
 }
 
+// BackgroundBudget is what the node's running incarnation's cache gives its
+// background work (cache.Cache.BackgroundBudget) — what an engine's git node
+// advertises on its presence status — and false while the node is killed or
+// stopped: a node whose heartbeat says nothing.
+func (g *GitNode) BackgroundBudget() (int64, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.cur == nil {
+		return 0, false
+	}
+	return g.cur.cache.BackgroundBudget(), true
+}
+
+// GitBudgets is a topology's git budgets as its routers weigh a repository's
+// maintainer by (estate.GitBudgets): the git node named by an id — nil for an
+// id the topology does not hold — saying what its cache gives its background
+// work, as the engine's presence status carries it, or NOT SAYING while it is
+// killed or stopped, as a node the view carries no status of.
+type GitBudgets func(id string) *GitNode
+
+// BackgroundBudget is node's advertised budget, and whether it says one.
+func (b GitBudgets) BackgroundBudget(node string) (int64, bool, error) {
+	g := b(node)
+	if g == nil {
+		return 0, false, nil
+	}
+	budget, said := g.BackgroundBudget()
+	return budget, said, nil
+}
+
 // Node is the git node as a case reads it — nil while it is killed or stopped.
 func (g *GitNode) Node() Node {
 	g.mu.Lock()

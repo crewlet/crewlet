@@ -294,9 +294,6 @@ func SetMaintenanceBudget(c *Cache, n int64) {
 	c.maint.setBudget(n)
 }
 
-// MaintenanceBudget is what everything in flight is held to together now.
-func MaintenanceBudget(c *Cache) int64 { return c.maint.budgetNow() }
-
 // MemoryReserve is what a node of memory bytes whose git pool admits
 // transfers transfers and has cores read slots keeps of its memory for
 // everything but its background work.

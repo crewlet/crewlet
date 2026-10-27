@@ -280,7 +280,7 @@ func TestAReplayedRequestRunsOnce(t *testing.T) {
 	f := newFleet(t, "data-a")
 	capture := &capturingAsker{Asker: f.start(t)}
 	r, err := NewRouter(RouterOptions{Self: "agent-2", Queue: capture, Placement: f.placement, Git: f.git,
-		Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
+		GitBudgets: f.budgets, Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,8 @@ func TestNothingIsBuiltWithoutEnvelopes(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	if _, err := NewRouter(RouterOptions{Self: "agent-1", Queue: f.start(t),
-		Placement: f.placement, Git: f.git, Session: NewSession()}); !errors.Is(err, errNoEnvelopes) {
+		Placement: f.placement, Git: f.git, GitBudgets: f.budgets,
+		Session: NewSession()}); !errors.Is(err, errNoEnvelopes) {
 		t.Errorf("a router with no envelopes = %v, want it refused", err)
 	}
 	if _, err := Serve(t.Context(), f.start(t), ServerOptions{Self: "data-a",
@@ -405,7 +406,7 @@ func serveAs(t *testing.T, f *fleet, node *fakeNode, env *Envelopes) {
 func routerAs(t *testing.T, f *fleet, self string, env *Envelopes) *Router {
 	t.Helper()
 	r, err := NewRouter(RouterOptions{Queue: f.start(t), Self: self, Placement: f.placement, Git: f.git,
-		Session: NewSession(), Timing: Production(), Envelopes: env})
+		GitBudgets: f.budgets, Session: NewSession(), Timing: Production(), Envelopes: env})
 	if err != nil {
 		t.Fatal(err)
 	}

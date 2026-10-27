@@ -39,7 +39,7 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	pm := uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")
 	want := coord.NodeStatus{
 		InFlight: 3, Draining: true, Posture: "shed", StartedAt: started,
-		AdminPosture: iam.AdminServe,
+		AdminPosture: iam.AdminServe, GitBackgroundBytes: 12 << 30,
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Shared: true, Started: 1, Tools: 12},
 			{Server: "jira", Started: 2, Failed: 1, Tools: 9,

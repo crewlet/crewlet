@@ -464,6 +464,11 @@ type fleet struct {
 	// unless a case names some.
 	git *fakePlacement
 
+	// budgets is what each git node advertises it can give its background
+	// work, as the routers weigh a repository's maintainer by: nobody says
+	// anything, unless a case writes it.
+	budgets *fakeBudgets
+
 	client *Router
 }
 
@@ -471,7 +476,7 @@ func newFleet(t *testing.T, names ...string) *fleet {
 	t.Helper()
 	sorted := slices.Sorted(slices.Values(names))
 	f := &fleet{broker: memory.NewBroker(), nodes: map[string]*fakeNode{},
-		placement: &fakePlacement{nodes: sorted}, git: &fakePlacement{}}
+		placement: &fakePlacement{nodes: sorted}, git: &fakePlacement{}, budgets: &fakeBudgets{}}
 	for _, name := range names {
 		node := &fakeNode{name: name, units: chartOf(name)}
 		f.nodes[name] = node
@@ -522,7 +527,7 @@ func (f *fleet) router(t *testing.T, self string, local *fakeNode) *Router {
 func (f *fleet) routerTimed(t *testing.T, self string, local *fakeNode, timing Timing) *Router {
 	t.Helper()
 	opts := RouterOptions{Queue: f.start(t), Self: self, Placement: f.placement, Git: f.git,
-		Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes}
+		GitBudgets: f.budgets, Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes}
 	if local != nil {
 		opts.Local, opts.Seams = local, local.seams()
 	}
@@ -821,7 +826,7 @@ func TestAWritesSilenceThroughAWholeAttemptIsEvidence(t *testing.T) {
 			var clock atomic.Int64
 			clock.Store(time.Now().UnixNano())
 			opts := RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement, Git: f.git,
-				Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes,
+				GitBudgets: f.budgets, Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes,
 				Now: func() time.Time { return time.Unix(0, clock.Load()) }}
 			r, err := NewRouter(opts)
 			if err != nil {
@@ -867,8 +872,8 @@ func TestARouterRefusesAZeroTiming(t *testing.T) {
 	t.Parallel()
 	build := func(timing Timing) error {
 		_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{},
-			Placement: &fakePlacement{}, Git: &fakePlacement{}, Session: NewSession(), Timing: timing,
-			Envelopes: fleetEnvelopes})
+			Placement: &fakePlacement{}, Git: &fakePlacement{}, GitBudgets: &fakeBudgets{},
+			Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes})
 		return err
 	}
 	if err := build(Production()); err != nil {
@@ -917,7 +922,7 @@ func TestAReadAttemptLongerThanTheReplysMarginIsAnsweredInside(t *testing.T) {
 	timing := Production()
 	timing.ReadAttempt = code.ReplyMargin
 	if _, err := NewRouter(RouterOptions{Self: "agent-2", Queue: f.start(t),
-		Placement: f.placement, Git: f.git, Session: NewSession(), Timing: timing,
+		Placement: f.placement, Git: f.git, GitBudgets: f.budgets, Session: NewSession(), Timing: timing,
 		Envelopes: fleetEnvelopes}); err == nil ||
 		!strings.Contains(err.Error(), "Timing.ReadAttempt") {
 		t.Fatalf("a router whose read attempt is the reply's margin (%v) answered %v, want a "+
@@ -1017,7 +1022,7 @@ func TestAWedgedNodeCostsAReadTheRoutersOwnReadAttempt(t *testing.T) {
 	timing.ReadAttempt = minReadAttempt + time.Second
 	still := time.Now()
 	r, err := NewRouter(RouterOptions{Queue: f.start(t), Self: "agent-2", Placement: f.placement,
-		Git: f.git, Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes,
+		Git: f.git, GitBudgets: f.budgets, Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes,
 		Now: func() time.Time { return still }})
 	if err != nil {
 		t.Fatal(err)

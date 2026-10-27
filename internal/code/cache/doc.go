@@ -829,7 +829,11 @@
 // graph are each kept on a gauge while they stay refused, and a refused
 // bitmap is raised as code_maintenance_refused
 // ([Cache.AlarmReading]), at the budget's own threshold: a git node's largest
-// repository with a bitmap is bound by its memory before its disk. A check a
+// repository with a bitmap is bound by its memory before its disk. The budget
+// itself is ADVERTISED as it stands ([Cache.BackgroundBudget], which the
+// engine's presence status carries to every git node), so the git node a
+// repository's maintenance is placed on is one whose own admissions would hold
+// the work — the figure itself, never a second estimate of it. A check a
 // person asks for whose charge is past the budget is refused
 // ([ErrNoMemory]). And the first repository a pass holds back for room is
 // given the room it needs, so a stream of small ones never starves it. A pool

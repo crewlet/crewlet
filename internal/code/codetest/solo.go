@@ -315,8 +315,16 @@ func (f *SoloFleet) route(t testing.TB) {
 		}
 	}
 	nodes := soloPlacement(ids)
+	budgets := GitBudgets(func(id string) *GitNode {
+		for _, g := range f.git {
+			if g.o.ID == id {
+				return g
+			}
+		}
+		return nil
+	})
 	r, err := estate.NewRouter(estate.RouterOptions{Self: soloRouter, Queue: q, Placement: nodes, Git: nodes,
-		Session: estate.NewSession(), Timing: estate.Production(), Envelopes: soloEnvelopes})
+		GitBudgets: budgets, Session: estate.NewSession(), Timing: estate.Production(), Envelopes: soloEnvelopes})
 	if err != nil {
 		t.Fatalf("codetest: the fleet's router: %v", err)
 	}

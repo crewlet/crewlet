@@ -99,6 +99,52 @@ var nodeStatusCases = []testCase{
 		}
 	}},
 
+	{"a_node_status_carries_the_git_budget", func(h *harness) {
+		// What a git node can give its background work is read by every
+		// other git node off this lease, to place each repository's
+		// maintenance on the first node of its order that holds the work —
+		// so it has to come back from the store exactly as published: a
+		// number the store hands back as a float64, at a size no int32 and
+		// no rounding to a float32 would carry (the large git-node class's
+		// background budget, about 68 GiB, and some odd bytes beside it). A
+		// node with nothing to give publishes no key at all, which must read
+		// back as the zero it is — and still as a status, never as a node
+		// not saying.
+		const budget = int64(68)<<30 + 12_345
+		want := map[string]coord.NodeStatus{
+			"n1": {InFlight: 1, GitBackgroundBytes: budget},
+			"n2": {InFlight: 1},
+		}
+		if _, ok := want["n2"].Meta()["git_background_bytes"]; ok {
+			h.t.Fatal("a node with nothing to give its background work published a budget key")
+		}
+		for _, node := range []string{"n1", "n2"} {
+			h.present(node, node+":a", want[node].Meta())
+		}
+		read := map[string]coord.Lease{}
+		for _, node := range []string{"n1", "n2"} {
+			read["Get "+node] = *h.mustHold(coord.NodeResource(node), node+":a")
+		}
+		for _, lease := range h.listLive(coord.ClassNode) {
+			node, _ := coord.ClassNode.Name(lease.Resource)
+			read["ListLive "+node] = lease
+		}
+		if len(read) != 2*len(want) {
+			h.t.Fatalf("read %d leases, want each of the %d nodes by Get and by ListLive",
+				len(read), len(want))
+		}
+		for what, lease := range read {
+			node, _ := coord.ClassNode.Name(lease.Resource)
+			got, ok := coord.StatusFromMeta(lease.Meta)
+			if !ok {
+				h.t.Fatalf("%s: a published status read back as absent", what)
+			}
+			if !reflect.DeepEqual(got, want[node]) {
+				h.t.Errorf("%s: status read back as %+v, want %+v", what, got, want[node])
+			}
+		}
+	}},
+
 	{"a_status_key_this_build_does_not_know_is_ignored", func(h *harness) {
 		// A successor that shares the fleet publishes what it adds beside
 		// what this build reads, in whatever shape it chooses. The status

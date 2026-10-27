@@ -566,7 +566,7 @@ func TestTheMemoryIsReadAgainAtEveryPass(t *testing.T) {
 	if got := len(w.logs.lines(t, "code_cache_memory_unreadable")); got != 1 {
 		t.Errorf("two passes that could not read the memory logged it %d times, want once", got)
 	}
-	if got := cache.MaintenanceBudget(c); got != cache.BitmapCharge(c, repo)-1 {
+	if got := c.BackgroundBudget(); got != cache.BitmapCharge(c, repo)-1 {
 		t.Errorf("a failed read moved the budget to %d, want the last reading's %d", got,
 			cache.BitmapCharge(c, repo)-1)
 	}
@@ -632,8 +632,8 @@ func TestOpenHoldsTheBackgroundWorkToTheNodesMemory(t *testing.T) {
 		t.Errorf("the open kept %d bytes for the rest of the node, want %d for its pool's lanes", got, reserved)
 	}
 	want := max(0, memory-reserved)
-	if got := int64(numberOf(t, l, "maintenance_budget")); got != want || cache.MaintenanceBudget(c) != want {
-		t.Errorf("the budget is %d (logged %d), want the memory %d less %d kept, %d", cache.MaintenanceBudget(c), got,
+	if got := int64(numberOf(t, l, "maintenance_budget")); got != want || c.BackgroundBudget() != want {
+		t.Errorf("the budget is %d (logged %d), want the memory %d less %d kept, %d", c.BackgroundBudget(), got,
 			memory, reserved, want)
 	}
 }
@@ -660,7 +660,7 @@ func TestANodeOfManyCoresAndModestMemoryStillMaintains(t *testing.T) {
 	if got := w.pool.Slots(gitproc.ClassTransfer); got != 32 {
 		t.Errorf("64 cores and 16 GiB run %d transfers, want the 32 the memory backs", got)
 	}
-	if got, want := cache.MaintenanceBudget(c), int64(2<<30); got != want {
+	if got, want := c.BackgroundBudget(), int64(2<<30); got != want {
 		t.Errorf("64 cores and 16 GiB give the background work %d, want %d, an eight-core node's", got, want)
 	}
 	clk.Add(cache.MidxDebounce)
@@ -764,40 +764,40 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 	w := newWorld(t)
 	w.processes, w.transfers, w.memory = cores, zeroing, memory
 	c := w.open(t)
-	if got := cache.MaintenanceBudget(c); got != 0 {
+	if got := c.BackgroundBudget(); got != 0 {
 		t.Fatalf("%d transfers on %d bytes and %d cores leave a budget of %d, want nothing", zeroing, memory,
 			cores, got)
 	}
 	resized := memory + 8<<30
 	cache.SetNodeMemory(c, resized)
 	cache.MaintainerPass(c)
-	if got, want := cache.MaintenanceBudget(c), resized-cache.MemoryReserved(c); want <= 0 || got != want {
+	if got, want := c.BackgroundBudget(), resized-cache.MemoryReserved(c); want <= 0 || got != want {
 		t.Errorf("the node given %d bytes in place has a budget of %d, want the %d past what Open kept",
 			resized, got, want)
 	}
 	c.Stop(context.Background())
 	c = w.open(t)
-	if got := cache.MaintenanceBudget(c); got != 0 {
+	if got := c.BackgroundBudget(); got != 0 {
 		t.Errorf("a restart over the same memory and lane gave the background work %d, want nothing", got)
 	}
 	c.Stop(context.Background())
 
 	w.transfers = 0
 	c = w.open(t)
-	if got, want := cache.MaintenanceBudget(c), int64(cores)*cache.MaintenanceMemoryPerCore; got != want {
+	if got, want := c.BackgroundBudget(), int64(cores)*cache.MaintenanceMemoryPerCore; got != want {
 		t.Fatalf("an unset lane on %d bytes and %d cores leaves %d, want MaintenanceMemoryPerCore a core, %d",
 			memory, cores, got, want)
 	}
 	lowered := memory / 2
 	cache.SetNodeMemory(c, lowered)
 	cache.MaintainerPass(c)
-	if got := cache.MaintenanceBudget(c); got != 0 {
+	if got := c.BackgroundBudget(); got != 0 {
 		t.Fatalf("an unset lane sized for %d bytes, lowered in place to %d, leaves %d, want nothing", memory,
 			lowered, got)
 	}
 	c.Stop(context.Background())
 	w.memory = lowered
-	if got := cache.MaintenanceBudget(w.open(t)); got <= 0 {
+	if got := w.open(t).BackgroundBudget(); got <= 0 {
 		t.Errorf("a restart over the lowered memory with the lane unset gave the background work %d, want "+
 			"the lanes re-sized to leave a budget", got)
 	}

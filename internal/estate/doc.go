@@ -292,6 +292,22 @@
 // of a split presence view both do is work its repository's committer takes
 // once.
 //
+// [Router.Maintainer] names the git node a repository's MAINTENANCE — the
+// compaction of its packs, the publication of its layers — is placed on, which
+// is the home unless the home cannot hold the work: the first node of the same
+// order, still with no demotion, whose ADVERTISED background budget
+// ([GitBudgets]: each git node's maintenance budget, on its presence status)
+// holds the work's charge, and the home where none does. So on a fleet of
+// alike nodes the maintainer is the home and nothing moves, and on one with a
+// single large git node every repository only it can hold is maintained
+// there. A node whose beat carried no status is NOT SAYING, never a node with
+// nothing to give, and keeps its place in the order as a quiet home keeps its
+// repositories: passed over for one beat, its repositories' maintenance would
+// start on runners-up that may hold no copy of them — a cold sync of each
+// whole history — and come back at the next. [Router.IsMaintainer] is
+// three-valued like IsHome, and a maintainer two nodes both believe in is one
+// the committer takes once, as a home's work is.
+//
 // # Which data nodes to ask is answered from memory
 //
 // Every request asks the [Placement] who holds the estate, so the placement

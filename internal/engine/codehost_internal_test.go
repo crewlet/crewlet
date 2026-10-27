@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -107,6 +111,94 @@ func TestACompanyWithNativeCodeServesItsOperations(t *testing.T) {
 				"as a node with no code half", err)
 		}
 	})
+}
+
+// A GIT NODE'S HEARTBEAT ADVERTISES ITS CACHE'S BACKGROUND BUDGET: the status
+// every beat publishes carries, across the lease's JSON and back, the very
+// figure the node's cache holds its maintenance to (Cache.BackgroundBudget),
+// read from the published runtime — and a node without the git role, which
+// holds no cache for a company that hosts code, advertises none: no key on the
+// wire, and zero read back from a status that is still one.
+//
+// Mutations: leave nodeStatus's field unset — the git node advertises nothing,
+// red; fill it from the node's memory rather than its cache's budget — the two
+// differ by what the node keeps for serving, red.
+func TestTheStatusAdvertisesTheCacheBudget(t *testing.T) {
+	t.Parallel()
+	const memory = int64(16) << 30
+	t.Run("a git node", func(t *testing.T) {
+		t.Parallel()
+		e := bootSizedCodeNode(t, nil, memory)
+		n := e.native.Load()
+		if n == nil || n.gitCache == nil {
+			t.Fatal("the premise: a node with every role, for a company hosting code, built no git cache")
+		}
+		budget := n.gitCache.BackgroundBudget()
+		if budget <= 0 || budget >= memory {
+			t.Fatalf("the premise: a %d-byte node's cache gives its background work %d bytes, want a part of "+
+				"its memory", memory, budget)
+		}
+		if got := advertised(t, e).GitBackgroundBytes; got != budget {
+			t.Errorf("the heartbeat advertises %d bytes of background budget, want the cache's own %d", got,
+				budget)
+		}
+	})
+	t.Run("a node without the git role", func(t *testing.T) {
+		t.Parallel()
+		e := bootSizedCodeNode(t, []string{"data", "ingress", "seats", "workers"}, memory)
+		if n := e.native.Load(); n == nil || n.gitCache != nil {
+			t.Fatalf("the premise: a node without the git role holds no git cache (runtime %+v)", n)
+		}
+		if _, ok := e.nodeStatus(t.Context()).Meta()["git_background_bytes"]; ok {
+			t.Error("a node without the git role published a background budget on its heartbeat")
+		}
+		if got := advertised(t, e).GitBackgroundBytes; got != 0 {
+			t.Errorf("a node without the git role advertises %d bytes of background budget, want none", got)
+		}
+	})
+}
+
+// bootSizedCodeNode boots a node with roles (nil: every role) for
+// [codeHostAlone], its git pool sized as a node of memory bytes rather than as
+// the machine running the case, and its transfer lane pinned ([PinGitLanes]);
+// it stops with t.
+func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
+	t.Helper()
+	b := testBootstrap(t)
+	dir := t.TempDir()
+	b.Store.Path = filepath.Join(dir, "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(dir, "stream")
+	b.Node.Roles = roles
+	PinGitLanes(&b)
+	SeedStore(t, &b)
+	company := parseCompany(t, codeHostAlone)
+	RequireNodeGit(t, &b, company)
+	e, err := New(t.Context(), WithGitMemory(Options{Bootstrap: &b, Company: company,
+		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)}, memory))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	return e
+}
+
+// advertised is e's status as a peer reads it off e's heartbeat: through the
+// JSON the lease store keeps it in, and back.
+func advertised(t *testing.T, e *Engine) coord.NodeStatus {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{coord.StatusKey: e.nodeStatus(t.Context()).Meta()})
+	if err != nil {
+		t.Fatalf("marshal the status: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatalf("unmarshal the status: %v", err)
+	}
+	status, ok := coord.StatusFromMeta(meta)
+	if !ok {
+		t.Fatal("the node's heartbeat carries no status")
+	}
+	return status
 }
 
 // A NODE IN A MAINTENANCE MODE DECIDES NO PUSH, ITS OWN OR A PEER'S.

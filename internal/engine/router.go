@@ -33,8 +33,10 @@ import (
 // ([wholeEstate] over [coord.LeaseView]) — the view the fleet's other
 // per-request questions read, never a second one, and never a listing of the
 // fleet per call. Who serves a repository's GIT work is read off the same
-// view — every live node with the git role ([wholeGit], ADR-0059) — and this
-// node's own git half is asked per request ([engineGit]).
+// view — every live node with the git role ([wholeGit], ADR-0059) — and so is
+// what each of them advertises it can give its background work
+// ([presenceRoster.BackgroundBudget]), which places a repository's maintenance;
+// this node's own git half is asked per request ([engineGit]).
 //
 // # What this node answers
 //
@@ -88,7 +90,7 @@ func (e *Engine) newRouter(q estate.Asker, nodeID string,
 
 	opts := estate.RouterOptions{
 		Self: nodeID, Queue: q, Placement: e.estatePlacement(), Git: e.gitPlacement(),
-		Session: estate.NewSession(), Seams: e.serverSeams(),
+		GitBudgets: e.gitBudgets(), Session: estate.NewSession(), Seams: e.serverSeams(),
 		Timing:    estate.Production(),
 		Envelopes: envelopes,
 	}
@@ -192,6 +194,13 @@ func (w wholeGit) Holders() ([]string, error) {
 // Unanswered asks the roster to list again, because a node it named went
 // silent.
 func (w wholeGit) Unanswered(string) { w.roster.Invalidate() }
+
+// gitBudgets is what each git node advertises it can give its background work
+// as this node's router weighs a repository's maintainer
+// ([estate.Router.Maintainer]): its presence status's GitBackgroundBytes, off
+// the same watched view as the git placement, so a node is weighed by the
+// listing that names it.
+func (e *Engine) gitBudgets() estate.GitBudgets { return presenceRoster{view: e.dataView} }
 
 // localGit is this node's git half as the router and the estate server ask for
 // it: resolved on every request ([engineGit]), never once.
@@ -623,7 +632,9 @@ func (e *Engine) serverSeams() estate.ServerSeams {
 
 // presenceRoster is the fleet's presence view as the router's placements read
 // it: every live data node, and every live git node, from memory — one view
-// for both, so the two placements can never disagree about who is live.
+// for both, so the two placements can never disagree about who is live — and
+// what each git node advertises it can give its background work, off the same
+// listing.
 type presenceRoster struct{ view *coord.LeaseView }
 
 // LiveDataNodes is every live data node. A node with no view has no
@@ -653,6 +664,40 @@ func (r presenceRoster) LiveGitNodes() ([]string, error) {
 		return nil, fmt.Errorf("engine: which nodes serve git: %w", err)
 	}
 	return gitNodesOf(leases), nil
+}
+
+// BackgroundBudget is what node's presence status says its git cache gives
+// its background work ([coord.NodeStatus.GitBackgroundBytes], which
+// [Engine.nodeStatus] fills from the node's own cache): said, and zero for a
+// node whose status names none — no git role, no code host built yet, or
+// transfers that keep all of its memory. NOT SAYING where the view carries no
+// status of node: a beat whose status read overran its share of the heartbeat
+// (coord.StatusFromMeta's false: absent is not zero), or no lease of node at
+// all — and a node with no view has no fleet, so nobody in it says anything.
+// An error is UNKNOWN: the view could not be read.
+//
+// A SCAN OF THE LISTING per question, which is the view's clone of a few
+// leases a node: the maintainer question weighs one node at a time and
+// stops at the first that holds the work, the home on a fleet of alike nodes.
+func (r presenceRoster) BackgroundBudget(node string) (int64, bool, error) {
+	if r.view == nil {
+		return 0, false, nil
+	}
+	leases, _, err := r.view.Leases()
+	if err != nil {
+		return 0, false, fmt.Errorf("engine: what %s can give its background work: %w", node, err)
+	}
+	for _, lease := range leases {
+		if id, ok := coord.NodeID(lease.Resource); !ok || id != node {
+			continue
+		}
+		status, said := coord.StatusFromMeta(lease.Meta)
+		if !said {
+			return 0, false, nil
+		}
+		return status.GitBackgroundBytes, true, nil
+	}
+	return 0, false, nil
 }
 
 // Invalidate lists again: a node the view named went silent,
