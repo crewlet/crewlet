@@ -260,18 +260,19 @@ const watchFilter = "crewlet.probe.log.repo.>"
 const watchAwait = 30 * time.Second
 
 // heardCall is one call a watch made to its handler: a subject and its
-// sequence, or — the zero value — a Gap.
+// sequence, or a Gap and the position it reaches.
 type heardCall struct {
+	gap     bool
 	subject string
 	seq     uint64
 }
 
-// heardGap is a Gap, as [watchHeard] records one.
-var heardGap = heardCall{}
+// gapThrough is a Gap reaching through, as [watchHeard] records one.
+func gapThrough(through uint64) heardCall { return heardCall{gap: true, seq: through} }
 
 func (c heardCall) String() string {
-	if c == heardGap {
-		return "gap"
+	if c.gap {
+		return fmt.Sprintf("gap through %d", c.seq)
 	}
 	return fmt.Sprintf("%s@%d", c.subject, c.seq)
 }
@@ -312,7 +313,7 @@ func (h *watchHeard) handler() WatchHandler {
 	}
 	return WatchHandler{
 		Subject: func(subject string, seq uint64) { record(heardCall{subject: subject, seq: seq}) },
-		Gap:     func() { record(heardGap) },
+		Gap:     func(through uint64) { record(gapThrough(through)) },
 	}
 }
 
@@ -354,6 +355,15 @@ func appendHeard(t *testing.T, log *DomainLog, subject string) heardCall {
 		t.Fatalf("append to %s: %v", subject, err)
 	}
 	return heardCall{subject: subject, seq: seq}
+}
+
+// appendUnheard appends one record of another kind of object, outside
+// watchFilter, and answers its sequence: the log's end, now past the last
+// record a watch was told — which is what tells a Gap reaching the end from
+// one reaching only the watch's last delivery.
+func appendUnheard(t *testing.T, log *DomainLog) uint64 {
+	t.Helper()
+	return appendHeard(t, log, "crewlet.probe.log.name.a").seq
 }
 
 // watchLog begins a watch on log under watchFilter, stopped when the case
@@ -538,15 +548,19 @@ func TestAWatchBeginsAtTheLogsEnd(t *testing.T) {
 // deletes it — and a watch that went deaf with it would leave its caller a
 // whole cadence behind every record after, with nothing saying why. So a lost
 // consumer is replaced by one of the watch's own at the log's end, and the
-// handler is told Gap BEFORE anything the new one delivers: what the gap held,
-// the caller reads from its rows. Two ways a consumer goes, because the broker
+// handler is told Gap BEFORE anything the new one delivers, reaching the log's
+// end when the broker made it: the caller reads its rows for what the gap
+// held once its copy is there. Two ways a consumer goes, because the broker
 // says so for one and nothing does for the other: deleted, it answers the
 // standing pull that the consumer is gone; held in memory by a member that
-// restarted, nothing serves the pull at all.
+// restarted, nothing serves the pull at all. Another kind's record after the
+// last one heard puts the log's end past the watch's last delivery.
 //
 // Mutation: owe no Gap for a replacement, and the handler never hears one; no
 // replacement, and the record after the loss is never heard; take only the
-// broker's word for a loss, and the restarted member's is never noticed.
+// broker's word for a loss, and the restarted member's is never noticed; reach
+// the last delivery rather than where the replacement began, and the Gap stops
+// short of the end.
 func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 	t.Parallel()
 
@@ -560,6 +574,7 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 		w, heard := watchLog(t, log)
 		first := appendHeard(t, log, "crewlet.probe.log.repo.a")
 		heard.await("heard the record before the loss", atLeast(1))
+		end := appendUnheard(t, log)
 
 		lost, _ := w.consumer()
 		if err := q.js.DeleteConsumer(t.Context(), probeDomain().Name, lost); err != nil {
@@ -567,10 +582,11 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 		}
 		awaitReplaced(t, w, lost)
 		second := appendHeard(t, log, "crewlet.probe.log.repo.b")
-		want := []heardCall{first, heardGap, second}
+		want := []heardCall{first, gapThrough(end), second}
 		if got := heard.await("heard the record after its replacement", atLeast(len(want))); !slices.Equal(got, want) {
 			t.Fatalf("the watch told its handler %v, want %v — a Gap for the "+
-				"lost consumer, before what its replacement delivered", got, want)
+				"lost consumer reaching the log's end when its replacement was "+
+				"made, before what the replacement delivered", got, want)
 		}
 	})
 
@@ -588,6 +604,7 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 		w, heard := watchLog(t, log)
 		first := appendHeard(t, log, "crewlet.probe.log.repo.a")
 		heard.await("heard the record before the restart", atLeast(1))
+		end := appendUnheard(t, log)
 
 		lost, _ := w.consumer()
 		srv.Restart(queue.MaxPayloadBytes, q.Conn())
@@ -597,17 +614,84 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 			func(heard []heardCall) bool { return len(heard) > 0 && heard[len(heard)-1] == second })
 		// ONE GAP AT LEAST, AND NOTHING ELSE between the two: the restart is
 		// also a reconnect, which may have said so before the loss was known.
+		// Every one of them reaches the end: the replacement began after it,
+		// a reconnect's reads it, and nothing was appended until the record
+		// after.
 		if len(got) < 3 || got[0] != first {
-			t.Fatalf("the watch told its handler %v, want %s, then a Gap, then %s",
-				got, first, second)
+			t.Fatalf("the watch told its handler %v, want %s, then a Gap through %d, "+
+				"then %s", got, first, end, second)
 		}
 		for _, between := range got[1 : len(got)-1] {
-			if between != heardGap {
+			if between != gapThrough(end) {
 				t.Fatalf("the watch told its handler %v — between the record before "+
-					"the restart and the one after, only Gaps", got)
+					"the restart and the one after, only Gaps through the log's end, %d",
+					got, end)
 			}
 		}
 	})
+}
+
+// A GAP REACHES EVERY RECORD THE WATCH MISSED.
+//
+// A caller reads its rows for what a Gap held, and its rows say only what its
+// copy has applied — and what costs a watch its records, a member restarting
+// or a connection lost, can hold that copy back as well. Rows read at a copy
+// behind the gap's records find nothing to do, and the caller would hear of
+// them only at its next pass over its rows. So a Gap reaches a position at or
+// past every record the watch never told, and the caller waits for its copy
+// to get there. Staged as the case it exists for: records appended while no
+// consumer serves the watch, which its replacement — beginning at the log's
+// end — never delivers. The replacement is held off by a consumer of another
+// description under the name its create asks for, which the broker refuses to
+// make twice, so those records are appended before it can begin whatever the
+// timing.
+//
+// Mutation: reach the watch's last delivery rather than where its
+// replacement began, and the records appended while it was deaf lie past the
+// Gap.
+func TestAGapReachesEveryRecordTheWatchMissed(t *testing.T) {
+	t.Parallel()
+	q := domainQueue(t, probeDomain())
+	log, err := q.DomainLog(t.Context(), probeDomain().Name)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
+	}
+	// ASKED AGAIN IN MILLISECONDS rather than seconds, so the replacement
+	// begins as soon as nothing stands in its way: the case is about the
+	// position its Gap reaches, not the spacing of its attempts.
+	timing := log.watching()
+	timing.retry, timing.retryCeiling = 20*time.Millisecond, 200*time.Millisecond
+	log.watchTiming = timing
+	w, heard := watchLog(t, log)
+	first := appendHeard(t, log, "crewlet.probe.log.repo.a")
+	heard.await("heard the record before the loss", atLeast(1))
+
+	next := w.prefix + "2"
+	standing := w.config(next)
+	standing.Description = "a consumer standing where the watch's replacement would"
+	if _, err := q.js.CreateConsumer(t.Context(), probeDomain().Name, standing); err != nil {
+		t.Fatalf("make a consumer under the replacement's name: %v", err)
+	}
+	lost, _ := w.consumer()
+	if err := q.js.DeleteConsumer(t.Context(), probeDomain().Name, lost); err != nil {
+		t.Fatalf("delete the watch's consumer: %v", err)
+	}
+	// DELIVERED BY NOBODY: the watch's consumer is gone, its replacement
+	// cannot be made, and nothing pulls from the consumer standing in its
+	// place.
+	appendHeard(t, log, "crewlet.probe.log.repo.b")
+	missed := appendHeard(t, log, "crewlet.probe.log.repo.c")
+	if err := q.js.DeleteConsumer(t.Context(), probeDomain().Name, next); err != nil {
+		t.Fatalf("delete the consumer standing in the replacement's place: %v", err)
+	}
+	awaitReplaced(t, w, lost)
+	second := appendHeard(t, log, "crewlet.probe.log.repo.d")
+	want := []heardCall{first, gapThrough(missed.seq), second}
+	if got := heard.await("heard the record after its replacement", atLeast(len(want))); !slices.Equal(got, want) {
+		t.Fatalf("the watch told its handler %v, want %v — the records appended "+
+			"while no consumer served it are never told, and its Gap reaches the "+
+			"last of them", got, want)
+	}
 }
 
 // A REPLACEMENT ASKED AGAIN IS THE SAME CONSUMER.
@@ -620,11 +704,16 @@ func TestAWatchSaysWhenItLostItsConsumer(t *testing.T) {
 // consumer it made. Staged by making the replacement's consumer before the
 // loss, exactly as an earlier attempt of the watch's would have, then losing
 // the watch's consumer: the watch serves through that one, and hears through
-// it.
+// it. A record appended between the two shows WHERE that consumer begins:
+// where it was made, the log's end then, which its create's reply carries —
+// so the Gap reaches that end and the record after it is told again, by the
+// consumer that begins before it.
 //
 // Mutation: name each attempt afresh, and the watch replaces its consumer with
-// another; and should the broker ever refuse a create it already made, the
-// replacement never begins.
+// another; should the broker ever refuse a create it already made, the
+// replacement never begins; reach the log's end when the Gap is told rather
+// than where the replacement began, and the Gap reaches past a record the
+// replacement has yet to tell.
 func TestAReplacementAskedAgainIsTheSameConsumer(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
@@ -641,6 +730,8 @@ func TestAReplacementAskedAgainIsTheSameConsumer(t *testing.T) {
 	if _, err := q.js.CreateConsumer(t.Context(), probeDomain().Name, w.config(next)); err != nil {
 		t.Fatalf("make the consumer an earlier attempt would have made: %v", err)
 	}
+	between := appendHeard(t, log, "crewlet.probe.log.repo.b")
+	heard.await("heard the record appended after the earlier attempt", atLeast(2))
 	if err := q.js.DeleteConsumer(t.Context(), probeDomain().Name, lost); err != nil {
 		t.Fatalf("delete the watch's consumer: %v", err)
 	}
@@ -648,10 +739,12 @@ func TestAReplacementAskedAgainIsTheSameConsumer(t *testing.T) {
 		t.Fatalf("the watch replaced its consumer with %s, want %s — the one its "+
 			"own earlier create made", got, next)
 	}
-	second := appendHeard(t, log, "crewlet.probe.log.repo.b")
-	want := []heardCall{first, heardGap, second}
+	second := appendHeard(t, log, "crewlet.probe.log.repo.c")
+	want := []heardCall{first, between, gapThrough(first.seq), between, second}
 	if got := heard.await("heard the record after its replacement", atLeast(len(want))); !slices.Equal(got, want) {
-		t.Fatalf("the watch told its handler %v, want %v", got, want)
+		t.Fatalf("the watch told its handler %v, want %v — a Gap reaching the "+
+			"log's end when the replacement was made, and everything after it "+
+			"again from the replacement", got, want)
 	}
 }
 
@@ -663,33 +756,67 @@ func TestAReplacementAskedAgainIsTheSameConsumer(t *testing.T) {
 // goes on serving. Every delivery carries the consumer's own count of its
 // deliveries, which rises by one each time; one that rose by more says a
 // delivery went missing, and the handler is told Gap before the subject that
-// revealed it. A delivery whose count cannot be read vouches for nothing, and
-// is a Gap in place of its subject. Driven through the delivery path itself,
-// since no broker misdelivers on request.
+// revealed it, reaching that subject's own position: the consumer delivers in
+// log order, so what went missing came before it. Driven through the delivery
+// path itself, since no broker misdelivers on request.
 //
-// Mutation: drop the count's check, and the missing delivery is never told.
+// A delivery whose position cannot be read vouches for nothing — neither
+// whether one went missing before it nor how far the record it carried lies —
+// and is a Gap in place of its subject, reaching the log's end, read once the
+// delivery has come: no record a consumer delivered is past the end read
+// after it. Driven on a real watch, whose supervisor reads that end.
+//
+// Mutation: drop the count's check, and the missing delivery is never told;
+// reach the consumer's count rather than the log's position, or where the
+// watch's consumer began rather than the end, and each Gap stops short.
 func TestAWatchSaysWhenADeliveryNeverReachedIt(t *testing.T) {
 	t.Parallel()
-	heard := newWatchHeard(t)
-	w := &DomainWatch{l: &DomainLog{name: probeDomain().Name}, filter: watchFilter,
-		h: heard.handler(), logger: slog.New(slog.DiscardHandler),
-		gen: 1, live: true, name: "watch_probe_1"}
-	const subject = "crewlet.probe.log.repo.a"
-	deliver := func(count, seq uint64) {
-		w.take(1, subject, &jetstream.MsgMetadata{
-			Sequence: jetstream.SequencePair{Consumer: count, Stream: seq}}, nil)
-	}
-	deliver(1, 10)
-	deliver(2, 11)
-	deliver(4, 15) // the third went to an inbox nobody held
-	deliver(5, 16)
-	w.take(1, subject, nil, errors.New("a reply subject that names no position"))
 
-	want := []heardCall{{subject, 10}, {subject, 11}, heardGap, {subject, 15},
-		{subject, 16}, heardGap}
-	if got := heard.heard(); !slices.Equal(got, want) {
-		t.Fatalf("the watch told its handler %v, want %v", got, want)
-	}
+	t.Run("its count skipped one", func(t *testing.T) {
+		t.Parallel()
+		heard := newWatchHeard(t)
+		w := &DomainWatch{l: &DomainLog{name: probeDomain().Name}, filter: watchFilter,
+			h: heard.handler(), logger: slog.New(slog.DiscardHandler),
+			gen: 1, live: true, name: "watch_probe_1"}
+		const subject = "crewlet.probe.log.repo.a"
+		deliver := func(count, seq uint64) heardCall {
+			w.take(1, subject, &jetstream.MsgMetadata{
+				Sequence: jetstream.SequencePair{Consumer: count, Stream: seq}}, nil)
+			return heardCall{subject: subject, seq: seq}
+		}
+		want := []heardCall{deliver(1, 10), deliver(2, 11)}
+		revealing := deliver(4, 15) // the third went to an inbox nobody held
+		want = append(want, gapThrough(revealing.seq), revealing, deliver(5, 16))
+		if got := heard.heard(); !slices.Equal(got, want) {
+			t.Fatalf("the watch told its handler %v, want %v", got, want)
+		}
+	})
+
+	t.Run("its position cannot be read", func(t *testing.T) {
+		t.Parallel()
+		q := domainQueue(t, probeDomain())
+		log, err := q.DomainLog(t.Context(), probeDomain().Name)
+		if err != nil {
+			t.Fatalf("open the log: %v", err)
+		}
+		w, heard := watchLog(t, log)
+		first := appendHeard(t, log, "crewlet.probe.log.repo.a")
+		heard.await("heard the record before the unreadable one", atLeast(1))
+		end := appendUnheard(t, log)
+
+		w.mu.Lock()
+		gen := w.gen
+		w.mu.Unlock()
+		w.take(gen, "crewlet.probe.log.repo.b", nil,
+			errors.New("a reply subject that names no position"))
+		heard.await("said a delivery's position could not be read", atLeast(2))
+		second := appendHeard(t, log, "crewlet.probe.log.repo.c")
+		want := []heardCall{first, gapThrough(end), second}
+		if got := heard.await("heard the record after", atLeast(len(want))); !slices.Equal(got, want) {
+			t.Fatalf("the watch told its handler %v, want %v — a Gap through the "+
+				"log's end in place of the delivery it could not read", got, want)
+		}
+	})
 }
 
 // A RECONNECT IS A GAP, AND THE CONSUMER IS KEPT.
@@ -698,10 +825,13 @@ func TestAWatchSaysWhenADeliveryNeverReachedIt(t *testing.T) {
 // inbox nobody held, and when it was the last for a while nothing would ever
 // reveal it — the consumer's count shows a missing delivery only on the next
 // one. So the watch reads its connection's reconnect count every heartbeat
-// and tells its handler Gap when it moved, and keeps the consumer, which a
-// blip does not end ([ephemeralInactive]).
+// and tells its handler Gap when it moved, reaching the log's end read once
+// it was noticed, and keeps the consumer, which a blip does not end
+// ([ephemeralInactive]). Another kind's record after the last one heard puts
+// the end past the watch's last delivery.
 //
-// Mutation: drop the recheck, and no Gap is told.
+// Mutation: drop the recheck, and no Gap is told; reach the watch's last
+// delivery rather than the end, and the Gap stops short of it.
 func TestAWatchSaysWhenItsConnectionWasAway(t *testing.T) {
 	t.Parallel()
 	_, q, log := externalLog(t)
@@ -713,6 +843,7 @@ func TestAWatchSaysWhenItsConnectionWasAway(t *testing.T) {
 	w, heard := watchLog(t, log)
 	first := appendHeard(t, log, "crewlet.probe.log.repo.a")
 	heard.await("heard the record before the reconnect", atLeast(1))
+	end := appendUnheard(t, log)
 
 	kept, _ := w.consumer()
 	reconnects := q.Conn().Stats().Reconnects
@@ -728,9 +859,10 @@ func TestAWatchSaysWhenItsConnectionWasAway(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	second := appendHeard(t, log, "crewlet.probe.log.repo.b")
-	want := []heardCall{first, heardGap, second}
+	want := []heardCall{first, gapThrough(end), second}
 	if got := heard.await("heard the record after the reconnect", atLeast(len(want))); !slices.Equal(got, want) {
-		t.Fatalf("the watch told its handler %v, want %v", got, want)
+		t.Fatalf("the watch told its handler %v, want %v — a Gap through the "+
+			"log's end, read once the reconnect was noticed", got, want)
 	}
 	if name, _ := w.consumer(); name != kept {
 		t.Errorf("the watch replaced its consumer %s with %s over a reconnect it "+

@@ -563,7 +563,8 @@ func (l *DomainLog) SetMaxBytes(ctx context.Context, maxBytes uint64) error {
 }
 
 // WatchHandler is what a [DomainWatch] tells its caller: the subject of each
-// record appended under its filter, and every moment it may have missed one.
+// record appended under its filter, and every moment it may have missed one,
+// with how far the caller's rows must reach to hold what it missed.
 //
 // The two are called ONE AT A TIME, never concurrently, and never once
 // [DomainWatch.Stop] has returned, so a caller keeps what the two share without
@@ -582,12 +583,26 @@ type WatchHandler struct {
 	// before the record and finds nothing to do.
 	Subject func(subject string, seq uint64)
 
-	// Gap is called whenever the watch may have missed a record: it lost its
+	// Gap is called whenever the watch may have missed a record — it lost its
 	// consumer and began again at the log's end, a delivery its consumer
-	// counted never reached it, or the queue's connection to the broker went
-	// away and came back. What the watch did not deliver before a Gap, the
-	// caller finds by reading its rows.
-	Gap func()
+	// counted never reached it, a delivery came whose position it could not
+	// read, or the queue's connection to the broker went away and came back —
+	// with through, a position on the log at or past every record it may
+	// have missed. The caller waits for its copy to reach through, then reads
+	// its rows, which hold what the watch did not tell it.
+	//
+	// THE POSITION TRAVELS WITH THE GAP for Subject's reason. A Gap is told
+	// when the watch notices it, which says nothing of how far this node's
+	// copy has come, and what cost the watch its records — a member
+	// restarting, a connection lost — can hold the copy's applier back as
+	// well: rows read before the copy reaches through can predate the very
+	// records the Gap is about, and the caller would find them only at its
+	// next pass over its rows. Every record appended under the filter after
+	// the watch began is told to Subject or lies at or below the through of a
+	// Gap told after the watch may have missed it — so a Gap can follow
+	// Subjects of records past it, and a record can be both told and covered:
+	// a nudge twice is still a nudge.
+	Gap func(through uint64)
 }
 
 // Watch tells h the subject of every record appended to the log under filter
@@ -598,12 +613,12 @@ type WatchHandler struct {
 // of it is refused ([DomainLog.carries]).
 //
 // It returns once the watch has begun — every record appended after it
-// returns is delivered or followed by a Gap — and the watch is its caller's
-// to end with [DomainWatch.Stop]. A watch that could not begin is an error
-// and leaves nothing running. One that has begun outlives its consumer and
-// its connection's reconnects on its own, saying so through h.Gap, until it
-// is stopped or the queue's connection is closed for good, which takes the
-// node down with it ([Queue.Lost]).
+// returns is told to h.Subject or lies within a Gap told after it — and the
+// watch is its caller's to end with [DomainWatch.Stop]. A watch that could
+// not begin is an error and leaves nothing running. One that has begun
+// outlives its consumer and its connection's reconnects on its own, saying so
+// through h.Gap, until it is stopped or the queue's connection is closed for
+// good, which takes the node down with it ([Queue.Lost]).
 //
 // # Subjects and never records
 //
@@ -634,10 +649,11 @@ type WatchHandler struct {
 // for the price of one create. So a consumer that goes — the member holding it
 // stopped or was cut off, the broker reaped it while this node was away
 // ([ephemeralInactive]), somebody deleted it — is not waited for: the watch
-// creates another at the log's end, under a name of its own, and calls h.Gap,
-// and the caller reads its rows for what the gap held.
+// creates another at the log's end, under a name of its own, and calls h.Gap
+// through the position the new consumer begins after, and the caller reads
+// its rows for what the gap held once its copy is there.
 //
-// # How a loss is known
+// # How a loss is known, and how far its Gap reaches
 //
 // The broker sends an idle heartbeat to a standing pull every
 // [watchHeartbeat] while it has nothing to deliver, so silence for two of
@@ -645,12 +661,24 @@ type WatchHandler struct {
 // so is a pull nobody serves (no responders: no member holds the consumer),
 // and the broker's word that it deleted the consumer or that the member
 // holding it is shutting down ([lostConsumer]). Each is a loss, answered with
-// a new consumer. Two things are not, and each is a Gap with the consumer
-// kept: a delivery the consumer counted and this node never received — every
+// a new consumer, and its Gap reaches the log's end when the broker made that
+// consumer, because the new consumer delivers everything past it — a position
+// the create's own reply carries, so telling it costs nothing more.
+//
+// Two things are not a loss, and each is a Gap with the consumer kept. One is
+// a delivery the consumer counted and this node never received: every
 // delivery carries the consumer's own count, which must rise by one each
-// time — and a reconnect of the queue's connection, across which a delivery
-// may have gone to an inbox nobody held; the connection's reconnect count is
-// read every heartbeat, so the caller hears of one within one.
+// time, and the Gap reaches the position of the delivery that revealed the
+// miss, since the consumer delivers in log order. The other is a reconnect of
+// the queue's connection, across which a delivery may have gone to an inbox
+// nobody held: the connection's reconnect count is read every heartbeat, so
+// the caller hears of one within one, and the Gap reaches the log's end, read
+// once the reconnect is noticed — at or past every record the consumer can
+// have delivered by then, since a consumer delivers only what the log already
+// holds. A delivery whose position cannot be read is told as a reconnect is.
+// One the broker still makes to the old interest after that read, in the
+// instant before this node's resubscription reaches the consumer's member, the
+// consumer's count reveals at the next delivery.
 func (l *DomainLog) Watch(ctx context.Context, filter string, h WatchHandler) (*DomainWatch, error) {
 	if l.q.isClosed() {
 		return nil, ErrClosed
@@ -685,9 +713,6 @@ func (l *DomainLog) Watch(ctx context.Context, filter string, h WatchHandler) (*
 		prefix: "watch_" + nuid.Next() + "_",
 		life:   life, cancel: cancel,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
-		// READ BEFORE THE FIRST CONSUMER EXISTS, so a reconnect while it is
-		// made is one the watch notices rather than one it starts past.
-		reconnects: l.js.Conn().Stats().Reconnects,
 	}
 	if err := w.begin(ctx, 1); err != nil {
 		cancel()
@@ -736,7 +761,8 @@ type watchTiming struct {
 	// heartbeat is the broker's idle heartbeat to the watch's pull.
 	heartbeat time.Duration
 	// recheck is how often the watch reads its connection's reconnect
-	// count: every heartbeat, in production.
+	// count, and how soon a read of the log's end that failed is asked
+	// again: every heartbeat, in production.
 	recheck time.Duration
 	// attempt bounds one create of a replacement consumer: in production
 	// the client's own default for a request with no deadline, the five
@@ -750,7 +776,10 @@ type watchTiming struct {
 	// fifteen seconds clustered and thirty solo): that is sized for a
 	// replicated group's election, which a one-member consumer has none of,
 	// and a create lost to a restarting member would hold the watch deaf
-	// for all of it.
+	// for all of it. It bounds the read of the log's end a Gap with no
+	// position of its own waits for too ([DomainWatch.placeGap]): one
+	// request the stream's leader answers as fast, asked again inside the
+	// bound as every read of the log's state is ([DomainLog.stateInfo]).
 	attempt time.Duration
 	// retry and retryCeiling space the attempts to replace a lost consumer.
 	retry, retryCeiling time.Duration
@@ -799,12 +828,13 @@ var errWatchStopped = errors.New("jetstream: the watch was stopped")
 
 // DomainWatch is one running [DomainLog.Watch].
 //
-// ONE GOROUTINE OF ITS OWN, the supervisor, which replaces a lost consumer
-// and reads the connection's reconnect count, and which [DomainWatch.Stop]
-// ends and waits for. Deliveries and the client's reports about its pull
-// arrive on the client's own goroutines; all three meet under mu, where every
-// call to the handler is made, which is what makes the calls one at a time
-// and none after Stop.
+// ONE GOROUTINE OF ITS OWN, the supervisor, which replaces a lost consumer,
+// reads the connection's reconnect count and reads the log's end for a Gap
+// that has no position of its own, and which [DomainWatch.Stop] ends and
+// waits for — so no request the watch sends is made on the delivery path.
+// Deliveries and the client's reports about its pull arrive on the client's
+// own goroutines; all three meet under mu, where every call to the handler is
+// made, which is what makes the calls one at a time and none after Stop.
 type DomainWatch struct {
 	l      *DomainLog
 	filter string
@@ -819,12 +849,13 @@ type DomainWatch struct {
 	// consumer beside it.
 	prefix string
 
-	// life is the watch's own context, cancelled by Stop: every create the
-	// supervisor asks runs under it.
+	// life is the watch's own context, cancelled by Stop: every create and
+	// read the supervisor asks runs under it.
 	life   context.Context
 	cancel context.CancelFunc
-	// wake tells the supervisor a loss was reported. Capacity one, so a
-	// report is never lost and its sender never blocks.
+	// wake tells the supervisor a loss was reported or a Gap waits for the
+	// log's end. Capacity one, so a report is never lost and its sender
+	// never blocks: the supervisor reads the watch's state, not the reports.
 	wake chan struct{}
 	// done is closed when the supervisor has returned.
 	done chan struct{}
@@ -838,16 +869,24 @@ type DomainWatch struct {
 	// none does.
 	gen  uint64
 	live bool
-	// name and consume are gen's consumer and its standing pull.
+	// name and consume are gen's consumer and its standing pull, and began
+	// the position that consumer began after: the log's end when the broker
+	// made it ([DomainWatch.begin]).
 	name    string
 	consume jetstream.ConsumeContext
+	began   uint64
 	// delivered is the consumer's own count of the last delivery taken.
 	delivered uint64
 	// gapPending is the Gap a loss owes, called once its replacement has
 	// begun — by the replacement's first delivery or by the supervisor,
-	// whichever comes first — and never before, or the records appended
-	// between the call and the new consumer would be covered by nothing.
+	// whichever comes first — through the position the replacement began
+	// after, and never before, or the records appended between the call and
+	// the new consumer would be covered by nothing.
 	gapPending bool
+	// gapUnread is a Gap owed within gen that has no position of its own — a
+	// reconnect, a delivery whose position could not be read — which the
+	// supervisor calls once it has read the log's end ([DomainWatch.placeGap]).
+	gapUnread bool
 	// lost is what the client reported when gen stopped serving; closed is
 	// the queue's connection closed for good, which ends the watch.
 	lost   error
@@ -880,11 +919,28 @@ func (w *DomainWatch) config(name string) jetstream.ConsumerConfig {
 // starts its standing pull.
 func (w *DomainWatch) begin(ctx context.Context, gen uint64) error {
 	name := w.prefix + strconv.FormatUint(gen, 10)
+	// READ BEFORE THE CONSUMER EXISTS, so a reconnect while it is being
+	// made is one the watch notices at its next recheck rather than one it
+	// starts past. One before it is answered without a Gap of its own:
+	// whatever a delivery lost to it carried lies at or below the position
+	// this consumer begins after, which the Gap a loss owes reaches, or this
+	// consumer delivers it.
+	reconnects := w.l.js.Conn().Stats().Reconnects
 	w.l.q.noteConsumerProposal()
 	cons, err := w.l.js.CreateConsumer(ctx, w.l.name, w.config(name))
 	if err != nil {
 		return fmt.Errorf("create the consumer %s: %w", name, err)
 	}
+	// WHERE IT BEGINS, from the create's own reply: a consumer of new
+	// records reports everything up to the log's end when the broker made
+	// it as delivered, and delivers every record after. So that end is
+	// exactly how far a caller's rows must reach to hold what the watch
+	// missed before this consumer, told for nothing beyond the create —
+	// where a read of the log's end would be a second request saying less.
+	// A create asked again is answered with the consumer an earlier attempt
+	// made, which reports where IT was made: the position that holds, since
+	// that consumer delivers everything after it.
+	began := cons.CachedInfo().Delivered.Stream
 	w.mu.Lock()
 	if w.stopped {
 		// The consumer stays behind, and the broker reaps it within
@@ -892,7 +948,8 @@ func (w *DomainWatch) begin(ctx context.Context, gen uint64) error {
 		w.mu.Unlock()
 		return errWatchStopped
 	}
-	w.gen, w.live, w.name, w.delivered = gen, true, name, 0
+	w.gen, w.live, w.name, w.delivered, w.began = gen, true, name, 0, began
+	w.reconnects = reconnects
 	w.mu.Unlock()
 
 	cc, err := cons.Consume(
@@ -938,34 +995,54 @@ func (w *DomainWatch) take(gen uint64, subject string, meta *jetstream.MsgMetada
 	w.flushGap()
 	if metaErr != nil {
 		// NO COUNT, so nothing says whether a delivery went missing before
-		// this one, and no position to wait for: a Gap, which tells the
-		// caller everything this subject would have.
+		// this one, and NO POSITION, so nothing says how far the record it
+		// carried lies: a Gap through the log's end, which the supervisor
+		// reads — a request, which the delivery path never waits on.
 		w.logger.Warn("jetstream_watch_unreadable", "stream", w.l.name,
 			"filter", w.filter, "consumer", w.name, "subject", subject,
 			"error", metaErr.Error(),
 			"detail", "a delivery carried no position this build can read; "+
-				"its caller is told to read its rows instead")
-		w.h.Gap()
+				"its caller is told to read its rows once its copy reaches "+
+				"the log's end")
+		w.oweUnread()
 		return
 	}
 	if count := meta.Sequence.Consumer; count != w.delivered+1 {
 		w.logger.Info("jetstream_watch_missed", "stream", w.l.name,
 			"filter", w.filter, "consumer", w.name, "last_taken", w.delivered,
-			"delivered", count,
+			"delivered", count, "through", meta.Sequence.Stream,
 			"detail", "the consumer counted deliveries this node never "+
 				"received — sent to an inbox nobody held; its caller is told "+
-				"to read its rows")
-		w.h.Gap()
+				"to read its rows once its copy reaches this delivery")
+		// THROUGH THIS DELIVERY'S OWN POSITION: the consumer delivers in
+		// log order, so every delivery it counted and this node missed
+		// carried a record before this one.
+		w.h.Gap(meta.Sequence.Stream)
 	}
 	w.delivered = meta.Sequence.Consumer
 	w.h.Subject(subject, meta.Sequence.Stream)
 }
 
-// flushGap calls the Gap a loss owes, once. Under mu.
+// flushGap calls the Gap a loss owes, once, through the position its
+// replacement began after. Under mu.
+//
+// IT ANSWERS FOR A GAP STILL WAITING FOR THE LOG'S END ([DomainWatch.gapUnread])
+// as well: whatever a delivery the lost consumer made and this node never took
+// carried lies at or below that position, or the replacement delivers it.
 func (w *DomainWatch) flushGap() {
 	if w.gapPending {
-		w.gapPending = false
-		w.h.Gap()
+		w.gapPending, w.gapUnread = false, false
+		w.h.Gap(w.began)
+	}
+}
+
+// oweUnread owes a Gap within the current generation that has no position of
+// its own, and wakes the supervisor to read the log's end for it. Under mu.
+func (w *DomainWatch) oweUnread() {
+	w.gapUnread = true
+	select {
+	case w.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -1022,9 +1099,11 @@ func connectionClosed(err error) bool {
 		errors.Is(err, nats.ErrConnectionClosed)
 }
 
-// supervise replaces a lost consumer and reads the connection's reconnect
-// count every recheck, until the watch is stopped or its connection closed for
-// good.
+// supervise replaces a lost consumer, reads the connection's reconnect count
+// every recheck and reads the log's end for a Gap that waits for it, until the
+// watch is stopped or its connection closed for good. What it acts on is the
+// watch's state, so a wake that arrives while it is busy is answered by the
+// pass it is in or the next.
 func (w *DomainWatch) supervise() {
 	defer close(w.done)
 	recheck := time.NewTicker(w.timing.recheck)
@@ -1036,16 +1115,18 @@ func (w *DomainWatch) supervise() {
 		case <-recheck.C:
 			w.recheckConnection()
 		case <-w.wake:
-			if !w.replace() {
-				return
-			}
 		}
+		if !w.replace() {
+			return
+		}
+		w.placeGap()
 	}
 }
 
-// recheckConnection calls a Gap when the queue's connection reconnected since
+// recheckConnection owes a Gap when the queue's connection reconnected since
 // it was last read: a delivery made while it was away may have gone to an
-// inbox nobody held, and nothing would say so until the next one.
+// inbox nobody held, and nothing would say so until the next one. It reaches
+// the log's end, which [DomainWatch.placeGap] reads next.
 func (w *DomainWatch) recheckConnection() {
 	reconnects := w.l.js.Conn().Stats().Reconnects
 	w.mu.Lock()
@@ -1055,15 +1136,63 @@ func (w *DomainWatch) recheckConnection() {
 	}
 	w.reconnects = reconnects
 	if w.stopped || !w.live {
-		// A LOSS ALREADY OWES ONE, called once its replacement has begun.
+		// A LOSS ALREADY OWES ONE, called once its replacement has begun and
+		// reaching past whatever this reconnect cost ([DomainWatch.flushGap]).
 		return
 	}
 	w.logger.Info("jetstream_watch_reconnected", "stream", w.l.name,
 		"filter", w.filter, "consumer", w.name,
 		"detail", "the connection to the broker went away and came back, and a "+
 			"delivery made meanwhile may have gone to nobody; the consumer is "+
-			"kept and its caller is told to read its rows")
-	w.h.Gap()
+			"kept and its caller is told to read its rows once its copy reaches "+
+			"the log's end")
+	w.gapUnread = true
+}
+
+// placeGap calls a Gap the current generation owes with no position of its own
+// — a reconnect, a delivery whose position could not be read — through the
+// log's end, once it has read it: every record the consumer delivered before
+// the read lies at or below it, since a consumer delivers only what the log
+// already holds. Read here and not where the Gap was noticed, because a read
+// is a request and the delivery path never waits on one.
+//
+// THE LOG'S END, NOT THE CONSUMER'S OWN DELIVERED POSITION, though the
+// consumer's info would name a tighter one: a member answers for a one-replica
+// consumer it holds before the consumer has chosen where it begins — on a
+// cluster that choice waits for it to lead, as after the member restarted and
+// made it again — and reports it as having delivered nothing, a position
+// below everything its predecessor delivered. The log's end has no such
+// moment: no consumer delivers past it.
+//
+// A read that fails leaves the Gap owed, asked again at the next recheck. A
+// loss meanwhile owes a Gap of its own, which answers for this one
+// ([DomainWatch.flushGap]).
+func (w *DomainWatch) placeGap() {
+	w.mu.Lock()
+	owed := w.gapUnread && w.live && !w.stopped
+	w.mu.Unlock()
+	if !owed {
+		return
+	}
+	ctx, cancel := context.WithTimeout(w.life, w.timing.attempt)
+	through, err := w.l.End(ctx)
+	cancel()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped || !w.live || !w.gapUnread {
+		return
+	}
+	if err != nil {
+		w.logger.Warn("jetstream_watch_end_unread", "stream", w.l.name,
+			"filter", w.filter, "consumer", w.name, "error", err.Error(),
+			"retry_in", w.timing.recheck.String(),
+			"detail", "the watch owes its caller a Gap through the log's end and "+
+				"could not read the end; it asks again, and its caller's reads of "+
+				"its rows carry its work meanwhile")
+		return
+	}
+	w.gapUnread = false
+	w.h.Gap(through)
 }
 
 // replace begins a generation in place of one that stopped serving, asking at
@@ -1092,7 +1221,8 @@ func (w *DomainWatch) replace() bool {
 		"consumer", name, "error", fmt.Sprint(cause),
 		"detail", "the consumer is not serving this watch; it begins again at "+
 			"the log's end with a consumer of its own, and its caller is told "+
-			"to read its rows for what it missed")
+			"to read its rows for what it missed once its copy reaches where "+
+			"that consumer begins")
 	for attempt := 1; ; attempt++ {
 		ctx, cancel := context.WithTimeout(w.life, w.timing.attempt)
 		err := w.begin(ctx, gen+1)
@@ -1105,13 +1235,11 @@ func (w *DomainWatch) replace() bool {
 			if w.live && w.gen == gen+1 {
 				w.flushGap()
 			}
-			// THE GAP JUST CALLED COVERS ANY RECONNECT BEFORE IT, which is
-			// often what lost the consumer: one more for it says nothing.
-			w.reconnects = w.l.js.Conn().Stats().Reconnects
-			name := w.name
+			name, began := w.name, w.began
 			w.mu.Unlock()
 			w.logger.Info("jetstream_watch_resumed", "stream", w.l.name,
-				"filter", w.filter, "consumer", name, "attempts", attempt)
+				"filter", w.filter, "consumer", name, "attempts", attempt,
+				"through", began)
 			return true
 		}
 		if errors.Is(err, errWatchStopped) || w.life.Err() != nil {

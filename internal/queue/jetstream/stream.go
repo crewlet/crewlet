@@ -105,9 +105,10 @@
 // it. So a watch is a consumer of its own that takes each new record's
 // SUBJECT and position and never its body: headers only, from the log's end,
 // acknowledging nothing, one replica in memory on one member. What it may
-// have missed it says it may have missed — its consumer lost and replaced at
-// the log's end, a delivery the consumer counted and this node never
-// received, a reconnect — and the caller reads its rows, which are the
+// have missed it says it may have missed, and how far on the log that reaches
+// — its consumer lost and replaced at the log's end, a delivery the consumer
+// counted and this node never received, a reconnect — and the caller waits
+// for its copy to reach that position, then reads its rows, which are the
 // record; a nudge only ever shortens a wait. Its pull is the library's own
 // standing pull, which the applier's is not, because a watch acknowledges
 // nothing: what that pull keeps standing ahead of its reader holds nothing
