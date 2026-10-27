@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -360,50 +361,155 @@ func TestNoTextBecomesAPersonsWordsByBeingDecoded(t *testing.T) {
 	}
 }
 
+// caveatPath is this package's import path, which a file names it by.
+const caveatPath = "github.com/crewlet/crewlet/internal/caveat"
+
+// peerRebuilders are the functions that turn JSON into a person's words.
+var peerRebuilders = []string{"RebuildFromPeer", "SaidFromPeer"}
+
+// peerRebuildsIn is every reference to a [peerRebuilders] function in file,
+// resolved through the file's own import table rather than by the name a
+// reference is spelled with: under an alias (`cv.RebuildFromPeer`), through a
+// dot import (a bare `RebuildFromPeer`), and never for another package that
+// happens to be called caveat.
+func peerRebuildsIn(file *ast.File) []string {
+	var named []string
+	dotted := false
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || path != caveatPath {
+			continue
+		}
+		switch {
+		case spec.Name == nil:
+			named = append(named, "caveat")
+		case spec.Name.Name == ".":
+			dotted = true
+		case spec.Name.Name != "_":
+			named = append(named, spec.Name.Name)
+		}
+	}
+	if len(named) == 0 && !dotted {
+		return nil
+	}
+	var found []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			pkg, ok := x.X.(*ast.Ident)
+			if ok && pkg.Obj == nil && slices.Contains(named, pkg.Name) &&
+				slices.Contains(peerRebuilders, x.Sel.Name) {
+				found = append(found, x.Sel.Name)
+			}
+			// The selector's own name is a field or method, never the
+			// dot-imported function.
+			ast.Inspect(x.X, func(inner ast.Node) bool {
+				if id, ok := inner.(*ast.Ident); ok && dotted && id.Obj == nil &&
+					slices.Contains(peerRebuilders, id.Name) {
+					found = append(found, id.Name)
+				}
+				return true
+			})
+			return false
+		case *ast.Ident:
+			if dotted && x.Obj == nil && slices.Contains(peerRebuilders, x.Name) {
+				found = append(found, x.Name)
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// THE GATE RESOLVES A REFERENCE BY WHAT IT NAMES, not by how it is spelled. A
+// gate matching the identifier `caveat` passed an aliased import and a dot
+// import, and would have flagged another package that is also called caveat.
+// Each fixture states what the gate must find.
+func TestThePeerGateResolvesItsImports(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		src  string
+		want []string
+	}{
+		"plain": {`package p
+import "github.com/crewlet/crewlet/internal/caveat"
+var _ = caveat.RebuildFromPeer`, []string{"RebuildFromPeer"}},
+		"an alias": {`package p
+import cv "github.com/crewlet/crewlet/internal/caveat"
+func f(raw []byte, out any) { _ = cv.RebuildFromPeer(raw, out); _ = cv.SaidFromPeer("x") }`,
+			[]string{"RebuildFromPeer", "SaidFromPeer"}},
+		"a dot import": {`package p
+import . "github.com/crewlet/crewlet/internal/caveat"
+func f() { _ = SaidFromPeer("x") }`, []string{"SaidFromPeer"}},
+		"a dot import's call inside a selector": {`package p
+import . "github.com/crewlet/crewlet/internal/caveat"
+func f() { _ = SaidFromPeer("x").Words }`, []string{"SaidFromPeer"}},
+		"another package called caveat": {`package p
+import "example.com/other/caveat"
+var _ = caveat.RebuildFromPeer`, nil},
+		"a local name shadowing nothing": {`package p
+import "github.com/crewlet/crewlet/internal/caveat"
+type T struct{ RebuildFromPeer int }
+func f(t T) int { _ = caveat.Caveat{}; return t.RebuildFromPeer }`, nil},
+		"a blank import": {`package p
+import _ "github.com/crewlet/crewlet/internal/caveat"
+func RebuildFromPeer() {}
+var _ = RebuildFromPeer`, nil},
+	} {
+		file, err := parser.ParseFile(token.NewFileSet(), name+".go", c.src, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := peerRebuildsIn(file); !slices.Equal(got, c.want) {
+			t.Errorf("%s: the gate found %v, want %v", name, got, c.want)
+		}
+	}
+}
+
 // ONLY THE ESTATE ROUTER REBUILDS A PEER'S WORDS: [caveat.RebuildFromPeer] and
-// [caveat.SaidFromPeer] turn JSON into a person's words, so a call of either
-// anywhere else is text from anywhere becoming words a person is shown. Read
-// from the module's source, every non-test file.
+// [caveat.SaidFromPeer] turn JSON into a person's words, so a reference to
+// either anywhere else is text from anywhere becoming words a person is
+// shown. Read from every non-test file of the module, each reference resolved
+// through its file's imports ([peerRebuildsIn]).
 func TestOnlyTheEstateRouterRebuildsAPeersWords(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
 	allowed := filepath.Join(root, "internal", "estate")
+	home := filepath.Join(root, "internal", "caveat")
 	var found int
-	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string,
-		d fs.DirEntry, err error) error {
-
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") ||
-			strings.HasSuffix(path, "_test.go") {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
 			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "node_modules", "static", "dashboard", ".git", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") ||
+			filepath.Dir(path) == home {
+			return nil
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
 			return err
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			pkg, ok := sel.X.(*ast.Ident)
-			if !ok || pkg.Name != "caveat" ||
-				(sel.Sel.Name != "RebuildFromPeer" && sel.Sel.Name != "SaidFromPeer") {
-				return true
-			}
+		for _, name := range peerRebuildsIn(file) {
 			found++
 			if filepath.Dir(path) != allowed {
-				t.Errorf("%s calls caveat.%s, which only the estate router may: "+
-					"it turns JSON into a person's words", path, sel.Sel.Name)
+				t.Errorf("%s refers to caveat.%s, which only the estate router may: "+
+					"it turns JSON into a person's words", path, name)
 			}
-			return true
-		})
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if found < 2 {
-		t.Fatalf("the gate found %d calls; it is not reading the router", found)
+		t.Fatalf("the gate found %d references; it is not reading the router", found)
 	}
 }
 
