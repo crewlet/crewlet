@@ -2948,7 +2948,8 @@ var SESSION_QUERIES = {
 		"work_routing",
 		"work_flow",
 		"company_feed",
-		"decisions"
+		"decisions",
+		"answered_decisions"
 	],
 	pages: [
 		"pages",
