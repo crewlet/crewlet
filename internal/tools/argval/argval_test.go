@@ -76,7 +76,7 @@ func TestEachReadIsItsHelpers(t *testing.T) {
 		"a prefix":       {"5 days", read{5, true}, read{0, false}, read{0.0, false}, read{0.0, false}},
 		"a decimal text": {"2.5", read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
 		"NaN text":       {"NaN", read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
-		"infinity":       {math.Inf(1), read{nil, true}, read{0, false}, read{nil, true}, read{nil, false}},
+		"infinity":       {math.Inf(1), read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
 		"a boolean":      {true, read{0, false}, read{0, false}, read{0.0, false}, read{0.0, false}},
 		"an int":         {7, read{7, true}, read{7, true}, read{7.0, true}, read{7.0, true}},
 		"an int64":       {int64(7), read{7, true}, read{7, true}, read{0.0, false}, read{7.0, true}},
@@ -136,5 +136,35 @@ func TestAListIsReadAsTheCheckReadsIt(t *testing.T) {
 	}
 	if got, ok := argval.List([]any{map[string]any{}}); !ok || len(got) != 1 {
 		t.Error("List did not read a list")
+	}
+}
+
+// A WHOLE NUMBER SPELT AS A DECIMAL IS WHOLE, and one past the int range is
+// none (#423 review): "5.0" loses nothing read as 5, where 1e300 overflowed
+// int() into some other number.
+//
+// Mutation: drop the range check and 1e300 is read as an int.
+func TestAWholeNumberIsReadWithinItsRange(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[any]struct {
+		n  int
+		ok bool
+	}{
+		"5.0":                              {5, true},
+		" 5e2 ":                            {500, true},
+		"2.5":                              {0, false},
+		1e300:                              {0, false},
+		"1e300":                            {0, false},
+		json.Number("1e300"):               {0, false},
+		json.Number("9.3e18"):              {0, false},
+		math.Ldexp(1, 62):                  {1 << 62, true},
+		json.Number("4611686018427387904"): {1 << 62, true},
+	} {
+		if n, ok := argval.Whole(in); ok != want.ok || (ok && n != want.n) {
+			t.Errorf("Whole(%v) = %d, %v; want %d, %v", in, n, ok, want.n, want.ok)
+		}
+	}
+	if _, ok := argval.IntPrefix(1e300); ok {
+		t.Error("IntPrefix read 1e300 as an int")
 	}
 }

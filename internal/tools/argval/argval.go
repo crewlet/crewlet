@@ -116,6 +116,9 @@ func clean(in []string) []string {
 func IntPrefix(v any) (int, bool) {
 	switch v := v.(type) {
 	case float64:
+		if !Finite(v) || !inIntRange(math.Trunc(v)) {
+			return 0, false
+		}
 		return int(v), true
 	case json.Number:
 		// INT64 FIRST, because that is the whole reason the decoders on
@@ -125,7 +128,7 @@ func IntPrefix(v any) (int, bool) {
 			return int(i), true
 		}
 		if f, err := v.Float64(); err == nil {
-			return int(f), true
+			return IntPrefix(f)
 		}
 	case int:
 		return v, true
@@ -142,9 +145,10 @@ func IntPrefix(v any) (int, bool) {
 
 // Whole is the strict integer read, for a value whose zero is a setting
 // rather than an absence (zero minutes, a precision of 0): a finite whole
-// number, or a string that is one whole integer and nothing else. A fraction
-// is refused rather than truncated to one nobody typed, and "2 days" is not
-// 2.
+// number inside the int range, or a string that spells one and nothing else
+// ("90", "5.0", "5e2"). A fraction is refused rather than truncated to one
+// nobody typed, "2 days" is not 2, and a number past the int range (1e300)
+// is refused rather than overflowed into some other number.
 func Whole(v any) (int, bool) {
 	switch v := v.(type) {
 	case json.Number:
@@ -162,7 +166,7 @@ func Whole(v any) (int, bool) {
 		// FINITE FIRST, because the fraction test does not cover it: an
 		// infinity IS its own truncation, and `int(+Inf)` is not defined
 		// by the language.
-		if !Finite(v) || v != math.Trunc(v) {
+		if !Finite(v) || v != math.Trunc(v) || !inIntRange(v) {
 			return 0, false
 		}
 		return int(v), true
@@ -171,10 +175,25 @@ func Whole(v any) (int, bool) {
 	case int64:
 		return int(v), true
 	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		return n, err == nil
+		text := strings.TrimSpace(v)
+		if n, err := strconv.Atoi(text); err == nil {
+			return n, true
+		}
+		// A WHOLE-VALUED DECIMAL ("5.0") loses nothing read as 5.
+		f, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return 0, false
+		}
+		return Whole(f)
 	}
 	return 0, false
+}
+
+// inIntRange reports a whole float64 converts to an int without overflow:
+// above the smallest int64, and below 2^63, which is the first float past
+// the largest.
+func inIntRange(v float64) bool {
+	return v >= math.MinInt64 && v < -math.MinInt64
 }
 
 // Float is the lenient number read: a number, or a string that parses as one.
