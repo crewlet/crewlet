@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -476,11 +477,17 @@ func TestADeltaRetiringAPackItNeverHeldConvergesInPlace(t *testing.T) {
 // A SWAP COSTS LINKS, NOT DOWNLOADS: over a copy of fifteen packs whose
 // index of pushes holds runs, the round that learns of a compaction of two of
 // them downloads the output alone and runs no git at all, and its swap makes
-// exactly three links a live pack, one for the packed-refs and one a run of
-// the index — the pack count, never the bytes.
+// exactly three links a live pack, one each for HEAD, config and the
+// packed-refs and one a run of the index — the pack count, never the bytes —
+// and writes no file but its state. It syncs each directory it wrote ONCE:
+// objects/pack, crewlet/ (the index's runs) and the staged root, by its
+// state's write, before the rename, and repos/ after it — never scratch/,
+// and never a directory step by step.
 //
 // Mutations: link the leaving packs too (three links more each); write the
-// round's own multi-pack-index on a delta's swap (a git process).
+// round's own multi-pack-index on a delta's swap (a git process); write HEAD
+// and config afresh (two links fewer, two files staged and synced); sync the
+// staged root as the derived files land as well as at the state.
 func TestASwapCostsLinksNotDownloads(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -493,10 +500,11 @@ func TestASwapCostsLinksNotDownloads(t *testing.T) {
 		rows = append(rows, row)
 	}
 	var links atomic.Int64
+	var syncs syncLog
 	c := w.open(t, cache.LinkWith(func(oldname, newname string) error {
 		links.Add(1)
 		return os.Link(oldname, newname)
-	}))
+	}), cache.SyncingWith(syncs.add))
 	held := w.sync(t, c, repo)
 	for range 2 {
 		w.push(t, repo, "refs/heads/main", nil)
@@ -508,6 +516,7 @@ func TestASwapCostsLinksNotDownloads(t *testing.T) {
 	}
 	out := w.compacted(t, repo, rows[0], rows[1])
 	ran, opened := len(calls()), w.objects.total()
+	syncs.reset()
 
 	s := w.sync(t, c, repo)
 	if s.Dir == held.Dir {
@@ -523,9 +532,20 @@ func TestASwapCostsLinksNotDownloads(t *testing.T) {
 		t.Errorf("the output was opened %d times, want once", opens[out.Object])
 	}
 	const live = 15 - 2 + 1
-	if got, want := links.Load(), int64(3*live+1+len(idx.Runs)); got != want {
-		t.Errorf("the swap made %d links, want %d: three for each of %d live packs, the packed-refs and %d runs",
-			got, want, live, len(idx.Runs))
+	if got, want := links.Load(), int64(3*live+3+len(idx.Runs)); got != want {
+		t.Errorf("the swap made %d links, want %d: three for each of %d live packs, HEAD, config, the "+
+			"packed-refs and %d runs", got, want, live, len(idx.Runs))
+	}
+	for _, name := range []string{"HEAD", "config", "packed-refs"} {
+		if !sameInode(t, filepath.Join(held.Dir, name), filepath.Join(s.Dir, name)) {
+			t.Errorf("the next incarnation's %s is not the old one's, linked", name)
+		}
+	}
+	got := syncs.swap(w)
+	want := map[string]int{".": 1, "objects/pack": 1, "crewlet": 1, "repos/": 1}
+	if !maps.Equal(got, want) {
+		t.Errorf("the swap synced %v, want each directory it wrote once — the staged root by its state's write, "+
+			"objects/pack and crewlet/ — and repos/ after the rename: %v", got, want)
 	}
 	if line := swapLine(t, w); line["packs_kept"] != float64(live) {
 		t.Errorf("code_cache_swapped = %v, want %d packs kept", line, live)
@@ -876,45 +896,60 @@ func TestACrashBeforeTheSwapsRenameLeavesTheOldIncarnation(t *testing.T) {
 // pack and the round's refs — the staged directory moved aside, what is
 // leaving kept and its floor written into the state — and the repository's
 // next round, here a delta with nothing new, swaps. A swap that fails because
-// a live pack's file is gone from the copy itself marks the copy to be read
-// whole: the next round is full, puts the pack back with one download, and
+// a file it links is gone from the copy itself — a live pack's, or one of
+// the root's (HEAD, config, packed-refs) — marks the copy to be read whole,
+// since every swap of it would link that file again: the next round is full,
+// puts the file back — a pack with one download, a root file anew — and
 // swaps.
 //
 // Mutations: forget what is leaving when a swap fails (the next round has
 // nothing to swap); try no swap on a round that applied nothing new; mark no
-// read whole for a pack gone (the next round is a delta, and fails again).
+// read whole for a pack gone, or for a root file gone (the next round is a
+// delta, and fails again).
 func TestAFailedSwapServesTheOldIncarnationAndIsRetried(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
-		// opts makes the swap fail, and before breaks the copy first.
-		opts   func(*cache.Options)
-		before func(t *testing.T, k *compactable)
-		// whole: the next round is a full one that downloads the third pack.
-		whole bool
+		// opts makes the swap fail, and gone is the file of the copy, relative
+		// to it, the case removes first: "" for none.
+		opts func(*cache.Options)
+		gone func(k *compactable) string
+		// step is the step the failed swap names; refetch, that the next
+		// round downloads the third pack again.
+		step    string
+		refetch bool
 	}{
-		{"a link refused", cache.LinkWith(refuseOnce()), func(*testing.T, *compactable) {}, false},
-		{"a live pack's file gone from the copy", func(*cache.Options) {}, func(t *testing.T, k *compactable) {
-			if err := os.Remove(filepath.Join(k.held.Dir, "objects", "pack", "pack-"+k.rows[2].GitChecksum+
-				".rev")); err != nil {
-				t.Fatal(err)
-			}
-		}, true},
+		{"a link refused", cache.LinkWith(refuseOnce(aPack)), nil, "packs", false},
+		{"a live pack's file gone from the copy", nil, func(k *compactable) string {
+			return filepath.Join("objects", "pack", "pack-"+k.rows[2].GitChecksum+".rev")
+		}, "packs", true},
+		{"a root file gone from the copy", nil, func(*compactable) string { return "config" }, "root", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			k := newCompactable(t, false, tc.opts)
+			var opts []func(*cache.Options)
+			if tc.opts != nil {
+				opts = append(opts, tc.opts)
+			}
+			k := newCompactable(t, false, opts...)
 			w, c, repo := k.w, k.c, k.repo
 			n := cache.Incarnation(k.held)
-			tc.before(t, k)
+			var gone string
+			if tc.gone != nil {
+				gone = tc.gone(k)
+				if err := os.Remove(filepath.Join(k.held.Dir, gone)); err != nil {
+					t.Fatal(err)
+				}
+			}
 			out := k.compact(t)
 			s := w.sync(t, c, repo)
 			if got := cache.Incarnation(s); got != n || s.Dir != k.held.Dir {
 				t.Fatalf("the round whose swap failed answered incarnation %d at %s, want the old %d", got, s.Dir, n)
 			}
 			lines := w.logs.lines(t, "code_cache_swap_failed")
-			if len(lines) != 1 || lines[0]["step"] != "packs" || lines[0]["incarnation"] != float64(n) {
-				t.Errorf("code_cache_swap_failed = %v, want one line at the packs step of incarnation %d", lines, n)
+			if len(lines) != 1 || lines[0]["step"] != tc.step || lines[0]["incarnation"] != float64(n) {
+				t.Errorf("code_cache_swap_failed = %v, want one line at the %s step of incarnation %d", lines, tc.step,
+					n)
 			}
 			if got := counter(w.rec, metrics.CodeCacheSwaps, "graph", "failed"); got != 1 {
 				t.Errorf("%s{graph=failed} = %d, want 1", metrics.CodeCacheSwaps, got)
@@ -934,11 +969,9 @@ func TestAFailedSwapServesTheOldIncarnationAndIsRetried(t *testing.T) {
 					doc.LeavingSince, k.held.Position)
 			}
 			want := bundleNames(append(slices.Clone(k.rows), out)...)
-			if tc.whole {
-				want = slices.DeleteFunc(want, func(name string) bool {
-					return name == "pack-"+k.rows[2].GitChecksum+".rev"
-				})
-			}
+			want = slices.DeleteFunc(want, func(name string) bool {
+				return gone != "" && filepath.Join("objects", "pack", name) == gone
+			})
 			if got := packFiles(t, s.Dir); !slices.Equal(got, want) {
 				t.Errorf("the copy the failed swap left holds %v, want every pack it held: %v", got, want)
 			}
@@ -958,8 +991,12 @@ func TestAFailedSwapServesTheOldIncarnationAndIsRetried(t *testing.T) {
 			if doc := readStateDoc(t, s2.Dir); !doc.LeavingSince.IsZero() {
 				t.Errorf("the next incarnation's state says %v is leaving's floor, want none", doc.LeavingSince)
 			}
+			if gone != "" && !statOK(t, filepath.Join(s2.Dir, gone)) {
+				t.Errorf("the next incarnation holds no %s: the round that read the copy whole did not put it back",
+					gone)
+			}
 			opened, _, _ = w.objects.counts()
-			if got, want := opened[k.rows[2].Object]-before, map[bool]int{false: 0, true: 1}[tc.whole]; got != want {
+			if got, want := opened[k.rows[2].Object]-before, map[bool]int{false: 0, true: 1}[tc.refetch]; got != want {
 				t.Errorf("the round that swapped downloaded the third pack %d times, want %d", got, want)
 			}
 			if got := counter(w.rec, metrics.CodeCacheSwaps, "graph", "dropped"); got != 1 {
@@ -969,16 +1006,75 @@ func TestAFailedSwapServesTheOldIncarnationAndIsRetried(t *testing.T) {
 	}
 }
 
-// refuseOnce is a link that refuses its first call, as a file system at its
-// links' limit does, and links every other.
-func refuseOnce() func(oldname, newname string) error {
+// refuseOnce is a link that refuses the first call whose new name refuse
+// accepts, as a file system at its links' limit does, and makes every other.
+func refuseOnce(refuse func(newname string) bool) func(oldname, newname string) error {
 	var refused atomic.Bool
 	return func(oldname, newname string) error {
-		if refused.CompareAndSwap(false, true) {
+		if refuse(newname) && refused.CompareAndSwap(false, true) {
 			return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EMLINK}
 		}
 		return os.Link(oldname, newname)
 	}
+}
+
+// aPack and thePackedRefs are what refuseOnce refuses: a link into a staged
+// objects/pack, which the packs step makes, and the packed-refs', which the
+// root step makes once every live pack is linked.
+func aPack(newname string) bool {
+	return filepath.Base(filepath.Dir(newname)) == "pack" && strings.HasPrefix(filepath.Base(newname), "pack-")
+}
+
+func thePackedRefs(newname string) bool { return filepath.Base(newname) == "packed-refs" }
+
+// syncLog is every directory a cache told its syncing knob it was about to
+// sync (cache.SyncingWith), in order.
+type syncLog struct {
+	mu   sync.Mutex
+	dirs []string
+}
+
+func (l *syncLog) add(dir string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.dirs = append(l.dirs, dir)
+}
+
+func (l *syncLog) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.dirs = nil
+}
+
+// swap is what a swap synced, counted by directory: each under a staging in
+// scratch/, by its path relative to the staged root ("." for the root), and
+// scratch/ and repos/ themselves as "scratch/" and "repos/".
+func (l *syncLog) swap(w *syncWorld) map[string]int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := map[string]int{}
+	for _, dir := range l.dirs {
+		switch {
+		case dir == w.path("repos"):
+			out["repos/"]++
+		case dir == w.path("scratch"):
+			out["scratch/"]++
+		default:
+			rel, err := filepath.Rel(w.path("scratch"), dir)
+			if err != nil {
+				continue
+			}
+			first, rest, _ := strings.Cut(filepath.ToSlash(rel), "/")
+			if !strings.HasPrefix(first, "swap.") {
+				continue
+			}
+			if rest == "" {
+				rest = "."
+			}
+			out[rest]++
+		}
+	}
+	return out
 }
 
 // A STOPPED RUN COUNTS FOR THE DUTY CYCLE (M3-O15). The swap stops a

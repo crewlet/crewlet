@@ -940,42 +940,46 @@
 // code_packs_retired, the outputs holding every object of them — which a
 // round learns from a delta's retired phase, or from the retirements a full
 // answer serves above the copy's position; and a full round can meet a pack
-// file no row names that no retirement accounts for — a log gone back, a
-// row gone with no record retiring it. Neither leaves a copy a reader may
-// hold IN PLACE: git opens a pack lazily, part way through a run, so no pin
-// of a file could say which a running process will touch. The round applies
-// to its end on the incarnation it holds, and then SWAPS it (swap.go): the
-// next incarnation is staged under scratch/ by HARD LINKS of every pack the
-// live rows still name (the live set, kept by every round), the packed-refs
-// and each derived file the events of what leaves keep — a retirement keeps
-// the commit-graph (X04: a merge drops no commit), a pack no retirement
-// accounts for drops it, and both drop the multi-pack-index over the packs
-// that left — renamed into repos/ whole under the next number, and made
-// current, the memo's tree moved into it whole as it is (carryMemo, as a
+// file no row names that no retirement accounts for — a log gone back, a row
+// gone with no record retiring it. Neither leaves a copy a reader may hold IN
+// PLACE: git opens a pack lazily, part way through a run, so no pin of a file
+// could say which a running process will touch. The round applies to its end
+// on the incarnation it holds, and then SWAPS it (swap.go): the next
+// incarnation is staged under scratch/ by HARD LINKS of every pack the live
+// rows still name (the live set, kept by every round), HEAD, config, the
+// packed-refs and each derived file the events of what leaves keep — a
+// retirement keeps the commit-graph (X04: a merge drops no commit), a pack no
+// retirement accounts for drops it, and both drop the multi-pack-index over
+// the packs that left — renamed into repos/ whole under the next number, and
+// made current, the memo's tree moved into it whole as it is (carryMemo, as a
 // rebuild's); the old one retires, whole for its readers until the last lets
-// go. It costs links — three a live pack — and the memo's one rename, and no
-// download and no git process, but a full round's own index, written over the
-// next incarnation. The
-// promote carries every per-file verdict of the files it links (the same
-// inodes) — their vouches, a hint's hash, the scrub's schedule, what a repair
-// still owes them — and the repository's own records, every field of an
-// incarnation classified in swapFields, which
+// go. It costs links — three a live pack, one each for HEAD, config and
+// packed-refs — and the memo's one rename, and no download and no git
+// process, but a full round's own index, written over the next incarnation;
+// and one sync a directory it wrote, made once the staging is complete and
+// before the rename, since nothing reads the staging before it — four to six
+// fsyncs, the state's and repos/'s among them, where synced step by step it
+// took up to eleven, each while the round holds the repository. The promote
+// carries every per-file verdict of the files it links (the same inodes) —
+// their vouches, a hint's hash, the scrub's schedule, what a repair still
+// owes them — and the repository's own records, every field of an incarnation
+// classified in swapFields, which
 // TestEveryIncarnationFieldIsClassifiedForTheSwap holds to the struct both
 // ways. A maintenance run on the old copy is stopped first, and counted as a
 // run of the duty cycle. What is learnt of the old copy's files after the
 // swap belongs to the copy serving them now: a verdict reached over them;
 // what a git process over them reports — that copy's scrub's evidence, never
-// a drop, as is what the round's own index reports from the staged
-// directory; and a request whose git failed over the old copy, answered from
-// the copy serving as it stands, so it runs once more with its repair
-// unspent. A swap that FAILS leaves the old incarnation serving — a superset
-// of the rows — and the repository's next round tries again. A CRASH before
-// the rename leaves the old one the highest in repos/ and the staged one in
-// scratch/, which the boot moves aside; its state names the floor its leaving
-// packs' retirements are above (LeavingSince), so the boot's first round
-// reads them as the retirements they are and keeps the graph. An incarnation
-// nobody can hold — one not yet converged and unpinned: a boot's first round,
-// a rebuild's product — sheds what leaves it in place, as it always has.
+// a drop, as is what the round's own index reports from the staged directory;
+// and a request whose git failed over the old copy, answered from the copy
+// serving as it stands, so it runs once more with its repair unspent. A swap
+// that FAILS leaves the old incarnation serving — a superset of the rows —
+// and the repository's next round tries again. A CRASH before the rename
+// leaves the old one the highest in repos/ and the staged one in scratch/,
+// which the boot moves aside; its state names the floor its leaving packs'
+// retirements are above (LeavingSince), so the boot's first round reads them
+// as the retirements they are and keeps the graph. An incarnation nobody can
+// hold — one not yet converged and unpinned: a boot's first round, a
+// rebuild's product — sheds what leaves it in place, as it always has.
 //
 // # A boot starts from the disk, once
 //
@@ -995,12 +999,12 @@
 // counts each file ONCE, by its inode, and only where every name of the file
 // lies in it: the kept incarnation holds hard links of what it shares with
 // an older one — a rebuild links every pack a check found whole, a swap
-// every live pack, the packed-refs and the derived files it links — and so
-// do a copy a swap replaced, sitting in trash/ when a stop cut the janitor's
-// removal short, and a failed swap's staging; its state counts those, so
-// counted by every name they made the boot's budget claim room the volume
-// did not have. The janitor removes what is in trash/ in the background, so
-// a boot never waits on a large removal.
+// every live pack, HEAD, config, packed-refs and the derived files it links
+// — and so do a copy a swap replaced, sitting in trash/ when a stop cut the
+// janitor's removal short, and a failed swap's staging; its state counts
+// those, so counted by every name they made the boot's budget claim room the
+// volume did not have. The janitor removes what is in trash/ in the
+// background, so a boot never waits on a large removal.
 //
 // A repository's LAST USE comes back from a restart too, to within
 // [EvictInterval]: the boot reads it from the state file's modification

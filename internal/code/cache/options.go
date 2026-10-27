@@ -233,6 +233,10 @@ type knobs struct {
 	// place of os.Link: a case makes a link fail, as a filesystem out of
 	// links or room would.
 	link func(oldname, newname string) error
+	// syncing, when set, is told every directory a swap or a state's write
+	// is about to sync (Cache.durableDir): a case counts what a swap's
+	// durability costs.
+	syncing func(dir string)
 }
 
 // validate refuses an Options value naming the field and what to set,

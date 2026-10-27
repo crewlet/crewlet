@@ -126,8 +126,8 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 			// reader still held — and the kept one holds HARD LINKS of its
 			// files: a rebuild links its predecessor's every pack a check has
 			// just found whole (seedRebuild), and a swap its predecessor's
-			// every live pack, its packed-refs and the derived files a
-			// retirement keeps but the memo, whose tree it moves whole
+			// every live pack, HEAD, config, packed-refs and the derived files
+			// a retirement keeps but the memo, whose tree it moves whole
 			// (swap.go). The kept one's state counts those, so counted by its
 			// own state as well, every linked pack was counted twice, and the
 			// engine, which adds Held to the volume's free space to derive the

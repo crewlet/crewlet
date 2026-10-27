@@ -462,11 +462,11 @@ var cacheWriters = []writerRow{
 			"is trimmed removed, and the tree moved whole through layout.go's toTrash",
 		[]cache.DerivedName{cache.DerivedMemo}},
 	{"internal/code/cache/swap.go", kindOS,
-		"a swap's next incarnation, staged under scratch/: its directory and the directories of what it " +
-			"links, every live pack's three files, the packed-refs and each derived file a retirement keeps " +
-			"but the memo HARD-LINKED from the incarnation it replaces — the same inodes, written by nothing " +
-			"here — and the whole renamed into repos/ under its number; its skeleton and its state go through " +
-			"entry.go and durable.go, and the memo's tree moves whole through memo.go", nil},
+		"a swap's next incarnation, staged under scratch/: its directory, every incarnation's directories " +
+			"and those of what it links, every live pack's three files, HEAD, config, the packed-refs and each " +
+			"derived file a retirement keeps but the memo HARD-LINKED from the incarnation it replaces — the " +
+			"same inodes, written by nothing here — and the whole renamed into repos/ under its number; its " +
+			"state goes through durable.go, and the memo's tree moves whole through memo.go", nil},
 	{"internal/code/host/receive.go", kindGit + " receive-pack",
 		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
 			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +

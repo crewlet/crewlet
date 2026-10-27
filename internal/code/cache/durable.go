@@ -73,6 +73,16 @@ func (c *Cache) place(staged, dst string) error {
 	return nil
 }
 
+// durableDir is syncDir for the directories a swap and a state's write
+// sync, told first to the suite's syncing (knobs): what a swap's durability
+// costs is a count a case holds.
+func (c *Cache) durableDir(dir string) error {
+	if c.knobs != nil && c.knobs.syncing != nil {
+		c.knobs.syncing(dir)
+	}
+	return syncDir(dir)
+}
+
 // syncDir makes dir's entries durable: every rename into it, every file
 // created in it, so far.
 func syncDir(dir string) error {

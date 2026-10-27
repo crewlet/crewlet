@@ -25,28 +25,38 @@ import (
 // THE SWAP: A ROUND THAT TAKES A PACK OUT OF A COPY A READER MAY HOLD BUILDS
 // THE COPY'S NEXT INCARNATION BESIDE IT. A compaction retires packs — the
 // code domain moves their rows into code_packs_retired, the outputs holding
-// every object of them — and each git node's cache learns it from a round:
-// a delta's retired phase, or the retirements a full answer serves above the
-// caller's position. Its pack files then leave the copy. They cannot leave
-// IN PLACE: git opens a pack lazily, part way through a run, so a clone
-// reading the copy's old refs may open a retired pack's files a second after
-// the round, and no pin of a file could say which a running process will
-// touch — a scratch push's pin holds its incarnation whole for the same
-// reason. So the copy is SWAPPED, as a rebuild replaces one: the round
-// applies to its end on the current incarnation — every pack installed or
-// adopted, the refs written, the state renamed in, a truthful superset of
-// the rows at the round's position — and then the next incarnation,
-// repos/<id>.<n+1>.git, is built BY HARD LINKS of every pack the live rows
-// still name, its packed-refs and every derived file a retirement keeps but
-// the memo, renamed into repos/ whole, and made current, the memo's tree
-// MOVED into it whole as it is — one rename however many answers it holds
+// every object of them — and each git node's cache learns it from a round: a
+// delta's retired phase, or the retirements a full answer serves above the
+// caller's position. Its pack files then leave the copy. They cannot leave IN
+// PLACE: git opens a pack lazily, part way through a run, so a clone reading
+// the copy's old refs may open a retired pack's files a second after the
+// round, and no pin of a file could say which a running process will touch —
+// a scratch push's pin holds its incarnation whole for the same reason. So
+// the copy is SWAPPED, as a rebuild replaces one: the round applies to its
+// end on the current incarnation — every pack installed or adopted, the refs
+// written, the state renamed in, a truthful superset of the rows at the
+// round's position — and then the next incarnation, repos/<id>.<n+1>.git, is
+// built BY HARD LINKS of every pack the live rows still name, its HEAD,
+// config and packed-refs and every derived file a retirement keeps but the
+// memo, renamed into repos/ whole, and made current, the memo's tree MOVED
+// into it whole as it is — one rename however many answers it holds
 // (carryMemo), as a rebuild's promote moves it; the old one is retired, and
 // its readers keep it whole until the last of them lets go (entry.go's
 // retired-incarnation rule). The cost follows the pack COUNT — three links a
-// live pack, the carried files' links, the memo's one rename and two
-// directory syncs — never the bytes: no GET and no git process, but a full
-// round's own index, which it writes over the next incarnation rather than
-// the one it leaves.
+// live pack, one each for HEAD, config and packed-refs, the carried files'
+// links and the memo's one rename — never the bytes: no GET and no git
+// process, but a full round's own index, which it writes over the next
+// incarnation rather than the one it leaves. Its durability is ONE SYNC A
+// DIRECTORY, made once the staging is complete and before its rename
+// (syncStaged): objects/pack, objects/info where it carries the commit-graph,
+// crewlet/ where it carries the index of pushes, then the state — its own
+// file and the staged root — and repos/ after the rename: four to six fsyncs
+// a swap. The staging is ONE step of durable.go's rule, never several:
+// nothing in it is read before the rename makes it an incarnation, and a
+// crash before the rename leaves it in scratch/, which the boot moves aside.
+// Synced step by step, a swap made up to eleven, every one a journal commit
+// while the round holds the repository, on every git node at every
+// compaction.
 //
 // WHAT LEAVES, AND WHAT IT TAKES WITH IT. The live set (entry.go's live) is
 // the rows the copy last converged to hold, by pack id: set whole by a full
@@ -96,9 +106,10 @@ import (
 // trash/, the current incarnation keeps serving — it holds every live pack and
 // the round's refs — what is leaving stays so, and the round answers from it.
 // The repository's next round, delta or full, tries the swap again. A copy
-// whose live pack is gone from its own directory cannot be linked from; it is
-// marked to be read whole, so its next round — full — puts the pack back
-// with one GET and swaps.
+// whose live pack, HEAD, config or packed-refs is gone from its own
+// directory cannot be linked from; it is marked to be read whole, so its
+// next round — full — puts the pack back with one GET, or the file anew, and
+// swaps.
 //
 // A CRASH before the rename leaves the old incarnation the highest in repos/
 // with its state and the staged one in scratch/, which every boot empties;
@@ -120,10 +131,11 @@ const (
 // packs are leaving it (swap), and answers the incarnation that is current
 // once it returns: the next one, or inc after a swap that failed — which
 // leaves inc serving, its leaving kept for the next round. A copy whose live
-// pack is gone from its directory is marked to be read whole. The caller
-// holds the entry's write lock whole, for its round. snap is the snapshot the
-// round APPLIED — a full one's index is written over the next incarnation,
-// which holds exactly its packs — or the zero snapshot where it applied none.
+// pack or root file is gone from its directory is marked to be read whole.
+// The caller holds the entry's write lock whole, for its round. snap is the
+// snapshot the round APPLIED — a full one's index is written over the next
+// incarnation, which holds exactly its packs — or the zero snapshot where it
+// applied none.
 func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, snap snapshot) *incarnation {
 	e.mu.Lock()
 	leaving := len(inc.leaving) > 0 && e.current == inc && !inc.retired
@@ -151,25 +163,33 @@ func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, sna
 	if c.metrics != nil {
 		c.metrics.Add(metrics.CodeCacheSwaps, 1, metrics.Attrs{"graph": swapFailed})
 	}
-	if s.step == stepPacks && errors.Is(err, fs.ErrNotExist) {
-		// A live pack is gone from the copy's own directory: the next
-		// round reads it whole, puts the pack back with one GET (install's
-		// lost), and swaps.
+	if errors.Is(err, fs.ErrNotExist) && (s.step == stepPacks || s.step == stepRoot) {
+		// A file the swap links is gone from the copy's own directory —
+		// damage no retry ends, since every swap of the copy links it
+		// again: the next round reads the copy whole and swaps. It puts a
+		// live pack back with one GET (install's lost), counted as the
+		// stored files' repair, and HEAD, config or packed-refs anew (tidy,
+		// writeRefs), as the shape its sweep puts right.
+		reason := RebuildStored
+		if s.step == stepRoot {
+			reason = RebuildShape
+		}
 		e.mu.Lock()
-		c.markWhole(e, inc, Failure{Reason: RebuildStored}, dropRound)
+		c.markWhole(e, inc, Failure{Reason: reason}, dropRound)
 		e.mu.Unlock()
 	}
 	return inc
 }
 
 // The steps of a swap, as code_cache_swap_failed names the one it failed at.
-// The round's index between the derived files and the state is none: it
+// The round's index between the derived files and the sync is none: it
 // fails nothing (indexRound).
 const (
 	stepStage   = "stage"
 	stepPacks   = "packs"
-	stepRefs    = "refs"
+	stepRoot    = "root"
 	stepDerived = "derived"
+	stepSync    = "sync"
 	stepState   = "state"
 	stepRename  = "rename"
 )
@@ -290,7 +310,6 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	for _, ev := range inc.leaving {
 		s.events[ev] = true
 	}
-	branch := inc.repo.DefaultBranch
 	e.mu.Unlock()
 	var drop derivedSet
 	for ev := range s.events {
@@ -311,9 +330,10 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	// Open empties scratch/ into trash/ — and because the janitor counts
 	// scratch/ by sole names, so the staged links count only what they alone
 	// hold. Named by the repository, so what a git process run in it reports
-	// reaches the copy whose files it reads (swapAt). Its packed-refs is the
-	// old incarnation's own, linked below. From here the swap is the
-	// entry's (entry.swap), until swapLeaving ends it.
+	// reaches the copy whose files it reads (swapAt). Its directories are
+	// every incarnation's (requiredDirs); its files are all linked but its
+	// state. From here the swap is the entry's (entry.swap), until
+	// swapLeaving ends it.
 	s.step = stepStage
 	s.staged = filepath.Join(c.dir, scratchDir, stagedName(e.id))
 	if err := os.Mkdir(s.staged, hostbox.DirMode); err != nil {
@@ -324,8 +344,10 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	e.mu.Lock()
 	e.swap = s
 	e.mu.Unlock()
-	if err := c.skeleton(s.staged, branch, false); err != nil {
-		return nil, err
+	for _, d := range requiredDirs {
+		if err := os.MkdirAll(filepath.Join(s.staged, filepath.FromSlash(d)), hostbox.DirMode); err != nil {
+			return nil, err
+		}
 	}
 	// THE NEXT INCARNATION stands outside the cache's total while it is
 	// staged — discarded, as an incarnation whose bytes the total does not
@@ -350,18 +372,19 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		}
 		s.shared += s.packs[cs].size
 	}
-	if err := syncDir(into); err != nil {
-		return nil, err
-	}
 
-	// 3. PACKED-REFS: never written in place (every rewrite stages and
-	// renames), so a link is a snapshot of the round's own.
-	s.step = stepRefs
-	refs := filepath.Join(s.staged, "packed-refs")
-	if err := c.link(filepath.Join(inc.dir, "packed-refs"), refs); err != nil {
-		return nil, err
+	// 3. THE ROOT'S FILES — HEAD, config and packed-refs — the old
+	// incarnation's own, LINKED: none is ever written in place (a rewrite of
+	// any stages and renames, as tidy and writeRefs do), so a link is a
+	// snapshot of each, the packed-refs the round's own; written afresh,
+	// HEAD and config cost two files staged and synced on every swap.
+	s.step = stepRoot
+	for _, name := range []string{"HEAD", "config", "packed-refs"} {
+		if err := c.link(filepath.Join(inc.dir, name), filepath.Join(s.staged, name)); err != nil {
+			return nil, err
+		}
 	}
-	info, err := os.Lstat(refs)
+	info, err := os.Lstat(filepath.Join(s.staged, "packed-refs"))
 	if err != nil {
 		return nil, err
 	}
@@ -389,8 +412,13 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		c.indexRound(ctx, e, s.next, s.snap)
 	}
 
-	// 6. THE STATE, then the rename's fault point, then the NUMBER and the
-	// rename.
+	// 6. THE STAGING MADE DURABLE, each directory a link or a write landed
+	// in synced once (syncStaged); then THE STATE, which syncs the root
+	// last; then the rename's fault point, the NUMBER and the rename.
+	s.step = stepSync
+	if err = s.syncStaged(); err != nil {
+		return nil, err
+	}
 	s.step = stepState
 	if err = s.writeState(ctx); err != nil {
 		return nil, err
@@ -451,7 +479,8 @@ func (s *swapping) stopRun() {
 // incarnation as that is promoted, one rename (promote's carryMemo, SeedMove),
 // where linked an entry at a time it would cost a stat and a link an answer
 // inside the round that holds the repository, on every git node holding it at
-// every compaction. Each directory a link landed in is synced once.
+// every compaction. The directories its links land in are synced with the
+// rest of the staging, once each (syncStaged).
 func (s *swapping) carryDerived() error {
 	var err error
 	s.c.image.each(s.keep, func(i int, d *Derived) {
@@ -471,15 +500,34 @@ func (s *swapping) carryDerived() error {
 			s.carried |= 1 << i
 		}
 	})
-	if err != nil {
-		return err
+	return err
+}
+
+// syncStaged makes durable what the staging holds below its root, before its
+// state is written: each directory a link or a write landed in, synced ONCE —
+// objects/pack for the live packs and a full round's index, which is written
+// only over them, and the directory of each derived file it linked
+// (objects/info for the commit-graph, crewlet/ for the index of pushes). The
+// root — HEAD, config, packed-refs and the state — is synced by the state's
+// write, last (writeState). Nothing in the staging is read before the rename
+// makes it an incarnation, and a crash before the rename leaves it in
+// scratch/, which every boot moves aside, so the staging needs its files
+// durable once, at the end, and never step by step: each sync more is a
+// journal commit while the round holds the repository, on every git node at
+// every compaction, which can wait out the data other rounds are writing, the
+// readers waiting on the round with it.
+func (s *swapping) syncStaged() error {
+	dirs := map[string]bool{}
+	if len(s.packs) > 0 {
+		dirs[packRel] = true
 	}
-	dirs := map[string]bool{s.staged: true}
 	for rel := range s.linked {
-		dirs[filepath.Join(s.staged, filepath.Dir(rel))] = true
+		if dir := filepath.Dir(rel); dir != "." {
+			dirs[dir] = true
+		}
 	}
-	for dir := range dirs {
-		if err = syncDir(dir); err != nil {
+	for _, rel := range slices.Sorted(maps.Keys(dirs)) {
+		if err := s.c.durableDir(filepath.Join(s.staged, rel)); err != nil {
 			return err
 		}
 	}
@@ -646,7 +694,7 @@ func (s *swapping) rename() error {
 			return err
 		}
 		s.staged = dir
-		if err = syncDir(repos); err != nil {
+		if err = s.c.durableDir(repos); err != nil {
 			return err
 		}
 		s.e.mu.Lock()

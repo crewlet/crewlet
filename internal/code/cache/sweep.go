@@ -74,7 +74,8 @@ import (
 var rootFiles = []string{"HEAD", "config", "packed-refs", stateName}
 
 // requiredDirs are the image's directories below its root that every
-// incarnation has: the skeleton makes them, and the sweep makes them again.
+// incarnation has: the skeleton makes them, a swap's staging too (swap.go),
+// and the sweep makes them again.
 // refs/heads and refs/tags stay EMPTY: there are never loose refs, which
 // outrank packed-refs for every reader.
 var requiredDirs = []string{"refs/heads", "refs/tags", "objects/pack", "objects/info"}

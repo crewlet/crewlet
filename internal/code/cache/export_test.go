@@ -1683,6 +1683,18 @@ func LinkWith(f func(oldname, newname string) error) func(*Options) {
 	}
 }
 
+// SyncingWith makes the cache Open builds tell fn every directory a swap or
+// a state's write is about to sync (knobs.syncing): a case counts what a
+// swap's durability costs.
+func SyncingWith(fn func(dir string)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.syncing = fn
+	}
+}
+
 // Leaving is what is leaving repoID's current incarnation
 // (incarnation.leaving): each pack file no live row names any more, by its
 // checksum — or by its name, where it carries none — with the event that took

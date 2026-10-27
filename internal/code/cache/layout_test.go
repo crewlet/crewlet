@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
-	"syscall"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -406,7 +404,7 @@ func TestABootCountsEachFileOnce(t *testing.T) {
 		// staging goes into trash/ — and the next round's swaps; the old
 		// copy's last reader then lets it go, into trash/ as well. No
 		// janitor runs, as none had when a node stops before its pass.
-		k := newCompactable(t, true, cache.LinkWith(refuseRefsOnce()))
+		k := newCompactable(t, true, cache.LinkWith(refuseOnce(thePackedRefs)))
 		w, c, repo := k.w, k.c, k.repo
 		k.compact(t)
 		s, err := c.Sync(t.Context(), repo, linearizable)
@@ -465,19 +463,6 @@ func TestABootCountsEachFileOnce(t *testing.T) {
 		}
 		countedOnce(t, w, "")
 	})
-}
-
-// refuseRefsOnce is a link that refuses the first link of a packed-refs, as a
-// file system at its links' limit does, and makes every other: the swap it
-// fails has linked every live pack by then.
-func refuseRefsOnce() func(oldname, newname string) error {
-	var refused atomic.Bool
-	return func(oldname, newname string) error {
-		if filepath.Base(newname) == "packed-refs" && refused.CompareAndSwap(false, true) {
-			return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EMLINK}
-		}
-		return os.Link(oldname, newname)
-	}
 }
 
 // requireIn fails t unless dir is still where the case left it: an older

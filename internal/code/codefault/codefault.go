@@ -121,10 +121,11 @@ const (
 	SyncState Point = "sync.state"
 	// SyncSwapBeforeRename: packs left an incarnation a reader may hold, the
 	// round has applied to its end there (its state renamed in), and the next
-	// incarnation is staged whole under scratch/ — every live pack, the
-	// packed-refs and the derived files a retirement keeps linked in, its own
-	// state written — and not yet renamed into repos/: the swap's one
-	// irreversible step is next (internal/code/cache's swap.go).
+	// incarnation is staged whole under scratch/ — every live pack, HEAD,
+	// config, the packed-refs and the derived files a retirement keeps linked
+	// in, its directories synced and its own state written — and not yet
+	// renamed into repos/: the swap's one irreversible step is next
+	// (internal/code/cache's swap.go).
 	SyncSwapBeforeRename Point = "sync.swap_before_rename"
 )
 

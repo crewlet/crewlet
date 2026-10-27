@@ -522,21 +522,21 @@ func linksOf(info fs.FileInfo) int {
 //
 // Hard links put one file under many names here, and every one of them the
 // cache's own: an incarnation a swap or a rebuild replaced shares every file
-// the next one linked from it (a swap every live pack, the packed-refs and
-// the derived files it carries; a rebuild every pack a check found whole),
-// whether it is still in repos/ for a reader a crash outlived, or in trash/,
-// where its last reader's release, the promote, or the boot that found it
-// older put it, the janitor's removal of it cut short by a stop or a crash;
-// a failed swap's staging holds a link of every live pack, and a crashed
-// one's sits in scratch/ — which the boot then moves into trash/, where the
-// next boot finds it if this one dies before its janitor's first pass; and a
-// purged or evicted repository's incarnations share each other's files in
-// trash/. Counted by every name, a boot counted a kept incarnation's linked
-// files once by its state and once more for each name in those trees, and
-// the budget the engine derives from Held claimed room the volume does not
-// have, by those bytes, for the whole life of the process. Counted only
-// where a file has a single name, a file two of those trees share would
-// count nowhere, though removing both gives it back.
+// the next one linked from it (a swap every live pack, HEAD, config,
+// packed-refs and the derived files it carries; a rebuild every pack a check
+// found whole), whether it is still in repos/ for a reader a crash outlived,
+// or in trash/, where its last reader's release, the promote, or the boot
+// that found it older put it, the janitor's removal of it cut short by a stop
+// or a crash; a failed swap's staging holds a link of every live pack, and a
+// crashed one's sits in scratch/ — which the boot then moves into trash/,
+// where the next boot finds it if this one dies before its janitor's first
+// pass; and a purged or evicted repository's incarnations share each other's
+// files in trash/. Counted by every name, a boot counted a kept incarnation's
+// linked files once by its state and once more for each name in those trees,
+// and the budget the engine derives from Held claimed room the volume does
+// not have, by those bytes, for the whole life of the process. Counted only
+// where a file has a single name, a file two of those trees share would count
+// nowhere, though removing both gives it back.
 //
 // One walk a tree, a map entry for each file with more than one name. A
 // name a walk cannot read leaves its file uncounted, as an unreadable entry

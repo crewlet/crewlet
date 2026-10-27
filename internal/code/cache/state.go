@@ -405,7 +405,7 @@ func (c *Cache) writeState(ctx context.Context, e *entry, inc *incarnation, st s
 			return fmt.Errorf("cache: stamping %s's state with its last use: %w", e.id, err)
 		}
 	}
-	if err = syncDir(inc.dir); err != nil {
+	if err = c.durableDir(inc.dir); err != nil {
 		return err
 	}
 	e.mu.Lock()

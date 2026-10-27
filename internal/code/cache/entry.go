@@ -970,7 +970,7 @@ func (c *Cache) newIncarnation(e *entry, current bool) (*incarnation, error) {
 			return nil, fmt.Errorf("making %s: %w", dir, err)
 		}
 	}
-	if err := c.skeleton(dir, "main", true); err != nil {
+	if err := c.skeleton(dir); err != nil {
 		if terr := toTrash(c.dir, dir, newV7()+"-"+filepath.Base(dir)); terr != nil {
 			err = errors.Join(err, terr)
 		}
@@ -989,24 +989,19 @@ func (c *Cache) newIncarnation(e *entry, current bool) (*incarnation, error) {
 	return inc, nil
 }
 
-// skeleton writes an empty bare repository's files into dir: HEAD naming
-// branch, config, and — where refs says so — a packed-refs of the header
-// alone. A swap's staged incarnation takes the skeleton without packed-refs,
-// and links the one its predecessor's round wrote (swap.go).
-func (c *Cache) skeleton(dir, branch string, refs bool) error {
+// skeleton writes an empty bare repository's files into dir. A swap's staged
+// incarnation writes none of them: it links its predecessor's (swap.go).
+func (c *Cache) skeleton(dir string) error {
 	for _, d := range []string{"refs/heads", "refs/tags", "objects/pack", "objects/info"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), hostbox.DirMode); err != nil {
 			return fmt.Errorf("making %s: %w", filepath.Join(dir, d), err)
 		}
 	}
-	files := []struct{ name, content string }{
-		{"HEAD", string(headFor(branch))},
+	for _, f := range []struct{ name, content string }{
+		{"HEAD", string(headFor("main"))},
 		{"config", gitproc.RepoConfig},
-	}
-	if refs {
-		files = append(files, struct{ name, content string }{"packed-refs", packedRefsHeader})
-	}
-	for _, f := range files {
+		{"packed-refs", packedRefsHeader},
+	} {
 		staged, err := c.stage(hostbox.FileMode, func(w *os.File) error {
 			_, werr := w.WriteString(f.content)
 			return werr
