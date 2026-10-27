@@ -63,8 +63,9 @@ type aside struct {
 
 // readBoot is Prepare's step 6: the reading of repos/ and the bytes the cache
 // holds under root — each repository's kept incarnation as its state counts
-// it, one with no state as a walk finds it, an OLDER incarnation by the files
-// it alone holds, and trash/, scratch/ and tmp/.
+// it, one with no state as a walk finds it, and everything the boot gives
+// back, each file once (givenBack): every other entry of repos/, and trash/,
+// scratch/ and tmp/.
 func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 	skipped := func(path string, err error) {
 		log.Warn("code_cache_held_unmeasured", "path", path, "error", err)
@@ -77,13 +78,11 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 	}
 
 	var held int64
-	// walk adds what an entry Open moves aside holds: all of it goes back
-	// to the volume once the janitor has removed it.
-	walk := func(name string) error {
-		n, werr := sizeUnder(ctx, filepath.Join(repos, name), allNames, skipped, nil)
-		held += n
-		return werr
-	}
+	// gone is what the boot gives back, every tree of it walked before any
+	// is counted: a file's names can lie in any two of them.
+	gone := newGivenBack(ctx, skipped)
+	// walk adds an entry Open moves aside to what the boot gives back.
+	walk := func(name string) error { return gone.walk(filepath.Join(repos, name)) }
 	type found struct {
 		name string
 		n    int
@@ -121,11 +120,11 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 		slices.SortFunc(incs, func(a, b found) int { return cmp.Compare(a.n, b.n) })
 		for _, older := range incs[:len(incs)-1] {
 			b.aside = append(b.aside, aside{older.name, "an older incarnation of " + id})
-			// AN OLDER INCARNATION COUNTS WHAT IT ALONE HOLDS: every file of
-			// it no other name holds (soleNames). It is one a crash left beside
-			// the incarnation kept — a rebuild's predecessor, or a retired one a
+			// AN OLDER INCARNATION IS WHAT THE BOOT GIVES BACK, never what its
+			// state says it holds. It is one a crash left beside the
+			// incarnation kept — a rebuild's predecessor, or a retired one a
 			// reader still held — and the kept one holds HARD LINKS of its
-			// packs: a rebuild links its predecessor's every pack a check has
+			// files: a rebuild links its predecessor's every pack a check has
 			// just found whole (seedRebuild), and a swap its predecessor's
 			// every live pack, its packed-refs and the derived files a
 			// retirement keeps but the memo, whose tree it moves whole
@@ -135,15 +134,12 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 			// cache's budget, claimed room the volume did not have, by the
 			// linked bytes. Walked rather than read from its state: an older
 			// incarnation exists only where a crash left one, its walk one
-			// Lstat a file of a directory the janitor is about to remove. Two
-			// older ones can share a file the kept one does not — a pack the
-			// second swap took out, linked by the first — which neither
-			// counts: Held then errs small, the side a walk that cannot read an
-			// entry errs on too, never claiming room the volume lacks.
-			n, werr := sizeUnder(ctx, filepath.Join(repos, older.name), soleNames, skipped, nil)
-			held += n
-			if werr != nil {
-				return nil, 0, werr
+			// Lstat a file of a directory the janitor is about to remove; and
+			// two older ones can share a file the kept one does not — a pack
+			// the second swap took out, linked by the first — which the walk
+			// counts once.
+			if err = walk(older.name); err != nil {
+				return nil, 0, err
 			}
 		}
 
@@ -170,17 +166,16 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 		b.keep = append(b.keep, k)
 	}
 
-	// scratch/ counts only what has no other name, as the janitor's measure
-	// does: a file there with a second one is an incarnation's, counted by
-	// its state above, or one in trash/, counted by the walk of trash/.
-	for name, rule := range map[string]nameRule{trashDir: allNames, scratchDir: soleNames, tmpDir: allNames} {
-		n, werr := sizeUnder(ctx, filepath.Join(root, name), rule, skipped, nil)
-		if werr != nil {
-			return nil, 0, werr
+	// The leftovers, which the janitor empties: a file in them with a name
+	// in a kept incarnation is that incarnation's, counted by its state
+	// above, and one whose names all lie in what the boot gives back is
+	// counted once, wherever they lie.
+	for _, name := range []string{trashDir, scratchDir, tmpDir} {
+		if err = gone.walk(filepath.Join(root, name)); err != nil {
+			return nil, 0, err
 		}
-		held += n
 	}
-	return b, held, nil
+	return b, held + gone.bytes(), nil
 }
 
 // measureIncarnation is what an incarnation with no state holds, counted as a

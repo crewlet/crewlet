@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
@@ -238,13 +241,14 @@ func TestAPreparedDirectoryIsHeldUntilItsCacheStops(t *testing.T) {
 // a boot keeps, with a state of this build, counts what its state says it
 // holds — one small read a repository, never a stat of its packs, which at
 // one pack a push is a walk of millions of files at every restart — and only
-// what has no state, and an older incarnation beside it, is walked: the
-// older one by the files it alone holds (TestABootCountsAnOlderIncarnation-
-// BySoleNames). The leftovers count too: trash/, scratch/, tmp/ and a home/ a
-// killed git populated are given back by the janitor seconds after the boot,
-// so the next boot finds them as free space, and left out here they would
-// make this boot's budget smaller than the next one's. A link is counted as
-// itself, never as what it points at.
+// what has no state, and what the boot gives back, is walked: an older
+// incarnation beside the kept one, and the leftovers — trash/, scratch/,
+// tmp/ and a home/ a killed git populated — which the janitor gives back
+// seconds after the boot, so the next boot finds them as free space, and
+// left out here they would make this boot's budget smaller than the next
+// one's. What the boot gives back counts each file once, and none the kept
+// incarnation also holds (TestABootCountsEachFileOnce). A symbolic link is
+// counted as itself, never as what it points at.
 func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "c")
@@ -272,8 +276,8 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	// B's older incarnation, which Open moves aside, counts the files it
-	// alone holds — here its state and a pack of its own — whatever its state
-	// says it holds.
+	// holds — here its state and a pack of its own — whatever its state says
+	// it holds.
 	older := aState(repoB)
 	older.DiskBytes = 50
 	older.Derived = map[string]derivedDoc{
@@ -294,38 +298,68 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	write(t, filepath.Join(dir, "tmp", "download"), strings.Repeat("d", 7000))
 	write(t, filepath.Join(dir, "scratch", "0199a1d2-push.git", "f"), strings.Repeat("s", 600))
 	write(t, filepath.Join(dir, "home", "left-behind"), strings.Repeat("h", 40))
+	// And second names of files counted above, each counted nowhere again:
+	// a copy a swap replaced, in trash/ with a link of A's pack, which A's
+	// state counts; a failed swap's staging beside it, with a link of the big
+	// file trash/ already holds; and a crashed swap's staging in scratch/,
+	// with a link of B's pack, which B's walk counts.
+	linkAt(t, filepath.Join(dir, "repos", repoA+".3.git", "objects", "pack", "pack-1.pack"),
+		filepath.Join(dir, "trash", "swapped", "objects", "pack", "pack-1.pack"))
+	linkAt(t, filepath.Join(dir, "trash", "gone", "big"), filepath.Join(dir, "trash", "staged", "big"))
+	linkAt(t, filepath.Join(b, "objects", "pack", "pack-2.pack"),
+		filepath.Join(dir, "scratch", "swap.staged.git", "objects", "pack", "pack-2.pack"))
 
 	layout := prepare(t, dir)
 	want := (9100 + 400 + 120) + (2000 + 100 + linkInfo.Size()) + (olderState.Size() + 800) + 300 + 5000 + 7000 +
 		600 + 40
 	if layout.Held != want {
 		t.Errorf("Layout.Held = %d, want %d: what each kept state counts, the stateless and the older walked, and "+
-			"the leftovers", layout.Held, want)
+			"the leftovers, each file once", layout.Held, want)
 	}
 }
 
-// AN OLDER INCARNATION COUNTS WHAT IT ALONE HOLDS. A boot after a crash can
-// find a repository's older incarnation beside the one it keeps — a
-// rebuild's or a swap's predecessor a reader still held when the node died —
-// and the one it keeps holds HARD LINKS of the older one's files: a rebuild
-// links every pack a check has just found whole rather than download it
-// (seedRebuild), and a swap every live pack, the packed-refs and the derived
-// files a retirement keeps (swap.go). The kept incarnation's state counts
-// those files, so Layout.Held counts an older one by the files no other name
-// holds. Counted by its state as well, every linked file was counted twice,
-// and the engine — which adds Layout.Held to the volume's free space to
-// derive the cache's budget — gave the cache room the volume did not have, by
-// the linked bytes.
+// linkAt makes newname, and the directories above it, a hard link of
+// oldname: a second name of one file, as the cache gives them.
+func linkAt(t *testing.T, oldname, newname string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(newname), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(oldname, newname); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A BOOT COUNTS EACH FILE ONCE, however many names the cache gave it. The
+// cache hard-links one file into many places — a rebuild links every pack a
+// check found whole into the copy it builds (seedRebuild), a swap every live
+// pack, the packed-refs and the derived files it carries (swap.go) — and a
+// boot can find a file under several of them: an older incarnation a crash
+// left beside the one kept (a reader still held it when the node died); a
+// copy a swap replaced, or a failed swap's staging, in trash/ because the
+// process ended before the janitor removed it; a purged repository's two
+// copies, in trash/ together. The kept incarnation's state counts what it
+// holds, so Layout.Held counts what the boot gives back each file once and
+// only where no name of the file is the kept one's. Counted by every name,
+// the shared bytes were counted twice or three times, and the engine — which
+// adds Layout.Held to the volume's free space to derive the cache's budget —
+// gave the cache room the volume did not have, for the life of the process;
+// counted only where a file has one name, a file two of those trees share
+// counted nowhere.
 //
-// What Held should be is counted here by inode rather than by link count:
-// the kept incarnation as its state says, and every file of the older one
-// whose inode is none of the kept one's.
+// What Held should be is counted here by inode rather than by link count
+// (countedOnce): each kept incarnation as its state says, and every other
+// file under repos/, trash/, scratch/, tmp/ and home/ once an inode, but an
+// inode the kept one holds.
 //
-// Mutation: count the older incarnation by its state again (readBoot) — the
-// linked files are counted twice, and both arms fail.
-func TestABootCountsAnOlderIncarnationBySoleNames(t *testing.T) {
+// Mutations: count an older incarnation by its state (readBoot) — the two
+// arms of an older incarnation in repos/ count its linked files twice; count
+// trash/ by every name — the two arms of what sits in trash/ count the
+// shared files twice; count trash/ by its sole names — the purged
+// repository's arm counts the files its two copies share nowhere.
+func TestABootCountsEachFileOnce(t *testing.T) {
 	t.Parallel()
-	t.Run("a rebuild's predecessor", func(t *testing.T) {
+	t.Run("a rebuild's predecessor in repos/", func(t *testing.T) {
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
 		repo := w.repo(t, 1)
@@ -347,9 +381,10 @@ func TestABootCountsAnOlderIncarnationBySoleNames(t *testing.T) {
 			t.Fatalf("the rebuild left the copy at %s", kept)
 		}
 		c.Stop(context.Background())
-		olderBootCount(t, w, held.Dir, kept)
+		requireIn(t, held.Dir)
+		countedOnce(t, w, kept)
 	})
-	t.Run("a swap's predecessor", func(t *testing.T) {
+	t.Run("a swap's predecessor in repos/", func(t *testing.T) {
 		t.Parallel()
 		// A compaction retires two of the three packs while a reader holds
 		// the copy: the next incarnation links the output, the third pack,
@@ -362,57 +397,161 @@ func TestABootCountsAnOlderIncarnationBySoleNames(t *testing.T) {
 			t.Fatalf("the round that retired two packs left the copy at %s", kept)
 		}
 		k.c.Stop(context.Background())
-		olderBootCount(t, k.w, k.held.Dir, kept)
+		requireIn(t, k.held.Dir)
+		countedOnce(t, k.w, kept)
+	})
+	t.Run("a swapped-out copy and a failed swap's staging in trash/", func(t *testing.T) {
+		t.Parallel()
+		// The first swap fails once it has linked every live pack — its
+		// staging goes into trash/ — and the next round's swaps; the old
+		// copy's last reader then lets it go, into trash/ as well. No
+		// janitor runs, as none had when a node stops before its pass.
+		k := newCompactable(t, true, cache.LinkWith(refuseRefsOnce()))
+		w, c, repo := k.w, k.c, k.repo
+		k.compact(t)
+		s, err := c.Sync(t.Context(), repo, linearizable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Dir != k.held.Dir {
+			t.Fatalf("the round whose swap failed answered %s, want the copy it applied to, %s", s.Dir, k.held.Dir)
+		}
+		s.Release()
+		kept := w.sync(t, c, repo).Dir
+		if kept == k.held.Dir {
+			t.Fatalf("the round after the failed swap left the copy at %s", kept)
+		}
+		k.held.Release()
+		c.Stop(context.Background())
+		if statOK(t, k.held.Dir) {
+			t.Fatalf("%s is still in repos/ after its last reader let it go", k.held.Dir)
+		}
+		trash := names(t, w.path("trash"))
+		staging := slices.ContainsFunc(trash, func(name string) bool { return strings.Contains(name, "-swap.") })
+		replaced := slices.ContainsFunc(trash, func(name string) bool {
+			return strings.HasSuffix(name, "-"+filepath.Base(k.held.Dir))
+		})
+		if !staging || !replaced {
+			t.Fatalf("trash/ holds %v, want the failed swap's staging and the copy the swap replaced", trash)
+		}
+		countedOnce(t, w, kept)
+	})
+	t.Run("a purged repository's two copies in trash/", func(t *testing.T) {
+		t.Parallel()
+		// A swap leaves the old copy to its reader, and then the rows purge
+		// the repository: the copy serving goes into trash/ at once, the old
+		// one with its last reader. The two share every live pack, the
+		// packed-refs and the commit-graph, and no incarnation the boot keeps
+		// holds any of them.
+		k := newCompactable(t, true)
+		w, c, repo := k.w, k.c, k.repo
+		k.compact(t)
+		s, err := c.Sync(t.Context(), repo, linearizable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Dir == k.held.Dir {
+			t.Fatalf("the round that retired two packs left the copy at %s", s.Dir)
+		}
+		s.Release()
+		w.log.purge(repo)
+		if _, err = c.Sync(t.Context(), repo, linearizable); !errors.Is(err, code.ErrRepoNotFound) {
+			t.Fatalf("a sync of the purged repository: %v, want code.ErrRepoNotFound", err)
+		}
+		k.held.Release()
+		c.Stop(context.Background())
+		if got := names(t, w.path("repos")); len(got) != 0 {
+			t.Fatalf("repos/ holds %v after the purge, want nothing", got)
+		}
+		countedOnce(t, w, "")
 	})
 }
 
-// olderBootCount boots w's directory again, an older incarnation of a
-// repository at older beside the one the boot keeps at kept, and holds
-// Layout.Held to what the two hold counted once: kept as its state says,
-// and every file of older whose inode is none of kept's. It first empties
-// trash/, and requires tmp/ and scratch/ empty, so nothing but the two is
-// counted — and the two to share a file, the case's whole subject.
-func olderBootCount(t *testing.T, w *syncWorld, older, kept string) {
+// refuseRefsOnce is a link that refuses the first link of a packed-refs, as a
+// file system at its links' limit does, and makes every other: the swap it
+// fails has linked every live pack by then.
+func refuseRefsOnce() func(oldname, newname string) error {
+	var refused atomic.Bool
+	return func(oldname, newname string) error {
+		if filepath.Base(newname) == "packed-refs" && refused.CompareAndSwap(false, true) {
+			return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EMLINK}
+		}
+		return os.Link(oldname, newname)
+	}
+}
+
+// requireIn fails t unless dir is still where the case left it: an older
+// incarnation a reader held across the node's stop.
+func requireIn(t *testing.T, dir string) {
 	t.Helper()
-	trash := filepath.Join(w.layout.Dir, "trash")
-	if err := os.RemoveAll(trash); err != nil {
+	if !statOK(t, dir) {
+		t.Fatalf("%s is gone: the case needs it on the disk at the boot", dir)
+	}
+}
+
+// countedOnce boots w's directory again and holds Layout.Held to every byte
+// the cache holds there counted ONCE: the incarnation the boot keeps at kept
+// ("" for none) as its state says, and every other file — under repos/,
+// trash/, scratch/, tmp/ and home/, all of which the boot gives back — once
+// an inode, but an inode the kept one holds, which its state counts. It
+// requires the case's subject: a file the boot gives back under a second
+// name, the kept incarnation's or another it gives back.
+func countedOnce(t *testing.T, w *syncWorld, kept string) {
+	t.Helper()
+	keptInodes := map[uint64]bool{}
+	var want int64
+	if kept != "" {
+		for path := range regularFiles(t, kept) {
+			keptInodes[inode(t, path)] = true
+		}
+		st := readStateDoc(t, kept)
+		want = st.DiskBytes + st.derivedBytes()
+	}
+	given := []string{w.path("trash"), w.path("scratch"), w.path("tmp"), w.path("home")}
+	repos, err := os.ReadDir(w.path("repos"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(trash, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, leftover := range []string{"tmp", "scratch"} {
-		if files := regularFiles(t, filepath.Join(w.layout.Dir, leftover)); len(files) != 0 {
-			t.Fatalf("%s/ holds %d files once the node stopped: the case counts the two incarnations alone",
-				leftover, len(files))
+	for _, d := range repos {
+		if dir := w.path("repos", d.Name()); dir != kept {
+			given = append(given, dir)
 		}
 	}
-	keptInodes := map[uint64]bool{}
-	for path := range regularFiles(t, kept) {
-		keptInodes[inode(t, path)] = true
-	}
-	var alone, shared int64
-	for path, info := range regularFiles(t, older) {
-		if keptInodes[inode(t, path)] {
-			shared += info.Size()
+	// once is what the boot gives back, each file once; again, the bytes a
+	// count by every name adds — the kept incarnation's files under another
+	// name, and every name of a given-back file past its first.
+	var once, again int64
+	seen := map[uint64]bool{}
+	for _, dir := range given {
+		if !statOK(t, dir) {
 			continue
 		}
-		alone += info.Size()
+		for path, info := range regularFiles(t, dir) {
+			ino := inode(t, path)
+			switch {
+			case keptInodes[ino], seen[ino]:
+				again += info.Size()
+			default:
+				seen[ino] = true
+				once += info.Size()
+			}
+		}
 	}
-	if shared == 0 {
-		t.Fatalf("the incarnation kept at %s shares no file with the older one at %s: the case has nothing to "+
-			"count once", kept, older)
+	if again == 0 {
+		t.Fatalf("nothing the boot gives back has a second name: the case has nothing to count once")
 	}
-	st := readStateDoc(t, kept)
-	want := st.DiskBytes + st.derivedBytes() + alone
+	want += once
 	layout := prepare(t, w.layout.Dir)
 	switch held := layout.Held; {
-	case held == want+shared:
-		t.Errorf("Layout.Held = %d: the %d bytes the older incarnation shares with the one kept are counted twice",
-			held, shared)
+	case held == want+again:
+		t.Errorf("Layout.Held = %d: the %d bytes of files with more than one name are counted by every name",
+			held, again)
+	case held < want:
+		t.Errorf("Layout.Held = %d, want %d: %d bytes the boot gives back are counted nowhere", held, want,
+			want-held)
 	case held != want:
-		t.Errorf("Layout.Held = %d, want %d: the kept incarnation as its state counts it (%d), and the %d bytes "+
-			"only the older one holds", held, want, st.DiskBytes+st.derivedBytes(), alone)
+		t.Errorf("Layout.Held = %d, want %d: what the kept incarnation's state counts and the %d bytes the "+
+			"boot gives back, each file once", held, want, once)
 	}
 }
 

@@ -989,14 +989,18 @@
 // again. What the cache holds ([Layout.Held]) is summed from the same
 // reading — each kept incarnation's state counts it — so a warm node's boot
 // costs a small read a repository, never a stat of every pack: at one pack
-// a push, a node caching a million pushes holds three million files. An
-// older incarnation a crash left beside the kept one counts only the files
-// it alone holds, never by its state: the kept one holds hard links of what
-// they share — a rebuild links every pack a check found whole, a swap every
-// live pack, the packed-refs and the derived files it links — and its state
-// counts those, so counted twice they made the boot's budget claim room the
-// volume did not have. The janitor removes what is in trash/ in the
-// background, so a boot never waits on a large removal.
+// a push, a node caching a million pushes holds three million files.
+// Everything the boot GIVES BACK — an older incarnation a crash left beside
+// the kept one, and what trash/, scratch/ and tmp/ hold — is walked and
+// counts each file ONCE, by its inode, and only where every name of the file
+// lies in it: the kept incarnation holds hard links of what it shares with
+// an older one — a rebuild links every pack a check found whole, a swap
+// every live pack, the packed-refs and the derived files it links — and so
+// do a copy a swap replaced, sitting in trash/ when a stop cut the janitor's
+// removal short, and a failed swap's staging; its state counts those, so
+// counted by every name they made the boot's budget claim room the volume
+// did not have. The janitor removes what is in trash/ in the background, so
+// a boot never waits on a large removal.
 //
 // A repository's LAST USE comes back from a restart too, to within
 // [EvictInterval]: the boot reads it from the state file's modification

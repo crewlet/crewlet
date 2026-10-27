@@ -141,7 +141,10 @@ type Layout struct {
 	// The leftovers count for the same reason: the janitor gives them back
 	// seconds after the boot, so the NEXT boot finds them as free space, and
 	// left out here they would make this boot's budget smaller than the
-	// next one's for no change in the disk.
+	// next one's for no change in the disk. EACH FILE COUNTS ONCE, however
+	// many names it has: the cache hard-links one file into many places
+	// (givenBack), and a byte counted twice here is room the budget claims
+	// that the volume does not have.
 	Held int64
 
 	// boot is the claim and the reading Open takes over; nil in a Layout
@@ -196,16 +199,18 @@ func (l Layout) Release() {
 //     its state, and which entries Open moves aside — and Held is summed
 //     from the reading: the incarnation kept, with a state of this build,
 //     counts what its state says it holds, so a warm node's boot reads one
-//     small file a repository and stats none of its packs. Only what has no
-//     state to count — an incarnation whose state is missing, unreadable or
-//     another build's, and an entry that is not an incarnation — is walked;
-//     an OLDER incarnation a crash left beside the one kept is walked for the
-//     files it alone holds (soleNames), since the one kept links what they
-//     share and its state counts it; and trash/, scratch/ and tmp/, which the
-//     janitor keeps small, are walked too. An entry a walk cannot read is
-//     skipped and logged (code_cache_held_unmeasured), never a boot failure:
-//     the budget then errs small. The cost is O(repositories), whatever they
-//     hold (the package doc's Measured section). ctx bounds all of it.
+//     small file a repository and stats none of its packs; one kept with no
+//     state to count — missing or unreadable — is walked. Everything the boot
+//     GIVES BACK is walked too and counted each file once, only where every
+//     name of the file lies in it (givenBack): each entry of repos/ Open
+//     moves aside — an older incarnation a crash left beside the one kept,
+//     whose shared files the kept one links and its state counts; one whose
+//     state is another build's; an entry that is not an incarnation — and
+//     trash/, scratch/ and tmp/, which the janitor keeps small. An entry a
+//     walk cannot read is skipped and logged (code_cache_held_unmeasured),
+//     never a boot failure: the budget then errs small. The cost is
+//     O(repositories), whatever they hold (the package doc's Measured
+//     section). ctx bounds all of it.
 //
 // Any failure releases the claim.
 func Prepare(ctx context.Context, dir string) (Layout, error) {
@@ -406,26 +411,44 @@ type nameRule int
 
 const (
 	// allNames counts every regular file and symbolic link, each as itself:
-	// repos/, tmp/ and trash/, where every name the cache gives a file is
-	// its only one or the one the measure means.
+	// a kept incarnation a boot finds with no state (measureIncarnation),
+	// every file of which is its own — one it shares with what the boot gives
+	// back is counted here, and never there (givenBack).
 	allNames nameRule = iota
 	// soleNames counts a regular file only when it has no other name:
-	// scratch/, where a file with a second name is one of an incarnation's
-	// own linked in — an advertisement view's packed-refs, an adopted
-	// push's pack before its scratch goes — and its bytes are counted
-	// where that incarnation is; and an OLDER incarnation a boot finds
-	// beside the one it keeps, whose files the kept one links — a rebuild's
-	// seed — and counts by its state. A symbolic link counts as itself.
+	// scratch/ as the janitor measures it (measureScratch), where a file
+	// with a second name is one of an incarnation's own linked in — an
+	// advertisement view's packed-refs, an adopted push's pack before its
+	// scratch goes, a swap's staged links — and its bytes are counted where
+	// that incarnation is. A symbolic link counts as itself.
 	soleNames
 )
 
 // sizeUnder sums the sizes of the regular files and symbolic links at and
-// under root that rule counts, each as itself — a link is never followed, so
-// a link out of the cache never counts what it points at. An entry that is
-// there but cannot be read is handed to skipped and left out; an ended ctx
-// stops the walk and is its error. listing is nil but in a test
-// (knobs.measuring): it is told each directory as the walk is about to list
-// it, root first.
+// under root that rule counts, each as itself (eachFile). An ended ctx stops
+// the walk and is its error.
+func sizeUnder(ctx context.Context, root string, rule nameRule, skipped func(path string, err error),
+	listing func(dir string)) (int64, error) {
+	var total int64
+	err := eachFile(ctx, root, skipped, listing, func(info fs.FileInfo) {
+		if rule == soleNames && info.Mode().IsRegular() && linksOf(info) > 1 {
+			return
+		}
+		total += info.Size()
+	})
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// eachFile hands visit what Lstat says of every regular file and symbolic
+// link at and under root — a link is never followed, so a link out of the
+// cache never counts what it points at, and anything else that is not a
+// directory is no file the cache measures. An entry that is there but cannot
+// be read is handed to skipped and left out; an ended ctx stops the walk and
+// is its error. listing is nil but in a test (knobs.measuring): it is told
+// each directory as the walk is about to list it, root first.
 //
 // AN ENTRY THAT IS GONE IS NOTHING TO COUNT, WHEREVER THE WALK MEETS ITS
 // ABSENCE — the root; a directory a listing named, gone when the walk opens
@@ -442,9 +465,8 @@ const (
 // skipped. The boot's walks lose nothing by the rule: nothing of this process
 // writes the directory then, and an entry something else removed holds no
 // bytes either.
-func sizeUnder(ctx context.Context, root string, rule nameRule, skipped func(path string, err error),
-	listing func(dir string)) (int64, error) {
-	var total int64
+func eachFile(ctx context.Context, root string, skipped func(path string, err error), listing func(dir string),
+	visit func(info fs.FileInfo)) error {
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if cerr := ctx.Err(); cerr != nil {
 			return cerr
@@ -468,26 +490,109 @@ func sizeUnder(ctx context.Context, root string, rule nameRule, skipped func(pat
 			}
 			return nil
 		}
-		switch {
-		case info.Mode()&fs.ModeSymlink != 0:
-			total += info.Size()
-		case !info.Mode().IsRegular():
-		case rule == soleNames && namedTwice(info):
-		default:
-			total += info.Size()
+		if info.Mode()&fs.ModeSymlink != 0 || info.Mode().IsRegular() {
+			visit(info)
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("cache: measuring %s: %w", root, err)
+		return fmt.Errorf("cache: measuring %s: %w", root, err)
 	}
-	return total, nil
+	return nil
 }
 
-// namedTwice reports whether the file info describes has another name: a
-// link count over one, which every platform this builds for answers in its
-// stat (one that answers none is taken to have only its own).
-func namedTwice(info fs.FileInfo) bool {
-	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && st.Nlink > 1
+// linksOf is how many names the file info describes has: its link count,
+// which every platform this builds for answers in its stat — one that
+// answers none is taken to have only its own.
+func linksOf(info fs.FileInfo) int {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int(st.Nlink)
+	}
+	return 1
+}
+
+// givenBack measures what a boot GIVES BACK to the volume: every tree Open
+// moves into trash/ — each entry of repos/ but the incarnations it keeps —
+// and trash/, scratch/ and tmp/ themselves, which the janitor empties within
+// seconds of the boot. It counts EACH FILE ONCE, by its device and inode,
+// and only a file EVERY ONE OF WHOSE NAMES lies in those trees: removing
+// them gives back exactly those bytes, and a file with a name anywhere else —
+// in an incarnation the boot keeps, whose state counts it — gives back
+// nothing.
+//
+// Hard links put one file under many names here, and every one of them the
+// cache's own: an incarnation a swap or a rebuild replaced shares every file
+// the next one linked from it (a swap every live pack, the packed-refs and
+// the derived files it carries; a rebuild every pack a check found whole),
+// whether it is still in repos/ for a reader a crash outlived, or in trash/,
+// where its last reader's release, the promote, or the boot that found it
+// older put it, the janitor's removal of it cut short by a stop or a crash;
+// a failed swap's staging holds a link of every live pack, and a crashed
+// one's sits in scratch/ — which the boot then moves into trash/, where the
+// next boot finds it if this one dies before its janitor's first pass; and a
+// purged or evicted repository's incarnations share each other's files in
+// trash/. Counted by every name, a boot counted a kept incarnation's linked
+// files once by its state and once more for each name in those trees, and
+// the budget the engine derives from Held claimed room the volume does not
+// have, by those bytes, for the whole life of the process. Counted only
+// where a file has a single name, a file two of those trees share would
+// count nowhere, though removing both gives it back.
+//
+// One walk a tree, a map entry for each file with more than one name. A
+// name a walk cannot read leaves its file uncounted, as an unreadable entry
+// is: Held errs small, never claiming room the volume lacks.
+type givenBack struct {
+	ctx     context.Context
+	skipped func(path string, err error)
+	// single is the bytes of the files with one name, each counted as the
+	// walk meets it; linked is every file with more, by its identity.
+	single int64
+	linked map[fileKey]*linkedFile
+}
+
+// fileKey is what every name of one file shares: its device and inode.
+type fileKey struct{ dev, ino uint64 }
+
+// linkedFile is one file with more than one name: its size, its link count,
+// and how many of its names the walks met.
+type linkedFile struct {
+	size         int64
+	links, found int
+}
+
+// newGivenBack is an empty measure whose walks run under ctx and hand an
+// entry they cannot read to skipped.
+func newGivenBack(ctx context.Context, skipped func(path string, err error)) *givenBack {
+	return &givenBack{ctx: ctx, skipped: skipped, linked: map[fileKey]*linkedFile{}}
+}
+
+// walk adds every file at and under root to the measure.
+func (g *givenBack) walk(root string) error {
+	return eachFile(g.ctx, root, g.skipped, nil, func(info fs.FileInfo) {
+		links := linksOf(info)
+		if links <= 1 {
+			g.single += info.Size()
+			return
+		}
+		id := idOf(info)
+		key := fileKey{dev: id.dev, ino: id.ino}
+		f := g.linked[key]
+		if f == nil {
+			f = &linkedFile{size: info.Size(), links: links}
+			g.linked[key] = f
+		}
+		f.found++
+	})
+}
+
+// bytes is what the walks gave back: every file with one name, and every
+// file with more whose every name they met, each once.
+func (g *givenBack) bytes() int64 {
+	total := g.single
+	for _, f := range g.linked {
+		if f.found >= f.links {
+			total += f.size
+		}
+	}
+	return total
 }
