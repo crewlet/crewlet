@@ -297,7 +297,7 @@ type PushRow struct {
 // derived from the commits, whose committer header any client may write.
 //
 // THE ROW'S COLUMN HAS NO DOMAIN VALUE AS ITS DEFAULT (the empty string, in
-// replicated 0061), and a row naming no way this build knows is refused by
+// replicated 0063), and a row naming no way this build knows is refused by
 // every reader of it (scanPush): an apply that forgot the column would
 // otherwise read as one way or the other.
 type PushVia string

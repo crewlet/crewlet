@@ -1132,7 +1132,7 @@ type scanner interface{ Scan(dest ...any) error }
 //
 // A ROW NAMING NO WAY THIS BUILD KNOWS IS REFUSED ([ErrInvalid], naming the
 // push), never read as one: its column's default is the empty string rather
-// than a way (replicated 0061), so an apply that forgot to write it is a
+// than a way (replicated 0063), so an apply that forgot to write it is a
 // failed read here, where a default naming a way would have answered every
 // push the engine built as one a client's git sent.
 func scanPush(s scanner) (PushRow, int, error) {
