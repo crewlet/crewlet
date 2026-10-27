@@ -308,6 +308,18 @@ browser writes as the person signed in behind it, never as "the dashboard",
 which is nobody, so what it shows is what the engine recorded and every write
 behind it is attributed to somebody.
 
+**The tools are shared, so what they say is worded for each reader.** A person
+in the dashboard and an agent call the same tools, and a write that landed can
+come back with a caveat: the item went to triage because the project's default
+assignee has left the chart, a time was stored as its date. An agent is told
+it in words for a model, naming the tool and argument it would use next; a
+person is told it in the words of the screen, and is never shown advice that
+names an argument they have no control for. Each caveat also says whether
+somebody has to act on it, which is what decides whether its toast stays
+until dismissed or goes by itself
+([ADR-0059](../../adr/0059-a-caveat-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md),
+[What it answers](../reference/api-endpoints.md#what-it-answers)).
+
 **The binding lives in the directory**, not on the token and not in the
 company document. Tier A is the root of trust and may never read Tier B — it
 holds the keys to the secret store — so a `seat:` field on an

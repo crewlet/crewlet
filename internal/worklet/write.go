@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -729,10 +730,10 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	scope = scope.capped()
 	at := w.Now()
 
-	// WARNINGS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
+	// CAVEATS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
 	// every round: the LAST run is the one whose record was published, so
 	// the slice is replaced rather than appended to.
-	var fieldWarnings []string
+	var fieldCaveats []caveat.Caveat
 	result, err := w.published(ctx, statelog.Request{
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
@@ -902,7 +903,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 					return statelog.Decision{}, err
 				}
 				charged.Fields = &coerced
-				fieldWarnings = warned
+				fieldCaveats = warned
 			}
 			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS WRITE.
 			//
@@ -954,9 +955,9 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 		},
 	})
 	if patch.Body != nil {
-		result.Warnings = bodyWarnings(*patch.Body)
+		result.Caveats = bodyCaveats(*patch.Body)
 	}
-	result.Warnings = append(result.Warnings, fieldWarnings...)
+	result.Caveats = append(result.Caveats, fieldCaveats...)
 	return result, err
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -444,7 +445,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"list_artifacts before creating it a different way: if it landed, it is there."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
-	out := t.deps.publishedAnswer(c, published, report, "created")
+	out := t.deps.publishedAnswer(c, published, "created")
 	if folderPath != "" {
 		out["folder"] = folderPath
 	}
@@ -452,7 +453,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["shared_with"] = []map[string]any{{"to": shareTarget(shares[0].Audience),
 			"role": string(shares[0].Role)}}
 	}
-	return jsonResult(out)
+	return caveated(out, findingCaveats(report))
 }
 
 // folder is the folder a create files into, by id, with its path ("" for the
@@ -503,7 +504,7 @@ func (t *createArtifact) requesterShare(c artifactCaller) []artifacts.Share {
 
 // publishedAnswer is a version that landed, as create and publish answer it.
 func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Published,
-	report artifactupload.Report, outcome string) map[string]any {
+	outcome string) map[string]any {
 
 	out := map[string]any{
 		"outcome": outcome, "artifact": p.Artifact.String(), "version": p.Number,
@@ -512,10 +513,25 @@ func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Publis
 	if url := d.link(p.Artifact); url != "" {
 		out["url"] = url
 	}
-	if len(report.Warnings) > 0 {
-		out["warnings"] = report.Warnings
-	}
 	return withArtifactOperation(out, c)
+}
+
+// findingCaveats is the linter's warnings about a published version, as the
+// caveats its answer carries ([caveated]): each one about a file the caller
+// wrote, in the same words for a model and a person who wrote it.
+func findingCaveats(report artifactupload.Report) []caveat.Caveat {
+	if len(report.Warnings) == 0 {
+		return nil
+	}
+	out := make([]caveat.Caveat, len(report.Warnings))
+	for i, f := range report.Warnings {
+		where := f.Path
+		if f.Line > 0 {
+			where = fmt.Sprintf("%s:%d", f.Path, f.Line)
+		}
+		out[i] = caveat.FileFinding(where, f.Message)
+	}
+	return out
 }
 
 // withArtifactOperation puts the call's `op_id` on its answer on the operator
@@ -831,9 +847,9 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"get_artifact: if its head moved past your base, the publish landed."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
-	out := t.deps.publishedAnswer(c, published, report, "published")
+	out := t.deps.publishedAnswer(c, published, "published")
 	out["base_version"] = base
-	return jsonResult(out)
+	return caveated(out, findingCaveats(report))
 }
 
 // baseEntry is the entry page of the version a publish is based on, which a

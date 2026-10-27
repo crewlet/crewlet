@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -93,7 +94,7 @@ type TrackerWriter interface {
 	WriteTags(ctx context.Context, opID, project string, edit worklet.TagEdit,
 		authority worklet.TagAuthority) (worklet.WriteResult, error)
 	EnsureTags(ctx context.Context, opID, project string, tags []string) (
-		[]string, []string, error)
+		[]string, []caveat.Caveat, error)
 	PutFile(ctx context.Context, opID string, put worklet.FilePut) (worklet.WriteResult, error)
 	RemoveFile(ctx context.Context, opID, project, path string, ifMatch uint64) (worklet.WriteResult, error)
 	RecordTurn(ctx context.Context, opID string, turn worklet.TurnRecord) (worklet.WriteResult, error)
@@ -955,9 +956,13 @@ type ensureTagsArgs struct {
 }
 
 // ensuredTags is [TrackerWriter.EnsureTags]' two answers, named.
+//
+// CAVEATS UNDER A NEW NAME rather than the old `Warnings` retyped, for
+// [worklet.WriteResult.Caveats]' reason: an older peer's list of sentences
+// decoded into a list of caveats would fail the whole answer mid-upgrade.
 type ensuredTags struct {
-	Created  []string
-	Warnings []string
+	Created []string
+	Caveats []caveat.Caveat
 }
 
 var opEnsureTags = define("tracker.ensure_tags", opIdempotentWrite, trackerDomain, true,
@@ -966,8 +971,8 @@ var opEnsureTags = define("tracker.ensure_tags", opIdempotentWrite, trackerDomai
 		if err != nil {
 			return ensuredTags{}, err
 		}
-		created, warnings, err := w.EnsureTags(ctx, a.OpID, a.Project, a.Tags)
-		return ensuredTags{Created: created, Warnings: warnings}, err
+		created, caveats, err := w.EnsureTags(ctx, a.OpID, a.Project, a.Tags)
+		return ensuredTags{Created: created, Caveats: caveats}, err
 	})
 
 // ---- the operator's writes ------------------------------------------------ //

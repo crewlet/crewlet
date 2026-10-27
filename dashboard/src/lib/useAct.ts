@@ -11,7 +11,10 @@
  *
  * WHAT EACH OUTCOME TELLS A PERSON:
  *
- *  - `applied` — a toast naming what changed, which goes by itself;
+ *  - `applied`: a toast naming what changed, which goes by itself; or, where
+ *    the engine answered caveats beside it, one carrying their sentences,
+ *    which stays only when one of them asks the person to act
+ *    ([caveatToast]);
  *  - `pending`: "Sent. This node has not applied it yet", because the
  *    reads that follow wait for it and a person watching a spinner deserves
  *    to know why;
@@ -39,6 +42,7 @@ import {
   type ActionArgs,
   type ActionTool,
   type ActResult,
+  type Caveat,
 } from "~/protocol/act.ts";
 import { useWriteAccess, type WriteAccess } from "./useWriteAccess.ts";
 
@@ -120,16 +124,37 @@ interface Press<T extends ActionTool> {
   label: PressLabel;
 }
 
+/** The toast a landed write with caveats is shown as. */
+export interface CaveatToast {
+  /** `warning` (stays until dismissed) or `info` (goes by itself). */
+  variant: "warning" | "info";
+  /** Every caveat's sentence, in the order the engine answered them. */
+  message: string;
+}
+
 /**
- * The caveats an applied write's own answer carries (`warnings`), as sentences
- * — and none for an answer that carries none, or carries them in a shape this
- * build does not read.
+ * The toast a landed write's caveats are shown as, or null when it has none.
+ *
+ * THE ENGINE'S WORDS FOR A PERSON, and never the receipt's `warnings`: those
+ * are written for a model and name tools and arguments ("Use ask: ana"), and
+ * the engine answers every caveat's person phrasing in `caveats` instead
+ * (ADR-0059). A toast that read the receipt showed a person advice only a
+ * model could follow, and kept it on screen until they closed it.
+ *
+ * STICKY ONLY WHEN SOMEBODY MUST ACT. The engine states per caveat whether it
+ * asks the person to act (`required`: a setting left broken until somebody
+ * changes it) or only to know (`none`: a value stored in its canonical form).
+ * The kit's `warning` toast stays until it is dismissed and its `info` toast
+ * goes by itself, each by its own default, so one caveat that must be acted
+ * on makes the press's toast a warning, and anything else is information that
+ * does not demand a click to clear.
  */
-export function receiptWarnings(receipt: unknown): string[] {
-  const warnings = (receipt as { warnings?: unknown } | null)?.warnings;
-  return Array.isArray(warnings)
-    ? warnings.filter((w): w is string => typeof w === "string" && w.trim() !== "")
-    : [];
+export function caveatToast(caveats: readonly Caveat[]): CaveatToast | null {
+  if (caveats.length === 0) return null;
+  return {
+    variant: caveats.some((c) => c.action === "required") ? "warning" : "info",
+    message: caveats.map((c) => c.message).join(" "),
+  };
 }
 
 /** One change a screen can make, as the signed-in person. */
@@ -179,26 +204,35 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
       switch (result.kind) {
         case "applied": {
           // A CHANGE THAT LANDED WITH A CAVEAT SAYS IT. The engine answers
-          // `warnings` beside an applied write when it did something other
-          // than the obvious — a create filed to triage because the
-          // project's default assignee left the chart — and a plain "done"
-          // over it tells the person the opposite of what happened.
-          const warned = receiptWarnings(result.receipt);
-          if (warned.length > 0) {
+          // caveats beside an applied write when it did something other
+          // than the obvious (a create filed to triage because the
+          // project's default assignee left the chart), and a plain "done"
+          // over it tells the person the opposite of what happened. How
+          // long it stays is the caveat's to say ([caveatToast]); the
+          // variant's own duration applies.
+          const caveated = caveatToast(result.caveats);
+          if (caveated) {
             toast.show({
-              variant: "warning",
+              variant: caveated.variant,
               title: press.label.done,
-              message: warned.join(" "),
-              duration: 0,
+              message: caveated.message,
             });
           } else {
             toast.ok(press.label.done);
           }
           break;
         }
-        case "pending":
-          toast.show({ variant: "info", title: press.label.done, message: PENDING_SENTENCE });
+        case "pending": {
+          // A PENDING WRITE WAS DECIDED, so its caveats are as true as an
+          // applied one's, and said beside the wait.
+          const caveated = caveatToast(result.caveats);
+          toast.show({
+            variant: caveated?.variant ?? "info",
+            title: press.label.done,
+            message: caveated ? `${PENDING_SENTENCE} ${caveated.message}` : PENDING_SENTENCE,
+          });
           break;
+        }
         case "unknown":
           toast.show({
             // ONE TOAST PER PRESS, replaced rather than stacked when its own

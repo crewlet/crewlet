@@ -13,7 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
-import { useAct } from "./useAct.ts";
+import { caveatToast, useAct } from "./useAct.ts";
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
@@ -400,4 +400,53 @@ test("an abandoned press resolves with null and reports nothing", async () => {
   controller.abort();
   await waitFor(() => expect(got).toHaveBeenCalledWith(null));
   expect(screen.queryByText(/Could not confirm/)).toBeNull();
+});
+
+// LAST IN THE FILE, because the tab's floor it raises is shared with every
+// case above. THE INCIDENT: answering a decision left a toast that never went away,
+// telling a person to "Use ask: backend-engineer", the receipt's `warnings`
+// written for a model. A press is told the engine's PERSON words from
+// `caveats`, and the receipt's model words are never drawn.
+test("a press is told its caveats in a person's words, never the receipt's model words", async () => {
+  engine(() =>
+    json(
+      {
+        tool: "set_pins",
+        outcome: "applied",
+        position: "CREWLET_TRACKER_LOG@1:990",
+        receipt: { warnings: ["Use ask: backend-engineer, if you are expecting a reply."] },
+        caveats: [
+          {
+            code: "unaddressed_comment",
+            message: "@backend-engineer will see this comment, but it does not ask them anything.",
+            action: "none",
+          },
+        ],
+      },
+      200,
+    ),
+  );
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText(/does not ask them anything/)).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/Use ask:/)).toBeNull();
+});
+
+test("a caveat that asks nothing goes by itself, and one that needs a person stays", () => {
+  expect(caveatToast([])).toBeNull();
+  // NOTHING TO DO: the kit's info toast, which goes by itself.
+  expect(
+    caveatToast([
+      { code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" },
+      { code: "body_links_capped", message: "Only the first 25 are linked.", action: "none" },
+    ]),
+  ).toEqual({ variant: "info", message: "Saved as 2026-03-04. Only the first 25 are linked." });
+  // ONE THAT NEEDS A PERSON makes the press's toast a warning, which the kit
+  // keeps until it is dismissed.
+  expect(
+    caveatToast([
+      { code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" },
+      { code: "default_assignee_gone", message: "Assign it to someone.", action: "required" },
+    ]),
+  ).toEqual({ variant: "warning", message: "Saved as 2026-03-04. Assign it to someone." });
 });

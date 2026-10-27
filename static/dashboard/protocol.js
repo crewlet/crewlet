@@ -3152,6 +3152,21 @@ var ACT_ERRORS = {
 	internal_error: "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose."
 };
 //#endregion
+//#region src/contract/caveats.ts
+/**
+* What a caveat on a landed write asks of the person who reads it, as the
+* engine names it (`internal/caveat`, ADR-0059).
+*
+* `none` is something to know: shown, and gone by itself. `required` is
+* something somebody has to act on: shown until it is dismissed. The engine
+* states the action per caveat code, so a screen never guesses it from the
+* sentence. HELD AGAINST `caveat.Actions` by
+* `internal/caveat.TestTheDashboardReadsWhatACaveatAsks`: an action copied
+* here and renamed there would render a caveat that needs a person as one that
+* goes by itself.
+*/
+var CAVEAT_ACTIONS = ["none", "required"];
+//#endregion
 //#region src/protocol/writeOutcome.ts
 /**
 * What a write's answer means: the one interpreter of "did it land", shared by
@@ -3174,12 +3189,36 @@ var ACT_ERRORS = {
 *  - `refused`: the engine said no, with a code from `contract/errors.ts` and
 *    the sentence a person is shown for it.
 */
+/**
+* The caveats an answer carries, as this build reads them: each with a code
+* and a sentence, and an action this build knows. An action it does not know
+* (a newer engine's) is read as `none`, the engine's own rule for a caveat it
+* cannot explain: a toast nobody can say why it stays must not demand
+* dismissal. Anything that is not a caveat is dropped.
+*/
+function caveatsOf(raw) {
+	if (!Array.isArray(raw)) return [];
+	const known = new Set(CAVEAT_ACTIONS);
+	const out = [];
+	for (const item of raw) {
+		const c = item ?? {};
+		if (typeof c.code !== "string" || typeof c.message !== "string") continue;
+		if (c.message.trim() === "") continue;
+		const action = typeof c.action === "string" && known.has(c.action) ? c.action : "none";
+		out.push({
+			code: c.code,
+			message: c.message,
+			action
+		});
+	}
+	return out;
+}
 /** Whether a code off the wire is one this build knows. */
 function isActErrorCode(code) {
 	return Object.hasOwn(ACT_ERRORS, code);
 }
 /**
-* The 2xx answer `{outcome, position, receipt}` a write returns.
+* The 2xx answer `{outcome, position, receipt, caveats}` a write returns.
 *
 * AN OUTCOME THIS BUILD DOES NOT KNOW IS NOT A SUCCESS, the engine's own rule
 * for its own answer (`receiptOf`), for the same reason: it is the one reading
@@ -3194,7 +3233,8 @@ function writeLanded(body) {
 	return {
 		kind: answer.outcome,
 		position: typeof answer.position === "string" ? answer.position : null,
-		receipt: answer.receipt
+		receipt: answer.receipt,
+		caveats: caveatsOf(answer.caveats)
 	};
 }
 /**
@@ -3340,7 +3380,8 @@ async function act(tool, args, options = {}) {
 		opId,
 		position: landed.position,
 		domain,
-		receipt: landed.receipt
+		receipt: landed.receipt,
+		caveats: landed.caveats
 	};
 }
 /** What a refusal, or a request that never got an answer, came to. */

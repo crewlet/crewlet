@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -581,7 +582,7 @@ func (f *ledgerFake) WriteTags(_ context.Context, opID, _ string, _ worklet.TagE
 	return f.written(opID)
 }
 
-func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string) ([]string, []string, error) {
+func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string) ([]string, []caveat.Caveat, error) {
 	if _, err := f.record(opID); err != nil {
 		return nil, nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -319,11 +320,11 @@ func TestNearTagWarnsAndNeverRefuses(t *testing.T) {
 		t.Fatalf("a near-duplicate was REFUSED rather than warned: %v", err)
 	}
 	r.drain()
-	if len(got.Warnings) == 0 {
-		t.Fatal("no warning about a slug one edit from an existing tag")
+	if len(got.Caveats) == 0 || got.Caveats[0].Code() != caveat.CodeTagNearDuplicate {
+		t.Fatalf("no caveat about a slug one edit from an existing tag: %+v", got.Caveats)
 	}
-	if !strings.Contains(got.Warnings[0], "api") {
-		t.Fatalf("the warning does not name the near tag: %v", got.Warnings)
+	if !strings.Contains(got.Caveats[0].Person(), "api") {
+		t.Fatalf("the caveat does not name the near tag: %q", got.Caveats[0].Person())
 	}
 	if slugs := r.tagSlugs("ENG"); !slices.Equal(slugs, []string{"api", "apis"}) {
 		t.Fatalf("the near-duplicate was not declared: %v", slugs)
@@ -343,8 +344,8 @@ func TestFarTagDoesNotWarn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if len(got.Warnings) != 0 {
-		t.Fatalf("a tag six edits away warned: %v", got.Warnings)
+	if len(got.Caveats) != 0 {
+		t.Fatalf("a tag six edits away warned: %+v", got.Caveats)
 	}
 }
 

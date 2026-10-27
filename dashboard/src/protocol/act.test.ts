@@ -140,6 +140,45 @@ describe("what a change came to", () => {
     expect(heard).toEqual([["tracker", []]]);
   });
 
+  // A CAVEAT IS READ IN A PERSON'S WORDS, from `caveats`, and a receipt's
+  // `warnings` (written for a model, naming tools and arguments) is never read
+  // as one, whatever an engine sends there.
+  test("carries the caveats the engine answered for a person, and only those", async () => {
+    stub(async () =>
+      json(
+        {
+          ...APPLIED,
+          receipt: { views: ["v1"], warnings: ["Use ask: ana, if you expect a reply."] },
+          caveats: [
+            { code: "default_assignee_gone", message: "Assign it.", action: "required" },
+            { code: "body_links_capped", message: "Only some are linked.", action: "none" },
+            { code: "from_a_newer_engine", message: "Something new.", action: "escalate" },
+            { code: "no_words", message: " ", action: "none" },
+            "not a caveat",
+          ],
+        },
+        200,
+      ),
+    );
+    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    expect(result.kind).toBe("applied");
+    if (result.kind !== "applied") return;
+    expect(result.caveats).toEqual([
+      { code: "default_assignee_gone", message: "Assign it.", action: "required" },
+      { code: "body_links_capped", message: "Only some are linked.", action: "none" },
+      // AN ACTION THIS BUILD DOES NOT KNOW asks nothing: a toast nobody can
+      // say why it stays must not demand dismissal.
+      { code: "from_a_newer_engine", message: "Something new.", action: "none" },
+    ]);
+    expect(JSON.stringify(result.caveats)).not.toContain("ask:");
+  });
+
+  test("an answer with no caveats carries an empty list", async () => {
+    stub(async () => json(APPLIED, 200));
+    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    expect(result.kind === "applied" && result.caveats).toEqual([]);
+  });
+
   test("pending raises the floor too: the reads that follow wait for it", async () => {
     stub(async () => json({ ...APPLIED, outcome: "pending" }, 200));
     const floors = new SessionFloors();

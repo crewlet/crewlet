@@ -14,10 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // ActPattern is the route the act transport is mounted at: ONE catalogue tool
@@ -110,13 +112,26 @@ var ActTransportCodes = []httpjson.Code{
 // change) answers `applied` at no position: the state asked for already
 // holds, and there is nothing to wait for. OpID is the operation the request
 // was made under — the key a retry sends back. Receipt is the tool's own
-// answer, verbatim.
+// answer, verbatim but for its `warnings`, and Caveats is what those warnings
+// say, in a person's words.
+//
+// # Caveats, never the receipt's warnings (ADR-0059)
+//
+// The tools are shared: a seat's model calls them too, and a tool's answer
+// carries its caveats under `warnings` in the MODEL'S words, naming the tool
+// and the argument it would call next ("Use ask: ana"). This route answers a
+// person, so it answers each caveat's PERSON phrasing ([caveat.Caveat.Person])
+// with the action it asks of them, and takes the model's list off the receipt
+// ([builtin.WarningsKey]): a screen reading the receipt can then never show a
+// person advice written for a model, however it is written. Caveats is always
+// a list, empty when the write has nothing to add.
 type ActAnswer struct {
 	Tool     string           `json:"tool"`
 	Outcome  statelog.Outcome `json:"outcome"`
 	Position *string          `json:"position"`
 	OpID     string           `json:"op_id"`
 	Receipt  json.RawMessage  `json:"receipt"`
+	Caveats  []caveat.Shown   `json:"caveats"`
 }
 
 // actRequest is the body: the tool's arguments, and nothing else.
@@ -268,7 +283,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		Fail(w, result.Cause, result.Output, key, About(name, args))
 		return
 	}
-	answer := receiptOf(name, result.Output)
+	answer := receiptOf(name, result)
 	answer.OpID = key
 	log.InfoContext(r.Context(), "operator_act",
 		append(logged, "outcome", string(answer.Outcome))...)
@@ -335,8 +350,9 @@ func decodeAct(raw []byte) (actRequest, error) {
 	return req, nil
 }
 
-// receiptOf is a successful call's answer: the tool's own, verbatim, with the
-// outcome and position every write tool's answer states lifted beside it.
+// receiptOf is a successful call's answer: the tool's own, with the outcome and
+// position every write tool's answer states lifted beside it, and its caveats
+// in a person's words in place of the model's ([ActAnswer]).
 //
 // READ FROM THE TOOL'S ANSWER rather than a second channel, because those two
 // keys are already the tools' wire contract for read-your-writes — the same
@@ -344,15 +360,17 @@ func decodeAct(raw []byte) (actRequest, error) {
 // build does not know is reported `unknown`, never `applied`: it is the one
 // answer that cannot tell a caller to stop looking at a write it cannot vouch
 // for.
-func receiptOf(name, output string) ActAnswer {
-	answer := ActAnswer{Tool: name, Outcome: statelog.OutcomeApplied}
+func receiptOf(name string, result tools.Result) ActAnswer {
+	output := result.Output
+	answer := ActAnswer{Tool: name, Outcome: statelog.OutcomeApplied,
+		Caveats: caveat.ForPeople(result.Caveats)}
 	if !json.Valid([]byte(output)) {
 		// Every first-party write answers JSON; a sentence is carried as a
 		// string rather than dropped.
 		answer.Receipt, _ = json.Marshal(output)
 		return answer
 	}
-	answer.Receipt = json.RawMessage(output)
+	answer.Receipt = withoutWarnings(json.RawMessage(output))
 	var stated struct {
 		Outcome  *string `json:"outcome"`
 		Position *string `json:"position"`
@@ -370,4 +388,25 @@ func receiptOf(name, output string) ActAnswer {
 		answer.Position = stated.Position
 	}
 	return answer
+}
+
+// withoutWarnings is a tool's answer with its model-worded caveats
+// ([builtin.WarningsKey]) taken off, the rest of it as the tool wrote it. An
+// answer that is not an object, or carries no such key, is returned as it is.
+func withoutWarnings(receipt json.RawMessage) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(receipt, &fields) != nil {
+		return receipt
+	}
+	if _, carried := fields[builtin.WarningsKey]; !carried {
+		return receipt
+	}
+	delete(fields, builtin.WarningsKey)
+	out, err := json.Marshal(fields)
+	if err != nil {
+		// Unreachable: every value was just decoded from valid JSON. The
+		// receipt is never answered with the model's words left on it.
+		return json.RawMessage("{}")
+	}
+	return out
 }

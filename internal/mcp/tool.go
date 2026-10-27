@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+
+	"github.com/crewlet/crewlet/internal/caveat"
 )
 
 // Result is what one tool call produced.
@@ -49,6 +51,18 @@ type Result struct {
 	// 409 and 503, and reading those back out of a sentence would make the
 	// wording of a refusal an API.
 	Cause error
+
+	// Caveats are what a call that LANDED says beside its answer, each in the
+	// words of every reader ([caveat.Caveat]). Nil on a failure and on a
+	// success that has nothing to add.
+	//
+	// NEVER RENDERED, for Cause's reason: Output already carries each
+	// caveat's MODEL phrasing under `warnings`, written from these same
+	// values, so a model reads nothing here it has not read there. It exists
+	// for the caller that answers a PERSON (the act route, ADR-0059), which
+	// must answer the person's phrasing and never the model's, and could
+	// only otherwise read the model's out of Output.
+	Caveats []caveat.Caveat
 }
 
 // Callable is the least a phase surface needs to offer something to a model

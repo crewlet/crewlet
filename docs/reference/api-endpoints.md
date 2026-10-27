@@ -5674,7 +5674,9 @@ A write that went through answers `200`:
  "position": "CREWLET_TRACKER_LOG@1:4711",
  "op_id": "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a12.k3f9a1c0d2e4b6a88",
  "receipt": {"key": "ENG-8", "labels_created": null, "outcome": "applied",
-             "version": 4711, "position": "CREWLET_TRACKER_LOG@1:4711"}}
+             "version": 4711, "position": "CREWLET_TRACKER_LOG@1:4711"},
+ "caveats": [{"code": "date_truncated", "action": "none",
+              "message": "Launch holds a date without a time, so it was saved as 2026-03-04, the day 2026-03-05T04:00:00Z falls on in America/Los_Angeles."}]}
 ```
 
 `outcome` is the write's three-valued answer and `position` where its record
@@ -5683,9 +5685,32 @@ write includes it. `pending` is durable and not yet applied here; `unknown`
 means the broker never said, and the only safe retry is the same request under
 the same key. A write that appended nothing answers `applied` at a `null`
 position: the state asked for already holds. `op_id` is the operation the
-request was made under — the key as **this principal's** operation, named by a
+request was made under (the key as **this principal's** operation, named by a
 tag of their id, so sending it back as the header is the same operation as
-sending the original key — and `receipt` is the tool's own answer, verbatim.
+sending the original key). `receipt` is the tool's own answer, verbatim except
+for its `warnings`.
+
+`caveats` is what the write tells you beside its outcome, and was not refused
+for: an item filed to triage because the project's default assignee has left
+the org chart, a timestamp stored as the day it falls on, a description naming
+more items than are linked. It is always a list, empty when there is nothing
+to add, and each entry is written for a **person**:
+
+- **`code`**: the kind of caveat, stable to branch on (`unaddressed_comment`,
+  `default_assignee_gone`, `body_links_capped`, `date_truncated`,
+  `tag_near_duplicate`, `filed_earlier_unread`, `filed_earlier_removed`,
+  `file_finding`).
+- **`message`**: one or two sentences in the words of the screen, naming no
+  tool, argument or internal id.
+- **`action`**: `required` when something stays as it is until somebody acts
+  (a setting that no longer works), `none` when it is only something to know.
+  The dashboard keeps a `required` caveat on screen until it is dismissed and
+  lets a `none` one go by itself.
+
+The same tool called by an agent answers the same caveats under `warnings`,
+in words for a model that name the tool and argument it would use next. This
+route answers people, so it answers `caveats` and takes `warnings` off the
+receipt (ADR-0059).
 
 A tool that appends more than one record — an item filed or edited together
 with a dependency, a page saved and renamed in one call, a project's tags and
@@ -5862,7 +5887,7 @@ mean the same thing on every write surface:
 
 | Status | `error` | When | Carries |
 |---|---|---|---|
-| `200` | | The write was **applied** on this node, so the next read here sees it | the tool's own receipt, its `outcome`, `position` and `op_id` |
+| `200` | | The write was **applied** on this node, so the next read here sees it | the tool's own receipt, its `outcome`, `position`, `op_id` and `caveats` |
 | `202` | | The write is **pending**: durable, and not yet applied on this node | the same, and the `position` to read at |
 | `400` | `invalid_body` | The body is malformed, names a different object than the path, or carries an argument the tool does not declare | `detail` naming it |
 | `401` | `invalid_token` | Nobody presented a credential | |

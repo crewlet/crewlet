@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -19,11 +20,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -68,6 +71,8 @@ type recordingWork struct {
 	opIDs   []string
 	taskIDs []string
 	outcome statelog.Outcome
+	// caveats is what every create answers it was not refused for.
+	caveats []caveat.Caveat
 }
 
 type recordingWriter struct {
@@ -103,7 +108,8 @@ func (w recordingWriter) CreateTask(_ context.Context, opID string, task worklet
 			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711},
 			Version:  4711,
 		},
-		Key: "ENG-9",
+		Key:     "ENG-9",
+		Caveats: w.w.caveats,
 	}, nil
 }
 
@@ -476,7 +482,7 @@ func (p *recordingProject) WriteTags(_ context.Context, opID, _ string, _ workle
 	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
-func (p *recordingProject) EnsureTags(context.Context, string, string, []string) ([]string, []string, error) {
+func (p *recordingProject) EnsureTags(context.Context, string, string, []string) ([]string, []caveat.Caveat, error) {
 	return nil, nil, nil
 }
 
@@ -766,7 +772,7 @@ func TestTheActAnswerLiftsTheToolsOwnOutcome(t *testing.T) {
 		{"a sentence", `done`, statelog.OutcomeApplied, ""},
 	}
 	for _, tc := range cases {
-		got := operator.ReceiptOf("t", tc.output)
+		got := operator.ReceiptOf("t", tools.Result{Output: tc.output})
 		position := ""
 		if got.Position != nil {
 			position = *got.Position
@@ -876,5 +882,66 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	if rec.Code < 400 || rec.Code >= 500 {
 		t.Errorf("a call whose caller hung up was recorded as %d — a 5xx counts "+
 			"a closed tab as this node failing", rec.Code)
+	}
+}
+
+// A PERSON IS ANSWERED A CAVEAT IN A PERSON'S WORDS, and never the model's.
+//
+// The incident: answering a decision in the dashboard left a toast that never
+// went away, telling a person to "Use ask: backend-engineer", the receipt's
+// `warnings` written for a model and shown verbatim. The act route answers
+// each caveat's person phrasing with what it asks of the person, and takes the
+// model's list off the receipt, so no screen reading the receipt can show it.
+func TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels(t *testing.T) {
+	t.Parallel()
+	gone := caveat.DefaultAssigneeGone("ENG", "bo")
+	work := &recordingWork{caveats: []caveat.Caveat{gone}}
+	h := guarded(actSurface(t, work))
+
+	status, answer := act(t, h, "founder", "create_work_item", "application/json",
+		createBody(), newKey())
+	if status != http.StatusOK {
+		t.Fatalf("the create answered %d: %v", status, answer)
+	}
+	receipt, _ := answer["receipt"].(map[string]any)
+	if receipt == nil {
+		t.Fatalf("the answer carries no receipt: %v", answer)
+	}
+	if said, carried := receipt[builtin.WarningsKey]; carried {
+		t.Errorf("the receipt still carries the model's words, which a screen "+
+			"reading it would show a person: %v", said)
+	}
+	if receipt["key"] != "ENG-9" {
+		t.Errorf("the rest of the receipt was not kept: %v", receipt)
+	}
+	want := []any{map[string]any{"code": string(caveat.CodeDefaultAssigneeGone),
+		"message": gone.Person(), "action": string(caveat.ActionRequired)}}
+	if got := answer["caveats"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("caveats = %v, want %v", got, want)
+	}
+
+	// AND A WRITE WITH NOTHING TO ADD ANSWERS AN EMPTY LIST, never null,
+	// so a client reads one shape.
+	quiet := guarded(actSurface(t, &recordingWork{}))
+	if _, answer := act(t, quiet, "founder", "create_work_item", "application/json",
+		createBody(), newKey()); !reflect.DeepEqual(answer["caveats"], []any{}) {
+		t.Errorf("a write with no caveats answered %#v, want []", answer["caveats"])
+	}
+}
+
+// THE RECEIPT LOSES ITS MODEL WORDS AND NOTHING ELSE: a receipt that is not an
+// object, or carries no warnings, is answered exactly as the tool wrote it.
+func TestTheActReceiptLosesOnlyTheModelsWarnings(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ output, want string }{
+		"warnings and fields":  {`{"key":"ENG-1","warnings":["Use ask: ana"]}`, `{"key":"ENG-1"}`},
+		"no warnings":          {`{"key": "ENG-1"}`, `{"key": "ENG-1"}`},
+		"not an object":        {`["a","b"]`, `["a","b"]`},
+		"a sentence, not JSON": {`done`, `"done"`},
+	} {
+		got := operator.ReceiptOf("t", tools.Result{Output: c.output})
+		if string(got.Receipt) != c.want {
+			t.Errorf("%s: receipt %s, want %s", name, got.Receipt, c.want)
+		}
 	}
 }

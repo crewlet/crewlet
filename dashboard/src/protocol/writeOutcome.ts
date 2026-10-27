@@ -23,16 +23,63 @@
 // RELATIVE, not through `~`: protocol/ is also built alone as protocol.js,
 // where the alias does not exist.
 import { ACT_ERRORS } from "../contract/errors.ts";
+import { CAVEAT_ACTIONS } from "../contract/caveats.ts";
 import { RestError } from "./rest.ts";
 import { retryAfterMs } from "./retry.ts";
 
 /** A refusal code this build has a sentence for. */
 export type ActErrorCode = keyof typeof ACT_ERRORS;
 
+/** What a caveat asks of the person who reads it: `contract/caveats.ts`. */
+export type CaveatAction = (typeof CAVEAT_ACTIONS)[number];
+
+/**
+ * One thing a landed write says beside its outcome, in a PERSON'S words: the
+ * engine answers each caveat's person phrasing here and takes the model's
+ * (`warnings`, which name tools and arguments) off the receipt, so nothing a
+ * screen draws from an answer is advice written for a model (ADR-0059).
+ */
+export interface Caveat {
+  /** The engine's stable code for the kind of caveat. */
+  code: string;
+  /** The sentence a person is shown. */
+  message: string;
+  /** Whether the person must act on it (`required`) or only know it (`none`). */
+  action: CaveatAction;
+}
+
 /** What a write's 2xx answer came to. */
 export type WriteLanded =
-  | { kind: "applied" | "pending"; position: string | null; receipt: unknown }
+  | {
+      kind: "applied" | "pending";
+      position: string | null;
+      receipt: unknown;
+      /** What the write says beside its outcome, in a person's words. */
+      caveats: Caveat[];
+    }
   | { kind: "unknown"; reason: string };
+
+/**
+ * The caveats an answer carries, as this build reads them: each with a code
+ * and a sentence, and an action this build knows. An action it does not know
+ * (a newer engine's) is read as `none`, the engine's own rule for a caveat it
+ * cannot explain: a toast nobody can say why it stays must not demand
+ * dismissal. Anything that is not a caveat is dropped.
+ */
+export function caveatsOf(raw: unknown): Caveat[] {
+  if (!Array.isArray(raw)) return [];
+  const known = new Set<string>(CAVEAT_ACTIONS);
+  const out: Caveat[] = [];
+  for (const item of raw) {
+    const c = (item ?? {}) as { code?: unknown; message?: unknown; action?: unknown };
+    if (typeof c.code !== "string" || typeof c.message !== "string") continue;
+    if (c.message.trim() === "") continue;
+    const action =
+      typeof c.action === "string" && known.has(c.action) ? (c.action as CaveatAction) : "none";
+    out.push({ code: c.code, message: c.message, action });
+  }
+  return out;
+}
 
 /** What a write that did not land came to. */
 export type WriteFailed =
@@ -66,14 +113,19 @@ export function isActErrorCode(code: string): code is ActErrorCode {
 }
 
 /**
- * The 2xx answer `{outcome, position, receipt}` a write returns.
+ * The 2xx answer `{outcome, position, receipt, caveats}` a write returns.
  *
  * AN OUTCOME THIS BUILD DOES NOT KNOW IS NOT A SUCCESS, the engine's own rule
  * for its own answer (`receiptOf`), for the same reason: it is the one reading
  * that cannot tell a person to stop looking at a change nobody vouched for.
  */
 export function writeLanded(body: unknown): WriteLanded {
-  const answer = (body ?? {}) as { outcome?: unknown; position?: unknown; receipt?: unknown };
+  const answer = (body ?? {}) as {
+    outcome?: unknown;
+    position?: unknown;
+    receipt?: unknown;
+    caveats?: unknown;
+  };
   if (answer.outcome !== "applied" && answer.outcome !== "pending") {
     return {
       kind: "unknown",
@@ -84,6 +136,7 @@ export function writeLanded(body: unknown): WriteLanded {
     kind: answer.outcome,
     position: typeof answer.position === "string" ? answer.position : null,
     receipt: answer.receipt,
+    caveats: caveatsOf(answer.caveats),
   };
 }
 

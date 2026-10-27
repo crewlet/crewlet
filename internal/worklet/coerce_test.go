@@ -230,15 +230,16 @@ func TestTheCoercionTable(t *testing.T) {
 				t.Errorf("%s became %s, want %s", c.in, got.Value, c.want)
 			}
 			switch {
-			case c.warns == "" && len(got.Warnings) > 0:
-				t.Errorf("an exact value warned: %v", got.Warnings)
-			case c.warns != "" && len(got.Warnings) == 0:
+			case c.warns == "" && len(got.Caveats) > 0:
+				t.Errorf("an exact value warned: %v", got.Caveats)
+			case c.warns != "" && len(got.Caveats) == 0:
 				t.Error("a value the engine changed said nothing — a " +
 					"truncation nobody is told about is a value silently " +
 					"replaced")
-			case c.warns != "" && !strings.Contains(got.Warnings[0], c.warns):
-				t.Errorf("the warning is %q and does not name what was stored",
-					got.Warnings[0])
+			case c.warns != "" && (!strings.Contains(got.Caveats[0].Agent(), c.warns) ||
+				!strings.Contains(got.Caveats[0].Person(), c.warns)):
+				t.Errorf("the caveat is %q / %q and does not name what was stored",
+					got.Caveats[0].Agent(), got.Caveats[0].Person())
 			}
 		})
 	}
@@ -554,15 +555,15 @@ func TestAnInstantIsTheDayItFallsOnOnTheCompanysClock(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			day, warning, err := coerceDay("the target date", c.in, c.zone)
+			day, truncated, err := coerceDay("the target date", c.in, c.zone)
 			if err != nil {
 				t.Fatalf("coerceDay(%q): %v", c.in, err)
 			}
 			if day != c.want {
 				t.Errorf("coerceDay(%q) in %v = %q, want %q", c.in, c.zone, day, c.want)
 			}
-			if (warning != "") != c.warn || (c.warn && !strings.Contains(warning, c.want)) {
-				t.Errorf("warning %q, want one naming %q: %v", warning, c.want, c.warn)
+			if truncated != c.warn {
+				t.Errorf("coerceDay(%q) truncated = %v, want %v", c.in, truncated, c.warn)
 			}
 
 			// THE FIELD RULE IS THE SAME RULE, on the zone its settlement

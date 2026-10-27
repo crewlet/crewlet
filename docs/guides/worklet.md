@@ -203,7 +203,9 @@ that day ends in.
   refused for any other seat. It is not chart-owned: a config apply that
   renames the project carries the target through untouched.
 - Given an **instant** instead, the write stores the day that instant falls on
-  on the company's clock and says so in the answer's `warnings`. Anything that
+  on the company's clock and says so in the answer's `warnings` (a person in
+  the dashboard is told the same in its own words, see
+  [What it answers](../reference/api-endpoints.md#what-it-answers)). Anything that
   is neither is refused, naming both spellings.
 - `null` or `""` clears it; a project with none reports no `target_date`, and
   `sort=target` puts it last in both directions — "no target" is not the
@@ -542,8 +544,9 @@ value would be a number nobody typed under a declaration that says the field is
 exact.
 
 The one change the engine makes for you is the date truncation, and it says so
-in the result's `warnings` — a value the engine altered is one the writer has
-to be told about, or the board shows something they did not write.
+in the result's `warnings` (and, for a person in the dashboard, in a toast
+worded for them): a value the engine altered is one the writer has to be told
+about, or the board shows something they did not write.
 
 Required fields are enforced at **every** write, not only at the create: an
 update may not clear one. ClickUp enforces them at creation only; this is the
@@ -1885,7 +1888,11 @@ surface the seat cannot reach.
 A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without
 replying. The result says so in a `warnings` line, because a commenter
-expecting an answer otherwise gets silence with nothing to explain it.
+expecting an answer otherwise gets silence with nothing to explain it. An
+agent is told to pass `ask` or mention them; a person commenting from the
+dashboard is told the same thing in a short toast that goes by itself, in the
+words of the comment box rather than the tool's arguments. An answer to a
+question never says it, since an answer expects no reply.
 
 **What waits on a person** is one question (`GET /worklet/decisions`,
 `decisions`): the open asks put to them — under the one name their record is
