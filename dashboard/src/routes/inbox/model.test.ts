@@ -7,10 +7,12 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  answerWords,
   askContext,
   askQuestion,
   earlierOf,
   firstSentence,
+  followThrough,
   inboxQuiet,
   inboxResources,
   inboxRows,
@@ -25,7 +27,13 @@ import {
   type InboxRow,
 } from "./model.ts";
 import type { DecisionSubject } from "~/lib/decisions.ts";
-import type { SandboxRun, WorkAskRow, WorkInboxNotice } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  AnsweredDecision,
+  SandboxRun,
+  WorkAskRow,
+  WorkInboxNotice,
+} from "~/protocol/index.ts";
 import { itemAddress } from "~/lib/work.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { withDerived } from "~/test/org.ts";
@@ -347,5 +355,107 @@ describe("what Needs you names for the assistant", () => {
       { kind: "seat", id: "qa" },
       { kind: "run", id: "turn-2" },
     ]);
+  });
+});
+
+describe("what was answered", () => {
+  const ask = {
+    id: "t-20",
+    key: "LEAD-20",
+    project: "LEAD",
+    title: "Q4 release plan",
+    type: "task",
+    status: "todo",
+    comment: "c-20",
+    asked_by: "cto",
+    asked_at: "2026-09-30T10:00:00Z",
+    body: "",
+    decision: {
+      question: "Hold?",
+      options: [
+        { id: "hold", label: "Hold release" },
+        { id: "ship", label: "Ship anyway" },
+      ],
+      recommended: "hold",
+      role: "approver" as const,
+    },
+    open: false,
+  };
+  const answered = (extra: Partial<AnsweredDecision> = {}): AnsweredDecision => ({
+    at: "2026-09-30T11:00:00Z",
+    ask: ask as AnsweredDecision["ask"],
+    answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "hold", body: "Hold release" },
+    ...extra,
+  });
+  const index = indexOrg(
+    withDerived({
+      name: "Nimbus",
+      roles: [
+        { name: "Jane Founder", handle: "jane", kind: "human" },
+        { name: "Maya Ops", handle: "maya", kind: "human" },
+        { name: "CTO", handle: "cto", kind: "agent" },
+      ],
+      units: [],
+    }) as never,
+  );
+
+  test("an answer says who gave it: you, or the colleague who answered for you", () => {
+    expect(answerWords(answered(), "jane", index)).toEqual({
+      who: "You",
+      verb: "chose",
+      said: "Hold release",
+      kind: "choice",
+      recommended: true,
+    });
+    const maya = answered({
+      answer: { by: "maya", by_kind: "human", at: "2026-09-30T11:00:00Z", body: "Not yet." },
+    });
+    expect(answerWords(maya, "jane", index)).toMatchObject({
+      who: "Maya Ops",
+      verb: "replied",
+      said: "Not yet.",
+      kind: "reply",
+    });
+    const resolved = answered({
+      answer: { by: "cto", at: "2026-09-30T11:00:00Z", body: "", resolved: true },
+    });
+    expect(answerWords(resolved, "jane", index).kind).toBe("resolved");
+  });
+
+  test("how far the asker has got: acted from the tracker, the rest from its seat now", () => {
+    const seat = (extra: Record<string, unknown>) =>
+      ({ handle: "cto", activity: "idle", ...extra }) as unknown as AgentRow;
+    expect(
+      followThrough(
+        answered({ followed_up: { at: "2026-09-30T11:30:00Z", kind: "status" } }),
+        seat({ paused: { at: "x" } }),
+      ),
+    ).toEqual({ state: "acted", at: "2026-09-30T11:30:00Z" });
+    expect(
+      followThrough(
+        answered(),
+        seat({
+          activity: "working",
+          turn: { work_item: { id: "t-20", key: "LEAD-20" }, started_at: "2026-09-30T11:05:00Z" },
+        }),
+      ),
+    ).toEqual({ state: "acting", at: "2026-09-30T11:05:00Z" });
+    // ON ANOTHER TASK IS NOT ON THIS ONE.
+    expect(
+      followThrough(
+        answered(),
+        seat({ activity: "working", turn: { work_item: { id: "t-9", key: "LEAD-9" } } }),
+      ),
+    ).toEqual({ state: "waiting" });
+    expect(followThrough(answered(), seat({ paused: { at: "x" } }))).toEqual({
+      state: "held",
+      reason: "paused",
+    });
+    expect(followThrough(answered(), seat({ activity: "stopped" }))).toEqual({
+      state: "held",
+      reason: "stopped",
+    });
+    // A PERSON WHO ASKED has no seat state to read.
+    expect(followThrough(answered(), undefined)).toBeNull();
   });
 });

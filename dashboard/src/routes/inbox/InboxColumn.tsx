@@ -2,6 +2,13 @@
  * The Inbox's list: Needs you, then Updates, then the two quiet links to what
  * was snoozed and what was read already.
  *
+ * AN ANSWER IS SAID, NEVER STRUCK. A row answered here stays where it stood in
+ * Needs you until the reader leaves the screen, marked Answered in its head
+ * with what was chosen or written under the question, every word legible; the
+ * group's count is what is still open. Answers from before this visit (the
+ * last week's, from `answered_decisions`) wait in a closed, counted Answered
+ * group after Updates, each saying who answered and how.
+ *
  * EVERY ROW SAYS THE SAME THREE THINGS, whatever it is: WHO (whoever the
  * record names, `iam.ActorFor`: the seat a person or a bound credential writes
  * as, or the login of a credential bound to none), WHAT, in up to three lines
@@ -14,6 +21,7 @@ import type { ReactNode } from "react";
 import {
   Button,
   EmptyState,
+  Tag,
   InboxGroup,
   InboxList,
   InboxMore,
@@ -22,12 +30,15 @@ import {
   Skeleton,
   Text,
 } from "@crewlethq/ui";
+import { CheckGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import type { AskAnswer } from "~/components/writes.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { firstLine } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { ItemRef } from "~/lib/work.ts";
 import {
+  answerWords,
   askQuestion,
   budgetLine,
   moment,
@@ -38,11 +49,25 @@ import {
   rowName,
   rowWho,
   shortWhen,
+  type AnswerWords,
   type InboxRow,
   type Who,
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
+
+/** A row dealt with here: how ("Answered"), and the answer that was given. */
+export interface Settled {
+  label: string;
+  answer?: AskAnswer;
+}
+
+/** The closed group of what was answered before this visit. */
+export interface AnsweredGroup {
+  rows: readonly InboxRow[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
 
 /** What the list holds beyond its two groups, read only when opened. */
 export interface Later {
@@ -62,6 +87,8 @@ export function InboxColumn({
   earlier,
   onEarlierMore,
   settled,
+  answered,
+  reader,
   selected,
   onOpen,
   titles,
@@ -83,7 +110,11 @@ export function InboxColumn({
   /** Read the page of earlier updates after the ones shown. */
   onEarlierMore: () => void;
   /** The rows answered or resolved here, kept in place as done until the list is left. */
-  settled: ReadonlyMap<string, string>;
+  settled: ReadonlyMap<string, Settled>;
+  /** What was answered before this visit, in its closed group. */
+  answered: AnsweredGroup;
+  /** The reader's own record name, so their answers read "You". */
+  reader: string;
   selected: string;
   onOpen: (key: string) => void;
   /** Task titles by id and by unclaimed key ([titleOf]), for a row that carries none. */
@@ -115,6 +146,7 @@ export function InboxColumn({
       now={now}
       title={titleOf(titles, rowItem(row))}
       settled={settled.get(row.key)}
+      reader={reader}
       selected={row.key === selected}
       onOpen={() => onOpen(row.key)}
     />
@@ -125,13 +157,32 @@ export function InboxColumn({
   return (
     <InboxList label="Inbox" className="inbox-list">
       {refusal}
-      {needs.length > 0 && <InboxGroup label="Needs you">{needs.map(item)}</InboxGroup>}
+      {needs.length > 0 && (
+        // THE COUNT IS WHAT IS STILL OPEN: a row answered here stays in the
+        // group until the reader leaves, and is not waiting on them.
+        <InboxGroup label="Needs you" count={needs.filter((r) => !settled.has(r.key)).length}>
+          {needs.map(item)}
+        </InboxGroup>
+      )}
       {elsewhere && (
         <Text as="p" variant="caption" className="inbox-note">
           {elsewhere}
         </Text>
       )}
       {updates.length > 0 && <InboxGroup label="Updates">{updates.map(item)}</InboxGroup>}
+      {answered.rows.length > 0 && (
+        // CLOSED UNTIL OPENED, and counted: what a reader decided is there to
+        // look back at, never in the way of what still waits on them.
+        <InboxGroup
+          label="Answered"
+          count={answered.rows.length}
+          collapsible
+          open={answered.open}
+          onOpenChange={answered.onOpenChange}
+        >
+          {answered.rows.map(item)}
+        </InboxGroup>
+      )}
       {loading && <Skeleton variant="text" rows={5} label="Loading the inbox" />}
       {quiet && <EmptyState size="compact" title={quiet.title} description={quiet.hint} />}
       {more && (
@@ -232,6 +283,8 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
       break;
     case "condition":
       return { text: row.item.title };
+    case "answered":
+      return { text: askQuestion(row.answered.ask) };
     case "notice": {
       const said = noticeText(row.notice, index);
       return said
@@ -265,6 +318,7 @@ function InboxItem({
   now,
   title,
   settled,
+  reader,
   selected,
   onOpen,
 }: {
@@ -272,28 +326,46 @@ function InboxItem({
   index: OrgIndex;
   now: number;
   title: string | undefined;
-  /** How the row was settled here ("Answered"), or undefined. */
-  settled: string | undefined;
+  /** How the row was settled here, and with what, or undefined. */
+  settled: Settled | undefined;
+  /** The reader's own record name, so their answers read "You". */
+  reader: string;
   selected: boolean;
   onOpen: () => void;
 }) {
   const who = rowWho(row, index);
   const item = rowItem(row);
   const words = rowWords(row, index);
-  const qualifier = settled ? null : qualifierOf(row);
+  const answered = row.kind === "answered" ? answerWords(row.answered, reader, index) : null;
+  const done = settled !== undefined || answered !== null;
+  const qualifier = done ? null : qualifierOf(row);
   const unread = row.kind === "notice" && !row.notice.read && !row.notice.snoozed;
+  // WHAT WAS SAID: the answer this visit gave, or the one the engine recorded.
+  const said = answered ?? (settled?.answer ? givenWords(settled.answer) : null);
   return (
     <Row
       title={rowName(row, who)}
       qualifier={qualifier?.word}
       qualifierTone={qualifier?.danger ? "danger" : "default"}
-      meta={whenOf(row, now) || undefined}
+      // ANSWERED HERE, the head says so in place of the time; an answer
+      // from before this visit keeps the time it was given.
+      meta={settled ? undefined : whenOf(row, now) || undefined}
+      status={
+        settled ? (
+          <Tag size="xs" variant="success" appearance="soft" leadingIcon={<CheckGlyph size="sm" />}>
+            {settled.label}
+          </Tag>
+        ) : undefined
+      }
       leading={<Badge row={row} who={who} />}
       excerpt={words.excerpt}
+      outcome={said ? <AnswerLine words={said} /> : undefined}
+      outcomeIcon={said ? <AnswerMark words={said} /> : undefined}
+      outcomeTone="success"
       unread={unread}
-      actionable={row.kind !== "notice" && !settled}
-      done={settled !== undefined}
-      doneLabel={settled}
+      actionable={row.kind !== "notice" && !done}
+      done={done}
+      doneLabel={settled?.label ?? (answered?.kind === "resolved" ? "Resolved" : "Answered")}
       selected={selected}
       onClick={onOpen}
       aside={
@@ -305,6 +377,48 @@ function InboxItem({
       {words.text}
     </Row>
   );
+}
+
+/** The answer this visit gave, in the words an answered row says it with. */
+function givenWords(answer: AskAnswer): AnswerWords {
+  return answer.kind === "choice"
+    ? {
+        who: "You",
+        verb: "chose",
+        said: answer.label,
+        kind: "choice",
+        recommended: answer.recommended,
+      }
+    : { who: "You", verb: "replied", said: answer.text, kind: "reply", recommended: false };
+}
+
+/**
+ * The most of an answer in words a row carries: its first line, cut at a
+ * word near ninety characters. The pane and the thread carry it whole.
+ */
+const SAID_MAX = 90;
+
+function shortSaid(text: string): string {
+  const line = firstLine(text);
+  if (line.length <= SAID_MAX) return line;
+  const cut = line.slice(0, SAID_MAX);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), SAID_MAX / 2)).trimEnd()}…`;
+}
+
+/** "You chose **Hold release**", "Maya Ops replied **“Hold it a week.”**". */
+function AnswerLine({ words }: { words: AnswerWords }) {
+  if (words.kind === "resolved") return <>{`${words.who} ${words.verb}`}</>;
+  return (
+    <>
+      {`${words.who} ${words.verb} `}
+      <strong>{words.kind === "reply" ? `“${shortSaid(words.said)}”` : words.said}</strong>
+    </>
+  );
+}
+
+/** The mark before an answer: a check for a choice or a resolution, a speech mark for words. */
+function AnswerMark({ words }: { words: AnswerWords }) {
+  return words.kind === "reply" ? <MessageSquareGlyph size="sm" /> : <CheckGlyph size="sm" />;
 }
 
 /**
@@ -326,6 +440,7 @@ export function titleOf(
 
 /** The title a row carries for its own task, where it carries one. */
 export function taskTitleOf(row: InboxRow): string | undefined {
+  if (row.kind === "answered") return row.answered.ask.title;
   return row.kind === "decision" && row.subject.kind === "ask" ? row.subject.ask.title : undefined;
 }
 
