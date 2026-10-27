@@ -253,7 +253,11 @@ phone breakpoint, read off the diff's own width), and a keyed diff is always
 unified. Past 1,000 rows it is windowed: only the blocks of 100 rows within a
 view of the screen hold their rows, measured against the diff's own scroller,
 and the rest keep the height they last had; under it every row is mounted,
-which keeps find-in-page and a screen reader's reading of the whole diff.
+which keeps find-in-page and a screen reader's reading of the whole diff. The
+threshold is provisional: what decides it is the first paint of a 1,000-row
+split diff, held to 100 ms, and timing that needs a browser the dashboard's
+suites do not run. Whether to add one, keep the value unmeasured, or lower it
+to the window's own 300 rows is the maintainers' call.
 The window bounds the reading as well as the mounting: which line pairs
 with which is settled from the change's shape, and a pair's words are
 tokenized for its underline only once one of its lines is drawn, so the

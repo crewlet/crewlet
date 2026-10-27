@@ -177,8 +177,8 @@ export type DiffViewProps = DiffSource & {
 
 /**
  * How many rows a diff draws before it is windowed. PROVISIONAL: the value
- * was set without its cost measured, and the measurement that decides it is
- * named below.
+ * was set without its cost measured; the measurement that decides it, and who
+ * decides it while nothing here can take it, are named below.
  *
  * A row is about 21px (13px mono on the body's 1.45 leading, and a quarter
  * step of padding above and below), so a 900px view shows some 43 rows and
@@ -204,6 +204,16 @@ export type DiffViewProps = DiffSource & {
  * The value stands while that is within 100 ms, RAIL's budget for a response
  * the reader sees (a diff is drawn in answer to a click); past it, the
  * threshold comes down to the rows that fit in it.
+ *
+ * WHO DECIDES IT: nothing in this tree can time a first paint — jsdom lays
+ * nothing out, and the suites run no browser — so the value is the
+ * maintainers' to settle (crewlet/crewlet#422), from three answers: (a) keep
+ * it, and add a browser to the suites that times the case above, a new dev
+ * dependency (the recommendation, so the change page's split diffs are held
+ * to it); (b) keep it as a decision, unmeasured; (c) 300 rows, the window's
+ * own three blocks, so that no diff mounts more than a windowed one does — a
+ * bound that needs no timing, and costs find-in-page and a screen reader every
+ * diff past it.
  */
 export const WINDOW_FROM_ROWS = 1000;
 
