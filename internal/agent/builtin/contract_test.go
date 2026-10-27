@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"maps"
 	"os"
 	"path/filepath"
@@ -193,4 +194,57 @@ func inFmt(stack []ast.Node) bool {
 		}
 	}
 	return false
+}
+
+// notArguments are the type assertions in this package that read no
+// argument, each with what it reads instead.
+var notArguments = map[string]string{
+	"fence.go": "a JSON token of an answer the engine wrote, re-read to fence it",
+}
+
+// readKinds are the kinds a raw type assertion would read an argument as by a
+// rule of its own: argval reads each, the way the check at the surface does.
+var readKinds = []string{"string", "[]any", "[]string", "bool", "float64", "float32",
+	"json.Number", "int", "int64"}
+
+// NO ARGUMENT IS READ BY A RULE OF ITS OWN (ADR-0059): a raw .(string),
+// .([]any), .(bool) or numeric assertion reads a value differently from the
+// check at the surface, which reads it through argval, so the check admitted
+// `{"set": "GP-12"}` as the list of one it is while the tool read it as no
+// list and cleared every relation. Every such read goes through argval; an
+// object (.(map[string]any)) is read the same both ways and is not listed.
+//
+// Mutation: read a set with `raw.([]any)` and this names the assertion.
+func TestNoArgumentIsReadByARuleOfItsOwn(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, f, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			assert, ok := n.(*ast.TypeAssertExpr)
+			if !ok || assert.Type == nil {
+				return true
+			}
+			kind := types.ExprString(assert.Type)
+			if !slices.Contains(readKinds, kind) {
+				return true
+			}
+			if _, allowed := notArguments[f]; allowed {
+				return true
+			}
+			t.Errorf("%s: .(%s) reads a value by a rule of its own; read an argument through argval",
+				fset.Position(assert.Pos()), kind)
+			return true
+		})
+	}
 }

@@ -67,6 +67,28 @@ func Strings(v any) ([]string, bool) {
 	return nil, false
 }
 
+// StringItems is a value as a list-of-strings argument reads it, element by
+// element, for a caller that refuses an element it cannot use by its place:
+// a list as it is, or the single string a model sends where a list belongs,
+// split on commas, as [Strings] reads it. ok is false for anything else, null
+// included.
+func StringItems(v any) ([]any, bool) {
+	switch v := v.(type) {
+	case []any:
+		return v, true
+	case string:
+		parts := strings.Split(v, ",")
+		out := make([]any, 0, len(parts))
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out, true
+	}
+	return nil, false
+}
+
 // clean trims, drops empties and deduplicates, preserving order.
 func clean(in []string) []string {
 	if len(in) == 0 {
@@ -204,6 +226,15 @@ func Number(v any) (float64, bool) {
 // Finite is what a size has to be: a real number, which NaN and the
 // infinities are not.
 func Finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// List is a value as a list-of-objects argument reads it: a list, its
+// elements each read by the caller as the object it declares. ok is false for
+// anything else, null included, so a caller that requires the list refuses an
+// absent one by name, as it does any other.
+func List(v any) ([]any, bool) {
+	list, ok := v.([]any)
+	return list, ok
+}
 
 // Bool is a value as a boolean argument reads it: true or false and nothing
 // else. ok is false for any other value, which the read takes as false: a

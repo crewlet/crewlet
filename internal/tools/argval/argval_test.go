@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/tools/argval"
@@ -101,5 +102,39 @@ func TestEachReadIsItsHelpers(t *testing.T) {
 	}
 	if b, ok := argval.Bool(true); !b || !ok {
 		t.Error("Bool(true) is not true")
+	}
+}
+
+// A LIST READ ELEMENT BY ELEMENT is a list as it is, or the single string a
+// model sends for a list of one (or a comma-separated one), and nothing else:
+// a list of objects is a list or nothing.
+func TestAListIsReadAsTheCheckReadsIt(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]struct {
+		items []any
+		ok    bool
+	}{
+		`["a", 3]`: {[]any{"a", json.Number("3")}, true},
+		`"GP-12"`:  {[]any{"GP-12"}, true},
+		`"a, ,b"`:  {[]any{"a", "b"}, true},
+		`12`:       {nil, false},
+		`{"a": 1}`: {nil, false},
+		`null`:     {nil, false},
+	} {
+		var v any
+		dec := json.NewDecoder(strings.NewReader(in))
+		dec.UseNumber()
+		if err := dec.Decode(&v); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := argval.StringItems(v); ok != want.ok || !reflect.DeepEqual(got, want.items) {
+			t.Errorf("StringItems(%s) = %v, %v; want %v, %v", in, got, ok, want.items, want.ok)
+		}
+	}
+	if _, ok := argval.List("x"); ok {
+		t.Error("List read a string as a list of objects")
+	}
+	if got, ok := argval.List([]any{map[string]any{}}); !ok || len(got) != 1 {
+		t.Error("List did not read a list")
 	}
 }

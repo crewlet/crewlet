@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -131,7 +132,7 @@ func (d WorkDeps) checklistIntent(ctx context.Context, args map[string]any,
 	case worklet.ChecklistAddItem:
 		intent.Item = mintedID(opID, "item")
 	case worklet.ChecklistSetDone:
-		done, held := spec["done"].(bool)
+		done, held := argval.Bool(spec["done"])
 		if !held {
 			return nil, "set_done needs `done`: true to tick the item, false to untick it."
 		}

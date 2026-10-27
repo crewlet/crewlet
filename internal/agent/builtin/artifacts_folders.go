@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // FOLDERS, AS AN AGENT FILES IN THEM (ADR-0047: an artifact lives in one
@@ -664,7 +665,7 @@ func (t *moveArtifact) moveOne(ctx context.Context, c artifactCaller, ref, dest 
 // moveRefs reads `artifacts`: one to [artifacts.MaxMovesPerCall] references,
 // each once.
 func moveRefs(args map[string]any) ([]string, string) {
-	raw, ok := args["artifacts"].([]any)
+	raw, ok := argval.StringItems(args["artifacts"])
 	if !ok || len(raw) == 0 {
 		return nil, "move_artifact needs `artifacts`: a list of the artifact ids to move."
 	}
@@ -674,7 +675,7 @@ func moveRefs(args map[string]any) ([]string, string) {
 	}
 	out := make([]string, 0, len(raw))
 	for i, v := range raw {
-		ref, ok := v.(string)
+		ref, ok := argval.String(v)
 		ref = strings.TrimSpace(ref)
 		if !ok || ref == "" {
 			return nil, fmt.Sprintf("move_artifact: artifact %d of the list is not an id.", i+1)
