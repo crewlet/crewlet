@@ -1125,8 +1125,11 @@ const (
 	// reads gone): BriefCard's rules ride the one sheet, and the release splits
 	// the status card and suggestion row code BriefCard shares into chunks of
 	// their own, each one more request's overhead in the entry's graph. 349
-	// KiB, still under two seconds on that link.
-	initialBudget = 349 << 10
+	// KiB, still under two seconds on that link. uilet 0.73.0 (RecordChip and
+	// its peek, BriefCard's verdict) and an assistant answer that names its
+	// reads instead of carding them took it just past 349.0 KiB. 350 KiB,
+	// still under two seconds on that link.
+	initialBudget = 350 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1272,8 +1275,10 @@ const (
 	// took it to 4581.4 KiB. 4582 KiB, which still refuses a doubled
 	// baseline. uilet 0.71.0's toast that stays up for as long as its words
 	// take to read took it to 4582.1 KiB. 4583 KiB, which still refuses a
-	// doubled baseline.
-	treeBudget = 4<<20 + 487<<10
+	// doubled baseline. uilet 0.73.0, the assistant's reads named as chips
+	// in its answer with their peeks, and the oversize read's card took it
+	// to 4590.5 KiB. 4591 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 495<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

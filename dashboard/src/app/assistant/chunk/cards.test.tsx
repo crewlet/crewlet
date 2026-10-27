@@ -379,7 +379,8 @@ test("a brief's rows open the address the engine built, and its follow-ups ask i
     },
     { ...on, openHere, ask },
   );
-  expect(screen.getByRole("region", { name: "Brief 2 need you" })).toBeDefined();
+  // THE RECOMMENDED STEP LEADS THE ROWS, and the card counts every row.
+  expect(screen.getByRole("region", { name: "Brief 3 things need you" })).toBeDefined();
   expect(screen.getByText("Inbox")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Open the agent" }));
   expect(openHere).toHaveBeenCalledWith(
@@ -407,9 +408,8 @@ test("a brief of one record names it, and nothing waiting is said in words", () 
       as_of: "2026-10-26T09:00:00Z",
     },
   });
-  expect(screen.getByRole("region", { name: "Brief All clear" })).toBeDefined();
+  expect(screen.getByRole("region", { name: "Brief Nothing needs you" })).toBeDefined();
   expect(screen.getByText("Decision ENG-7")).toBeDefined();
-  expect(screen.getByText("Nothing needs you.")).toBeDefined();
 });
 
 test("a brief's open whose address is not this dashboard's draws no press", () => {
