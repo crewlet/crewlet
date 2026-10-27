@@ -50,9 +50,12 @@ import (
 // incarnation rather than the one it leaves. Its durability is ONE SYNC A
 // DIRECTORY, made once the staging is complete and before its rename
 // (syncStaged): objects/pack, objects/info where it carries the commit-graph,
-// crewlet/ where it carries the index of pushes, then the state — its own
-// file and the staged root — and repos/ after the rename: four to six fsyncs
-// a swap. The staging is ONE step of durable.go's rule, never several:
+// crewlet/ where it carries the index of pushes, the installed chain's two
+// directories where it holds one, then the state — its own file and the
+// staged root — and repos/ after the rename: four to six fsyncs a swap —
+// six to nine for a copy serving from a published chain, whose two chain
+// files the layer step writes from the rows, each made durable as it is
+// staged. The staging is ONE step of durable.go's rule, never several:
 // nothing in it is read before the rename makes it an incarnation, and a
 // crash before the rename leaves it in scratch/, which the boot moves aside.
 // Synced step by step, a swap made up to eleven, every one a journal commit
@@ -116,13 +119,14 @@ import (
 // installed layer names joins the packs the next incarnation holds, live row
 // or none — the chain holds its packs — and a swap that PLACES a chain, the
 // installer's or a full round's on a copy a reader may hold, links the layers
-// it keeps, renames in the ones it fetched, writes both chain files, and
-// carries no own-mode index and no graph (EventLayersMoved drops them: git
-// reads either before a chain); the packs the chain it leaves held alone go
-// with the old copy. Before the rename a CANARY reads through the staged
-// chain's bitmap wherever the placement added a layer, and a canary that
-// fails abandons the placement — its added layers refused corrupt — while the
-// swap is made again for any packs still leaving.
+// it keeps, renames in the ones it fetched, writes both chain files — their
+// directories synced once with the rest of the staging, as every other one
+// is — and carries no own-mode index and no graph (EventLayersMoved drops
+// them: git reads either before a chain); the packs the chain it leaves held
+// alone go with the old copy. Before the rename a CANARY reads through the
+// staged chain's bitmap wherever the placement added a layer, and a canary
+// that fails abandons the placement — its added layers refused corrupt —
+// while the swap is made again for any packs still leaving.
 //
 // A CRASH before the rename leaves the old incarnation the highest in repos/
 // with its state and the staged one in scratch/, which every boot empties;
@@ -348,6 +352,11 @@ type swapping struct {
 	placedLayers []*stagedLayer
 	keptLayers   int
 	cutLayers    int
+	// wrote is every file the layer step placed by a write or a rename
+	// rather than a link — the layers it fetched, the two chain files —
+	// relative to the staged root: syncStaged syncs their directories, as
+	// it syncs those of what the swap linked.
+	wrote []string
 
 	// next is the incarnation being built, staged at staged until the rename
 	// gives it its number. stagedAt is the staged directory as step 1 named
@@ -533,8 +542,9 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 
 	// 4b. THE INSTALLED CHAIN (layers.go): every layer of it the copy kept
 	// LINKED, every one the placement fetched RENAMED IN from tmp/, and both
-	// chain files written over the chain — staged, synced, renamed — after
-	// the layers' files, so neither names a file not there.
+	// chain files written over the chain — staged and renamed in, after the
+	// layers' files, so neither names a file not there — with no directory
+	// synced at the step: the staging's every directory is, once, at step 6.
 	s.step = stepLayers
 	if err = s.placeLayers(); err != nil {
 		return nil, err
@@ -667,8 +677,10 @@ func (s *swapping) carryDerived() error {
 // syncStaged makes durable what the staging holds below its root, before its
 // state is written: each directory a link or a write landed in, synced ONCE —
 // objects/pack for the live packs and a full round's index, which is written
-// only over them, and the directory of each derived file it linked
-// (objects/info for the commit-graph, crewlet/ for the index of pushes). The
+// only over them, the directory of each derived file it linked
+// (objects/info for the commit-graph, crewlet/ for the index of pushes), and
+// those of the installed chain the layer step linked, renamed in and wrote
+// (multi-pack-index.d and commit-graphs, a chain file in each). The
 // root — HEAD, config, packed-refs and the state — is synced by the state's
 // write, last (writeState). Nothing in the staging is read before the rename
 // makes it an incarnation, and a crash before the rename leaves it in
@@ -687,6 +699,11 @@ func (s *swapping) syncStaged() error {
 			dirs[dir] = true
 		}
 	}
+	for _, rel := range s.wrote {
+		if dir := filepath.Dir(rel); dir != "." {
+			dirs[dir] = true
+		}
+	}
 	for _, rel := range slices.Sorted(maps.Keys(dirs)) {
 		if err := s.c.durableDir(filepath.Join(s.staged, rel)); err != nil {
 			return err
@@ -694,6 +711,11 @@ func (s *swapping) syncStaged() error {
 	}
 	return nil
 }
+
+// unsynced is the layer step's sync of a directory of the staging
+// (writeChains): none at the step, since nothing reads the staging before its
+// rename, and syncStaged syncs every directory the step wrote in, once.
+func unsynced(string) error { return nil }
 
 // chainOf decides the chain the next incarnation holds — the placement's
 // rows (layers), or inc's installed chain cut to the prefix the packs
@@ -757,8 +779,13 @@ func (s *swapping) chainOf(installed []code.LayerRow, held map[string]livePack, 
 // again over files that failed their check), linked from inc otherwise, the
 // same inodes — then both chain files written over the chain, and the next
 // incarnation's record of it set (recordInstalled) at the bytes the rows
-// count. Every file it wrote is vouched, as written by this process from
-// files held to their rows; a linked one carries inc's vouch (carryVouches).
+// count. Nothing is synced here: the directories of what it wrote and linked
+// are synced once with the rest of the staging (syncStaged), since nothing
+// reads the staging before its rename, where synced as an incarnation's are
+// in place its two chain files would cost four more directory syncs at every
+// swap of a chained copy. Every file it wrote is vouched, as written by this
+// process from files held to their rows; a linked one carries inc's vouch
+// (carryVouches).
 // The bytes the two incarnations hold alike, linked, are counted by
 // declaration (chainShared), which the promote takes out of inc's total.
 func (s *swapping) placeLayers() error {
@@ -795,7 +822,7 @@ func (s *swapping) placeLayers() error {
 		s.chainShared[DerivedLayers] += r.Layer.MidxBytes + r.Layer.BitmapBytes
 		s.chainShared[DerivedGraphLayers] += r.Layer.GraphBytes
 	}
-	if err := c.writeChains(s.staged, s.chain); err != nil {
+	if err := c.writeChains(s.staged, s.chain, unsynced); err != nil {
 		return err
 	}
 	if len(s.chain) > 0 {
@@ -804,6 +831,7 @@ func (s *swapping) placeLayers() error {
 			wrote = append(wrote, graphChainRel)
 		}
 	}
+	s.wrote = wrote
 	ids := make([]fileID, len(wrote))
 	for i, rel := range wrote {
 		ids[i] = lstatID(filepath.Join(s.staged, rel))

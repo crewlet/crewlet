@@ -970,7 +970,7 @@ func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, ro
 			return kept, err
 		}
 	}
-	if err := c.writeChains(inc.dir, rows); err != nil {
+	if err := c.writeChains(inc.dir, rows, syncDir); err != nil {
 		c.trashRels(inc.dir, moved)
 		return kept, err
 	}
@@ -998,7 +998,7 @@ func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, ro
 					}
 				}
 			}
-			if werr := c.writeChains(inc.dir, rows[:first]); werr != nil {
+			if werr := c.writeChains(inc.dir, rows[:first], syncDir); werr != nil {
 				return kept, errors.Join(err, werr)
 			}
 			c.trashRels(inc.dir, gone)
@@ -1049,8 +1049,9 @@ func (c *Cache) placed(e *entry, inc *incarnation, rows []code.LayerRow, fetched
 
 // moveLayerIn renames st's files into the incarnation (or the staged one) at
 // dir, under the names git opens them by, and answers the paths it placed,
-// relative to dir. The directories are made where missing; each is synced by
-// the chain files' write that follows, before anything names what landed.
+// relative to dir. The directories are made where missing; each is synced
+// before anything names what landed: by the chain files' write that follows
+// in place, and with the rest of a swap's staging (syncStaged).
 func (c *Cache) moveLayerIn(st *stagedLayer, dir string) ([]string, error) {
 	var placed []string
 	for i, rel := range layerRels(st.row.Layer) {
@@ -1106,12 +1107,15 @@ func (c *Cache) trashRels(dir string, rels []string) {
 }
 
 // writeChains writes both chain files of the incarnation (or the staged one)
-// at dir over rows — staged in tmp/, durable, renamed in, each directory
-// synced — or, for an empty chain, removes them and the directories left
-// empty: an incarnation with no chain holds no file of one. Each directory
-// is synced once, so every layer file renamed into it before is durable
-// before a chain file names it.
-func (c *Cache) writeChains(dir string, rows []code.LayerRow) error {
+// at dir over rows — staged in tmp/, durable, renamed in — or, for an empty
+// chain, removes them and the directories left empty: an incarnation with no
+// chain holds no file of one. sync makes the directory a chain file lands in
+// durable, before the file is renamed in — so every layer file renamed into it
+// before is durable before a chain file names it — and after: syncDir for an
+// incarnation a reader may open now or once it is current, and unsynced for a
+// swap's staging, which nothing reads before its rename and which syncs every
+// directory it wrote in once, with the rest of it (syncStaged).
+func (c *Cache) writeChains(dir string, rows []code.LayerRow, sync func(dir string) error) error {
 	midx, graph := chainIDs(rows)
 	if c.knobs != nil && c.knobs.chainLines != nil {
 		midx = c.knobs.chainLines(midx)
@@ -1146,13 +1150,13 @@ func (c *Cache) writeChains(dir string, rows []code.LayerRow) error {
 		// The layers' files renamed in before the chain file are made durable
 		// by this sync of their directory too: the rule "what a file names is
 		// durable before that file is renamed in" (durable.go).
-		if err = syncDir(filepath.Dir(path)); err != nil {
+		if err = sync(filepath.Dir(path)); err != nil {
 			return removeStaged(staged, err)
 		}
 		if err = c.place(staged, path); err != nil {
 			return err
 		}
-		if err = syncDir(filepath.Dir(path)); err != nil {
+		if err = sync(filepath.Dir(path)); err != nil {
 			return err
 		}
 	}
@@ -1172,7 +1176,7 @@ func (c *Cache) cutChain(e *entry, inc *incarnation, k int, why Event) error {
 	installed := slices.Clone(inc.installed)
 	e.mu.Unlock()
 	kept := installed[:min(k, len(installed))]
-	if err := c.writeChains(inc.dir, kept); err != nil {
+	if err := c.writeChains(inc.dir, kept, syncDir); err != nil {
 		return err
 	}
 	keep := map[string]bool{layersChainRel: len(kept) > 0}

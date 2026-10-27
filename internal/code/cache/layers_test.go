@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1" //nolint:gosec // git's hashfile trailer is a SHA-1: a case reseals a file as git would
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -578,6 +579,111 @@ func TestTheChainHoldsItsPacksUntilItsReplacementIsPlaced(t *testing.T) {
 		t.Errorf("crewlet.code.cache.layers{outcome=cut} = %d, want the %d layers the placement replaced", got,
 			len(old))
 	}
+}
+
+// A CHAINED COPY'S SWAP IS ONE SYNC A DIRECTORY, as an own copy's is
+// (swap.go's syncStaged): the layer step links the layers the copy keeps,
+// renames in those a placement fetched and writes both chain files from the
+// rows into the staging, and syncs nothing at the step — nothing reads the
+// staging before its rename — so each directory it wrote in is synced once
+// with the rest of the staging: objects/pack, the two chain directories,
+// crewlet/ for the index of pushes, the staged root by its state's write,
+// and repos/ after the rename. A swap that carries the chain whole (packs of
+// the tail leaving) and the installer's placement of a replacement, whose
+// every layer is renamed in rather than linked, alike.
+//
+// Mutations: sync a chain file's directory at the layer step as an
+// incarnation's are in place (placeLayers' writeChains given the cache's
+// durableDir) — the two chain directories synced three times each; leave
+// what the layer step wrote out of the staging's sync (syncStaged's wrote
+// loop removed) — the placement's chain directories, holding no file it
+// linked, never synced.
+func TestAChainedCopysSwapSyncsEachDirectoryOnce(t *testing.T) {
+	t.Parallel()
+	// indexed makes the copy keep an index of pushes, whose runs the swap
+	// links into crewlet/ — two pushes, each read by a delta that folds it in
+	// before it answers — and answers the syncs every case's swap makes.
+	indexed := func(t *testing.T, w *syncWorld, c *cache.Cache, repo string) map[string]int {
+		t.Helper()
+		for range 2 {
+			w.push(t, repo, "refs/heads/main", nil)
+			w.sync(t, c, repo)
+		}
+		if idx, ok := cache.Index(c, repo); !ok || len(idx.Runs) == 0 {
+			t.Fatalf("the index of pushes is %+v (kept %t): the case needs runs to carry", idx, ok)
+		}
+		return map[string]int{".": 1, "objects/pack": 1, "objects/pack/multi-pack-index.d": 1,
+			"objects/info/commit-graphs": 1, "crewlet": 1, "repos/": 1}
+	}
+	t.Run("carried", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		p := w.pushN(t, repo, 4)
+		chain := w.buildChain(t, p[:2])
+		w.log.publish(repo, chain, nil)
+		var syncs syncLog
+		c := w.open(t, cache.SyncingWith(syncs.add))
+		held := w.sync(t, c, repo)
+		want := indexed(t, w, c, repo)
+		// The tail's two first packs merged: they leave, and the chain,
+		// naming neither, crosses the swap whole.
+		w.compacted(t, repo, p[2].row, p[3].row)
+		syncs.reset()
+
+		s := w.sync(t, c, repo)
+		if s.Dir == held.Dir {
+			t.Fatalf("the round answered the incarnation a reader holds, %s: no swap", s.Dir)
+		}
+		if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(chain)) {
+			t.Fatalf("the next incarnation holds the chain %v, want %v carried", got, layerIDs(chain))
+		}
+		if got := syncs.swap(w); !maps.Equal(got, want) {
+			t.Errorf("the swap synced %v, want each directory it wrote once — the two chain directories "+
+				"among them — and repos/ after the rename: %v", got, want)
+		}
+		if midx, graph := chainFiles(t, s.Dir); !slices.Equal(midx, layerIDs(chain)) ||
+			!slices.Equal(graph, graphIDs(chain)) {
+			t.Errorf("the next incarnation's chain files list %v and %v, want %v and %v", midx, graph,
+				layerIDs(chain), graphIDs(chain))
+		}
+		readsThroughTheBitmap(t, s.Dir)
+	})
+	t.Run("placed", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		p := w.pushN(t, repo, 3)
+		w.log.publish(repo, w.buildChain(t, p[:2]), nil)
+		var syncs syncLog
+		c := w.open(t, cache.SyncingWith(syncs.add))
+		w.sync(t, c, repo)
+		want := indexed(t, w, c, repo)
+		// A repacking publication: the chain's two packs merged under one
+		// root layer, which the installer fetches and places by a swap.
+		merged := w.merged(t, p[0].row, p[1].row)
+		replacement := w.buildChain(t, []pushed{{oid: p[1].oid, row: merged}})
+		w.log.publish(repo, replacement, []code.PackRow{merged}, p[0].row.PackID, p[1].row.PackID)
+		held := w.sync(t, c, repo)
+		syncs.reset()
+
+		cache.InstallPass(c)
+		synced := syncs.swap(w)
+		if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(replacement)) {
+			t.Fatalf("after the installer's pass the copy holds %v, want the replacement %v", got,
+				layerIDs(replacement))
+		}
+		s := w.sync(t, c, repo)
+		if s.Dir == held.Dir {
+			t.Fatalf("the placement wrote into %s, the copy the delta answered", held.Dir)
+		}
+		if !maps.Equal(synced, want) {
+			t.Errorf("the placement's swap synced %v, want each directory it wrote once — the two chain "+
+				"directories its fetched layer was renamed into among them — and repos/ after the rename: %v",
+				synced, want)
+		}
+		readsThroughTheBitmap(t, s.Dir)
+	})
 }
 
 // A PLACEMENT SWAPS A COPY A READER MAY HOLD, and writes in place one nobody

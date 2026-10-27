@@ -968,11 +968,13 @@
 // and one sync a directory it wrote, made once the staging is complete and
 // before the rename, since nothing reads the staging before it — four to six
 // fsyncs, the state's and repos/'s among them, where synced step by step it
-// took up to eleven, each while the round holds the repository. The promote
-// carries every per-file verdict of the files it links (the same inodes) —
-// their vouches, a hint's hash, the scrub's schedule, what a repair still
-// owes them — and the repository's own records, every field of an incarnation
-// classified in swapFields, which
+// took up to eleven, each while the round holds the repository; six to nine
+// for a copy serving from a published chain, whose two directories are synced
+// with the rest and whose two chain files are written from the rows. The
+// promote carries every per-file verdict of the files it links (the same
+// inodes) — their vouches, a hint's hash, the scrub's schedule, what a repair
+// still owes them — and the repository's own records, every field of an
+// incarnation classified in swapFields, which
 // TestEveryIncarnationFieldIsClassifiedForTheSwap holds to the struct both
 // ways. A maintenance run on the old copy is stopped first, and counted as a
 // run of the duty cycle. What is learnt of the old copy's files after the

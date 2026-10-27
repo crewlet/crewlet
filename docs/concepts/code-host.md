@@ -751,7 +751,9 @@ reading: the node builds the copy's **next directory** beside it — every pack
 the rows still name, the ref file and the files built over them that the
 change leaves valid, each hard-linked from the old directory, so it
 downloads nothing, runs no git and costs a few file links a pack and four
-to six disk syncs, whatever the repository's size — moves it into place
+to six disk syncs (six to nine for a copy that serves from a published
+chain, whose two chain files it writes from the rows), whatever the
+repository's size — moves it into place
 whole, moves the memo of answers
 into it in one rename, and serves every later request from it, while the
 requests already reading the old directory keep
