@@ -48,7 +48,8 @@ import (
 //
 // Every call also records, in `configured`, whether it was handed
 // OPENCODE_CONFIG_CONTENT — `handed|<subcommand>` or `|<subcommand>` — and
-// `serve` keeps the content it was handed, in `serve-config`.
+// `serve` keeps the content it was handed, in `serve-config`; and, in
+// `steered`, the CREWLET_STEER_SESSION it was handed — `<session>|<subcommand>`.
 //
 // FAKE_SERVE=listen-only is a server that says where it listens and never
 // prints a password; FAKE_SERVE=silent one that says nothing at all; and
@@ -58,6 +59,7 @@ const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
 printf '%s|%s %s\n' "${OPENCODE_CONFIG_CONTENT+handed}" "$1" "$2" >> "$d/configured"
+printf '%s|%s %s\n' "${CREWLET_STEER_SESSION-}" "$1" "$2" >> "$d/steered"
 authed() {
   [ "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" = "$(cat "$d/server-password" 2> /dev/null)" ] && return 0
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
@@ -544,6 +546,56 @@ func TestOnlyTheServerIsHandedTheConfiguration(t *testing.T) {
 		for _, call := range []string{"serve --hostname", "auth import", "auth export", "run --server", "api --server"} {
 			if !seen[call] {
 				t.Errorf("the script never ran %q, so what it was handed went unasked: %v", call, seen)
+			}
+		}
+	})
+}
+
+// ONLY THE SERVER IS HANDED THE RUN'S SESSION, and only for a run wired to its
+// notes: the notes plugin the server loads admits notes to the session the
+// run's script names, which it reads from CREWLET_STEER_SESSION — the same id
+// the run's client is pointed at with --session. No other command the script
+// runs is handed it, and a run wired to no notes hands nobody it.
+//
+// Mutation: export the variable for the whole script, or hand it the run's
+// server whatever its wiring.
+func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, wired := range []bool{true, false} {
+			req := sandbox.RunRequest{MCPServers: bridgeOnly}
+			if wired {
+				req.Steer = steerWiring
+			}
+			run := runScript(t, scriptOpts{shell: sh, login: seededLogin, req: req})
+			if run.code != 0 {
+				t.Fatalf("wired %v: exit %d:\n%s", wired, run.code, run.stderr)
+			}
+			at := run.callIndex("run --server ")
+			if at < 0 {
+				t.Fatalf("wired %v: the brief was never run:\n%s", wired, strings.Join(run.calls, "\n"))
+			}
+			_, session, _ := strings.Cut(run.calls[at], "--session ")
+			session, _, _ = strings.Cut(session, " ")
+			served := false
+			for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "steered")), "\n") {
+				handed, call, _ := strings.Cut(line, "|")
+				if !strings.HasPrefix(call, "serve ") {
+					if handed != "" {
+						t.Errorf("wired %v: %q was handed the run's session %q, want the server alone", wired, call, handed)
+					}
+					continue
+				}
+				served = true
+				switch {
+				case wired && handed != session:
+					t.Errorf("the server was handed the session %q, want the one the run names, %q", handed, session)
+				case !wired && handed != "":
+					t.Errorf("a run wired to no notes handed its server the session %q", handed)
+				}
+			}
+			if !served {
+				t.Errorf("wired %v: the server never started", wired)
 			}
 		}
 	})

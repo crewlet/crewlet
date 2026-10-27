@@ -325,13 +325,15 @@ The run's `--model` is the `opencode` entry's model exactly as written — the s
 
 **A login follows a run into a local cell as OpenCode's own export.** OpenCode 2 keeps its logins in the database it keeps its sessions in, so the entry's login travels as the document `opencode auth export` printed ([LLM Backends](llm-backends.md#1-broker-the-vendors-own-login-any-cli)): a `direct` or `container` box is seeded with it at `~/.crewlet/exported-credentials`, and the run imports it before its server starts. A token OpenCode refreshes mid-run then lives only in that database, and every teardown of a run still in flight — a seat retired mid-run, a launch settled as failed after its job started, the pause reaper — kills the job's group outright (`SIGKILL`, or `docker rm -f` for a `container` box), so nothing in the box runs at its end. So the run **exports the database back over the document while it works**, through its own server every 30 s, as well as once more when it ends; a `SIGTERM`, `SIGINT` or `SIGHUP` to the run exports once more before it goes, exiting 143, 130 or 129. Thirty seconds is the window a kill can still lose a refresh in: an OAuth access token lives an hour or more, so under one refresh in a hundred falls inside it, and an export through the server costs about 0.14 s (measured on 2.0.32). An export replaces the document only where it differs and holds a login — a whole, non-empty JSON array, never the `[]` a database that dropped its credential prints — and nothing is exported where the box was given none. The box's teardown then writes the document back to the shared login under the rule every local box's login follows ([Local sandboxes](#local-sandboxes)). A remote box is never given it.
 
-The runner **writes OpenCode 2's own configuration to `<home>/.crewlet/opencode.json`**, beside the run's other artefacts and never in the checkout, and the run's script hands its content to the run's server alone as **`OPENCODE_CONFIG_CONTENT`**. OpenCode takes no config flag, and of its two variables for a process's own configuration, `OPENCODE_CONFIG` (a file's path) ranks *below* a repository's `opencode.json` and `.opencode/`, while `OPENCODE_CONFIG_CONTENT` ranks above them: 2.x reads managed policies, well-known, global, `OPENCODE_CONFIG`, the project's `opencode.json`, its `.opencode/`, `OPENCODE_CONFIG_CONTENT` and managed settings in that order, a later document winning (the same at 2.0.0, 2.0.32 and 2.1.4). So **a repository's own `opencode.json` is not written to**: it stays as it is and loads beneath the run's configuration, the way Claude Code loads a repository's `.claude/settings.json` beneath `--settings`. Measured on 2.0.32 and 2.1.4 with a repository whose own `opencode.json` and `.opencode/opencode.json` disable the bridge and deny every permission: the bridge connected and the shell ran. Every server the run declares, and the agent its turn cap is set on, states `disabled: false`, so a document beneath the run's cannot switch one off under the same name. The login's import and export and the run's own client calls are handed none of it, and a run whose configuration is missing is refused before a login is imported or a server started.
+The runner **writes OpenCode 2's own configuration to `<home>/.crewlet/opencode.json`**, beside the run's other artefacts and never in the checkout, and the run's script hands its content to the run's server alone as **`OPENCODE_CONFIG_CONTENT`**. OpenCode takes no config flag, and of its two variables for a process's own configuration, `OPENCODE_CONFIG` (a file's path) ranks *below* a repository's `opencode.json` and `.opencode/`, while `OPENCODE_CONFIG_CONTENT` ranks above them: 2.x reads managed policies, well-known, global, `OPENCODE_CONFIG`, the project's `opencode.json`, its `.opencode/`, `OPENCODE_CONFIG_CONTENT` and managed settings in that order, a later document winning (the same at 2.0.0, 2.0.32 and 2.1.4). So **a repository's own `opencode.json` is not written to**: it stays as it is and loads beneath the run's configuration, the way Claude Code loads a repository's `.claude/settings.json` beneath `--settings`. Measured on 2.0.32 and 2.1.4 with a repository whose own `opencode.json` and `.opencode/opencode.json` disable the bridge and deny every permission: the bridge connected and the shell ran. Every server the run declares, and the agent its turn cap is set on, states `disabled: false`, so a document beneath the run's cannot switch one off under the same name. The login's import and export and the run's own client calls are handed none of it, and a run whose configuration is missing is refused before a login is imported or a server started. For a run wired to its turn's notes, the same file names the run's [notes plugin](#opencodes-notes-plugin) and the server alone is handed the run's session as `CREWLET_STEER_SESSION`.
 
 It declares **no provider**: the model names one of OpenCode's own, which reads its key from the run environment under that provider's own variable, so a credential is never written into the file where the agent could read it back into its report, and a provider declared beside the one the model names would shadow it. The same file sets `permissions` to allow every action and deny only `question` (headless runs have no human to approve a prompt — a gate left at `ask` is auto-rejected — and the one tool that asks a person is replaced by `crewlet-ask`; the rules of every document OpenCode reads are added together in its order, so these come last and, the last match winning, decide), `share: disabled`, `update: disable` (a CLI that updates itself mid-run swaps the tool under the brief while the seat's turn is suspended waiting on it) and `snapshots: false` (a git snapshot of the checkout at every step, for an undo a headless run never offers). Each MCP server is declared under `mcp.servers` with **`codemode: false`**, so its tools are offered to the model directly as `<server>_<tool>` rather than only through Code Mode's JavaScript `execute` tool — which a model may never take to, and which the transcript would record as `execute` whatever it reached — and a remote server with **`oauth: false`**, since the bridge authenticates with the run's token and a headless run cannot complete an OAuth flow.
 
-**A server's values are referenced, not written into the configuration.** Its `url`, each header value and each `environment` value is a `{file:<path>}` reference to a file of its own under `<home>/.crewlet/opencode-values/`, which OpenCode reads in the reference's place — the file's content with the whitespace at either end trimmed, so an `environment` value that begins or ends with whitespace arrives without it (a URL or a header value has none that counts) — so the configuration and the variable carrying it hold paths and no value. The files are written before the configuration that names them, at the mode a box writes every file with (`0600` on a local box). OpenCode finds a reference in the configuration's text before it parses it, so a run with servers on a box whose home it cannot name — a relative one, or one holding a `}`, a quote, a backslash or a control character — is refused, saying so and naming `providers.sandbox.local.state_dir`, which places a local box's home.
+**A server's values are referenced, not written into the configuration.** Its `url`, each header value and each `environment` value is a `{file:<path>}` reference to a file of its own under `<home>/.crewlet/opencode-values/`, which OpenCode reads in the reference's place — the file's content with the whitespace at either end trimmed, so an `environment` value that begins or ends with whitespace arrives without it (a URL or a header value has none that counts) — so the configuration and the variable carrying it hold paths and no value. The files are written before the configuration that names them, at the mode a box writes every file with (`0600` on a local box). OpenCode replaces every `{env:…}` and `{file:…}` in the configuration's text before it parses it, and the configuration names the instruction file, the notes plugin and every value under the box's home, so a run on a box whose home that text cannot name — a relative one, or one holding a brace, a quote, a backslash or a control character — is refused, saying so and naming `providers.sandbox.local.state_dir`, which places a local box's home.
 
 Its `instructions` names the file holding the run's [standing instructions](#what-a-coding-agent-is-told), by its absolute path. The configuration is written on **every** run, including one that names no model and no server, and the previous run's configuration and values are removed before it is: a run is configured by its own file or not started at all, never by the vendor's defaults or by a file an earlier run on a reused box left, MCP block and dead per-run bridge URL included.
+
+**Its answer is its last message's text.** Each step of a run is a message of its own, and `run --format json` prints every step's text, so the result is the text of the last message that wrote any — a run handed a [note](#opencodes-notes-plugin) after it had answered answers again, and its result is the later answer, not the two joined — while the transcript keeps every step's. The report the run writes is what the result prefers anyway.
 
 **Its tokens are the session's own totals.** `run --format json` drops the final step's counts, so the run asks its session (`opencode api session.get`) once it ends and the collection reads that: the whole prompt, the cache's two shares included, and the output with the reasoning OpenCode reports beside it added back, as every provider bills it — plus OpenCode's price, as it reported it (zero where it has no pricing for the provider, which the record reads as no price). A run whose report is missing reports zero rather than an estimate.
 
@@ -550,10 +552,10 @@ its review, whichever node resumes it:
     the note and the job, so a poller that admits it twice admits it once.
 
   A CLI takes notes here only where its run is set up to ask for them; a run
-  whose CLI asks for none still has every note read, by its review. **Claude
-  Code** is set up to, through [hooks](#claude-codes-hooks) that call
-  `steer_take`. **OpenCode** runs take none between their steps: their notes
-  are read by the next brief and by the review.
+  whose CLI asks for none still has every note read, by its review. Both
+  coding CLIs are set up to: **Claude Code** through [hooks](#claude-codes-hooks)
+  that call `steer_take`, and **OpenCode** through a [plugin](#opencodes-notes-plugin)
+  that polls the notes route and hands each note to the run's session.
 
   A take is pinned to the run's **job** and to a run that is launching or
   working with its ending undecided: a relaunch's job, a run parked on a
@@ -643,6 +645,72 @@ What still switches the hooks off — a managed policy that allows only managed
 hooks (`allowManagedHooksOnly`, `strictPluginOnlyCustomization`) or sets
 `disableAllHooks`, or a CLI too old to read the file — leaves a run that
 succeeds without asking for its notes once, which the collection says as
+[`steer_reader_never_ran`](#failure-modes); its notes still reach its review.
+
+### OpenCode's notes plugin
+
+Every OpenCode run its launch wires to its turn's notes is handed a plugin of
+its own, which the run's server loads: `index.js` in `opencode-steer/` in the
+box's work directory, written before the server starts and named in the run's
+[configuration](#opencode) with the run's notes route as its one option — a
+`{file:}` reference to a file under `opencode-values/`, like every value there,
+so the configuration holds no token:
+
+```json
+{
+  "plugins": [{"package": "<home>/.crewlet/opencode-steer",
+               "options": {"url": "{file:<home>/.crewlet/opencode-values/v<n>}"}}]
+}
+```
+
+The plugin is the engine's own, embedded in the binary: plain JavaScript with
+no imports, so nothing is installed or fetched to load it. The run's script
+hands the server the id of the session the run works in, as
+`CREWLET_STEER_SESSION` on `opencode serve` alone, and the plugin reads that
+session and no other:
+
+- **It polls only while the session works** — from the session's
+  `session.execution.started` (or any of its steps starting) to its
+  `succeeded`, `failed` or `interrupted`, again for an execution OpenCode
+  starts itself — and nothing before, so the brief is always the first thing
+  the session reads. Its setup only registers and returns: OpenCode holds
+  every prompt until each plugin's setup has resolved.
+- **Each note is admitted as a steer**, under the id the route gives it
+  (`ctx.session.prompt` with `delivery: "steer"`): OpenCode hands every steer
+  waiting at its next step boundary to the model as a user message after that
+  step's tool results — or after a final step that called no tool, whose
+  boundary reads the inbox again — so a note sent while the run writes its
+  answer is still read in the same run. The id is derived from the job and the
+  note, so a note admitted twice is admitted once. The cursor moves past a note
+  only once it is admitted.
+- **With `resume: false`**: a note admitted once the session has settled
+  starts nothing — an execution `opencode run` no longer watched would answer
+  nobody — and the plugin admits none then anyway. Such a note waits on the
+  run's record for its review.
+- **It confirms only what OpenCode delivered**: on the session's
+  `session.inbox.delivered` for a note it admitted, it posts the note's id to
+  the route's `read`, which records it read by the run's job (`boundary:
+  step`). A note admitted and never delivered is never confirmed, and its
+  review reads it.
+- **It asks, and never insists**: a poll is held up to the route's ten seconds
+  and given twenty, a confirmation ten; a failed request is made again after a
+  pause of a second, doubling to thirty and reset by the next success; and a
+  refused token (`401`) or a run with no notes route (`404`) ends the plugin
+  for the rest of the run, its notes waiting for the review.
+- **It writes nothing**: OpenCode reloads a configured plugin whose directory
+  changes, and a note never touches the box's disk.
+
+Measured against a stub model API: on OpenCode 2.0.32 and 2.1.4, a note
+admitted while a tool call ran was read by the next request, after the tool's
+result, and one admitted during the final model call was read in the same
+execution, after the answer it superseded; on 2.1.4, one admitted after the
+execution settled, with `resume: false`, started nothing. The run's
+[result](#opencode) is its **last** message's text, so a run steered past its
+answer reports the answer it gave after the note.
+
+A managed policy that denies the plugin (`integration.use`), or a plugin
+OpenCode fails to load — which its own log names — leaves a run that succeeds
+without asking for its notes once, which the collection says as
 [`steer_reader_never_ran`](#failure-modes); its notes still reach its review.
 
 ---
@@ -878,9 +946,9 @@ What an operator should recognize:
 - **`sandbox_run_failed` with reason `launch_node_gone`**: the run's `direct` or `container` box was on the host of a node that left the fleet and did not come back within `default_timeout_seconds` — scaled away, or its host lost — so nothing could poll, collect or reclaim it (see [A node that never comes back](#durability-completion-and-observability)). Whatever the run pushed is on its branch. A node that only restarts within that bound never produces this; one that is routinely away longer needs a longer `default_timeout_seconds`.
 - **`sandbox_collect_host_silent`** (a log line, at warning): the seat's holder asked the node whose host a run's box is on to read it back, and it did not answer — stopped, restarting, or gone. The claim is handed back uncounted and that node announces the completion again from its own poll once it is back; a node that never comes back ends the run as `launch_node_gone`.
 - **`sandbox_run_failed` with reason `seat_removed`**: the seat left the company's agent seats — it was removed from the chart, or made a person's and not made an agent's again within the 24-hour retirement grace — so its runs were ended when its mailbox was retired. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
-- **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose CLI takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish — so something in its box switched its [hooks](#claude-codes-hooks) off: a managed policy that allows only managed hooks or disables them all, or a CLI older than 2.1.163. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its CLI.
+- **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose CLI takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish, and an OpenCode run's plugin as soon as its session starts working — so something in its box switched its reading off: for Claude Code its [hooks](#claude-codes-hooks), by a managed policy that allows only managed hooks or disables them all, or a CLI older than 2.1.163; for OpenCode its [plugin](#opencodes-notes-plugin), by a managed policy that denies it or a load that failed, which OpenCode's own log names. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its CLI.
 - **`a hook in the run stopped its loop before it finished (Claude Code terminal_reason hook_stopped)`** — a hook of the repository's or the image's own settings exited 2 or returned a block, and Claude Code ended the run part-way while reporting a success subtype. The run is a failure saying so; the run's own steering hooks never block. Fix or remove that hook in the repository or the image.
-- **`this box's home "…" cannot hold the values of an OpenCode run's MCP servers`** — an OpenCode run's servers are configured by `{file:}` references to files under the box's home ([OpenCode](#opencode)), and this home is one a reference cannot name: relative, or holding a `}`, a quote, a backslash or a control character. A local box's home is under `providers.sandbox.local.state_dir`; move it to a path without one. The run starts nothing.
+- **`this box's home "…" cannot be named in an OpenCode run's configuration`** — an OpenCode run's configuration names its instruction file, its notes plugin and its servers' values by paths under the box's home ([OpenCode](#opencode)), and this home is one the configuration's text cannot carry: relative, or holding a brace, a quote, a backslash or a control character. A local box's home is under `providers.sandbox.local.state_dir`; move it to a path without one. The run starts nothing.
 - **`crewlet: the run has no OpenCode configuration at …`** (the run's error output) — the configuration the runner writes before every OpenCode run was not there, or was empty, when the run's script started: something in the box removed it between the two. The script stops before it imports a login or starts a server, and the next run writes the file again.
 - **A run that "finishes" with no report** — the coding agent neither wrote its findings file nor streamed a final message. `collect` surfaces the exit status, the CLI's own account of how it ended (an error subtype, or that its stream stopped before its result) and the stderr as the error; the resumed executor sees a failed run rather than an empty success.
 
@@ -888,4 +956,4 @@ What an operator should recognize:
 
 ## Testing
 
-`providers.sandbox.fake: true` wires the in-process fakes (`sandbox.FakeProvider`, `sandbox.FakeRunner`): scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format stream-json --verbose`, `opencode run … --format json`) and output parsers — Claude Code's against fixtures written from the vendor's documented stream-json message schema, and its hook lines and result messages against Claude Code's own output for 2.1.263 and 2.1.310 run against a stub model API (no model is ever called), and once through a real shell with a stand-in CLI so the wrapper's copy of the result line and the CLI's own exit status are exercised as they run — and `internal/config/examples_test.go` parses the git-auth recipe out of *this page* and holds it to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them. This is the copy readers take, so this is the copy under test.
+`providers.sandbox.fake: true` wires the in-process fakes (`sandbox.FakeProvider`, `sandbox.FakeRunner`): scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format stream-json --verbose`, `opencode run … --format json`) and output parsers — Claude Code's against fixtures written from the vendor's documented stream-json message schema, and its hook lines and result messages against Claude Code's own output for 2.1.263 and 2.1.310 run against a stub model API (no model is ever called), and once through a real shell with a stand-in CLI so the wrapper's copy of the result line and the CLI's own exit status are exercised as they run; OpenCode's notes plugin runs, as the engine writes it into a real box, under `node` against a stand-in of the notes route and of the context OpenCode hands a plugin — and `internal/config/examples_test.go` parses the git-auth recipe out of *this page* and holds it to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them. This is the copy readers take, so this is the copy under test.

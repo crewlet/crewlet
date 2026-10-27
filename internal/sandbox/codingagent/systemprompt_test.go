@@ -228,11 +228,10 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 // to a run whose launch wired it to its turn's notes and whose CLI takes them
 // between its steps, after the report instruction — and to no other. Told to a
 // run its launch gave nothing to ask for (the assistant's deep work), or to one
-// whose CLI is not taught to take notes yet, it would describe a channel that
-// never opens.
+// whose CLI takes none, it would describe a channel that never opens.
 //
-// Mutation: append the instruction whenever Steer is set and the OpenCode and
-// unreading rows go red; drop the reader's check and so do they.
+// Mutation: append the instruction whenever Steer is set and the unreading row
+// goes red; drop the reader's check and so does it.
 func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -243,7 +242,8 @@ func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 		"claude code, wired to its notes": {codingagent.NewClaudeCode(), steerWiring, true},
 		"claude code, wired to none":      {codingagent.NewClaudeCode(), sandbox.SteerWiring{}, false},
 		"a CLI that reads no notes":       {codingagent.New(unreading{codingagent.ClaudeCode{}}), steerWiring, false},
-		"opencode, not taught to yet":     {codingagent.NewOpenCode(), steerWiring, false},
+		"opencode, wired to its notes":    {codingagent.NewOpenCode(), steerWiring, true},
+		"opencode, wired to none":         {codingagent.NewOpenCode(), sandbox.SteerWiring{}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -289,11 +289,13 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // settings and configuration go too: a run's instructions are its own — a
 // previous job's hooks name a bridge session that job's end closed — and a file
 // this run writes is then always created fresh, at the mode a backend creates a
-// file with. OpenCode's values ([Paths.OpenCodeValues]) are a DIRECTORY,
-// removed whole: a run writes one file per value, so one with fewer values than
-// the last would otherwise keep the last one's beside its own. THE CHECKOUT IS
-// LEFT INTACT — that disk state is the continued context, and it is the whole
-// reason to reuse a box.
+// file with. OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
+// ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes one
+// file per value, so one with fewer values than the last would otherwise keep
+// the last one's beside its own, and a run wired to no notes would otherwise
+// leave a plugin no configuration names. THE CHECKOUT IS LEFT INTACT — that
+// disk state is the continued context, and it is the whole reason to reuse a
+// box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
@@ -305,10 +307,11 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	if out.Stdout != p.Result() {
 		files = append(files, out.Stdout)
 	}
-	// The values directory alone is removed recursively; every other target
+	// The two directories alone are removed recursively; every other target
 	// is a file, removed as it always was. Two statements rather than one
-	// joined by `&&`, so a file that will not go never keeps the directory.
-	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuote(p.OpenCodeValues())
+	// joined by `&&`, so a file that will not go never keeps a directory.
+	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
+		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin()})
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: clearing the prior run's artefacts: %w", err)
 	}

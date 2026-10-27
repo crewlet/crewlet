@@ -188,10 +188,14 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
 		}
 	}
-	// OpenCode's values are a DIRECTORY, removed whole — a run with fewer
-	// values than the last would keep the last one's beside its own.
-	if !strings.Contains(cleared, "rm -rf '"+p.OpenCodeValues()+"'") {
-		t.Fatalf("the values directory %q was not removed whole: %s", p.OpenCodeValues(), cleared)
+	// OpenCode's values and its notes plugin are DIRECTORIES, removed whole —
+	// a run with fewer values than the last would keep the last one's beside
+	// its own, and a run wired to no notes a plugin nothing names.
+	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
+	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin()} {
+		if !strings.Contains(removed, "'"+dir+"'") {
+			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
+		}
 	}
 	// The CHECKOUT is left alone — that disk state is the whole reason to
 	// reuse a box.

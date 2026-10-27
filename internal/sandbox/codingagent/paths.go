@@ -8,8 +8,9 @@
 // and an ask overlay surfaces a mid-run clarification. This package owns that
 // plumbing so each runner supplies only what is its own: its invocation, its
 // config, where its output lands, and how its stream and result are read —
-// and, for a CLI taught to, how a person's notes to its run's turn reach it
-// between its own steps (steer.go; Claude Code's hooks, [ClaudeCode]).
+// and how a person's notes to its run's turn reach it between its own steps
+// (steer.go: Claude Code's hooks, [ClaudeCode]; OpenCode's plugin,
+// opencode_steer.js, [OpenCode]).
 //
 // # A run's output is read as a stream
 //
@@ -149,6 +150,21 @@ func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
 // every run ([Runner.ClearArtifacts]), so a run configured with fewer values
 // than the last keeps none of the last one's.
 func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values" }
+
+// OpenCodeSteerPlugin is the DIRECTORY an OpenCode run's notes plugin is written
+// into, as index.js ([OpenCode.WriteConfig]), and named by the run's
+// configuration — the plugin that admits a person's notes to the run's turn into
+// its session at its next step (opencode_steer.js).
+//
+// A DIRECTORY, because OpenCode 2 loads a configured local plugin only from one
+// — a file named there is skipped with a warning — trying its `server` module
+// and then its `index`. Under WorkDir, beside the configuration that names it,
+// never in the checkout or a `.opencode/plugins/` OpenCode would discover on its
+// own; and its own, removed whole before every run ([Runner.ClearArtifacts]):
+// OpenCode watches a configured plugin's directory and reloads the plugin on any
+// change inside it, so nothing is written there once the run's server starts —
+// the plugin itself writes nothing at all.
+func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
 
 // Findings is the agent's authoritative final report.
 //

@@ -580,6 +580,42 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 	}
 }
 
+// THE ANSWER IS THE LAST MESSAGE'S TEXT. Each step of an OpenCode run is a
+// message of its own, and a run handed a person's note after it had answered
+// answers again in a later one — the stream prints nothing for the note, so it
+// reads as two answers in a row (below in the shape OpenCode 2.0.32 prints, its
+// other fields left out and its ids shortened). The result is the later answer
+// alone, and the run's
+// transcript keeps both. A message's text in two events is one answer.
+//
+// Mutation: join every text event, as the decoder did, and the superseded
+// answer leads the result.
+func TestTheAnswerIsTheLastMessagesText(t *testing.T) {
+	t.Parallel()
+	stream := strings.Join([]string{
+		`{"type":"step_start","part":{"messageID":"msg_1","type":"step-start"}}`,
+		`{"type":"tool_use","part":{"messageID":"msg_1","tool":"shell","state":{"input":{"command":"go test ./..."},"status":"completed"}}}`,
+		`{"type":"text","part":{"messageID":"msg_1","type":"text","text":"Running the tests first."}}`,
+		`{"type":"step_finish","part":{"messageID":"msg_1","type":"step-finish","reason":"tool-calls"}}`,
+		`{"type":"text","part":{"messageID":"msg_2","type":"text","text":"answer-1: it targets main."}}`,
+		`{"type":"step_finish","part":{"messageID":"msg_2","type":"step-finish","reason":"stop"}}`,
+		`{"type":"text","part":{"messageID":"msg_3","type":"text","text":"answer-2: it targets release,"}}`,
+		`{"type":"text","part":{"messageID":"msg_3","type":"text","text":"as the note asked. Opened https://github.com/acme/api/pull/9"}}`,
+	}, "\n")
+	res := opencode().Parse(stream)
+	if want := "answer-2: it targets release,\nas the note asked. Opened https://github.com/acme/api/pull/9"; res.Text != want {
+		t.Errorf("the answer is %q, want the last message's text %q", res.Text, want)
+	}
+	if !res.Success || len(res.DeliveredRefs) != 1 {
+		t.Errorf("the last message's answer read as success %v with refs %v", res.Success, res.DeliveredRefs)
+	}
+	for _, kept := range []string{"Running the tests first.", "answer-1: it targets main.", "answer-2: it targets release,"} {
+		if !strings.Contains(res.Transcript, kept) {
+			t.Errorf("the transcript lost %q:\n%s", kept, res.Transcript)
+		}
+	}
+}
+
 func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
 	t.Parallel()
 	stream := `{"type":"tool_use","part":{"tool":"shell","state":{"input":{"command":"pytest"},"status":"error","error":"2 failed"}}}

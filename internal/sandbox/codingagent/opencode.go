@@ -85,6 +85,22 @@ const openCodeStopWait = 5 * time.Second
 // OpenCode otherwise resolves a bare "<provider>/<model>" against a catalogue
 // AND the vendor's default endpoint — so a custom gateway plus an unlisted
 // model either fails to resolve or silently hits the wrong host.
+//
+// A PERSON'S NOTES REACH THE RUN AT ITS NEXT STEP, through a plugin of the
+// run's own that its server loads (opencode_steer.js, written by
+// [OpenCode.WriteConfig]): while the run's session works, it polls the bridge's
+// notes route ([sandbox.SteerWiring.URL]) and admits each note into the
+// session's inbox as a steer, which OpenCode hands the model after the tool
+// results of the step in flight — or after a final step that called no tool —
+// as a user message, and reports delivered, which the plugin confirms to the
+// engine. Each with `resume: false`, so a note that arrives once the session
+// has settled starts nothing the run would not see, and waits for the run's
+// review. Measured against a stub model API: on OpenCode 2.0.32 and 2.1.4, a
+// note admitted during a tool call or during the final model call is read in
+// the same execution; on 2.1.4, one admitted after it settles starts nothing.
+// What switches it off — a managed policy that denies the plugin
+// (`integration.use`) — leaves a run that succeeds without asking for its notes
+// once, which the collection says (internal/sandbox, steer_reader_never_ran).
 type OpenCode struct{}
 
 var _ CLI = OpenCode{}
@@ -98,6 +114,10 @@ func (OpenCode) Name() string { return OpenCodeName }
 // Resumes says OpenCode continues a session it reported: naming the session
 // is the whole of continuing it ([openCodeSessionFor]).
 func (OpenCode) Resumes() bool { return true }
+
+// ReadsNotes says OpenCode takes a person's notes between its steps, through the
+// plugin its configuration loads — see [OpenCode].
+func (OpenCode) ReadsNotes() bool { return true }
 
 // Command is the run: a short shell script, because OpenCode 2 has to be
 // driven through a server of the run's own rather than in one command.
@@ -122,7 +142,11 @@ func (OpenCode) Resumes() bool { return true }
 // [OpenCode.WriteConfig] wrote ([Paths.OpenCodeConfig]) and hands its content
 // to `opencode serve` as OPENCODE_CONFIG_CONTENT, which OpenCode ranks above a
 // repository's own opencode.json and .opencode/; a run with no such file is
-// refused before a login is imported or a server started.
+// refused before a login is imported or a server started. A run wired to its
+// turn's notes ([sandbox.RunRequest.Steer]) hands the server
+// CREWLET_STEER_SESSION too — the session the run works in, which the notes
+// plugin admits notes to and follows ([OpenCode]) — on the same command, so
+// nothing else the script runs is handed it.
 //
 // THE BRIEF ON STDIN ([Output.BriefOnStdin]), because OpenCode re-quotes an
 // argv prompt; the session NAMED, by an id minted here, so the usage report
@@ -293,10 +317,16 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`fi`)
 
 	// ON THE SERVER ALONE: it runs the session, so it is the one process
-	// that reads the run's configuration. The run's client and its `api`
-	// calls are answered by it, and the login's import and export, which run
-	// before it or beside it, are handed none of it.
-	line(`OPENCODE_CONFIG_CONTENT="$config" opencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`, srv)
+	// that reads the run's configuration — and, for a run wired to its notes,
+	// the session the notes plugin it loads admits them to. The run's client
+	// and its `api` calls are answered by it, and the login's import and
+	// export, which run before it or beside it, are handed none of it.
+	steered := ""
+	if req.Steer.Set() {
+		steered = "CREWLET_STEER_SESSION=" + shellQuote(sid) + " "
+	}
+	line(`OPENCODE_CONFIG_CONTENT="$config" %sopencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`,
+		steered, srv)
 	line(`spid=$!`)
 	line(`deadline=$(( $(date +%%s) + %d ))`, int(times.listen.Seconds()))
 	line(`until grep -q '^server listening on ' %s 2> /dev/null && grep -q '^server password ' %s 2> /dev/null; do`, srv, srv)
@@ -463,7 +493,23 @@ func jsonStringify(s string) string {
 // THE MCP SERVERS' VALUES ARE FILES ([openCodeValueFiles]), written before the
 // configuration that names them, so the content holds each value's path and
 // never the value — as the server's environment holds no password
-// ([OpenCode.Command]).
+// ([OpenCode.Command]). The notes plugin's route is one such value.
+//
+// THE NOTES PLUGIN, for a run wired to its turn's notes
+// ([sandbox.RunRequest.Steer]): written into a directory of its own
+// ([Paths.OpenCodeSteerPlugin]) before the server that loads it starts, and
+// named in `plugins` with the route as its one option. A `plugins` list is
+// combined across the documents OpenCode reads in their order — an entry is an
+// addition, or a removal by id written `-<id>` — so this document's entry, read
+// last, is added after any removal a document beneath it makes. Measured on
+// 2.0.32 and 2.1.4 with a repository whose own opencode.json and .opencode/
+// remove the plugin: it loaded, with its option read from its file.
+//
+// EVERY PATH THE CONFIGURATION NAMES IS UNDER THE BOX'S WORK DIRECTORY — the
+// instruction file, the plugin, every value — and OpenCode replaces `{env:…}`
+// and `{file:…}` in the configuration's text before it parses it, so a box
+// whose home that text cannot name is refused before anything is written
+// ([openCodeReferable]).
 //
 // IT IS WRITTEN ON EVERY RUN, including one that names no server. The posture
 // keys below are not decoration a minimal run can go without, and a run that
@@ -471,6 +517,13 @@ func jsonStringify(s string) string {
 // file — the clear removed that ([Runner.ClearArtifacts]) — but not at all: the
 // script refuses to start a server it has no configuration for.
 func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+	if req.System != "" || len(req.MCPServers) > 0 || req.Steer.Set() {
+		if err := openCodeReferable(paths.WorkDir()); err != nil {
+			return "", fmt.Errorf("codingagent: this box's home %q cannot be named in an OpenCode "+
+				"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
+				"which needs a path without such characters", paths.Home, err)
+		}
+	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		// Sharing is disabled: a run's transcript is company work, and
@@ -528,16 +581,22 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 			openCodeAgent: map[string]any{"steps": req.Limits.MaxTurns, "disabled": false},
 		}
 	}
+	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	if len(req.MCPServers) > 0 {
-		values, err := newOpenCodeValueFiles(paths)
-		if err != nil {
-			return "", err
-		}
 		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers, values)}
-		for _, v := range values.files {
-			if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
-				return "", fmt.Errorf("codingagent: writing an MCP server's value for OpenCode: %w", err)
-			}
+	}
+	if req.Steer.Set() {
+		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
+			return "", fmt.Errorf("codingagent: writing OpenCode's notes plugin: %w", err)
+		}
+		cfg["plugins"] = []map[string]any{{
+			"package": paths.OpenCodeSteerPlugin(),
+			"options": map[string]string{"url": values.ref(req.Steer.URL)},
+		}}
+	}
+	for _, v := range values.files {
+		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
+			return "", fmt.Errorf("codingagent: writing a value of OpenCode's configuration: %w", err)
 		}
 	}
 	// THE SYSTEM TEXT AS AN INSTRUCTION FILE, named by its absolute path.
@@ -597,10 +656,11 @@ func openCodeJSON(v any) ([]byte, error) {
 const openCodeAgent = "build"
 
 // openCodeValueFiles is the values a run's configuration names by reference:
-// each MCP server's url, header value and environment value, one file apiece
-// under [Paths.OpenCodeValues], named `v1`, `v2`, … in the order the
-// configuration asks for them — servers by name, a server's headers and
-// environment by key — so the same request writes the same files.
+// each MCP server's url, header value and environment value, and the notes
+// plugin's route, one file apiece under [Paths.OpenCodeValues], named `v1`,
+// `v2`, … in the order the configuration asks for them — servers by name, a
+// server's headers and environment by key, then the plugin's — so the same
+// request writes the same files.
 //
 // OpenCode replaces `{file:<path>}` with the file's content, its surrounding
 // whitespace TRIMMED and JSON-escaped (core/src/config/variable.ts, the same
@@ -618,43 +678,31 @@ type openCodeValueFiles struct {
 // openCodeValueFile is one value and the file it is written to.
 type openCodeValueFile struct{ path, value string }
 
-// newOpenCodeValueFiles is the run's value files, none yet, under the box's
-// [Paths.OpenCodeValues] — or the reason a reference there cannot be read
-// ([openCodeReferable]), said once for the directory every file shares.
-func newOpenCodeValueFiles(paths Paths) (*openCodeValueFiles, error) {
-	dir := paths.OpenCodeValues()
-	if err := openCodeReferable(dir); err != nil {
-		return nil, fmt.Errorf("codingagent: this box's home %q cannot hold the values of an OpenCode "+
-			"run's MCP servers: %w; a local box's home is under providers.sandbox.local.state_dir, "+
-			"which needs a path without such characters", paths.Home, err)
-	}
-	return &openCodeValueFiles{dir: dir}, nil
-}
-
 // ref is the reference naming value's file, which it records for writing.
-// Every file is the directory and `v<n>` in it, and [newOpenCodeValueFiles]
-// already held the directory to what a reference can carry.
+// Every file is the directory and `v<n>` in it, and [OpenCode.WriteConfig]
+// already held the work directory above it to what a reference can carry.
 func (v *openCodeValueFiles) ref(value string) string {
 	path := v.dir + "/v" + strconv.Itoa(len(v.files)+1)
 	v.files = append(v.files, openCodeValueFile{path: path, value: value})
 	return "{file:" + path + "}"
 }
 
-// openCodeReferable is nil where `{file:<path>}` names path to OpenCode, and
-// otherwise says why it cannot. OpenCode finds a reference by matching
-// `{file:[^}]+}` in the configuration's text before it parses it, and resolves
-// a relative path against the working directory, which is the checkout — so a
-// path is named only where it is absolute, holds no `}` to end the reference
-// early, and is carried by the JSON text as itself: no `"`, `\`, control
-// character, U+2028 or U+2029, which the text holds escaped and OpenCode would
-// read as part of the path, and nothing that is not UTF-8, which the text holds
-// as U+FFFD.
+// openCodeReferable is nil where `{file:<path>}` names path to OpenCode — and
+// where the path, and any below it, can stand in the configuration's text as
+// itself — and otherwise says why it cannot. OpenCode replaces every
+// `{env:[^}]+}` and then every `{file:[^}]+}` in the configuration's text before
+// it parses it, and resolves a relative path against the working directory,
+// which is the checkout — so a path is named only where it is absolute, holds
+// no brace to open a reference of its own or end one early, and is carried by
+// the JSON text as itself: no `"`, `\`, control character, U+2028 or U+2029,
+// which the text holds escaped and OpenCode would read as part of the path, and
+// nothing that is not UTF-8, which the text holds as U+FFFD.
 func openCodeReferable(path string) error {
 	if !strings.HasPrefix(path, "/") {
 		return fmt.Errorf("the path %q is not absolute", path)
 	}
-	if strings.Contains(path, "}") {
-		return fmt.Errorf("the path %q holds a `}`, which ends a reference", path)
+	if strings.ContainsAny(path, "{}") {
+		return fmt.Errorf("the path %q holds a brace, which opens or ends a reference", path)
 	}
 	ref := "{file:" + path + "}"
 	if text, err := openCodeJSON(ref); err != nil || string(text) != `"`+ref+`"` {
@@ -772,11 +820,14 @@ type openCodeEvent struct {
 	Name  string          `json:"name"`
 	Error json.RawMessage `json:"error"`
 	Part  struct {
-		Tool   string         `json:"tool"`
-		Text   string         `json:"text"`
-		Reason string         `json:"reason"`
-		Input  *openCodeInput `json:"input"`
-		State  struct {
+		// MessageID is the message the part belongs to: each step of a
+		// run is a message of its own.
+		MessageID string         `json:"messageID"`
+		Tool      string         `json:"tool"`
+		Text      string         `json:"text"`
+		Reason    string         `json:"reason"`
+		Input     *openCodeInput `json:"input"`
+		State     struct {
 			Status string         `json:"status"`
 			Error  string         `json:"error"`
 			Output string         `json:"output"`
@@ -847,8 +898,24 @@ func decodeOpenCodeEvent(line []byte) (openCodeEvent, bool) {
 
 // openCodeEvents decodes one stream into the answer and a readable
 // transcript, read whole or followed across reads ([Decoder]).
+//
+// THE ANSWER IS THE LAST MESSAGE'S TEXT, never every step's joined. Each step
+// of a run is a message of its own (`part.messageID`), and a run handed a
+// person's note after it had written an answer goes on to a later step that
+// answers again — `run --format json` prints no event for the note, so the
+// stream reads as two answers in a row (measured on 2.0.32 and 2.1.4). Joined,
+// the run's result was the answer the note superseded followed by the one it
+// asked for; and a run that narrated its way through its steps ("running the
+// tests first") reported the narration as part of its answer. The transcript
+// keeps every step's text, and the report the run writes is what the result
+// prefers anyway ([Paths.Findings]).
 type openCodeEvents struct {
+	// answers is the text of the latest message that produced any, in
+	// order, and message that message's id. A text event that names no
+	// message belongs to the latest one: only a message that names itself
+	// and differs ends it, so a stream that names none is read whole.
 	answers    []string
+	message    string
 	transcript transcriptLines
 	errText    string
 	sawEvent   bool
@@ -903,7 +970,7 @@ func (d *openCodeEvents) Line(line []byte) {
 	case "text":
 		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
 			if !d.following {
-				d.answers = append(d.answers, chunk)
+				d.answer(ev.Part.MessageID, chunk)
 			}
 			d.transcript.add(chunk)
 		}
@@ -917,6 +984,19 @@ func (d *openCodeEvents) Line(line []byte) {
 			d.usage = ev.Report
 		}
 	}
+}
+
+// answer adds one text event's chunk to the answer: after the latest message's
+// text where the event is that message's, or names none; in its place where it
+// names a later one.
+func (d *openCodeEvents) answer(message, chunk string) {
+	if message != "" {
+		if d.message != "" && message != d.message {
+			d.answers = d.answers[:0]
+		}
+		d.message = message
+	}
+	d.answers = append(d.answers, chunk)
 }
 
 func (d *openCodeEvents) keepPlain(line []byte) {

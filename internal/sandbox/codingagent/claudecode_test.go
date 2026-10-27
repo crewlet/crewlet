@@ -270,6 +270,16 @@ func TestClaudeCodeReadsNotes(t *testing.T) {
 	}
 }
 
+// OpenCode READS NOTES, through its plugin, and says so to the runner it is
+// driven by — so its runs are told notes arrive, and one that never asked for
+// them is said at its collection.
+func TestOpenCodeReadsNotes(t *testing.T) {
+	t.Parallel()
+	if !codingagent.NewOpenCode().ReadsNotes() {
+		t.Fatal("the OpenCode runner says its CLI reads no notes, so no run is told notes arrive")
+	}
+}
+
 // fixture is a measured stream's file, sanitized, for one Claude Code release.
 func fixture(t *testing.T, version, name string) string {
 	t.Helper()

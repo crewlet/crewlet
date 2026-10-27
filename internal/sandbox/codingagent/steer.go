@@ -3,6 +3,7 @@ package codingagent
 import (
 	"bytes"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"slices"
@@ -22,8 +23,9 @@ import (
 // the CLI keeps in front of its model, and the id OpenCode admits a note under —
 // because those are facts about the CLIs, measured on them, and this package is
 // where every other such fact lives. And how a CLI is set up to ask for them at
-// all: Claude Code's settings file ([ClaudeCode.WriteConfig]), and the standing
-// instruction that tells a run's model what a note is ([SteerInstruction]).
+// all: Claude Code's settings file ([ClaudeCode.WriteConfig]), OpenCode's plugin
+// ([OpenCode.WriteConfig], opencode_steer.js), and the standing instruction that
+// tells a run's model what a note is ([SteerInstruction]).
 
 // SteerInstruction is the standing instruction a run whose CLI takes a person's
 // notes between its steps is given, after its report instruction: what a note
@@ -274,3 +276,16 @@ func OpenCodeInboxID(launch, noteID string) string {
 	sum := sha256.Sum256([]byte("crewlet.steer\x00" + launch + "\x00" + noteID))
 	return "msg_" + hex.EncodeToString(sum[:])[:32]
 }
+
+// openCodeSteerPlugin is the plugin an OpenCode run's server loads to admit the
+// run's notes into its session at its next step: opencode_steer.js, whose
+// header says how. Embedded rather than shipped beside the binary, so the
+// plugin a run is handed is the one this build's bridge answers.
+//
+//go:embed opencode_steer.js
+var openCodeSteerPlugin []byte
+
+// openCodeSteerEntry is the plugin's file in its directory
+// ([Paths.OpenCodeSteerPlugin]): the `index` module OpenCode loads from a
+// configured plugin directory with no `server` module.
+const openCodeSteerEntry = "index.js"

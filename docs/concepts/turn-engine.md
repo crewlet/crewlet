@@ -764,7 +764,7 @@ sequenceDiagram
     N->>C: the launch writes the record, the seat anchor, and the box's notes
     P->>C: steer_turn{turn_id, note} — filed sealed, by the asking node
     C-->>P: accepted → outcome "pending", reads "next_step"
-    B->>C: the run's CLI takes the note between its steps (Claude Code: after a tool batch, or at its finish)
+    B->>C: the run's CLI takes the note between its steps (Claude Code after a tool batch or at its finish, OpenCode at its next step)
     C-->>B: recorded read by the run's job
     Note over R: the run finishes, and the turn resumes
     R->>C: the review takes any note still waiting, at its first round
@@ -800,7 +800,14 @@ sequenceDiagram
   as the run is about to finish (`finish`), when a note continues the turn and
   the run's result is the answer given after it. A subagent's batch takes
   nothing, because a note handed to a delegated loop binds that piece of work
-  alone; the note waits for the main agent's next step.
+  alone; the note waits for the main agent's next step. **OpenCode** takes
+  them through a plugin its run's server loads, which hands each note to the
+  run's own session while it works; OpenCode puts it before the model at the
+  session's next step (`step`) — after the tool results of the step in flight,
+  or after a final step that called no tool, so a note sent while the run
+  writes its answer still reaches it, and the run's result is the answer given
+  after it. A note that arrives once the session has settled waits for the
+  review.
 - **The review's first round.** A note the run never took is read by the
   segment that reviews the run, before its first provider call — so the work
   is always judged against the note.

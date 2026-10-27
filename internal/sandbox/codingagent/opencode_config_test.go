@@ -1,6 +1,7 @@
 package codingagent_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -359,6 +360,77 @@ func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
 	}
 }
 
+// THE NOTES PLUGIN IS WRITTEN FOR A RUN WIRED TO ITS NOTES, AND ITS ROUTE IS A
+// REFERENCE. The run's configuration names one plugin: the directory the
+// engine's plugin is written into as index.js, byte for byte the plugin this
+// build embeds, with the run's notes route as its one option — a `{file:}`
+// reference to a 0600 file holding the route, so the configuration's content
+// holds no token. A run wired to no notes is handed no plugin, and none is
+// written.
+//
+// Mutation: write the route into the option rather than a reference, or name
+// the plugin whatever the run's wiring.
+func TestTheNotesPluginIsWrittenAndItsRouteReferenced(t *testing.T) {
+	t.Parallel()
+	_, box := openCodeBox(t, t.TempDir())
+	p := codingagent.PathsFor(box)
+	route := "http://127.0.0.1:7/mcp/run-token-placeholder/steer"
+	path, err := codingagent.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
+		MCPServers: seatServers(),
+		Steer:      sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: route},
+	}, p)
+	if err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // the run's configuration, under the test's box
+	if err != nil {
+		t.Fatalf("read the configuration: %v", err)
+	}
+	if strings.Contains(string(raw), "run-token-placeholder") {
+		t.Errorf("the configuration's content holds the notes route:\n%s", raw)
+	}
+	plugin := steerPluginOf(t, path)
+	if plugin.Package != p.OpenCodeSteerPlugin() {
+		t.Errorf("the plugin is named at %q, want %q", plugin.Package, p.OpenCodeSteerPlugin())
+	}
+	file, ok := referencedPath(plugin.Options.URL)
+	if !ok || !strings.HasPrefix(file, p.OpenCodeValues()+"/") {
+		t.Fatalf("the plugin's route is %q, want a reference to a file under %q", plugin.Options.URL, p.OpenCodeValues())
+	}
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("the route's file: %v, %v; want it there at 0600", info, err)
+	}
+	if got := readReference(t, plugin.Options.URL); got != route {
+		t.Errorf("the route reads as %q, want %q", got, route)
+	}
+	written, err := os.ReadFile(filepath.Join(plugin.Package, "index.js")) //nolint:gosec // under the test's box
+	if err != nil {
+		t.Fatalf("read the plugin: %v", err)
+	}
+	embedded, err := os.ReadFile("opencode_steer.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(written, embedded) {
+		t.Error("the plugin written into the box is not opencode_steer.js")
+	}
+
+	// A RUN WIRED TO NO NOTES: no plugin named, none written.
+	_, bare := openCodeBox(t, t.TempDir())
+	bp := codingagent.PathsFor(bare)
+	path, err = codingagent.OpenCode{}.WriteConfig(t.Context(), bare, sandbox.RunRequest{MCPServers: seatServers()}, bp)
+	if err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	raw, _ = os.ReadFile(path) //nolint:gosec // the run's configuration, under the test's box
+	if strings.Contains(string(raw), `"plugins"`) {
+		t.Errorf("a run wired to no notes names a plugin:\n%s", raw)
+	}
+	if _, err := os.Stat(bp.OpenCodeSteerPlugin()); !os.IsNotExist(err) {
+		t.Errorf("a run wired to no notes has a plugin written (%v)", err)
+	}
+}
+
 // homed is a box whose home is not the default, for the homes a reference
 // cannot name.
 type homed struct {
@@ -370,27 +442,38 @@ func (h homed) Home() string { return h.home }
 
 // A HOME A REFERENCE CANNOT NAME IS REFUSED, AND SAYS WHERE IT COMES FROM. A
 // reference is found in the configuration's text before it is parsed, so a
-// `}` ends it early, a character JSON escapes is read as part of the path, and
-// a relative one is resolved against the checkout — each a server OpenCode
-// would be handed empty values for, with a warning only in its own log. Such a
-// home is refused before anything is written, naming the home and the setting
-// that places a local box's. A `&`, `<` or `>` is carried as itself, and is no
-// reason to refuse.
+// `}` ends it early, a `{` opens one of its own (`{file:…}`, `{env:…}`), a
+// character JSON escapes is read as part of the path, and a relative one is
+// resolved against the checkout — each a server OpenCode would be handed empty
+// values for, a plugin with no route, or an instruction file that is not
+// there, with a warning only in its own log. Such a home is refused before
+// anything is written, whichever of them the run names, naming the home and the
+// setting that places a local box's. A `&`, `<` or `>` is carried as itself, and
+// is no reason to refuse.
 //
-// Mutation: drop the check and every refused home writes a configuration.
+// Mutation: drop the check, or the brace's part of it, and a refused home
+// writes a configuration.
 func TestAHomeAReferenceCannotNameIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, home := range []string{"/srv/boxes}/home", `/srv/"boxes"/home`, `/srv/a\b/home`,
-		"/srv/line\u2028sep/home", "/srv/\x01/home", "srv/relative/home"} {
-		b := homed{FakeSandbox: sandbox.NewFakeSandbox("box-1"), home: home}
-		p := codingagent.PathsFor(b)
-		_, err := codingagent.OpenCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{MCPServers: seatServers()}, p)
-		if err == nil || !strings.Contains(err.Error(), "providers.sandbox.local.state_dir") ||
-			!strings.Contains(err.Error(), fmt.Sprintf("%q", home)) {
-			t.Errorf("home %q: WriteConfig = %v, want it refused naming the home and the setting", home, err)
-		}
-		if written, _ := b.ReadFile(t.Context(), p.OpenCodeConfig()); written != nil {
-			t.Errorf("home %q: a refused run wrote its configuration:\n%s", home, written)
+	for _, home := range []string{"/srv/boxes}/home", "/srv/{file:boxes/home", "/srv/{env:BOXES/home",
+		`/srv/"boxes"/home`, `/srv/a\b/home`, "/srv/line\u2028sep/home", "/srv/\x01/home", "srv/relative/home"} {
+		// Every run names a path under the home: a server's values, the
+		// notes plugin, the instruction file — each alone refused.
+		for what, req := range map[string]sandbox.RunRequest{
+			"servers":      {MCPServers: seatServers()},
+			"notes":        {Steer: steerWiring},
+			"instructions": {System: "the seat's standing instructions"},
+		} {
+			b := homed{FakeSandbox: sandbox.NewFakeSandbox("box-1"), home: home}
+			p := codingagent.PathsFor(b)
+			_, err := codingagent.OpenCode{}.WriteConfig(t.Context(), b, req, p)
+			if err == nil || !strings.Contains(err.Error(), "providers.sandbox.local.state_dir") ||
+				!strings.Contains(err.Error(), fmt.Sprintf("%q", home)) {
+				t.Errorf("home %q, %s: WriteConfig = %v, want it refused naming the home and the setting", home, what, err)
+			}
+			if written, _ := b.ReadFile(t.Context(), p.OpenCodeConfig()); written != nil {
+				t.Errorf("home %q, %s: a refused run wrote its configuration:\n%s", home, what, written)
+			}
 		}
 	}
 	b := homed{FakeSandbox: sandbox.NewFakeSandbox("box-1"), home: "/srv/r&d <boxes>/home"}
@@ -401,24 +484,25 @@ func TestAHomeAReferenceCannotNameIsRefused(t *testing.T) {
 }
 
 // A REUSED BOX KEEPS NONE OF AN EARLIER RUN'S CONFIGURATION. The clear before
-// every run removes the configuration and the whole values directory, so a run
-// configured with fewer values than the last finds only its own — never the
-// last run's beside them — and every file it writes is created afresh.
+// every run removes the configuration, the whole values directory and the notes
+// plugin's, so a run configured with fewer values than the last finds only its
+// own — never the last run's beside them — a run wired to no notes keeps no
+// plugin, and every file it writes is created afresh.
 //
-// Mutation: leave the values directory out of the clear and the earlier run's
-// files are still there.
+// Mutation: leave the values directory or the plugin's out of the clear and the
+// earlier run's files are still there.
 func TestAReusedBoxKeepsNoEarlierRunsConfiguration(t *testing.T) {
 	t.Parallel()
 	runner, box := openCodeBox(t, t.TempDir())
 	p := codingagent.PathsFor(box)
 	if _, err := (codingagent.OpenCode{}).WriteConfig(t.Context(), box,
-		sandbox.RunRequest{MCPServers: seatServers()}, p); err != nil {
+		sandbox.RunRequest{MCPServers: seatServers(), Steer: steerWiring}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	if err := runner.ClearArtifacts(t.Context(), box); err != nil {
 		t.Fatalf("ClearArtifacts: %v", err)
 	}
-	for _, gone := range []string{p.OpenCodeConfig(), p.OpenCodeValues()} {
+	for _, gone := range []string{p.OpenCodeConfig(), p.OpenCodeValues(), p.OpenCodeSteerPlugin()} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
 			t.Errorf("%s survived the clear (%v)", gone, err)
 		}
