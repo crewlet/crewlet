@@ -39,7 +39,10 @@ type PageContext struct {
 	Query map[string]string `json:"query"`
 	// Resources are what the page is about and what is in view, by id.
 	Resources []Resource `json:"resources"`
-	// Selection is the peeked or selected row, or null.
+	// Selection is the one record the person has open, or null: the record
+	// a record's screen is of, the row a screen has open beside its list, or
+	// the peeked one, with what the screen calls it. A brief turn is limited
+	// to it ([TurnBrief]).
 	Selection *ResourceRef `json:"selection"`
 	// SourceRevision is the revision the screen's state and data were
 	// drawn at; a page action prepared against it is refused stale by the
@@ -190,6 +193,10 @@ type Resource struct {
 type ResourceRef struct {
 	Kind ResourceKind `json:"kind"`
 	ID   string       `json:"id"`
+	// Noun is what the person calls it where the screen says ([RecordNoun]):
+	// a selection's word for itself ("decision" for an ask in the Inbox),
+	// absent where its kind says enough.
+	Noun RecordNoun `json:"noun,omitempty"`
 }
 
 // The grammars a page context's names are held to.
@@ -393,6 +400,10 @@ func (r ResourceRef) validate() error {
 	if r.ID == "" || !plain(r.ID, pageIDMaxBytes) {
 		return fmt.Errorf("%w: a %s resource id is empty or not plain text of at most %d bytes",
 			ErrInvalid, r.Kind, pageIDMaxBytes)
+	}
+	if r.Noun != "" && !r.Noun.Valid() {
+		return fmt.Errorf("%w: resource noun %q is not one of %v", ErrInvalid, r.Noun,
+			RecordNouns)
 	}
 	return nil
 }

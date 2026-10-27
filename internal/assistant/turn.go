@@ -100,6 +100,8 @@ type turn struct {
 	// deep is the turn's deep work (ADR-0054): what this segment hands a
 	// run, and the run in flight.
 	deep deepState
+	// brief is a brief turn's own state ([wire.TurnBrief], brief.go).
+	brief briefState
 }
 
 // write is the record caller for this segment, with no step yet.
@@ -304,6 +306,19 @@ type reply struct {
 // drew.
 func (t *turn) onProgress(res toolloop.Result) {
 	t.mu.Lock()
+	if t.brief.on {
+		// A BRIEF'S PROSE IS NEVER ITS ANSWER: the brief card is, and
+		// whatever the model writes around its calls is neither drawn nor
+		// recorded.
+		if res.Model != "" {
+			t.model = res.Model
+		}
+		if res.ProviderKey != "" {
+			t.provider = res.ProviderKey
+		}
+		t.mu.Unlock()
+		return
+	}
 	var deltas []wire.DeltaEvent
 	var commits []reply
 	for ; t.narrated < len(res.Narration); t.narrated++ {
@@ -450,8 +465,11 @@ type loopRun struct {
 	steps    int
 	timeout  time.Duration
 	// fresh is a first segment, whose conversation may be titled after it.
-	fresh    bool
-	question string
+	fresh bool
+	// terminate are the tools whose success ends the loop: a brief's
+	// answer ([toolloop.Config.TerminateAfter]).
+	terminate []string
+	question  string
 	// deep is the deep-work run a resumed segment continues before its
 	// loop, the answer to the call it parked on being that run's end.
 	deep *parkedDeep
@@ -479,7 +497,7 @@ func (t *turn) run(r loopRun) {
 	ctx, span := tracing.Start(ctx, "assistant", "assistant.turn",
 		attribute.String("conversation_id", t.conversation.String()),
 		attribute.String("turn_id", t.id.String()),
-		attribute.String("prompt_version", PromptVersion))
+		attribute.String("prompt_version", t.promptVersion()))
 	defer span.End()
 
 	if r.deep != nil {
@@ -499,7 +517,8 @@ func (t *turn) run(r loopRun) {
 		Provider: r.provider, ProviderKey: r.key, Surface: surface, Messages: r.messages,
 		Host: t.svc.sessions, ServerTitle: "Dashboard Assistant",
 		MaxRounds: r.steps + 1, AllowSuspend: true, Budget: r.meter,
-		Fence: t.fence, OnProgress: t.onProgress, Progress: progress,
+		TerminateAfter: r.terminate,
+		Fence:          t.fence, OnProgress: t.onProgress, Progress: progress,
 		// STREAMED, so a round's prose reaches the drawer while it is
 		// written, through the CLI's token stream where it has one. A CLI
 		// that cannot stream never sends a fragment, and its round arrives
@@ -520,7 +539,7 @@ func (t *turn) run(r loopRun) {
 	if end.State == wire.TurnFailed {
 		tracing.Fail(span, err)
 	}
-	if r.fresh && end.State == wire.TurnCompleted {
+	if r.fresh && end.State == wire.TurnCompleted && !t.briefing() {
 		t.svc.title(ctx, t, r.question, t.answerText(), r.meter)
 	}
 }
@@ -613,10 +632,20 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 		return wire.TurnCompleted, nil
 	case errors.Is(err, errStopped) || errors.Is(cause, errStopped):
 		return wire.TurnStopped, nil
+	case errors.Is(err, errBriefInvalid):
+		return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorBriefInvalid,
+			Message: wire.ErrorBriefInvalid.Sentence(), Retryable: true}
 	case errors.Is(err, toolloop.ErrBudgetExhausted):
 		failure := &wire.ErrorEvent{Code: wire.ErrorBudgetExhausted,
 			Message: wire.ErrorBudgetExhausted.Sentence()}
 		var budget *toolloop.BudgetError
+		if errors.As(err, &budget) && budget.Scope == BriefBudgetScope {
+			// THE BRIEF'S OWN CAP, not a window: nothing the company or the
+			// person set is spent, and a narrower question answers.
+			return wire.TurnFailed, &wire.ErrorEvent{Code: wire.ErrorBriefInvalid,
+				Message: "The brief read more than a brief may. Ask about one thing on " +
+					"this page instead.", Retryable: true}
+		}
 		if errors.As(err, &budget) {
 			if budget.Scope == PersonBudgetScope {
 				failure.Message = "Your own assistant token budget for this window is spent."
@@ -737,7 +766,7 @@ func (t *turn) publishAudit(ctx context.Context, state wire.TurnState, code stri
 	data := types.NewAssistantTurnCompleted(types.AssistantTurnCompleted{
 		ActorName: t.by.Name, ActorKind: string(t.by.Kind), OperatorID: t.by.OperatorID,
 		ConversationID: t.conversation.String(), TurnID: t.id.String(), State: string(state),
-		ErrorCode: code, PromptVersion: PromptVersion, Model: model, ProviderKey: provider,
+		ErrorCode: code, PromptVersion: t.promptVersion(), Model: model, ProviderKey: provider,
 		DurationMS: duration.Milliseconds(), Steps: steps,
 	})
 	ev := events.NewFrom(data, tracing.TraceOf(ctx))

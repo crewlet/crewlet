@@ -135,7 +135,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	rig.Store.Seed(rig.Person.ID, rig.Conversation, c.Name)
 	accepted, err := rig.Svc.Start(ctx, assistant.TurnStart{Person: rig.Person,
 		Conversation: rig.Conversation, Key: Key(c.Name), Input: c.Question, Page: c.page,
-		Read: rig.Grant(c.Name)})
+		Read: rig.Grant(c.Name), Mode: c.Mode})
 	if err != nil {
 		return Trial{}, err
 	}
@@ -218,6 +218,7 @@ func judge(e Expect, frames []wire.Frame) Trial {
 	var t Trial
 	seen := map[string]bool{}
 	var answer, shown strings.Builder
+	var brief *wire.BriefCard
 	for _, f := range frames {
 		switch f.Kind {
 		case wire.EventStep:
@@ -228,6 +229,9 @@ func judge(e Expect, frames []wire.Frame) Trial {
 		case wire.EventCard:
 			if f.Card.Card.Proposal != nil {
 				t.Proposals++
+			}
+			if f.Card.Card.Brief != nil {
+				brief = f.Card.Card.Brief
 			}
 			// THE CARD AS ITS WIRE CARRIES IT, every title, cell, row and
 			// note, which is what the person was shown.
@@ -280,7 +284,31 @@ func judge(e Expect, frames []wire.Frame) Trial {
 			fail("shows: %q on no card", s)
 		}
 	}
+	if e.Brief != nil {
+		judgeBrief(*e.Brief, brief, fail)
+	}
 	return t
+}
+
+// judgeBrief holds a brief's card to what the case expects: the records its
+// rows cite, in order, and their tones.
+func judgeBrief(e ExpectBrief, card *wire.BriefCard, fail func(string, ...any)) {
+	if card == nil {
+		fail("brief: no brief card was shown")
+		return
+	}
+	cited := make([]string, 0, len(card.Needs))
+	tones := make([]wire.BriefTone, 0, len(card.Needs))
+	for _, n := range card.Needs {
+		cited = append(cited, n.Ref.ID)
+		tones = append(tones, n.Tone)
+	}
+	if !slices.Equal(cited, e.Needs) {
+		fail("brief.needs: %v, want %v", cited, e.Needs)
+	}
+	if len(e.Tones) > 0 && !slices.Equal(tones, e.Tones) {
+		fail("brief.tones: %v, want %v", tones, e.Tones)
+	}
 }
 
 // measured is a provider whose rounds are counted: how many, their tokens

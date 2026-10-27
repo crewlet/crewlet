@@ -7089,7 +7089,7 @@ written against; a version this engine does not speak is
 | `POST` | `/assistant/conversations` | `{protocol_version}` | `201 {conversation}`. An `Idempotency-Key`, when sent, names the conversation, so a retried create is one conversation |
 | `GET` | `/assistant/conversations/{id}` | | `200` the transcript: `{conversation, messages, steps, cards, open_turn, audit_reads}`. A card built from an app the caller no longer holds is replaced by a notice, and so is a message written after its turn read through one (each message records the apps its turn had read through); every step names its `turn_id` |
 | `DELETE` | `/assistant/conversations/{id}` | | `200 {outcome, position}`: the conversation is purged at once, a turn of it running here is stopped and every grant of its open turn is ended |
-| `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context, attachments?}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn. `attachments` names at most 4 files uploaded to this conversation, each once (`400 invalid_body` otherwise) |
+| `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context, mode?, attachments?}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn. `attachments` names at most 4 files uploaded to this conversation, each once (`400 invalid_body` otherwise). `mode` is `ask` (the default) or `brief` (see [Briefs](#briefs)), which needs a `page_context` and takes no `attachments` (`400 invalid_body` otherwise) |
 | `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, or `204` when the segment has ended and nothing follows `Last-Event-ID`, below |
 | `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, on whichever node of the fleet that is, a turn waiting on an approval is closed stopped and every proposal it waits on declined (under the request's `Idempotency-Key`, when sent), and a turn already over answers the state it ended in. `state` is what the turn truly reached: `stopped`, or what it came to first (`completed`, `waiting_for_approval`), and `running` while its runner has not yet recorded its end, which then arrives on the turn's stream |
 | `GET` | `/assistant/cards/{id}/export.csv` | | `200` the table card as CSV, from the snapshot the conversation stored, never a fresh read |
@@ -7118,6 +7118,14 @@ past 6 KiB, 8 levels or 160 parts, or an example its own schema refuses is
 recorded, its `args` are held to that schema, and one that does not match is
 the model's refused step, naming the members the screen takes, never a card.
 An action the screen declares no arguments for is never proposed.
+
+`selection` is the one record the person has open, or `null`: `{kind, id,
+noun?}`, the row a screen has open beside its list, else the peeked row, else
+the record a record's own screen is of (a task's page is that task, a seat's
+that agent). `noun` is what the person calls it where its kind does not say:
+`decision`, `update`, `task`, `project`, `agent`, `artifact`, `page`, `turn` or
+`run` (an ask open in the Inbox is a `decision` on its task); any other value is
+`400 invalid_body`. A brief is limited to the selection.
 
 `action_revisions` gives each accepted action its own revision: the screen and
 its path, and only the parts of the page the action depends on (its address,
@@ -7172,6 +7180,36 @@ conversation's turn waits on an approval is taken: that turn ends as
 `superseded`, and its proposals stay approvable until they expire. One approved
 later is applied and its card updated on that turn's stream, without the
 superseded turn's answer resuming.
+
+### Briefs
+
+A turn asked with `"mode": "brief"` answers with one `brief` card rather than
+prose: a brief of the page, or of the page context's `selection` where it names
+one. It is a turn like any other (admitted, metered, recorded and streamed the
+same way, the first answer of a conversation the person goes on asking in),
+with these differences:
+
+- It only reads: the model is offered the person's read tools and its answer
+  tool, no write, page action, link or deep work. Its reads draw no card and
+  its prose is never drawn; its steps are shown as any turn's.
+- The card is `{"type": "brief", "brief": {scope, summary, needs, recommended?,
+  follow_ups, as_of}}`. `scope` is `{screen, title, record?}`, `record` the
+  selection the brief was limited to. `needs` holds at most three rows,
+  `{ref: {kind, id}, text, detail?, tone, action?}`, and `[]` is "Nothing needs
+  you". `tone` is `warning`, `neutral` or `danger`. An `action` is `{kind,
+  label, link?, question?}`: `open` carries a `link` the engine built from its
+  link table (`href` a dashboard address), `ask` a `question` to ask in the same
+  conversation. `follow_ups` holds at most three questions. Lines are plain
+  text: a summary of at most 200 characters, a row's text and detail of at
+  most 120 each.
+- A row's `ref` is a `task`, `project`, `seat`, `page` or `artifact` that this
+  turn's own reads returned and whose own read, sent again as the person,
+  answers it; any other row is left out. `danger` is drawn only where that read
+  says a seat is stopped or its last turn failed, or a task is urgent; the
+  model's other dangers are drawn `warning`.
+- A brief the model could not write within one retry ends the turn with the
+  error code `brief_invalid`; one that read more than its own token cap ends
+  with the same code and a sentence saying so. Neither draws a card.
 
 ### The turn's stream
 

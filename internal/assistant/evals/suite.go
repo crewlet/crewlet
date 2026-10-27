@@ -29,9 +29,12 @@ type Case struct {
 	// validated as the turn route validates one.
 	Page     map[string]any `yaml:"page"`
 	Question string         `yaml:"question"`
-	Answers  []CaseAnswer   `yaml:"answers"`
-	Script   []CaseRound    `yaml:"script"`
-	Expect   Expect         `yaml:"expect"`
+	// Mode is what the question asks for, `ask` when left out; a `brief`
+	// needs the page.
+	Mode    wire.TurnMode `yaml:"mode"`
+	Answers []CaseAnswer  `yaml:"answers"`
+	Script  []CaseRound   `yaml:"script"`
+	Expect  Expect        `yaml:"expect"`
 
 	page *wire.PageContext
 }
@@ -80,12 +83,22 @@ type Expect struct {
 	// the person was shown, and what the model read of it, which the answer's
 	// own words cannot stand for.
 	Shows []string `yaml:"shows"`
+	// Brief is what a brief turn's card holds.
+	Brief *ExpectBrief `yaml:"brief"`
+}
+
+// ExpectBrief is what a brief's card must hold: the records its rows cite,
+// in order (none is "Nothing needs you"), and the tone each is drawn with,
+// where the case names them.
+type ExpectBrief struct {
+	Needs []string         `yaml:"needs"`
+	Tones []wire.BriefTone `yaml:"tones"`
 }
 
 // empty reports whether e expects nothing.
 func (e Expect) empty() bool {
 	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.State == "" &&
-		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0
+		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 && e.Brief == nil
 }
 
 // LoadSuite reads every `*.yaml` case in dir, in name order, each checked.
@@ -221,14 +234,33 @@ func (c Case) Validate() error {
 			}
 		}
 	}
+	switch {
+	case c.Mode != "" && !c.Mode.Valid():
+		fail("mode: %q is not a turn mode (%v)", c.Mode, wire.TurnModes)
+	case c.Mode == wire.TurnBrief && c.page == nil:
+		fail("mode: a brief needs the page it briefs")
+	case c.Expect.Brief != nil && c.Mode != wire.TurnBrief:
+		fail("expect.brief: only a brief turn writes a brief; set mode: brief")
+	}
+	if b := c.Expect.Brief; b != nil {
+		if len(b.Tones) > 0 && len(b.Tones) != len(b.Needs) {
+			fail("expect.brief.tones: %d tones for %d needs", len(b.Tones), len(b.Needs))
+		}
+		for i, tone := range b.Tones {
+			if !tone.Valid() {
+				fail("expect.brief.tones[%d]: %q is not a tone (%v)", i, tone, wire.BriefTones)
+			}
+		}
+	}
 	if c.Expect.State != "" && !c.Expect.State.Valid() {
 		fail("expect.state: %q is not a turn state (%v)", c.Expect.State, wire.TurnStates)
 	}
 	return errors.Join(errs...)
 }
 
-// known reports whether the catalogue has a tool named name.
+// known reports whether the catalogue has a tool named name, the brief's
+// answer among them.
 func known(name string) bool {
 	_, ok := catalog.Lookup(name)
-	return ok
+	return ok || name == catalog.AnswerBriefTool
 }

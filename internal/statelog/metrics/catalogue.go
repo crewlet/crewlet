@@ -812,6 +812,19 @@ func Catalogue() []Instrument {
 				"dispatcher breaking under the assistant.",
 		},
 		{
+			Name: AssistantBriefs, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Brief answers the assistant's model wrote, by what the engine did with " +
+				"each (`written`, `refused`). A `refused` answer is written again once; a " +
+				"climb in it is a model that cannot keep to the brief's shape.",
+		},
+		{
+			Name: AssistantBriefRowsDropped, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Rows of written briefs the engine left out because the record a row " +
+				"cited was not in what its turn read, or the person may not open it. A " +
+				"steady climb is a model citing records it did not read.",
+		},
+		{
 			Name: AssistantStreamsActive, Kind: KindGauge, Unit: UnitCount,
 			Shows: "Assistant live streams this node is serving. Each holds a " +
 				"connection and a subscription to one turn's frame log; a count that " +

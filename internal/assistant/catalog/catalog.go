@@ -155,10 +155,15 @@ const (
 	// coding CLI with its own tools, reaching Crewlet only through the
 	// person's other tools, bridged (ADR-0054). It sends nothing itself.
 	KindDeep Kind = "deep"
+	// KindBrief is a brief turn's answer ([BriefTool]): the engine checks it,
+	// resolves every record it cites as the person, and draws it as a brief
+	// card. It sends nothing of its own and writes nothing.
+	KindBrief Kind = "brief"
 )
 
-// Kinds are the six, in declaration order.
-var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs, KindDeep}
+// Kinds are the seven, in declaration order.
+var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs, KindDeep,
+	KindBrief}
 
 // Valid reports whether k is a kind this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }

@@ -121,4 +121,6 @@ const (
 	AssistantFirstOutputLatency = "crewlet.assistant.first_output.latency"
 	AssistantSteps              = "crewlet.assistant.steps"
 	AssistantStreamsActive      = "crewlet.assistant.streams.active"
+	AssistantBriefs             = "crewlet.assistant.briefs"
+	AssistantBriefRowsDropped   = "crewlet.assistant.brief.rows_dropped"
 )
