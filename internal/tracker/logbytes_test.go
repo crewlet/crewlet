@@ -109,7 +109,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"statelog.AnchorsPerTrimmedRecord, and the log keeps an anchor a repository and a " +
 		"name, never one a push or a read",
 	code.OpExpungeRequest: "a person's purge of a repository's unreachable objects: a command " +
-		"a person runs, and one asked while another is open is that one",
+		"a person runs, one record each, a later one widening the purge already open",
 }
 
 // codeLogUnwritten is every op of the code domain that no node of this build
