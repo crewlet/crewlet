@@ -424,6 +424,38 @@ describe("a person's note", () => {
     expect(within(run).getByText("note")).toBeTruthy();
   });
 
+  // A STEP A NEWER BUILD NAMES is the turn's read, placed on the run its record
+  // names — never on a round of the engine's loop, which a record with no
+  // boundary at all (a build before the field) still is.
+  test("a boundary this build does not know is never drawn or said as a round", async () => {
+    const read = (note_id: string, ms: number, fields: Record<string, unknown>) =>
+      event("agent_turn_steered", ms, {
+        note_id,
+        outcome: "delivered",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        note: `note ${note_id}`,
+        ...fields,
+      });
+    const events = [
+      ...PARKED,
+      read("new", 1_500, { boundary: "checkpoint", launch_id: "L1" }),
+      read("unplaced", 2_500, { boundary: "checkpoint" }),
+      read("old", 3_500, {}),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.boundary, m.spanId])).toEqual([
+      ["new", "unknown", "run:L1"],
+      ["unplaced", "unknown", ""],
+      ["old", "round", "turn-1|execute|1.r1"],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    expect(screen.getAllByText(/read by the turn in Execute/)).toHaveLength(2);
+    expect(screen.getAllByText(/read at round 1 of Execute/)).toHaveLength(1);
+  });
+
   // NAMED BY ITS HEADING, which a screen reader announces: an `aria-label` on
   // a plain `div` is ignored, so the list had no name and no landmark.
   test("the notes are a region a screen reader can find by name", async () => {
