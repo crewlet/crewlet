@@ -417,7 +417,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 		// made rather than for what it named.
 		msg, class := fmt.Sprintf("Unknown tool: %s", name), RefusalNotFound
 		if known {
-			msg = fmt.Sprintf("Tool %s is not active on this surface. Activate it first.", name)
+			msg = fmt.Sprintf("Tool %s is not active on this surface; activate it first.", name)
 			class = RefusalForbidden
 		}
 		s.record(Call{Name: name, Args: args.Map(), Output: msg, Failed: true, Cause: class})
@@ -472,7 +472,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	})
 	if err != nil {
 		tracing.Fail(span, err)
-		// The caller's own context ended — the turn is being torn down.
+		// The caller's own context ended: the turn is being torn down.
 		// Nothing is reported to the model and nothing is recorded: this
 		// call did not happen as far as the ledger is concerned.
 		return toolloop.ToolResult{}, err
