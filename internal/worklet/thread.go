@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -389,16 +390,16 @@ func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, er
 func (a openAsk) answerableBy(author, self string) error {
 	switch {
 	case a.asked == "":
-		return invalid("comment %s on task %s asked nobody a "+
+		return invalidSaying(caveat.NotAQuestion(), "comment %s on task %s asked nobody a "+
 			"question, so it cannot be answered — `answers` names an open ask",
 			a.id, a.task)
 	case author != "" && a.asked != author:
-		return forbidden("comment %s on task %s asked %s rather than %s, and "+
+		return forbiddenSaying(caveat.AskedSomebodyElse(a.asked), "comment %s on task %s asked %s rather than %s, and "+
 			"answering it would close somebody else's question",
 			a.id, a.task, a.asked,
 			author)
 	case a.removed:
-		return invalid("comment %s on task %s was removed",
+		return invalidSaying(caveat.QuestionRemoved(), "comment %s on task %s was removed",
 			a.id, a.task)
 	case self != "" && a.answeredBy == self:
 		return nil

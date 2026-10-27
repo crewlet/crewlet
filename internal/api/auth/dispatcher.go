@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/modelnote"
 )
 
 // HOW AN ASSISTANT TOOL CALL IS SENT: in process, through the very handler the
@@ -116,6 +117,10 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 
 	reqCtx, cancel := detached(ctx)
 	defer cancel()
+	// THE MODEL'S HALF OF A REFUSAL, heard in process only: the route
+	// answers the person's words, and tells the tool's sentence here for
+	// the model that made this request (internal/modelnote).
+	reqCtx, note := modelnote.Expect(reqCtx)
 	req, err := http.NewRequestWithContext(withInProcess(reqCtx), r.Method, u.String(),
 		bytes.NewReader(r.Body))
 	if err != nil {
@@ -150,7 +155,9 @@ func (d *Dispatcher) Do(ctx context.Context, g exec.Grant, r exec.Request) (exec
 	if err := serve(reqCtx, h, out, req); err != nil {
 		return exec.Response{}, err
 	}
-	return out.response(), nil
+	resp := out.response()
+	resp.ModelDetail = note.Said()
+	return resp, nil
 }
 
 // detached is a fresh context carrying only ctx's cancellation, deadline and

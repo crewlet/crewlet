@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -110,14 +111,22 @@ type refusal struct {
 	// see [forbiddenAs].
 	also error
 	err  error
+	// said is the refusal in a person's words, or nil where nobody has
+	// worded it for one yet ([invalidSaying], ADR-0060).
+	said *caveat.Said
 }
 
 func (e *refusal) Error() string { return "worklet: " + e.err.Error() }
 func (e *refusal) Unwrap() []error {
+	out := []error{e.mark}
 	if e.also != nil {
-		return []error{e.mark, e.also, e.err}
+		out = append(out, e.also)
 	}
-	return []error{e.mark, e.err}
+	out = append(out, e.err)
+	if e.said != nil {
+		out = append(out, e.said)
+	}
+	return out
 }
 func (e *refusal) sentence() string { return e.err.Error() }
 
@@ -141,6 +150,21 @@ func invalid(format string, args ...any) error {
 // [ErrForbidden]. The sentence names who may.
 func forbidden(format string, args ...any) error {
 	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...)}
+}
+
+// invalidSaying is [invalid] with the refusal in a person's words beside the
+// model's sentence: the tool answering it lifts the phrasing onto its result,
+// and the act route answers a person with it (ADR-0060).
+func invalidSaying(person caveat.Refusal, format string, args ...any) error {
+	return &refusal{mark: ErrInvalid, err: fmt.Errorf(format, args...),
+		said: &caveat.Said{Words: person}}
+}
+
+// forbiddenSaying is [forbidden] with the refusal in a person's words, as
+// [invalidSaying] is [invalid].
+func forbiddenSaying(person caveat.Refusal, format string, args ...any) error {
+	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...),
+		said: &caveat.Said{Words: person}}
 }
 
 // forbiddenAs is [forbidden] carrying a sentinel of its own BESIDE the class:
@@ -729,10 +753,10 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	scope = scope.capped()
 	at := w.Now()
 
-	// WARNINGS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
+	// CAVEATS ARE COLLECTED FROM INSIDE THE DECIDE, which runs again on
 	// every round: the LAST run is the one whose record was published, so
 	// the slice is replaced rather than appended to.
-	var fieldWarnings []string
+	var fieldCaveats []caveat.Caveat
 	result, err := w.published(ctx, statelog.Request{
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
@@ -902,7 +926,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 					return statelog.Decision{}, err
 				}
 				charged.Fields = &coerced
-				fieldWarnings = warned
+				fieldCaveats = warned
 			}
 			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS WRITE.
 			//
@@ -954,9 +978,9 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 		},
 	})
 	if patch.Body != nil {
-		result.Warnings = bodyWarnings(*patch.Body)
+		result.Caveats = bodyCaveats(*patch.Body)
 	}
-	result.Warnings = append(result.Warnings, fieldWarnings...)
+	result.Caveats = append(result.Caveats, fieldCaveats...)
 	return result, err
 }
 

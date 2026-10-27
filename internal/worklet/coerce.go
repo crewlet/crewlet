@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/caveat"
 )
 
 // The coercion table: what a field value may BE, decided once at the write.
@@ -89,9 +91,9 @@ type coerced struct {
 	// Value is the canonical form the record carries.
 	Value json.RawMessage
 
-	// Warnings are what the writer is TOLD and not refused for — today
-	// the one case the design names, a timestamp truncated to its date.
-	Warnings []string
+	// Caveats are what the writer is TOLD and not refused for: today the
+	// one case the design names, a timestamp truncated to its date.
+	Caveats []caveat.Caveat
 }
 
 // coerceFields runs the table over a whole field map.
@@ -105,7 +107,7 @@ type coerced struct {
 // a newer build — and refusing it here would make a rolling upgrade reject
 // writes it is supposed to carry through.
 func coerceFields(declared map[string]FieldDef, values map[string]json.RawMessage,
-	taskType string, refs fieldRefs) (map[string]json.RawMessage, []string, error) {
+	taskType string, refs fieldRefs) (map[string]json.RawMessage, []caveat.Caveat, error) {
 
 	if len(values) == 0 {
 		return values, nil, nil
@@ -116,7 +118,7 @@ func coerceFields(declared map[string]FieldDef, values map[string]json.RawMessag
 	}
 	bySlug, byName := fieldIndex(declared)
 	out := make(map[string]json.RawMessage, len(values))
-	var warnings []string
+	var warnings []caveat.Caveat
 	// SORTED, so a write that refuses names the same field on every node
 	// and a warning list is the same list twice. A map's order is not a
 	// property anything may depend on, and two nodes reporting different
@@ -156,7 +158,7 @@ func coerceFields(declared map[string]FieldDef, values map[string]json.RawMessag
 				"it once", field.Slug)
 		}
 		out[field.ID] = got.Value
-		warnings = append(warnings, got.Warnings...)
+		warnings = append(warnings, got.Caveats...)
 	}
 	_ = taskType
 	return out, warnings, nil
@@ -244,20 +246,20 @@ func coerceMany(field FieldDef, raw json.RawMessage, refs fieldRefs) (coerced, e
 			"maximum is %d", field.Slug, len(members), MaxFieldValueSeq)
 	}
 	out := make([]json.RawMessage, 0, len(members))
-	var warnings []string
+	var warnings []caveat.Caveat
 	for _, member := range members {
 		got, err := coerceOne(field, member, refs)
 		if err != nil {
 			return coerced{}, err
 		}
 		out = append(out, got.Value)
-		warnings = append(warnings, got.Warnings...)
+		warnings = append(warnings, got.Caveats...)
 	}
 	encoded, err := json.Marshal(out)
 	if err != nil {
 		return coerced{}, fmt.Errorf("worklet: re-encode field %q: %w", field.Slug, err)
 	}
-	return coerced{Value: encoded, Warnings: warnings}, nil
+	return coerced{Value: encoded, Caveats: warnings}, nil
 }
 
 // coerceOne is the table itself, one member at a time.
@@ -389,7 +391,7 @@ func coerceDate(field FieldDef, raw json.RawMessage, zone *time.Location) (coerc
 	}
 	text = strings.TrimSpace(text)
 	if !field.Config.Time {
-		day, warning, err := coerceDay(fmt.Sprintf("field %q", field.Slug), text, zone)
+		day, truncated, err := coerceDay(fmt.Sprintf("field %q", field.Slug), text, zone)
 		if err != nil {
 			return coerced{}, err
 		}
@@ -398,8 +400,9 @@ func coerceDate(field FieldDef, raw json.RawMessage, zone *time.Location) (coerc
 			return coerced{}, err
 		}
 		out := coerced{Value: encoded}
-		if warning != "" {
-			out.Warnings = []string{warning}
+		if truncated {
+			out.Caveats = []caveat.Caveat{caveat.FieldDateTruncated(field.Slug,
+				field.Name, text, day, zoneName(zone))}
 		}
 		return out, nil
 	}
@@ -422,9 +425,10 @@ func coerceDate(field FieldDef, raw json.RawMessage, zone *time.Location) (coerc
 }
 
 // coerceDay is THE rule for a value that holds a DAY: a calendar date is kept,
-// an instant is truncated to the date it falls on and the writer is told, and
-// anything else is refused naming both spellings. `what` names the value in
-// the sentence — `field "launch"`, `the target date`.
+// an instant is truncated to the date it falls on (truncated, which the caller
+// tells the writer about with its own [caveat]), and anything else is refused
+// naming both spellings. `what` names the value in the refusal: `field
+// "launch"`, `the target date`.
 //
 // # The date an instant falls on is the COMPANY'S (ADR-0018)
 //
@@ -435,22 +439,29 @@ func coerceDate(field FieldDef, raw json.RawMessage, zone *time.Location) (coerc
 // resolves in it, and a day read out of an instant is the same question.
 //
 // A nil zone is UTC, which is what a writer given no clock has always used.
-func coerceDay(what, text string, zone *time.Location) (day, warning string, err error) {
+func coerceDay(what, text string, zone *time.Location) (day string, truncated bool, err error) {
 	if zone == nil {
 		zone = time.UTC
 	}
 	text = strings.TrimSpace(text)
 	if at, perr := time.Parse(time.RFC3339, text); perr == nil {
-		day = at.In(zone).Format(time.DateOnly)
-		return day, fmt.Sprintf("%s holds a date and not a time, so %s was "+
-			"stored as %s, the day it falls on in %s", what, text, day, zone), nil
+		return at.In(zone).Format(time.DateOnly), true, nil
 	}
 	parsed, perr := time.Parse(time.DateOnly, text)
 	if perr != nil {
-		return "", "", invalid("%s is a date and %q is not one — "+
+		return "", false, invalid("%s is a date and %q is not one: "+
 			"write 2026-03-04, or 2026-03-04T09:00:00Z", what, clip(text))
 	}
-	return parsed.Format(time.DateOnly), "", nil
+	return parsed.Format(time.DateOnly), false, nil
+}
+
+// zoneName is the calendar a truncated day was read in, as a caveat names it:
+// [coerceDay]'s nil is UTC.
+func zoneName(zone *time.Location) string {
+	if zone == nil {
+		return time.UTC.String()
+	}
+	return zone.String()
 }
 
 // coerceOption resolves a slug, a name or an id to the option's ID.
@@ -729,7 +740,7 @@ const MaxRefusalQuote = MaxFieldValueBytes
 // folded into the captured patch would compound across attempts.
 func settleFields(ctx context.Context, tx *sql.Tx, project, taskType string,
 	values map[string]json.RawMessage, world FieldWorld, zone *time.Location) (
-	map[string]json.RawMessage, []string, error) {
+	map[string]json.RawMessage, []caveat.Caveat, error) {
 
 	if len(values) == 0 {
 		return values, nil, nil

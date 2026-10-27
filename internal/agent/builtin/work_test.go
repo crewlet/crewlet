@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -106,7 +107,7 @@ type fakeTracker struct {
 	projectAuthority []worklet.ProjectAuthority
 	// projectWarnings is what a policy write reports it was not refused
 	// for — a target date given as an instant, stored as its day.
-	projectWarnings []string
+	projectWarnings []caveat.Caveat
 
 	// declaredTypes and declaredFields are the catalogue as the WRITE
 	// tools composed it, which is the half of those verbs that lives in
@@ -117,7 +118,7 @@ type fakeTracker struct {
 	declaredFields [][]worklet.FieldDef
 	tagEdits       []worklet.TagEdit
 	tagAuthority   []worklet.TagAuthority
-	tagWarnings    []string
+	tagWarnings    []caveat.Caveat
 	ensured        [][]string
 	ensuredIn      []string
 	// ensureErr is what the INLINE declaration alone answers, so a case can
@@ -515,7 +516,7 @@ func (f *fakeTracker) WriteProject(_ context.Context, opID, key string,
 			Outcome: statelog.OutcomeApplied, Version: 3,
 			Position: statelog.Position{Stream: "S", Generation: 1, Seq: 13},
 		},
-		Warnings: f.projectWarnings,
+		Caveats: f.projectWarnings,
 	}, nil
 }
 
@@ -532,7 +533,7 @@ func (f *fakeTracker) WriteTags(_ context.Context, opID, project string,
 	return worklet.WriteResult{
 		Outcome: statelog.OutcomeApplied, Version: 4,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 14},
-		Warnings: f.tagWarnings,
+		Caveats:  f.tagWarnings,
 	}, nil
 }
 
@@ -569,7 +570,7 @@ func (f *fakeTracker) WriteFields(_ context.Context, opID string,
 }
 
 func (f *fakeTracker) EnsureTags(_ context.Context, opID, project string,
-	tags []string) ([]string, []string, error) {
+	tags []string) ([]string, []caveat.Caveat, error) {
 
 	if f.writeErr != nil {
 		return nil, nil, f.writeErr

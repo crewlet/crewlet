@@ -1258,13 +1258,20 @@ const (
 	// a doubled baseline. A brief of the page or its open record in the
 	// drawer, drawn by uilet 0.69.0's BriefCard, with the record each screen
 	// has open reported to the assistant, took it to 4574.6 KiB. 4575 KiB,
-	// which still refuses a doubled baseline. Sortable column heads with a
-	// default order, aligned columns, the filter pill in place of a tag of
-	// three spans, waits said as times and a link-only row opened by Enter,
-	// on uilet 0.70.0 (FilterPill, the grid's align and icon columns, the
-	// value trigger), took it to 4578.4 KiB. 4579 KiB, which still refuses a
-	// doubled baseline.
-	treeBudget = 4<<20 + 483<<10
+	// which still refuses a doubled baseline. Reading a landed write's
+	// caveats in a person's words off the act answer, each with whether the
+	// person must act, so the toast stays only when they must (ADR-0060),
+	// took it to 4576.5 KiB. 4577 KiB, which still refuses a doubled
+	// baseline. Telling a change nobody could confirm in the dashboard's
+	// own words, rather than the operation key's retry rule for a client
+	// (ADR-0060), took it to 4577.4 KiB. 4578 KiB, which still refuses a
+	// doubled baseline. Sortable column heads with a default order, aligned
+	// columns, the filter pill in place of a tag of three spans, waits said
+	// as times and a link-only row opened by Enter, on uilet 0.70.0
+	// (FilterPill, the grid's align and icon columns, the value trigger),
+	// took it to 4581.4 KiB. 4582 KiB, which still refuses a doubled
+	// baseline.
+	treeBudget = 4<<20 + 486<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

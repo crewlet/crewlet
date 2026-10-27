@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
@@ -221,6 +222,29 @@ func (l *logLines) named(t *testing.T, msg string) []map[string]any {
 	return out
 }
 
+// endLogWait bounds how long a suite waits for a line a turn writes AFTER its
+// stream has ended. A turn tells the stream it is done first, so a person is
+// answered at once, and only then publishes its audit record and logs its end
+// (`assistant_turn_ended`), on the same goroutine, within milliseconds. A
+// suite that read the log the moment the stream ended raced that write and
+// failed about one run in two under the race detector. Ten seconds is a turn
+// that never logged its end, not a slow runner.
+const endLogWait = 10 * time.Second
+
+// awaited is [logLines.named] once at least want lines with message msg have
+// been logged, or what has been logged when [endLogWait] runs out.
+func (l *logLines) awaited(t *testing.T, msg string, want int) []map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(endLogWait)
+	for {
+		got := l.named(t, msg)
+		if len(got) >= want || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // captured replaces the rig's logger with one the suite reads.
 func captured(f *assistanttest.Rig) *logLines {
 	l := &logLines{}
@@ -365,7 +389,8 @@ func TestABriefRefusedInTheTurnsLastRoundIsFinal(t *testing.T) {
 	if len(refused) != 1 || refused[0]["final"] != true {
 		t.Errorf("refusals logged %v, want one, final", refused)
 	}
-	ended := logs.named(t, "assistant_turn_ended")
+	// THE END IS LOGGED AFTER THE STREAM HEARS IT ([endLogWait]).
+	ended := logs.awaited(t, "assistant_turn_ended", 1)
 	if len(ended) != 1 || ended[0]["error_code"] != string(wire.ErrorBriefInvalid) {
 		t.Fatalf("turn ends logged %v, want one brief_invalid", ended)
 	}

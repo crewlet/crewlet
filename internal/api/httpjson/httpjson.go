@@ -1132,12 +1132,15 @@ var codes = map[Code]string{
 	CodeResetSpent: "This password reset link is no longer valid. Ask an " +
 		"admin for a new one.",
 
+	// THE TWO A REFUSAL'S DETAIL MOST OFTEN NAMES, and each stands alone:
+	// a refusal nobody worded for a person carries no detail, and this
+	// sentence is the whole of what that person reads (ADR-0060).
 	CodeForbidden: "That change is not yours to make here, and nothing was " +
-		"written. The detail says whose it is.",
+		"written. Ask whoever owns it.",
 	CodeStale: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
-	CodeInvalid: "That change was refused and nothing was written. The detail " +
-		"names what to send differently.",
+	CodeInvalid: "That change was refused, and nothing was written. Check " +
+		"what was entered, then try again.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
 	CodeConflict: "This collided with another change landing at the same " +

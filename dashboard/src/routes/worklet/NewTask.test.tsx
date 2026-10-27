@@ -837,7 +837,9 @@ test("an empty assignee lands where the engine will file it", async () => {
 // AND AN APPLIED CREATE THAT CAME BACK WITH A CAVEAT SAYS IT: "Filed" over a
 // task the engine sent to triage instead of the default assignee is the
 // opposite of what happened.
-test("an applied create's warnings are said, not dropped", async () => {
+// AN APPLIED CREATE'S CAVEATS ARE SAID, in the person's words the engine
+// answers them in, and the receipt's model-worded `warnings` never are.
+test("an applied create's caveats are said, not dropped", async () => {
   reply = {
     status: 200,
     body: {
@@ -847,8 +849,15 @@ test("an applied create's warnings are said, not dropped", async () => {
       receipt: {
         item: "ENG-9",
         key: "ENG-9",
-        warnings: ['ENG\'s default assignee "ana" is not a seat on the org chart any more.'],
+        warnings: ["The project lead sets another with write_project `default_assignee`."],
       },
+      caveats: [
+        {
+          code: "default_assignee_gone",
+          message: "ENG's default assignee, @ana, is no longer on the org chart.",
+          action: "required",
+        },
+      ],
     },
   };
   mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
@@ -858,7 +867,6 @@ test("an applied create's warnings are said, not dropped", async () => {
     fireEvent.click(screen.getByRole("button", { name: "Create task" }));
   });
   await settle();
-  expect(
-    (await screen.findAllByText(/is not a seat on the org chart any more/)).length,
-  ).toBeGreaterThan(0);
+  expect((await screen.findAllByText(/is no longer on the org chart/)).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/write_project/)).toBeNull();
 });

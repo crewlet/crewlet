@@ -501,7 +501,19 @@ describe("moving a card", () => {
         tool: "place_work_item",
         outcome: "applied",
         position: "CREWLET_TRACKER_LOG@1:99",
-        receipt: { placed: false, unplaced: "ENG-1 is in progress, but not above ENG-3." },
+        // THE MISSED PLACE IS A CAVEAT in a person's words (ADR-0060); a
+        // receipt field carrying the model's sentence is never drawn.
+        receipt: {
+          placed: false,
+          unplaced: "place_work_item could not land the order: call get_work_item again.",
+        },
+        caveats: [
+          {
+            code: "lane_changed_not_placed",
+            message: "The card moved lanes, but not to the position it was dropped at.",
+            action: "none",
+          },
+        ],
       },
     };
     const { rerender } = mountBoard();
@@ -510,7 +522,10 @@ describe("moving a card", () => {
     await settle();
     expect(laneOf("ENG-1")).toBe("In progress");
     expect(cardOf("ENG-1").getAttribute("data-pending")).toBeNull();
-    expect(screen.getByText("ENG-1 is in progress, but not above ENG-3.")).toBeTruthy();
+    expect(
+      screen.getAllByText("The card moved lanes, but not to the position it was dropped at."),
+    ).toHaveLength(1);
+    expect(screen.queryByText(/place_work_item/)).toBeNull();
     // AND THE RE-READ IS WHAT DRAWS IT FROM THEN ON, at the place the engine
     // kept: the overlay goes with the first new answer.
     const reread = lanes();
