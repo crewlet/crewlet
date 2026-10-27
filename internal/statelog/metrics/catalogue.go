@@ -1213,15 +1213,18 @@ func Catalogue() []Instrument {
 				"directory because packs left it — a compaction retired them, " +
 				"or a full read found pack files no row names — built by hard " +
 				"links of every pack still live beside the old directory, " +
-				"which the requests reading it keep until they end; by " +
-				"whether the next one kept the commit-graph. `kept`: every " +
-				"pack that left was a compaction's, which drops no commit, so " +
-				"the graph came along and the multi-pack index and its bitmap " +
-				"alone are written again. `dropped`: a pack left that no " +
-				"retirement accounts for — the code log recreated or restored " +
-				"under the node, or a full read that could not say which were " +
-				"retired — or the copy held no graph: the background indexing " +
-				"writes it again at once. `failed`: the swap could not be " +
+				"which the requests reading it keep until they end; by what " +
+				"became of the commit-graph. `kept`: every pack that left " +
+				"was a compaction's, which drops no commit, so the graph " +
+				"came along and the multi-pack index and its bitmap alone are " +
+				"written again. `dropped`: the copy held a graph and a pack " +
+				"left that no retirement accounts for — the code log " +
+				"recreated or restored under the node, or a full read that " +
+				"could not say which were retired — so the graph went with " +
+				"it, and the background indexing writes it again at once. " +
+				"`none`: the copy held no graph to keep — not written yet, " +
+				"or past what the node's memory holds for the repository — " +
+				"so nothing was lost. `failed`: the swap could not be " +
 				"made — a link refused, the disk full — and the old directory " +
 				"goes on serving, every live pack in it, until the " +
 				"repository's next sync tries again (`code_cache_swap_failed` " +

@@ -139,11 +139,12 @@ func swapLine(t *testing.T, w *syncWorld) map[string]any {
 // one, which a reader still holds, keeps every file it had and the output the
 // round installed, so every pack the reader's refs may lead git to stays
 // whole under it; its last release moves it into trash/. The swap is logged
-// and counted once, the copy holding no commit-graph to keep.
+// and counted once as one with no commit-graph to keep — none, never a graph
+// dropped, since the copy held none.
 //
 // Mutations: link the leaving packs into the next incarnation too (the next
 // holds them); take them out of the old one in place (the reader's packs are
-// gone).
+// gone); count a copy with no graph as one whose graph was dropped (swapped).
 func TestASwapKeepsEveryPackAReaderHolds(t *testing.T) {
 	t.Parallel()
 	k := newCompactable(t, false)
@@ -188,13 +189,15 @@ func TestASwapKeepsEveryPackAReaderHolds(t *testing.T) {
 
 	line := swapLine(t, w)
 	if line["from"] != float64(from) || line["to"] != float64(to) || line["packs_kept"] != float64(2) ||
-		line["packs_dropped"] != float64(2) || line["graph"] != "dropped" {
+		line["packs_dropped"] != float64(2) || line["graph"] != "none" {
 		t.Errorf("code_cache_swapped = %v, want from %d to %d, two packs kept and two dropped, no graph", line,
 			from, to)
 	}
-	if got := counter(w.rec, metrics.CodeCacheSwaps, "graph", "dropped"); got != 1 {
-		t.Errorf("%s{graph=dropped} = %d, want the one swap of a copy that held no graph", metrics.CodeCacheSwaps,
-			got)
+	if got := counter(w.rec, metrics.CodeCacheSwaps, "graph", "none"); got != 1 {
+		t.Errorf("%s{graph=none} = %d, want the one swap of a copy that held no graph", metrics.CodeCacheSwaps, got)
+	}
+	if got := counterOf(w.rec, metrics.CodeCacheSwaps, nil); got != 1 {
+		t.Errorf("%s = %d, want the one swap", metrics.CodeCacheSwaps, got)
 	}
 	if got := cache.Leaving(c, repo); len(got) != 0 {
 		t.Errorf("after the swap the copy has %v leaving, want nothing", got)
@@ -280,10 +283,12 @@ func TestAMergeCompactionKeepsTheCommitGraph(t *testing.T) {
 // names commits the copy no longer holds: the full round that finds it leaves
 // the copy a reader holds by the swap, and the next incarnation holds neither
 // the graph nor the multi-pack-index, while the old one keeps both and the
-// stray for its reader.
+// stray for its reader. Logged and counted as a graph dropped: one the copy
+// held, written again.
 //
-// Mutation: read every stray as a retirement (packStrays), and the next
-// incarnation keeps a graph naming a commit that is gone.
+// Mutations: read every stray as a retirement (packStrays), and the next
+// incarnation keeps a graph naming a commit that is gone; count a swap that
+// links no graph as one of a copy that held none (swapped).
 func TestAStrayNoRetirementAccountsForDropsTheGraph(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -323,6 +328,52 @@ func TestAStrayNoRetirementAccountsForDropsTheGraph(t *testing.T) {
 	}
 	if line := swapLine(t, w); line["graph"] != "dropped" || line["packs_dropped"] != float64(1) {
 		t.Errorf("code_cache_swapped = %v, want the stray dropped and the graph with it", line)
+	}
+	if got := counter(w.rec, metrics.CodeCacheSwaps, "graph", "dropped"); got != 1 {
+		t.Errorf("%s{graph=dropped} = %d, want 1", metrics.CodeCacheSwaps, got)
+	}
+	if got, want := w.image(t, c, repo), w.rebuilt(t, repo); got != want {
+		t.Errorf("the next incarnation is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A COMPACTION A COPY MISSES UNTIL ITS RETIREMENTS ARE SWEPT DROPS THE GRAPH:
+// the copy of an idle repository — maintained, its commit-graph written, and
+// read by nobody — does not sync across a compaction before the
+// code-retention duty sweeps the compaction's retirements. Its next round,
+// below the sweep, reads it whole, and that answer serves none of them, so
+// the packs the compaction took out are packs no retirement accounts for:
+// they leave the copy a reader holds by the swap, the graph and the
+// multi-pack-index with them, while the old copy keeps everything for its
+// reader. Logged and counted as a graph dropped — the copy held one, and the
+// maintainer writes it again — never as one of a copy with none to keep.
+//
+// Mutations: read the strays of a full answer below the sweep as
+// retirements (packStrays) — the next incarnation keeps the graph; count a
+// swap that links no graph as one of a copy with none (swapped) — the swap
+// is counted none.
+func TestACompactionACopyMissesUntilItsRetirementsAreSweptDropsTheGraph(t *testing.T) {
+	t.Parallel()
+	k := newCompactable(t, true)
+	w, c, repo := k.w, k.c, k.repo
+	out := k.compact(t)
+	w.log.sweepRetired(repo, w.log.head())
+	s := w.sync(t, c, repo)
+	if s.Dir == k.held.Dir {
+		t.Fatalf("the round answered the incarnation a reader holds, %s: no swap", s.Dir)
+	}
+	if got, want := packFiles(t, s.Dir), bundleNames(out, k.rows[2]); !slices.Equal(got, want) {
+		t.Errorf("the next incarnation holds %v, want the output and the pack no compaction named: %v", got, want)
+	}
+	if statOK(t, filepath.Join(s.Dir, graphRel)) || statOK(t, filepath.Join(s.Dir, midxRel)) {
+		t.Error("the next incarnation holds a commit-graph or a multi-pack-index over packs no retirement " +
+			"accounts for")
+	}
+	if !statOK(t, filepath.Join(k.held.Dir, graphRel)) {
+		t.Error("the incarnation a reader holds lost its commit-graph")
+	}
+	if line := swapLine(t, w); line["graph"] != "dropped" || line["packs_dropped"] != float64(2) {
+		t.Errorf("code_cache_swapped = %v, want the two packs dropped and the graph with them", line)
 	}
 	if got := counter(w.rec, metrics.CodeCacheSwaps, "graph", "dropped"); got != 1 {
 		t.Errorf("%s{graph=dropped} = %d, want 1", metrics.CodeCacheSwaps, got)
@@ -999,8 +1050,9 @@ func TestAFailedSwapServesTheOldIncarnationAndIsRetried(t *testing.T) {
 			if got, want := opened[k.rows[2].Object]-before, map[bool]int{false: 0, true: 1}[tc.refetch]; got != want {
 				t.Errorf("the round that swapped downloaded the third pack %d times, want %d", got, want)
 			}
-			if got := counter(w.rec, metrics.CodeCacheSwaps, "graph", "dropped"); got != 1 {
-				t.Errorf("%s{graph=dropped} = %d, want the swap tried again", metrics.CodeCacheSwaps, got)
+			if got := counter(w.rec, metrics.CodeCacheSwaps, "graph", "none"); got != 1 {
+				t.Errorf("%s{graph=none} = %d, want the swap tried again, of a copy with no graph",
+					metrics.CodeCacheSwaps, got)
 			}
 		})
 	}

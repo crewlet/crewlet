@@ -119,11 +119,14 @@ import (
 // and its fault point (codefault.SyncSwapBeforeRename) is the moment before
 // it.
 
-// swapGraph is the graph attribute of crewlet.code.cache.swaps: whether the
-// next incarnation kept the commit-graph, or the swap failed.
+// swapGraph is the graph attribute of crewlet.code.cache.swaps: what became
+// of the commit-graph of the copy a swap left — kept by the next
+// incarnation, dropped, or none there to keep (swapped) — or that the swap
+// failed.
 const (
 	swapGraphKept    = "kept"
 	swapGraphDropped = "dropped"
+	swapGraphNone    = "none"
 	swapFailed       = "failed"
 )
 
@@ -269,10 +272,14 @@ type swapping struct {
 	linked  map[string]bool
 	// events is every event that took a pack file out, refsBytes the
 	// packed-refs it linked, and shared the bytes the two incarnations hold
-	// alike: the live packs' and the packed-refs'.
+	// alike: the live packs' and the packed-refs'. heldGraph: the copy the
+	// swap leaves held a commit-graph once nothing could write one in it —
+	// what tells a swap that dropped the graph from one of a copy with none
+	// to keep (swapped).
 	events    map[Event]bool
 	refsBytes int64
 	shared    int64
+	heldGraph bool
 }
 
 // keepsPack reports whether the next incarnation holds the pack checksum cs.
@@ -398,6 +405,10 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	// file is what the swap linked of it.
 	s.step = stepDerived
 	s.stopRun()
+	if rel := c.image.mainRel(DerivedGraph); rel != "" {
+		_, gerr := os.Lstat(filepath.Join(inc.dir, rel))
+		s.heldGraph = gerr == nil
+	}
 	if err = s.carryDerived(); err != nil {
 		return nil, err
 	}
@@ -759,13 +770,21 @@ func (s *swapping) promote() {
 }
 
 // swapped records a swap made: code_cache_swapped and
-// crewlet.code.cache.swaps, by whether the next incarnation kept the
-// commit-graph — dropped where a stray no retirement accounts for took it,
-// or where the copy held none.
+// crewlet.code.cache.swaps, by what became of the commit-graph — kept, where
+// the next incarnation linked it; dropped, where the copy held one and a
+// stray no retirement accounts for took it, which the maintainer writes
+// again at once; none, where the copy held none to keep, its graph not yet
+// written or past what the node's memory holds, so nothing was lost and
+// nothing is written again. Counted as dropped, a node too small for a large
+// repository's graph counted every compaction of it among the drops that
+// say whole reads cannot see their retirements.
 func (c *Cache) swapped(s *swapping, next *incarnation, took time.Duration) {
-	graph := swapGraphDropped
-	if rel := c.image.mainRel(DerivedGraph); rel != "" && s.linked[rel] {
+	graph := swapGraphNone
+	switch rel := c.image.mainRel(DerivedGraph); {
+	case rel != "" && s.linked[rel]:
 		graph = swapGraphKept
+	case s.heldGraph:
+		graph = swapGraphDropped
 	}
 	dropped := 0
 	s.e.mu.Lock()

@@ -772,7 +772,8 @@ still holding every pack the rows name, and the repository's next sync tries
 again; one a crash interrupts leaves the old directory in place, and the
 node's first sync of the repository after its restart finishes the job,
 keeping the graph. `crewlet.code.cache.swaps` counts every move by whether
-the commit-graph came along, and every one that failed.
+the commit-graph came along, was dropped or was never there to keep, and
+every one that failed.
 
 **What the cache writes beside the packs.** Four kinds of file in a
 repository's cache are the node's own work rather than the rows': the
@@ -2333,7 +2334,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_rebuild_refused` | `WARN` | A rebuild was asked for and refused: one that did not end the failure ran too recently, or the copy holds exactly what such a rebuild read. The damage is then in the object store or the rows, not in this node's copy. At most once every ten minutes a repository. |
 | `code_cache_rebuild_seeded` | `INFO` | A rebuild linked the `packs` found whole into the new copy, of the `whole` found so — by `crewlet code verify` asked to repair, or by the scrub a request's repair ran before it — so it downloads only the rest. |
 | `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead. The disk refusing a hard link. |
-| `code_cache_swapped` | `INFO` | Packs left a repository's copy — a compaction retired them, or a whole read found pack files no row names — and the node moved the copy into its next directory ([When packs leave a copy](#the-cache-on-a-git-node)): `from` and `to` the two directories' numbers, `packs_kept` the packs the rows still name, hard-linked, `packs_dropped` those that left, `graph` whether the commit-graph came along (`kept`, a compaction's) or not (`dropped`), and `took`. Requests reading the old directory finish there. |
+| `code_cache_swapped` | `INFO` | Packs left a repository's copy — a compaction retired them, or a whole read found pack files no row names — and the node moved the copy into its next directory ([When packs leave a copy](#the-cache-on-a-git-node)): `from` and `to` the two directories' numbers, `packs_kept` the packs the rows still name, hard-linked, `packs_dropped` those that left, `graph` whether the commit-graph came along (`kept`, a compaction's), went with a pack no compaction retired (`dropped`, written again at once) or was never there to keep (`none`), and `took`. Requests reading the old directory finish there. |
 | `code_cache_swap_failed` | `WARN` | Packs left a repository's copy and the node could not build its next directory (`step`, `error`; `incarnation` the copy's number): the copy keeps serving, every pack the rows name still in it, and the repository's next sync tries again. Recurring, the cache volume is refusing links or is full. |
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
 | `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph`, or `state` when its record could not be written). The repository is served without the index — slower, never wrong — and the next run waits out the interval. |

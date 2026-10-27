@@ -57,11 +57,13 @@ import (
 //     an earlier state's rows;
 //   - a COMPACTION — two or three live packs merged into one by git's own
 //     merge and a record retiring them — which the copy's next round takes
-//     out of it by a swap (swap.go); the retirements swept from the rows, so
-//     a copy below them reads them as packs no retirement accounts for; a
-//     swap killed at its rename, which the copy's next round tries again; and
-//     that kill followed by a restart, the next boot reading what was leaving
-//     from the state's floor;
+//     out of it by a swap (swap.go); one an idle, maintained copy misses
+//     until its retirements are swept, so its next round takes the packs out
+//     as no retirement accounts for, the graph with them; the retirements
+//     swept from the rows, so a copy below them reads them as packs no
+//     retirement accounts for; a swap killed at its rename, which the copy's
+//     next round tries again; and that kill followed by a restart, the next
+//     boot reading what was leaving from the state's floor;
 //   - DAMAGE A PREVIOUS PROCESS LEFT: a byte of an index file — a pack's .idx
 //     or .rev, a multi-pack-index, its bitmap, the commit-graph — flipped in
 //     place, its identity kept, and the same directory booted again; and a
@@ -99,7 +101,11 @@ import (
 // drawn, no seed maintained a repository over its own index. A rebuild is
 // drawn at a weight of five: at three, once the compaction's four operations
 // were drawn beside the rest, no seed's rebuild met a copy a repair had just
-// written, so none answered a request from the copy as it stands.
+// written, so none answered a request from the copy as it stands. A
+// compaction a copy misses is an operation of its own rather than a
+// compaction and a sweep meeting by chance: drawn apart, they met with no
+// round of the repository between them over a copy holding its graph on no
+// seed, so none reached a swap that dropped a graph the copy held.
 // interleavingOutcomes holds the seeds to reaching every outcome; sixteen
 // reach them all, in about ten seconds under the race detector, the
 // seeds in parallel. Forty steps a seed, a check every ten:
@@ -138,6 +144,7 @@ var interleavingOps = []struct {
 	{"scrub", 2, (*interleaving).scrub},
 	{"compact", 6, (*interleaving).compact},
 	{"sweep retirements", 2, (*interleaving).sweepRetirements},
+	{"a compaction a copy missed", 2, (*interleaving).missedCompaction},
 	{"a swap killed", 3, (*interleaving).killedSwap},
 	{"a crash mid-swap", 2, (*interleaving).crashMidSwap},
 }
@@ -159,7 +166,8 @@ var interleavingOutcomes = []string{
 	"a report queued a repair round", "a stale report", "a deferred report", "a report in its scrub's cooldown",
 	"a crash made the scrub due", "scrub", "a scrub found damage", "a pack body found damaged",
 	"compact", "sweep retirements", "a swap with the graph kept", "a swap with the graph dropped",
-	"a swap killed at its rename", "a failed swap retried by the next round", "a crash mid-swap",
+	"a swap with no graph to keep", "a swap killed at its rename", "a failed swap retried by the next round",
+	"a crash mid-swap",
 }
 
 // errKilled is what a killed sync's fault point answers.
@@ -685,6 +693,20 @@ func (in *interleaving) sweepRetirements(repo string) string {
 	return fmt.Sprintf("%d swept", n)
 }
 
+// missedCompaction is a day on an idle repository's copy: the maintainer
+// indexes it — its commit-graph first — and then a compaction retires some
+// of its packs and the code-retention duty sweeps the retirements before the
+// copy's next round, which reads it whole below the sweep: its answer serves
+// none of them, so the packs the compaction took out leave the copy as packs
+// no retirement accounts for, by a swap that takes the graph with them. One
+// operation rather than three: a compaction and a sweep, each drawn on its
+// own, all but never met with no round of the repository between them over a
+// copy holding its graph, and no seed of sixteen reached a swap that dropped
+// a graph the copy held until this was drawn.
+func (in *interleaving) missedCompaction(repo string) string {
+	return strings.Join([]string{in.maintain(repo), in.compact(repo), in.sweepRetirements(repo)}, "; ")
+}
+
 // killedSwap is a compaction, then a linearizable sync whose swap fails at
 // the point before its rename: the round answers from the copy it applied
 // to, which keeps every pack, and what is leaving waits for the next round
@@ -723,15 +745,18 @@ func (in *interleaving) crashMidSwap(repo string) string {
 }
 
 // noteSwaps records the outcomes the rounds' swaps reached: a swap that kept
-// the commit-graph, one that dropped it, and a killed swap TRIED AGAIN — a
-// later swap of the same repository from the incarnation the killed one left
-// serving, with nothing leaving it after.
+// the commit-graph, one that dropped it, one of a copy that held none, and a
+// killed swap TRIED AGAIN — a later swap of the same repository from the
+// incarnation the killed one left serving, with nothing leaving it after.
 func (in *interleaving) noteSwaps() {
 	if counter(in.w.rec, metrics.CodeCacheSwaps, "graph", "kept") > 0 {
 		in.saw("a swap with the graph kept")
 	}
 	if counter(in.w.rec, metrics.CodeCacheSwaps, "graph", "dropped") > 0 {
 		in.saw("a swap with the graph dropped")
+	}
+	if counter(in.w.rec, metrics.CodeCacheSwaps, "graph", "none") > 0 {
+		in.saw("a swap with no graph to keep")
 	}
 	if len(in.killed) == 0 {
 		return
