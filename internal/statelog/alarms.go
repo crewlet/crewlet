@@ -140,15 +140,39 @@ const (
 	ObjectsHeadroomAlarmFraction = 2 * HeadroomAlarmFraction
 
 	// WALAlarmBytes is a write-ahead log large enough to say a checkpoint
-	// is not happening. A gibibyte: normal operation keeps it in the tens
-	// of megabytes, and the failure it names — a reader holding a snapshot
-	// open for ever — has no other symptom until the volume fills.
+	// is not happening. A gibibyte: between checkpoints the driver's
+	// 1 000-frame autocheckpoint keeps it at a few megabytes, normal
+	// operation in the tens, and the failure it names — a reader holding a
+	// snapshot open for ever — has no other symptom until the volume fills.
+	//
+	// A COPY HOLDS IT TOO, for the copy's whole run (store.DB.Copies): a
+	// backup's or a donor snapshot's copy stops every checkpoint at its
+	// moment, so the log grows by what the node writes while the copy
+	// runs, and the run is the file's size over the rate the copy reads it
+	// — about seven minutes for the reference company's year-five estate of
+	// ≈ 44 GB at the ~104 MB/s measured on the pinned driver, so a
+	// gibibyte is about 2.5 MB/s of log written through one. The bound
+	// stays where it says a checkpoint is wrong rather than rising to clear
+	// every copy: a gibibyte of log takes the same room from the volume
+	// whatever holds it, and the reading names the copy holding it
+	// ([Reading.WALCopy]), so the alarm says which of the two it is and
+	// that a copy's end folds the log back in.
 	WALAlarmBytes = 1 << 30
 
 	// VolumeHeadroomFactor is how much free space a node's volume must
 	// have relative to its store, expressed as a multiple. A restore, a
 	// vacuum and a snapshot each need room for a second copy, so 1.1 is
 	// the point at which the next routine operation would fail.
+	//
+	// THE LOG A COPY HOLDS BACK IS ADDED to it ([Reading.CopyHeldBytes]),
+	// not left to the tenth: a backup's or a snapshot's copy stops every
+	// checkpoint at its moment for its run, so the live file's log grows
+	// on the same volume by what the node writes meanwhile, and a tenth of
+	// the store covers that only while the node writes its log at under a
+	// tenth of the rate the copy reads the file — about 10 MB/s at the
+	// ~104 MB/s measured on the pinned driver. What a copy holds back is
+	// measured by the last one; before any copy has run, the tenth stands
+	// for it.
 	VolumeHeadroomFactor = 1.1
 
 	// PoolWaitAlarm is how long a caller may queue for a database
@@ -508,10 +532,26 @@ type Reading struct {
 	// FreeBytes and StoreBytes are one volume's free space and what this
 	// node's databases occupy ON IT, and StoreVolume the directory that
 	// names it: of the volumes the databases are on — the two files need
-	// not share one — the one with the least room for a second copy of what
-	// it holds. WALBytes is the larger write-ahead log's size.
-	FreeBytes, StoreBytes, WALBytes int64
-	StoreVolume                     string
+	// not share one — the one with the least room for the next copy of what
+	// it holds. CopyHeldBytes is the write-ahead log that copy is expected
+	// to hold back there while it runs, as each file's last copy measured
+	// it (store.DB.CopyHoldsBack): a copy stops every checkpoint at its
+	// moment for its run, so the next one needs room for its log beside
+	// itself — zero where no copy has measured it yet.
+	FreeBytes, StoreBytes, CopyHeldBytes int64
+	StoreVolume                          string
+
+	// WALBytes is the larger write-ahead log's size and WALFile the
+	// database it is beside. WALCopy is the copy holding that log now — the
+	// part file it writes, and how many more hold the log beside it — and
+	// WALCopyFor how long it has, empty and zero when no copy does: a copy
+	// holds its file's log for its whole run (store.DB.Copies), so a large
+	// log a copy holds is one the copy's end folds back in, where one
+	// nothing holds is a checkpoint that is not happening.
+	WALBytes   int64
+	WALFile    string
+	WALCopy    string
+	WALCopyFor time.Duration
 
 	// StoreVolumeUnmeasured says which database, or which volume, could not
 	// be measured and why — empty when every one was. It is the alarm, not
@@ -1143,24 +1183,44 @@ var table = []rule{
 					"shows the next restore, vacuum or snapshot has room for a second "+
 					"copy", r.StoreVolumeUnmeasured), true
 			}
-			return fmt.Sprintf("%s free on the volume holding %s against %s of store "+
-					"there, and the next restore, vacuum or snapshot needs room for a "+
-					"second copy", bytesHuman(r.FreeBytes), r.StoreVolume,
-					bytesHuman(r.StoreBytes)),
-				r.StoreBytes > 0 && float64(r.FreeBytes) < VolumeHeadroomFactor*float64(r.StoreBytes)
+			detail := fmt.Sprintf("%s free on the volume holding %s against %s of store "+
+				"there, and the next restore, vacuum or snapshot needs room for a "+
+				"second copy", bytesHuman(r.FreeBytes), r.StoreVolume,
+				bytesHuman(r.StoreBytes))
+			if r.CopyHeldBytes > 0 {
+				detail += fmt.Sprintf(" and for the %s of write-ahead log a copy holds "+
+					"back there while it runs", bytesHuman(r.CopyHeldBytes))
+			}
+			return detail, r.StoreBytes > 0 && float64(r.FreeBytes) <
+				VolumeHeadroomFactor*float64(r.StoreBytes)+float64(r.CopyHeldBytes)
 		},
 		remedy: "Add space to the volume the alarm names. Where it could not be " +
 			"measured, fix what stops it being read. A backup, a vacuum and a peer's " +
-			"join all need the room, and each fails partway through without it.",
+			"join all need the room, and each fails partway through without it; a " +
+			"backup's or a snapshot's copy also needs room there for the write-ahead " +
+			"log it holds back while it runs, which the alarm counts.",
 	},
 	{
 		kind: KindWALLarge,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("the write-ahead log is %s", bytesHuman(r.WALBytes)),
-				r.WALBytes > WALAlarmBytes
+			detail := fmt.Sprintf("the write-ahead log is %s", bytesHuman(r.WALBytes))
+			if r.WALFile != "" {
+				detail = fmt.Sprintf("the write-ahead log beside %s is %s", r.WALFile,
+					bytesHuman(r.WALBytes))
+			}
+			if r.WALCopy != "" {
+				detail += fmt.Sprintf(", held there for %s by a copy to %s, which "+
+					"folds it back in when it ends", spoken(r.WALCopyFor), r.WALCopy)
+			}
+			return detail, r.WALBytes > WALAlarmBytes
 		},
-		remedy: "A checkpoint is not happening, which usually means a reader is " +
-			"holding a snapshot open. It has no other symptom until the volume fills.",
+		remedy: "A checkpoint is not happening past what something still reads. When " +
+			"the alarm names a copy — a backup's or a donor snapshot's — the copy holds " +
+			"the log back for its whole run, so it grows by what the node writes " +
+			"meanwhile, and the first checkpoint after the copy ends folds it back in " +
+			"and clears the alarm: make room for it, or take the copy at a quieter hour. " +
+			"When it names none, a reader is holding a snapshot open, and the log has " +
+			"no other symptom until the volume fills.",
 	},
 	{
 		kind: KindPoolStarved,

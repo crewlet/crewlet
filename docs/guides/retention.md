@@ -519,8 +519,9 @@ node that is only below the published trim floor, while the log still holds
 what it lacks, replays it instead and needs none of this.)
 
 **A snapshot is a copy of the replicated estate's file**, never of the node's
-own. It is taken on `snapshot_interval` and judged against the file's size for
-free space. Every data node takes its own and offers it, whether or not it may
+own. It is taken on `snapshot_interval` and judged against the file's size, and
+the write-ahead log a copy holds back while it runs (below), for free space.
+Every data node takes its own and offers it, whether or not it may
 write the estate: an evicted machine, back with its files, keeps applying its
 logs and may hold the only copy a joiner can fetch. A take the node declines is
 retried rather than left for an interval: one declined for a reason a boot
@@ -538,6 +539,19 @@ moves. Artefacts live in `store.snapshot_dir` itself.
 **Each snapshot is one moment** of the file: as it stood when the take began,
 with every record the node had applied by then and nothing it applied while
 the copy ran, and the positions its manifest names are read from that copy.
+
+**A take needs room for more than the copy.** Keeping the copy one moment
+stops every checkpoint at that moment for the copy's whole run, so the live
+file's `-wal` grows by what the node writes meanwhile, on the volume the
+applier commits to: its write rate times the copy's run, which is the file's
+size over the rate the copy reads it. Each copy measures how far the log grew
+under it, and a take is declined `insufficient_space` unless
+`store.snapshot_dir`'s volume has room for the copy, a tenth of it to spare,
+and the log the last copy measured, scaled to the file as it stands — and,
+where the snapshots live on a volume of their own, unless the replicated
+estate's volume has room for that log. Until a copy has measured it since the
+node started, the tenth is what stands for the log, which covers a node
+writing its log at up to a tenth of the rate the copy reads the file.
 
 ```
 crewlet retention snapshots
@@ -606,7 +620,7 @@ answer rather than a silence:
 | `lagging` | this node is more than 1 000 records behind |
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |
-| `insufficient_space` | not enough disk in `store.snapshot_dir` |
+| `insufficient_space` | not enough disk in `store.snapshot_dir` for the copy and the write-ahead log it holds back, or on the replicated estate's own volume for that log |
 | `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
 | `log_diverged` | the log holds, at this node's checkpoint, another record than the one it consumed there — a broker restored from an older copy and written past these rows — so they are a history the log does not continue |
 | `recent` | the newest artefact is younger than `snapshot_interval` **and names every domain this node runs, at the generation this node is on**; a young artefact short of a domain is replaced at once (`statelog_snapshot_recent_but_short`), because no joiner can adopt it — see [Running a Fleet](fleet.md#draining-and-rolling-upgrades). And see below |

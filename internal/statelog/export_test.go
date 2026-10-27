@@ -12,6 +12,14 @@ func RankOffersForTest(offers []Offer, seed uint64) []Offer {
 	return rankOffers(offers, seed)
 }
 
+// MeasureVolumesWith has s read what a volume has free from fn rather than
+// from the volume.
+//
+// EXPORTED FOR A TEST because the gate's arithmetic is the part with a rule in
+// it, and what the machine running a case has free is no condition the case
+// can state.
+func MeasureVolumesWith(s *Snapshotter, fn func(dir string) (int64, error)) { s.volumeFree = fn }
+
 // LogTrackerTo points a tracker's transition lines at a logger a case reads.
 //
 // EXPORTED FOR A TEST because the two lines are half of what a tracker is for

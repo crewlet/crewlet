@@ -27,6 +27,16 @@ import (
 // pool too small for the node's domains makes every query slower with nothing
 // naming the queue in front of it.
 //
+// # A copy holds the log, and the reading says so
+//
+// A backup's or a donor snapshot's copy of a file stops every checkpoint at
+// its moment for its whole run (store.DB.Copies), so two of the three see it:
+// the log grows under the copy, and the next copy needs room for the log it
+// will hold back as well as for itself. So the reading names the copy holding
+// the largest log, for `wal_large` to say the copy's end folds it back in, and
+// counts on each volume what the files there last measured a copy holding back
+// (store.DB.CopyHoldsBack), for `volume_low` to keep room for it.
+//
 // # Why the sizes are measured per read and the pool wait per tick
 //
 // A size is a LEVEL: four `os.Stat` calls and one `statfs`, microseconds
@@ -182,14 +192,14 @@ func fileBytes(path string) (int64, error) {
 	return info.Size(), nil
 }
 
-// space fills the three storage fields of a reading.
+// space fills the storage fields of a reading, at now.
 //
 // MEASURED RATHER THAN READ BACK OFF THE GAUGES. The gauges are published on
 // the trim's own tick, which is a quarter of an hour, while the alarms are
 // evaluated every [statelog.AlarmInterval]; a volume fills in less time than a
 // quarter hour, and an alarm evaluated against a fifteen-minute-old free count
 // is one that reports the space that was there before the thing that used it.
-func (r *retention) space(out *statelog.Reading) {
+func (r *retention) space(out *statelog.Reading, now time.Time) {
 	if r.db == nil {
 		return
 	}
@@ -200,12 +210,15 @@ func (r *retention) space(out *statelog.Reading) {
 	var files []storedFile
 	var unmeasured []string
 	for _, db := range storeFiles(r.db) {
-		if wal, err := fileBytes(db.Path() + walSuffix); err == nil {
+		if wal, err := fileBytes(db.Path() + walSuffix); err == nil && wal > out.WALBytes {
 			// THE LARGEST, NOT THE SUM. The alarm is about ONE
 			// checkpoint that is not happening, and a gibibyte
 			// spread evenly over two estates is two healthy logs
-			// where a gibibyte in one is the fault.
-			out.WALBytes = max(out.WALBytes, wal)
+			// where a gibibyte in one is the fault. With the file it
+			// is beside, and the copy holding it there, if one is:
+			// a copy's log is one its end folds back in.
+			out.WALBytes, out.WALFile = wal, filepath.Base(db.Path())
+			out.WALCopy, out.WALCopyFor = holdingCopy(db.Copies(), now)
 		}
 		// A FILE THAT CANNOT BE MEASURED IS SAID, never skipped: skipped,
 		// the node is judged on its other volume alone, which is the very
@@ -222,11 +235,28 @@ func (r *retention) space(out *statelog.Reading) {
 			unmeasured = append(unmeasured, err.Error())
 			continue
 		}
-		files = append(files, storedFile{volume: vol, dir: dir, free: free, size: size})
+		files = append(files, storedFile{volume: vol, dir: dir, free: free, size: size,
+			held: db.CopyHoldsBack(size)})
 	}
 	tightest := tightestVolume(files)
-	out.FreeBytes, out.StoreBytes, out.StoreVolume = tightest.free, tightest.stored, tightest.dir
+	out.FreeBytes, out.StoreBytes, out.CopyHeldBytes, out.StoreVolume =
+		tightest.free, tightest.stored, tightest.held, tightest.dir
 	out.StoreVolumeUnmeasured = strings.Join(unmeasured, "; ")
+}
+
+// holdingCopy names the copies holding a file's log — the part file the one
+// holding it longest writes, and how many more hold it beside — and how long
+// that one has; nothing when none does.
+func holdingCopy(copies []store.Copy, now time.Time) (string, time.Duration) {
+	if len(copies) == 0 {
+		return "", 0
+	}
+	oldest := copies[0]
+	name := oldest.Dest
+	if more := len(copies) - 1; more > 0 {
+		name = fmt.Sprintf("%s and %d more", name, more)
+	}
+	return name, max(now.Sub(oldest.Since), 0)
 }
 
 // measureVolume is the volume dir is on — the filesystem's own device number,
@@ -249,22 +279,24 @@ func measureVolume(dir string) (string, int64, error) {
 
 // storedFile is one database file as the volume alarm weighs it: the volume it
 // is on, the directory it is in — what an operator is told to grow — what that
-// volume has free, and how large the file is.
+// volume has free, how large the file is, and the log a copy of it is expected
+// to hold back there ([store.DB.CopyHoldsBack]).
 type storedFile struct {
-	volume, dir string
-	free, size  int64
+	volume, dir      string
+	free, size, held int64
 }
 
 // storeVolume is one volume as the alarm reads it: a directory on it, what it
-// has free, and what the databases on it occupy.
+// has free, what the databases on it occupy, and the log a copy of them is
+// expected to hold back there.
 type storeVolume struct {
-	dir          string
-	free, stored int64
+	dir                string
+	free, stored, held int64
 }
 
-// tightestVolume is the free space and the stored bytes of the volume with the
-// least room for a second copy of what it holds — the one `volume_low` has to
-// be about.
+// tightestVolume is the free space, the stored bytes and the held log of the
+// volume with the least room for the next copy of what it holds and the log
+// that copy holds back — the one `volume_low` has to be about.
 //
 // PER VOLUME, because the files need not share one. `store.replicated_path`
 // puts the replicated estate's file wherever an operator names — the fast
@@ -290,20 +322,28 @@ func tightestVolume(files []storedFile) storeVolume {
 			order = append(order, f.volume)
 		}
 		v.stored += f.size
+		v.held += f.held
 	}
 	var out storeVolume
 	for i, id := range order {
 		v := byVolume[id]
-		// THE SMALLEST RATIO OF FREE TO STORED is the volume nearest the
-		// alarm's own condition — free below a multiple of stored — and
-		// comparing across multiplies rather than divides, so an empty
-		// volume is never a division by zero. In floating point, because
-		// the cross products of tens of terabytes overflow an int64.
-		if i == 0 || float64(v.free)*float64(out.stored) < float64(out.free)*float64(v.stored) {
+		// THE SMALLEST RATIO OF FREE TO NEEDED is the volume nearest the
+		// alarm's own condition — free below a multiple of stored, plus
+		// the log a copy holds back — and comparing across multiplies
+		// rather than divides, so an empty volume is never a division by
+		// zero. In floating point, because the cross products of tens of
+		// terabytes overflow an int64.
+		if i == 0 || float64(v.free)*volumeNeed(out) < float64(out.free)*volumeNeed(*v) {
 			out = *v
 		}
 	}
 	return out
+}
+
+// volumeNeed is the room the next copy of a volume's databases wants there: the
+// alarm's own measure, so the volume read is the one nearest its condition.
+func volumeNeed(v storeVolume) float64 {
+	return statelog.VolumeHeadroomFactor*float64(v.stored) + float64(v.held)
 }
 
 // measureCoverage takes the fraction of this node's sources carrying a current

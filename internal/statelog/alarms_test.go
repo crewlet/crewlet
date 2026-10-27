@@ -153,10 +153,25 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{StoreVolumeUnmeasured: "measure the free space on /mnt/estate: input/output error"},
 			"/mnt/estate",
 		},
+		// ROOM FOR A SECOND COPY AND ITS TENTH — 5 GiB against 4.4 — IS NOT
+		// ROOM when the copy holds back 2 GiB of log on the same volume.
+		"a volume with room for a second copy and not for the log a copy holds back": {
+			statelog.KindVolumeLow,
+			statelog.Reading{FreeBytes: 5 << 30, StoreBytes: 4 << 30, CopyHeldBytes: 2 << 30,
+				StoreVolume: "/var/lib/crewlet"},
+			"and for the 2.0 GiB of write-ahead log a copy holds back there while it runs",
+		},
 		"a write-ahead log nothing is checkpointing": {
 			statelog.KindWALLarge,
 			statelog.Reading{WALBytes: 2 << 30},
 			"write-ahead log is 2.0 GiB",
+		},
+		"a write-ahead log a copy is holding": {
+			statelog.KindWALLarge,
+			statelog.Reading{WALBytes: 2 << 30, WALFile: "crewlet-replicated.db",
+				WALCopy: "/var/lib/crewlet/snapshots/snapshot.part.db", WALCopyFor: 7 * time.Minute},
+			"the write-ahead log beside crewlet-replicated.db is 2.0 GiB, held there for 7m by a " +
+				"copy to /var/lib/crewlet/snapshots/snapshot.part.db, which folds it back in when it ends",
 		},
 		"a pool every reader queues on": {
 			statelog.KindPoolStarved,

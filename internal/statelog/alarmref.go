@@ -117,10 +117,13 @@ var alarmMeaning = map[Kind]string{
 	KindMaintenanceOpen: "A maintenance operation has been open for an hour. " +
 		"Maintenance stops every publisher on every node.",
 	KindVolumeLow: "A volume holding this node's databases has less free space " +
-		"than the next restore, vacuum or snapshot needs for a second copy, or " +
-		"could not be measured at all. The alarm names the volume.",
+		"than the next restore, vacuum or snapshot needs for a second copy and for " +
+		"the write-ahead log a copy holds back there while it runs, or could not " +
+		"be measured at all. The alarm names the volume.",
 	KindWALLarge: "The write-ahead log has grown past a gibibyte, which means " +
-		"a checkpoint is not happening.",
+		"a checkpoint is not happening: a backup's or a snapshot's copy holds it " +
+		"back for the copy's run, which the alarm names, and anything else " +
+		"holding it is a reader holding a snapshot open.",
 	KindPoolStarved: "Callers are queuing for a database connection before " +
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +

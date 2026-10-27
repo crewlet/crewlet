@@ -51,8 +51,15 @@ type snapHarness struct {
 
 func newSnapHarness(t *testing.T) *snapHarness {
 	t.Helper()
+	return newSnapHarnessWith(t, store.Options{})
+}
+
+// newSnapHarnessWith is newSnapHarness over a store opened with opts — a case
+// holding the estate's copies at their VACUUM INTO passes its hold's wrapper.
+func newSnapHarnessWith(t *testing.T, opts store.Options) *snapHarness {
+	t.Helper()
 	dir := t.TempDir()
-	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{}, 1)
+	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), opts, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
@@ -409,6 +416,99 @@ func TestEverySnapshotPreconditionSaysWhyItSkipped(t *testing.T) {
 		}
 	})
 }
+
+// A TAKE KEEPS ROOM FOR THE LOG ITS COPY HOLDS BACK, as well as for the copy.
+//
+// A copy stops every checkpoint at its moment for its whole run, so the live
+// file's write-ahead log grows by what the node writes meanwhile, on the volume
+// the applier commits to (store.DB.CopyHoldsBack). The gate kept room for the
+// copy and a tenth beside it, and a node writing its log at more than a tenth
+// of the rate a copy reads the file outgrew the tenth. Here a copy is held
+// while the estate is written beside it, so the handle has measured what a
+// copy holds back; then the gate is shown volumes with room for the copy and
+// its tenth but one byte short of that log as well, which it declines; the
+// snapshots on a volume of their own with every room, and the live file's
+// volume one byte short of the log alone, which it declines too; and one
+// volume with exactly what the take needs, which it takes.
+func TestASnapshotKeepsRoomForTheLogItsCopyHoldsBack(t *testing.T) {
+	t.Parallel()
+	hold := storetest.NewCopyHold()
+	h := newSnapHarnessWith(t, store.Options{WrapDriver: hold.Wrap})
+	ctx := t.Context()
+	if err := h.estate.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`CREATE TABLE crewlet_snapshot_held (id INTEGER PRIMARY KEY, pad BLOB NOT NULL)`)
+		return err
+	}); err != nil {
+		t.Fatalf("create the table written beside the copy: %v", err)
+	}
+	live := storetest.ReplicatedDB(t, h.estate)
+	storetest.HoldCopy(t, live, hold, func() {
+		for i := range snapshotHeldWrites {
+			if err := h.estate.Tx(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `INSERT INTO crewlet_snapshot_held (id, pad)
+					VALUES (?, zeroblob(4096))`, i)
+				return err
+			}); err != nil {
+				t.Fatalf("write row %d beside the copy: %v", i, err)
+			}
+		}
+	})
+	info, err := os.Stat(live.Path())
+	if err != nil {
+		t.Fatalf("measure the replicated estate: %v", err)
+	}
+	held := live.CopyHoldsBack(info.Size())
+	if held <= 0 {
+		t.Fatalf("the estate's handle measured a copy holding back %d after one held its "+
+			"log under %d commits", held, snapshotHeldWrites)
+	}
+	want := int64(float64(info.Size())*statelog.SnapshotFreeSpaceFactor) + held
+	liveDir := filepath.Dir(live.Path())
+	declined := func(what string) string {
+		t.Helper()
+		_, err := h.snap.Take(ctx)
+		var skip *statelog.ErrSkipped
+		if !errors.As(err, &skip) || skip.Reason != statelog.SkipInsufficientSpace {
+			t.Fatalf("%s: Take = %v, want insufficient_space", what, err)
+		}
+		return skip.Detail
+	}
+
+	// ONE VOLUME, the default's, one byte short of the copy, its tenth and
+	// the log.
+	statelog.MeasureVolumesWith(h.snap, func(string) (int64, error) { return want - 1, nil })
+	if detail := declined("one volume short of the log"); !strings.Contains(detail,
+		fmt.Sprintf("%d of it the write-ahead log", held)) {
+		t.Errorf("the skip does not name the log the copy holds back: %s", detail)
+	}
+
+	// THE SNAPSHOTS ON A VOLUME OF THEIR OWN, with every room, and the live
+	// file's one byte short of the log alone.
+	h.dir = filepath.Join(t.TempDir(), "snapshots")
+	h.rebuild(24 * time.Hour)
+	statelog.MeasureVolumesWith(h.snap, func(dir string) (int64, error) {
+		if dir == liveDir {
+			return held - 1, nil
+		}
+		return 1 << 40, nil
+	})
+	if detail := declined("the live volume short of the log"); !strings.Contains(detail, liveDir) {
+		t.Errorf("the skip does not name the live file's volume %s: %s", liveDir, detail)
+	}
+
+	// AND EXACTLY WHAT THE TAKE NEEDS on one volume is room.
+	statelog.MeasureVolumesWith(h.snap, func(string) (int64, error) { return want, nil })
+	if _, err := h.snap.Take(ctx); err != nil {
+		t.Fatalf("a volume with room for the copy, its tenth and the log the copy holds "+
+			"back declined the take: %v", err)
+	}
+}
+
+// snapshotHeldWrites is how many rows, four kibibytes each and one commit
+// apiece, are written while a copy holds the log: enough that the log it holds
+// back is hundreds of kibibytes, far past what one stray commit accounts for.
+const snapshotHeldWrites = 64
 
 // isRecent reports a take skipped because the newest artefact is recent.
 func isRecent(err error) bool {
