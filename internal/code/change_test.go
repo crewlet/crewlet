@@ -394,9 +394,9 @@ func TestAPurgeIsBoundedByWhatItsChangesWeigh(t *testing.T) {
 			n.seedChanges(id, changesOf(10, changeShape{revisions: 1, authors: 1, body: width}))
 			if tc.pushes > 0 {
 				n.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
-					INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
+					INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, via, commands,
 						received_at, row_bytes)
-					SELECT printf('wide-%02d', i), ?, i + 1, 0, 'seed', 'operator', '[]', 0, ? FROM k`,
+					SELECT printf('wide-%02d', i), ?, i + 1, 0, 'seed', 'operator', 'git', '[]', 0, ? FROM k`,
 					tc.pushes, id, width)
 			}
 			changes := func() int {
