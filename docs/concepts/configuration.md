@@ -1123,7 +1123,10 @@ validate` on a laptop rather than by a process at bind time:
 
 With `api.public.port` set on an `ingress` node, **`api.public.external_url`** is required as well:
 the address vendors and sandboxes reach the public listener at, which every
-webhook URL, the per-run OTLP endpoint and the tool bridge are built on. The two
+webhook URL is built on. A box's per-run OTLP and tool-bridge endpoints are
+built on `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL`,
+which name that same address (see
+[Deployment](../guides/deployment.md#exposing-webhooks-without-the-admin-api)). The two
 are separate settings because they are separate sockets — a person reaches
 `api.port` and a vendor the public one — and neither is ever read off a request.
 Without a public listener the two are the same address and only

@@ -1404,8 +1404,11 @@ api:
     external_url: "https://hooks.example.com"
                         # REQUIRED once public.port is set on an ingress node —
                         #   where VENDORS and sandboxes reach this listener:
-                        #   every webhook, app manifest and per-run sandbox
-                        #   endpoint is built on it
+                        #   every webhook and app manifest is built on it. A
+                        #   box's bridge and OTLP endpoints are built on
+                        #   CREWLET_MCP_BRIDGE_URL and
+                        #   CREWLET_SANDBOX_OTEL_RECEIVER_URL, which name the
+                        #   same address
   artifacts:            # optional: the artifact origin, a THIRD listener that
     port: 8001          #   serves the files of artifact versions, their assets
                         #   and the embedded page runtime, and nothing else: no
