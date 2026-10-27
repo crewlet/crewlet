@@ -844,43 +844,22 @@ function Brief({ brief, on }: { brief: AssistantBriefCard; on: CardHandlers }) {
       ? `${word.charAt(0).toUpperCase()}${word.slice(1)} ${record.id}`
       : brief.scope.title;
   const recommended = brief.recommended;
-  // THE CARD COUNTS ITS ROWS INTO ITS VERDICT (@crewlethq/ui 0.72.0): a row
-  // is something to do, and the one to do first leads. So the engine's
-  // recommended step is the first row, a row the engine marked neutral is a
-  // fact rather than something to do and is said on the context line, and two
-  // follow-ups are offered, as the card draws no third.
-  const facts = brief.needs.filter((need) => need.tone === "neutral").map((need) => need.text);
   return (
     <BriefCard
       scope={scope}
       asOf={`As of ${fmtTime(brief.as_of)}`}
-      about={brief.summary}
-      needs={[
-        ...(recommended
-          ? [
-              {
-                key: "recommended",
-                text: recommended.text,
-                action: briefPress(recommended.action, on),
-              },
-            ]
-          : []),
-        ...brief.needs.flatMap((need) =>
-          need.tone === "neutral"
-            ? []
-            : [
-                {
-                  key: `${need.ref.kind}:${need.ref.id}`,
-                  text: need.text,
-                  ...(need.detail ? { detail: need.detail } : {}),
-                  tone: need.tone,
-                  action: briefPress(need.action, on),
-                },
-              ],
-        ),
-      ]}
-      context={facts.length > 0 ? facts.join(" ") : undefined}
-      followUps={brief.follow_ups.slice(0, 2).map((question) => ({
+      summary={brief.summary}
+      needs={brief.needs.map((need) => ({
+        key: `${need.ref.kind}:${need.ref.id}`,
+        text: need.text,
+        ...(need.detail ? { detail: need.detail } : {}),
+        tone: need.tone,
+        action: briefPress(need.action, on),
+      }))}
+      recommended={
+        recommended ? { text: recommended.text, action: briefPress(recommended.action, on) } : null
+      }
+      followUps={brief.follow_ups.map((question) => ({
         key: question,
         question,
         onSelect: () => on.ask(question),
