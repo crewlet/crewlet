@@ -354,12 +354,19 @@ const AuditInterval = 24 * time.Hour
 // read rates are held against counts it (statelog.Census.Background).
 const PinsPerDay = int(24*time.Hour/CollectInterval + 24*time.Hour/AuditInterval)
 
-// judgeBatch is how many listed objects one reference read judges.
+// JudgeBatch is how many listed objects one reference read judges: the
+// widest [objstore.ReferenceTable.ObjectsAmong] a collection builds, and a
+// pass's last batch any narrower one.
 //
 // FIVE HUNDRED: one statement's arguments, inside every SQL engine's variable
 // ceiling with room to spare, and what the pass holds in memory between the
 // listing and the read — never the store's whole inventory.
-const judgeBatch = 500
+//
+// EXPORTED FOR THE PLANS HELD TO IT. Each width is a statement text of its
+// own, which the driver plans on its own, so a declaring domain's plan gate
+// plans the question at this width — a gate that planned three keys would
+// pass a driver that scans a table for five hundred.
+const JudgeBatch = 500
 
 // auditConcurrency is how many questions the audit has out to the store at
 // once: a stat of one object, or — on a store that lists in order — a listing
@@ -439,7 +446,7 @@ const deleteConcurrency = 16
 
 // batchesInFlight is how many batch deletions ([objstore.BatchDeleter]) a
 // collection has out at once on a store that deletes in batches: each judged
-// batch's unnamed objects — up to [judgeBatch] — in one DeleteObjects.
+// batch's unnamed objects — up to [JudgeBatch] — in one DeleteObjects.
 //
 // ONE, and the reason is the prefix's write rate rather than the requests.
 // AWS states that rate in requests and is silent on how a batch's keys count
@@ -993,7 +1000,7 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		}
 		r.Aged++
 		batch = append(batch, k)
-		if len(batch) < judgeBatch {
+		if len(batch) < JudgeBatch {
 			return nil
 		}
 		return judge()

@@ -73,7 +73,7 @@ func TestACollectionDeletesABatchAtATimeOnAStoreThatDeletesInBatches(t *testing.
 	t.Parallel()
 	h, b, singles := newBatchingHarness(t)
 	var orphans, kept []objstore.Key
-	for i := range 2*judgeBatch + 7 {
+	for i := range 2*JudgeBatch + 7 {
 		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
 		if i%100 == 0 {
 			kept = append(kept, h.file(fmt.Sprintf("%03d.md", i), fmt.Sprintf("kept %d", i)).Key)
@@ -108,7 +108,7 @@ func TestACollectionDeletesABatchAtATimeOnAStoreThatDeletesInBatches(t *testing.
 			got.r, got.err, len(orphans), len(kept))
 	}
 	listed := got.r.Aged
-	if want := (listed + judgeBatch - 1) / judgeBatch; len(b.sent()) != want {
+	if want := (listed + JudgeBatch - 1) / JudgeBatch; len(b.sent()) != want {
 		t.Fatalf("the collection sent %d batches for %d judged objects, want one a judged batch (%d)",
 			len(b.sent()), listed, want)
 	}
@@ -136,7 +136,7 @@ func TestABatchRefusedAsARequestTurnsTheCollectionToSingleDeletions(t *testing.T
 	t.Parallel()
 	h, b, singles := newBatchingHarness(t)
 	var orphans []objstore.Key
-	for i := range 2*judgeBatch + 7 {
+	for i := range 2*JudgeBatch + 7 {
 		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
 	}
 	h.clock.advance(PendingGrace + time.Hour)
@@ -168,7 +168,7 @@ func TestABatchRefusedInPartStopsTheCollection(t *testing.T) {
 	t.Parallel()
 	h, b, _ := newBatchingHarness(t)
 	var orphans []objstore.Key
-	for i := range 2 * judgeBatch {
+	for i := range 2 * JudgeBatch {
 		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
 	}
 	h.clock.advance(PendingGrace + time.Hour)
@@ -198,8 +198,8 @@ func TestABatchRefusedInPartStopsTheCollection(t *testing.T) {
 			gone++
 		}
 	}
-	if r.Deleted != gone || gone != judgeBatch-1 {
+	if r.Deleted != gone || gone != JudgeBatch-1 {
 		t.Fatalf("the collection reported %d deleted and the store lost %d; want both the %d "+
-			"the refused batch removed, and nothing after it", r.Deleted, gone, judgeBatch-1)
+			"the refused batch removed, and nothing after it", r.Deleted, gone, JudgeBatch-1)
 	}
 }

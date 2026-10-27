@@ -650,7 +650,7 @@ func TestEveryBatchIsJudged(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var keep []objstore.Key
-	for i := range judgeBatch*2 + 7 {
+	for i := range JudgeBatch*2 + 7 {
 		if i%3 == 0 {
 			keep = append(keep, h.file(fmt.Sprintf("%d.md", i), "object "+time.Duration(i).String()).Key)
 			continue
@@ -662,7 +662,7 @@ func TestEveryBatchIsJudged(t *testing.T) {
 	if err != nil || !r.Completed {
 		t.Fatalf("Collect = %+v, %v", r, err)
 	}
-	if r.Listed != judgeBatch*2+7 || r.Deleted+r.Referenced != r.Listed || r.Referenced != len(keep) {
+	if r.Listed != JudgeBatch*2+7 || r.Deleted+r.Referenced != r.Listed || r.Referenced != len(keep) {
 		t.Fatalf("the pass judged %+v; want every object judged and %d kept", r, len(keep))
 	}
 	for _, k := range keep {
@@ -754,16 +754,16 @@ func TestARefusedSweepIsReportedBesideTheCollection(t *testing.T) {
 func TestAPassThatStoppedReportsWhatItDeletedFirst(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	for i := range judgeBatch + 10 {
+	for i := range JudgeBatch + 10 {
 		h.put(fmt.Sprintf("orphan %d", i))
 	}
 	h.source.incompleteAfter = 1
 	h.clock.advance(PendingGrace + time.Hour)
 	r, err := h.c.Collect(t.Context())
-	if err != nil || r.Deleted != judgeBatch || r.Skipped == "" || r.Completed {
+	if err != nil || r.Deleted != JudgeBatch || r.Skipped == "" || r.Completed {
 		t.Fatalf("the pass = %+v, %v; want one batch deleted and why it stopped", r, err)
 	}
-	if got := h.c.Status().Collect; got.Deleted != judgeBatch || got.Skipped == "" {
+	if got := h.c.Status().Collect; got.Deleted != JudgeBatch || got.Skipped == "" {
 		t.Fatalf("the status = %+v; want both halves", got)
 	}
 }
@@ -1340,7 +1340,7 @@ func TestACollectionDeletesAtMostItsBoundAtOnce(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var orphans []objstore.Key
-	for i := range 2 * judgeBatch {
+	for i := range 2 * JudgeBatch {
 		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
 	}
 	h.clock.advance(PendingGrace + time.Hour)
@@ -1728,7 +1728,7 @@ func TestAFailedDeletionStopsTheCollection(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	var orphans []objstore.Key
-	for i := range 2 * judgeBatch {
+	for i := range 2 * JudgeBatch {
 		orphans = append(orphans, h.put(fmt.Sprintf("orphan %d", i)))
 	}
 	h.clock.advance(PendingGrace + time.Hour)
