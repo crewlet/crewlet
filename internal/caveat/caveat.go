@@ -84,6 +84,10 @@ const (
 	// operation already filed, and that has since been purged.
 	CodeFiledEarlierRemoved Code = "filed_earlier_removed"
 
+	// CodeLaneChangedNotPlaced is a card dropped on a board whose lane
+	// change landed and whose place in the lane did not.
+	CodeLaneChangedNotPlaced Code = "lane_changed_not_placed"
+
 	// CodeFileFinding is a finding about a file the caller authored and
 	// published: legal, and almost certainly not what they meant (an
 	// artifact page with no viewport, a resource the origin will not load).
@@ -124,6 +128,9 @@ var actions = map[Code]Action{
 	CodeTagNearDuplicate:    ActionNone,
 	CodeFiledEarlierUnread:  ActionNone,
 	CodeFiledEarlierRemoved: ActionNone,
+	// The card is in the lane it was dropped into; only its order there
+	// differs, which the next drag sets.
+	CodeLaneChangedNotPlaced: ActionNone,
 	// The published file is live as it is, and stays wrong in the way the
 	// finding says until its author publishes a corrected version.
 	CodeFileFinding: ActionRequired,

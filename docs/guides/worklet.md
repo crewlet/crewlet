@@ -1006,9 +1006,10 @@ ordinary status change: history, and a wake for the people on the card — and
 it is written first, as its own record, before the place. It is refused
 `stale_version` before anything lands if the card changed since the board was
 drawn. If somebody changes the card between the two halves, the new lane stands
-and the answer says `placed: false`, naming why in `unplaced`: the card is in
-the lane it was dropped into, at the place it already held there, and can be
-dragged again.
+and the answer says `placed: false`, with a `lane_changed_not_placed` caveat
+(the dashboard draws it beside the board; an agent reads why in `warnings`):
+the card is in the lane it was dropped into, at the place it already held
+there, and can be dragged again.
 
 A drag is retried as the same call. Each half is a step of the call's one
 operation, so a retry is answered from the ledger step by step, the lane change

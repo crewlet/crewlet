@@ -31,6 +31,8 @@ var samples = map[string]caveat.Caveat{
 	"TagNearDuplicate":    caveat.TagNearDuplicate("ENG", "apis", []string{"api"}),
 	"FiledEarlierUnread":  caveat.FiledEarlierUnread("0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"),
 	"FiledEarlierRemoved": caveat.FiledEarlierRemoved("0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"),
+	"LaneChangedNotPlaced": caveat.LaneChangedNotPlaced("ENG-4",
+		"place_work_item could not land the order: somebody changed the item"),
 	"FileFinding": caveat.FileFinding("index.html:12",
 		"the page has no <meta name=\"viewport\">, so it renders at desktop width on a phone"),
 }

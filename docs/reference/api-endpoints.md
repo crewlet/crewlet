@@ -5220,8 +5220,9 @@ It answers `{key, status, placed, rank, version, outcome, position}`. A move
 across lanes is **two records** — the status change on the item, which is
 history and wakes the people on it exactly as `update_work_item` does, then the
 place in the project's order, which wakes nobody. If the item changes between
-the two, the lane change stands and the answer says `placed: false` with the
-reason in `unplaced`, rather than failing a call whose status write landed.
+the two, the lane change stands and the answer says `placed: false` with a
+`lane_changed_not_placed` caveat, rather than failing a call whose status write
+landed.
 Dropping a card where it already sits writes nothing and answers `applied`.
 
 A retry is the same call. The two records are steps of the call's one
@@ -5699,7 +5700,7 @@ to add, and each entry is written for a **person**:
 - **`code`**: the kind of caveat, stable to branch on (`unaddressed_comment`,
   `default_assignee_gone`, `body_links_capped`, `date_truncated`,
   `tag_near_duplicate`, `filed_earlier_unread`, `filed_earlier_removed`,
-  `file_finding`).
+  `lane_changed_not_placed`, `file_finding`).
 - **`message`**: one or two sentences in the words of the screen, naming no
   tool, argument or internal id.
 - **`action`**: `required` when something stays as it is until somebody acts

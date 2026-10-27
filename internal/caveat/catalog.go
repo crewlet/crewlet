@@ -112,6 +112,17 @@ func FiledEarlierRemoved(task string) Caveat {
 	}
 }
 
+// LaneChangedNotPlaced is a card dropped on a board that moved to its new lane
+// and was not placed where it was dropped: item names it as a model reads it,
+// and why is the model's sentence about the placement that did not land.
+func LaneChangedNotPlaced(item, why string) Caveat {
+	return Caveat{code: CodeLaneChangedNotPlaced,
+		agent: fmt.Sprintf("%s moved lanes, and was not placed where it was "+
+			"dropped: %s", item, why),
+		person: "The card moved lanes, but not to the position it was dropped at.",
+	}
+}
+
 // FileFinding is a finding about a file its caller authored: where names the
 // file (and line), and finding is the linter's sentence. The finding is about
 // the file's own text, which a model and a person who wrote it read alike, so
