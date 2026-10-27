@@ -381,7 +381,10 @@ see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 For a local instance, a workstation included, put code work in a container —
 except, for now, on Docker Desktop, where a seat's executor in a container
 reaches none of its tools
-([Bring your own image](../concepts/code-sandbox.md#bring-your-own-image)):
+([Bring your own image](../concepts/code-sandbox.md#bring-your-own-image)), so
+code work there runs in **E2B**, or **direct** only on a host you are willing to
+hand an autonomous agent
+([Security model](../concepts/code-sandbox.md#security-model)). Elsewhere:
 
 ```yaml
 providers:
