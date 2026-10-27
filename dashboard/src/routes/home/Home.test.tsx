@@ -614,11 +614,9 @@ describe("the decisions", () => {
         acts: [],
       },
     });
-    // ANY SALUTE, because the reader's clock picks it (`greeting`, held on
-    // its own below) and this case is about the NAME: pinned to "Good", it
-    // failed every night from midnight to five in the suite's zone, when
-    // the greeting is a plain "Hello".
-    expect(await screen.findByRole("heading", { name: /^(Good \w+|Hello), Bob$/ })).toBeTruthy();
+    // The salute follows the wall clock ("Hello" from midnight until five), so
+    // only the name is asserted.
+    expect(await screen.findByRole("heading", { name: /^(?:Good \w+|Hello), Bob$/ })).toBeTruthy();
     const reads = () =>
       sessions.mock.calls.filter(([url]) => String(url).endsWith("/auth/session"));
     expect(reads()).toHaveLength(1);
@@ -627,7 +625,7 @@ describe("the decisions", () => {
     name = undefined;
     mount();
     await waitFor(() => expect(reads()).toHaveLength(1));
-    expect(await screen.findByRole("heading", { name: /^(Good \w+|Hello)$/ })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: /^(?:Good \w+|Hello)$/ })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: /Jane/ })).toBeNull();
   });
 

@@ -5,7 +5,7 @@
  *
  * # Anatomy
  *
- * The HEAD stands at the page bar's height so the two lines meet: the Orbit
+ * The HEAD stands at the page bar's height so the two lines meet: the spark
  * mark, "Crewlet Assistant", then New conversation, Conversations (a menu of
  * recent conversations with Clear behind a confirmation) and Close. No status
  * tag and no help: what the assistant may do is said once, on the home.
