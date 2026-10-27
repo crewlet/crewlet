@@ -874,7 +874,9 @@ func TestACopysMemoIsWrittenDownOnceATickAtMost(t *testing.T) {
 // logged — code_cache_memo_unlisted says the copy is listed again at the next
 // pass, of a copy that is gone. A cohort still there that the measure cannot
 // read is logged: here one replaced by a file, the one such failure a case
-// can make whoever runs it.
+// can make whoever runs it. And a listing the pass's end cuts short — the
+// engine stopping — failed at nothing: it logs nothing and leaves the copy to
+// the next pass, which lists it.
 //
 // Mutations: pass over a cohort no state records (listMemo measuring nothing)
 // — the first row's record lacks it; keep a recorded cohort the tree no longer
@@ -882,7 +884,8 @@ func TestACopysMemoIsWrittenDownOnceATickAtMost(t *testing.T) {
 // names be — the third row's tree is still there; log a cohort gone from
 // under the measure (listMemo without its fs.ErrNotExist case) — the fourth
 // row logs it; excuse every error of a cohort's measure — the fifth row logs
-// nothing.
+// nothing; log a measure the pass's end cut short (listMemo without its
+// ended-context case) — the sixth row logs it.
 func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 	t.Parallel()
 	block := memoEntry(0)
@@ -1055,6 +1058,46 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		if st, _ := cache.MemoOf(c, repo); st.Listed {
 			t.Errorf("the copy's record is %+v after a cohort of it could not be read, want it left to the next "+
 				"pass unlisted", st)
+		}
+	})
+
+	t.Run("a listing the pass's end cuts short is no failure", func(t *testing.T) {
+		t.Parallel()
+		ctx, stop := context.WithCancel(t.Context())
+		defer stop()
+		var (
+			c         *cache.Cache
+			w         *syncWorld
+			repo, dir string
+			first     uint64
+			stopped   bool
+		)
+		c, repo, dir, first, w = crashed(t, nil, func(o *cache.Options) {
+			cache.BeforeMeasuring(o, func(d string) {
+				// The engine stops as the listing is about to measure the
+				// cohort no state records.
+				if d == cache.MemoCohortDir(dir, first+1) && !stopped {
+					stop()
+					stopped = true
+				}
+			})
+		})
+		cache.JanitorPassUnder(ctx, c)
+		if !stopped {
+			t.Fatal("the listing never came to measure the cohort no state records")
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_unlisted"); len(lines) != 0 {
+			t.Errorf("code_cache_memo_unlisted was logged %d times (%v) for a listing the pass's end cut short, "+
+				"want never", len(lines), lines)
+		}
+		if st, _ := cache.MemoOf(c, repo); st.Listed {
+			t.Errorf("the copy's record is %+v after its listing was cut short, want it left to the next pass "+
+				"unlisted", st)
+		}
+		cache.JanitorPass(c)
+		if st, _ := cache.MemoOf(c, repo); !st.Listed || !slices.Equal(st.Cohorts, []uint64{first, first + 1}) {
+			t.Errorf("after the next pass the copy's record is %+v, want it listed with cohorts %d and %d", st,
+				first, first+1)
 		}
 	})
 }

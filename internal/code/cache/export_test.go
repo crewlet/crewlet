@@ -31,9 +31,14 @@ import (
 
 // JanitorPass runs one janitor pass between its ticks — a kicked one —
 // synchronously, as work of the cache's own (a stopped cache runs none).
-func JanitorPass(c *Cache) {
+func JanitorPass(c *Cache) { JanitorPassUnder(context.Background(), c) }
+
+// JanitorPassUnder is JanitorPass under ctx, as the janitor runs its passes
+// under the context Start was given: a case ends ctx part way through a pass,
+// as the engine stopping does.
+func JanitorPassUnder(ctx context.Context, c *Cache) {
 	if c.enter() {
-		c.janitorPass(context.Background(), false)
+		c.janitorPass(ctx, false)
 		c.leave()
 	}
 }

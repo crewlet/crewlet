@@ -1047,7 +1047,8 @@ func (c *Cache) listMemos(ctx context.Context) {
 // does the rebuild that replaced it once its last reader lets go, and its
 // directory moves into trash/ whole (Cache.trash), which no memo lock guards.
 // A cohort the listing named and then found gone is therefore nothing to
-// count and no failure. A listing that fails leaves the copy to the next pass.
+// count and no failure. A listing that fails, or that the pass's end cuts
+// short, leaves the copy to the next pass; only the failure is logged.
 func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 	inc.memoMu.Lock()
 	defer inc.memoMu.Unlock()
@@ -1118,6 +1119,13 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 			// discarded copy is let go below; a copy still here is recorded
 			// without the cohort, as a recorded cohort gone is forgotten.
 			continue
+		case err != nil && ctx.Err() != nil:
+			// THE PASS ENDED, not the listing: the engine stopping ends the
+			// context the janitor runs under, and measureCohort answers it.
+			// Nothing failed, and the copy stays unlisted for the next pass
+			// or process — a stop, as every duty of the cache tells one from
+			// a failure (scrub, backfill, maintenance).
+			return
 		case err != nil:
 			c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "cohort", n, "error", err)
 			return
