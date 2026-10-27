@@ -168,21 +168,25 @@ var remoteBase = []gitproc.KV{
 }
 
 // A REMOTE RESOLVING TO AN ADDRESS OFF THE PUBLIC INTERNET IS REFUSED WHOLE,
-// before git is told anything: a private, loopback, link-local or unique-local
-// address, written as the host or answered for its name; an IPv6 address
-// carrying such an IPv4 address through NAT64 — the well-known prefix, and the
-// prefix the network's own resolver names, which sits in global unicast where
-// only the rule WITH the network's prefixes reads the address it carries; and
-// a name answering one public and one private address, which its owner can
-// point either way between the judgment and the next lookup. The refusal is
+// before git is told anything: a private, loopback, link-local or
+// unique-local address, written as the host or answered for its name; an IPv6
+// address carrying such an IPv4 address through NAT64 — the well-known
+// prefix, and the prefix the network's own resolver names, which sits in
+// global unicast where only the rule WITH the network's prefixes reads the
+// address it carries; an address under a prefix the resolver names in
+// unique-local space, whatever it carries, since httpx takes no resolver's
+// word that would open a network off the internet; and a name answering one
+// public and one private address, which its owner can point either way
+// between the judgment and the next lookup. The refusal is
 // httpx.ErrNotPublic, naming git.import_allow_private — which pins the
 // answers as they come — and a resolver that cannot say which prefixes its
 // network translates through, for an address whose verdict they decide, fails
 // the resolve rather than judging on a guess.
 //
 // Mutation: judge the answers by the rule without the network's discovered
-// prefixes, and the DNS64 row goes red; pin a private answer without
-// git.import_allow_private, and every refused row does.
+// prefixes, and the DNS64 row goes red; count a prefix the resolver names
+// wherever it lies, and the unique-local DNS64 row does; pin a private answer
+// without git.import_allow_private, and every refused row does.
 func TestARemoteResolvingPrivateIsRefused(t *testing.T) {
 	t.Parallel()
 	const named = "https://" + remoteHost + "/team/r.git"
@@ -204,6 +208,12 @@ func TestARemoteResolvingPrivateIsRefused(t *testing.T) {
 			answers: addrs("64:ff9b::a00:5")},
 		{name: "the network's own NAT64 prefix carrying a private address", url: named,
 			answers: addrs("2606:4700:64::a00:5"), nat64: dns64},
+		// fd00:64::/96, named by the network's resolver, carrying
+		// 104.16.0.1: a resolver that could have this counted could call
+		// public any host of the unique-local network whose low 32 bits read
+		// as a public IPv4 address.
+		{name: "a unique-local NAT64 prefix carrying a public address", url: named,
+			answers: addrs("fd00:64::6810:1"), nat64: addrs("fd00:64::c000:aa")},
 		{name: "a private address literal", url: "https://10.0.0.5/r.git", pinned: addrs("10.0.0.5")},
 		{name: "an IPv6 loopback literal", url: "https://[::1]/r.git", pinned: addrs("::1")},
 		{name: "a private address written in IPv6", url: "https://[::ffff:10.0.0.5]/r.git", pinned: addrs("10.0.0.5")},

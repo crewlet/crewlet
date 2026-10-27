@@ -156,13 +156,21 @@ type remoteEnv struct {
 //
 // Its host's addresses are what git connects to, pinned so git never asks DNS
 // for the name again, and every one is held to the engine's public-address
-// rule on the network the node resolves on (httpx.ResolvePublic: the NAT64
-// prefixes discovered through the same resolver the host is resolved with, so
-// a DNS64 network's own prefix is judged by the IPv4 address it carries) — a
-// name that resolves to any address that is not on the public internet is
-// refused whole, httpx.ErrNotPublic wrapped with what lets it through.
-// allowPrivate (Tier A git.import_allow_private) lifts the rule: the host's
-// addresses are pinned as the resolver answers them.
+// rule on the network the node resolves on (httpx.ResolvePublic) — a name
+// that resolves to any address that is not on the public internet is refused
+// whole, httpx.ErrNotPublic wrapped with what lets it through. An IPv6
+// address under a NAT64 prefix is judged by the IPv4 address it carries
+// where the prefix is the well-known one, or one the network's own resolver
+// names where httpx takes that resolver's word: in global unicast clear of
+// the blocks the rule refuses there, or in RFC 8215's 64:ff9b:1::/48. A
+// prefix named anywhere else could widen the rule into a network that is not
+// on the internet, so httpx ignores it and the addresses under it stay
+// refused: a DNS64 network that translates through a unique-local prefix
+// reaches no IPv4-only host this way, and names a proxy for it instead
+// (below). The prefixes are asked of the resolver the host is resolved with,
+// and only for an address whose verdict they can change. allowPrivate (Tier A
+// git.import_allow_private) lifts the rule: the host's addresses are pinned
+// as the resolver answers them.
 //
 // THROUGH A PROXY the process names for the URL — HTTPS_PROXY and NO_PROXY,
 // read as every other client of the engine reads them
@@ -174,10 +182,11 @@ type remoteEnv struct {
 // trusts what the engine's own clients trust ([remoteCADir] says what of
 // SSL_CERT_DIR it can take).
 //
-// It resolves on every call and keeps nothing, as the rule's discovery does: a
-// remote is dialed once a fetch or a push, and an answer kept past it would be
-// a judgment of an address the name may no longer have. A lookup that fails is
-// the resolver's error, wrapped.
+// It resolves on every call and keeps nothing, as httpx keeps nothing of the
+// network's prefixes past one resolve: a remote is dialed once a fetch or a
+// push, and an answer kept past it would be a judgment of an address the name
+// may no longer have. A lookup that fails, the host's or the one for the
+// NAT64 prefixes an address's verdict needs, is the resolver's error, wrapped.
 func ResolveRemote(ctx context.Context, rawURL string, allowPrivate bool) (Remote, error) {
 	return resolveRemote(ctx, rawURL, allowPrivate, remoteEnv{
 		resolver: net.DefaultResolver,

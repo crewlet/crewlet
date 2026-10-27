@@ -332,22 +332,27 @@ git:
   governs every host a git node dials for the company — an import's source and
   both kinds of mirror, pull and push alike, whatever its name says. Off, the
   engine resolves the host itself before git runs and refuses it when ANY
-  address it resolves to is not on the public internet — an IPv6 address that
-  carries an IPv4 one through NAT64 is judged by the IPv4 address it carries,
-  with the network's own NAT64 prefixes asked of the same resolver — and git
-  is then handed exactly the addresses judged, so it never asks DNS for the
-  name again and a name that answers differently a moment later is never
-  dialed at the second answer. On, the host's addresses are pinned as they
-  resolve. Either way the dial is https alone, follows no redirect, verifies
-  TLS, and carries its credential in git's environment rather than its
-  command line. A proxy the node's environment names for the host
-  (`HTTPS_PROXY`, with `NO_PROXY` read as the engine's own clients read it) is
-  dialed as itself whatever this says: the proxy resolves the host, so what it
-  may reach is the proxy's to decide. The certificate authorities git trusts
-  are the process's — `SSL_CERT_FILE`, and the one directory `SSL_CERT_DIR`
-  names; a list of several is refused at the dial, since libcurl, which git
-  does its TLS through, reads one — so git trusts what the engine's own
-  clients trust.
+  address it resolves to is not on the public internet, judged as the
+  [artifact CDN fetch](artifacts.md#serving) judges one, and git is then handed
+  exactly the addresses judged, so it never asks DNS for the name again and a
+  name that answers differently a moment later is never dialed at the second
+  answer. An IPv6 address under a NAT64 prefix is judged by the IPv4 address it
+  carries where the prefix is the well-known `64:ff9b::/96`, or one the
+  network's own resolver names in global unicast or in `64:ff9b:1::/48`; a
+  network that translates through a unique-local prefix reaches no IPv4-only
+  forge this way, and names a proxy for it in `HTTPS_PROXY` instead. A resolver
+  that fails the lookup of those prefixes an address needs, rather than
+  answering it has none, fails the dial, which is worth asking again. On, the
+  host's addresses are pinned as they resolve. Either way the dial is https
+  alone, follows no redirect, verifies TLS, and carries its credential in git's
+  environment rather than its command line. A proxy the node's environment
+  names for the host (`HTTPS_PROXY`, with `NO_PROXY` read as the engine's own
+  clients read it) is dialed as itself whatever this says: the proxy resolves
+  the host, so what it may reach is the proxy's to decide. The certificate
+  authorities git trusts are the process's — `SSL_CERT_FILE`, and the one
+  directory `SSL_CERT_DIR` names; a list of several is refused at the dial,
+  since libcurl, which git does its TLS through, reads one — so git trusts what
+  the engine's own clients trust.
 
 A `git` block on a node whose roles name no `git` is read by nothing, and
 `crewlet validate` warns about it.
