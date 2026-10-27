@@ -341,3 +341,68 @@ func TestATagNameEncodingJSONReadsTwoWaysIsRefused(t *testing.T) {
 	}()
 	jsonform.Of[invalidTag]()
 }
+
+type base2 struct {
+	X int `json:"x"`
+}
+
+type viaA struct{ base2 }
+
+type viaB struct{ base2 }
+
+type twoPaths struct {
+	viaA
+	viaB
+	Y int `json:"y"`
+}
+
+// A TYPE EMBEDDED THROUGH TWO PATHS AT ONE DEPTH CARRIES NONE OF ITS KEYS, as
+// encoding/json counts it: json.Marshal writes {"y":0} for this shape, so a
+// form that admitted `x` would let a publish write a key the typed decode then
+// drops in silence.
+//
+// Mutation: visit each embedded type once without counting its paths, and the
+// form carries x.
+func TestATypeEmbeddedTwiceAtOneDepthCarriesNoKeys(t *testing.T) {
+	t.Parallel()
+	encoded, err := json.Marshal(twoPaths{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]any
+	if err := json.Unmarshal(encoded, &keys); err != nil {
+		t.Fatal(err)
+	}
+	f := jsonform.Of[twoPaths]()
+	if got, want := f.Keys(), slices.Sorted(maps.Keys(keys)); !slices.Equal(got, want) {
+		t.Fatalf("the form carries %v, and encoding/json writes %v", got, want)
+	}
+	var got twoPaths
+	d := jsonform.Decode([]byte(`{"x": 1, "y": 2}`), f, subject, &got)
+	if len(d.Faults) != 1 || !strings.Contains(d.Faults[0].Message, "x is not a key") {
+		t.Errorf("x was not refused: %v", d.Faults)
+	}
+}
+
+type wider struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+type narrower struct {
+	Y int `json:"y"`
+}
+
+// A KEY THE STRUCT DOES NOT CARRY IS A FAULT, NEVER A SILENT DROP, even where
+// the form and the struct disagree: the typed decode refuses unknown keys as
+// a backstop to the walk.
+//
+// Mutation: decode with json.Unmarshal and x is dropped with no fault.
+func TestAFormThatDisagreesWithItsStructIsAFault(t *testing.T) {
+	t.Parallel()
+	var got narrower
+	d := jsonform.Decode([]byte(`{"x": 1, "y": 2}`), jsonform.Of[wider](), subject, &got)
+	if !d.Fatal || len(d.Faults) == 0 || !strings.Contains(d.Faults[0].Message, `"x"`) {
+		t.Errorf("a key the struct does not carry was dropped: fatal %v, faults %v", d.Fatal, d.Faults)
+	}
+}

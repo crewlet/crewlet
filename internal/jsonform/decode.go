@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -25,6 +26,11 @@ type Fault struct {
 type Decoded struct {
 	// Faults are every structural fault, in file order.
 	Faults []Fault
+
+	// tolerated marks the faults, by index, that a [Stored] read admits (a
+	// key written twice, a key in another case of one the object carries):
+	// a refusal of a stored version names only the faults its read refused.
+	tolerated map[int]bool
 
 	// Fatal reports the bytes could not be read as one value of the form
 	// at all (not JSON, more after the value, or a value its own reader
@@ -115,14 +121,21 @@ func Decode(raw []byte, form *Form, subject Subject, into any) *Decoded {
 		d.fatal(0, "%s cannot be read: %v", subject.File, err)
 		return d
 	}
-	if decodeErr := json.Unmarshal(body, into); decodeErr != nil {
+	// UNKNOWN FIELDS REFUSED HERE TOO, as a backstop: the walk admitted only
+	// the form's keys, so a key the typed decode does not know is a form
+	// that disagrees with its struct, and it is a fault rather than a value
+	// silently dropped.
+	typed := json.NewDecoder(bytes.NewReader(body))
+	typed.DisallowUnknownFields()
+	if decodeErr := typed.Decode(into); decodeErr != nil {
 		// THE WALK HELD EVERY VALUE TO ITS FORM, and every value with its
 		// own reader to that reader, so this is a value the form could not
-		// describe (a `,string` field): its own sentence, at its field.
-		var typed *json.UnmarshalTypeError
-		if errors.As(decodeErr, &typed) && typed.Field != "" {
-			d.fatal(d.lines[typed.Field], "%s is a JSON %s, and the format reads %s there",
-				typed.Field, typed.Value, typed.Type)
+		// describe (a `,string` field, a key the struct does not carry):
+		// its own sentence, at its field.
+		var mismatch *json.UnmarshalTypeError
+		if errors.As(decodeErr, &mismatch) && mismatch.Field != "" {
+			d.fatal(d.lines[mismatch.Field], "%s is a JSON %s, and the format reads %s there",
+				mismatch.Field, mismatch.Value, mismatch.Type)
 			return d
 		}
 		d.fatal(0, "%s cannot be read: %s", subject.File, jsonReason(decodeErr))
@@ -181,11 +194,20 @@ func Stored(trailing Trailing) Reader {
 			return &Decoded{lines: map[string]int{}, dropped: map[string]bool{}}
 		}
 		fresh := reflect.New(reflect.TypeOf(into).Elem()).Interface()
-		d := Decode(raw, form, subject, fresh)
-		if len(d.Faults) == 0 {
-			d.fault("", 0, "%s cannot be read: %s", subject.File, jsonReason(err))
+		walked := Decode(raw, form, subject, fresh)
+		// ONLY WHAT THIS READ REFUSES: a key in another case and a key
+		// written twice are faults to a publish and fine here, so a refusal
+		// of a stored version never asks its reader to fix what it accepts.
+		d := &Decoded{lines: walked.lines, dropped: walked.dropped, Fatal: true}
+		for i, f := range walked.Faults {
+			if !walked.tolerated[i] {
+				d.Faults = append(d.Faults, f)
+			}
 		}
-		d.Fatal = true
+		if len(d.Faults) == 0 {
+			d.Faults = append(d.Faults, Fault{Message: fmt.Sprintf("%s cannot be read: %s",
+				subject.File, jsonReason(err))})
+		}
 		return d
 	}
 }
@@ -213,6 +235,14 @@ func legacy(raw []byte, into any, trailing Trailing) error {
 func (d *Decoded) fault(field string, line int, format string, args ...any) {
 	d.Faults = append(d.Faults, Fault{Field: field, Line: line, Message: fmt.Sprintf(format, args...)})
 	d.dropped[field] = true
+}
+
+// tolerate marks the fault just reported as one a [Stored] read admits.
+func (d *Decoded) tolerate() {
+	if d.tolerated == nil {
+		d.tolerated = map[int]bool{}
+	}
+	d.tolerated[len(d.Faults)-1] = true
 }
 
 func (d *Decoded) fatal(line int, format string, args ...any) {
@@ -354,10 +384,14 @@ func (w *walker) object(f *Form, path string) (any, bool, error) {
 		switch {
 		case seen[key]:
 			w.d.fault(name, at, "%s is written twice: write each key once", name)
+			w.d.tolerate()
 			ok = false
 		case closed && f.Field(key) == nil:
 			w.d.fault(name, at, "%s is not a key %s carries: %s takes %s", name, w.subject.Format,
 				w.where(path), strings.Join(f.Keys(), ", "))
+			if slices.ContainsFunc(f.Keys(), func(k string) bool { return strings.EqualFold(k, key) }) {
+				w.d.tolerate()
+			}
 			ok = false
 		case closed:
 			next = f.Field(key)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/jsonform"
@@ -153,5 +154,30 @@ func TestThePublishReadRefusesWhatTheStoredReadAdmits(t *testing.T) {
 		if d := jsonform.Stored(jsonform.UntilEOF)([]byte(raw), form, subject, &stored); len(d.Faults) != 0 {
 			t.Errorf("%s: the stored read refused it: %v", raw, d.Faults)
 		}
+	}
+}
+
+// A REFUSED STORED VERSION IS TOLD ONLY WHAT ITS READ REFUSES: a key in
+// another case and a key written twice are faults to a publish and fine to a
+// stored read, so the refusal of a stored version that has both and an
+// unknown key names the unknown key alone.
+//
+// Mutation: answer a stored refusal with the walk's faults unfiltered and the
+// case and repeat faults are listed too.
+func TestAStoredRefusalNamesOnlyWhatTheStoredReadRefuses(t *testing.T) {
+	t.Parallel()
+	form := jsonform.Of[storedIndex]()
+	var got storedIndex
+	d := jsonform.Stored(jsonform.UntilEOF)([]byte(`{"Title": "t", "order": ["a"], "order": ["b"], "nope": 1}`),
+		form, jsonform.Subject{File: "index.json", Format: "the test format"}, &got)
+	if !d.Fatal || len(d.Faults) != 1 || !strings.Contains(d.Faults[0].Message, "nope is not a key") {
+		t.Errorf("faults %v, want the unknown key alone", d.Faults)
+	}
+	// AND A REFUSAL NO LISTED FAULT EXPLAINS still says why, in the old
+	// read's words: a wrong type under a key in another case.
+	d = jsonform.Stored(jsonform.UntilEOF)([]byte(`{"Title": 7}`), form,
+		jsonform.Subject{File: "index.json", Format: "the test format"}, &got)
+	if !d.Fatal || len(d.Faults) != 1 || !strings.Contains(d.Faults[0].Message, "index.json cannot be read") {
+		t.Errorf("faults %v, want the old read's reason", d.Faults)
 	}
 }

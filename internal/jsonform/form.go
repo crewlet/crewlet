@@ -155,11 +155,19 @@ func fieldsOf(t reflect.Type, seen map[reflect.Type]*Form) []Field {
 		t     reflect.Type
 		index []int
 	}
+	// count and nextCount are how many times a struct type is embedded at
+	// this level and the next, as encoding/json counts them: a type reached
+	// through two paths at one depth carries each of its keys twice there,
+	// so they annihilate at the tie below (Top{A{Base}, B{Base}} has none
+	// of Base's keys).
 	next := []level{{t: t}}
+	var count map[reflect.Type]int
+	nextCount := map[reflect.Type]int{t: 1}
 	visited := map[reflect.Type]bool{}
 	for len(next) > 0 {
 		current := next
 		next = nil
+		count, nextCount = nextCount, map[reflect.Type]int{}
 		for _, lv := range current {
 			if visited[lv.t] {
 				continue
@@ -192,7 +200,10 @@ func fieldsOf(t reflect.Type, seen map[reflect.Type]*Form) []Field {
 				}
 				index := append(slices.Clone(lv.index), i)
 				if name == "" && sf.Anonymous && ft.Kind() == reflect.Struct {
-					next = append(next, level{t: ft, index: index})
+					nextCount[ft]++
+					if nextCount[ft] == 1 {
+						next = append(next, level{t: ft, index: index})
+					}
 					continue
 				}
 				tagged := name != ""
@@ -201,7 +212,7 @@ func fieldsOf(t reflect.Type, seen map[reflect.Type]*Form) []Field {
 				}
 				sft := sf.Type
 				quoted := slices.Contains(strings.Split(opts, ","), "string")
-				found = append(found, candidate{key: name, index: index, tagged: tagged,
+				c := candidate{key: name, index: index, tagged: tagged,
 					form: func() *Form {
 						if quoted {
 							// A `,string` field is a quoted scalar: its
@@ -209,7 +220,11 @@ func fieldsOf(t reflect.Type, seen map[reflect.Type]*Form) []Field {
 							return &Form{Type: Any}
 						}
 						return of(sft, seen)
-					}})
+					}}
+				found = append(found, c)
+				if count[lv.t] > 1 {
+					found = append(found, c)
+				}
 			}
 		}
 	}
