@@ -568,6 +568,22 @@
           ],
           "description": "The cache's byte budget; unset is derived at boot from the room the cache can use: the volume's free space plus what the cache already holds, less what an embedded broker storing its streams on the same volume may still write under its limit (stream.store_max_bytes, or its own derivation) and the request spools' allowance. Half of that room when the volume also holds the store, the replicated estate, the snapshots or the broker's streams; seven eighths of a volume of its own. Never more, and never raised to a minimum: a volume that leaves no room at all refuses the node's code host, naming what to change."
         },
+        "import_allow_private": {
+          "anyOf": [
+            {
+              "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$"
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$"
+            }
+          ],
+          "description": "Let this node's imports and mirrors — pull and push alike, whatever the name says — dial a host that resolves to a loopback, link-local, private or otherwise non-public address, such as a forge on this node's own network. Off, a host any of whose addresses is not on the public internet is refused before git runs. A proxy the process names (HTTPS_PROXY, NO_PROXY) is dialed either way, and resolves the host itself.",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "max_processes": {
           "anyOf": [
             {

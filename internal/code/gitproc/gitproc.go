@@ -46,8 +46,10 @@
 // Configuration reaches a process only as GIT_CONFIG_COUNT pairs: a fixed
 // BASE the pool owns (no transport, no automatic gc or maintenance, one
 // thread, no hook unless the call site names a hooks directory, no global
-// attributes file), then the call site's own pairs, each of which must be on
-// an ALLOWLIST. An allowlist rather than a list of forbidden keys, for
+// attributes file), then — for a run that dials a remote alone — the pairs
+// the pool writes from its [Cmd.Remote] ("One outbound dial", below), then
+// the call site's own pairs, each of which must be on an ALLOWLIST. An
+// allowlist rather than a list of forbidden keys, for
 // hostbox's reason: git has a dozen keys that run a command (alias.*,
 // uploadpack.packObjectsHook, core.fsmonitor, core.alternateRefsCommand,
 // include.path, …) and one that serves every object in a repository to
@@ -104,6 +106,82 @@
 // told its healthy caches were tampered with. [CheckShape] is that check,
 // exported for the git cache's sweep, which repairs a cache the pool refused
 // and holds what it leaves to the pool's own predicate.
+//
+// # One outbound dial
+//
+// A git process reaches another host in exactly one shape: a [Cmd.Remote],
+// REQUIRED of a fetch, an ls-remote and a push and refused on every other
+// subcommand, which lifts the base's protocol.allow=never for https alone
+// (protocol.https.allow=always), for its run alone. It is the engine's one
+// outbound git dial — a repository's import and both kinds of mirror take it
+// — and it is built so that a host a person or a company document names is
+// dialed where the engine judged it, and nowhere else:
+//
+//   - THE NAME IS RESOLVED IN GO AND PINNED. git resolves a host itself,
+//     through libcurl, after any judgment the engine could make of it, so a
+//     name whose owner answers once with a public address and once with an
+//     internal one would pass a check made in Go and be dialed at the
+//     second answer. [ResolveRemote] resolves the host and holds every
+//     address to the engine's public-address rule (internal/httpx, its
+//     NAT64 prefixes discovered through the same resolver) — unless Tier A's
+//     git.import_allow_private lifts the rule — and the run hands libcurl
+//     those addresses as the name's only answer (http.curloptResolve), so
+//     the address judged is the address connected to.
+//   - THE URL GIT READS IS THE ONE THE RULE JUDGED. ResolveRemote writes the
+//     URL back from what it parsed — https; a lowercase name of letters,
+//     digits and hyphens whose last label begins with a letter, or an
+//     address in its one written form; no user, query or fragment — because
+//     two parsers that read one URL differently (a host after an @, a
+//     backslash, an IPv4 address in octal or in fewer than four parts, a
+//     trailing dot, a name libcurl would turn into punycode) are how a check
+//     of one host becomes a dial of another, or how libcurl looks a name up
+//     by a spelling the pin is not keyed by and asks DNS instead.
+//   - ONE HOST, NEVER A SECOND. Nothing the remote answers sends git to a
+//     host the pin does not cover: no redirect is followed, nor a dumb
+//     server's http-alternates, which git follows under the same switch
+//     (http.followRedirects=false); no bundle URI is fetched
+//     (transfer.bundleURI=false, written out against a default that may
+//     change); no submodule is (fetch.recurseSubmodules=false, which also
+//     spares a large fetch git's walk of every new tree for gitlinks); and
+//     packfile URIs are never asked for, since fetch.uriProtocols is no key
+//     a call site may set. The remote git dials is the run's: the first
+//     argument that is no option must be Remote.URL, and no other argument
+//     may name a URL.
+//   - A CREDENTIAL IS A HEADER, NEVER AN ARGUMENT. [Remote.WithHeader]'s
+//     header reaches git as a GIT_CONFIG_COUNT pair (http.extraHeader), in
+//     the process's environment, which only its own user can read — never in
+//     its arguments, which every user of the machine can (ps,
+//     /proc/<pid>/cmdline) — and a URL naming a user is refused, since git
+//     writes the URL into the arguments of every process it starts. git
+//     never prints the header, but the remote, which holds it, may echo it
+//     back: so the header's value, the credential in it, what a Basic
+//     credential encodes and a proxy's password are taken out of every line
+//     the run hands back — stderr's tail and stdout a line at a time as they
+//     arrive, and the damage its trace named — and the stderr and the damage
+//     then go through internal/redact.
+//   - NOTHING PROMPTS (GIT_TERMINAL_PROMPT=0 is every run's) and no
+//     credential helper is configured, so a remote that asks for a password
+//     is refused at once rather than waited on.
+//   - A REMOTE PACES ITS RUN as a client paces a transfer, so a remote run
+//     waits in the transfer lane, charged to the [Share] it carries, under
+//     [RemoteDeadline]. Its network leg is git-remote-https's, past the
+//     pool's pipes, where no stall watchdog of the pool's sees it move — a
+//     fetch or a push writes nothing on them without --progress until it
+//     ends — so it is held to libcurl's own, under a byte a second for
+//     [TransferStall] ending it (http.lowSpeedLimit, http.lowSpeedTime), and
+//     a Cmd.Stall beside a remote is refused rather than left to end a
+//     transfer that is moving.
+//   - THE PROCESS'S PROXY AND AUTHORITIES, which the built environment would
+//     otherwise drop exactly as a hand-built HTTP transport drops a proxy
+//     (internal/httpx). The proxy the process names for the URL
+//     (HTTPS_PROXY and NO_PROXY, read as Go's clients read them) is git's
+//     http.proxy, dialed as itself, and it resolves the remote — the wall is
+//     the operator's there, as it is for the CDN fetch's dialer — and
+//     SSL_CERT_FILE and SSL_CERT_DIR, where they are set, are git's
+//     http.sslCAInfo and http.sslCAPath, so git trusts what the engine's own
+//     clients trust; an SSL_CERT_DIR naming several directories is refused,
+//     since libcurl reads one. TLS is verified, git's default, and no key
+//     that turns it off is one a call site may set.
 //
 // # Slots: three lanes, each sized by what it spends
 //

@@ -257,9 +257,9 @@ runs with, so a fleet node given `-roles` is not told they are undeclared.
 #### `git`
 
 How a node with the `git` role serves the company's repositories. Every field
-is a fact about this node's machine — its disk, its cores, its memory — so the
-block is Tier A, read once per process, and two git nodes on different
-hardware size theirs differently:
+is a fact about this node's machine — its disk, its cores, its memory, its
+network — so the block is Tier A, read once per process, and two git nodes on
+different hardware size theirs differently:
 
 ```yaml
 git:
@@ -267,6 +267,7 @@ git:
   cache_max_bytes: 214748364800   # default: derived at boot, see below
   max_processes: 0                # default: one a core (GOMAXPROCS)
   max_transfers: 0                # default: four a process slot, by memory
+  import_allow_private: false     # default: dial only the public internet
 ```
 
 - **`cache_dir`** — where the node keeps its disposable copies of the
@@ -325,6 +326,28 @@ git:
   refused, and [`code_maintenance_refused`](../reference/alarms.md) says so
   until the figure is lowered or unset, or the node is given memory past what
   it keeps, in place or at a boot. A restart alone changes nothing.
+- **`import_allow_private`** — lets the git this node runs dial a host on a
+  network that is not the public internet: a forge on the node's own network,
+  reached at a loopback, link-local, private or unique-local address. It
+  governs every host a git node dials for the company — an import's source and
+  both kinds of mirror, pull and push alike, whatever its name says. Off, the
+  engine resolves the host itself before git runs and refuses it when ANY
+  address it resolves to is not on the public internet — an IPv6 address that
+  carries an IPv4 one through NAT64 is judged by the IPv4 address it carries,
+  with the network's own NAT64 prefixes asked of the same resolver — and git
+  is then handed exactly the addresses judged, so it never asks DNS for the
+  name again and a name that answers differently a moment later is never
+  dialed at the second answer. On, the host's addresses are pinned as they
+  resolve. Either way the dial is https alone, follows no redirect, verifies
+  TLS, and carries its credential in git's environment rather than its
+  command line. A proxy the node's environment names for the host
+  (`HTTPS_PROXY`, with `NO_PROXY` read as the engine's own clients read it) is
+  dialed as itself whatever this says: the proxy resolves the host, so what it
+  may reach is the proxy's to decide. The certificate authorities git trusts
+  are the process's — `SSL_CERT_FILE`, and the one directory `SSL_CERT_DIR`
+  names; a list of several is refused at the dial, since libcurl, which git
+  does its TLS through, reads one — so git trusts what the engine's own
+  clients trust.
 
 A `git` block on a node whose roles name no `git` is read by nothing, and
 `crewlet validate` warns about it.

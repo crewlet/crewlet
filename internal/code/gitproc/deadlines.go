@@ -31,6 +31,9 @@ import (
 //     the engine's hook after both, since all three phases run inside one
 //     process: bounded by the client's leg alone, a client at the floor pace
 //     spends the whole budget uploading and the run is killed in index-pack.
+//     A REMOTE run — a fetch, push or listing the engine makes of another
+//     host ([RemoteDeadline]) — is the same transfer with the engine as the
+//     client.
 //   - A WALK OF A REPOSITORY'S HISTORY adds [HistoryWalk] to whatever else
 //     bounds it — a push's force check and its listings, and receive-pack's
 //     own connectivity check — because what such a walk costs is set by the
@@ -160,6 +163,26 @@ func UploadPackDeadline(liveBytes int64) time.Duration {
 // is what lets it be slow rather than refused.
 func ReceivePackDeadline(maxPushBytes, liveObjects int64, hook time.Duration) time.Duration {
 	return transferDeadline(maxPushBytes) + HistoryWalk(liveObjects) + hook
+}
+
+// RemoteDeadline bounds one run that dials a remote ([Cmd.Remote]) and moves
+// bytes over it — a fetch of a repository from another host, a push of one to
+// it, or the listing of its refs — where bytes is what the run moves and
+// objects the objects of the repository it fetches into or pushes from (0 for
+// a listing, which walks nothing).
+//
+// IT IS A TRANSFER WITH THE ENGINE AS THE CLIENT, so it is a transfer's
+// formula: the remote's leg at the floor every transfer is held to, in series
+// with the local pack work over the same bytes — a fetch's index-pack of what
+// arrives, a push's pack-objects of what it sends — and a walk of the history
+// ([HistoryWalk]), since git's connectivity check after a fetch walks by date
+// whatever the repository holds, as receive-pack's does
+// ([ReceivePackDeadline]), and a push's counting walks from its tips to what
+// the remote holds. A remote that stops moving is ended long before it, by
+// libcurl's own stall (the package doc's "One outbound dial": nothing moved
+// for [TransferStall]).
+func RemoteDeadline(bytes, objects int64) time.Duration {
+	return transferDeadline(bytes) + HistoryWalk(objects)
 }
 
 // WalkPerObject is what a walk of a repository's history is given for every

@@ -26,6 +26,18 @@ var (
 	// directory.
 	ErrInvalid = errors.New("gitproc: a malformed git command")
 
+	// ErrRemote: a remote no git process may dial as given — a URL that is
+	// not https, names a user, a query or a fragment, or a host in any form
+	// but the one [ResolveRemote] reads, a header that is not one line, a
+	// proxy git cannot be handed, or an SSL_CERT_DIR naming more directories
+	// of authorities than libcurl reads. Never an address the public-address
+	// rule refused, which is httpx.ErrNotPublic, nor a lookup that failed,
+	// which is the resolver's own error, because the three ask different
+	// people for different things: a malformed remote is corrected where it
+	// was written, a refused address is the operator's
+	// (git.import_allow_private), and a failed lookup is worth asking again.
+	ErrRemote = errors.New("gitproc: not a remote a git process may dial")
+
 	// ErrRepoShape: a Cmd.Dir (or the alternate the call names, at its real
 	// path) that is definitely not a repository the engine wrote by hand —
 	// always a *ShapeError, which names the rule and the repository. A file

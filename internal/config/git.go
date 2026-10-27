@@ -7,14 +7,15 @@ import (
 
 // Git is how this node serves the company's repositories when it has the git
 // role and the company sets code.native: where its disposable cache lives, how
-// large it may grow, and how many git processes it runs. Read once per
-// process, like every Tier A block.
+// large it may grow, how many git processes it runs, and which hosts the git
+// it runs may dial. Read once per process, like every Tier A block.
 //
 // TIER A, because every field is a fact about THIS NODE'S MACHINE — its disk,
-// its cores, its memory — rather than about the company: two git nodes of one
-// company on different hardware size their caches and lanes differently, and
-// a company document edited live has no business deciding how much of an
-// operator's volume a cache may fill.
+// its cores, its memory, its network — rather than about the company: two git
+// nodes of one company on different hardware size their caches and lanes
+// differently, and a company document edited live has no business deciding
+// how much of an operator's volume a cache may fill, or what of the node's
+// network its git may reach.
 type Git struct {
 	// CacheDir is where the node keeps its disposable copies of the
 	// company's repositories (internal/code/cache): relative to the store's
@@ -35,6 +36,21 @@ type Git struct {
 	// MaxTransfers is the size of the pool's TRANSFER lane — the clones,
 	// fetches and pushes in flight — passed raw like MaxProcesses.
 	MaxTransfers int `yaml:"max_transfers,omitempty" json:"max_transfers,omitempty" js:"min=0;max=65536" desc:"Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the node's memory. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."`
+
+	// ImportAllowPrivate lifts the public-address rule from the one outbound
+	// git dial (internal/code/gitproc's ResolveRemote): set, a remote's host
+	// is pinned to whatever its name resolves to, a forge on this node's own
+	// network among them. It governs every remote a git node dials — an
+	// import's source and both kinds of mirror — though its name names
+	// only the first of them.
+	//
+	// TIER A, and off unset, because what it opens is THIS NODE'S network:
+	// the addresses a dial may reach are the ones its machine is wired to,
+	// and a company document edited live — or a person naming an import's
+	// URL — has no business deciding that a git process may reach the
+	// node's metadata service or its neighbours. The zero value is the
+	// refusal, so a block that never names it keeps the wall.
+	ImportAllowPrivate bool `yaml:"import_allow_private,omitempty" json:"import_allow_private,omitempty" desc:"Let this node's imports and mirrors — pull and push alike, whatever the name says — dial a host that resolves to a loopback, link-local, private or otherwise non-public address, such as a forge on this node's own network. Off, a host any of whose addresses is not on the public internet is refused before git runs. A proxy the process names (HTTPS_PROXY, NO_PROXY) is dialed either way, and resolves the host itself."`
 }
 
 const (
@@ -75,7 +91,7 @@ const (
 // and what lets an unset block drop out of a JSON round trip.
 func (g Git) IsZero() bool {
 	return strings.TrimSpace(g.CacheDir) == "" && g.CacheMaxBytes == 0 &&
-		g.MaxProcesses == 0 && g.MaxTransfers == 0
+		g.MaxProcesses == 0 && g.MaxTransfers == 0 && !g.ImportAllowPrivate
 }
 
 // CacheDirFor is the cache's directory with the default applied and a

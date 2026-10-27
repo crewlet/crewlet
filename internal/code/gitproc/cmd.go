@@ -317,6 +317,21 @@ type Cmd struct {
 	// [Identity] for why the identity is the call's and what a part may hold.
 	Identity *Identity
 
+	// Remote is the one host the run dials — REQUIRED of a fetch, an
+	// ls-remote and a push, and ErrInvalid on every other subcommand, in
+	// any lane but the transfer lane, beside a Stall (libcurl watches a
+	// remote's leg, where the pool's watchdog cannot see it), and where its
+	// arguments name any remote but this one: git reads the remote from the
+	// first argument that is no option (or the first after "--"), which
+	// must be Remote.URL, and no other argument may name a URL. Built by
+	// [ResolveRemote] alone, so every address git connects to is one the
+	// public-address rule judged; the pool turns it into the run's
+	// configuration after the base (https alone, its host pinned to those
+	// addresses, no redirect, its header as http.extraHeader), and takes
+	// its secrets out of every line the run hands back. The package doc's
+	// "One outbound dial" says why each is so.
+	Remote *Remote
+
 	// Protocol is GIT_PROTOCOL as the client sent it. One not matching
 	// ^version=[0-9]+(:[a-z0-9=.-]+)*$ is DROPPED, and the run is then v0,
 	// which every client speaks. "" sets none.
@@ -436,8 +451,11 @@ type Result struct {
 // site may not set any of these keys: a rule every call site has to remember
 // is the rule ADR-0008 says gets one implementation.
 //
-//   - protocol.allow=never: no engine git dials anything; alternates are not
-//     a transport.
+//   - protocol.allow=never: no engine git dials anything through git's
+//     transports — alternates are not one — but a remote run, whose
+//     configuration after the base lifts it for https alone, for that run
+//     ([Cmd.Remote], remote.go's keys and the package doc's "One outbound
+//     dial").
 //   - gc.auto=0, maintenance.auto=false: only the cache's sync and its
 //     maintainer change a cache, and an automatic gc or maintenance run
 //     would detach a background process the sweep then kills.
@@ -481,7 +499,10 @@ var baseKeys = []KV{
 // serves every object in a repository to anyone who asks
 // (uploadpack.allowAnySHA1InWant, which the code host never sets, with its
 // two siblings) — a denylist leaks whichever nobody named. A key a call site
-// needs is added here in the commit that adds the call site.
+// needs is added here in the commit that adds the call site. No key of a
+// remote run's configuration is here, nor any other that reaches a network:
+// the pool writes those from the run's [Cmd.Remote], and a call site setting
+// one is told to name the remote there.
 var allowedConfig = map[string]string{
 	"core.multipackindex": "the cache's serve configuration and its maintainer",
 	"pack.allowpackreuse": "the cache's serve configuration: `single` — the bitmap's preferred pack sent " +
@@ -703,8 +724,15 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 	if err := checkIdentity(c.Args[0], c.Identity); err != nil {
 		return prepared{}, err
 	}
+	if err := checkRemote(c); err != nil {
+		return prepared{}, err
+	}
+	var remote []KV
+	if c.Remote != nil {
+		remote = c.Remote.config()
+	}
 
-	env := make([]string, 0, len(p.baseEnv)+3+2*(len(baseKeys)+len(c.Config))+len(c.Env)+len(identityVars))
+	env := make([]string, 0, len(p.baseEnv)+3+2*(len(baseKeys)+len(remote)+len(c.Config))+len(c.Env)+len(identityVars))
 	env = append(env, p.baseEnv...)
 	wd := c.Dir
 	if c.Dir != "" {
@@ -720,7 +748,7 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 			p.log.Debug("code_git_protocol_dropped", "protocol", textcut.Ellipsis(c.Protocol, 64))
 		}
 	}
-	env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(baseKeys)+len(c.Config)))
+	env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(baseKeys)+len(remote)+len(c.Config)))
 	threads := -1
 	for i, kv := range baseKeys {
 		value := kv.Value
@@ -732,8 +760,15 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		}
 		env = append(env, configKey(i, kv.Key), configValue(i, value))
 	}
-	for i, kv := range c.Config {
+	// A remote run's configuration, after the base and before the call
+	// site's: written by the pool from Cmd.Remote, and so in the process's
+	// environment, never its arguments — a credential header among it.
+	for i, kv := range remote {
 		env = append(env, configKey(len(baseKeys)+i, kv.Key), configValue(len(baseKeys)+i, kv.Value))
+	}
+	for i, kv := range c.Config {
+		at := len(baseKeys) + len(remote) + i
+		env = append(env, configKey(at, kv.Key), configValue(at, kv.Value))
 	}
 	for _, kv := range c.Env {
 		env = append(env, kv.Key+"="+kv.Value)
@@ -764,6 +799,10 @@ func checkConfig(config []KV) error {
 				}
 				return fmt.Errorf("%w: %s is the pool's: the pool sets it for every process", ErrConfig, kv.Key)
 			}
+		}
+		if slices.ContainsFunc(remoteKeys, func(k string) bool { return strings.EqualFold(k, key) }) {
+			return fmt.Errorf("%w: %s is the pool's: it is written for a remote run from its Cmd.Remote, so name "+
+				"the remote there (ResolveRemote, Remote.WithHeader)", ErrConfig, kv.Key)
 		}
 		if _, ok := allowedConfig[key]; !ok {
 			return fmt.Errorf("%w: %s: add it to gitproc's allowlist with the call site that needs it", ErrConfig, textcut.Ellipsis(kv.Key, 120))

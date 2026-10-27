@@ -43,6 +43,16 @@ func TestTheDeadlinesAreTheirFormulas(t *testing.T) {
 		t.Errorf("ReceivePackDeadline(1 GiB, 3M objects, 2m) = %v, want the upload formula, a walk of the "+
 			"history and the hook's: %v", got, want)
 	}
+	// A REMOTE RUN IS A TRANSFER WITH THE ENGINE AS THE CLIENT: the transfer
+	// formula over what it moves, and a walk of the history it fetches into
+	// or pushes from — none for a listing, which walks nothing.
+	if got, want := gitproc.RemoteDeadline(1<<30, 3_000_000),
+		gitproc.UploadPackDeadline(1<<30)+gitproc.HistoryWalk(3_000_000); got != want {
+		t.Errorf("RemoteDeadline(1 GiB, 3M objects) = %v, want the transfer formula and a walk of the history: %v", got, want)
+	}
+	if got, want := gitproc.RemoteDeadline(0, 0), gitproc.UploadPackDeadline(0); got != want {
+		t.Errorf("RemoteDeadline(0, 0), a listing's, = %v, want the transfer formula's floor %v", got, want)
+	}
 	for objects, want := range map[int64]time.Duration{
 		-1: 0, 0: 0, 1: gitproc.WalkPerObject, 3_000_000: 3_000_000 * gitproc.WalkPerObject,
 	} {

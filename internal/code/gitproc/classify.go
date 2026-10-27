@@ -485,6 +485,13 @@ type stderrSink struct {
 	pending []byte
 	tailBuf []byte
 	cut     bool // the tail buffer has dropped bytes from its front
+	// known takes a remote run's secrets out of each line as it arrives
+	// (Remote.known), or is nil: AS IT ARRIVES, before the tail is cut, so
+	// no cut can split a secret and keep the half it did not reach. A
+	// secret holds no line break (Remote.WithHeader), so a line holds it
+	// whole — but for a line past MaxLine, kept in pieces, across whose cut
+	// only the remote that holds the secret could have written it.
+	known *strings.Replacer
 }
 
 func (s *stderrSink) Write(p []byte) (int, error) {
@@ -518,6 +525,9 @@ func (s *stderrSink) Write(p []byte) (int, error) {
 // line appends one line to the tail, kept to at most twice StderrTail so the
 // copy it trims to is amortised.
 func (s *stderrSink) line(l []byte) {
+	if s.known != nil {
+		l = []byte(s.known.Replace(string(l)))
+	}
 	s.tailBuf = append(s.tailBuf, l...)
 	s.tailBuf = append(s.tailBuf, '\n')
 	if len(s.tailBuf) > 2*StderrTail {

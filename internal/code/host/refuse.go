@@ -187,11 +187,13 @@ func (s *Server) gitStopped(w http.ResponseWriter, r *http.Request, name string,
 //   - the pool refusing the engine's own call to git: malformed
 //     (gitproc.ErrInvalid, ErrNoDeadline), naming configuration or environment
 //     outside its allowlists (ErrConfig, ErrEnv), capturing output a call site
-//     must stream (ErrCaptureFull, whose own message says so), or reaching a
-//     pool that should never have been built — git's HOME not empty
-//     (ErrHome), a git below the node floor (*gitproc.ErrTooOld), a git that
-//     writes no trace2 stream (ErrNoTrace), each refused by gitproc.New and
-//     never by a run;
+//     must stream (ErrCaptureFull, whose own message says so), naming a
+//     remote no git process may dial (ErrRemote: no request of the host's
+//     dials another host, so one reaching here is the engine's own call), or
+//     reaching a pool that should never have been built — git's HOME not
+//     empty (ErrHome), a git below the node floor (*gitproc.ErrTooOld), a git
+//     that writes no trace2 stream (ErrNoTrace), each refused by gitproc.New
+//     and never by a run;
 //   - the cache refusing the host's call (cache.ErrInvalid): a Synced or a
 //     scratch it did not hand out, an id that is no canonical UUID, an
 //     adoption whose row and scratch disagree;
@@ -201,7 +203,7 @@ func refusedByCaller(err error) bool {
 	return errors.Is(err, gitproc.ErrInvalid) || errors.Is(err, gitproc.ErrNoDeadline) ||
 		errors.Is(err, gitproc.ErrConfig) || errors.Is(err, gitproc.ErrEnv) ||
 		errors.Is(err, gitproc.ErrHome) || errors.As(err, &old) || errors.Is(err, gitproc.ErrNoTrace) ||
-		errors.Is(err, gitproc.ErrCaptureFull) ||
+		errors.Is(err, gitproc.ErrCaptureFull) || errors.Is(err, gitproc.ErrRemote) ||
 		errors.Is(err, cache.ErrInvalid) || errors.Is(err, code.ErrBadLevel)
 }
 

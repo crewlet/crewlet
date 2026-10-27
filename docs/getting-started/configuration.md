@@ -1271,6 +1271,13 @@ store:
                                     #   more than one per 512 MiB of the node's
                                     #   memory — a transfer holds memory for its
                                     #   whole life, so size it to memory
+#   import_allow_private: false     #   let this node's imports and mirrors
+                                    #   (pull and push alike) dial a host on a
+                                    #   network that is not the public internet,
+                                    #   such as a forge beside the node. Off, a
+                                    #   host any of whose addresses is not public
+                                    #   is refused before git runs; a proxy
+                                    #   HTTPS_PROXY names is dialed either way
 
 coordination:
   type: local                       # one node holding its own seat leases;

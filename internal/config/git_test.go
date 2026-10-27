@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"strings"
@@ -166,9 +167,11 @@ func TestAGitBlockOnANodeThatServesNoGitWarns(t *testing.T) {
 		return out
 	}
 	block := "git:\n  cache_dir: /srv/git\n"
-	if got := gitWarnings(t, "node:\n  roles: [data, ingress]\n"+block); len(got) != 1 ||
-		!strings.Contains(got[0].Message, "nothing reads it") {
-		t.Errorf("a git block on a [data, ingress] node: warnings %+v, want one saying nothing reads it", got)
+	for _, b := range []string{block, "git:\n  import_allow_private: true\n"} {
+		if got := gitWarnings(t, "node:\n  roles: [data, ingress]\n"+b); len(got) != 1 ||
+			!strings.Contains(got[0].Message, "nothing reads it") {
+			t.Errorf("%q on a [data, ingress] node: warnings %+v, want one saying nothing reads it", b, got)
+		}
 	}
 	for name, doc := range map[string]string{
 		"undeclared roles, which are every role": block,
@@ -178,5 +181,45 @@ func TestAGitBlockOnANodeThatServesNoGitWarns(t *testing.T) {
 		if got := gitWarnings(t, doc); len(got) != 0 {
 			t.Errorf("%s: warned %+v", name, got)
 		}
+	}
+}
+
+// AN IMPORT OR A MIRROR DIALS ONLY THE PUBLIC INTERNET UNLESS ITS NODE SAYS
+// OTHERWISE: git.import_allow_private is off where the block does not name
+// it, on where it does, and a block naming nothing else is still a block — it
+// survives the JSON a node's Tier A is exported as, rather than dropping out
+// as an unset block does.
+//
+// Mutation: leave the field out of Git.IsZero, and the export loses it.
+func TestImportAllowPrivateIsOffUnlessTheNodeSetsIt(t *testing.T) {
+	t.Parallel()
+	b, err := ParseRunnableBootstrap([]byte("git:\n  max_processes: 2\n"), EnvOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Git.ImportAllowPrivate {
+		t.Error("git.import_allow_private is on where nothing sets it")
+	}
+	b, err = ParseRunnableBootstrap([]byte("git:\n  import_allow_private: true\n"), EnvOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.Git.ImportAllowPrivate {
+		t.Fatal("git.import_allow_private: true is read as off")
+	}
+	encoded, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back struct {
+		Git struct {
+			ImportAllowPrivate bool `json:"import_allow_private"`
+		} `json:"git"`
+	}
+	if err := json.Unmarshal(encoded, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !back.Git.ImportAllowPrivate {
+		t.Errorf("a git block naming only import_allow_private is exported without it:\n%s", encoded)
 	}
 }

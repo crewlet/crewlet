@@ -168,6 +168,8 @@ func TestACallSiteRefusalNamesItselfAndPromisesNoRetry(t *testing.T) {
 		"gitproc.ErrTooOld": &gitproc.ErrTooOld{Path: "/usr/bin/git", Found: gitproc.Version{Major: 2, Minor: 54},
 			Floor: gitproc.FloorNode},
 		"gitproc.ErrNoTrace": fmt.Errorf("%w: git version 2.43.0 on fd 3", gitproc.ErrNoTrace),
+		"gitproc.ErrRemote": fmt.Errorf("%w: http://git.example.com/r.git is not an https URL",
+			gitproc.ErrRemote),
 		"gitproc.ErrCaptureFull": fmt.Errorf("%w: git cat-file: %w", gitproc.ErrOutput,
 			fmt.Errorf("%w: git wrote more than 1048576 bytes into a capture — stream it through Cmd.Stdout",
 				gitproc.ErrCaptureFull)),
@@ -236,6 +238,9 @@ func TestEveryGitprocErrorHasADecidedAnswer(t *testing.T) {
 		"ErrHome":       {fmt.Errorf("%w: /h holds x", gitproc.ErrHome), refused},
 		"ErrTooOld":     {&gitproc.ErrTooOld{Path: "/usr/bin/git", Floor: gitproc.FloorNode}, refused},
 		"ErrNoTrace":    {fmt.Errorf("%w: /usr/bin/git", gitproc.ErrNoTrace), refused},
+		// No request of the host's dials another host: a remote refused is
+		// the engine's own call naming one wrongly, as a malformed command is.
+		"ErrRemote": {fmt.Errorf("%w: http://git.example.com/r.git is not an https URL", gitproc.ErrRemote), refused},
 		// Unmarked, a shape refusal is not the cache's: the cache's own is
 		// repaired under the request, and one met again past its repair is
 		// marked errStillDamaged (repairing). What is left is a scratch's or

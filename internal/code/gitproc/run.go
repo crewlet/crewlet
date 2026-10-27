@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -172,6 +174,11 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	p.track(c.Class, +1)
 
 	errs := &stderrSink{}
+	var known *strings.Replacer
+	if c.Remote != nil {
+		known = c.Remote.known()
+		errs.known = known
+	}
 	trace := newTraceSink(c.Dir)
 	var capt *capture
 	dst := c.Stdout
@@ -179,7 +186,21 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 		capt = &capture{max: p.captureMax}
 		dst = capt
 	}
-	out := startCopier("stdout", outR, func(cp *copier) { cp.pump(dst) })
+	// A remote run whose remote has a secret hands its stdout on a line at a
+	// time, the secrets taken out, and the last line once the stream ends —
+	// inside the copier, so Run's return still waits for every byte.
+	var redacting *lineRedactor
+	if known != nil {
+		redacting = &lineRedactor{w: dst, known: known}
+		dst = redacting
+	}
+	out := startCopier("stdout", outR, func(cp *copier) {
+		cp.pump(dst)
+		if redacting != nil && cp.callerErr == nil {
+			cp.state.Store(inCaller)
+			cp.callerErr = redacting.flush()
+		}
+	})
 	errc := startCopier("stderr", errR, func(cp *copier) { cp.pump(errs) })
 	// The trace is read to its end and counts toward no stall (moved): it
 	// says what git did, never that a transfer moves, and a pack-objects
@@ -233,6 +254,19 @@ func (p *Pool) run(ctx context.Context, c Cmd, prep prepared, lent *loan) (Resul
 	}
 	if capt != nil {
 		res.Stdout = capt.buf
+	}
+	if c.Remote != nil {
+		// A REMOTE RUN'S LINES ARE REDACTED BEFORE ANYTHING READS THEM — its
+		// ExitError, the observer, a caller's log line: stderr's tail has had
+		// the remote's secrets taken out of each line as it arrived (the
+		// sink), and the damage its events named has them taken out here;
+		// both then go through internal/redact, since what a remote writes is
+		// text from outside. Stdout had them taken out a line at a time too
+		// (lineRedactor) and no more: it is the run's ANSWER — the refs an
+		// ls-remote lists, a push's porcelain statuses — which its caller
+		// parses, so no rule that guesses at a credential's shape rewrites it.
+		res.Stderr = redact.Secrets(res.Stderr)
+		res.Damage = redactDamage(res.Damage, known)
 	}
 	// A CRASH IS A SIGNAL NOBODY HERE SENT. The pool's own kill (w.ended)
 	// is the pool's judgement of a run, and a caller whose input or output

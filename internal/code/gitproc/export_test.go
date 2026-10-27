@@ -2,8 +2,33 @@ package gitproc
 
 import (
 	"context"
+	"net/url"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
+
+// RemoteEnv is what a case resolves a remote against in place of the
+// process's own: the resolver the remote's host and the network's NAT64
+// prefixes are asked of, the proxy the process would name for a URL (nil
+// names none), and the values SSL_CERT_FILE and SSL_CERT_DIR would hold.
+type RemoteEnv struct {
+	Resolver       httpx.Resolver
+	Proxy          func(*url.URL) (*url.URL, error)
+	CAFile, CADirs string
+}
+
+// ResolveRemoteWith is ResolveRemote against env: a remote a case builds
+// reaching no network and no environment of the machine's.
+func ResolveRemoteWith(ctx context.Context, env RemoteEnv, rawURL string, allowPrivate bool) (Remote, error) {
+	proxy := env.Proxy
+	if proxy == nil {
+		proxy = func(*url.URL) (*url.URL, error) { return nil, nil }
+	}
+	return resolveRemote(ctx, rawURL, allowPrivate, remoteEnv{
+		resolver: env.Resolver, proxy: proxy, caFile: env.CAFile, caDirs: env.CADirs,
+	})
+}
 
 // SetTimings scales SlotWait and KillGrace for a pool a test then uses (call
 // before any Run).
