@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -21,9 +22,13 @@ import (
 type Result struct {
 	// Cards are what the person is shown, built from the route's own JSON.
 	Cards []wire.Card
-	// Model is what the model is handed: a compact summary of the cards,
-	// fenced where the answer carries text somebody wrote, at most
-	// [cards.ModelBytes] plus the fence.
+	// Model is what the model is handed: a compact summary of the cards, or
+	// a fact the engine states about the call (a refusal, a read too large
+	// to show, a body-less answer), fenced where the tool reads text
+	// somebody wrote and defused where it does not ([modelText]), at most
+	// [cards.ModelBytes] with the fence. EVERY PRODUCER GOES THROUGH THE ONE
+	// PIPELINE: [fitModel], [fitAnswer], [emptyModel] or [modelFact], each
+	// ending in [modelText] and the bound (TestEveryModelTextGoesThroughThePipeline).
 	Model string
 	// Refusal is the route's refusal, when the answer was one.
 	Refusal *wire.Refusal
@@ -46,8 +51,10 @@ func (r Result) Failed() bool { return r.Refusal != nil }
 //  2. An answer past what a step reads (exec.Response.Truncated) is never
 //     carded as though whole. The person is shown an oversize card naming
 //     what it read, the screen that shows all of it and what would narrow
-//     it; the model is told none of it reached it, which fields the cut
-//     answer began with and what to narrow ([oversize], ADR-0061).
+//     it; the model is told, in the engine's words alone, that none of it
+//     reached it, which tool and route it read, the bound and what the tool
+//     documents as narrowing it ([oversize], ADR-0061). Not one byte of the
+//     cut answer reaches the model, not even a field's name.
 //  3. Every string in the answer passes redact.Secrets, so no credential the
 //     answer carried reaches a card, the log or the model.
 //  4. The card is built by the tool's spec, capped with a notice when cut.
@@ -74,19 +81,21 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 		refusal.Detail = redact.Secrets(refusal.Detail)
 		// THE MODEL READS THE ROUTE'S WHOLE ACCOUNT, the person the engine's
 		// sentence for its kind (cards.PersonRefusal).
-		model, err := json.Marshal(map[string]any{"refused": map[string]any{
-			"code": refusal.Code, "message": refusal.ForModel(), "hint": refusal.Hint,
-			"grants": refusal.Grants,
+		// Each of the route's sentences is held to [refusalTextBytes], so
+		// the refusal is told whole within the bound however long a detail
+		// the route wrote.
+		model, err := modelFact(t, t.Trust, b, map[string]any{"refused": map[string]any{
+			"code": refusal.Code, "message": clipText(refusal.ForModel(), refusalTextBytes),
+			"hint": clipText(refusal.Hint, refusalTextBytes), "grants": refusal.Grants,
 		}})
 		if err != nil {
-			return Result{}, fmt.Errorf("catalog: encode a refusal: %w", err)
+			return Result{}, err
 		}
 		return Result{Cards: []wire.Card{cards.Error(cards.PersonRefusal(refusal, resp.Status),
-			t.Phrase, cards.Retryable(resp.Status))}, Model: provenance.Neutralise(b, string(model)),
-			Refusal: &refusal}, nil
+			t.Phrase, cards.Retryable(resp.Status))}, Model: model, Refusal: &refusal}, nil
 	}
 	if resp.Truncated {
-		return oversize(t, args, resp.Body, b)
+		return oversize(t, args, b)
 	}
 	if t.Infer {
 		return shapeAnswer(t, args, resp, b, now)
@@ -187,12 +196,11 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 		if len(headers) > 0 {
 			described["headers"] = headers
 		}
-		encoded, err := json.Marshal(described)
+		model, err := modelFact(t, t.Trust, b, described)
 		if err != nil {
-			return Result{}, fmt.Errorf("catalog: encode %s's answer: %w", t.Name, err)
+			return Result{}, err
 		}
-		return Result{Model: provenance.Neutralise(b, string(encoded)),
-			Trust: t.Trust, Empty: true}, nil
+		return Result{Model: model, Trust: t.Trust, Empty: true}, nil
 	}
 	body, err := redacted(resp.Body)
 	if err != nil {
@@ -266,17 +274,25 @@ func fitAnswer(t Tool, trust provenance.Trust, b provenance.Boundary, answer str
 // record it is of, page through it or pick its view, or (a generic read's)
 // carry the request itself.
 var notNarrowing = map[string]bool{"limit": true, "cursor": true, "after": true,
-	"before": true, "next": true, "view": true, "handle": true, "key": true, "id": true,
-	"item": true, "route": true, "path": true, "query": true}
+	"before": true, "before_id": true, "before_time": true, "next": true, "sort": true,
+	"view": true, "handle": true, "key": true, "id": true, "item": true, "route": true,
+	"path": true, "query": true}
 
 // narrowing is what a read takes that would narrow it, in the words a person
-// reads them in, in a stable order.
-func narrowing(t Tool) []string {
-	if t.schema == nil {
-		return nil
+// reads them in, in a stable order: the tool's own arguments, or for a generic
+// read ([Tool.Infer]) the query parameters the API reference documents for
+// the route it read. Every name is the engine's own (the catalogue's schema,
+// the reference's question table), never the answer's.
+func narrowing(t Tool, route string) []string {
+	var names []string
+	switch {
+	case t.Infer:
+		names = slices.Sorted(slices.Values(queryParams(route)))
+	case t.schema != nil:
+		names = slices.Sorted(maps.Keys(t.schema.properties))
 	}
 	var out []string
-	for _, name := range slices.Sorted(maps.Keys(t.schema.properties)) {
+	for _, name := range names {
 		switch {
 		case notNarrowing[name]:
 		case name == "q":
@@ -288,44 +304,27 @@ func narrowing(t Tool) []string {
 	return out
 }
 
-// fieldsOf is the top-level fields a cut answer began with, in order, read
-// until the cut: what the model can ask the route to leave out.
-func fieldsOf(body []byte) []string {
-	dec := json.NewDecoder(bytes.NewReader(body))
-	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-		return nil
-	}
-	var fields []string
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			break
-		}
-		name, ok := tok.(string)
-		if !ok {
-			break
-		}
-		fields = append(fields, name)
-		var skip json.RawMessage
-		if err := dec.Decode(&skip); err != nil {
-			break
-		}
-	}
-	return fields
-}
-
 // cutNote is what the model is told of a read past what one step reads.
 const cutNote = "None of this answer reached you or the person: it is larger than one " +
 	"step reads, so do not answer as though you read it. Read it again narrowed: with " +
 	"narrow_by, a smaller page, or (for a route you read with api_request) the route's " +
-	"own filters or a flag that leaves out the large field its documentation names. Or " +
-	"tell the person it is too large to show here, and that its screen shows all of it."
+	"own filters, paging or a flag that leaves out the large field its documentation " +
+	"names. Or tell the person it is too large to show here, and that its screen shows " +
+	"all of it."
 
 // oversize is the result of a read whose answer was past what one step reads:
-// the oversize card for the person, and for the model what the read was,
-// that none of it was read, the fields the cut answer began with and what
-// narrows it.
-func oversize(t Tool, args Args, body []byte, b provenance.Boundary) (Result, error) {
+// the oversize card for the person, and for the model what the read was, that
+// none of it was read and what narrows it.
+//
+// THE MODEL IS TOLD ONLY WHAT THE ENGINE KNOWS: the tool's name, the route
+// pattern it read (the catalogue's own, matched from the request the tool
+// built), the bound and the arguments the tool documents as narrowing it.
+// Never the cut answer's bytes, keys or values: a payload's field names are
+// written by whoever wrote the payload, and a cut read is otherwise unfenced
+// text nobody vouched for. The fact goes through [modelFact], fenced or
+// defused as every result of the tool is, held to the same bound and labelled
+// with the tool's trust.
+func oversize(t Tool, args Args, b provenance.Boundary) (Result, error) {
 	title := t.StepLabel(args)
 	var open *wire.Link
 	if spec, ok := t.CardFor(args); ok {
@@ -337,17 +336,78 @@ func oversize(t Tool, args Args, body []byte, b provenance.Boundary) (Result, er
 			open = cards.OpenFor(spec.Entity.Open, args)
 		}
 	}
-	narrow := narrowing(t)
-	model, err := json.Marshal(map[string]any{"cut": map[string]any{
-		"read": title, "shown": false, "limit_bytes": exec.MaxResponseBytes,
-		"began_with_fields": fieldsOf(body), "narrow_by": narrow, "note": cutNote,
-	}})
-	if err != nil {
-		return Result{}, fmt.Errorf("catalog: encode a cut read: %w", err)
+	route := readRoute(t, args)
+	narrow := narrowing(t, route)
+	cut := map[string]any{"tool": t.Name, "shown": false, "limit_bytes": exec.MaxResponseBytes,
+		"narrow_by": narrow, "note": cutNote}
+	if route != "" {
+		cut["route"] = route
 	}
-	// DEFUSED, as a refusal is: a field name is the answer's own text.
-	return Result{Cards: []wire.Card{cards.Oversize(title, open, narrow)},
-		Model: provenance.Neutralise(b, string(model))}, nil
+	model, err := modelFact(t, t.Trust, b, map[string]any{"cut": cut})
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Cards: []wire.Card{cards.Oversize(title, open, narrow)}, Model: model,
+		Trust: t.Trust}, nil
+}
+
+// readRoute is the route pattern a read's call was sent to, as the engine
+// knows it: a dedicated tool's Routes entry the request matched, or the route
+// a generic read named, which its request was only built for because the
+// route table holds it. Empty where neither is known.
+func readRoute(t Tool, args Args) string {
+	req, err := t.Request(args)
+	if err != nil {
+		return ""
+	}
+	if t.Infer {
+		// THE TABLE'S PATTERN, never free text: Request built the call only
+		// because the route table holds this key (a HEAD read as its GET's
+		// route, both as [generic.request] resolves them).
+		route := args.String("route")
+		if rest, isHead := strings.CutPrefix(route, http.MethodHead+" "); isHead {
+			route = http.MethodGet + " " + rest
+		}
+		return strings.TrimSpace(route)
+	}
+	route, _ := t.RouteOf(req)
+	return route
+}
+
+// refusalTextBytes is the most of each of a refusal's sentences the model is
+// told: a route's refusal is a sentence or two, and one that runs on is cut
+// so the refusal still fits the bound whole.
+const refusalTextBytes = 2 << 10
+
+// clipText is s cut to at most n bytes on a character, saying it was cut.
+func clipText(s string, n int) string {
+	const cut = " [cut]"
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n-len(cut)], "") + cut
+}
+
+// modelFact is a fact the engine states about a call (a refusal, a read too
+// large to show, a body-less answer) as the model reads it: encoded, then
+// through [modelText] as every summary of the tool is, held to
+// [cards.ModelBytes]. A fact is small by construction, so one past the bound
+// is the engine's defect and fails the step rather than reaching the model
+// cut.
+func modelFact(t Tool, trust provenance.Trust, b provenance.Boundary, fact any) (string, error) {
+	encoded, err := json.Marshal(fact)
+	if err != nil {
+		return "", fmt.Errorf("catalog: encode %s's result: %w", t.Name, err)
+	}
+	model, err := modelText(t, trust, b, encoded)
+	if err != nil {
+		return "", err
+	}
+	if len(model) > cards.ModelBytes {
+		return "", fmt.Errorf("catalog: %s's result does not fit the %d bytes a model is handed",
+			t.Name, cards.ModelBytes)
+	}
+	return model, nil
 }
 
 // fenceBytes is a first guess at what the fence and its envelope add to a
