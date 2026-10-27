@@ -1276,6 +1276,15 @@ func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 // engine stopping — failed at nothing: it logs nothing and leaves the copy to
 // the next pass, which lists it.
 //
+// The measure holds each entry of the cohort to the same rule once the
+// cohort's listing has named it. One gone by its stat — removed by something
+// outside the engine — counts nothing, and the rest of the cohort counts. One
+// still named whose stat fails is logged, and the copy counts what its state
+// recorded until a pass measures the cohort whole: passed over, its bytes
+// would be on the disk and in no count, the budget held to a total short by
+// them. Here the cohort becomes a file under the measure, so the stat answers
+// ENOTDIR, the one such failure a case can make whoever runs it.
+//
 // Mutations: pass over a cohort no state records (listMemo measuring nothing)
 // — the first row's record lacks it; keep a recorded cohort the tree no longer
 // holds — the second row's record keeps it; leave a tree of another layout's
@@ -1283,7 +1292,11 @@ func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 // under the measure (listMemo without its fs.ErrNotExist case) — the fourth
 // row logs it; excuse every error of a cohort's measure — the fifth row logs
 // nothing; log a measure the pass's end cut short (listMemo without its
-// ended-context case) — the sixth row logs it.
+// ended-context case) — the sixth row logs it; take an entry gone by its stat
+// for the measure's failure (measureCohort without its fs.ErrNotExist case) —
+// the seventh row's record lacks the cohort; pass over an entry whose stat
+// fails (measureCohort counting only what it stats) — the eighth row logs
+// nothing and lists the copy.
 func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 	t.Parallel()
 	block := memoEntry(0)
@@ -1496,6 +1509,95 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		if st, _ := cache.MemoOf(c, repo); !st.Listed || !slices.Equal(st.Cohorts, []uint64{first, first + 1}) {
 			t.Errorf("after the next pass the copy's record is %+v, want it listed with cohorts %d and %d", st,
 				first, first+1)
+		}
+	})
+
+	t.Run("an entry gone by its stat counts nothing", func(t *testing.T) {
+		t.Parallel()
+		var (
+			c         *cache.Cache
+			w         *syncWorld
+			repo, dir string
+			first     uint64
+			removed   bool
+		)
+		c, repo, dir, first, w = crashed(t, nil, func(o *cache.Options) {
+			cache.BeforeStatingMemo(o, func(entry string) {
+				// The cohort's listing has named its entries, and something
+				// outside the engine removes the first before the measure
+				// stats it.
+				if removed || filepath.Dir(entry) != cache.MemoCohortDir(dir, first+1) {
+					return
+				}
+				if err := os.Remove(entry); err != nil {
+					t.Error(err)
+					return
+				}
+				removed = true
+			})
+		})
+		cache.JanitorPass(c)
+		if !removed {
+			t.Fatal("the measure never came to stat an entry of the cohort no state records")
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_unlisted"); len(lines) != 0 {
+			t.Errorf("code_cache_memo_unlisted was logged %d times (%v) for an entry gone by its stat, want never",
+				len(lines), lines)
+		}
+		st, _ := cache.MemoOf(c, repo)
+		if !st.Listed || !slices.Equal(st.Cohorts, []uint64{first, first + 1}) ||
+			!slices.Equal(st.Held, []int64{4 * block, 2 * block}) {
+			t.Errorf("after the listing the record is %+v, want cohorts %d and %d holding %d and %d bytes, the "+
+				"second its two entries left", st, first, first+1, 4*block, 2*block)
+		}
+	})
+
+	t.Run("an entry the measure cannot stat is logged", func(t *testing.T) {
+		t.Parallel()
+		var (
+			c         *cache.Cache
+			w         *syncWorld
+			repo, dir string
+			first     uint64
+			replaced  bool
+		)
+		c, repo, dir, first, w = crashed(t, nil, func(o *cache.Options) {
+			cache.BeforeStatingMemo(o, func(entry string) {
+				// The cohort's listing has named its entries, and the cohort
+				// becomes a file before the measure stats the first, so the
+				// stat answers ENOTDIR: an entry still named that cannot be
+				// stat'ed, as EIO from a failing disk or EACCES from a lost
+				// search permission leaves one.
+				cohort := cache.MemoCohortDir(dir, first+1)
+				if replaced || filepath.Dir(entry) != cohort {
+					return
+				}
+				if err := os.RemoveAll(cohort); err != nil {
+					t.Error(err)
+					return
+				}
+				if err := os.WriteFile(cohort, []byte("no cohort"), 0o600); err != nil {
+					t.Error(err)
+					return
+				}
+				replaced = true
+			})
+		})
+		cache.JanitorPass(c)
+		if !replaced {
+			t.Fatal("the measure never came to stat an entry of the cohort no state records")
+		}
+		lines := w.logs.lines(t, "code_cache_memo_unlisted")
+		if len(lines) != 1 || lines[0]["cohort"] != float64(first+1) {
+			t.Errorf("code_cache_memo_unlisted was logged %d times (%v), want once, for cohort %d", len(lines),
+				lines, first+1)
+		}
+		if st, _ := cache.MemoOf(c, repo); st.Listed || st.Bytes != 4*block {
+			t.Errorf("the copy's record is %+v after an entry of a cohort could not be stat'ed, want it left to "+
+				"the next pass unlisted, holding the %d bytes its state recorded", st, 4*block)
+		}
+		if got := cache.MemoBytes(c); got != 4*block {
+			t.Errorf("the node counts its memo at %d bytes, want the %d the copy's state recorded", got, 4*block)
 		}
 	})
 }

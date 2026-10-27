@@ -99,6 +99,16 @@ func BeforeMeasuring(o *Options, f func(dir string)) {
 	o.knobs.measuring = f
 }
 
+// BeforeStatingMemo makes a copy's memo listing call f with each entry of a
+// cohort it measures as it is about to stat it, the cohort's listing having
+// named it.
+func BeforeStatingMemo(o *Options, f func(path string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.statingMemo = f
+}
+
 // BeforeTrimming makes the memo's trim call f as it is about to move the
 // cohort at dir out of a copy it found holding it.
 func BeforeTrimming(o *Options, f func(dir string)) {

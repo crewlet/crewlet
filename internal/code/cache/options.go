@@ -112,6 +112,15 @@ type knobs struct {
 	// holds it, as the host moves a view out, or a purge a copy, from under a
 	// measure that has listed it.
 	measuring func(dir string)
+	// statingMemo is told each entry of a cohort a copy's memo listing
+	// measures as the measure is about to stat it, once the cohort's listing
+	// has named it: a case removes the entry there, or replaces the cohort
+	// with a file so the stat fails, as something outside the engine, or a
+	// disk failing under the measure, would. What a case does here reaches
+	// that stat only where the listing reports each entry's type, as every
+	// filesystem the suite runs on does: on one that reports none, ReadDir
+	// stats each entry as it lists it.
+	statingMemo func(path string)
 	// trimming runs as the memo's trim is about to move the cohort at dir out
 	// of a copy it found holding it: a case retires the copy there, as a purge
 	// does from under a trim that has picked it.

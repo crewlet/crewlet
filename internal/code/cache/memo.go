@@ -1095,9 +1095,9 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 			cs = append(cs, ch)
 		}
 	}
-	var measuring func(dir string)
+	var measuring, stating func(path string)
 	if c.knobs != nil {
-		measuring = c.knobs.measuring
+		measuring, stating = c.knobs.measuring, c.knobs.statingMemo
 	}
 	for _, n := range found {
 		if holdsCohort(recorded, n) {
@@ -1107,7 +1107,7 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 		if measuring != nil {
 			measuring(dir)
 		}
-		bytes, err := measureCohort(ctx, dir)
+		bytes, err := measureCohort(ctx, dir, stating)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			// GONE SINCE THE LISTING NAMED IT: the copy was retired and its
@@ -1127,6 +1127,10 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 			// a failure (scrub, backfill, maintenance).
 			return
 		case err != nil:
+			// A COHORT STILL THERE THAT COULD NOT BE COUNTED — its directory, or
+			// an entry of it, unreadable (measureCohort): bytes on the disk no
+			// count holds. The copy stays unlisted, so the next pass measures it
+			// again, and the line repeats until the disk is fixed.
 			c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "cohort", n, "error", err)
 			return
 		}
@@ -1183,8 +1187,24 @@ const memoListBatch = 256
 // measureCohort is what the cohort directory at dir holds as the memo counts
 // it: each regular file at the blocks it takes, read a batch of names at a
 // time. Anything else in it is no entry and counts nothing; it goes with the
-// cohort.
-func measureCohort(ctx context.Context, dir string) (int64, error) {
+// cohort. stating is nil but in a test (knobs.statingMemo): it is told each
+// entry's path as the measure is about to stat it.
+//
+// AN ENTRY GONE BY ITS STAT IS NOTHING TO COUNT, AND EVERY OTHER ERROR OF THAT
+// STAT IS THE MEASURE'S — the rule every measure of the cache keeps
+// (eachFile, image.sizes). The listing that named an entry can outlive it —
+// its copy retired and moved into trash/ whole, or the entry removed by
+// something outside the engine — and then it holds no bytes. But an entry
+// still there that cannot be stat'ed — EIO from a failing disk, EACCES from a
+// cohort directory that lost its search permission and stays readable — still
+// holds its bytes. Passed over, it would leave the copy's record, the memo's
+// total and the total the budget is held to short by them: the budget overrun
+// while every gauge reads within it, and nothing logged. As the measure's
+// error it is listMemo's to log (code_cache_memo_unlisted), the copy left to
+// the next pass, which measures it again: the line repeats until the disk or
+// the permission is fixed, and meanwhile the copy counts what its state
+// recorded.
+func measureCohort(ctx context.Context, dir string, stating func(path string)) (int64, error) {
 	f, err := os.Open(dir)
 	if err != nil {
 		return 0, err
@@ -1200,9 +1220,17 @@ func measureCohort(ctx context.Context, dir string) (int64, error) {
 			if !d.Type().IsRegular() {
 				continue
 			}
-			if info, ierr := d.Info(); ierr == nil {
-				total += memoBytesOf(info.Size())
+			if stating != nil {
+				stating(filepath.Join(dir, d.Name()))
 			}
+			info, ierr := d.Info()
+			switch {
+			case errors.Is(ierr, fs.ErrNotExist):
+				continue
+			case ierr != nil:
+				return 0, ierr
+			}
+			total += memoBytesOf(info.Size())
 		}
 		switch {
 		case errors.Is(rerr, io.EOF):
