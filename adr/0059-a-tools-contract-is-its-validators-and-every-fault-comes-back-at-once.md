@@ -95,11 +95,16 @@ through `operator.Server.run`, skipped it.
   value outside an enum, a number past its bound or a list too long is left
   to the tool, and its answer carries every finding: a refusal lists them
   all, so one retry answers them.
-- **An unknown argument is noted, never refused here.** Every tool ignored an
-  unknown argument before this check existed. A call the tool answered
-  successfully while outside its schema (an unknown argument, a value the
-  tool tolerated) is answered with a note naming each one, logged
-  (`tool_args_outside_schema`) and counted
+- **An unknown argument is noted, never refused here.** At the top level,
+  the builtin authority gate already refuses an argument the tool does not
+  declare (`builtin.ErrUndeclaredArgument`), and that refusal now carries
+  every finding. Inside an object argument, an unknown key was ignored. A
+  call the tool answered successfully while outside its schema (an unknown
+  key it ignored, a value it tolerated) carries a note naming each one in
+  `Result.Note`, never in `Output`, which a caller may decode as a JSON
+  receipt. The model and an MCP client read the note after the answer, and
+  the act and work API answers carry it as `arguments_note` beside the
+  receipt. It is logged (`tool_args_outside_schema`) and counted
   (`crewlet.tools.args_outside_schema`). That count is the drift signal for a
   later decision, per tool, to refuse before the tool runs.
 - **The lossless leniencies stay accepted, exactly as the tools read them.**
@@ -124,7 +129,7 @@ seat:
 | `argFloat` | 2 | junk read as 0 | a misread |
 | `argFloatValue` | 7 | refused non-finite values and junk itself | a misread, refused before it runs |
 | `argStrings` | 15 | one string or a comma-separated one split; anything else read as no list | the split is kept; anything else is a misread |
-| an unknown argument | every tool | ignored | noted, logged and counted |
+| an unknown argument | every builtin | refused at the top level by the authority gate; ignored inside an object | the refusal carries every finding; inside an object, noted, logged and counted |
 
 Two drift tests hold the advertised schemas to what the check and the tools
 read:

@@ -49,6 +49,14 @@ type Result struct {
 	// 409 and 503, and reading those back out of a sentence would make the
 	// wording of a refusal an API.
 	Cause error
+
+	// Note is what the caller tells its reader beside Output: on a success,
+	// the arguments the call sent outside its tool's schema, which the tool
+	// did not read as sent (ADR-0059). NEVER PART OF OUTPUT, because a
+	// caller may parse Output (a write tool's JSON receipt, which the work
+	// API decodes); each renderer places the note where its reader reads
+	// it: the model's text, an MCP answer's own content, a receipt's field.
+	Note string
 }
 
 // Callable is the least a phase surface needs to offer something to a model

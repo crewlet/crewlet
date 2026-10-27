@@ -102,8 +102,9 @@ func call(ctx context.Context, in Invocation) (DetachedResult, error) {
 }
 
 // withFaults is a tool's answer carrying the findings its call's arguments
-// had: on a refusal of the arguments, every one, so the next call answers
-// them all; on a success, a note naming what was not read as sent, logged
+// had: on a refusal of the arguments (a sentence), every one appended, so the
+// next call answers them all; on a success, a [Result.Note] naming what was
+// not read as sent, logged
 // and counted ([metrics.ToolArgsOutsideSchema]) as the drift between the
 // schema and the tool's reading. Any other answer is left as it was.
 func withFaults(in Invocation, res Result, faults []ArgFault) Result {
@@ -114,8 +115,10 @@ func withFaults(in Invocation, res Result, faults []ArgFault) Result {
 	case res.Failed && RefusalOf(res) == RefusalInvalid:
 		res.Output += fmt.Sprintf("\n\nEvery argument outside %s's schema:\n%s", in.Name, faultLines(faults))
 	case !res.Failed:
-		res.Output += fmt.Sprintf("\n\nNote: %s ran, but these arguments are outside its schema and "+
-			"were not read as sent; send them as described next time:\n%s", in.Name, faultLines(faults))
+		// A NOTE, NEVER OUTPUT: a write's answer is the JSON receipt a
+		// caller decodes ([Result.Note]).
+		res.Note = fmt.Sprintf("%s ran, but these arguments are outside its schema and were not "+
+			"read as sent; send them as described next time:\n%s", in.Name, faultLines(faults))
 		paths := make([]string, len(faults))
 		for i, f := range faults {
 			paths[i] = f.Path
@@ -130,4 +133,14 @@ func withFaults(in Invocation, res Result, faults []ArgFault) Result {
 		}
 	}
 	return res
+}
+
+// Rendered is a result as a reader of text reads it: its output, and its note
+// after it ([Result.Note]). The model's surface and an MCP transport render a
+// result this way; a caller that decodes Output carries the note apart.
+func Rendered(res Result) string {
+	if res.Note == "" {
+		return res.Output
+	}
+	return res.Output + "\n\nNote: " + res.Note
 }

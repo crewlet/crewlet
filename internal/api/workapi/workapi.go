@@ -673,6 +673,20 @@ func (s *served) answerDispatched(w http.ResponseWriter, r *http.Request, key,
 	}
 }
 
+// receiptOf is a tool's successful result as the work API answers it: the
+// tool's JSON, and the note on its arguments beside its own fields, never in
+// the tool's answer, which is what this decodes ([tools.Result.Note]).
+func receiptOf(result tools.Result) (map[string]any, error) {
+	var receipt map[string]any
+	if err := json.Unmarshal([]byte(result.Output), &receipt); err != nil {
+		return nil, err
+	}
+	if result.Note != "" {
+		receipt["arguments_note"] = result.Note
+	}
+	return receipt, nil
+}
+
 // answerTool renders one tool's receipt, or its failure beside about.
 func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
 	result tools.Result) {
@@ -681,8 +695,8 @@ func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
 		operator.Fail(w, result.Cause, result.Output, key, about)
 		return
 	}
-	var receipt map[string]any
-	if err := json.Unmarshal([]byte(result.Output), &receipt); err != nil {
+	receipt, err := receiptOf(result)
+	if err != nil {
 		// EVERY WRITE TOOL ANSWERS JSON, so this is a tool that changed
 		// shape rather than a caller's mistake.
 		log.Warn("api_work_receipt_unreadable", "error", err)

@@ -472,7 +472,9 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 			attribute.String("crewlet.tool_outcome", "refused_by_contract"))
 		return toolloop.ToolResult{Output: recorded.Output, Failed: true, Cause: RefusalInvalid}, nil
 	}
-	recorded, run := s.settle(Call{Name: call.Name, Args: args, Output: res.Output,
+	// THE MODEL READS TEXT, so the note is rendered after the output here
+	// ([Rendered]), and the ledger records what the model read.
+	recorded, run := s.settle(Call{Name: call.Name, Args: args, Output: Rendered(res.Result),
 		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target)
 	res.Output = recorded.Output
 	s.reportLoop(call.Name, target, run, turn)

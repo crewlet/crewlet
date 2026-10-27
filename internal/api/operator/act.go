@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // ActPattern is the route the act transport is mounted at: ONE catalogue tool
@@ -117,6 +118,11 @@ type ActAnswer struct {
 	Position *string          `json:"position"`
 	OpID     string           `json:"op_id"`
 	Receipt  json.RawMessage  `json:"receipt"`
+
+	// ArgumentsNote names the arguments the call sent outside its tool's
+	// schema, which the tool did not read as sent ([tools.Result.Note]),
+	// beside the receipt rather than inside it, which is the tool's JSON.
+	ArgumentsNote string `json:"arguments_note,omitempty"`
 }
 
 // actRequest is the body: the tool's arguments, and nothing else.
@@ -268,7 +274,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		Fail(w, result.Cause, result.Output, key, About(name, args))
 		return
 	}
-	answer := receiptOf(name, result.Output)
+	answer := answerOf(name, result)
 	answer.OpID = key
 	log.InfoContext(r.Context(), "operator_act",
 		append(logged, "outcome", string(answer.Outcome))...)
@@ -344,6 +350,15 @@ func decodeAct(raw []byte) (actRequest, error) {
 // build does not know is reported `unknown`, never `applied`: it is the one
 // answer that cannot tell a caller to stop looking at a write it cannot vouch
 // for.
+// answerOf is a tool's successful result as the act transport answers it:
+// the receipt the tool's JSON is, and the note on its arguments beside it,
+// never inside it ([tools.Result.Note]).
+func answerOf(name string, result tools.Result) ActAnswer {
+	answer := receiptOf(name, result.Output)
+	answer.ArgumentsNote = result.Note
+	return answer
+}
+
 func receiptOf(name, output string) ActAnswer {
 	answer := ActAnswer{Tool: name, Outcome: statelog.OutcomeApplied}
 	if !json.Valid([]byte(output)) {

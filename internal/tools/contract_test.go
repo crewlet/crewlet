@@ -260,3 +260,29 @@ func TestAnUnsupportedSchemaIsNamed(t *testing.T) {
 		t.Errorf("the contract schema is unsupported: %v", got)
 	}
 }
+
+// A NOTE NEVER TOUCHES A TOOL'S OUTPUT (ADR-0059): a write tool answers the JSON
+// receipt a caller decodes (the work API, the act transport), so a success
+// outside the schema leaves Output byte for byte as the tool wrote it and
+// carries the findings in Note, which each renderer places for its reader.
+//
+// Mutation: append the note to Output and the receipt no longer decodes.
+func TestANoteNeverTouchesTheToolsOutput(t *testing.T) {
+	t.Parallel()
+	const receipt = `{"key": "ENG-9", "outcome": "applied"}`
+	tool := &contractTool{name: "make_thing", answer: tools.Result{Output: receipt}}
+	res, refused, err := tools.Invoke(context.Background(), tools.Invocation{Name: "make_thing",
+		Tool: tool, Args: map[string]any{"title": "t", "tittle": "x"}, Where: "operator"})
+	if err != nil || refused {
+		t.Fatalf("Invoke: refused %v, %v", refused, err)
+	}
+	if res.Output != receipt {
+		t.Errorf("the tool's Output became %q", res.Output)
+	}
+	if !strings.Contains(res.Note, "`tittle` is not an argument") {
+		t.Errorf("the note is %q", res.Note)
+	}
+	if got := tools.Rendered(res.Result); !strings.HasPrefix(got, receipt+"\n\nNote: make_thing ran") {
+		t.Errorf("rendered for a reader of text as %q", got)
+	}
+}

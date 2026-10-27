@@ -24,6 +24,7 @@ import (
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -876,5 +877,23 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	if rec.Code < 400 || rec.Code >= 500 {
 		t.Errorf("a call whose caller hung up was recorded as %d — a 5xx counts "+
 			"a closed tab as this node failing", rec.Code)
+	}
+}
+
+// A RECEIPT STAYS THE TOOL'S JSON WHEN THE CALL'S ARGUMENTS WERE NOTED
+// (ADR-0059): the note rides beside the receipt (`arguments_note`), never
+// inside the tool's answer, which a screen decodes.
+//
+// Mutation: carry the note in the tool's Output and the receipt is a string.
+func TestAnArgumentsNoteRidesBesideTheReceipt(t *testing.T) {
+	t.Parallel()
+	answer := operator.AnswerOf(worklet.CreateWorkItemTool, tools.Result{
+		Output: `{"key": "ENG-9", "outcome": "applied"}`, Note: "`ops[0].opp` is not an argument"})
+	var receipt map[string]any
+	if err := json.Unmarshal(answer.Receipt, &receipt); err != nil || receipt["key"] != "ENG-9" {
+		t.Errorf("the receipt is %s (%v), want the tool's own JSON answer", answer.Receipt, err)
+	}
+	if answer.ArgumentsNote != "`ops[0].opp` is not an argument" {
+		t.Errorf("the answer's note is %q", answer.ArgumentsNote)
 	}
 }
