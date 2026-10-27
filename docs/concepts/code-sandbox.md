@@ -550,7 +550,10 @@ its review, whichever node resumes it:
     ended, a held poll is let go and every later one turned away with a `503`
     and a `Retry-After` — never an empty answer a poller would ask again at
     once — and its notes wait on the record for the session's next opening, on
-    this node or the seat's next holder; a read names the notes
+    this node or the seat's next holder. That holds as well for a poll the
+    stopping node is relaying to another node that holds the session: the
+    stopping node lets go of it at once rather than wait out the holder's hold
+    on its listener's grace. A read names the notes
     (one to ten) the CLI put in front of its model, and is recorded read at the
     run's next step. Each note carries an id the CLI admits it under, unique to
     the note and the job, so a poller that admits it twice admits it once.

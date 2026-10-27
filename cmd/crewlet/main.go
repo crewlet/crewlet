@@ -1731,9 +1731,11 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	// and a stream is a request a listener's grace would otherwise wait out
 	// whole. The engine its ends are written to has not been torn down yet.
 	closeAssistant(ctx, s.assistant, log)
-	// AND EVERY HELD POLL FOR A RUN'S NOTES, for the same reason: released
-	// at once and turned away as a 503 the CLI pauses on before it polls
-	// again — on this node's successor, once it has the seat.
+	// AND EVERY HELD POLL FOR A RUN'S NOTES, for the same reason — one this
+	// node serves from its own opening and one it relays to the session's
+	// holder alike: released at once and turned away as a 503 the CLI pauses
+	// on before it polls again, on this node's successor once it has the
+	// seat. A relayed tool call or read is left to finish within the grace.
 	s.bridge.Shutdown()
 	// THE ARTIFACT ORIGIN FIRST: it serves no probe, and an artifact frame
 	// is the request most able to wait for a node that is going away.

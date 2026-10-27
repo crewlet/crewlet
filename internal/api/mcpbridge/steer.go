@@ -238,6 +238,70 @@ func (b *Bridge) pollNotes(w http.ResponseWriter, r *http.Request, opened *bindi
 	}
 }
 
+// isNotesPoll reports whether r is a poll of the notes route ([SteerPattern]):
+// the one call under the bridge's prefix that WAITS for something to happen,
+// rather than for something to be done.
+func isNotesPoll(r *http.Request) bool {
+	return r.Method == http.MethodGet && r.PathValue("verb") == "notes"
+}
+
+// forwardPoll relays a poll this node holds no opening for to the session's
+// holder ([Bridge.forward]) — and lets go of it the moment this bridge shuts
+// down, answering it as a poll held here is answered then: a 503 the poller
+// pauses on ([Bridge.pollNotes]).
+//
+// A RELAYED POLL IS HELD BY TWO NODES, the holder that waits for a note and this
+// one, which waits for the holder's answer, and only the holder's shutdown
+// released it. A node that is stopping relays its polls the longest — its seats
+// are handed to peers, and a direct box goes on dialling its loopback (ADR-0057)
+// — and one it went on waiting on kept its listener busy for the whole grace of
+// a graceful stop and was then cut, which a poller reads as a network error
+// rather than the answer to pause on. Only the poll: a relayed tool call or a
+// read may already be running on the holder, and is left to finish.
+func (b *Bridge) forwardPoll(w http.ResponseWriter, r *http.Request, sub subject, f *fleet) {
+	if b.shuttingDown() {
+		httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(steerPollRetry))
+		return
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	go func() {
+		select {
+		case <-b.shutdown:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	answered := &statusWriter{ResponseWriter: w}
+	// THE RELAY TELLS THE HOLDER THE EXCHANGE IS OVER when its context ends
+	// (internal/httprelay), so the holder lets go of its side as well.
+	b.forward(answered, r.WithContext(ctx), sub, f)
+	if !answered.wrote && b.shuttingDown() {
+		httpjson.Unavailable(w, httpjson.CodeDraining, httpjson.RetrySeconds(steerPollRetry))
+	}
+}
+
+// statusWriter is a response writer that says whether a status was written
+// through it — the relay's pump writes one only once the holder answers.
+type statusWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (s *statusWriter) WriteHeader(status int) {
+	s.wrote = true
+	s.ResponseWriter.WriteHeader(status)
+}
+
+func (s *statusWriter) Write(b []byte) (int, error) {
+	s.wrote = true
+	return s.ResponseWriter.Write(b)
+}
+
+// Unwrap hands [http.ResponseController] the writer beneath, so the relay's
+// flushes reach the client.
+func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 // steerPollRetry is the Retry-After a poll the bridge cannot hold is turned
 // away with: the pace the bridge's own relay reads a seat's lease again at
 // while it waits for the seat's next holder ([holderRetryCeiling]), because
@@ -286,10 +350,11 @@ func readNotes(w http.ResponseWriter, r *http.Request, opened *binding, inbox St
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Shutdown releases every poll for notes this bridge holds, and turns away every
-// one that arrives after it, at once and as a failure the poller pauses on
-// ([Bridge.pollNotes]), so a graceful stop never waits out a hold. Safe to call
-// more than once.
+// Shutdown releases every poll for notes this bridge holds — one it serves from
+// its own opening, and one it is relaying to the session's holder
+// ([Bridge.forwardPoll]) — and turns away every one that arrives after it, at
+// once and as a failure the poller pauses on ([Bridge.pollNotes]), so a graceful
+// stop never waits out a hold. Safe to call more than once.
 func (b *Bridge) Shutdown() {
 	if b == nil {
 		return

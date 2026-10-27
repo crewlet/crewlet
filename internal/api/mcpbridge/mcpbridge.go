@@ -1030,6 +1030,10 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 			return
 		}
 		if f := b.fleet.Load(); f != nil {
+			if isNotesPoll(r) {
+				b.forwardPoll(w, r, sub, f)
+				return
+			}
 			b.forward(w, r, sub, f)
 			return
 		}

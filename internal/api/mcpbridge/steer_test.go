@@ -147,12 +147,18 @@ type polled struct {
 // answer is one GET of the notes route, read whole.
 func (f *steerFixture) answer(ctx context.Context, t *testing.T, url string) polled {
 	t.Helper()
+	return pollWith(ctx, t, f.server.Client(), url)
+}
+
+// pollWith is one GET of the notes route through client, read whole.
+func pollWith(ctx context.Context, t *testing.T, client *http.Client, url string) polled {
+	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	began := time.Now()
-	res, err := f.server.Client().Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return polled{took: time.Since(began)}
 	}
@@ -555,6 +561,66 @@ func TestTheNotesRouteReachesTheSessionsHolderThroughTheRelay(t *testing.T) {
 		t.Errorf("a read through the fleet's address answered %d, the holder's inbox read %v",
 			read.StatusCode, reads)
 	}
+}
+
+// A RELAYED POLL IS LET GO WHEN THE NODE RELAYING IT STOPS. A poll that reaches
+// a node holding no opening of its job is relayed to the session's holder, and
+// waits there for a note — and the node relaying it waits too. A stopping node
+// relays its polls the longest (its seats are handed on, and a direct box goes
+// on dialling its loopback), so its Shutdown lets go of each, answering it as a
+// poll held there is answered: a 503 `draining` with a Retry-After, at once —
+// never left to keep the listener busy for its whole grace and then be cut,
+// which a poller reads as a network error rather than the answer to pause on.
+// A poll that arrives after the shutdown is turned away the same way.
+//
+// Mutation: forward the poll under the request's own context, as every call
+// was, and the poll waits out the holder's hold.
+func TestShutdownLetsGoOfAPollItRelays(t *testing.T) {
+	t.Parallel()
+	fx := newFixture(t)
+	f := newFleet(t, 2, 10*time.Second)
+	entry, holder := f.members[0], f.members[1]
+	for _, m := range f.members {
+		mux := m.server.Config.Handler.(*http.ServeMux)
+		mux.Handle(mcpbridge.SteerPattern, m.bridge.SteerHandler())
+	}
+	const hold = time.Minute
+	mcpbridge.HoldPollsFor(holder.bridge, hold)
+	session := &mcpbridge.Session{RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
+		Surface: fx.surface, Ledger: fx.ledger, Steer: newFakeInbox()}
+	route := mcpbridge.SteerURL(f.takeOver(t, holder, session)) + "/notes"
+	poll := func() polled {
+		t.Helper()
+		return pollWith(t.Context(), t, entry.server.Client(), route)
+	}
+	done := make(chan polled, 1)
+	go func() { done <- poll() }()
+	// THE POLL IS HELD AT THE HOLDER, relayed by the entry.
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case got := <-done:
+		t.Fatalf("the relayed poll answered %v before anything happened", got.res)
+	default:
+	}
+	stopped := time.Now()
+	entry.bridge.Shutdown()
+	select {
+	case got := <-done:
+		if got.res == nil || got.res.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("the relayed poll answered %v when its node stopped, want a 503", got.res)
+		}
+		wantTurnedAway(t, got, "draining")
+		if took := time.Since(stopped); took > 2*time.Second {
+			t.Errorf("the relayed poll was let go %s after its node stopped, want at once", took)
+		}
+	case <-time.After(hold / 2):
+		t.Fatal("the relayed poll waited out the holder's hold after its node stopped")
+	}
+	after := poll()
+	if after.res == nil || after.res.StatusCode != http.StatusServiceUnavailable || after.took > 2*time.Second {
+		t.Fatalf("a poll after the shutdown answered %v after %s, want a 503 at once", after.res, after.took)
+	}
+	wantTurnedAway(t, after, "draining")
 }
 
 // syncBuffer is a log sink the logger may write to from any goroutine.
