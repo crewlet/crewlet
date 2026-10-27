@@ -1544,8 +1544,10 @@ func (c *Cache) Layers(s Synced) []code.LayerRow {
 //   - A FAILURE: a part the store does not hold is asked about once at the
 //     log's head (a linearizable sync) and refused `missing` only while the
 //     rows still name the layer; bytes that are not the row's are refused
-//     `corrupt`; anything else waits 1 minute, doubling to installRetryCap,
-//     and the repository's next round that serves its chain clears the wait.
+//     `corrupt`; anything else — a miss whose read at the head failed among
+//     it, which decided nothing — waits 1 minute, doubling to
+//     installRetryCap, and the repository's next round that serves its chain
+//     clears the wait.
 //     A layer the rows no longer name — one a publication replaced — keeps
 //     serving, its packs held, while its replacement cannot be placed, and is
 //     cut once that has lasted installRetryCap.
@@ -1780,9 +1782,10 @@ func (c *Cache) installPass(ctx context.Context) (time.Time, *sync.WaitGroup) {
 //  4. THE FAILURE, if one stopped the fetches: a part the store does not hold
 //     is asked about at the log's head once, refused `missing` while the rows
 //     still name it there; bytes not its row's are refused `corrupt`; and
-//     anything else is tried again after its wait. A layer the rows no longer
-//     name that has stood in for its replacement for installRetryCap with
-//     nothing fetched is cut.
+//     anything else — a miss the head could not be read about included — is
+//     tried again after its wait. A layer the rows no longer name that has
+//     stood in for its replacement for installRetryCap with nothing fetched
+//     is cut.
 func (c *Cache) installRepo(ctx context.Context, id string) {
 	c.mu.Lock()
 	e := c.entries[id]
@@ -1859,12 +1862,14 @@ func (c *Cache) installRepo(ctx context.Context, id string) {
 	}
 
 	// WHAT IS LEFT: a definite failure decided, and the repository queued
-	// again behind its wait — a failure that may pass, a placement that did
-	// not, or a stale layer still standing in for a replacement — or nothing.
+	// again behind its wait — a failure that may pass (a miss the log's head
+	// could not decide among them), a placement that did not, or a stale
+	// layer still standing in for a replacement — or nothing.
+	var undecided error
 	if stop != nil && stop.outcome != layerFailed {
-		c.refuseFailed(ctx, e, *stop)
+		undecided = c.refuseFailed(ctx, e, *stop)
 	}
-	c.settleInstall(id, stop, swapFailed, stale)
+	c.settleInstall(id, stop, undecided, swapFailed, stale)
 }
 
 // stuckFor is how long a layer the rows no longer name has stood in for a
@@ -1882,12 +1887,16 @@ func (c *Cache) stuckFor(id string, now time.Time) time.Duration {
 
 // settleInstall records how id's install ended: done — its wait forgotten —
 // or queued again behind a wait. A try that failed for a reason that may pass
-// (the store, this node's disk, a swap that did not complete) waits
-// installWindow of its failures in a row; a definite refusal plans again at
-// once, the refused layer now blocking; and a layer the rows no longer name
+// waits installWindow of its failures in a row: the store or this node's disk
+// failing (stop's outcome failed), a swap that did not complete, or a part the
+// store does not hold while the read at the log's head that decides it failed
+// (undecided, that read's error) — nothing was decided, and taken up again at
+// once the repository would cost a GET, a staging and a failed round at every
+// pass for as long as the head cannot be read. A definite refusal plans again
+// at once, the refused layer now blocking; and a layer the rows no longer name
 // still standing in for its replacement waits until it has stood
 // installRetryCap, when its cut is due.
-func (c *Cache) settleInstall(id string, stop *layerFetch, swapFailed, stale bool) {
+func (c *Cache) settleInstall(id string, stop *layerFetch, undecided error, swapFailed, stale bool) {
 	in, now := c.installer, c.now()
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -1901,12 +1910,17 @@ func (c *Cache) settleInstall(id string, stop *layerFetch, swapFailed, stale boo
 		in.waits[id] = w
 	}
 	switch {
-	case swapFailed || (stop != nil && stop.outcome == layerFailed):
+	case swapFailed || undecided != nil || (stop != nil && stop.outcome == layerFailed):
 		w.failures++
 		w.retryAt = now.Add(installWindow(w.failures))
 		if stop != nil {
-			c.log.Warn("code_layer_install_failed", "repo", id, "layer", stop.row.Layer.LayerID, "error", stop.err,
-				"retry_in", installWindow(w.failures))
+			err := stop.err
+			if undecided != nil {
+				err = fmt.Errorf("%w; and the log's head, which decides whether the rows still name the layer, "+
+					"could not be read: %w", stop.err, undecided)
+			}
+			c.log.Warn("code_layer_install_failed", "repo", id, "layer", stop.row.Layer.LayerID, "seq", stop.row.Seq,
+				"outcome", string(stop.outcome), "error", err, "retry_in", installWindow(w.failures))
 		}
 	default:
 		w.failures, w.retryAt = 0, time.Time{}
@@ -1977,13 +1991,16 @@ func (c *Cache) fetchForInstall(ctx context.Context, id string, row code.LayerRo
 // a round like any other — and refused `missing` on the copy current then
 // only while its rows still name the layer at the same record (a publication
 // that replaced it since leaves nothing to refuse); bytes that are not the
-// row's are refused `corrupt` while the rows name it.
-func (c *Cache) refuseFailed(ctx context.Context, e *entry, f layerFetch) {
+// row's are refused `corrupt` while the rows name it. It answers nil once it
+// decided — a refusal, or none to make — and the head read's failure where it
+// could not: a miss the head did not decide is neither refused nor cleared,
+// and its try is one that may pass (settleInstall), asked again after its
+// wait.
+func (c *Cache) refuseFailed(ctx context.Context, e *entry, f layerFetch) error {
 	if f.outcome == layerMissing {
 		s, err := c.Sync(ctx, e.id, statelog.Freshness{Level: statelog.ReadLinearizable})
 		if err != nil {
-			// Unknown, not refused: the next try asks again.
-			return
+			return err
 		}
 		s.Release()
 	}
@@ -1993,9 +2010,10 @@ func (c *Cache) refuseFailed(ctx context.Context, e *entry, f layerFetch) {
 	if e.dead || inc == nil || !slices.ContainsFunc(inc.chain, func(r code.LayerRow) bool {
 		return r.Layer.LayerID == f.row.Layer.LayerID && r.Added == f.row.Added
 	}) {
-		return
+		return nil
 	}
 	c.refuse(e, inc, f.row, f.outcome, f.err.Error())
+	return nil
 }
 
 // chainPlacement is what became of the installer's placement of a chain.

@@ -1513,7 +1513,8 @@ chain. Each refusal is logged once a copy as `code_layer_refused`, with its
   rows may have moved to a newer publication since the node read them, and
   the store collected the old one's parts, so the node asks the log's head
   first: the layer is refused only while a read made after the store's answer
-  still names it.
+  still names it. While the head cannot be read, nothing is decided, and the
+  layer is tried again after the wait a store that fails to answer gets.
 - **`corrupt`**: a part whose bytes are not its row's, files the row does not
   describe — sections, packs or counts not the row's, a graph layer over
   another base — or a placement whose read through the bitmap failed.
@@ -1522,11 +1523,11 @@ chain. Each refusal is logged once a copy as `code_layer_refused`, with its
 
 A refusal holds while the rows name that very layer record, and lives in the
 node's memory, so a restart tries the layer once more. A failure that may
-pass is no refusal. A store that fails to answer, or a disk that refuses a
-write, is logged as `code_layer_install_failed` and tried again a minute
-later, then twice as long each time up to half an hour — at most one try of a
-repository a node each half hour once it keeps failing — while the copy
-serves as it is.
+pass is no refusal. A store that fails to answer, a disk that refuses a
+write, or a missing part while the log's head cannot be read, is logged as
+`code_layer_install_failed` and tried again a minute later, then twice as long
+each time up to half an hour — at most one try of a repository a node each
+half hour once it keeps failing — while the copy serves as it is.
 
 **After a restore.** A backup carries no layer: a layer is derived, and the
 backup neither copies nor asks after it ([Live, retired and derived
@@ -2965,7 +2966,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_layer_installed` | `INFO` | A published layer of a repository's chain was placed in this node's copy ([Published layers](#published-layers)): the `layer` (its multi-pack-index's checksum) and the `seq` of its row, its `bytes`, how long its fetch, check and placement `took`, and whether it was `adopted` — linked from the files the repository's maintainer wrote on this node rather than fetched. |
 | `code_layer_refused` | `WARN` | This node will not install a published layer while the rows name it ([When a layer is missing](#when-a-layer-is-missing)): `outcome` `missing`, a part the object store holds nothing for while the log's head still names the layer; `corrupt`, bytes or files its row does not describe, or a placement whose read through its bitmap failed — a layer over the wrong base; or `newer_git`, written by a git newer than this node's — with the `detail`. The copy serves from the layers below it, or in its own mode. Once a copy a layer; a restart tries it again. |
 | `code_layers_cut` | `INFO` | A repository's installed chain was cut in place (`incarnation` the copy's number), the `kept` layers beneath the `cut` ones staying: `why` is `layers-moved` — the rows name another chain, or a layer's file failed its checksum, its layers then fetched again — or `pack-removed` or `pack-retired`, a pack a cut layer names leaving. |
-| `code_layer_install_failed` | `WARN` | A published layer could not be installed (`error`). The installer logs it when the object store failed to answer or this node's disk refused a write, with `retry_in` — a minute, doubling to half an hour; a full sync logs it for any layer it could not fetch, with the layer's `seq` and `outcome`, and leaves the layer to the installer (one `corrupt` is refused at once). The copy serves as it is meanwhile. |
+| `code_layer_install_failed` | `WARN` | A published layer could not be installed (`error`), with the layer's `seq` and `outcome`. The installer logs it when the object store failed to answer, this node's disk refused a write, or a part was `missing` while the log's head, which decides whether the rows still name the layer, could not be read — with `retry_in`, a minute, doubling to half an hour; a full sync logs it for any layer it could not fetch, and leaves the layer to the installer (one `corrupt` is refused at once). The copy serves as it is meanwhile. |
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
 | `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph` — the copy's own graph, or its tip over a published chain — or `state` when its record could not be written). The repository is served without what the step writes — slower, never wrong — and the next run waits out the interval. |
 | `code_cache_compaction_refused` | `WARN` | A compaction of a `repo` needs more memory than this node can give its background work — its `estimate`, against the `budget`, with the `memory` it was taken from and what was `reserved` — so this node does not build it; logged once for the copy however many polls ask again, and counted `crewlet.code.cache.maintenance.refusals{step=compact}`. The next poll asks again, so a node given more memory builds it; at the pack bound the repository's pushes are refused meanwhile, which `code_compaction_behind` raises. |
