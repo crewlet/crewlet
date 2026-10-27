@@ -46,6 +46,10 @@ import (
 //     of it — the interrupt case failed so, now and then, under load. With no
 //     shell left there is nothing to hold it.
 //
+// Every call also records, in `configured`, whether it was handed
+// OPENCODE_CONFIG_CONTENT — `handed|<subcommand>` or `|<subcommand>` — and
+// `serve` keeps the content it was handed, in `serve-config`.
+//
 // FAKE_SERVE=listen-only is a server that says where it listens and never
 // prints a password; FAKE_SERVE=silent one that says nothing at all; and
 // FAKE_SERVE=password-first one that prints its password a second before it
@@ -53,6 +57,7 @@ import (
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
+printf '%s|%s %s\n' "${OPENCODE_CONFIG_CONTENT+handed}" "$1" "$2" >> "$d/configured"
 authed() {
   [ "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" = "$(cat "$d/server-password" 2> /dev/null)" ] && return 0
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
@@ -69,6 +74,7 @@ auth)
   esac ;;
 serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
+  printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
   echo $$ > "$d/serve.pid"
   [ "${FAKE_SERVE:-}" != silent ] || exec sleep 60
   if [ "${FAKE_SERVE:-}" = password-first ]; then
@@ -120,7 +126,17 @@ type scriptOpts struct {
 	// shell is the sh the script runs under; the zero value is the sh on
 	// PATH, which is what Command names.
 	shell boxShell
+	// unconfigured starts the script with no run configuration where
+	// [codingagent.Paths.OpenCodeConfig] names it; every other case finds
+	// [scriptConfig] there, as WriteConfig would have left one.
+	unconfigured bool
 }
+
+// scriptConfig is the run configuration a case's script finds, as
+// [codingagent.OpenCode.WriteConfig] would have left it — with text a shell
+// would expand, were it ever read as anything but a value.
+const scriptConfig = "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n" +
+	"  \"instructions\": [\"/box/$HOME/$(echo expanded)/`id`.md\"]\n}"
 
 // scriptJob is the script running, in a process group of its own as the
 // wrapper's job is, so a case can signal the whole of it as a teardown does.
@@ -159,6 +175,11 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 		t.Fatal(err)
 	}
 	paths := codingagent.Paths{Home: home}
+	if !o.unconfigured {
+		if err := os.WriteFile(paths.OpenCodeConfig(), []byte(scriptConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if o.login != "" {
 		if err := os.WriteFile(paths.CredentialDocument(), []byte(o.login), 0o600); err != nil {
 			t.Fatal(err)
@@ -489,6 +510,65 @@ func TestTheBriefWaitsForTheSeatsTools(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(run.home, ".crewlet", "opencode-server")); !os.IsNotExist(err) {
 			t.Errorf("the server's password outlived its read (%v)", err)
+		}
+	})
+}
+
+// ONLY THE SERVER IS HANDED THE CONFIGURATION. The run's configuration is the
+// content of the file WriteConfig left, handed to `opencode serve` as
+// OPENCODE_CONFIG_CONTENT — verbatim, its `$` and backquotes never expanded —
+// and to no other command the script runs: the login's import and export, the
+// run's own client and its `api` calls are each started without it.
+//
+// Mutation: export the variable for the whole script, and every other command
+// is handed it.
+func TestOnlyTheServerIsHandedTheConfiguration(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, login: seededLogin,
+			req: sandbox.RunRequest{MCPServers: bridgeOnly}, env: []string{"FAKE_REFRESH=" + refreshedLogin}})
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		if got := readIn(t, run.dir, "serve-config"); got != scriptConfig {
+			t.Errorf("the server was handed %q, want the run's configuration verbatim %q", got, scriptConfig)
+		}
+		seen := map[string]bool{}
+		for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "configured")), "\n") {
+			handed, call, _ := strings.Cut(line, "|")
+			seen[call] = true
+			if (handed == "handed") != strings.HasPrefix(call, "serve ") {
+				t.Errorf("%q was handed the configuration: %t, want it on the server alone", call, handed == "handed")
+			}
+		}
+		for _, call := range []string{"serve --hostname", "auth import", "auth export", "run --server", "api --server"} {
+			if !seen[call] {
+				t.Errorf("the script never ran %q, so what it was handed went unasked: %v", call, seen)
+			}
+		}
+	})
+}
+
+// A RUN WITH NO CONFIGURATION STARTS NOTHING. Handed none, the server would run
+// on whatever the image and the checkout hold, with neither the run's posture
+// nor its servers; so a run whose configuration is missing is refused before
+// any login is imported or any server started, naming the file it looked for.
+//
+// Mutation: drop the check and the server starts, handed an empty
+// configuration.
+func TestARunWithNoConfigurationStartsNothing(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		job := startScript(t, scriptOpts{shell: sh, login: seededLogin, unconfigured: true})
+		run := job.wait()
+		if run.code != 1 {
+			t.Errorf("exit %d, want 1", run.code)
+		}
+		if want := "no OpenCode configuration at " + job.paths.OpenCodeConfig(); !strings.Contains(run.stderr, want) {
+			t.Errorf("stderr = %q, want it to say %q", run.stderr, want)
+		}
+		if run.callIndex("serve ") >= 0 || run.callIndex("auth ") >= 0 {
+			t.Errorf("a run with no configuration ran:\n%s", strings.Join(run.calls, "\n"))
 		}
 	})
 }

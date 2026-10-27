@@ -285,31 +285,43 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 //
 // A reused box still carries the prior run's done marker, result, findings and
 // ask file. Without clearing them the completion poll fires immediately on the
-// stale marker and Collect reads the old result. Its brief, system text and
-// settings go too: a run's instructions are its own — a previous job's hooks
-// name a bridge session that job's end closed — and a file this run writes is
-// then always created fresh, at the mode a backend creates a file with. THE
-// CHECKOUT IS LEFT INTACT — that disk state is the continued context, and it is
-// the whole reason to reuse a box.
+// stale marker and Collect reads the old result. Its brief, system text,
+// settings and configuration go too: a run's instructions are its own — a
+// previous job's hooks name a bridge session that job's end closed — and a file
+// this run writes is then always created fresh, at the mode a backend creates a
+// file with. OpenCode's values ([Paths.OpenCodeValues]) are a DIRECTORY,
+// removed whole: a run writes one file per value, so one with fewer values than
+// the last would otherwise keep the last one's beside its own. THE CHECKOUT IS
+// LEFT INTACT — that disk state is the continued context, and it is the whole
+// reason to reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
-	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System(),
-		p.ClaudeSettings()}
+	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System(),
+		p.ClaudeSettings(), p.OpenCodeConfig()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
 	if out.Stdout != p.Result() {
-		targets = append(targets, out.Stdout)
+		files = append(files, out.Stdout)
 	}
-	quoted := make([]string, len(targets))
-	for i, path := range targets {
-		quoted[i] = shellQuote(path)
-	}
-	if _, err := box.Exec(ctx, "rm -f "+strings.Join(quoted, " "), sandbox.ExecOptions{}); err != nil {
+	// The values directory alone is removed recursively; every other target
+	// is a file, removed as it always was. Two statements rather than one
+	// joined by `&&`, so a file that will not go never keeps the directory.
+	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuote(p.OpenCodeValues())
+	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: clearing the prior run's artefacts: %w", err)
 	}
 	return nil
+}
+
+// shellQuoteAll is paths quoted for sh, one word each, space-separated.
+func shellQuoteAll(paths []string) string {
+	quoted := make([]string, len(paths))
+	for i, path := range paths {
+		quoted[i] = shellQuote(path)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // Start launches the coding agent detached and returns its handle.

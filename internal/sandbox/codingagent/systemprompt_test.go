@@ -86,7 +86,7 @@ func TestTheStandingInstructionsReachOpenCodeAsAnInstructionFile(t *testing.T) {
 	if err != nil || string(brief) != "fix the flake" {
 		t.Errorf("the prompt on stdin is %q (%v), want the task alone", brief, err)
 	}
-	blob, err := b.ReadFile(t.Context(), p.Home+"/"+sandbox.WorkspaceSubdir+"/opencode.json")
+	blob, err := b.ReadFile(t.Context(), p.OpenCodeConfig())
 	if err != nil {
 		t.Fatalf("read the config: %v", err)
 	}

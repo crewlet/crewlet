@@ -182,11 +182,16 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask(),
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
-		p.Brief(), p.System(), p.ClaudeSettings(),
+		p.Brief(), p.System(), p.ClaudeSettings(), p.OpenCodeConfig(),
 	} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
 		}
+	}
+	// OpenCode's values are a DIRECTORY, removed whole — a run with fewer
+	// values than the last would keep the last one's beside its own.
+	if !strings.Contains(cleared, "rm -rf '"+p.OpenCodeValues()+"'") {
+		t.Fatalf("the values directory %q was not removed whole: %s", p.OpenCodeValues(), cleared)
 	}
 	// The CHECKOUT is left alone — that disk state is the whole reason to
 	// reuse a box.

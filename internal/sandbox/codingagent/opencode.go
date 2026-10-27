@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -117,6 +118,12 @@ func (OpenCode) Resumes() bool { return true }
 // has left `pending` (`api mcp.list`, bounded by [openCodeMCPWait]), runs the
 // brief against that server, and stops it.
 //
+// THE RUN'S CONFIGURATION, ON ITS SERVER ALONE. The script reads the file
+// [OpenCode.WriteConfig] wrote ([Paths.OpenCodeConfig]) and hands its content
+// to `opencode serve` as OPENCODE_CONFIG_CONTENT, which OpenCode ranks above a
+// repository's own opencode.json and .opencode/; a run with no such file is
+// refused before a login is imported or a server started.
+//
 // THE BRIEF ON STDIN ([Output.BriefOnStdin]), because OpenCode re-quotes an
 // argv prompt; the session NAMED, by an id minted here, so the usage report
 // asked for afterwards is this run's; a TITLE given, which stops 2.0 making a
@@ -221,6 +228,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	next := shellQuote(paths.CredentialDocument() + ".next")
 	loop := shellQuote(paths.CredentialDocument() + ".sync")
 	srv := shellQuote(paths.WorkDir() + "/opencode-server")
+	cfg := shellQuote(paths.OpenCodeConfig())
 	sid := "ses_" + session
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
@@ -243,6 +251,13 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`v=$(opencode --version < /dev/null 2> /dev/null) || { echo 'crewlet: no opencode on the box PATH' >&2; exit 127; }`)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
 	line(`unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD`)
+	// THE RUN'S CONFIGURATION, read before anything starts, and refused where
+	// there is none: handed nothing, the server would run on whatever
+	// documents the image and the checkout hold, with neither the run's
+	// posture nor its servers. A shell variable, never exported: it is handed
+	// to the server alone.
+	line(`config=$(cat %s) && [ -n "$config" ] || { echo 'crewlet: the run has no OpenCode configuration at '%s >&2; exit 1; }`,
+		cfg, cfg)
 	line(`imported= spid= xpid=`)
 	// end: stop one process of the script's own, bounded ([openCodeStopWait]),
 	// killing it only if it is still there at the end of the wait.
@@ -277,7 +292,11 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`  imported=1`)
 	line(`fi`)
 
-	line(`opencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`, srv)
+	// ON THE SERVER ALONE: it runs the session, so it is the one process
+	// that reads the run's configuration. The run's client and its `api`
+	// calls are answered by it, and the login's import and export, which run
+	// before it or beside it, are handed none of it.
+	line(`OPENCODE_CONFIG_CONTENT="$config" opencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`, srv)
 	line(`spid=$!`)
 	line(`deadline=$(( $(date +%%s) + %d ))`, int(times.listen.Seconds()))
 	line(`until grep -q '^server listening on ' %s 2> /dev/null && grep -q '^server password ' %s 2> /dev/null; do`, srv, srv)
@@ -400,9 +419,11 @@ func jsonStringify(s string) string {
 	return b.String()
 }
 
-// WriteConfig renders opencode.json in OpenCode 2's own format: the run's
-// posture, the scoped MCP surface and the instruction file its system text is
-// written to.
+// WriteConfig renders the run's configuration in OpenCode 2's own format — the
+// run's posture, the scoped MCP surface and the instruction file its system
+// text is written to — at [Paths.OpenCodeConfig], beside the run's other
+// artefacts, and returns that path. The run's script hands its content to the
+// run's server as OPENCODE_CONFIG_CONTENT ([OpenCode.Command]).
 //
 // 2.0's FORMAT, NOT 1.x's, though 2.0 still reads 1.x's by translating it
 // (its migration guide: servers move under `mcp.servers`, `enabled` becomes
@@ -417,13 +438,38 @@ func jsonStringify(s string) string {
 // inside the box where the agent could read it back and echo it into its
 // report.
 //
+// OUT OF THE CHECKOUT, AND ABOVE THE REPOSITORY'S OWN. OpenCode takes no config
+// flag, and of the two variables that hand a process a configuration of its
+// own, OPENCODE_CONFIG — a file's path — ranks BELOW a repository's
+// opencode.json and .opencode/, while OPENCODE_CONFIG_CONTENT ranks above them.
+// 2.x reads its configuration in this order, a later document winning: managed
+// policies, well-known, global, OPENCODE_CONFIG, the project's opencode.json,
+// its .opencode/, OPENCODE_CONFIG_CONTENT, managed settings (core/src/config.ts,
+// the same at 2.0.0, 2.0.32 and 2.1.4). So the file is written here and its
+// content handed over, where one written into the checkout would replace the
+// repository's own opencode.json: that is left as it is and loads beneath the
+// run's — the way Claude Code loads a repository's .claude/settings.json
+// beneath --settings. Measured
+// on 2.0.32 and 2.1.4 with a repository whose own opencode.json and
+// .opencode/opencode.json disable the bridge and deny every permission: the
+// bridge connected and the shell ran.
+//
+// EVERY ENTRY THE RUN OWNS SAYS IT IS ON (`disabled: false`): OpenCode
+// combines the documents it reads, and a document beneath this one may
+// disable a server or an agent under the name this one declares. How a release combines them differs by kind — 2.1.4
+// replaces a server's entry whole and updates an agent's field by field — so
+// the run states the field rather than rest on either.
+//
+// THE MCP SERVERS' VALUES ARE FILES ([openCodeValueFiles]), written before the
+// configuration that names them, so the content holds each value's path and
+// never the value — as the server's environment holds no password
+// ([OpenCode.Command]).
+//
 // IT IS WRITTEN ON EVERY RUN, including one that names no server. The posture
-// keys below are not decoration a minimal run can go without — and because
-// this CLI takes no config flag, the file's LOCATION is
-// the wiring, so a run that writes nothing does not run on the vendor's
-// defaults: it runs on whatever the PREVIOUS run left in the checkout, which
-// on a reused box is that run's MCP block with its dead per-run bridge URL in
-// it.
+// keys below are not decoration a minimal run can go without, and a run that
+// wrote none would not run on the vendor's defaults or on a previous run's
+// file — the clear removed that ([Runner.ClearArtifacts]) — but not at all: the
+// script refuses to start a server it has no configuration for.
 func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
@@ -447,6 +493,10 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 		// `question` is the one tool denied: it asks a PERSON, through a form
 		// a headless run cancels, and a run that has something to ask has
 		// `crewlet-ask`, which reaches the seat that started it.
+		//
+		// The rules of every document OpenCode reads are added together in
+		// its order, so these come after a repository's own and, the last
+		// match winning, decide.
 		"permissions": []map[string]string{
 			{"action": "*", "resource": "*", "effect": "allow"},
 			{"action": "question", "resource": "*", "effect": "deny"},
@@ -475,11 +525,20 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 	// refuses a step count below one.
 	if req.Limits.MaxTurns > 0 {
 		cfg["agents"] = map[string]any{
-			openCodeAgent: map[string]any{"steps": req.Limits.MaxTurns},
+			openCodeAgent: map[string]any{"steps": req.Limits.MaxTurns, "disabled": false},
 		}
 	}
 	if len(req.MCPServers) > 0 {
-		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers)}
+		values, err := newOpenCodeValueFiles(paths)
+		if err != nil {
+			return "", err
+		}
+		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers, values)}
+		for _, v := range values.files {
+			if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
+				return "", fmt.Errorf("codingagent: writing an MCP server's value for OpenCode: %w", err)
+			}
+		}
 	}
 	// THE SYSTEM TEXT AS AN INSTRUCTION FILE, named by its absolute path.
 	// OpenCode has no flag that adds to its system prompt; it adds every
@@ -506,17 +565,29 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 		}
 		cfg["instructions"] = []string{paths.System()}
 	}
-	blob, err := json.MarshalIndent(cfg, "", "  ")
+	blob, err := openCodeJSON(cfg)
 	if err != nil {
 		return "", err
 	}
-	// opencode.json in the WORKING DIRECTORY, which is the checkout: the CLI
-	// takes no --config flag, so the file's location is the wiring.
-	path := paths.Home + "/" + sandbox.WorkspaceSubdir + "/opencode.json"
-	if err := box.WriteFile(ctx, path, blob); err != nil {
-		return "", err
+	if err := box.WriteFile(ctx, paths.OpenCodeConfig(), blob); err != nil {
+		return "", fmt.Errorf("codingagent: writing OpenCode's configuration: %w", err)
 	}
-	return path, nil
+	return paths.OpenCodeConfig(), nil
+}
+
+// openCodeJSON is v as the configuration's text: indented, and with `&`, `<`
+// and `>` written as themselves. OpenCode finds a `{file:<path>}` reference in
+// the TEXT, before it parses it ([openCodeReferable]), so a path encoding/json
+// escaped for HTML — `&` as `\u0026` — would name a file that is not there.
+func openCodeJSON(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, fmt.Errorf("codingagent: rendering OpenCode's configuration: %w", err)
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // openCodeAgent is the OpenCode agent a run runs as: `build`, the CLI's own
@@ -525,7 +596,77 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 // run's turn cap.
 const openCodeAgent = "build"
 
-// openCodeMCP translates the generic launch specs into OpenCode 2's schema.
+// openCodeValueFiles is the values a run's configuration names by reference:
+// each MCP server's url, header value and environment value, one file apiece
+// under [Paths.OpenCodeValues], named `v1`, `v2`, … in the order the
+// configuration asks for them — servers by name, a server's headers and
+// environment by key — so the same request writes the same files.
+//
+// OpenCode replaces `{file:<path>}` with the file's content, its surrounding
+// whitespace TRIMMED and JSON-escaped (core/src/config/variable.ts, the same
+// in 2.0.32 and 2.1.4), so a value arrives as written save for whitespace at
+// either end — which a url or a header value carries nothing in (HTTP drops a
+// header value's own), and which an environment value that has it arrives
+// without. A reference to a file
+// that is missing reads as empty, with a warning only in OpenCode's own log,
+// so the files are written before the configuration that names them.
+type openCodeValueFiles struct {
+	dir   string
+	files []openCodeValueFile
+}
+
+// openCodeValueFile is one value and the file it is written to.
+type openCodeValueFile struct{ path, value string }
+
+// newOpenCodeValueFiles is the run's value files, none yet, under the box's
+// [Paths.OpenCodeValues] — or the reason a reference there cannot be read
+// ([openCodeReferable]), said once for the directory every file shares.
+func newOpenCodeValueFiles(paths Paths) (*openCodeValueFiles, error) {
+	dir := paths.OpenCodeValues()
+	if err := openCodeReferable(dir); err != nil {
+		return nil, fmt.Errorf("codingagent: this box's home %q cannot hold the values of an OpenCode "+
+			"run's MCP servers: %w; a local box's home is under providers.sandbox.local.state_dir, "+
+			"which needs a path without such characters", paths.Home, err)
+	}
+	return &openCodeValueFiles{dir: dir}, nil
+}
+
+// ref is the reference naming value's file, which it records for writing.
+// Every file is the directory and `v<n>` in it, and [newOpenCodeValueFiles]
+// already held the directory to what a reference can carry.
+func (v *openCodeValueFiles) ref(value string) string {
+	path := v.dir + "/v" + strconv.Itoa(len(v.files)+1)
+	v.files = append(v.files, openCodeValueFile{path: path, value: value})
+	return "{file:" + path + "}"
+}
+
+// openCodeReferable is nil where `{file:<path>}` names path to OpenCode, and
+// otherwise says why it cannot. OpenCode finds a reference by matching
+// `{file:[^}]+}` in the configuration's text before it parses it, and resolves
+// a relative path against the working directory, which is the checkout — so a
+// path is named only where it is absolute, holds no `}` to end the reference
+// early, and is carried by the JSON text as itself: no `"`, `\`, control
+// character, U+2028 or U+2029, which the text holds escaped and OpenCode would
+// read as part of the path, and nothing that is not UTF-8, which the text holds
+// as U+FFFD.
+func openCodeReferable(path string) error {
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("the path %q is not absolute", path)
+	}
+	if strings.Contains(path, "}") {
+		return fmt.Errorf("the path %q holds a `}`, which ends a reference", path)
+	}
+	ref := "{file:" + path + "}"
+	if text, err := openCodeJSON(ref); err != nil || string(text) != `"`+ref+`"` {
+		return fmt.Errorf("the path %q holds a character the configuration's text cannot "+
+			"carry as itself", path)
+	}
+	return nil
+}
+
+// openCodeMCP translates the generic launch specs into OpenCode 2's schema,
+// every value a server is configured with — its url, each header value, each
+// environment value — a reference to a file of values ([openCodeValueFiles]).
 //
 // EVERY SERVER'S TOOLS ARE OFFERED DIRECTLY (`codemode: false`). 2.0's default
 // is Code Mode, where a server's tools are reachable only from JavaScript the
@@ -538,16 +679,19 @@ const openCodeAgent = "build"
 // on a remote server that refuses a request, and a headless run has nobody to
 // complete it — the bridge authenticates with the run's token, which is a
 // segment of the endpoint's URL path rather than a header.
-func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
+//
+// EVERY SERVER IS ON (`disabled: false`) — see [OpenCode.WriteConfig].
+func openCodeMCP(servers map[string]sandbox.MCPServer, values *openCodeValueFiles) map[string]any {
 	out := make(map[string]any, len(servers))
-	for name, s := range servers {
-		entry := map[string]any{"codemode": false}
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		s := servers[name]
+		entry := map[string]any{"codemode": false, "disabled": false}
 		if s.Transport == sandbox.TransportHTTP {
 			entry["type"] = "remote"
-			entry["url"] = s.URL
+			entry["url"] = values.ref(s.URL)
 			entry["oauth"] = false
 			if len(s.Headers) > 0 {
-				entry["headers"] = s.Headers
+				entry["headers"] = openCodeRefs(s.Headers, values)
 			}
 			out[name] = entry
 			continue
@@ -567,9 +711,19 @@ func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
 		entry["type"] = "local"
 		entry["command"] = cmd
 		if len(s.Env) > 0 {
-			entry["environment"] = s.Env
+			entry["environment"] = openCodeRefs(s.Env, values)
 		}
 		out[name] = entry
+	}
+	return out
+}
+
+// openCodeRefs is a header or environment map with every value a reference to
+// its file, taken in key order.
+func openCodeRefs(m map[string]string, values *openCodeValueFiles) map[string]string {
+	out := make(map[string]string, len(m))
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		out[k] = values.ref(m[k])
 	}
 	return out
 }

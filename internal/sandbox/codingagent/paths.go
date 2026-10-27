@@ -70,7 +70,8 @@ func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 
 // System is where a run's standing instructions ([sandbox.RunRequest.System])
 // are written for its CLI to add to its own system prompt: named on Claude
-// Code's command line, listed in the opencode.json OpenCode reads.
+// Code's command line, listed in the configuration an OpenCode run is handed
+// ([Paths.OpenCodeConfig]).
 //
 // A FILE, never argv. The text carries the seat's org chart, policies and
 // memory, and a command line is readable by every process that can list them
@@ -127,6 +128,27 @@ func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
 // are there whatever it holds. Under WorkDir, so a `git clean` in the brief
 // cannot remove it from under the run.
 func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
+
+// OpenCodeConfig is where an OpenCode run's own configuration is written
+// ([OpenCode.WriteConfig]), and read from by the run's script, which hands its
+// content to the run's server alone as OPENCODE_CONFIG_CONTENT
+// ([OpenCode.Command]).
+//
+// BESIDE the run's other artefacts, never in the checkout: the checkout is the
+// repository's, and an opencode.json written there would replace the
+// repository's own file, where content handed to the server ranks above it and
+// leaves it in place. Under WorkDir, so a `git clean` in the brief cannot
+// remove it from under the run.
+func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
+
+// OpenCodeValues is the directory holding the values an OpenCode run's MCP
+// servers are configured with — each server's url, each header value, each
+// environment value — one file apiece, which [Paths.OpenCodeConfig] names by a
+// `{file:<path>}` reference rather than carrying the value
+// ([openCodeValueFiles]). A directory of the run's own, removed whole before
+// every run ([Runner.ClearArtifacts]), so a run configured with fewer values
+// than the last keeps none of the last one's.
+func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values" }
 
 // Findings is the agent's authoritative final report.
 //

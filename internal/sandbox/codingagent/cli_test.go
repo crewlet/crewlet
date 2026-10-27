@@ -264,6 +264,13 @@ type openCodeConfig struct {
 
 func writeOpenCodeConfig(t *testing.T, req sandbox.RunRequest) (openCodeConfig, string) {
 	t.Helper()
+	cfg, body, _ := writeOpenCodeConfigIn(t, req)
+	return cfg, body
+}
+
+// writeOpenCodeConfigIn is [writeOpenCodeConfig], with the box it wrote to.
+func writeOpenCodeConfigIn(t *testing.T, req sandbox.RunRequest) (openCodeConfig, string, *sandbox.FakeSandbox) {
+	t.Helper()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, req, codingagent.PathsFor(b))
 	if err != nil || path == "" {
@@ -277,7 +284,23 @@ func writeOpenCodeConfig(t *testing.T, req sandbox.RunRequest) (openCodeConfig, 
 	if err := json.Unmarshal(blob, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, blob)
 	}
-	return cfg, string(blob)
+	return cfg, string(blob), b
+}
+
+// openCodeValue is the value a `{file:<path>}` reference in a run's
+// configuration names: the content of the file it names, which OpenCode reads
+// in its place.
+func openCodeValue(t *testing.T, b sandbox.Sandbox, ref string) string {
+	t.Helper()
+	path, ok := referencedPath(ref)
+	if !ok {
+		t.Fatalf("%q is not a reference to a file", ref)
+	}
+	value, err := b.ReadFile(t.Context(), path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(value)
 }
 
 // NO CREDENTIAL IS WRITTEN INTO THE BOX, where the agent could read it back
@@ -306,7 +329,7 @@ func TestTheOpenCodeConfigCarriesNoCredential(t *testing.T) {
 // cannot complete.
 func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	t.Parallel()
-	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{
+	cfg, body, b := writeOpenCodeConfigIn(t, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
 			"files": {
 				Name: "files", Transport: sandbox.TransportStdio,
@@ -330,18 +353,19 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	}
 	// The CREDENTIAL reaches the box under this CLI's own key. It is
 	// `environment` here and `env` in Claude Code's file, which is the
-	// whole reason each runner renders its own.
-	if got.Environment["K"] != "v" {
+	// whole reason each runner renders its own — here by a reference to the
+	// file holding it, which OpenCode reads in its place.
+	if got.Environment["K"] == "" || openCodeValue(t, b, got.Environment["K"]) != "v" {
 		t.Errorf("stdio env = %v, want the seat's credential under `environment`", got.Environment)
 	}
 	if got.Codemode == nil || *got.Codemode {
 		t.Errorf("the stdio server's tools are behind Code Mode:\n%s", body)
 	}
 	got = cfg.MCP.Servers["linear"]
-	if got.Type != "remote" || got.URL != "https://example.com/mcp" {
+	if got.Type != "remote" || openCodeValue(t, b, got.URL) != "https://example.com/mcp" {
 		t.Fatalf("http server = %+v", got)
 	}
-	if got.Headers["H"] != "v" {
+	if got.Headers["H"] == "" || openCodeValue(t, b, got.Headers["H"]) != "v" {
 		t.Errorf("http headers = %v, want the seat's credential", got.Headers)
 	}
 	if got.OAuth == nil || *got.OAuth {
@@ -496,11 +520,10 @@ func TestTheOpenCodeConfigCarriesTheRunsTurnCap(t *testing.T) {
 	}
 }
 
-// The config carries the run's POSTURE, not just its servers, and
-// this CLI reads it from the checkout rather than from a flag — so a run that
-// wrote none would not fall back to the vendor's defaults. It would inherit
-// whatever the previous run left on a reused box, MCP block and dead per-run
-// bridge URL included.
+// The config carries the run's POSTURE, not just its servers, so it is written
+// on every run: the run's script refuses to start a server it has no
+// configuration for, and one handed none would run on whatever documents the
+// image and the checkout hold.
 func TestAnOpenCodeConfigIsWrittenEvenWithNoModelAndNoServers(t *testing.T) {
 	t.Parallel()
 	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{})
