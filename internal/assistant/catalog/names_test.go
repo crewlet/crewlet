@@ -249,8 +249,9 @@ func TestASeatIsShownByItsNameAndAFailedTurnByItsReason(t *testing.T) {
 }
 
 // A PAGE IS NEVER READ AS THE WHOLE: an answer whose cursor says more rows lie
-// past it tells the model its count is a floor ("at least 5"), and the person
-// that there are more; one with no cursor is the whole. "Five turns in a row"
+// past it tells the model its count is a floor ("at least 5"), and the person,
+// on the card itself (`more`), that there are more; one with no cursor is the
+// whole. "Five turns in a row"
 // was once said of a seat that had failed twenty-five. Mutation: drop the
 // turns card's More path, or the summary's use of it, and this fails.
 func TestAPageWithMoreIsNeverTheWhole(t *testing.T) {
@@ -268,8 +269,8 @@ func TestAPageWithMoreIsNeverTheWhole(t *testing.T) {
 			t.Fatal(err)
 		}
 		saysFloor := strings.Contains(res.Model, "at least 2")
-		hasNotice := len(res.Cards) == 2 && strings.Contains(res.Cards[1].Notice.Text, "there are more")
-		if saysFloor != tc.more || hasNotice != tc.more {
+		marked := len(res.Cards) == 1 && res.Cards[0].Table.More
+		if saysFloor != tc.more || marked != tc.more {
 			t.Errorf("next %s: the model reads %s and the cards are %+v, want more=%v", tc.next,
 				res.Model, res.Cards, tc.more)
 		}
@@ -322,6 +323,9 @@ func TestARecordIsKeyedTheWayTheAnswerNamesIt(t *testing.T) {
 			e := spec.Entity
 			if e == nil {
 				continue
+			}
+			if err := spec.Validate(); err != nil {
+				t.Errorf("%s (%q): %v", tool.Name, variant, err)
 			}
 			switch e.Kind {
 			case wire.ResourceTask, wire.ResourceProject:

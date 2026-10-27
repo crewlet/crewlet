@@ -345,6 +345,8 @@ func cardSummary(c wire.Card) string {
 		return fmt.Sprintf("[refused: %s]", c.Error.Refusal.Code)
 	case wire.CardNotice:
 		return fmt.Sprintf("[notice: %s]", oneLine(c.Notice.Text))
+	case wire.CardOversize:
+		return fmt.Sprintf("[too large to read: %s]", oneLine(c.Oversize.Title))
 	case wire.CardBrief:
 		return briefSummary(c.Brief)
 	case wire.CardFile:

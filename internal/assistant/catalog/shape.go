@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,7 +44,10 @@ func (r Result) Failed() bool { return r.Refusal != nil }
 //  1. A refusal is an error card in the engine's own words, the tool's phrase
 //     beside the refusal's sentence, and the model reads the refusal.
 //  2. An answer past what a step reads (exec.Response.Truncated) is never
-//     carded as though whole: it is a notice, for both.
+//     carded as though whole. The person is shown an oversize card naming
+//     what it read, the screen that shows all of it and what would narrow
+//     it; the model is told none of it reached it, which fields the cut
+//     answer began with and what to narrow ([oversize], ADR-0061).
 //  3. Every string in the answer passes redact.Secrets, so no credential the
 //     answer carried reaches a card, the log or the model.
 //  4. The card is built by the tool's spec, capped with a notice when cut.
@@ -81,7 +86,7 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 			Refusal: &refusal}, nil
 	}
 	if resp.Truncated {
-		return notice(cards.TooLargeText)
+		return oversize(t, args, resp.Body, b)
 	}
 	if t.Infer {
 		return shapeAnswer(t, args, resp, b, now)
@@ -117,7 +122,7 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Cards: built.Cards(), Model: model, Trust: trust}, nil
+	return Result{Cards: []wire.Card{built.Card}, Model: model, Trust: trust}, nil
 }
 
 // scoped is spec with its table's title carrying scope, the one spelling a
@@ -222,7 +227,7 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 		if built.Empty {
 			out.Empty = true
 		} else {
-			out.Cards = built.Cards()
+			out.Cards = []wire.Card{built.Card}
 		}
 	}
 	return out, nil
@@ -257,13 +262,92 @@ func fitAnswer(t Tool, trust provenance.Trust, b provenance.Boundary, answer str
 		t.Name, cards.ModelBytes)
 }
 
-// notice is a result that is one notice, the same sentence for both readers.
-func notice(text string) (Result, error) {
-	model, err := json.Marshal(map[string]string{"notice": text})
-	if err != nil {
-		return Result{}, fmt.Errorf("catalog: encode a notice: %w", err)
+// notNarrowing are the arguments that do not narrow a read: they name the one
+// record it is of, page through it or pick its view, or (a generic read's)
+// carry the request itself.
+var notNarrowing = map[string]bool{"limit": true, "cursor": true, "after": true,
+	"before": true, "next": true, "view": true, "handle": true, "key": true, "id": true,
+	"item": true, "route": true, "path": true, "query": true}
+
+// narrowing is what a read takes that would narrow it, in the words a person
+// reads them in, in a stable order.
+func narrowing(t Tool) []string {
+	if t.schema == nil {
+		return nil
 	}
-	return Result{Cards: []wire.Card{cards.Notice(wire.NoticeInfo, text)}, Model: string(model)}, nil
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(t.schema.properties)) {
+		switch {
+		case notNarrowing[name]:
+		case name == "q":
+			out = append(out, "the search words")
+		default:
+			out = append(out, strings.ReplaceAll(name, "_", " "))
+		}
+	}
+	return out
+}
+
+// fieldsOf is the top-level fields a cut answer began with, in order, read
+// until the cut: what the model can ask the route to leave out.
+func fieldsOf(body []byte) []string {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil
+	}
+	var fields []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		name, ok := tok.(string)
+		if !ok {
+			break
+		}
+		fields = append(fields, name)
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			break
+		}
+	}
+	return fields
+}
+
+// cutNote is what the model is told of a read past what one step reads.
+const cutNote = "None of this answer reached you or the person: it is larger than one " +
+	"step reads, so do not answer as though you read it. Read it again narrowed: with " +
+	"narrow_by, a smaller page, or (for a route you read with api_request) the route's " +
+	"own filters or a flag that leaves out the large field its documentation names. Or " +
+	"tell the person it is too large to show here, and that its screen shows all of it."
+
+// oversize is the result of a read whose answer was past what one step reads:
+// the oversize card for the person, and for the model what the read was,
+// that none of it was read, the fields the cut answer began with and what
+// narrows it.
+func oversize(t Tool, args Args, body []byte, b provenance.Boundary) (Result, error) {
+	title := t.StepLabel(args)
+	var open *wire.Link
+	if spec, ok := t.CardFor(args); ok {
+		switch {
+		case spec.Table != nil:
+			title = withScope(spec.Table.Title, t.ScopeOf(args))
+			open = cards.OpenFor(spec.Table.Open, args)
+		case spec.Entity != nil:
+			open = cards.OpenFor(spec.Entity.Open, args)
+		}
+	}
+	narrow := narrowing(t)
+	model, err := json.Marshal(map[string]any{"cut": map[string]any{
+		"read": title, "shown": false, "limit_bytes": exec.MaxResponseBytes,
+		"began_with_fields": fieldsOf(body), "narrow_by": narrow, "note": cutNote,
+	}})
+	if err != nil {
+		return Result{}, fmt.Errorf("catalog: encode a cut read: %w", err)
+	}
+	// DEFUSED, as a refusal is: a field name is the answer's own text.
+	return Result{Cards: []wire.Card{cards.Oversize(title, open, narrow)},
+		Model: provenance.Neutralise(b, string(model))}, nil
 }
 
 // fenceBytes is a first guess at what the fence and its envelope add to a

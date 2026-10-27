@@ -159,6 +159,7 @@ func shapes() map[string]reflect.Type {
 		"AssistantOpenInAppCard":       reflect.TypeFor[wire.OpenInAppCard](),
 		"AssistantErrorCard":           reflect.TypeFor[wire.ErrorCard](),
 		"AssistantNoticeCard":          reflect.TypeFor[wire.NoticeCard](),
+		"AssistantOversizeCard":        reflect.TypeFor[wire.OversizeCard](),
 		"AssistantBriefCard":           reflect.TypeFor[wire.BriefCard](),
 		"AssistantBriefScope":          reflect.TypeFor[wire.BriefScope](),
 		"AssistantBriefNeed":           reflect.TypeFor[wire.BriefNeed](),

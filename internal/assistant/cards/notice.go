@@ -12,16 +12,17 @@ func Notice(tone wire.NoticeTone, text string) wire.Card {
 	return wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{Tone: tone, Text: text}}
 }
 
-// The engine's own sentences for an answer no card is built from.
-const (
-	// TooLargeText is an answer past what one step reads, which is never
-	// carded as though it were whole.
-	TooLargeText = "This answer is larger than one step reads, so it is not shown. " +
-		"Narrow the question, or open it in the app."
-	// WithheldText stands in for a stored card whose app the person no
-	// longer holds.
-	WithheldText = "This result is hidden because it needs access you no longer have."
-)
+// WithheldText stands in for a stored card whose app the person no longer
+// holds: the engine's own sentence for an answer no card is built from.
+const WithheldText = "This result is hidden because it needs access you no longer have."
+
+// Oversize is the card of a read whose answer was past what one step reads
+// (ADR-0061): never drawn as though it held the answer, but named for what it
+// read, with the screen that shows all of it and what would narrow it.
+func Oversize(title string, open *wire.Link, narrow []string) wire.Card {
+	return wire.Card{Type: wire.CardOversize, Oversize: &wire.OversizeCard{Title: title,
+		Open: open, Narrow: narrow}}
+}
 
 // Error is the error card for a refusal, in the engine's own words: phrase is
 // the tool's action phrase, so "You do not have permission to file tasks." is

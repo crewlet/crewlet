@@ -651,6 +651,8 @@ func answerSummary(shown []wire.Card) string {
 			return "1 record"
 		case wire.CardNotice:
 			return "See the notice"
+		case wire.CardOversize:
+			return "Too large to show"
 		}
 	}
 	return "Done"

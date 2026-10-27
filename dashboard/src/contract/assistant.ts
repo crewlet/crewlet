@@ -92,7 +92,15 @@ type AssistantStepState = "running" | "done" | "failed" | "refused" | "stopped" 
 
 /** An engine-built card's kind. */
 export type AssistantCardKind =
-  "table" | "entity" | "proposal" | "open_in_app" | "error" | "notice" | "file" | "brief";
+  | "table"
+  | "entity"
+  | "proposal"
+  | "open_in_app"
+  | "error"
+  | "notice"
+  | "oversize"
+  | "file"
+  | "brief";
 
 /** Where a proposal stands. */
 type AssistantProposalState =
@@ -340,6 +348,7 @@ export interface AssistantCard {
   open_in_app?: AssistantOpenInAppCard;
   error?: AssistantErrorCard;
   notice?: AssistantNoticeCard;
+  oversize?: AssistantOversizeCard;
   // --- deep work (im-deep) ---
   file?: AssistantFileCard;
   brief?: AssistantBriefCard;
@@ -354,6 +363,11 @@ export interface AssistantTableCard {
   total?: (string | number | boolean | null)[];
   row_count: number;
   truncated: boolean;
+  /**
+   * The answer says rows lie past the page it read, so `row_count` is a page
+   * and never the total: the card's screen shows the rest.
+   */
+  more?: boolean;
   as_of: string;
   exports?: AssistantExports;
   open?: AssistantLink;
@@ -399,6 +413,8 @@ export interface AssistantEntityCard {
   facts?: AssistantFact[];
   text?: string;
   items?: AssistantEntityItem[];
+  /** How many items the record holds where `items` is only the first of them. */
+  items_total?: number;
   /** What one item and several are called ("policy", "policies"), where the card has a list. */
   items_noun?: AssistantNoun;
   open?: AssistantLink;
@@ -528,6 +544,17 @@ export interface AssistantErrorCard {
 export interface AssistantNoticeCard {
   tone: AssistantNoticeTone;
   text: string;
+}
+
+/**
+ * A read whose answer was past what one step reads, so none of it is shown:
+ * what it read, the screen that shows all of it, and what would narrow it.
+ * The drawer lists it with the turn's other reads (ADR-0061).
+ */
+export interface AssistantOversizeCard {
+  title: string;
+  open?: AssistantLink;
+  narrow?: string[];
 }
 
 /**

@@ -247,9 +247,48 @@ func TestARefusalAndATruncatedAnswerAreNeverCardedAsData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Failed() || len(res.Cards) != 1 || res.Cards[0].Type != wire.CardNotice ||
-		res.Cards[0].Notice.Text != cards.TooLargeText {
+	if res.Failed() || len(res.Cards) != 1 || res.Cards[0].Type != wire.CardOversize {
 		t.Errorf("a truncated answer shaped as %+v", res)
+	}
+}
+
+// A READ PAST WHAT A STEP READS IS STILL A READ (ADR-0061): the person is
+// shown what it read, the screen that shows all of it and what would narrow
+// it, and the model is told none of it reached it, which fields the cut
+// answer began with and what to narrow, so it never answers as though it saw
+// the rows. Mutation: hand the model a bare notice and the fields and the
+// narrowing are gone; drop the link and the person has nowhere to go.
+func TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel(t *testing.T) {
+	t.Parallel()
+	b := provenance.NewBoundary()
+	search, _ := catalog.Lookup("search_work")
+	res, err := catalog.Shape(search, catalog.Args{"q": "brand identity"},
+		exec.Response{Status: 200, Body: []byte(`{"note":"","hits":[{"key":"GP-1","title":"Lo`),
+			Truncated: true}, b, evals.Epoch, cards.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cards) != 1 || res.Cards[0].Type != wire.CardOversize {
+		t.Fatalf("the cut search is %+v", res.Cards)
+	}
+	card := res.Cards[0].Oversize
+	if !strings.HasPrefix(card.Title, "Matching tasks") || !strings.Contains(card.Title, "brand identity") {
+		t.Errorf("the cut search is named %q", card.Title)
+	}
+	if card.Open == nil || card.Open.Href != "#/worklet/search" {
+		t.Errorf("the cut search opens %+v", card.Open)
+	}
+	if !slices.Contains(card.Narrow, "the search words") || slices.Contains(card.Narrow, "limit") {
+		t.Errorf("the cut search narrows by %v", card.Narrow)
+	}
+	for _, want := range []string{`"shown":false`, `"began_with_fields":["note","hits"]`,
+		`"narrow_by":["`, "do not answer as though you read it"} {
+		if !strings.Contains(res.Model, want) {
+			t.Errorf("the model reads %s, without %s", res.Model, want)
+		}
+	}
+	if err := res.Cards[0].Validate(); err != nil {
+		t.Errorf("the oversize card is invalid: %v", err)
 	}
 }
 
