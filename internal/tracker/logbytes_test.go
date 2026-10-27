@@ -1,10 +1,14 @@
 package tracker_test
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -58,6 +62,75 @@ const (
 	referencePeopleReads = 30 * 8 * 60 / 3
 	referenceCIReads     = 10 * 60 * 24
 )
+
+// codeLogTerm is one term of the code log's day: the bytes a day one op's
+// records take at the reference company, at their least (no CI) and their
+// most.
+type codeLogTerm struct{ least, most float64 }
+
+// codeLogDay is the code log's day, by the op whose records each term is: its
+// pushes, and its git clients' barriers at code.BarrierRecordBytes. What the
+// day is summed from, so a term priced here is a term of every figure
+// TestTheDocsPrintTheMeasuredDay holds.
+func codeLogDay() map[code.OpKind]codeLogTerm {
+	pushes := float64(referencePushesADay * codePushRecordBytes)
+	git := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
+	return map[code.OpKind]codeLogTerm{
+		code.OpPush:    {least: pushes, most: pushes},
+		code.OpBarrier: {least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)},
+	}
+}
+
+// codeLogNegligible is every op of the code domain whose records the code
+// log's day leaves out, and why: each is appended at the rate a person edits
+// the company's document or runs a command, or the trim sweeps what the log
+// no longer holds — a few records a day beside 3 000 pushes and the tens of
+// thousands of reads around them.
+var codeLogNegligible = map[code.OpKind]string{
+	code.OpCreate: "a repository is created when an activation of the company's document " +
+		"declares it",
+	code.OpSettings: "a repository's settings change when an activation of the company's " +
+		"document changes them",
+	code.OpDelete: "a repository is deleted when an activation of the company's document " +
+		"drops it",
+	code.OpRestore: "a deleted repository returns when an activation of the company's " +
+		"document declares it again",
+	code.OpPurgePart: "a deleted repository's rows go in bounded parts once it is past its " +
+		"retention: once a repository",
+	code.OpPurge:    "a deleted repository's last part: once a repository",
+	code.OpActivate: "the activation fence: one record an activation, fleet-wide",
+	code.OpEviction: "an operator's eviction of a node from the log, or its readmission",
+	code.OpGeneration: "a reanchor's record, once an operator recreates or restores the " +
+		"log",
+	code.OpTrimmed: "the trim's sweep of the anchors under its floor, one record per " +
+		"statelog.AnchorsPerTrimmedRecord, and the log keeps an anchor a repository and a " +
+		"name, never one a push or a read",
+}
+
+// codeLogUnwritten is every op of the code domain that no node of this build
+// appends, with the package whose code would append it and how: the day leaves
+// the op out while that package does not exist, and
+// TestTheCodeLogsDayPricesEveryRecordItTakes fails the day it does.
+var codeLogUnwritten = map[code.OpKind]struct{ writer, how string }{
+	code.OpCompact: {"internal/code/compact", "a compaction is proposed by a " +
+		"repository's compactor alone, through the estate's code.compact"},
+	code.OpRetireSweep: {"internal/code/compact", "a sweep removes the pack rows a " +
+		"compaction retired, and nothing is retired while nothing compacts"},
+}
+
+// codeLogKinds is every kind of object the code log's records are on, and how
+// its day counts the records on it.
+var codeLogKinds = map[code.ObjectKind]string{
+	code.KindRepo: "a push is on its repository (codeLogDay); so are its settings, deletion, " +
+		"restore and purge (codeLogNegligible) and a compaction and its sweep " +
+		"(codeLogUnwritten)",
+	code.KindBarrier:    "a git client's read (codeLogDay)",
+	code.KindName:       "a repository's create, on the name it claims (codeLogNegligible)",
+	code.KindEviction:   "an operator's eviction or readmission (codeLogNegligible)",
+	code.KindGeneration: "a reanchor (codeLogNegligible)",
+	code.KindCompany:    "the activation fence (codeLogNegligible)",
+	code.KindTrimmed:    "the trim's sweep of the anchors (codeLogNegligible)",
+}
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed
 // into ENG, which the chart gives to the Engineering unit — a unit with no
@@ -470,15 +543,15 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 // reason, and the reasons that size the code log's share of the broker against
 // this day (config's DerivedCodeLogNumerator and its prose in
 // docs/guides/replication.md, code's CodeLogMaxBytes and GitReadsShare), the
-// count of barriers a day under which a code log at half this log's ceiling
-// suffices among them — the production reading the share is lowered on. Each
-// figure is computed here from the published costs, the corpus's rates, the
-// published barriers, the code log's day, code.BarrierRecordBytes and
+// count of barriers a day that is the reference company's line for a code log
+// at half this log's ceiling among them. Each figure is computed here from the
+// published costs, the corpus's rates, the published barriers, the code log's
+// day (codeLogDay, every term of it), code.BarrierRecordBytes and
 // config.DefaultMinAge, and rounded as the pages round it; the few the pages
 // put in words are held to the range the words are true over.
 //
 // Mutation: change any published figure, a corpus's rate or text,
-// MaxTurnSummary, the code log's day, code.BarrierRecordBytes or
+// MaxTurnSummary, a term of the code log's day, code.BarrierRecordBytes or
 // config.DefaultMinAge, and a page no longer says what this package measures.
 func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	t.Parallel()
@@ -492,20 +565,29 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	years := func(capacity, rate float64) float64 { return capacity / rate / 365 }
 	keyBytes := referenceKeyGrowth * referenceKeysADay
 
-	// THE CODE LOG'S DAY BESIDE THIS ONE, at its least (no CI) and its most.
-	pushes := float64(referencePushesADay * codePushRecordBytes)
-	gitLeast := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
-	gitMost := gitLeast + float64(referenceCIReads*code.BarrierRecordBytes)
-	codeLeast, codeMost := (pushes+gitLeast)/day, (pushes+gitMost)/day
+	// THE CODE LOG'S DAY BESIDE THIS ONE, at its least (no CI) and its most:
+	// every term it prices, summed.
+	terms := codeLogDay()
+	pushes := terms[code.OpPush].most
+	gitLeast, gitMost := terms[code.OpBarrier].least, terms[code.OpBarrier].most
+	var codeLeastBytes, codeMostBytes, besideBarriers float64
+	for op, term := range terms {
+		codeLeastBytes += term.least
+		codeMostBytes += term.most
+		if op != code.OpBarrier {
+			besideBarriers += term.most
+		}
+	}
+	codeLeast, codeMost := codeLeastBytes/day, codeMostBytes/day
 	share := float64(config.DerivedCodeLogNumerator) / config.DerivedCodeLogDenominator
-	// THE BARRIERS UNDER WHICH HALF SUFFICES: the count a day that, beside the
-	// reference company's pushes, makes the code log's day half this one's, so
-	// a code log at half the mutation log's ceiling fills no sooner under a
-	// blocked trim. It is the production reading two thirds is lowered on
-	// (DerivedCodeLogNumerator), and the pages print it to the nearest
-	// hundred, beside the reads the reference company's git clients make with
-	// no CI at all.
-	halfBarriers := day/2 - pushes
+	// THE BARRIERS UNDER WHICH HALF SUFFICES, for a code log that takes them
+	// beside its other terms at their most: the count a day that makes the
+	// code log's day half this one's, so a code log at half the mutation log's
+	// ceiling fills no sooner under a blocked trim. The line itself is the two
+	// logs' bytes a day; this is the reference company's count for it, which
+	// the pages print to the nearest hundred, beside the reads the reference
+	// company's git clients make with no CI at all.
+	halfBarriers := day/2 - besideBarriers
 	halfCount := halfBarriers / code.BarrierRecordBytes
 	leastReads := int64(referencePushReads + referencePeopleReads)
 	// A TENTH OF THE CODE LOG'S CEILING is what its census lets git's barriers
@@ -642,7 +724,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("and %s MB of barriers, its seats' %s reads and the object collector's %d",
 				mb(barriers, 1), spaced(referenceSeatReads), collector),
 			fmt.Sprintf("the code log %s–%s MB a day: %s pushes at %s bytes",
-				mb(pushes+gitLeast, 1), mb(pushes+gitMost, 1), spaced(referencePushesADay),
+				mb(codeLeastBytes, 1), mb(codeMostBytes, 1), spaced(referencePushesADay),
 				spaced(codePushRecordBytes)),
 			fmt.Sprintf("%s MB; and the barriers of its git clients, %s–%s MB", mb(pushes, 1),
 				mb(gitLeast, 1), mb(gitMost, 1)),
@@ -653,9 +735,9 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("So the code log takes %.2f–%.2f of the mutation log's day — %.2f on its push "+
 				"records alone (%.2f of the tracker's records)", codeLeast, codeMost, pushes/day,
 				pushes/records),
-			fmt.Sprintf("A HALF SUFFICES UNDER ABOUT %s BARRIERS A DAY: beside the reference company's "+
-				"%s MB of pushes, %s MB of barriers make half the mutation log's %s MB day",
-				hundreds(halfCount), mb(pushes, 1), mb(halfBarriers, 1), mb(day, 1)),
+			fmt.Sprintf("beside the reference company's %s MB of pushes, ABOUT %s BARRIERS A DAY, %s MB, "+
+				"make half the mutation log's %s MB day", mb(pushes, 1), hundreds(halfCount),
+				mb(halfBarriers, 1), mb(day, 1)),
 			fmt.Sprintf("with no CI at all (%s)", spaced(leastReads)),
 		},
 		"internal/code/limits.go": {
@@ -675,11 +757,10 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				"clients' reads append (%d bytes a read) take about half to seven tenths of what its "+
 				"tracker writes and its seats' reads take a day, and the ratio is taken past the "+
 				"middle of that range", spaced(codePushRecordBytes), code.BarrierRecordBytes),
-			fmt.Sprintf("Beside the reference company's %s pushes a day, **half the mutation log's "+
-				"ceiling suffices under about %s barriers a day**: its pushes' %s MB and those "+
-				"barriers' %s MB are half the %s MB a day its tracker writes and its seats' reads "+
-				"take", spaced(referencePushesADay), hundreds(halfCount), mb(pushes, 1),
-				mb(halfBarriers, 1), mb(day, 1)),
+			fmt.Sprintf("Beside the reference company's %s pushes a day, that is **about %s barriers a "+
+				"day**: its pushes' %s MB and those barriers' %s MB are half the %s MB a day its "+
+				"tracker writes and its seats' reads take", spaced(referencePushesADay),
+				hundreds(halfCount), mb(pushes, 1), mb(halfBarriers, 1), mb(day, 1)),
 			fmt.Sprintf("with no CI at all — %s, three reads a push and thirty people fetching every "+
 				"three minutes of a working day", spaced(leastReads)),
 		},
@@ -689,6 +770,100 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s does not say %q", file, want)
 			}
+		}
+	}
+}
+
+// THE CODE LOG'S DAY PRICES EVERY RECORD THE LOG TAKES, or says why one is not
+// in it.
+//
+// The day sizes the code log's share (config's DerivedCodeLogNumerator), and
+// the pages count, beside it, the barriers under which a code log at half the
+// mutation log's ceiling suffices. A kind of record the log takes and the day
+// leaves out makes both quietly short, and no figure
+// TestTheDocsPrintTheMeasuredDay reads moves when it joins the log: a
+// compaction's, a change's or a check's record would come on top of a day
+// that has no room for it, and a company that lowered its code log to a half
+// on the barrier count would fill it first.
+//
+// So every op the code domain declares is exactly one of three: a term of the
+// day (codeLogDay), negligible beside it for the reason given
+// (codeLogNegligible), or appended by no node of this build (codeLogUnwritten)
+// — and that last only while the package that would append it does not exist.
+// Every kind of object the log's records are on says how the day counts them
+// (codeLogKinds). A new op, a new kind, or the package that writes an
+// unwritten op fails here until its records are priced into the day — and the
+// share and when a half suffices restated on the pages
+// TestTheDocsPrintTheMeasuredDay holds — or argued negligible.
+//
+// Mutation: declare an op or a kind in the code domain, or make
+// internal/code/compact, and this fails naming it.
+func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
+	t.Parallel()
+	const remedy = "price its records into codeLogDay — and restate the code log's share and " +
+		"when a half suffices on the pages TestTheDocsPrintTheMeasuredDay holds — or say in " +
+		"codeLogNegligible why they are no rate beside the day"
+	day := codeLogDay()
+	for _, op := range code.OpKinds {
+		var in []string
+		if _, found := day[op]; found {
+			in = append(in, "codeLogDay")
+		}
+		if _, found := codeLogNegligible[op]; found {
+			in = append(in, "codeLogNegligible")
+		}
+		if _, found := codeLogUnwritten[op]; found {
+			in = append(in, "codeLogUnwritten")
+		}
+		switch len(in) {
+		case 0:
+			t.Errorf("the code log takes %q records, which its day neither prices nor leaves out "+
+				"for a reason: %s", op, remedy)
+		case 1:
+		default:
+			t.Errorf("%q is in %s: an op is priced, negligible or unwritten, one of the three",
+				op, strings.Join(in, " and "))
+		}
+	}
+	for _, listed := range []struct {
+		name string
+		ops  []code.OpKind
+	}{
+		{"codeLogDay", slices.Collect(maps.Keys(day))},
+		{"codeLogNegligible", slices.Collect(maps.Keys(codeLogNegligible))},
+		{"codeLogUnwritten", slices.Collect(maps.Keys(codeLogUnwritten))},
+	} {
+		for _, op := range listed.ops {
+			if !op.Valid() {
+				t.Errorf("%s names %q, which is no op the code domain declares", listed.name, op)
+			}
+		}
+	}
+	for op, why := range codeLogNegligible {
+		if strings.TrimSpace(why) == "" {
+			t.Errorf("codeLogNegligible leaves %q out of the day and says nothing of why", op)
+		}
+	}
+	// AN UNWRITTEN OP IS UNWRITTEN WHILE ITS WRITER DOES NOT EXIST.
+	for op, unwritten := range codeLogUnwritten {
+		_, err := os.Stat(filepath.Join(sourcetree.Root(t), filepath.FromSlash(unwritten.writer)))
+		switch {
+		case err == nil:
+			t.Errorf("%s exists, so a node appends %q records — %s: %s", unwritten.writer, op,
+				unwritten.how, remedy)
+		case !errors.Is(err, fs.ErrNotExist):
+			t.Fatalf("whether %s exists, which would append %q records: %v", unwritten.writer, op, err)
+		}
+	}
+	for _, kind := range code.ObjectKinds {
+		if strings.TrimSpace(codeLogKinds[kind]) == "" {
+			t.Errorf("the code log's records are on %q objects, and codeLogKinds does not say how "+
+				"its day counts them: %s", kind, remedy)
+		}
+	}
+	for kind := range codeLogKinds {
+		if !kind.Valid() {
+			t.Errorf("codeLogKinds names %q, which is no kind of object the code domain declares", kind)
 		}
 	}
 }

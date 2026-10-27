@@ -958,23 +958,24 @@ the code log's lowered, then the log you want longer raised.
 The code log's share, two thirds of the mutation log's ceiling, is a judgement
 on the softest term in its day — the barriers its git clients' reads append —
 which no deployment had reported when it was made, and it holds until yours
-has. The count is
+has. **A half suffices while the code log takes at most half of what the
+mutation log takes a day**:
+[`crewlet.statelog.log.bytes_per_day`](../reference/metrics.md) whose `domain`
+is `code` at most half the one whose `domain` is `tracker` — the two logs'
+`bytes_per_day` in `crewlet retention status` — which count every record each
+log takes, so a code log at half the mutation log's ceiling fills no sooner
+while a trim is blocked. For a code log that takes nothing but pushes and its
+git clients' barriers, the same line is a count of the barriers:
 [`crewlet.statelog.barrier.applied`](../reference/metrics.md) whose `stream` is
-`CREWLET_CODE_LOG`: a day's increase of it on any one data node, which counts
+`CREWLET_CODE_LOG`, a day's increase of it on any one data node, which counts
 every barrier because every data node applies every record, so the nodes'
 counts are not added together. Beside the reference company's 3 000 pushes a
-day, **half the mutation log's ceiling suffices under about 11 700 barriers a
-day**: its pushes' 4.0 MB and those barriers' 2.1 MB are half the 12.1 MB a day
-its tracker writes and its seats' reads take, so a code log at half the
-mutation log's ceiling fills no sooner while a trim is blocked. That is fewer
-than the reference company's own git clients append with no CI at all —
-13 800, three reads a push and thirty people fetching every three minutes of a
-working day — so a half is for a company whose people and CI fetch less. A
-company whose pushes or tracker writes are far from the reference company's
-compares the two logs'
-[`crewlet.statelog.log.bytes_per_day`](../reference/metrics.md) instead
-(`domain` `code` and `tracker`), which count every record each log takes: a
-half suffices while the code log's is at most half the mutation log's.
+day, that is **about 11 700 barriers a day**: its pushes' 4.0 MB and those
+barriers' 2.1 MB are half the 12.1 MB a day its tracker writes and its seats'
+reads take. That is fewer than the reference company's own git clients append
+with no CI at all — 13 800, three reads a push and thirty people fetching every
+three minutes of a working day — so a half is for a company whose people and
+CI fetch less.
 
 **The half is of the ceiling the mutation log is created with, never of what
 it asks for.** A ceiling you set comes off the logs' share whole and is never

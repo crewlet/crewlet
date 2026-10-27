@@ -270,20 +270,20 @@ const (
 	// taken from the other logs on every volume whose logs are scaled into
 	// their share.
 	//
-	// SO TWO THIRDS HOLDS UNTIL PRODUCTION BARRIER COUNTS EXIST, and the
-	// count is the code log's crewlet.statelog.barrier.applied (its stream,
-	// CREWLET_CODE_LOG), which any one data node counts whole, since every
-	// data node applies every barrier. A HALF SUFFICES UNDER ABOUT 11 700
-	// BARRIERS A DAY: beside the reference company's 4.0 MB of pushes, 2.1 MB
-	// of barriers make half the mutation log's 12.1 MB day, so a code log at
-	// half that log's ceiling fills no sooner under a blocked trim. The
-	// reference company's own git clients append more than that with no CI at
-	// all (13 800), so a half is for a company whose people and CI fetch
-	// less. One whose pushes or tracker writes are far from the reference
-	// company's compares the two logs' crewlet.statelog.log.bytes_per_day
-	// instead, which count every record each log takes, whatever a later
-	// release adds to the code log included: a half suffices while the code
-	// log's is at most half the mutation log's.
+	// SO TWO THIRDS HOLDS UNTIL PRODUCTION COUNTS EXIST, and A HALF SUFFICES
+	// WHILE THE CODE LOG TAKES AT MOST HALF OF WHAT THE MUTATION LOG TAKES A
+	// DAY: the two logs' crewlet.statelog.log.bytes_per_day, domain code
+	// against domain tracker, which count every record each log takes, so a
+	// code log at half the mutation log's ceiling fills no sooner under a
+	// blocked trim. For a code log that takes nothing but pushes and its git
+	// clients' barriers, the same line is a count of the barriers, its
+	// crewlet.statelog.barrier.applied (stream CREWLET_CODE_LOG), which any
+	// one data node counts whole, since every data node applies every
+	// barrier: beside the reference company's 4.0 MB of pushes, ABOUT 11 700
+	// BARRIERS A DAY, 2.1 MB, make half the mutation log's 12.1 MB day. The
+	// reference company's own git clients append more than that with no CI
+	// at all (13 800), so a half is for a company whose people and CI fetch
+	// less.
 	//
 	// HALF IS OF THE CEILING THE MUTATION LOG IS CREATED WITH, never of its
 	// ask. A ceiling set in stream.code_log_max_bytes comes off the logs'
