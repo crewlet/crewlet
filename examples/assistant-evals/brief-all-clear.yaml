@@ -1,6 +1,7 @@
 # A brief of a page where nothing waits on the person: no decision, every
-# agent working. "Nothing needs you" is an answer, drawn as an empty list,
-# never a row invented to fill the card.
+# agent working. "Nothing needs you" is the answer, and it is the engine's to
+# say: the model writes what the page is about and an empty list, never a row
+# invented to fill the card and never a verdict of its own.
 person:
   apps: [worklet]
 page:
@@ -27,7 +28,7 @@ script:
   - call: list_agents
   - call: answer_brief
     args:
-      summary: Nothing waits on you; the Software Engineer is working and the Product Manager is idle.
+      about: The Software Engineer is working and the Product Manager is idle; no decision is open.
       needs: []
       follow_ups: ["What shipped this week?"]
 expect:
@@ -37,3 +38,4 @@ expect:
   state: completed
   brief:
     needs: []
+    verdict: Nothing needs you

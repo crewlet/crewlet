@@ -162,7 +162,6 @@ func shapes() map[string]reflect.Type {
 		"AssistantBriefCard":           reflect.TypeFor[wire.BriefCard](),
 		"AssistantBriefScope":          reflect.TypeFor[wire.BriefScope](),
 		"AssistantBriefNeed":           reflect.TypeFor[wire.BriefNeed](),
-		"AssistantBriefStep":           reflect.TypeFor[wire.BriefStep](),
 		"AssistantBriefAction":         reflect.TypeFor[wire.BriefAction](),
 		"AssistantPageContext":         reflect.TypeFor[wire.PageContext](),
 		"AssistantActionArgs":          reflect.TypeFor[wire.ActionArgs](),

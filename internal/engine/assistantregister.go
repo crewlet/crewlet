@@ -122,9 +122,15 @@ func (c *core) openAssistant(e *Engine, sl *stateLog) error {
 	if err != nil {
 		return fmt.Errorf("engine: assistant sealer: %w", err)
 	}
-	reader, err := assistantdomain.NewReader(assistantdomain.ReaderOptions{
+	opts := assistantdomain.ReaderOptions{
 		DB: sl.estate().Reader(), Log: running.reader, Sealer: sealer,
-	})
+	}
+	// A NIL RECORDER STAYS A NIL INTERFACE: one wrapped in it would be a
+	// recorder the reader calls into.
+	if e.metrics != nil {
+		opts.Metrics = e.metrics
+	}
+	reader, err := assistantdomain.NewReader(opts)
 	if err != nil {
 		return fmt.Errorf("engine: assistant reader: %w", err)
 	}

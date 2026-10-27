@@ -325,7 +325,7 @@ func judgeRefusals(want [][]string, got []string, fail func(string, ...any)) {
 }
 
 // judgeBrief holds a brief's card to what the case expects: the records its
-// rows cite, in order, and their tones.
+// rows cite, in order, their tones, and its verdict.
 func judgeBrief(e ExpectBrief, card *wire.BriefCard, fail func(string, ...any)) {
 	if card == nil {
 		fail("brief: no brief card was shown")
@@ -342,6 +342,9 @@ func judgeBrief(e ExpectBrief, card *wire.BriefCard, fail func(string, ...any)) 
 	}
 	if len(e.Tones) > 0 && !slices.Equal(tones, e.Tones) {
 		fail("brief.tones: %v, want %v", tones, e.Tones)
+	}
+	if e.Verdict != "" && card.Verdict() != e.Verdict {
+		fail("brief.verdict: %q, want %q", card.Verdict(), e.Verdict)
 	}
 }
 

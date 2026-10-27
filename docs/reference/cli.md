@@ -2516,8 +2516,9 @@ expect:
   brief:                          # a brief turn's card (mode: brief only)
     needs: [ENG-42, qa]           # the records its rows cite, in order; [] is "Nothing needs you"
     tones: [warning, danger]      # optional: each row's tone, in the same order
+    verdict: 2 things need you    # optional: the verdict the engine counted from the rows it kept
   refusals:                       # what each refused call's answer names, in order
-    - [summary, "needs[0].text"]  # judged against the scripted model, which hears every answer
+    - [about, "needs[0].do"]      # judged against the scripted model, which hears every answer
 ```
 
 A case is read by the configuration's own strict reader: a member this build does
@@ -2538,7 +2539,8 @@ read card gives. A `mode: brief` case runs a brief turn (the drawer's "Brief me
 on this page"), whose script ends with an `answer_brief` call; `brief` holds the
 card the engine drew from it, after the engine dropped every row whose record
 the turn did not read or the person may not open, and drew a danger tone only
-where the record's own read carried the fact.
+where the record's own read carried the fact; its `verdict` is counted from the
+rows that survived, never written by the model.
 
 ---
 

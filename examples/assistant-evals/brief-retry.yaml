@@ -1,5 +1,5 @@
-# A brief whose first answer is over its caps (a summary of 297 characters,
-# the live failure's shape) and whose retry fixes it. The engine refuses the
+# A brief whose first answer is over its caps (an about line of 297
+# characters, the live failure's shape) and whose retry fixes it. The engine refuses the
 # first with every fault it has, and draws the second: one retry is enough
 # when the refusal names everything at once.
 person:
@@ -29,16 +29,14 @@ script:
   - call: list_decisions
   - call: answer_brief
     args:
-      summary: "1 decision waits on you: the QA Engineer asked at 09:00 on ENG-42 which store build to test, and nothing else on the Inbox is blocked on you today, so answering it is the one thing that moves QA forward before the release candidate is cut this afternoon and the store review window opens tomorrow."
+      about: "1 decision waits on you: the QA Engineer asked at 09:00 on ENG-42 which store build to test, and nothing else on the Inbox is blocked on you today, so answering it is the one thing that moves QA forward before the release candidate is cut this afternoon and the store review window opens tomorrow."
       needs:
-        - {ref_kind: task, ref_id: ENG-42, text: "QA asks which build to test on ENG-42", tone: warning, action: open}
-      follow_ups: []
+        - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: which build QA tests", tone: warning, action: open}
   - call: answer_brief
     args:
-      summary: 1 decision waits on you; the QA Engineer asks which build to test on ENG-42.
+      about: The QA Engineer asks which build to test on ENG-42.
       needs:
-        - {ref_kind: task, ref_id: ENG-42, text: "QA asks which build to test on ENG-42", tone: warning, action: open}
-      follow_ups: []
+        - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: which build QA tests", tone: warning, action: open}
 expect:
   calls: [list_decisions, answer_brief, answer_brief]
   proposals: 0

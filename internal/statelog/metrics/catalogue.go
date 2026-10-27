@@ -844,6 +844,15 @@ func Catalogue() []Instrument {
 				"it did not read.",
 		},
 		{
+			Name: AssistantCardsShownAsNotice, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"type"},
+			Shows: "Stored assistant cards read back as a plain notice because this build's " +
+				"contract refuses their shape, by card `type`. Expected for briefs recorded " +
+				"before the brief's current shape, and during a rolling upgrade when an older " +
+				"node reads a newer node's card. A climb outside both is a card written past " +
+				"its own validation.",
+		},
+		{
 			Name: AssistantStreamsActive, Kind: KindGauge, Unit: UnitCount,
 			Shows: "Assistant live streams this node is serving. Each holds a " +
 				"connection and a subscription to one turn's frame log; a count that " +

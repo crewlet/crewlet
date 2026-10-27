@@ -1272,8 +1272,11 @@ const (
 	// took it to 4581.4 KiB. 4582 KiB, which still refuses a doubled
 	// baseline. uilet 0.71.0's toast that stays up for as long as its words
 	// take to read took it to 4582.1 KiB. 4583 KiB, which still refuses a
-	// doubled baseline.
-	treeBudget = 4<<20 + 487<<10
+	// doubled baseline. A brief that says its verdict once and ranks its
+	// rows, on uilet 0.72.0, and the record chip and words-sized table
+	// columns uilet 0.73.0 ships beside it, took it to 4585.1 KiB. 4586 KiB,
+	// which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 490<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

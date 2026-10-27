@@ -61,7 +61,7 @@ func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 		"status-and-failure", "page-in-named-space", "ambiguous-brand",
 		"week-over-week-spend", "change-from-another-screen",
 		"brief-inbox", "brief-all-clear", "brief-injected-instruction", "brief-record-gone",
-		"brief-retry", "brief-at-the-caps", "brief-every-cap", "2/2", "pass^2 15/15 cases",
+		"brief-retry", "brief-at-the-caps", "brief-every-cap", "2/2", "pass^2 16/16 cases",
 		"model scripted"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())

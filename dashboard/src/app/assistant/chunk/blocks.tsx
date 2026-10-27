@@ -917,15 +917,14 @@ function refusalBody(grants: readonly string[] | undefined, message: string): st
 }
 
 /**
- * A brief's action as the card's one press: an open the engine built, followed
+ * A brief row's action as its one press: an open the engine built, followed
  * only where it is one of this dashboard's own addresses, or a question asked
  * in the conversation. Anything else draws no button.
  */
 function briefPress(
-  action: AssistantBriefAction | undefined,
+  action: AssistantBriefAction,
   on: CardHandlers,
 ): { label: string; onSelect: () => void } | undefined {
-  if (action === undefined) return undefined;
   if (action.kind === "ask") {
     const question = action.question;
     return question ? { label: action.label, onSelect: () => on.ask(question) } : undefined;
@@ -936,9 +935,13 @@ function briefPress(
 
 /**
  * A brief, drawn by the design system's `BriefCard`: what it covers (the page,
- * or the one record it was limited to) and when it was read, the summary, the
- * rows with their presses, the recommendation, and the follow-ups, each asked
- * in this conversation.
+ * or the one record it was limited to) and when it was read, what the page is
+ * about, the ranked rows with their presses, the context line, and the
+ * follow-ups, each asked in this conversation.
+ *
+ * THE VERDICT IS THE CARD'S, FROM THE ROWS: whether anything needs the reader
+ * is the number of rows the engine kept (ADR-0062), which `BriefCard` counts
+ * into its head, so nothing here passes a verdict of its own.
  */
 function Brief({ brief, on }: { brief: AssistantBriefCard; on: CardHandlers }) {
   const record = brief.scope.record;
@@ -947,12 +950,11 @@ function Brief({ brief, on }: { brief: AssistantBriefCard; on: CardHandlers }) {
     record && word
       ? `${word.charAt(0).toUpperCase()}${word.slice(1)} ${record.id}`
       : brief.scope.title;
-  const recommended = brief.recommended;
   return (
     <BriefCard
       scope={scope}
       asOf={`As of ${fmtTime(brief.as_of)}`}
-      summary={brief.summary}
+      about={brief.about}
       needs={brief.needs.map((need) => ({
         key: `${need.ref.kind}:${need.ref.id}`,
         text: need.text,
@@ -960,9 +962,7 @@ function Brief({ brief, on }: { brief: AssistantBriefCard; on: CardHandlers }) {
         tone: need.tone,
         action: briefPress(need.action, on),
       }))}
-      recommended={
-        recommended ? { text: recommended.text, action: briefPress(recommended.action, on) } : null
-      }
+      context={brief.context}
       followUps={brief.follow_ups.map((question) => ({
         key: question,
         question,
