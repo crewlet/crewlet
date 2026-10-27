@@ -1258,8 +1258,13 @@ const (
 	// a doubled baseline. A brief of the page or its open record in the
 	// drawer, drawn by uilet 0.69.0's BriefCard, with the record each screen
 	// has open reported to the assistant, took it to 4574.6 KiB. 4575 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 479<<10
+	// which still refuses a doubled baseline. Sortable column heads with a
+	// default order, aligned columns, the filter pill in place of a tag of
+	// three spans, waits said as times and a link-only row opened by Enter,
+	// on uilet 0.70.0 (FilterPill, the grid's align and icon columns, the
+	// value trigger), took it to 4578.4 KiB. 4579 KiB, which still refuses a
+	// doubled baseline.
+	treeBudget = 4<<20 + 483<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
