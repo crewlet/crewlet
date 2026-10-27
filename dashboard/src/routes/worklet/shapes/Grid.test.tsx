@@ -354,6 +354,54 @@ test("the heads sort from the order in force, and only where the engine can orde
   }
 });
 
+// EACH COLUMN HAS ONE EDGE, shared by its head and its values: marks are
+// centred in their own track, times and dates end on the right, words start
+// on the left. The owner saw Updated ragged, Due off its head and the marks
+// scattered between them.
+test("every column's head and values share one edge, in both sets", () => {
+  const edge = (el: Element) =>
+    ["right", "center"].find((a) => el.className.includes(`--${a}`)) ?? "left";
+  const expected: Record<"list" | "table", Record<string, string>> = {
+    list: {
+      Priority: "center",
+      Key: "left",
+      Status: "left",
+      Title: "left",
+      Due: "right",
+      Type: "center",
+      Assignee: "center",
+      Updated: "right",
+    },
+    table: {
+      Key: "left",
+      Type: "center",
+      Title: "left",
+      Status: "left",
+      Due: "right",
+      Updated: "right",
+    },
+  };
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ due: "2031-04-20" })]);
+    const heads = screen.getAllByRole("columnheader");
+    let checked = 0;
+    const cells = [
+      ...container.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell"),
+    ];
+    heads.forEach((head, i) => {
+      const name = head.getAttribute("title") || head.textContent?.trim() || "";
+      const want = expected[shape][name];
+      if (want === undefined) return;
+      checked += 1;
+      expect(`${shape} ${name} head ${edge(head)}`).toBe(`${shape} ${name} head ${want}`);
+      expect(`${shape} ${name} cell ${edge(cells[i]!)}`).toBe(`${shape} ${name} cell ${want}`);
+    });
+    // EVERY NAMED COLUMN WAS FOUND, so a renamed head cannot pass by omission.
+    expect(checked).toBe(Object.keys(expected[shape]).length);
+    cleanup();
+  }
+});
+
 // THE TRASH'S `removed_by` IS THE THIRD CELL ON THIS GRID THAT DRAWS A PERSON,
 // and it reads the same resolver: somebody who emptied a subtree is drawn the
 // way they are drawn on the row above.

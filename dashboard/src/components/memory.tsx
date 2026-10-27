@@ -307,6 +307,7 @@ export function EpisodesCard({
         columns={[
           {
             key: "at",
+            align: "right",
             header: "When",
             shrink: true,
             // THROUGH `tsKey`, never `<` on the string: the engine

@@ -271,6 +271,7 @@ export function RecentPhases({
       },
       {
         key: "when",
+        align: "right",
         header: "When",
         shrink: true,
         cell: (r) => <TableDateCell value={r.at} now={now} />,

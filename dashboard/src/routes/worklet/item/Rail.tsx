@@ -446,6 +446,7 @@ function Pick({
   return (
     <span className="cell-edit">
       <Menu
+        triggerFlush
         label={label}
         trigger={
           <>
@@ -499,6 +500,7 @@ function LabelsValue({
   return (
     <span className="cell-edit">
       <Menu
+        triggerFlush
         label={`Labels of ${itemKey}`}
         trigger={
           <>

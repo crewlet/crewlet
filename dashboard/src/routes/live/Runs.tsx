@@ -695,6 +695,7 @@ export function Runs() {
               },
               {
                 key: "updated",
+                align: "right",
                 header: "Updated",
                 shrink: true,
                 sortValue: (r) => tsKey(r.updated_at || r.started_at),

@@ -796,6 +796,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
               {
                 key: "next",
+                align: "right",
                 header: "Next",
                 shrink: true,
                 sortValue: (s) => tsKey(s.next_run) || Number.MAX_SAFE_INTEGER,
@@ -819,6 +820,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
               {
                 key: "last",
+                align: "right",
                 header: "Last",
                 shrink: true,
                 drop: 1,
@@ -862,6 +864,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             columns={[
               {
                 key: "fired",
+                align: "right",
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),
@@ -1074,6 +1077,7 @@ function OneSchedule({
             columns={[
               {
                 key: "fired",
+                align: "right",
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),

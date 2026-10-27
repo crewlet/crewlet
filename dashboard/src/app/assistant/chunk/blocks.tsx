@@ -212,9 +212,14 @@ const ACCESS_CODES: ReadonlySet<string> = new Set([
   "assistant_not_permitted",
 ]);
 
-/** A number of seconds, as the run chip says it. */
+/**
+ * How long a run took or has run, as the run chip says it: the product's one
+ * duration ([fmtDuration]), so a deep run reads "Done in 14m 5s" rather than
+ * "Done in 845s". Under a second it keeps a tenth of a second, where a
+ * millisecond count would churn on a ticking chip.
+ */
 function seconds(ms: number): string {
-  return ms < 10_000 ? `${(ms / 1000).toFixed(ms < 1000 ? 1 : 0)}s` : `${Math.round(ms / 1000)}s`;
+  return ms < 1000 ? `${(Math.max(0, ms) / 1000).toFixed(1)}s` : fmtDuration(ms);
 }
 
 const steps = (n: number) => `${n} ${n === 1 ? "step" : "steps"}`;

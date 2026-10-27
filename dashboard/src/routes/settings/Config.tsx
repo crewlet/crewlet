@@ -1035,6 +1035,7 @@ export function ConfigScreen({
                 columns={[
                   {
                     key: "at",
+                    align: "right",
                     header: "When",
                     shrink: true,
                     // THE ONE COLUMN THAT GIVES WAY, and it is the revision

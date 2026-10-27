@@ -516,6 +516,7 @@ export function Conversations() {
                 },
                 {
                   key: "opened",
+                  align: "right",
                   header: "Opened",
                   shrink: true,
                   drop: 1,
@@ -524,6 +525,7 @@ export function Conversations() {
                 },
                 {
                   key: "last",
+                  align: "right",
                   header: "Last message",
                   shrink: true,
                   sortValue: (c) => tsKey(c.last_at),

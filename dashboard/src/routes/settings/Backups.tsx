@@ -270,6 +270,7 @@ export function BackupRecord({
                 },
                 {
                   key: "taken",
+                  align: "right",
                   header: "Taken",
                   shrink: true,
                   sortValue: (p) => p.taken_at,
@@ -360,6 +361,7 @@ export function BackupRecord({
               columns={[
                 {
                   key: "at",
+                  align: "right",
                   header: "When",
                   shrink: true,
                   sortValue: (r) => r.at,

@@ -78,7 +78,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { ASSISTANT_INPUT_MAX_RUNES, type AssistantFileRef } from "~/contract/assistant.ts";
 import { questionFits } from "~/protocol/assistantWire.ts";
-import { relTime } from "~/lib/format.ts";
+import { fmtWait, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { rereadViewer } from "~/lib/viewer.ts";
 import { keyRow, matchesRow, pressText } from "../../keymap.ts";
@@ -257,7 +257,7 @@ export function Drawer({
     if (view.fault === "protocol_mismatch") return "Reload to keep asking";
     if (model !== null) return model.short;
     if (view.stream === "reconnecting") return "Reconnecting to the answer";
-    if (waitSeconds > 0) return `You can ask again in ${waitSeconds} seconds`;
+    if (waitSeconds > 0) return `You can ask again ${fmtWait(waitSeconds)}`;
     return undefined;
   }, [view.fault, model, view.stream, waitSeconds]);
 

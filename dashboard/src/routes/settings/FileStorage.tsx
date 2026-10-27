@@ -380,6 +380,7 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
             },
             {
               key: "at",
+              align: "right",
               header: "Last ran",
               shrink: true,
               // A PASS THAT HAS NOT RUN has no instant, and sorts last.

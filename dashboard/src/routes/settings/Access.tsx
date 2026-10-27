@@ -1693,6 +1693,7 @@ function Invitations({
             },
             {
               key: "expires",
+              align: "right",
               header: "Expires",
               shrink: true,
               sortValue: (i) => i.expires_at ?? "",
@@ -2225,6 +2226,7 @@ function Principal({
               },
               {
                 key: "created",
+                align: "right",
                 header: "Created",
                 shrink: true,
                 drop: 3,
@@ -2347,6 +2349,7 @@ function Principal({
                 },
                 {
                   key: "ends",
+                  align: "right",
                   header: "Ends",
                   shrink: true,
                   drop: 1,

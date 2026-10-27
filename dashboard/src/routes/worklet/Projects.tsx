@@ -458,6 +458,7 @@ export function Projects() {
       },
       {
         key: "target",
+        align: "right",
         drop: 1,
         header: "Target",
         shrink: true,
