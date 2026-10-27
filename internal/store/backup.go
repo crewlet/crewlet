@@ -472,7 +472,10 @@ func remove(path string) error {
 // and closed after it. Drawn from the pool beside the copying connection, one
 // copy would need two of the readers at once: on a node configured with one
 // it would wait for ever on its own hold, and two copies at once on the
-// replicated estate's floor of two would each hold one and wait for the other.
+// replicated estate's floor of two would each hold one and wait for the other
+// — for ever in earnest, since the hold begins under [context.WithoutCancel].
+// TestACopyTakesOneConnectionFromItsPool stands both at their VACUUM INTO at
+// once.
 //
 // IT COSTS THE LOG ITS CHECKPOINTS for the copy's run: nothing past the held
 // mark is backfilled while it stands, so the write-ahead log grows by what the

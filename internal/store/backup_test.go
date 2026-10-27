@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // A path with a space in it is ordinary and must work: the destination
@@ -284,6 +285,81 @@ func TestACopyTakenUnderWritesAndCheckpointsIsOneMoment(t *testing.T) {
 	if checkpoints.Load() == 0 {
 		t.Error("no checkpoint completed beside the copies, so nothing moved the " +
 			"file under any of them")
+	}
+}
+
+// A COPY TAKES ONE CONNECTION FROM ITS POOL, so it finishes on the smallest
+// pool either file can be configured with, and two at once on the smallest the
+// replicated estate keeps.
+//
+// The read transaction that keeps a copy one moment is a second connection,
+// opened OUTSIDE the pool (DB.vacuumInto). Drawn from the pool instead — the
+// obvious simplification — one copy needs two of its readers at once: a node
+// file opened with `store.max_open_conns: 1` keeps one, so its copy would wait
+// for ever on its own hold, and two copies at once on the replicated estate's
+// floor of two would each draw one and wait for the other. The wait is for
+// ever in earnest, since the hold begins under context.WithoutCancel, so no
+// deadline ends it and a fleet backup stuck in it keeps its running flag and
+// its trim hold for the life of the process. Every other case copies through a
+// pool of two or more readers, one copy at a time, and passes either way.
+//
+// So all three copies are stood at the same point before any is let through:
+// each has drawn its connection, holds its view and waits at its VACUUM INTO.
+// A copy short of a connection never reaches that point, and the case says so
+// within a bound rather than hanging the binary.
+func TestACopyTakesOneConnectionFromItsPool(t *testing.T) {
+	t.Parallel()
+	hold := storetest.NewCopyHold()
+	node, replicated := openReplicated(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{MaxOpenConns: 1, WrapDriver: hold.Wrap}, 1)
+	ctx := t.Context()
+	// THE REPLICATED ESTATE AT ITS FLOOR: two readers beside the identity
+	// reserve the handle holds and the writer its log pins, pinned here as
+	// the applier pins it — left unpinned, its connection is one more a copy
+	// could draw, and two copies would never be short of one.
+	w, err := replicated.Writer(ctx)
+	if err != nil {
+		t.Fatalf("pin the applier's writer: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+
+	type copied struct {
+		name string
+		err  error
+	}
+	hold.Arm()
+	// RELEASED ON EVERY WAY OUT, so a copy the case gave up on fails at its
+	// VACUUM INTO rather than waiting on a gate nobody will open.
+	defer hold.Release(errors.New("the case ended before it let the copies through"))
+	dir := t.TempDir()
+	copies := []*store.DB{node, replicated, replicated}
+	done := make(chan copied, len(copies))
+	for i, db := range copies {
+		name := fmt.Sprintf("copy %d, of the %s estate", i, db.Estate())
+		go func() {
+			_, err := db.Backup(ctx, filepath.Join(dir, fmt.Sprintf("copy-%d.db", i)))
+			done <- copied{name: name, err: err}
+		}()
+	}
+	if got := hold.Wait(len(copies), storetest.CopyHoldWait); got < len(copies) {
+		t.Fatalf("%d of %d copies reached their VACUUM INTO within %s; the rest wait on a "+
+			"connection their pool cannot give — a copy that draws its hold from the pool "+
+			"needs two readers at once, where a node file at `store.max_open_conns: 1` "+
+			"keeps one, and two such copies at once need four of the replicated estate's two",
+			got, len(copies), storetest.CopyHoldWait)
+	}
+	hold.Release(nil)
+	timeout := time.After(storetest.CopyHoldWait)
+	for range copies {
+		select {
+		case c := <-done:
+			if c.err != nil {
+				t.Errorf("%s: %v", c.name, c.err)
+			}
+		case <-timeout:
+			t.Fatalf("a copy let through to its VACUUM INTO did not return within %s",
+				storetest.CopyHoldWait)
+		}
 	}
 }
 
