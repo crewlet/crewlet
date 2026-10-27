@@ -112,6 +112,10 @@ type knobs struct {
 	// holds it, as the host moves a view out, or a purge a copy, from under a
 	// measure that has listed it.
 	measuring func(dir string)
+	// trimming runs as the memo's trim is about to move the cohort at dir out
+	// of a copy it found holding it: a case retires the copy there, as a purge
+	// does from under a trim that has picked it.
+	trimming func(dir string)
 	// ticks, when set, is where the janitor takes its ticks from, in place
 	// of a ticker of EvictInterval: a case delivers a tick when it chooses
 	// — or never, so that no tick can pass for a kick — rather than waiting

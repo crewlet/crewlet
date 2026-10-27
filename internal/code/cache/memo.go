@@ -1315,6 +1315,22 @@ func (c *Cache) trimCohort(ctx context.Context, n uint64) (bool, error) {
 // trimCohortOf moves inc's cohort n into trash/ where inc still holds it, and
 // answers what its record counted of it and whether it went. Under the memo's
 // lock.
+//
+// A COPY THAT GOES WHOLE UNDER THE MOVE GIVES THE TRIM NOTHING. The memo's lock
+// keeps the tree still against everything that moves a cohort — a rebuild's
+// promote and a swap carry the memo under it (carryMemo), so neither retires
+// the copy while the trim holds it — but not against a PURGE, which retires
+// the copy without it once its holding is read here; the moment nobody holds
+// the copy, Cache.trash moves its directory into trash/ whole — the cohort
+// with it, its bytes out of the totals already (discard) — and the move meets
+// the cohort's absence. Counted, the cohort would be one the trim never moved,
+// and code_cache_memo_trimmed would report the bytes the purge gave back as
+// the trim's own; so a discarded copy is let go and nothing of it is counted,
+// as the listing (listMemo) and the tick's state writes (stateMemos) let one
+// go. discard marks the copy under e.mu before its directory moves, so the
+// absence a whole move makes the trim meet is always a discarded copy's. A
+// cohort gone from a copy still held is forgotten, as a recorded cohort gone
+// is.
 func (c *Cache) trimCohortOf(e *entry, inc *incarnation, n uint64) (int64, bool, error) {
 	inc.memoMu.Lock()
 	defer inc.memoMu.Unlock()
@@ -1325,11 +1341,18 @@ func (c *Cache) trimCohortOf(e *entry, inc *incarnation, n uint64) (int64, bool,
 		return 0, false, nil
 	}
 	dir := cohortDir(inc.dir, n)
-	if err := toTrash(c.dir, dir, newV7()+"-memo-"+cohortName(n)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if c.knobs != nil && c.knobs.trimming != nil {
+		c.knobs.trimming(dir)
+	}
+	err := toTrash(c.dir, dir, newV7()+"-memo-"+cohortName(n))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return 0, false, err
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if err != nil && inc.discarded {
+		return 0, false, nil
+	}
 	cs, freed := withoutCohort(inc.derived[DerivedMemo].Cohorts, n)
 	c.setMemo(inc, cs, true)
 	return freed, true, nil

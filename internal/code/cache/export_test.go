@@ -99,6 +99,15 @@ func BeforeMeasuring(o *Options, f func(dir string)) {
 	o.knobs.measuring = f
 }
 
+// BeforeTrimming makes the memo's trim call f as it is about to move the
+// cohort at dir out of a copy it found holding it.
+func BeforeTrimming(o *Options, f func(dir string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.trimming = f
+}
+
 // TicksFrom makes the janitor take its ticks from ticks, in place of a
 // ticker of EvictInterval: a tick is delivered by a send, and a channel
 // nothing sends on is a janitor that never ticks.

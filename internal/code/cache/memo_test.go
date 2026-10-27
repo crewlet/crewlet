@@ -231,6 +231,98 @@ func TestATrimFallsDueOnceACohort(t *testing.T) {
 	}
 }
 
+// THE TRIM COUNTS ONLY THE COHORTS IT MOVED. It moves the oldest cohort out of
+// each copy that holds it, under that copy's memo lock, which keeps the tree
+// still but not the copy: a purge may retire a copy the trim has found holding
+// the cohort and move its directory into trash/ whole — the cohort with it —
+// before the trim's own move. That cohort left with its copy, whose bytes the
+// purge took out of the totals, so the trim counts neither it nor its bytes:
+// code_cache_memo_trimmed reports the copies the trim dropped the cohort from
+// and what that gave back.
+//
+// The case puts one answer of each of two copies in the node's oldest cohort,
+// fills one of them past the memo's share in cohorts of their own, and purges
+// the other as the trim is about to move its cohort.
+//
+// Mutation: count a cohort whose move met its copy's absence (trimCohortOf
+// without its discarded case) — the trim reports both copies and both answers.
+func TestTheTrimCountsOnlyTheCohortsItMoved(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	kept, purged := w.repo(t, 1), w.repo(t, 2)
+	for _, repo := range []string{kept, purged} {
+		w.push(t, repo, "refs/heads/main", nil)
+	}
+	var (
+		c       *cache.Cache
+		mu      sync.Mutex
+		gone    string
+		retired bool
+	)
+	c = w.open(t, func(o *cache.Options) {
+		cache.BeforeTrimming(o, func(dir string) {
+			mu.Lock()
+			defer mu.Unlock()
+			if retired || gone == "" || !strings.HasPrefix(dir, gone+string(filepath.Separator)) {
+				return
+			}
+			// The trim has found the purged repository's copy holding the
+			// cohort and is about to move it: a purge takes the copy, which
+			// nobody holds, there.
+			retired = cache.Retire(c, purged)
+		})
+	})
+	// A share of 32 answers: a cohort is opened past every two placed.
+	block := memoEntry(0)
+	share := 32 * block
+	cache.SetMaxBytes(c, cache.MemoShare*share)
+	k := w.sync(t, c, kept)
+	defer k.Release()
+	first := cache.MemoNewest(c)
+	memoize(t, c, k, memoKeys("kept", 1))
+	p := w.sync(t, c, purged)
+	memoize(t, c, p, memoKeys("purged", 1))
+	mu.Lock()
+	gone = p.Dir
+	mu.Unlock()
+	p.Release()
+	if got := cache.MemoNewest(c); got != first+1 {
+		t.Fatalf("the two copies' answers left the newest cohort at %d, want %d: the oldest cohort is not both "+
+			"copies'", got, first+1)
+	}
+	// Two answers a run, a cohort each: 32 answers more take the memo past its
+	// share by the two in the oldest cohort, which the trim drops alone.
+	fill := memoKeys("fill", 32)
+	for i := 0; i < len(fill); i += 2 {
+		memoize(t, c, k, fill[i:i+2])
+	}
+	cache.JanitorPass(c)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !retired {
+		t.Fatal("the trim never came to move the purged copy's cohort, so no purge met it")
+	}
+	if statOK(t, gone) {
+		t.Errorf("the purged copy's directory %s is still where it was", gone)
+	}
+	trims := w.logs.lines(t, "code_cache_memo_trimmed")
+	if len(trims) != 1 || trims[0]["cohort"] != float64(first) || trims[0]["copies"] != float64(1) ||
+		trims[0]["bytes"] != float64(block) {
+		t.Errorf("the trim logged %v, want the oldest cohort, %d, dropped from the one copy it moved it out of, "+
+			"%d bytes", trims, first, block)
+	}
+	if lines := w.logs.lines(t, "code_cache_memo_untrimmed"); len(lines) != 0 {
+		t.Errorf("code_cache_memo_untrimmed was logged %d times (%v), want never", len(lines), lines)
+	}
+	if statOK(t, cache.MemoCohortDir(k.Dir, first)) {
+		t.Errorf("the oldest cohort's directory, %d, is still in the kept copy after the trim", first)
+	}
+	if got := cache.MemoBytes(c); got != share {
+		t.Errorf("after the trim the node counts its memo at %d bytes, want the kept copy's %d", got, share)
+	}
+}
+
 // A RUN'S STAGED PAGES ARE THE MEMO'S. A page a read's run has staged and not
 // yet placed counts against the memo's share beside the pages it keeps, so the
 // janitor makes room for it from the memo's own answers — never by evicting a
