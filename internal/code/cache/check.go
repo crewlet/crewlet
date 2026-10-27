@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -33,9 +34,12 @@ import (
 // Each is a git HASHFILE, whose last twenty bytes are the SHA-1 of every byte
 // before them (git's finalize_hashfile), and that is the check: a .idx and a
 // .rev also carry their pack's checksum — the pack's name — in the twenty
-// before it, and a .pack's trailer IS its name. No git process runs: git's
-// own verifiers cost twenty times a trailer for the graph and are blind to
-// the bitmap.
+// before it, and a .pack's trailer IS its name. The rule has ONE
+// implementation, code.HashTrailer, which a published layer's check
+// (code.CheckLayer) holds the layer's files to as well, so a layer a git node
+// fetched and the layer it keeps are judged by one reading (ADR-0008). No git
+// process runs: git's own verifiers cost twenty times a trailer for the graph
+// and are blind to the bitmap.
 
 // fileKind is which file of an incarnation a check hashed: the `file`
 // attribute of crewlet.code.cache.checks. A pack's own files are named here;
@@ -218,6 +222,43 @@ func (c *Cache) pieces(hold func(context.Context) (func(), error)) pieces {
 	return p
 }
 
+// of is p as the one hash of git's trailer rule reads the file at path by
+// (code.HashTrailer): through p's buffer, a piece of p.size in each slot
+// p.hold takes — and, where a case set them, its hooks told of each piece
+// through the hold itself: the fault asked once the piece's slot is held and
+// before a byte of it is read, its error that read's; the read hook once the
+// piece is read with its slot still held, and again once the slot is given
+// back.
+func (p pieces) of(path string) code.Pieces {
+	if p.read == nil && p.fault == nil {
+		return code.Pieces{Buf: p.buf, Size: p.size, Hold: p.hold}
+	}
+	return code.Pieces{Buf: p.buf, Size: p.size, Hold: func(ctx context.Context) (func(), error) {
+		release := func() {}
+		if p.hold != nil {
+			var err error
+			if release, err = p.hold(ctx); err != nil {
+				return nil, err
+			}
+		}
+		if p.fault != nil {
+			if err := p.fault(path); err != nil {
+				release()
+				return nil, err
+			}
+		}
+		return func() {
+			if p.read != nil {
+				p.read(path, true)
+			}
+			release()
+			if p.read != nil {
+				p.read(path, false)
+			}
+		}, nil
+	}}
+}
+
 // repairAction is what a repair does about the checkable file at rel found
 // failing: a derived file is dropped, a pack's file installed again.
 func (im *image) repairAction(rel string) string {
@@ -237,10 +278,11 @@ func noVerdict(ctx context.Context, err error) bool {
 
 // trailerSound holds the file at path to its hashfile trailer — git's, the
 // SHA-1 of every byte before its last twenty against those twenty, or a
-// provenance run's SHA-256 over 32 (expect.run) — and to want, reading it one
-// PIECE at a time as p says, and checking ctx before every read. A file that
-// is not a regular file, or shorter than its trailer and what want names, is
-// damaged.
+// provenance run's SHA-256 over 32 (expect.run) — by the rule's one
+// implementation, code.HashTrailer, which a published layer's check shares
+// (code.CheckLayer), reading it one PIECE at a time as p says and checking ctx
+// before every read; and to want. A file that is not a regular file, or
+// shorter than its trailer and what want names, is damaged.
 //
 // A VERDICT HOLDS ONLY FOR THE FILE IT HASHED: the path is Lstat'ed before it
 // is opened, and after the hash both the open file and the path again, and
@@ -275,46 +317,28 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 	}
 	defer func() { _ = f.Close() }() // read-only: what was read is the answer
 
-	body := &io.LimitedReader{R: f, N: id.size - int64(trailerLen)}
-	var read int64
-	for body.N > 0 {
-		release := func() {}
-		if p.hold != nil {
-			if release, err = p.hold(ctx); err != nil {
-				return hashNone, id, read, err
-			}
-		}
-		piece := &io.LimitedReader{R: body, N: p.size}
-		if p.fault != nil {
-			err = p.fault(path)
-		}
-		if err == nil {
-			err = copyChecked(ctx, sum, piece, p.buf)
-		}
-		if p.read != nil {
-			p.read(path, true)
-		}
-		release()
-		if p.read != nil {
-			p.read(path, false)
-		}
-		read += p.size - piece.N
-		if err != nil {
-			return hashNone, id, read, err
-		}
-		if piece.N > 0 {
-			break // the body ended inside this piece: the file is shorter than it was
-		}
-	}
-	tail := make([]byte, need)
-	if _, err = f.ReadAt(tail, id.size-need); err != nil {
-		if errors.Is(err, io.EOF) {
-			// Shorter than when it was Lstat'ed: rewritten while it was read.
-			return hashNone, id, read, nil
-		}
+	t, err := code.HashTrailer(ctx, f, id.size, sum, p.of(path))
+	read := t.Read
+	switch {
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		// Shorter than when it was Lstat'ed: rewritten while it was read.
+		return hashNone, id, read, nil
+	case err != nil:
 		return hashNone, id, read, err
 	}
-	read += need
+	prior := make([]byte, len(want.prior))
+	if len(prior) > 0 {
+		n, priorErr := f.ReadAt(prior, id.size-need)
+		read += int64(n)
+		switch {
+		case n == len(prior):
+		case errors.Is(priorErr, io.EOF):
+			// Shorter than when it was Lstat'ed, as above.
+			return hashNone, id, read, nil
+		default:
+			return hashNone, id, read, priorErr
+		}
+	}
 	after, err := f.Stat()
 	if err != nil {
 		return hashNone, id, read, err
@@ -322,14 +346,13 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 	// Both: the open file written through its own inode moves the first,
 	// and another file renamed in over the path — or the path removed —
 	// moves the second while the open file keeps every byte it had.
-	if idOf(after) != id || lstatID(path) != id || body.N > 0 {
+	if idOf(after) != id || lstatID(path) != id {
 		return hashNone, id, read, nil
 	}
-	trailer := tail[len(tail)-trailerLen:]
 	switch {
-	case !bytes.Equal(sum.Sum(nil), trailer),
-		want.prior != nil && !bytes.Equal(tail[:len(want.prior)], want.prior),
-		want.trailer != nil && !bytes.Equal(trailer, want.trailer):
+	case !t.Sound(),
+		want.prior != nil && !bytes.Equal(prior, want.prior),
+		want.trailer != nil && !bytes.Equal(t.Held, want.trailer):
 		return hashDamaged, id, read, nil
 	}
 	return hashSound, id, read, nil

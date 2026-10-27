@@ -1034,7 +1034,11 @@ func hashBundle(ctx context.Context, stem string, buf []byte,
 
 // hashFile adds the bytes of the file at path to sum, a piece of at most
 // CheckPieceBytes at a time, each in a slot hold takes (none when nil) and
-// gives back once the piece is read.
+// gives back once the piece is read — the one piece loop every hash of this
+// node's files reads by (code.HashPieces), so a hint's hash of a pack holds
+// the read lane exactly as a check's of its index does. It hashes the bytes
+// the file held when it was opened: one rewritten meanwhile is its caller's
+// to see, by the files' identity (hashPack).
 func hashFile(ctx context.Context, sum io.Writer, path string, buf []byte,
 	hold func(context.Context) (func(), error)) error {
 
@@ -1043,42 +1047,12 @@ func hashFile(ctx context.Context, sum io.Writer, path string, buf []byte,
 		return err
 	}
 	defer func() { _ = f.Close() }() // read-only: what was read is the answer
-	for {
-		release := func() {}
-		if hold != nil {
-			if release, err = hold(ctx); err != nil {
-				return err
-			}
-		}
-		piece := &io.LimitedReader{R: f, N: CheckPieceBytes}
-		err = copyChecked(ctx, sum, piece, buf)
-		release()
-		if err != nil || piece.N > 0 {
-			// A failure, or a piece the file ended inside: the file is read.
-			return err
-		}
+	info, err := f.Stat()
+	if err != nil {
+		return err
 	}
-}
-
-// copyChecked copies r to w through buf, checking ctx before every read.
-func copyChecked(ctx context.Context, w io.Writer, r io.Reader, buf []byte) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return context.Cause(ctx)
-		}
-		n, err := r.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr
-			}
-		}
-		switch {
-		case errors.Is(err, io.EOF):
-			return nil
-		case err != nil:
-			return err
-		}
-	}
+	_, err = code.HashPieces(ctx, sum, f, info.Size(), code.Pieces{Buf: buf, Size: CheckPieceBytes, Hold: hold})
+	return err
 }
 
 // checkRefs hashes the packed-refs the listing opened against the digest

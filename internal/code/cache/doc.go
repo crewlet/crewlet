@@ -453,10 +453,14 @@
 // verdict; and a repair acts only on a file still at the identity its finding
 // names, so it never undoes the maintainer's rewrite or an earlier repair.
 //
-// Hashing is a request's core — the round's callers wait on it — so it holds
-// ONE SLOT OF THE READ LANE a piece at a time (gitproc.Pool.HoldRead,
-// [CheckPieceBytes]) and none while the round runs git, which waits in the
-// same lane; one slot rather than several, so the largest repository's first
+// The trailer rule, and the piece loop every hash of a node's files reads by,
+// are internal/code's (code.HashTrailer, code.HashPieces): ONE implementation,
+// which a published layer's check (code.CheckLayer) holds the layer's files
+// by as well, so a layer fetched and the layer kept are judged alike
+// (ADR-0008). Hashing is a request's core — the round's callers wait on it —
+// so it holds ONE SLOT OF THE READ LANE a piece at a time
+// (gitproc.Pool.HoldRead, [CheckPieceBytes]) and none while the round runs
+// git, which waits in the same lane; one slot rather than several, so the largest repository's first
 // round costs that one request seconds rather than taking every core the
 // node's other requests are served with. A slot not had in gitproc.SlotWait
 // fails the round busy, and the next round checks: a refused slot and an

@@ -72,7 +72,11 @@ import (
 // header, its table of contents and the chunks a count is read from — each
 // held to the file's own size before a byte of it is read, so no count a file
 // states sizes anything the file does not hold (FuzzParseMidx and its
-// siblings) — and hash the rest as it streams past.
+// siblings) — and hash the rest as it streams past, by git's trailer rule's
+// one implementation ([HashTrailer], hashfile.go): a piece at a time under the
+// caller's hold, its context checked before every read, so a check of the
+// largest layer stops when its caller does and holds a git node's read lane a
+// piece at a time, as the cache's own check of the files it keeps does.
 //
 // THE BYTES ARE CUT IN ONE PLACE (layerSpans): [StoreLayer] uploads the three
 // files back to back as [LayerPartBytes] parts, every part at once, and
@@ -119,13 +123,6 @@ const (
 	// packNameBytes is one PNAM entry of a pack a cache holds: "pack-", its
 	// forty hex digits, ".idx" and the NUL that ends it.
 	packNameBytes = len("pack-") + gitref.OIDHexLen + len(".idx") + 1
-	// hashBuffer is the most a trailer's hash reads of a file at once: a
-	// quarter mebibyte, the piece a git node's download copies a stored
-	// object through (internal/code/cache's copyBuffer), so a check reads a
-	// file in the pieces its download wrote it — 4 096 reads a gibibyte,
-	// whose system calls are a small fraction of the SHA-1 itself. Never more
-	// than the file holds.
-	hashBuffer = 256 << 10
 )
 
 // The chunk ids the readers read: midx.h's MIDX_CHUNKID_* and commit-graph.c's
@@ -235,30 +232,24 @@ func sized(r io.ReaderAt, size int64, what string) error {
 }
 
 // trailerOf holds the git hashfile r holds, size bytes, to its trailer — the
-// SHA-1 of every byte before its last twenty (csum-file.c's finalize_hashfile,
-// CSUM_HASH_IN_STREAM) — and answers the trailer in hex: a multi-pack-index's
-// and a commit-graph layer's own name, and what a bitmap's header names.
-func trailerOf(r io.ReaderAt, size int64, what string) (string, error) {
-	var trailer [hashBytes]byte
-	if err := readAt(r, trailer[:], size-hashBytes, what); err != nil {
-		return "", err
+// SHA-1 of every byte before its last twenty — by the one rule
+// ([HashTrailer]), hashed a piece at a time as p says and stopped with ctx,
+// and answers the trailer in hex: a multi-pack-index's and a commit-graph
+// layer's own name, and what a bitmap's header names. A file that does not
+// hold the bytes it was handed as, or whose trailer is not that hash, is a
+// refusal; a read, a hold or a context that failed is answered as it came.
+func trailerOf(ctx context.Context, r io.ReaderAt, size int64, what string, p Pieces) (string, error) {
+	t, err := HashTrailer(ctx, r, size, sha1.New(), p) //nolint:gosec // git's trailer, compared as git wrote it
+	switch {
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return "", formatf("%s ends at byte %d, inside the %d bytes it is read as holding", what, t.Read, size)
+	case err != nil:
+		return "", fmt.Errorf("code: hash %s: %w", what, err)
+	case !t.Sound():
+		return "", formatf("%s's trailer, %x, is not the SHA-1 of the %d bytes before it, %x", what, t.Held,
+			size-hashBytes, t.Sum)
 	}
-	body := size - hashBytes
-	h := sha1.New() //nolint:gosec // git's trailer, compared as git wrote it
-	if body > 0 {
-		buf := make([]byte, min(body, hashBuffer))
-		switch n, err := io.CopyBuffer(h, io.NewSectionReader(r, 0, body), buf); {
-		case err != nil:
-			return "", fmt.Errorf("code: read %s to hash it: %w", what, err)
-		case n != body:
-			return "", formatf("%s ends at byte %d, before the %d its trailer is read at", what, n, body)
-		}
-	}
-	if sum := h.Sum(nil); !bytes.Equal(sum, trailer[:]) {
-		return "", formatf("%s's trailer, %x, is not the SHA-1 of the %d bytes before it, %x", what, trailer, body,
-			sum)
-	}
-	return hex.EncodeToString(trailer[:]), nil
+	return hex.EncodeToString(t.Held), nil
 }
 
 // chunkSpan is one chunk of a chunk-format file: its id and where it lies.
@@ -412,11 +403,13 @@ type MidxInfo struct {
 // indexes at least one object, as every one git writes with a bitmap does.
 // Every PNAM entry is "pack-<forty hex>.idx", the one name a cache gives a
 // pack, in strictly ascending order in a version 1 file, as git's reader
-// requires. And it recomputes the trailer over the file.
+// requires. And it recomputes the trailer over the file ([HashTrailer]), a
+// piece at a time as p says, stopped with ctx.
 //
-// Every refusal names what of the file differs; a read of r that failed is
-// answered as it came ([CheckLayer] says why the two are apart).
-func ParseMidx(r io.ReaderAt, size int64) (MidxInfo, error) {
+// Every refusal names what of the file differs; a read of r, a hold or a ctx
+// that failed is answered as it came ([CheckLayer] says why the two are
+// apart).
+func ParseMidx(ctx context.Context, r io.ReaderAt, size int64, p Pieces) (MidxInfo, error) {
 	const what = "the multi-pack-index"
 	if size < midxHeaderBytes+hashBytes {
 		return MidxInfo{}, formatf("%s is %d bytes, under its %d-byte header and %d-byte trailer", what, size,
@@ -500,7 +493,7 @@ func ParseMidx(r io.ReaderAt, size int64) (MidxInfo, error) {
 	if pad := raw[int(packs)*packNameBytes:]; slices.ContainsFunc(pad, func(b byte) bool { return b != 0 }) {
 		return MidxInfo{}, formatf("%s pads its pack names with %q, not NULs", what, pad)
 	}
-	checksum, err := trailerOf(r, size, what)
+	checksum, err := trailerOf(ctx, r, size, what, p)
 	if err != nil {
 		return MidxInfo{}, err
 	}
@@ -544,14 +537,15 @@ type BitmapInfo struct {
 // load_bitmap_header): the signature "BITM", version 1, the options with
 // BITMAP_OPT_FULL_DAG set — git refuses a bitmap without it — the selected
 // commits, and the multi-pack-index's checksum the header names; and it
-// recomputes the trailer over the file. The tables the options say follow
-// the commits' bitmaps are held to the file's room by [CheckLayer] and
-// [LayLayer], which know the multi-pack-index's object count the hash cache
-// is sized by: the rest of git's own check of a header.
+// recomputes the trailer over the file ([HashTrailer]), a piece at a time as
+// p says, stopped with ctx. The tables the options say follow the commits'
+// bitmaps are held to the file's room by [CheckLayer] and [LayLayer], which
+// know the multi-pack-index's object count the hash cache is sized by: the
+// rest of git's own check of a header.
 //
-// Every refusal names what of the file differs; a read of r that failed is
-// answered as it came.
-func ParseBitmap(r io.ReaderAt, size int64) (BitmapInfo, error) {
+// Every refusal names what of the file differs; a read of r, a hold or a ctx
+// that failed is answered as it came.
+func ParseBitmap(ctx context.Context, r io.ReaderAt, size int64, p Pieces) (BitmapInfo, error) {
 	const what = "the bitmap"
 	if size < bitmapHeaderBytes+hashBytes {
 		return BitmapInfo{}, formatf("%s is %d bytes, under its %d-byte header and %d-byte trailer", what, size,
@@ -571,7 +565,7 @@ func ParseBitmap(r io.ReaderAt, size int64) (BitmapInfo, error) {
 		return BitmapInfo{}, formatf("%s's options, %#x, lack BITMAP_OPT_FULL_DAG, which git requires", what,
 			options)
 	}
-	checksum, err := trailerOf(r, size, what)
+	checksum, err := trailerOf(ctx, r, size, what, p)
 	if err != nil {
 		return BitmapInfo{}, err
 	}
@@ -647,11 +641,12 @@ type GraphInfo struct {
 // GDA2, GDO2, EDGE, and BIDX and BDAT together, BIDX's last entry the bytes of
 // BDAT's filters as git writes it — and a BASE chunk of exactly the base
 // graphs the header counts, absent when it counts none; and it recomputes the
-// trailer over the file.
+// trailer over the file ([HashTrailer]), a piece at a time as p says, stopped
+// with ctx.
 //
-// Every refusal names what of the file differs; a read of r that failed is
-// answered as it came.
-func ParseGraph(r io.ReaderAt, size int64) (GraphInfo, error) {
+// Every refusal names what of the file differs; a read of r, a hold or a ctx
+// that failed is answered as it came.
+func ParseGraph(ctx context.Context, r io.ReaderAt, size int64, p Pieces) (GraphInfo, error) {
 	const what = "the commit-graph layer"
 	// graph_min_size: a header, the rows of three chunks and of the one that
 	// ends the table, a fanout and a trailer.
@@ -719,7 +714,7 @@ func ParseGraph(r io.ReaderAt, size int64) (GraphInfo, error) {
 	if info.Bases, err = baseGraphs(r, chunks, bases, what); err != nil {
 		return GraphInfo{}, err
 	}
-	if info.Checksum, err = trailerOf(r, size, what); err != nil {
+	if info.Checksum, err = trailerOf(ctx, r, size, what, p); err != nil {
 		return GraphInfo{}, err
 	}
 	return info, nil
@@ -811,10 +806,13 @@ type layerFiles struct {
 // 2) — a layer of version 1 filters, or of none, would have every node's log
 // and blame read the slow way, or a path the version 1 hash gets wrong
 // misread. fields name the three sections' sizes as the caller states them.
+// Each file's trailer is hashed as p says, stopped with ctx.
 //
-// A refusal of the bytes is [ErrBadLayer], naming the field; a read that
-// failed is answered as it came.
-func readLayer(midx, bitmap, graph io.ReaderAt, sizes [3]int64, fields [3]string) (layerFiles, error) {
+// A refusal of the bytes is [ErrBadLayer], naming the field; a read, a hold
+// or a ctx that failed is answered as it came.
+func readLayer(ctx context.Context, midx, bitmap, graph io.ReaderAt, sizes [3]int64, fields [3]string,
+	p Pieces) (layerFiles, error) {
+
 	bad := func(field string, err error) error {
 		if !isFormat(err) {
 			return err
@@ -831,10 +829,10 @@ func readLayer(midx, bitmap, graph io.ReaderAt, sizes [3]int64, fields [3]string
 	}
 	var f layerFiles
 	var err error
-	if f.midx, err = ParseMidx(midx, sizes[0]); err != nil {
+	if f.midx, err = ParseMidx(ctx, midx, sizes[0], p); err != nil {
 		return layerFiles{}, bad("midx", err)
 	}
-	if f.bitmap, err = ParseBitmap(bitmap, sizes[1]); err != nil {
+	if f.bitmap, err = ParseBitmap(ctx, bitmap, sizes[1], p); err != nil {
 		return layerFiles{}, bad("bitmap", err)
 	}
 	if f.bitmap.Midx != f.midx.Checksum {
@@ -857,7 +855,7 @@ func readLayer(midx, bitmap, graph io.ReaderAt, sizes [3]int64, fields [3]string
 	if graph == nil {
 		return f, nil
 	}
-	if f.graph, err = ParseGraph(graph, sizes[2]); err != nil {
+	if f.graph, err = ParseGraph(ctx, graph, sizes[2], p); err != nil {
 		return layerFiles{}, bad("graph", err)
 	}
 	if f.graph.BloomVersion != 2 {
@@ -882,6 +880,14 @@ func readLayer(midx, bitmap, graph io.ReaderAt, sizes [3]int64, fields [3]string
 // its bases, as a multi-pack-index layer does not — and its changed-path
 // filters version 2.
 //
+// HASHED A PIECE AT A TIME, STOPPED WITH ITS CALLER: every byte of the three
+// files is read for its trailer ([HashTrailer]) — some 2.6 GB for the root
+// layer of the largest repository the defaults admit — so each trailer is
+// hashed as p says, ctx checked before every read: a git node's installer
+// hands its read lane's hold a piece at a time (internal/code/cache's
+// CheckPieceBytes), as its own check of the files it keeps does, and a
+// caller holding a maintenance slot across the check none.
+//
 // Every refusal is [ErrBadLayer] naming the row's field it differs in, or the
 // file's part (bitmap.midx, graph.bases, graph.filters) — a definite answer
 // about the bytes, never retried: a part is read through the store's own hash
@@ -889,7 +895,11 @@ func readLayer(midx, bitmap, graph io.ReaderAt, sizes [3]int64, fields [3]string
 // publication replaces the layer. A read of a file that FAILED is answered as
 // it came, never as ErrBadLayer: a disk that failed a read says nothing of the
 // layer, and refusing the layer for it would have every node fetch it again.
-func CheckLayer(row LayerRef, midx, bitmap, graph io.ReaderAt, baseGraphs []string) error {
+// So is a hold that failed and a ctx that ended: neither says anything of
+// the bytes.
+func CheckLayer(ctx context.Context, row LayerRef, midx, bitmap, graph io.ReaderAt, baseGraphs []string,
+	p Pieces) error {
+
 	bad := func(field, format string, args ...any) error {
 		return fmt.Errorf("%w: %s: %s", ErrBadLayer, field, fmt.Sprintf(format, args...))
 	}
@@ -912,8 +922,8 @@ func CheckLayer(row LayerRef, midx, bitmap, graph io.ReaderAt, baseGraphs []stri
 		}
 		graph = nil
 	}
-	f, err := readLayer(midx, bitmap, graph, row.Sections(),
-		[3]string{"midx_bytes", "bitmap_bytes", "graph_bytes"})
+	f, err := readLayer(ctx, midx, bitmap, graph, row.Sections(),
+		[3]string{"midx_bytes", "bitmap_bytes", "graph_bytes"}, p)
 	if err != nil {
 		return err
 	}
@@ -965,11 +975,12 @@ func packsDiffer(file, row []string) string {
 // files to ([CheckLayer]): the files are held to each other as there, so a
 // build whose files no node would install is refused here, before a byte is
 // stored. BaseID, Replaces, Parts, Git and TookMs are the publisher's own,
-// unset.
+// unset. Each file's trailer is hashed as p says, stopped with ctx, as
+// [CheckLayer]'s are.
 //
 // A refusal of the bytes is [ErrBadLayer]; a file that cannot be opened or
-// read is answered as it came.
-func LayLayer(midxPath, bitmapPath, graphPath string) (LayerRef, error) {
+// read, a hold that failed and a ctx that ended are answered as they came.
+func LayLayer(ctx context.Context, midxPath, bitmapPath, graphPath string, p Pieces) (LayerRef, error) {
 	var readers [3]io.ReaderAt
 	var sizes [3]int64
 	for i, path := range [3]string{midxPath, bitmapPath, graphPath} {
@@ -995,7 +1006,7 @@ func LayLayer(midxPath, bitmapPath, graphPath string) (LayerRef, error) {
 		}
 		readers[i], sizes[i] = f, info.Size()
 	}
-	files, err := readLayer(readers[0], readers[1], readers[2], sizes, [3]string{"midx", "bitmap", "graph"})
+	files, err := readLayer(ctx, readers[0], readers[1], readers[2], sizes, [3]string{"midx", "bitmap", "graph"}, p)
 	if err != nil {
 		return LayerRef{}, err
 	}

@@ -761,6 +761,22 @@
 // ([LayerContentType]), every part uploaded at once so every key is named
 // within objstore.RecordWithin.
 //
+// # Git's trailer is one rule
+//
+// Every file git writes through its hashfile — a pack, its index, a
+// multi-pack-index, its bitmap, a commit-graph and its layers — ends in the
+// hash of every byte before it, which git never reads back, and a git node
+// holds such files to it in two places: its cache's check and scrub
+// (internal/code/cache) and a published layer's check. Both judge by ONE
+// implementation, [HashTrailer] over the piece loop [HashPieces]
+// (hashfile.go, ADR-0008), because the same layer files reach both — fetched,
+// then kept. It reads a file a PIECE at a time, each in a slot its caller's
+// hold takes ([Pieces]: a git node's read lane, a piece of the cache's
+// CheckPieceBytes), checking its context before every read: the root layer of
+// the largest repository the defaults admit is some 2.6 GB, seconds of a core
+// warm and minutes cold, which a node stopping, or a request queued in the
+// lane behind it, would otherwise wait out whole.
+//
 // # An expunge drops what no ref reaches, in two records
 //
 // Nothing else ever removes an object a push stored — a force-push or a
