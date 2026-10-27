@@ -50,6 +50,7 @@ import (
 // ---- move_work_item ----------------------------------------------------- //
 
 type moveWorkItem struct {
+	itemTarget
 	deps WorkDeps
 }
 

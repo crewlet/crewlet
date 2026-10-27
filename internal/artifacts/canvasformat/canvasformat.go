@@ -513,10 +513,10 @@ type Source interface {
 
 // Read reads a stored version's canvas from src and holds it to the version,
 // m, as [Parse] held it at publish, its JSON read as stored
-// ([jsonform.DecodeStored]) so a canvas accepted before ADR-0059 tightened its
+// ([jsonform.Stored]) so a canvas accepted before ADR-0059 tightened its
 // keys reads as it did.
 func Read(src Source, m artifacts.Manifest) (Canvas, error) {
-	return readWith(src, m, jsonform.DecodeStored)
+	return readWith(src, m, jsonform.Stored(jsonform.NoMoreValues))
 }
 
 // Check is [Read] as a publish holds a canvas it writes ([Parse]).

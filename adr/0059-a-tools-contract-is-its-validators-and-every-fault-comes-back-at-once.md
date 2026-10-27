@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/jsonform`
-- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestAWriteToolThatKeepsRefusingIsStoppedInPlainWords`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`
+- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`
 - **Measured:** GP-38 (brand kit): 14 refusals, rounds 11 to 24 and beyond, more than eight minutes of one turn, 12 distinct structural faults learned one per attempt. The brief (#407): 4 of 4 briefs ended `brief_invalid` at 7 steps. Replayed after this change: the GP-38 version gets all 14 of its findings in one refusal and its fixed version lands on the next attempt; a kit written from the format reference lands on the first.
 - **Cost-when-tried:** the brief fix (#407) repaired one tool: its caps went into its schema and its validator started naming every fault. Two days later the brand kit failed the same way through a different tool, because nothing had changed for any other tool.
 - **Tag-status:** unreleased
@@ -34,10 +34,15 @@ runs only where a publish writes an index (`slideformat.Check`,
 `ParseIndex` beside them). Every read of a version already stored (a render,
 `get_artifact`, a dashboard's data, a compare, a publish that carries an index
 it does not rewrite) goes through the format's `Read`, which is
-`jsonform.DecodeStored`: keys matched without regard to case and a key written
-twice decoded as encoding/json decoded it. A fuzz holds `DecodeStored` to
-encoding/json's answer (`FuzzTheStoredReadIsEncodingJSONs`), and a walk of the
-tree refuses a strict read anywhere but the publish pipeline and the formats.
+`jsonform.Stored`: ACCEPTANCE IS THE FORMAT'S OLD CALL, encoding/json with
+DisallowUnknownFields and that format's own trailing rule (the next token
+io.EOF for the deck, doc and dashboard; More false for the canvas, which
+accepted a stray `}` or `]` after its value), so a version stored then reads
+now, to the same value, by construction. Only when that call refuses does the
+walk run, to name every fault. A fuzz holds the two halves together (accepted
+exactly when the old call accepts, and at least one fault named otherwise), and
+a walk of the tree refuses a strict read anywhere but the publish pipeline and
+the formats.
 `brand.json` needs neither: it was matched exactly and refused repeats before
 this record, and its key tree is held to the one it had then. So no stored
 version needs a migration.
@@ -47,11 +52,19 @@ a miss with the near keys and the catalogue, and a description names a skill
 by its key.
 
 **A write tool refused on its policy again and again is stopped in words, at
-the tool-call layer.** `tools.Surface` counts `invalid` refusals per tool not
-annotated read-only; from the fourth (`tools.PolicyRefusalLimit`) the answer
-tells the model to stop retrying, raise a blocker on the work item and end the
-branch, logs `tool_policy_refusal_loop` and counts
-`crewlet.tools.policy_refusal_loops`. The call still runs: never a silent cap.
+the tool-call layer.** `tools.Surface` counts runs of `invalid` refusals IN A
+ROW, per tool not annotated read-only and per target the call acts on (an
+artifact, a work item, through `tools.Targeted`; the whole tool where it names
+none): a success on that target ends the run, and a refusal of another class
+leaves it as it was, so refusals across four artifacts are four first attempts.
+The count and the record are one step under the surface's lock, so calls
+answered side by side cannot read the same count. From the fourth refusal in a
+row (`tools.PolicyRefusalLimit`) the answer tells the model to stop retrying,
+raise a blocker on its work item if it has one or tell whoever asked, and end
+the branch; the run is logged (`tool_policy_refusal_loop`) and counted
+(`crewlet.tools.policy_refusal_loops`) once, when it reaches the limit. The run
+is a phase's: a resumed phase counts again. The call still runs: never a
+silent cap.
 
 ## The class, and why a per-tool patch recurs
 

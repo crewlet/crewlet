@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -91,38 +92,10 @@ func parentOf(p string) (string, bool) {
 // The subject names the file and its format in the faults.
 //
 // THIS IS THE PUBLISH READ: what a version is held to when it is written. A
-// version already stored is read with [DecodeStored].
+// version already stored is read with [Stored].
 func Decode(raw []byte, form *Form, subject Subject, into any) *Decoded {
-	return decode(raw, form, subject, into, false)
-}
-
-// DecodeStored reads a version that was already accepted, with every fault in
-// one pass as [Decode] names them, but admitting exactly what encoding/json
-// with DisallowUnknownFields admitted when the format read that way: a key
-// matched without regard to case (an exact match first, then the first key
-// of the form that folds to it, as encoding/json does), and a key written
-// twice decoded as encoding/json decodes it (a struct field decoded again
-// into what the first wrote, a map's element and a list replaced, a null
-// leaving a scalar or a struct as it was). An unknown key and a value of the
-// wrong type are still faults, as they were.
-//
-// WHY TWO READS. A format tightened at publish must not turn a version it
-// stored under the older rule into one its own reader refuses: every read of
-// a stored version (a render, get_artifact, the dashboard's data, a compare)
-// would fail on bytes nobody can now republish without a person's edit. A
-// test fuzzes this read against encoding/json to hold the two to one answer.
-func DecodeStored(raw []byte, form *Form, subject Subject, into any) *Decoded {
-	return decode(raw, form, subject, into, true)
-}
-
-// Reader is [Decode] or [DecodeStored], for a format read both ways: the
-// publish of a version and the read of one already stored.
-type Reader func(raw []byte, form *Form, subject Subject, into any) *Decoded
-
-func decode(raw []byte, form *Form, subject Subject, into any, stored bool) *Decoded {
 	d := &Decoded{lines: map[string]int{}, dropped: map[string]bool{}}
-	w := &walker{d: d, raw: raw, subject: subject, stored: stored,
-		dec: json.NewDecoder(bytes.NewReader(raw))}
+	w := &walker{d: d, raw: raw, subject: subject, dec: json.NewDecoder(bytes.NewReader(raw))}
 	w.dec.UseNumber()
 	clean, keep, err := w.value(form, "")
 	if err != nil {
@@ -137,19 +110,15 @@ func decode(raw []byte, form *Form, subject Subject, into any, stored bool) *Dec
 		d.Fatal = true
 		return d
 	}
-	// UNESCAPED, so a value with its own reader is handed the text the author
-	// wrote (compacted), never `&` re-spelt as `\u0026`.
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(clean); err != nil {
+	body, err := encode(clean)
+	if err != nil {
 		d.fatal(0, "%s cannot be read: %v", subject.File, err)
 		return d
 	}
-	body := buf.Bytes()
 	if decodeErr := json.Unmarshal(body, into); decodeErr != nil {
-		// A value with its own reader (an Any form) refused what it was
-		// handed: its own sentence, at the field it names.
+		// THE WALK HELD EVERY VALUE TO ITS FORM, and every value with its
+		// own reader to that reader, so this is a value the form could not
+		// describe (a `,string` field): its own sentence, at its field.
 		var typed *json.UnmarshalTypeError
 		if errors.As(decodeErr, &typed) && typed.Field != "" {
 			d.fatal(d.lines[typed.Field], "%s is a JSON %s, and the format reads %s there",
@@ -159,6 +128,86 @@ func decode(raw []byte, form *Form, subject Subject, into any, stored bool) *Dec
 		d.fatal(0, "%s cannot be read: %s", subject.File, jsonReason(decodeErr))
 	}
 	return d
+}
+
+// encode is a well-formed value as the typed decode and a value's own reader
+// read it: UNESCAPED, so a reader is handed the text the author wrote
+// (compacted), never `&` re-spelt as `\u0026`.
+func encode(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// Reader is [Decode] or a [Stored] read, for a format read both ways: the
+// publish of a version and the read of one already stored.
+type Reader func(raw []byte, form *Form, subject Subject, into any) *Decoded
+
+// Trailing is what a format's read before ADR-0059 refused after its value.
+type Trailing uint8
+
+const (
+	// UntilEOF refused anything but white space after the value: the
+	// decoder's next token was io.EOF (the deck, doc and dashboard indexes).
+	UntilEOF Trailing = iota
+
+	// NoMoreValues refused only another value after it: the decoder's
+	// More was false, which it also is before a stray `}` or `]`, so a
+	// canvas ending `} }` was accepted (the design canvas).
+	NoMoreValues
+)
+
+// Stored is the read of a version already accepted, for a format that read
+// its JSON with encoding/json and DisallowUnknownFields before ADR-0059
+// tightened the publish: ACCEPTANCE IS THAT EXACT CALL, the decoder, the
+// option, the decode and the format's own trailing rule, so whatever was
+// stored then reads now, to the same value, by construction (a key in another
+// case, a key written twice, a stray closing bracket after a canvas). Only when
+// that call refuses does the walk run, to name every fault at once the way a
+// publish names them.
+//
+// WHY NOT ONE READ. A format tightened at publish must not turn a version it
+// stored under the older rule into one its own reader refuses: every read of
+// a stored version (a render, get_artifact, the dashboard's data, a compare)
+// would fail on bytes nobody can now republish without a person's edit.
+func Stored(trailing Trailing) Reader {
+	return func(raw []byte, form *Form, subject Subject, into any) *Decoded {
+		err := legacy(raw, into, trailing)
+		if err == nil {
+			return &Decoded{lines: map[string]int{}, dropped: map[string]bool{}}
+		}
+		fresh := reflect.New(reflect.TypeOf(into).Elem()).Interface()
+		d := Decode(raw, form, subject, fresh)
+		if len(d.Faults) == 0 {
+			d.fault("", 0, "%s cannot be read: %s", subject.File, jsonReason(err))
+		}
+		d.Fatal = true
+		return d
+	}
+}
+
+// legacy is the read a format made before ADR-0059.
+func legacy(raw []byte, into any, trailing Trailing) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(into); err != nil {
+		return err
+	}
+	switch trailing {
+	case NoMoreValues:
+		if dec.More() {
+			return errors.New("more than one JSON value")
+		}
+	default:
+		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+			return errors.New("more than one JSON value")
+		}
+	}
+	return nil
 }
 
 func (d *Decoded) fault(field string, line int, format string, args ...any) {
@@ -183,9 +232,6 @@ type walker struct {
 	raw     []byte
 	subject Subject
 	dec     *json.Decoder
-
-	// stored reads as [DecodeStored] does.
-	stored bool
 }
 
 // Subject is what a fault calls the value it reads: the file (`brand.json`),
@@ -206,6 +252,28 @@ func (w *walker) line() int {
 // value reads one value whose form is f (nil: anything, its keys unchecked
 // but never repeated), answering its well-formed copy and whether to keep it.
 func (w *walker) value(f *Form, path string) (any, bool, error) {
+	v, keep, err := w.read(f, path)
+	if err != nil || !keep || f == nil || f.reader == nil {
+		return v, keep, err
+	}
+	// A VALUE WITH ITS OWN READER IS HELD TO IT HERE, at its path, so its
+	// refusal is one fault among the others rather than the one fatal
+	// error the typed decode would stop at (a dashboard's engine argument,
+	// a calc operand).
+	body, encErr := encode(v)
+	if encErr == nil {
+		encErr = reflect.New(f.reader).Interface().(json.Unmarshaler).UnmarshalJSON(body)
+	}
+	if encErr != nil {
+		w.d.fault(path, w.d.lines[path], "%s: %s", path, jsonReason(encErr))
+		return nil, false, nil
+	}
+	return v, true, nil
+}
+
+// read reads one value whose form is f, before a value with its own reader is
+// held to that reader ([walker.value]).
+func (w *walker) read(f *Form, path string) (any, bool, error) {
 	if path != "" {
 		if _, seen := w.d.lines[path]; !seen {
 			w.d.lines[path] = w.line()
@@ -279,15 +347,12 @@ func (w *walker) object(f *Form, path string) (any, bool, error) {
 			return nil, false, err
 		}
 		key, _ := keyTok.(string)
-		if closed && w.stored {
-			key = f.fold(key)
-		}
 		at := w.line()
 		name := member(path, key, open)
 		var next *Form
 		ok := true
 		switch {
-		case seen[key] && !w.stored:
+		case seen[key]:
 			w.d.fault(name, at, "%s is written twice: write each key once", name)
 			ok = false
 		case closed && f.Field(key) == nil:
@@ -307,17 +372,12 @@ func (w *walker) object(f *Form, path string) (any, bool, error) {
 			}
 			continue
 		}
-		again := seen[key]
 		seen[key] = true
 		v, keep, err := w.value(next, name)
 		if err != nil {
 			return nil, false, err
 		}
-		switch {
-		case !keep:
-		case again && closed:
-			out[key] = merge(out[key], v, f.field(key))
-		default:
+		if keep {
 			out[key] = v
 		}
 	}
@@ -418,71 +478,4 @@ func scalarName(tok json.Token) string {
 		return "a number"
 	}
 	return "a value"
-}
-
-// fold is the key of the form a stored key decodes into, as encoding/json
-// matches it: the key itself when the form carries it, else the first key in
-// declaration order that equals it without regard to case, else the key as
-// written (which the caller then names as unknown).
-func (f *Form) fold(key string) string {
-	if f.Field(key) != nil {
-		return key
-	}
-	for _, fl := range f.Fields {
-		if strings.EqualFold(fl.Key, key) {
-			return fl.Key
-		}
-	}
-	return key
-}
-
-// merge is a key written twice as encoding/json decodes the second value over
-// the first: into a struct, the second's keys decoded into what the first
-// wrote, field by field; into a map, the second's elements replacing the
-// first's by name; a list or a scalar replaced. A null leaves a struct or a
-// scalar as it was and clears a list, a map or a pointer.
-func merge(old, next any, fl Field) any {
-	f := fl.Form
-	if f == nil || f.Type == Any {
-		return next
-	}
-	if next == nil {
-		switch {
-		case fl.Nullable, f.Type == Map, f.Type == Array:
-			return nil
-		}
-		return old
-	}
-	om, oldObject := old.(map[string]any)
-	nm, newObject := next.(map[string]any)
-	if !oldObject || !newObject || (f.Type != Object && f.Type != Map) {
-		return next
-	}
-	out := make(map[string]any, len(om)+len(nm))
-	for k, v := range om {
-		out[k] = v
-	}
-	for k, v := range nm {
-		if f.Type == Map {
-			out[k] = v
-			continue
-		}
-		prev, had := om[k]
-		if !had {
-			out[k] = v
-			continue
-		}
-		out[k] = merge(prev, v, f.field(k))
-	}
-	return out
-}
-
-// field is an Object's key with what it is, or the zero Field.
-func (f *Form) field(key string) Field {
-	for _, fl := range f.Fields {
-		if fl.Key == key {
-			return fl
-		}
-	}
-	return Field{}
 }

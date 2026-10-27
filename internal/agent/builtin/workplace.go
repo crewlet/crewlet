@@ -52,7 +52,10 @@ type WorkPlacer interface {
 		notify *worklet.Notify) (worklet.PlaceResult, error)
 }
 
-type placeWorkItem struct{ deps WorkDeps }
+type placeWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*placeWorkItem)(nil)
 

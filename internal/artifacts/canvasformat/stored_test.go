@@ -34,3 +34,24 @@ func TestACanvasStoredBeforeTheExactKeysStillReads(t *testing.T) {
 type memSource map[string][]byte
 
 func (m memSource) Read(p string) ([]byte, error) { return m[p], nil }
+
+// A CANVAS STORED WITH A STRAY CLOSING BRACKET STILL READS: the canvas was read
+// with encoding/json's More after its value, which is false before a `}` or
+// `]`, so `{...} }` and `{...}]]]` were accepted and stored.
+//
+// Mutation: read a stored canvas with the io.EOF rule and these are refused.
+func TestACanvasStoredWithAStrayBracketStillReads(t *testing.T) {
+	t.Parallel()
+	for _, tail := range []string{" }", "]]]", "\n}\n"} {
+		src := memSource{Path: []byte(landing + tail)}
+		if _, err := Read(src, landingVersion()); err != nil {
+			t.Errorf("a stored canvas ending %q is refused: %v", tail, err)
+		}
+		if _, err := Check(src, landingVersion()); err == nil {
+			t.Errorf("a publish writing a canvas ending %q admitted it", tail)
+		}
+	}
+	if _, err := Read(memSource{Path: []byte(landing + " {}")}, landingVersion()); err == nil {
+		t.Error("a stored canvas followed by another value reads")
+	}
+}

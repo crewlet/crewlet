@@ -47,9 +47,9 @@ func (s Shape) column(key string) (Column, bool) {
 // format is an [*Invalid] carrying every finding, so an author fixes them in
 // one pass; any other error is a file that could not be read.
 //
-// The spec is read as stored ([jsonform.DecodeStored]), so a board accepted
+// The spec is read as stored ([jsonform.Stored]), so a board accepted
 // before ADR-0059 tightened its keys reads as it did; [Check] is the publish's.
-func Read(v Version) (*Board, error) { return read(v, jsonform.DecodeStored) }
+func Read(v Version) (*Board, error) { return read(v, jsonform.Stored(jsonform.UntilEOF)) }
 
 // Check is [Read] as a publish holds a board whose spec it writes ([Parse]).
 func Check(v Version) (*Board, error) { return read(v, jsonform.Decode) }

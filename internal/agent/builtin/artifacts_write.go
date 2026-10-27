@@ -643,7 +643,10 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 
 // ---- publish_artifact --------------------------------------------------- //
 
-type publishArtifact struct{ deps ArtifactDeps }
+type publishArtifact struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*publishArtifact)(nil)
 
@@ -1024,7 +1027,10 @@ func (t *publishArtifact) changedPaths(ctx context.Context, id artifacts.ID, bas
 
 // ---- update_artifact ---------------------------------------------------- //
 
-type updateArtifact struct{ deps ArtifactDeps }
+type updateArtifact struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*updateArtifact)(nil)
 

@@ -76,7 +76,10 @@ func authorDetail(err error) string { return worklet.Sentence(err) + "." }
 
 // ---- remove_work_item --------------------------------------------------- //
 
-type removeWorkItem struct{ deps WorkDeps }
+type removeWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*removeWorkItem)(nil)
 
@@ -210,7 +213,10 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // ---- restore_work_item -------------------------------------------------- //
 
-type restoreWorkItem struct{ deps WorkDeps }
+type restoreWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*restoreWorkItem)(nil)
 

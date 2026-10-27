@@ -28,7 +28,10 @@ import (
 
 // ---- share_artifact ----------------------------------------------------- //
 
-type shareArtifact struct{ deps ArtifactDeps }
+type shareArtifact struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*shareArtifact)(nil)
 
@@ -112,7 +115,10 @@ func (t *shareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // ---- unshare_artifact --------------------------------------------------- //
 
-type unshareArtifact struct{ deps ArtifactDeps }
+type unshareArtifact struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*unshareArtifact)(nil)
 
@@ -232,7 +238,10 @@ func (d ArtifactDeps) shareAnswer(ctx context.Context, tool string, c artifactCa
 
 // ---- upload_artifact_asset ---------------------------------------------- //
 
-type uploadArtifactAsset struct{ deps ArtifactDeps }
+type uploadArtifactAsset struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*uploadArtifactAsset)(nil)
 

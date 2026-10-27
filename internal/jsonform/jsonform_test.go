@@ -3,7 +3,9 @@ package jsonform_test
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,14 +173,13 @@ func TestAValueOfTheWrongShapeDropsWhatIsInsideIt(t *testing.T) {
 }
 
 // WHAT CANNOT BE READ AT ALL IS FATAL: bytes that are not JSON, more after
-// the value, a root of the wrong shape, and a value its own reader refuses.
+// the value, and a root of the wrong shape.
 func TestWhatCannotBeReadIsFatal(t *testing.T) {
 	t.Parallel()
 	for raw, says := range map[string]string{
 		`{"v": 1,`:                 "index.json is not JSON",
 		`{"v": 1} {}`:              "index.json holds more after its value",
 		`[1]`:                      "index.json is a list, and the format reads an object {v, name",
-		`{"v": 1, "own": "bad"}`:   "own refuses bad",
 		`{"v": 1, "name": "a"} x`:  "index.json holds more after its value",
 		`"text"`:                   "index.json is a string",
 		`{"v": 1, "own": "fine"} `: "",
@@ -239,4 +240,104 @@ func TestAKeyIsMatchedExactly(t *testing.T) {
 	if len(d.Faults) != 1 || !strings.Contains(d.Faults[0].Message, "Name is not a key") || got.Name != "" {
 		t.Errorf("a key in another case: faults %v, name %q", d.Faults, got.Name)
 	}
+}
+
+// A VALUE ITS OWN READER REFUSES IS ONE FAULT AMONG THE OTHERS, at its path and
+// line, never a fatal error with no place: a dashboard's engine argument and a
+// calc operand read themselves, and their refusals come back beside the rest.
+//
+// Mutation: leave the own reader to the typed decode and the fault is fatal,
+// at line 0, and the other fault is lost.
+func TestAnOwnReadersRefusalIsAFaultAtItsPath(t *testing.T) {
+	t.Parallel()
+	var got index
+	d := jsonform.Decode([]byte("{\"v\": 1,\n \"own\": \"bad\",\n \"name\": 7}"), jsonform.Of[index](), subject, &got)
+	if d.Fatal {
+		t.Fatalf("an own reader's refusal was fatal: %v", d.Faults)
+	}
+	want := []jsonform.Fault{
+		{Field: "own", Line: 2, Message: "own: own refuses bad"},
+		{Field: "name", Line: 3, Message: "name is a number, and the format reads a string there"},
+	}
+	if !reflect.DeepEqual(d.Faults, want) {
+		t.Errorf("faults\n%+v\nwant\n%+v", d.Faults, want)
+	}
+	if got.V != 1 {
+		t.Error("the well-formed fields were not decoded")
+	}
+}
+
+type deep struct {
+	Name string `json:"name"`
+	Deep string
+}
+
+type shallow struct {
+	Name string
+}
+
+type tagged struct {
+	Name string `json:"name"`
+}
+
+type untaggedTie struct {
+	Tie string
+}
+
+type otherTie struct {
+	Tie string
+}
+
+type withDeep struct{ deep }
+
+type promoted struct {
+	shallow
+	withDeep
+	tagged
+	untaggedTie
+	otherTie
+	Raw     []byte `json:"raw"`
+	Kept    string `json:"kept,omitempty"`
+	Skipped string `json:"-"`
+}
+
+// THE KEYS ARE encoding/json's, by its own rules: the shallower of two keys of
+// one name, a tagged key winning a tie, a tie neither breaks dropping both,
+// `-,` naming the key `-`, and []byte read as base64 text rather than a list of
+// numbers. A tag name encoding/json does not take is refused, since its
+// versions read one differently.
+//
+// Mutation: promote every embedded key regardless of depth and `name` is
+// carried twice; model []byte as a list and `raw` is a list of numbers.
+func TestTheKeysAreEncodingJSONs(t *testing.T) {
+	t.Parallel()
+	encoded, err := json.Marshal(promoted{Kept: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]any
+	if err := json.Unmarshal(encoded, &keys); err != nil {
+		t.Fatal(err)
+	}
+	f := jsonform.Of[promoted]()
+	if got, want := slices.Sorted(slices.Values(f.Keys())), slices.Sorted(maps.Keys(keys)); !slices.Equal(got, want) {
+		t.Errorf("the form carries %v, and encoding/json writes %v", got, want)
+	}
+	if f.Field("raw").Type != jsonform.String {
+		t.Error("[]byte is not base64 text")
+	}
+}
+
+type invalidTag struct {
+	Bad string `json:"a§b"`
+}
+
+func TestATagNameEncodingJSONReadsTwoWaysIsRefused(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Error("a form was derived from a tag name encoding/json reads two ways")
+		}
+	}()
+	jsonform.Of[invalidTag]()
 }

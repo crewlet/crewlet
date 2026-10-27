@@ -821,10 +821,11 @@ func Catalogue() []Instrument {
 		{
 			Name: ToolPolicyRefusalLoops, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"tool"},
-			Shows: "Answers of a seat's or a worker's write tool that reached its policy " +
-				"refusal limit in one phase (internal/tools.PolicyRefusalLimit) and so told " +
-				"the model to stop retrying and raise a blocker, by `tool`. A climb names a " +
-				"tool whose contract the model cannot see or cannot meet.",
+			Shows: "Runs of policy refusals a seat's or a worker's write tool answered in a " +
+				"row on one target until it reached the limit (internal/tools." +
+				"PolicyRefusalLimit), each counted once when it did, by `tool`: the model was " +
+				"told to stop retrying and raise a blocker. A climb names a tool whose " +
+				"contract the model cannot see or cannot meet.",
 		},
 		{
 			Name: AssistantBriefRowsDropped, Kind: KindCounter, Unit: UnitCount,

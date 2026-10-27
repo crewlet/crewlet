@@ -201,11 +201,11 @@ func (r *Refused) Unwrap() error { return ErrRefused }
 // first.
 const MaxFindings = 50
 
-// Read reads a whole stored deck: the index ([jsonform.DecodeStored], so a
+// Read reads a whole stored deck: the index ([jsonform.Stored], so a
 // deck accepted before ADR-0059 tightened its keys reads as it did), every
 // slide it orders, and every file the slides and faces name. A deck outside
 // the format is a [*Refused]; an error reading a file is answered as itself.
-func Read(src Source) (Deck, error) { return read(src, jsonform.DecodeStored) }
+func Read(src Source) (Deck, error) { return read(src, jsonform.Stored(jsonform.UntilEOF)) }
 
 // Check is [Read] as a publish holds a deck whose index it writes: the index
 // read strictly ([ParseIndex]).

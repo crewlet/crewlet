@@ -27,6 +27,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Type is what one value of a form is.
@@ -62,16 +63,16 @@ type Form struct {
 
 	// Elem is an Array's element, or a Map's value.
 	Elem *Form
+
+	// reader is an Any's Go type when it reads its own JSON
+	// (json.Unmarshaler), which the walk holds each such value to.
+	reader reflect.Type
 }
 
 // Field is one key of an Object.
 type Field struct {
 	Key  string
 	Form *Form
-
-	// Nullable reports the field is a pointer, which a null clears where
-	// it leaves a struct or a scalar as it was ([DecodeStored]).
-	Nullable bool
 }
 
 // Of is the form of T, by the rules encoding/json decodes T with: a struct is
@@ -99,8 +100,10 @@ func of(t reflect.Type, seen map[reflect.Type]*Form) *Form {
 	}
 	pt := reflect.PointerTo(t)
 	switch {
-	case t == rawMessage, t.Implements(jsonUnmarshaler), pt.Implements(jsonUnmarshaler):
+	case t == rawMessage:
 		return &Form{Type: Any}
+	case t.Implements(jsonUnmarshaler), pt.Implements(jsonUnmarshaler):
+		return &Form{Type: Any, reader: t}
 	case t.Implements(textUnmarshaler), pt.Implements(textUnmarshaler):
 		return &Form{Type: String}
 	}
@@ -112,7 +115,14 @@ func of(t reflect.Type, seen map[reflect.Type]*Form) *Form {
 		return f
 	case reflect.Map:
 		return &Form{Type: Map, Elem: of(t.Elem(), seen)}
-	case reflect.Slice, reflect.Array:
+	case reflect.Slice:
+		if t.Elem().Kind() == reflect.Uint8 && !reflect.PointerTo(t.Elem()).Implements(jsonUnmarshaler) &&
+			!reflect.PointerTo(t.Elem()).Implements(textUnmarshaler) {
+			// []byte is base64 text to encoding/json, never a list.
+			return &Form{Type: String}
+		}
+		return &Form{Type: Array, Elem: of(t.Elem(), seen)}
+	case reflect.Array:
 		return &Form{Type: Array, Elem: of(t.Elem(), seen)}
 	case reflect.String:
 		return &Form{Type: String}
@@ -127,40 +137,129 @@ func of(t reflect.Type, seen map[reflect.Type]*Form) *Form {
 	return &Form{Type: Any}
 }
 
-// fieldsOf is a struct's keys as encoding/json reads them.
+// fieldsOf is a struct's keys as encoding/json reads them, by its own rules
+// (encoding/json's typeFields): an untagged embedded struct's keys promoted a
+// level, the shallower of two keys of one name winning, a tagged key winning a
+// tie, and a tie neither breaks dropping both. A tag name encoding/json does
+// not take is refused outright. A test holds the keys to the ones
+// encoding/json writes for the same types.
 func fieldsOf(t reflect.Type, seen map[reflect.Type]*Form) []Field {
-	var out []Field
-	for i := range t.NumField() {
-		sf := t.Field(i)
-		tag := sf.Tag.Get("json")
-		if tag == "-" {
-			continue
-		}
-		name, opts, _ := strings.Cut(tag, ",")
-		if sf.Anonymous && name == "" {
-			et := sf.Type
-			if et.Kind() == reflect.Pointer {
-				et = et.Elem()
-			}
-			if et.Kind() == reflect.Struct {
-				out = append(out, fieldsOf(et, seen)...)
+	type candidate struct {
+		key    string
+		index  []int
+		tagged bool
+		form   func() *Form
+	}
+	var found []candidate
+	type level struct {
+		t     reflect.Type
+		index []int
+	}
+	next := []level{{t: t}}
+	visited := map[reflect.Type]bool{}
+	for len(next) > 0 {
+		current := next
+		next = nil
+		for _, lv := range current {
+			if visited[lv.t] {
 				continue
 			}
+			visited[lv.t] = true
+			for i := range lv.t.NumField() {
+				sf := lv.t.Field(i)
+				ft := sf.Type
+				if ft.Name() == "" && ft.Kind() == reflect.Pointer {
+					ft = ft.Elem()
+				}
+				switch {
+				case sf.Anonymous && !sf.IsExported() && ft.Kind() != reflect.Struct:
+					continue
+				case !sf.Anonymous && !sf.IsExported():
+					continue
+				}
+				tag := sf.Tag.Get("json")
+				if tag == "-" {
+					continue
+				}
+				name, opts, _ := strings.Cut(tag, ",")
+				if name != "" && !validTag(name) {
+					// A TAG NAME encoding/json DOES NOT TAKE is read
+					// differently by its versions (the Go name, or the
+					// name cut at the character), so a format may not
+					// carry one: its key would depend on the build.
+					panic(fmt.Sprintf("jsonform: %s.%s has the json tag name %q, which "+
+						"encoding/json reads differently across its versions", lv.t, sf.Name, name))
+				}
+				index := append(slices.Clone(lv.index), i)
+				if name == "" && sf.Anonymous && ft.Kind() == reflect.Struct {
+					next = append(next, level{t: ft, index: index})
+					continue
+				}
+				tagged := name != ""
+				if !tagged {
+					name = sf.Name
+				}
+				sft := sf.Type
+				quoted := slices.Contains(strings.Split(opts, ","), "string")
+				found = append(found, candidate{key: name, index: index, tagged: tagged,
+					form: func() *Form {
+						if quoted {
+							// A `,string` field is a quoted scalar: its
+							// own grammar.
+							return &Form{Type: Any}
+						}
+						return of(sft, seen)
+					}})
+			}
 		}
-		if !sf.IsExported() {
+	}
+	// THE DOMINANT FIELD OF EACH NAME: the shallowest, then the tagged one;
+	// two left level is no field at all.
+	byName := map[string][]candidate{}
+	for _, c := range found {
+		byName[c.key] = append(byName[c.key], c)
+	}
+	var kept []candidate
+	for _, group := range byName {
+		slices.SortStableFunc(group, func(a, b candidate) int {
+			if d := len(a.index) - len(b.index); d != 0 {
+				return d
+			}
+			switch {
+			case a.tagged && !b.tagged:
+				return -1
+			case b.tagged && !a.tagged:
+				return 1
+			}
+			return 0
+		})
+		if len(group) > 1 && len(group[0].index) == len(group[1].index) &&
+			group[0].tagged == group[1].tagged {
 			continue
 		}
-		if name == "" {
-			name = sf.Name
-		}
-		form := of(sf.Type, seen)
-		if slices.Contains(strings.Split(opts, ","), "string") {
-			// A `,string` field is a quoted scalar: its own grammar.
-			form = &Form{Type: Any}
-		}
-		out = append(out, Field{Key: name, Form: form, Nullable: sf.Type.Kind() == reflect.Pointer})
+		kept = append(kept, group[0])
+	}
+	slices.SortFunc(kept, func(a, b candidate) int { return slices.Compare(a.index, b.index) })
+	out := make([]Field, len(kept))
+	for i, c := range kept {
+		out[i] = Field{Key: c.key, Form: c.form()}
 	}
 	return out
+}
+
+// validTag reports a tag name encoding/json takes as a key (its isValidTag).
+func validTag(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", c):
+		case !unicode.IsLetter(c) && !unicode.IsDigit(c):
+			return false
+		}
+	}
+	return true
 }
 
 // Field is the form of an Object's key, or nil when it carries none.

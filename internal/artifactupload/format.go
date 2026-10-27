@@ -102,7 +102,7 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 // brings reports the publish writes new bytes for the file at p: an index this
 // publish writes is held to its format as written today ([jsonform.Decode]),
 // and one it carries from the version before is read as it was stored
-// ([jsonform.DecodeStored]), so a publish that changes one slide of a deck
+// ([jsonform.Stored]), so a publish that changes one slide of a deck
 // accepted before ADR-0059 tightened its keys is not refused for keys it never
 // touched.
 func (r *run) brings(p string) bool {

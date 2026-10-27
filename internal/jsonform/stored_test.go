@@ -47,13 +47,18 @@ type storedIndex struct {
 }
 
 // oldRead is how the deck, doc, canvas and dashboard indexes were read before
-// ADR-0059: encoding/json with DisallowUnknownFields, one value, nothing after.
-func oldRead(raw []byte) (storedIndex, bool) {
+// ADR-0059: encoding/json with DisallowUnknownFields and the format's own
+// trailing rule (the decoder's next token io.EOF for the deck, doc and
+// dashboard; its More false for the canvas).
+func oldRead(raw []byte, trailing jsonform.Trailing) (storedIndex, bool) {
 	var out storedIndex
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&out); err != nil {
 		return storedIndex{}, false
+	}
+	if trailing == jsonform.NoMoreValues {
+		return out, !dec.More()
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return storedIndex{}, false
@@ -72,7 +77,10 @@ var storedSeeds = []string{
 	`{"ptr": {"path": "a"}, "ptr": null}`,
 	`{"count": 3, "count": null}`,
 	`{"order": ["a", "b"], "order": ["c"]}`,
+	`{"order": ["a", "b"], "order": [null]}`,
 	`{"order": ["a"], "order": null}`,
+	`{"leaves": [{"path": "a"}], "leaves": [{"weight": 4}]}`,
+	`{"leaves": [{"path": "a"}, {"path": "b"}], "leaves": [null]}`,
 	`{"boards": {"x": {"path": "a"}}, "boards": {"y": {"path": "b"}}}`,
 	`{"boards": {"x": {"path": "a"}, "x": {"weight": 3}}}`,
 	`{"boards": {"x": {"PATH": "a"}}}`,
@@ -90,29 +98,40 @@ var storedSeeds = []string{
 	`{"skipped": 1}`,
 	`null`,
 	`{} {}`,
+	`{"v": 1} }`,
+	`{"v": 1}]]]`,
+	`{"v": 1} x`,
 	`{"v": 1,`,
 }
 
-// THE STORED READ ADMITS EXACTLY WHAT encoding/json ADMITTED, and decodes it to
-// the same value: a key in another case, a key written twice (into a struct, a
-// pointer, a list, a map and its elements, with and without null), and still
-// refuses an unknown key and a wrong type. This is what keeps a version stored
-// before ADR-0059 readable on every read path.
+// THE STORED READ ACCEPTS EXACTLY WHAT THE FORMAT'S OLD READ ACCEPTED, TO THE
+// SAME VALUE, under each trailing rule: acceptance is that call, so this holds
+// by construction, and what the fuzz proves is the other half, that a refusal
+// always names at least one fault.
 //
-// Mutation: drop the fold, or merge a repeated struct field by replacing it,
-// and a seed below decodes to another value than encoding/json's.
+// Mutation: accept with the walk instead of the old call, and a repeated list
+// of objects, a null list element or a canvas's stray `}` decodes differently
+// or is refused.
 func FuzzTheStoredReadIsEncodingJSONs(f *testing.F) {
 	for _, s := range storedSeeds {
-		f.Add([]byte(s))
+		f.Add([]byte(s), false)
+		f.Add([]byte(s), true)
 	}
 	form := jsonform.Of[storedIndex]()
-	f.Fuzz(func(t *testing.T, raw []byte) {
-		want, accepted := oldRead(raw)
+	f.Fuzz(func(t *testing.T, raw []byte, canvas bool) {
+		trailing := jsonform.UntilEOF
+		if canvas {
+			trailing = jsonform.NoMoreValues
+		}
+		want, accepted := oldRead(raw, trailing)
 		var got storedIndex
-		d := jsonform.DecodeStored(raw, form, jsonform.Subject{File: "index.json", Format: "the test format"}, &got)
+		d := jsonform.Stored(trailing)(raw, form, jsonform.Subject{File: "index.json", Format: "the test format"}, &got)
 		read := len(d.Faults) == 0
 		if read != accepted {
 			t.Fatalf("%s: encoding/json accepted %v, the stored read %v (%v)", raw, accepted, read, d.Faults)
+		}
+		if read == d.Fatal {
+			t.Fatalf("%s: Fatal is %v with faults %v", raw, d.Fatal, d.Faults)
 		}
 		if accepted && !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s: the stored read decoded\n%+v\nencoding/json decoded\n%+v", raw, got, want)
@@ -131,7 +150,7 @@ func TestThePublishReadRefusesWhatTheStoredReadAdmits(t *testing.T) {
 		if d := jsonform.Decode([]byte(raw), form, subject, &strict); len(d.Faults) == 0 {
 			t.Errorf("%s: the publish read admitted it", raw)
 		}
-		if d := jsonform.DecodeStored([]byte(raw), form, subject, &stored); len(d.Faults) != 0 {
+		if d := jsonform.Stored(jsonform.UntilEOF)([]byte(raw), form, subject, &stored); len(d.Faults) != 0 {
 			t.Errorf("%s: the stored read refused it: %v", raw, d.Faults)
 		}
 	}

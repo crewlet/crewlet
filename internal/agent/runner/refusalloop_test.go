@@ -34,8 +34,9 @@ func (refusingWrite) Call(context.Context, map[string]any) (tools.Result, error)
 // THE GP-38 TURN, REPLAYED THROUGH THE RUNNER (ADR-0059): the model asks for
 // the artifacts skill by the wrong key and is told the right one, loads it,
 // and then keeps writing a version its tool refuses. From the fourth refusal
-// on, the answer tells it to stop and raise a blocker, and the node counts it
-// (crewlet.tools.policy_refusal_loops); the turn ends on its own submission.
+// on, the answer tells it to stop and raise a blocker, and the node counts the
+// loop once (crewlet.tools.policy_refusal_loops); the turn ends on its own
+// submission.
 //
 // Mutation: drop the Metrics wiring from the runner's surface and nothing is
 // counted; drop the key list from load_tool_skill and the miss names none.
@@ -105,7 +106,7 @@ func TestTheGP38LoopIsStoppedAndCounted(t *testing.T) {
 		}
 		if strings.Contains(res.Output, "STOP RETRYING create_thing") {
 			stops++
-			if !strings.Contains(res.Output, "Raise a blocker on the work item") {
+			if !strings.Contains(res.Output, "raise a blocker on it") {
 				t.Errorf("answer %d stops without saying to raise a blocker: %q", i, res.Output)
 			}
 		}
@@ -120,7 +121,7 @@ func TestTheGP38LoopIsStoppedAndCounted(t *testing.T) {
 			counted = s.Total
 		}
 	}
-	if counted != uint64(stops) {
-		t.Errorf("the node counted %d refusal loops, want %d", counted, stops)
+	if counted != 1 {
+		t.Errorf("the node counted %d refusal loops, want the one", counted)
 	}
 }

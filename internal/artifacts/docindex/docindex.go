@@ -236,10 +236,10 @@ func (r *Refused) Unwrap() error { return ErrRefused }
 // every tab it names, or the one Markdown file. A doc outside the format is a
 // [*Refused]; an error reading a file is answered as itself.
 //
-// The index is read as stored ([jsonform.DecodeStored]), so a doc accepted
+// The index is read as stored ([jsonform.Stored]), so a doc accepted
 // before ADR-0059 tightened its keys reads as it did; [Check] is the publish's.
 func Read(src artifacts.FileSource, entry string) (Doc, error) {
-	return read(src, entry, jsonform.DecodeStored)
+	return read(src, entry, jsonform.Stored(jsonform.UntilEOF))
 }
 
 // Check is [Read] as a publish holds a doc whose index it writes.
