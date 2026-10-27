@@ -601,7 +601,6 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
-	const yearFivePeak = int64(8_460_000_000)
 	host := sizingHost{budget: jetstream.StorageBudget{Limit: free / 4 * 3,
 		Source: jetstream.BudgetServerStore}}
 	for name, stream := range map[string]config.Stream{

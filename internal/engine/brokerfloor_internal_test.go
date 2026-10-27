@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
 // freshFits reports whether a fresh node of stream boots on a stream volume
@@ -18,19 +17,16 @@ import (
 // [BrokerFloor]'s, so the two are held to each other.
 func freshFits(t *testing.T, stream config.Stream, free int64) bool {
 	t.Helper()
-	limit := free / embeddedShareDen * embeddedShareNum
-	bucket := derivedObjectsReservation(limit, stream.DeclaredLogCeilings())
-	host := sizingHost{budget: jetstream.StorageBudget{Limit: limit, Committed: bucket,
-		Source: jetstream.BudgetServerStore}}
+	host := firstBootBroker(stream, free)
 	sized, err := sizeCeilings(t.Context(), host, stream, free, "/var/lib/crewlet/stream")
 	if err != nil {
 		t.Fatalf("sizeCeilings: %v", err)
 	}
-	reserved := bucket
+	reserved := host.budget.Committed
 	for _, ceiling := range sized {
 		reserved += ceiling.Bytes
 	}
-	return reserved <= limit
+	return reserved <= host.budget.Limit
 }
 
 // A FRESH NODE'S FLOOR IS WHAT THE SIZING ITSELF NEEDS, to the byte.

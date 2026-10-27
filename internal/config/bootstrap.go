@@ -1738,10 +1738,14 @@ type Stream struct {
 	// append rather than shedding history. The log runs on every node that
 	// runs a state log, whether or not the company hosts code, as every
 	// domain's log does — so its derived ask is paid by every company:
-	// below about 500 GiB free it comes out of the other logs' share (at
-	// 100 GiB the mutation log is created at 12.5 GiB rather than 16.2). A
-	// company that hosts no code and is short of broker room sets the floor
-	// here before the first boot, which the other logs then divide.
+	// below about 626 GiB free it comes out of the other logs' share (at
+	// 100 GiB the mutation log is created at 9.9 GiB rather than 12.2;
+	// docs/guides/replication.md, "What the code log's reservation costs",
+	// has the other volumes, and internal/engine's
+	// TestThePagesPrintTheCeilingsAFirstBootCreates holds both to what a
+	// first boot creates). A company that hosts no code and is short of
+	// broker room sets the floor here before the first boot, which the
+	// other logs then divide.
 	CodeLogMaxBytes int64 `yaml:"code_log_max_bytes,omitempty" json:"code_log_max_bytes,omitempty" js:"min=1073741824;max=1099511627776" desc:"Byte ceiling on the code log, the ordered stream a repository's refs, packs and settings move on; unset derives two thirds of the mutation log's ceiling, set or derived, 1 GiB..1 TiB. Reserved whether or not the company hosts code: one that hosts none and is short of broker room sets 1073741824 before the first boot."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
