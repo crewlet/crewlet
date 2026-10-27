@@ -17,9 +17,10 @@
  * THE MATCHING RULE, decided once, here:
  *
  *  1. A KEY is matched exactly, case and all, at token boundaries: no letter,
- *     digit, underscore, hyphen or slash on either side, so GOP-11 is never
- *     found in GOP-110, GOP-11-b or worklet/GOP-11. A record carries a key
- *     where it has one (a task's, a project's: `AssistantEntityCard.key`).
+ *     digit, underscore or hyphen on either side, so GOP-11 is never found
+ *     in GOP-110 or GOP-11-b. A slash delimits tokens, so both keys of
+ *     "GOP-10/GOP-11" are found. A record carries a key where it has one (a
+ *     task's, a project's: `AssistantEntityCard.key`).
  *  2. A NAME is matched only for the kinds whose title is a name people
  *     write (an agent, a team, a project, a page, a space, an artifact, a
  *     schedule), exactly, as a whole phrase at the same boundaries, and only
@@ -36,9 +37,12 @@
  *     - A NAME TWO READS SHARE NAMES NEITHER: two seats both called "QA"
  *       cannot be told apart by the word, so neither is a chip and both are
  *       listed under the answer. A record with a key is still matched by it.
- *  3. NOTHING IN A BARE ADDRESS: a run of text from a scheme's `://` or a
- *     `www.` to the next space is an address the model wrote, and a key in it
- *     (https://x.test/GOP-11) is part of the address, never a mention.
+ *  3. NOTHING IN AN ADDRESS OR A PATH: a word (a run of text between spaces,
+ *     its surrounding brackets, quotes and stops aside) that is a bare
+ *     address (a scheme's `://`, a `www.` host) or a path (one that starts
+ *     with `/`, `./` or `../`, or has a slash after a part that is no key) is
+ *     something the model wrote out, and a key in it (https://x.test/GOP-11,
+ *     /worklet/GOP-11, worklet/GOP-11) is part of it, never a mention.
  *  4. In each run of text, the earliest mention wins; where two start at one
  *     place, the longer. Only a record's FIRST mention, in reading order, is
  *     its chip; the rest stay text.
@@ -188,17 +192,37 @@ function escape(s: string): string {
 
 /**
  * A word character on either side ends a match: a letter, a digit, an
- * underscore, a hyphen or a slash (rule 1).
+ * underscore or a hyphen (rule 1). A slash delimits.
  */
-const BEFORE = "(?<![\\p{L}\\p{N}_/-])";
-const AFTER = "(?![\\p{L}\\p{N}_/-])";
+const BEFORE = "(?<![\\p{L}\\p{N}_-])";
+const AFTER = "(?![\\p{L}\\p{N}_-])";
 
-/** A bare address: a scheme's `://` or a `www.` host, to the next space (rule 3). */
-const ADDRESS = /(?:[a-z][a-z0-9+.-]*:\/\/|(?<![\p{L}\p{N}_.-])www\.)\S+/giu;
+/** A word of the run: what lies between spaces. */
+const WORD = /\S+/gu;
+/** What surrounds a word without being part of it: brackets, quotes, stops. */
+const AROUND = /^["'\u201c\u2018([{<]*(.*?)[.,;:!?"'\u201d\u2019)\]}>]*$/su;
+/** A bare address: a scheme's `://` or a `www.` host. */
+const ADDRESS = /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu;
+/** A part of a word a key could be: a capital, then capitals and digits, then a number. */
+const KEY_SHAPED = /^\p{Lu}[\p{Lu}\p{N}]*(?:-\p{N}+)?$/u;
 
-/** Where each bare address in `text` lies, as [start, end). */
+/** Whether a word is an address or a path, which nothing in is a mention (rule 3). */
+function writtenOut(word: string): boolean {
+  if (ADDRESS.test(word) || /^\.{0,2}\//u.test(word)) return true;
+  // A SLASH AFTER A PART THAT IS NO KEY: "worklet/GOP-11" is a path, and
+  // "GOP-10/GOP-11" two keys.
+  const parts = word.split("/");
+  return parts.slice(0, -1).some((part) => !KEY_SHAPED.test(part));
+}
+
+/** Where each address or path in `text` lies, as [start, end) (rule 3). */
 function addresses(text: string): Array<readonly [number, number]> {
-  return [...text.matchAll(ADDRESS)].map((m) => [m.index, m.index + m[0].length] as const);
+  const out: Array<readonly [number, number]> = [];
+  for (const m of text.matchAll(WORD)) {
+    const word = AROUND.exec(m[0])?.[1] ?? m[0];
+    if (word !== "" && writtenOut(word)) out.push([m.index, m.index + m[0].length]);
+  }
+  return out;
 }
 
 /** Text that ends a sentence: its stop, and any closing quote or bracket after it. */

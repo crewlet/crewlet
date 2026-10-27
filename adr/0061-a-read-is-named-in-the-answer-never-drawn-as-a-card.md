@@ -39,8 +39,9 @@ as its tools gave it, outside code.
 **The matching rule** is stated once, in `mentions.ts`:
 
 - A key exactly, case and all, at token boundaries: no letter, digit,
-  underscore, hyphen or **slash** on either side, so `GOP-11` is never found in
-  `GOP-110`, `GOP-11-b` or `worklet/GOP-11`.
+  underscore or hyphen on either side, so `GOP-11` is never found in `GOP-110`
+  or `GOP-11-b`. A slash delimits tokens, so both keys of `GOP-10/GOP-11` are
+  found.
 - A name only for the kinds whose title is a name people write (an agent, a
   team, a project, a page, a space, an artifact, a schedule), whole and in its
   own case; never a task's title, a table's or a record of no kind.
@@ -56,16 +57,21 @@ as its tools gave it, outside code.
 - **A name two reads share names neither.** Two seats both called "QA" cannot
   be told apart by the word, so neither is a chip and both are listed under the
   answer; a record with a key is still matched by its key.
-- **Nothing in a bare address.** From a scheme's `://` or a `www.` to the next
-  space is an address the model wrote, and a key in it is part of it.
+- **Nothing in an address or a path.** A word (between spaces, its brackets,
+  quotes and stops aside) that is a bare address (a scheme's `://`, a `www.`
+  host) or a path (starting with `/`, `./` or `../`, or with a slash after a
+  part that is no key) is something the model wrote out, and a key in it
+  (`https://x.test/GOP-11`, `/worklet/GOP-11`, `worklet/GOP-11`) is part of it.
 - The earliest mention first and, at one place, the longer; only the first
   mention of a record.
 - It reads only the words a reader reads: the Markdown renderer hands each run
   of prose to it (`RenderOptions.prose`), never a code span, a code block or a
   link's label.
-- The drawer works the mentions out once per change of the turn's cards: each
-  answer is handed one array of its cards while they are unchanged, never a
-  fresh one per render.
+- The drawer works the mentions out once per change of the answer's words or
+  the turn's cards: each answer is handed one array of its cards while they
+  are unchanged, and holds one object of handlers for its life
+  (`useLatestHandlers`), each calling the newest its caller gave, so neither a
+  clock tick nor handlers built inline undo the memo.
 
 ## Why the obvious alternatives are wrong
 

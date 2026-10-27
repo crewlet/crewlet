@@ -47,6 +47,7 @@ import type {
 import { exportFile } from "~/protocol/assistant.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtExact } from "~/lib/format.ts";
+import { useLatestHandlers } from "~/lib/useLatestHandlers.ts";
 import { href as hrefOf } from "../../router.tsx";
 import { recordWord } from "../brief.ts";
 import { cellText, factText, ProseBlock, ReplyProse, type CardHandlers } from "./blocks.tsx";
@@ -347,16 +348,20 @@ export function Answer({
   card: (event: AssistantCardEvent) => ReactNode;
   on: CardHandlers;
 }) {
+  // ONE OBJECT OF HANDLERS for the answer's life, however its caller builds
+  // them, so the mentions below are worked out once per change of the
+  // answer's words or reads, and a chip still runs the newest handler.
+  const handlers = useLatestHandlers(on);
   const { reads, others } = useMemo(() => readsOf(cards), [cards]);
   const { nodes, named } = useMemo(() => {
     const mentions = mentionsOf(reads, (mention, key) => (
-      <ReadChip key={key} read={mention.read} said={mention} on={on} />
+      <ReadChip key={key} read={mention.read} said={mention} on={handlers} />
     ));
     // RENDERED FIRST, so `named` is whole before the Also read line reads it.
     const rendered =
       text.trim() === "" ? [] : renderMarkdown(text, { ...ASSISTANT_WORDS, prose: mentions.prose });
     return { nodes: rendered, named: mentions.named };
-  }, [text, reads, on]);
+  }, [text, reads, handlers]);
   const unnamed = reads.filter((read) => !named.has(read.id));
   return (
     <Stack gap={3}>
@@ -364,7 +369,7 @@ export function Answer({
       {unnamed.length > 0 ? (
         <RecordChipList label="Also read">
           {unnamed.map((read) => (
-            <ReadChip key={read.id} read={read} on={on} />
+            <ReadChip key={read.id} read={read} on={handlers} />
           ))}
         </RecordChipList>
       ) : null}
