@@ -1168,14 +1168,16 @@ and the tab.
 `g` then a letter jumps to a workspace: `g h`, `g i` and `g m` for the first
 run; `g c` for Company's Principles, `g e` for Brand, `g a` for the Org chart,
 `g d` for Schedules, `g n` for Integrations and `g b` for Budgets; `g w`,
-`g o` for Code (its own initial is Company's), `g k`, `g f` for Artifacts and
-`g l` for Live; `g s` for Settings, and `g u` for your Account. A chord to a
-hidden place is not answered, as its row is not drawn. A chord rather than a
-modifier, because every single-modifier combination worth having is already
-the browser's. `g r` is the one `g` sequence that is not a workspace: it
-watches the running turn when exactly one seat is working, and opens Live ›
-Now running — every running turn — when several are, or none. Every key the
-dashboard answers is in [one table](#the-keys), and `?` shows it.
+`g o` for Code (its initial is Company's, and `d` and `e` are Schedules' and
+Brand's, so `o` is the one letter of its name no other chord holds), `g k`,
+`g f` for Artifacts and `g l` for Live; `g s` for Settings, and `g u` for
+your Account. A chord to a hidden place is not answered, as its row is not
+drawn. A chord rather than a modifier, because every single-modifier
+combination worth having is already the browser's. `g r` is the one `g`
+sequence that is not a workspace: it watches the running turn when exactly
+one seat is working, and opens Live › Now running — every running turn — when
+several are, or none. Every key the dashboard answers is in
+[one table](#the-keys), and `?` shows it.
 
 ### Work's scope is named and switched in the trail
 

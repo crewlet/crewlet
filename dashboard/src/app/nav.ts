@@ -701,8 +701,10 @@ export const WORKSPACES: WorkspaceRow[] = [
     owns: ["code"],
     hint: "The repositories the engine hosts, and who pushed what into them",
     keywords: ["git", "repositories", "repos", "clone", "source", "code host"],
-    // `g o`: `c` is Company's Principles and `p` switches project, so Code
-    // takes the one letter that moves no chord a reader already has.
+    // `g o`, the one letter of Code's name no other chord holds: `c` is the
+    // Principles', `d` Schedules' and `e` Brand's. Taking `c` would move the
+    // Principles to their own initial, `p`, which switches project, so giving
+    // Code its initial would move two chords a reader already has.
     chord: "o",
     place: "workspace",
     renderer: "tabs",

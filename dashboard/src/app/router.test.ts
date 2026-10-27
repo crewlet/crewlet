@@ -168,8 +168,9 @@ describe("navigation identity", () => {
       integrations: "n",
       budgets: "b",
       work: "w",
-      // `o` (U42): `c` is the Principles', and Code takes the one letter that
-      // moves no chord a reader already has.
+      // `o`: Code's other letters are chords already (`c` the Principles',
+      // `d` Schedules', `e` Brand's), and taking `c` would move the
+      // Principles onto `p`, which is Switch project's.
       code: "o",
       knowledge: "k",
       artifacts: "f",
