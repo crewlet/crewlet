@@ -65,6 +65,8 @@ type TrackerReader interface {
 	CompanyFeed(ctx context.Context, q worklet.FeedQuery) (worklet.FeedPage, error)
 	Decisions(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
 		loc *time.Location) (worklet.DecisionsAnswer, error)
+	AnsweredAsks(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+		loc *time.Location) (worklet.AnsweredAnswer, error)
 	TurnPlaces(ctx context.Context, runs []string,
 		fresh statelog.Freshness) (map[string]worklet.TurnPlace, error)
 }
@@ -647,6 +649,20 @@ var opDecisions = define("tracker.decisions", opRead, trackerDomain, false,
 			return worklet.DecisionsAnswer{}, err
 		}
 		return b.Tracker.Decisions(ctx, a.Query, a.Now, loc)
+	})
+
+// opAnsweredAsks takes [decisionsArgs]: the same person, freshness and clock,
+// asked for the asks closed rather than the ones still open.
+var opAnsweredAsks = define("tracker.answered_asks", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a decisionsArgs) (worklet.AnsweredAnswer, error) {
+		if b.Tracker == nil {
+			return worklet.AnsweredAnswer{}, errNoHalf
+		}
+		loc, err := zoneOf(a.Zone)
+		if err != nil {
+			return worklet.AnsweredAnswer{}, err
+		}
+		return b.Tracker.AnsweredAsks(ctx, a.Query, a.Now, loc)
 	})
 
 type turnPlacesArgs struct {

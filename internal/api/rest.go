@@ -111,6 +111,7 @@ var namedRoutes = []struct {
 	// literal segments above /worklet/{id} for the reason given there.
 	{method: "GET", pattern: "/worklet/flow", what: "work_flow"},
 	{method: "GET", pattern: "/worklet/decisions", what: "decisions"},
+	{method: "GET", pattern: "/worklet/decisions/answered", what: "answered_decisions"},
 	{method: "GET", pattern: "/worklet/activity", what: "work_activity"},
 	{method: "GET", pattern: "/worklet/my-work", what: "work_my_work"},
 	{method: "GET", pattern: "/worklet/inbox", what: "work_inbox"},

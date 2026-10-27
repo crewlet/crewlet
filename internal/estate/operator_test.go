@@ -100,6 +100,14 @@ func (deskBoard) Decisions(_ context.Context, q worklet.DecisionsQuery, _ time.T
 	return worklet.DecisionsAnswer{Asks: []worklet.AskRow{}, Complete: q.Handle == "founder"}, nil
 }
 
+func (deskBoard) AnsweredAsks(_ context.Context, q worklet.DecisionsQuery, _ time.Time,
+	loc *time.Location) (worklet.AnsweredAnswer, error) {
+	if loc == nil || loc.String() != "Europe/Berlin" {
+		return worklet.AnsweredAnswer{}, fmt.Errorf("the asker's zone did not cross: %v", loc)
+	}
+	return worklet.AnsweredAnswer{Asks: []worklet.AnsweredAsk{}, Complete: q.Handle == "founder"}, nil
+}
+
 func (deskBoard) TurnsOf(_ context.Context, ref, cursor string, limit int,
 	_ statelog.Freshness) (worklet.TaskTurns, error) {
 	return worklet.TaskTurns{Task: ref, Next: cursor + "+" + strconv.Itoa(limit)}, nil

@@ -144,6 +144,78 @@ func TestSomebodyElsesDecisionsTakeTheLeadRelation(t *testing.T) {
 	}
 }
 
+// WHAT A PERSON DECIDED LATELY IS READ FOR THEIR OWN RECORD, on the scope rule
+// `decisions` takes: a colleague is refused somebody else's, and their lead is
+// answered.
+func TestAnsweredDecisionsTakeTheDecisionsScope(t *testing.T) {
+	t.Parallel()
+	work := &stubWork{}
+	if _, err := askHolding(t, viewerSources(t, work), "ana", "answered_decisions", nil,
+		iam.GrantWorklet); err != nil {
+		t.Fatalf("ana's own answered decisions: %v", err)
+	}
+	if work.answeredQuery.Handle != "ana" {
+		t.Errorf("the answered asks were read for %q, want the caller's own record",
+			work.answeredQuery.Handle)
+	}
+	other := &stubWork{}
+	if _, err := askHolding(t, viewerSources(t, other), "ana", "answered_decisions",
+		map[string]any{"handle": "bo"}, iam.GrantWorklet); !errors.Is(err,
+		queries.ErrUnauthorized) {
+		t.Errorf("a colleague read bo's answered decisions = %v, want unauthorized", err)
+	}
+	if other.answeredQuery.Handle != "" {
+		t.Errorf("a refused read still asked the tracker about %q",
+			other.answeredQuery.Handle)
+	}
+	s := viewerSources(t, other)
+	s.Chart = leadsChart{lead: "ana", report: "bo"}
+	if _, err := askHolding(t, s, "ana", "answered_decisions",
+		map[string]any{"handle": "bo"}, iam.GrantWorklet); err != nil {
+		t.Fatalf("bo's lead was refused his answered decisions: %v", err)
+	}
+	if other.answeredQuery.Handle != "bo" {
+		t.Errorf("the lead's read reached %q, want bo", other.answeredQuery.Handle)
+	}
+}
+
+// WHAT THE ASKER DID NEXT IS THE TASK'S: a reader the tracker shows no task to
+// is answered every ask put to them and who answered it, and none of the task's
+// records beyond the question.
+func TestAnsweredDecisionsShowTheFollowUpOnlyToATrackerReader(t *testing.T) {
+	t.Parallel()
+	answered := worklet.AnsweredAnswer{Asks: []worklet.AnsweredAsk{{
+		Ask:        worklet.AskRow{Comment: "c-1"},
+		Answer:     worklet.AskAnswer{By: "ana", Body: "Ship it"},
+		FollowedUp: &worklet.AskFollowUp{Kind: worklet.ChangeStatus},
+	}}}
+	for _, c := range []struct {
+		name   string
+		grants []iam.Grant
+		shown  bool
+	}{
+		{"with the tracker", []iam.Grant{iam.GrantWorklet}, true},
+		{"without it", nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{answered: answered}
+			got, err := askHolding(t, viewerSources(t, work), "ana", "answered_decisions",
+				nil, c.grants...)
+			if err != nil {
+				t.Fatalf("answered_decisions: %v", err)
+			}
+			items := got.(map[string]any)["items"].([]worklet.AnsweredAsk)
+			if len(items) != 1 || items[0].Answer.Body != "Ship it" {
+				t.Fatalf("items are %+v, want the one answered ask", items)
+			}
+			if (items[0].FollowedUp != nil) != c.shown {
+				t.Errorf("the follow-up is %+v, want shown=%v", items[0].FollowedUp, c.shown)
+			}
+		})
+	}
+}
+
 // THE SERIES TAKES A DAY OR A WEEK AND AT MOST NINETY POINTS, and a fortnight
 // of days when it names neither.
 func TestWorkFlowParams(t *testing.T) {

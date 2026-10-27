@@ -382,6 +382,11 @@ func (stubWorkReader) Decisions(context.Context, worklet.DecisionsQuery, time.Ti
 	return worklet.DecisionsAnswer{}, nil
 }
 
+func (stubWorkReader) AnsweredAsks(context.Context, worklet.DecisionsQuery, time.Time,
+	*time.Location) (worklet.AnsweredAnswer, error) {
+	return worklet.AnsweredAnswer{}, nil
+}
+
 func (stubWorkReader) TurnPlaces(context.Context, []string,
 	statelog.Freshness) (map[string]worklet.TurnPlace, error) {
 	return map[string]worklet.TurnPlace{}, nil

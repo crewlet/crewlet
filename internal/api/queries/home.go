@@ -708,6 +708,66 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	return answer, nil
 }
 
+// answeredDecisions answers what one person decided lately: the asks put to
+// them and closed within [worklet.AnsweredWindow], by them or by somebody
+// else, newest closing first, at most [worklet.MaxAnswered]. Each is the ask
+// as `decisions` listed it while it was open, who answered it and when, the
+// option chosen or the words, and the asker's first record on the task since.
+//
+// THE SAME SCOPE AS `decisions` ([Sources.recordHandle] with
+// [authz.ActionPersonRead]): no `handle` is the caller's own record, and
+// anybody else's is theirs, their lead's or an admin's. And for the same
+// reason it is everybody's: a person kept off the tracker was still asked
+// these questions, and what they answered is theirs to read.
+//
+// BUT WHAT THE ASKER DID NEXT IS THE TASK'S, not the ask's: it is a record on
+// the task beyond the question put to the reader, so it is shown only to a
+// reader the tracker shows a task to ([shows]) and dropped for the rest, a
+// filter rather than a refusal, as the company feed filters.
+//
+// A COMPANY THAT KEEPS NO TRACKER HERE ([keptHere]) has no asks in the engine:
+// it is answered with none, and with no `read_level`, since none was read.
+func (s Sources) answeredDecisions(ctx context.Context, p Params) (any, error) {
+	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
+		strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
+	}
+	answer := map[string]any{"handle": handle, "items": []worklet.AnsweredAsk{}}
+	work, err := keptHere(s.Work)
+	if err != nil || !work {
+		return answer, err
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	got, err := s.Work.AnsweredAsks(ctx, worklet.DecisionsQuery{
+		Handle: handle,
+		Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
+	}, s.clock(), s.zone())
+	if err != nil {
+		return nil, err
+	}
+	items := got.Asks
+	if !shows(ctx, authz.KindTask) {
+		// A COPY, never the reader's own rows, which another caller of
+		// the same answer may still hold.
+		items = make([]worklet.AnsweredAsk, len(got.Asks))
+		for i, ask := range got.Asks {
+			ask.FollowedUp = nil
+			items[i] = ask
+		}
+	}
+	answer["items"] = items
+	answer["since"] = got.Since
+	answer["truncated"] = got.Truncated
+	answer["read_level"] = got.Level
+	answer["complete"] = got.Complete
+	return answer, nil
+}
+
 // waitingSince is when a parked run began waiting on its question: when its
 // box was held, or — for a run whose hold was never stamped — its last update.
 func waitingSince(run sandbox.PendingRun) time.Time {

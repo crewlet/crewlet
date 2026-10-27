@@ -271,6 +271,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"knowledge": "everybody", "colleague": "everybody",
 		"sandbox_runs": "everybody", "company_feed": "everybody",
 		"decisions": "everybody",
+		// The other half of `decisions`: a person's own asks need no app.
+		"answered_decisions": "everybody",
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
