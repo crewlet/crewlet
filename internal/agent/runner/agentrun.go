@@ -252,7 +252,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	}
 	history := state.Iterations
 	called := bridgedLedger(inAdmissionOrder(bridged))
-	seedCalls(r.cfg.Turn.Context.CallLog(), history, called)
+	seedCalls(r.cfg.Turn.Context.CallLog(), r.cfg.Registry.Snapshot(), history, called)
 
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
 	var surface *tools.Surface

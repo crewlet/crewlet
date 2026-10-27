@@ -85,7 +85,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// round's own calls and whatever a box-mode run called over the
 	// bridge — or a call made again after a different one would take its
 	// first copy's operation id. See [turnctx.CallLog].
-	seedCalls(r.cfg.Turn.Context.CallLog(), history, parkedCalls(state),
+	seedCalls(r.cfg.Turn.Context.CallLog(), r.cfg.Registry.Snapshot(), history, parkedCalls(state),
 		bridgedLedger(r.cfg.Resume.Bridged))
 
 	if state.AgentRun {
@@ -219,13 +219,21 @@ func parkedCalls(state execstate.State) []ledger.Call {
 // seedCalls records into a resumed run's log every call it made before it
 // parked. Order does not matter to a count, and a call recorded twice — a
 // bridged call the parked round also holds — only raises one, which is safe.
-func seedCalls(log *turnctx.CallLog, history []ledger.Iteration, groups ...[]ledger.Call) {
+//
+// BY THE CANONICAL ARGUMENTS (universe's [tools.Snapshot.ArgsOf]), the form
+// a call made after the resume is counted by. The records hold the model's
+// own spelling, which they keep: a parked round's calls and a bridged run's
+// log are what the model sent, and a count read against them as written took
+// a repeat spelt "Draft" after "draft" for another call and wrote it twice.
+func seedCalls(log *turnctx.CallLog, universe tools.Snapshot, history []ledger.Iteration,
+	groups ...[]ledger.Call) {
+
 	for _, iteration := range history {
 		groups = append(groups, iteration.Calls)
 	}
 	for _, group := range groups {
 		for _, call := range group {
-			log.Seed(turnctx.SeededCall{Tool: call.Name, Args: call.Args})
+			log.Seed(turnctx.SeededCall{Tool: call.Name, Args: universe.ArgsOf(call.Name, call.Args)})
 		}
 	}
 }

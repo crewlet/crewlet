@@ -95,8 +95,8 @@ func TestASeededLogCountsTheCallsBeforeTheSeed(t *testing.T) {
 	t.Parallel()
 	a, b := map[string]any{"status": "in_progress"}, map[string]any{"status": "done"}
 	log := turnctx.NewCallLog()
-	log.Seed(turnctx.SeededCall{Tool: "update", Args: a},
-		turnctx.SeededCall{Tool: "update", Args: b})
+	log.Seed(turnctx.SeededCall{Tool: "update", Args: toolargs.Of(nil, a)},
+		turnctx.SeededCall{Tool: "update", Args: toolargs.Of(nil, b)})
 	if got := log.Ordinal("update", a); got != 1 {
 		t.Fatalf("a call made again after the seeded different one counts %d, "+
 			"want 1 — the resumed run would take the first copy's id", got)

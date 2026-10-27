@@ -92,32 +92,29 @@ func NewCallLog() *CallLog { return &CallLog{} }
 // derives its operation id from with [CallLog.Ordinal], so a retry spelt
 // "Draft" after "draft" is the same call here as it is to the tool.
 func (l *CallLog) Record(tool string, args toolargs.Args) {
-	l.record(tool, args.Map())
-}
-
-// record notes one call by the arguments it was made with.
-func (l *CallLog) record(tool string, args map[string]any) {
 	if l == nil {
 		return
 	}
-	digest := ArgsDigest(args)
+	digest := ArgsDigest(args.Map())
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = append(l.entries, callEntry{tool: tool, digest: digest})
 }
 
-// SeededCall is one call a run made before this log held it.
+// SeededCall is one call a run made before this log held it, by the
+// canonical arguments its tool read ([toolargs.Args]): a resumed run's record
+// of a parked call holds the model's spelling, which a count read against the
+// canonical form would take for another call.
 type SeededCall struct {
 	Tool string
-	Args map[string]any
+	Args toolargs.Args
 }
 
 // Seed records calls the run made before this log existed — a resumed run's
-// calls from before its suspension, as the run's ledger recorded them (in the
-// canonical form the entry made, which is what the ledger holds).
+// calls from before its suspension, by their canonical arguments.
 func (l *CallLog) Seed(calls ...SeededCall) {
 	for _, call := range calls {
-		l.record(call.Tool, call.Args)
+		l.Record(call.Tool, call.Args)
 	}
 }
 

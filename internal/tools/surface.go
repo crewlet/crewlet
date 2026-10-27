@@ -334,17 +334,11 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 }
 
 // ArgsOf is a call's arguments in the canonical form, made ONCE, at the
-// surface's entry ([ArgsOf]): the admission, the run's call log, the guard,
-// the refusal-loop target, the check, the tool and the ledger all read this
-// form and never the one the model sent. A name this surface does not offer
-// keeps them as sent; nothing reads them but the ledger's refusal.
+// surface's entry ([Snapshot.ArgsOf]): the admission, the run's call log, the
+// guard, the refusal-loop target, the check, the tool and the ledger all read
+// this form and never the one the model sent.
 func (s *Surface) ArgsOf(name string, raw map[string]any) toolargs.Args {
-	e, known := s.universe.Lookup(name)
-	if !known {
-		return toolargs.Of(nil, raw)
-	}
-	_, thirdParty := e.FromMCP()
-	return ArgsOf(e.Tool, thirdParty, raw)
+	return s.universe.ArgsOf(name, raw)
 }
 
 // Admit records a call in its run's call log NOW, in the order calls arrive,
