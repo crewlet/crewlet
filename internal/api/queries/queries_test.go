@@ -334,6 +334,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_repos":  "decided_by:" + string(authz.ActionCodeRead),
 		"code_repo":   "decided_by:" + string(authz.ActionCodeRead),
 		"code_pushes": "decided_by:" + string(authz.ActionCodeRead),
+		// AND WHO READ A UNIT'S REPOSITORY, decided by its own verb before
+		// anything is read: an admin's, since the answer names the people
+		// who read it, which no repository's grant gives.
+		"code_repo_readers": "decided_by:" + string(authz.ActionCodeRepoReaders),
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, everySeam(t))

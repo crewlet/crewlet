@@ -262,20 +262,22 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 
 // EACH CODE READ HAS ONE PATH, AND IT IS A QUESTION'S. The code host's rows —
 // the repositories, one repository in detail, one repository's push history —
-// were routes of the code host's own beside git, with a parameter reading and
-// a refusal mapping of their own beside the registry's. They are registry
-// questions, served on the paths those routes had through the named routes, so
-// a person, a script, the CLI and a screen reading its own write back are
-// answered by one implementation: each code question is named by exactly one
-// route, at its path; every route an app mounts under /code/ — on a node of
-// every role and on one without git — is one of those or, where git is served,
-// the verify and its read, operations on this node's copy rather than reads of
-// the rows; and a request on each path is the question's own answer, asking
-// the reader what the generic form of the same question asks it.
+// and who read a unit's repository were routes of the code host's own beside
+// git, with a parameter reading and a refusal mapping of their own beside the
+// registry's. They are registry questions, served on the paths those routes
+// had through the named routes, so a person, a script, the CLI and a screen
+// reading its own write back are answered by one implementation: each code
+// question is named by exactly one route, at its path; every route an app
+// mounts under /code/ — on a node of every role and on one without git — is
+// one of those or, where git is served, the verify and its read, operations on
+// this node's copy rather than reads of the rows; and a request on each path
+// is the question's own answer, asking the reader what the generic form of the
+// same question asks it.
 //
 // Mutation: mount a code read beside the questions again (mountCode serving
-// `GET /code/repositories` from a handler of its own) → the walk names it, red;
-// drop a question's named route → its question has no path, red.
+// `GET /code/repos/{name}/readers` from a handler of its own, as it did) → the
+// walk names it, red; drop a question's named route → its question has no
+// path, red.
 func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 	t.Parallel()
 	held := func(what string) bool {
@@ -308,8 +310,14 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			reads := &fakeCodeReads{}
-			a := codeApp(t, tc.roles, fixedCode{git: fakeGitRoutes{}, reads: reads})
+			// EVERY REPOSITORY A DETAIL, the company's, so who read one is
+			// answered from its row — not recorded — without the readers.
+			reads := &fakeCodeReads{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+				return code.ReadAnswer{Level: q.Fresh.Level, Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{
+					RepoRef: code.RepoRef{Name: q.Repo, Visibility: code.VisibilityCompany}}}}, nil
+			}}
+			a := codeApp(t, tc.roles, fixedCode{git: fakeGitRoutes{}, reads: reads,
+				readers: readersOn(t, &fakeRepoReaders{})})
 			for _, what := range a.Queries().Names() {
 				if strings.HasPrefix(what, "code_") && !held(what) {
 					t.Errorf("this node answers the code question %q, which no path here holds", what)
@@ -357,20 +365,22 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 	}
 }
 
-// codeQuestion is one of the code host's rows as a question: its name, its
-// route, the kind of read it asks, and the repository a request naming "web"
-// on its path reads — none for the listing, whose route names none.
+// codeQuestion is one of the code host's questions: its name, its route, the
+// kind of read it asks, and the repository a request naming "web" on its path
+// reads — none for the listing, whose route names none.
 type codeQuestion struct {
 	what, route string
 	kind        code.ReadKind
 	repo        string
 }
 
-// codeQuestions are the three.
+// codeQuestions are the four: the three rows, and who read a unit's
+// repository, which reads the repository's row by name before its readers.
 var codeQuestions = []codeQuestion{
 	{"code_repos", "GET /code/repos", code.ReadRepos, ""},
 	{"code_repo", "GET /code/repos/{name}", code.ReadRepo, "web"},
 	{"code_pushes", "GET /code/repos/{name}/pushes", code.ReadPushes, "web"},
+	{"code_repo_readers", "GET /code/repos/{name}/readers", code.ReadRepo, "web"},
 }
 
 // THE CODE SURFACE IS ASKED ON EVERY REQUEST. The code host is built with the
@@ -736,22 +746,25 @@ func bearing(h http.Handler, token string) http.Handler {
 // reader with no asker.
 func TestACodeReadForNobodyIsRefused(t *testing.T) {
 	t.Parallel()
-	reads := &fakeCodeReads{}
-	a := codeApp(t, nil, fixedCode{reads: reads})
+	reads, readers := &fakeCodeReads{}, &fakeRepoReaders{}
+	a := codeApp(t, nil, fixedCode{reads: reads, readers: readersOn(t, readers)})
 	for name, ctx := range map[string]context.Context{
 		"nobody presented anything": iam.WithAnonymous(t.Context()),
 		"this node could not tell":  iam.WithUnresolved(t.Context(), errors.New("the identity estate is behind")),
 		"no resolver touched it":    t.Context(),
 	} {
-		for _, what := range []string{"code_repos", "code_repo", "code_pushes"} {
-			if _, err := a.Queries().AnswerWith(ctx, what,
+		for _, q := range codeQuestions {
+			if _, err := a.Queries().AnswerWith(ctx, q.what,
 				queries.FromMap(map[string]any{"name": "web"})); err == nil {
-				t.Errorf("%s: %s was answered", name, what)
+				t.Errorf("%s: %s was answered", name, q.what)
 			}
 		}
 	}
 	if asked := reads.queries(); len(asked) != 0 {
 		t.Errorf("the reader was asked %d reads for nobody: %+v", len(asked), asked)
+	}
+	if asked := readers.asks(); len(asked) != 0 {
+		t.Errorf("the readers were asked %d pages for nobody: %+v", len(asked), asked)
 	}
 }
 
@@ -765,7 +778,8 @@ func TestCodeReadsAreAlwaysGuarded(t *testing.T) {
 	b := closedPosture()
 	a := newApp(t, api.Options{Bootstrap: &b,
 		Code: fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}}})
-	for _, path := range []string{"/code/repos", "/code/repos/web", "/code/repos/web/pushes"} {
+	for _, path := range []string{"/code/repos", "/code/repos/web", "/code/repos/web/pushes",
+		"/code/repos/web/readers"} {
 		rec := ask(t, a, http.MethodGet, path, false)
 		if rec.Code != http.StatusUnauthorized || !strings.HasPrefix(rec.Header().Get("Content-Type"),
 			"application/json") {

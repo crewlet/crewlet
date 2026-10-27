@@ -187,7 +187,8 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
 	// THE CODE HOST'S ROWS: the repositories, one repository in detail, and
 	// one repository's push history, each decided per repository by the grant
-	// the serving node derives (code.GrantOf, ADR-0058). ON THESE PATHS
+	// the serving node derives (code.GrantOf, ADR-0058) — and who read a
+	// unit's repository, an admin's, decided by its own verb. ON THESE PATHS
 	// ALONE: they were the code host's own routes, mounted beside git
 	// (code.go), and a question answered there too would be the second
 	// implementation this table exists to prevent. The verify and its read
@@ -195,6 +196,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/code/repos", what: "code_repos"},
 	{method: "GET", pattern: "/code/repos/{name}", what: "code_repo", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/code/repos/{name}/pushes", what: "code_pushes", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/readers", what: "code_repo_readers", path: map[string]string{"name": "name"}},
 }
 
 // mountReads registers the named read routes.

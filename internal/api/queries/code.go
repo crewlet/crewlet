@@ -21,6 +21,16 @@ import (
 // registered [DecidedBy] the authority table's `code.read`, which admits
 // everybody the guard resolved and decides nothing a repository's grant does.
 //
+// AND WHO READ A UNIT'S REPOSITORY, `code_repo_readers`: the operator tool's
+// one answer (builtin.ReadersOf) — the repository read by name as the asker,
+// then a page of its readers from the usage domain — asked as a question of
+// this registry on the route an admin's script reads, so the route, the
+// generic form and the socket are one implementation, as the rows are. It is
+// registered [DecidedBy] its own verb, `code_repo_readers`, and decided inside
+// its answer before anything is read ([Sources.codeRepoReaders]): an admin's
+// and a person's, since the answer names the people, the credentials and the
+// seats that read a unit's code — an audit no repository's grant gives.
+//
 // # Why questions, and not the code host's own routes
 //
 // They were answered by routes of the code host's own (internal/api's
@@ -86,6 +96,12 @@ type CodeReads interface {
 // would pass a nil check and panic on the first question.
 type CodeSource interface {
 	CodeReads() (CodeReads, error)
+
+	// RepoReaders is who read a `visibility: unit` repository — the usage
+	// domain's readers and the company's clock a range that names no end
+	// is cut on — or why this node serves none, on CodeReads' terms and in
+	// the same vocabulary: the readers stand with the code reads.
+	RepoReaders() (builtin.ReadersDeps, error)
 }
 
 // codeRead is the answer to one kind of code question.
@@ -217,10 +233,69 @@ func refusalSentence(err, sentinel error) string {
 	return err.Error()
 }
 
+// codeRepoReaders answers who read a `visibility: unit` repository over a range
+// of company days, a page at a time: `name` (the path's repository), `from` and
+// `to` (company days, both inclusive — the [builtin.RepoReadersDefaultDays]
+// ending today where the request names neither), and `cursor` (the `next` of
+// the page before).
+//
+// THE OPERATOR TOOL'S ONE ANSWER ([builtin.ReadersOf]), so a person's script
+// and their assistant are told the same thing in the same pages: the
+// repository read by name as the caller, linearizable — a repository declared
+// a moment ago is never answered undeclared from an old copy, and no read
+// level is the caller's to choose, since what the page is read from is the
+// usage domain and not the code log — and, for a unit's repository, one page
+// of its readers summed over every node, the first page with how many readers
+// the per-day cap left out. A `visibility: company` repository's readers are
+// not recorded, and its answer says so.
+//
+// DECIDED FIRST, by its own verb ([authz.ActionCodeRepoReaders]) and before
+// anything else — whether this node serves the code host included — so a
+// caller who may not ask is refused alike by every node, as a route's mount
+// refused them: on grants alone ([authz.NoChart]), since the verb is admin's
+// and asks no relation. Then the source, so a node serving none says why;
+// then the read. A range or a cursor the read cannot take is [ErrBadParams] in
+// the tool's own words ([builtin.ReadersRefusal]) — this node's judgement,
+// before anything is read, or a peer's; everything else is a code read's
+// refusal ([codeRefusal]).
+func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
+	const what = "code_repo_readers"
+	asking, err := caller(ctx, what)
+	if err != nil {
+		return nil, err
+	}
+	d := authz.Decide(ctx, asking, authz.ActionCodeRepoReaders, authz.Object{}, authz.NoChart{}, s.clock())
+	switch {
+	case d.Unknown():
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
+	case !d.Allowed:
+		return nil, refused(what, d)
+	}
+	reads, err := s.Code.CodeReads()
+	if err != nil {
+		return nil, err
+	}
+	readers, err := s.Code.RepoReaders()
+	if err != nil {
+		return nil, err
+	}
+	q := builtin.ReadersQuery{Repo: p.String("name"), From: p.String("from"), To: p.String("to"),
+		Cursor: p.String("cursor")}
+	answer, err := builtin.ReadersOf(ctx, reads, readers.Readers, codeAsker(asking), q, readers.Today())
+	if said, refusedHere := builtin.ReadersRefusal(err); refusedHere {
+		return nil, fmt.Errorf("%w: %s", ErrBadParams, said)
+	}
+	if err != nil {
+		return nil, codeRefusal(q.Repo, err)
+	}
+	return answer, nil
+}
+
 // registerCode registers the code questions over s.Code — see the file's
-// doc for what each answers and why each is decided by `code.read`.
+// doc for what each answers and why each is decided by the verb it is.
 func registerCode(r *Registry, s Sources) {
 	r.Register("code_repos", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepos, "code_repos"))
 	r.Register("code_repo", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepo, "code_repo"))
 	r.Register("code_pushes", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadPushes, "code_pushes"))
+	r.Register("code_repo_readers", DecidedBy(authz.ActionCodeRepoReaders), s.codeRepoReaders)
 }

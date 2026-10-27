@@ -5,26 +5,65 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // stubCode is the code host's rows as the code questions find them: a node
 // serving them, whose read records every query it is asked — the WHOLE query,
 // so a question that carried the level and dropped the floors or the bound
 // beside it is visible — and answers what answer does, or an empty answer at
-// the level asked where answer is nil.
+// the level asked where answer is nil; and the usage domain's readers of a
+// repository. Where unserved is set, the node serves none of them, and says
+// that.
 type stubCode struct {
-	answer func(code.ReadQuery) (code.ReadAnswer, error)
-	asked  []code.ReadQuery
+	answer   func(code.ReadQuery) (code.ReadAnswer, error)
+	asked    []code.ReadQuery
+	unserved error
+	readers  stubReaders
+	// sourced counts the asks of the source itself: CodeReads and
+	// RepoReaders.
+	sourced int
 }
 
-// CodeReads is the stub itself: this node serves the code host's rows.
-func (s *stubCode) CodeReads() (queries.CodeReads, error) { return s, nil }
+// stubReaders is the usage domain's readers of a repository: an empty page,
+// every ask counted.
+type stubReaders struct{ paged int }
+
+func (r *stubReaders) RepoReaders(context.Context, usage.RepoReadsQuery, string, int) (
+	estate.RepoReadersAnswer, error) {
+
+	r.paged++
+	return estate.RepoReadersAnswer{}, nil
+}
+
+// CodeReads is the stub itself: this node serves the code host's rows, or
+// why it does not.
+func (s *stubCode) CodeReads() (queries.CodeReads, error) {
+	s.sourced++
+	if s.unserved != nil {
+		return nil, s.unserved
+	}
+	return s, nil
+}
+
+// RepoReaders is the stub's readers, on CodeReads' terms.
+func (s *stubCode) RepoReaders() (builtin.ReadersDeps, error) {
+	s.sourced++
+	if s.unserved != nil {
+		return builtin.ReadersDeps{}, s.unserved
+	}
+	return builtin.ReadersDeps{Readers: &s.readers}, nil
+}
 
 func (s *stubCode) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	s.asked = append(s.asked, q)
@@ -196,5 +235,53 @@ func TestACodeQuestionRefusesInThisSurfacesVocabulary(t *testing.T) {
 				tc.check(t, stub.last().Repo, err)
 			}
 		})
+	}
+}
+
+// WHO READ A UNIT'S REPOSITORY IS DECIDED BEFORE ANYTHING IS READ, by its own
+// verb (authz.ActionCodeRepoReaders) inside its answer: a caller holding every
+// app and not admin is refused on authority — naming admin, the one permission
+// that would admit them — alike by a node serving the code host and by one
+// serving none of it, and neither the source, the repository's row nor its
+// readers is asked; an admin is told why a node serves none, and answered by
+// one that does.
+//
+// Mutation: ask the source before the decide (codeRepoReaders' first lines
+// swapped) → the colleague on a node serving none is told `not_hosted` and
+// the source is asked, red.
+func TestWhoReadARepositoryIsDecidedBeforeAnythingIsRead(t *testing.T) {
+	t.Parallel()
+	company := func(q code.ReadQuery) (code.ReadAnswer, error) {
+		return code.ReadAnswer{Level: q.Fresh.Level, Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{
+			RepoRef: code.RepoRef{Name: q.Repo, Visibility: code.VisibilityCompany}}}}, nil
+	}
+	hostsNone := &queries.NotFound{Reason: queries.ReasonNotHosted, Detail: "this company does not host code"}
+	ask := func(t *testing.T, stub *stubCode, grants ...iam.Grant) (any, error) {
+		t.Helper()
+		r := queries.NewRegistry()
+		queries.Register(r, queries.Sources{Code: stub})
+		return r.Answer(asGrants(t, "", grants...), "code_repo_readers", map[string]any{"name": "web"})
+	}
+	for name, unserved := range map[string]error{"a node serving the code host": nil,
+		"a node serving none of it": hostsNone} {
+		stub := &stubCode{answer: company, unserved: unserved}
+		_, err := ask(t, stub, iam.Apps...)
+		var refusal *queries.Refusal
+		if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAdmin}) {
+			t.Errorf("%s: a caller holding every app and not admin was answered %v, want refused naming admin",
+				name, err)
+		}
+		if stub.sourced != 0 || len(stub.asked) != 0 || stub.readers.paged != 0 {
+			t.Errorf("%s: a refused caller asked the source %d time(s), the repository %d and its readers %d",
+				name, stub.sourced, len(stub.asked), stub.readers.paged)
+		}
+	}
+	if _, err := ask(t, &stubCode{answer: company, unserved: hostsNone}, iam.GrantAdmin); !errors.Is(err,
+		queries.ErrNotFound) {
+		t.Errorf("an admin asking a node serving none was answered %v, want why: %v", err, hostsNone)
+	}
+	answer, err := ask(t, &stubCode{answer: company}, iam.GrantAdmin)
+	if got, ok := answer.(builtin.ReadersAnswer); err != nil || !ok || got.Repo != "web" || got.Recorded {
+		t.Errorf("an admin was answered %+v (%v), want the company repository's answer, not recorded", answer, err)
 	}
 }

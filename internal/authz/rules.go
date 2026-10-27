@@ -120,10 +120,10 @@ const (
 	ActionCodeCompare   Action = "code_compare"
 	ActionCodeLandedIn  Action = "code_landed_in"
 	// ActionCodeRepoReaders is WHO READ a `visibility: unit` repository —
-	// the operator tool `code_repo_readers` and `GET
-	// /code/repos/{name}/readers`, ONE verb asked two ways — whose answer
-	// names the persons, the credentials and the seats that read it and how
-	// much.
+	// the operator tool `code_repo_readers` and the query registry's
+	// question of the same name, on `GET /code/repos/{name}/readers` and
+	// the socket, ONE verb asked two ways — whose answer names the persons,
+	// the credentials and the seats that read it and how much.
 	ActionCodeRepoReaders Action = "code_repo_readers"
 
 	// --- somebody's own record -------------------------------------- //

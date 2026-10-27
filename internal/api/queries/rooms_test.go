@@ -371,18 +371,23 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 	}
 }
 
-// readOutsideTheDashboard are the questions no room reads and a `crewlet`
-// command does, over their REST paths, each beside the command that reads it:
-// the code host's rows, which `crewlet code status` lists and shows
+// readOutsideTheDashboard are the questions no room reads and something
+// outside the dashboard does, over their REST paths, each beside what reads
+// it: the code host's rows, which `crewlet code status` lists and shows
 // (cmd/crewlet/code.go, whose own suite reads them from a node) — routes of
 // the code host's own before they were questions, read by that command then as
-// now. The decision [TestEveryQueryThisServerAnswersHasAReader] asks to be
-// taken in the open, and held both ways there: the first room that reads one
-// of these deletes its line.
+// now; and who read a unit's repository, an admin's script — the request the
+// code guide prints (docs/guides/code.md, "Who read a unit's repository") —
+// whose assistant asks the operator tool `code_repo_readers` for the same
+// answer (builtin.ReadersOf). The decision
+// [TestEveryQueryThisServerAnswersHasAReader] asks to be taken in the open,
+// and held both ways there: the first room that reads one of these deletes its
+// line.
 var readOutsideTheDashboard = map[string]string{
-	"code_repos":  "crewlet code status",
-	"code_repo":   "crewlet code status -repo",
-	"code_pushes": "crewlet code status -repo",
+	"code_repos":        "crewlet code status",
+	"code_repo":         "crewlet code status -repo",
+	"code_pushes":       "crewlet code status -repo",
+	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
 }
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.

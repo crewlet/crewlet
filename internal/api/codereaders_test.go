@@ -94,12 +94,14 @@ func readersOn(t *testing.T, readers builtin.RepoReaders) builtin.ReadersDeps {
 }
 
 // WHO READ A REPOSITORY IS ADMIN'S, ON THE ROUTE AS ON THE TOOL: one verb
-// (authz.ActionCodeRepoReaders) decides both, so a caller holding every app
-// and not admin is refused `403` naming admin before the repository or its
-// readers are read — the per-repository grant that admits them to the code
-// reads gives them no audit of who read it — and an admin is answered.
+// (authz.ActionCodeRepoReaders) decides both — the question the route asks
+// decides it inside its answer before anything else — so a caller holding
+// every app and not admin is refused `403` naming admin before the repository
+// or its readers are read — the per-repository grant that admits them to the
+// code reads gives them no audit of who read it — and an admin is answered.
 //
-// Mutation: mount the route on code.read, and the colleague is answered.
+// Mutation: decide the question by code.read rather than its own verb, and the
+// colleague is answered.
 func TestTheReadersRouteIsAnAdminsAlone(t *testing.T) {
 	t.Parallel()
 	const colleague = "a-token-that-carries-every-app-and-not-admin"
@@ -143,8 +145,8 @@ func TestTheReadersRouteIsAnAdminsAlone(t *testing.T) {
 // nobody declared is the code reads' `not_found`; a read no node served is
 // `unavailable` with its Retry-After.
 //
-// Mutation: answer ErrBadRange through codeRefusal, and the range rows answer
-// 500 query_failed.
+// Mutation: answer ErrBadRange through the code questions' codeRefusal
+// (internal/api/queries), and the range rows answer 500 query_failed.
 func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 	t.Parallel()
 	elided := int64(2)

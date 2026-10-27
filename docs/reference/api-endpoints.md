@@ -4342,6 +4342,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_repos` | `{status, limit, cursor, read_level, …}` | `GET /code/repos`. The repositories the caller may read, a page at a time — see [The code reads](#the-code-reads), which say what the three code questions answer, at which level and with which refusals |
 | `code_repo` | `{name, read_level, …}` | `GET /code/repos/{name}`. One repository in detail |
 | `code_pushes` | `{name, limit, cursor, read_level, …}` | `GET /code/repos/{name}/pushes`. One repository's push history, newest first in log order |
+| `code_repo_readers` | `{name, from, to, cursor}` | [`GET /code/repos/{name}/readers`](#get-codereposnamereaders). Who read a `visibility: unit` repository's contents over a range of company days, a page at a time. **An admin's**, decided before anything is read; it takes none of the freshness keys |
 | `config` | `{}` | `GET /config` *(needs `admin`)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
@@ -7141,7 +7142,8 @@ The code host's rows are three questions of the query registry —
 `code_repos`, `code_repo` and `code_pushes` — answered on the routes below,
 and, like every question, by `GET /query/{what}` and the socket's query
 channel ([Queries](#queries)), by one implementation whichever way they are
-asked. Every caller the guard resolved reaches these (`code.read`): what each
+asked; who read a unit's repository is a fourth, an admin's
+([below](#get-codereposnamereaders)). Every caller the guard resolved reaches these (`code.read`): what each
 answers is the caller's grant on each repository, decided once the repository
 is read ([Who may read and push](../concepts/code-host.md#who-may-read-and-push))
 — so a repository a caller may not read is left out of a listing, and answered
@@ -7216,7 +7218,10 @@ read that answered, through a seat's code tools or a person's assistant —
 summed over every node and every day of the range, one row per reader: a
 credential and the human seat it acted as, or a seat, and how it read. What
 counts as a read and how it is kept are in
-[Who read it](../concepts/code-host.md#who-read-it); the operator tool
+[Who read it](../concepts/code-host.md#who-read-it). It is the question
+`code_repo_readers` of the query registry, answered on this route and, like
+every question, by `GET /query/code_repo_readers?name=…` and the socket's query
+channel ([Queries](#queries)) — one implementation — and the operator tool
 `code_repo_readers` answers the same pages.
 
 | Parameter | |

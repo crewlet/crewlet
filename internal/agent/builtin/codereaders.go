@@ -17,8 +17,9 @@ import (
 )
 
 // WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: the code host's fetch audit, as
-// the operator tool `code_repo_readers` and the REST route `GET
-// /code/repos/{name}/readers` both answer it — ONE answer ([ReadersOf]), so a
+// the operator tool `code_repo_readers` and the query registry's question of
+// the same name — on the REST route `GET /code/repos/{name}/readers`, the
+// generic form and the socket — both answer it: ONE answer ([ReadersOf]), so a
 // person's script and their assistant are told the same thing in the same pages.
 //
 // Every read of a `visibility: unit` repository's contents is recorded where it
@@ -55,7 +56,8 @@ const RepoReadersPageBytes = ToolAnswerBytes / 2
 
 // RepoRowReader is the one code read a readers question makes — the
 // repository's row by name, as its asker — declared here by its consumer:
-// estate.CodeSeam and the REST surface's code reads satisfy it.
+// estate.CodeSeam and the code questions' reads (internal/api/queries)
+// satisfy it.
 type RepoRowReader interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 }
@@ -180,9 +182,9 @@ func readersRange(from, to string, today period.Window) (string, string, error) 
 // peer's — in the words the usage domain wrote for the caller past its
 // sentinel. Anything else is a code read's failure.
 //
-// EXPORTED for the REST route, which answers the same refusals of the same
-// read: one reading, so a person's script and their assistant quote the same
-// words.
+// EXPORTED for the registry's question (internal/api/queries), which answers
+// the same refusals of the same read on the REST route and the socket: one
+// reading, so a person's script and their assistant quote the same words.
 func ReadersRefusal(err error) (string, bool) {
 	for _, sentinel := range []error{usage.ErrBadRange, usage.ErrBadCursor} {
 		if !errors.Is(err, sentinel) {
