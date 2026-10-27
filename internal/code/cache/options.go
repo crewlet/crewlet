@@ -155,6 +155,12 @@ type knobs struct {
 	// try of the repository id and is about to settle it: a case holds the
 	// task there to land a kick of the repository while it runs.
 	installSettling func(id string)
+	// installReading, when set, is told each time the installer takes a
+	// share of the node's read lane for work of its own (held true) and gives
+	// it back (held false) — its canaries' share where canary says so, else
+	// its checks' — the share held across the call: a case counts how many
+	// of each it holds at once.
+	installReading func(canary, held bool)
 	// chainLines, when set, is what a written multi-pack-index chain file
 	// lists in place of the ids installed: a case writes one in another
 	// order, a chain over the wrong base, for the canary to meet (M16).

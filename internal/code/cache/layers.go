@@ -1028,10 +1028,14 @@ func (c *Cache) fetchParts(ctx context.Context, st *stagedLayer, files [3]*os.Fi
 // pack's three are (syncStaged) — closes them, and holds them to the row
 // over the commit-graph layers base names below it (code.CheckLayer): the
 // one rule the maintainer's adoption and every install share, hashed a
-// piece at a time in a slot of the read lane, as the round's check of the
-// files a copy keeps is, and stopped with ctx. Then the layer is fetched and
-// checked and nothing is placed: the fault point InstallAfterFetch.
-func (c *Cache) finishLayer(ctx context.Context, st *stagedLayer, files [3]*os.File, base []string) error {
+// piece at a time in a slot of the read lane hold takes — a round's, as its
+// check of the files a copy keeps is (gitproc.Pool.HoldRead), or the
+// installer's, in its one share of the lane (installHold) — and stopped with
+// ctx. Then the layer is fetched and checked and nothing is placed: the fault
+// point InstallAfterFetch.
+func (c *Cache) finishLayer(ctx context.Context, st *stagedLayer, files [3]*os.File, base []string,
+	hold func(context.Context) (func(), error)) error {
+
 	syncFile := (*os.File).Sync
 	if c.knobs != nil && c.knobs.fileSync != nil {
 		syncFile = c.knobs.fileSync
@@ -1054,7 +1058,7 @@ func (c *Cache) finishLayer(ctx context.Context, st *stagedLayer, files [3]*os.F
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("cache: layer %s: making its files durable on this node: %w", st.row.Layer.LayerID, err)
 	}
-	if err := checkStaged(ctx, st, base, c.pieces(c.git.HoldRead).layer()); err != nil {
+	if err := checkStaged(ctx, st, base, c.pieces(hold).layer()); err != nil {
 		return err
 	}
 	st.base = base
@@ -1575,6 +1579,11 @@ func (c *Cache) Layers(s Synced) []code.LayerRow {
 //     (100–200 ms on S3) and a placement a repository in series — 10 000
 //     one-part installs are 17 to 33 minutes that way, about a minute
 //     sixteen wide.
+//   - ITS WORK IN THE READ LANE IS ONE SLOT AT A TIME ACROSS THEM ALL FOR
+//     EACH KIND (installReadSlots): the pieces of its layers' checks in one,
+//     its placements' canaries in the other. Sixteen tasks keep sixteen GETs
+//     in flight; they were never sixteen cores of hashing to take from the
+//     requests that lane serves.
 //   - ONE REPOSITORY IS INSTALLED BY ONE TASK AT A TIME, its layers fetched in
 //     chain order and placed together, by a swap, under the repository's write
 //     lock: a round queues behind it, and it behind a round.
@@ -1591,10 +1600,15 @@ func (c *Cache) Layers(s Synced) []code.LayerRow {
 type layerInstaller struct {
 	// share is the parts in flight across every repository it installs, and
 	// tasks the repositories it installs at once: both a round's share, since
-	// a task fetches at least a part.
-	share *semaphore.Weighted
-	tasks int
-	kicks chan struct{}
+	// a task fetches at least a part. checks and canaries are its shares of
+	// the node's read lane, installReadSlots each, which every task's work
+	// there takes in turn: its checks' pieces the first, its placements'
+	// canaries the second.
+	share    *semaphore.Weighted
+	tasks    int
+	checks   *semaphore.Weighted
+	canaries *semaphore.Weighted
+	kicks    chan struct{}
 
 	mu sync.Mutex
 	// repos is every repository the installer holds, each with its place and
@@ -1786,14 +1800,93 @@ func installWindow(n int) time.Duration {
 	return min(w, installRetryCap)
 }
 
+// installReadSlots is how many slots of the node's read lane each kind of the
+// installer's own work holds at once, across every repository it installs:
+// the pieces of its layers' checks (CheckPieceBytes in a
+// gitproc.Pool.HoldRead), and its placements' canaries (a git read) — ONE
+// each, as the scrub holds one, the cache's other work behind the serving.
+// The read lane is a core a slot for the work requests wait on — a seat's git
+// read, a fetch's check of its wants (Missing), a round's check of the files
+// a copy keeps — and the installer's sixteen tasks are there to keep sixteen
+// GETs in flight, not to hash on sixteen cores: bounded by its tasks alone,
+// its checks and canaries held up to sixteen slots — the whole lane of a node
+// of sixteen cores or fewer — through a mass install (a burst of root
+// publications, the republish after a restore, when every node installs every
+// root), each request queued behind a piece of up to 0.54 s read cold. One
+// slot hashes about a gigabyte a second (BenchmarkVerify's 0.95–1.08 ms a
+// mebibyte), about what sixteen GETs bring at the S3 fake's 80 MB/s a
+// connection (FetchConcurrency's measurement), so it paces a node's installs
+// about as its downloads do.
+//
+// A SLOT FOR EACH KIND, never one for both: a canary runs inside its
+// placement's swap, under the repository's write lock, which every round of
+// the repository waits for — the sync a fetch after a push waits on among
+// them. In one slot with the checks it waited behind up to fifteen other
+// tasks' pieces, about a second warm and several read cold, with that lock
+// held. In its own it waits only behind other placements' canaries, 0.004 s
+// each over a chain with no tail.
+//
+// A JUDGMENT CALL, not a measurement: a node of many cores with a link far
+// wider than sixteen connections bring would install faster with more, at the
+// price of what its requests wait for.
+const installReadSlots = 1
+
 // newLayerInstaller is an installer of nothing yet, fetching at most share
 // parts at once: a round's share (Cache.fetchConcurrency), so the rounds keep
 // the node's other half.
 func newLayerInstaller(share int) *layerInstaller {
 	return &layerInstaller{
 		share: semaphore.NewWeighted(int64(share)), tasks: share, kicks: make(chan struct{}, 1),
+		checks: semaphore.NewWeighted(installReadSlots), canaries: semaphore.NewWeighted(installReadSlots),
 		repos: map[string]*installEntry{}, staged: map[string]map[string]*stagedLayer{},
 	}
+}
+
+// takeInstallRead takes the installer's share of the node's read lane for its
+// own work about to run there — its canaries' share where canary says the
+// work is a placement's canary, else its checks' (installReadSlots) — waiting
+// in turn with every other task's work of the kind, and answers the call that
+// gives it back, once however often it is called. It holds no slot of the
+// lane itself: a piece's hold takes one after it (installHold), and a
+// canary's git is admitted to one as it starts, so the installer never holds
+// a slot while it waits for its share.
+func (c *Cache) takeInstallRead(ctx context.Context, canary bool) (func(), error) {
+	in, kind := c.installer, c.installer.checks
+	if canary {
+		kind = in.canaries
+	}
+	if err := kind.Acquire(ctx, 1); err != nil {
+		return nil, err
+	}
+	if c.knobs != nil && c.knobs.installReading != nil {
+		c.knobs.installReading(canary, true)
+	}
+	return sync.OnceFunc(func() {
+		if c.knobs != nil && c.knobs.installReading != nil {
+			c.knobs.installReading(canary, false)
+		}
+		kind.Release(1)
+	}), nil
+}
+
+// installHold is the hold the installer's check of a layer hashes each piece
+// in (code.Pieces.Hold): its checks' share of the read lane (takeInstallRead),
+// then a slot of the lane (gitproc.Pool.HoldRead), both given back once the
+// piece is read.
+func (c *Cache) installHold(ctx context.Context) (func(), error) {
+	share, err := c.takeInstallRead(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	release, err := c.git.HoldRead(ctx)
+	if err != nil {
+		share()
+		return nil, err
+	}
+	return sync.OnceFunc(func() {
+		release()
+		share()
+	}), nil
 }
 
 // kickInstall holds id for the installer and wakes it: due at once where it
@@ -2223,7 +2316,7 @@ func (c *Cache) fetchForInstall(ctx context.Context, id string, row code.LayerRo
 		}, nil
 	})
 	if err == nil {
-		err = c.finishLayer(ctx, st, files, base)
+		err = c.finishLayer(ctx, st, files, base, c.installHold)
 	} else {
 		closeAll(files)
 	}
@@ -2300,7 +2393,7 @@ func (c *Cache) placeBySwap(ctx context.Context, e *entry, inc *incarnation, gen
 		return placementMoved
 	}
 	e.mu.Unlock()
-	next := c.swapLeaving(ctx, e, inc, snapshot{}, &layerStep{rows: rows, fetched: fetched})
+	next := c.swapLeaving(ctx, e, inc, snapshot{}, &layerStep{rows: rows, fetched: fetched, installer: true})
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
@@ -2322,10 +2415,14 @@ func sameChain(a, b []code.LayerRow) bool {
 
 // layerStep is a placement a swap makes (swap.go): the chain the next
 // incarnation holds, root first — the layers it keeps of the one it leaves,
-// linked, and those fetched, renamed in from tmp/.
+// linked, and those fetched, renamed in from tmp/ — and whether it is the
+// installer's, whose canary runs in the installer's share of the read lane
+// for canaries (takeInstallRead) rather than as a round's, which a reader
+// waits on.
 type layerStep struct {
-	rows    []code.LayerRow
-	fetched []*stagedLayer
+	rows      []code.LayerRow
+	fetched   []*stagedLayer
+	installer bool
 }
 
 // discard takes every staged layer of s that no swap placed out of tmp/.

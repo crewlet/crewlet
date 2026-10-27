@@ -579,13 +579,26 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	// its own files and fails the first read through its bitmap. A failure
 	// abandons the placement (swapLeaving), its added layers refused — before
 	// the staging is synced, which a placement abandoned would have spent.
+	// The installer's placement walks in the installer's share of the read
+	// lane for canaries (takeInstallRead), behind the serving — never behind
+	// its checks' hashing, since this swap holds the repository's write lock,
+	// which the repository's rounds wait for; a round's, which a reader waits
+	// on, in the lane as the round's other reads do.
 	if len(s.added) > 0 {
 		s.step = stepCanary
 		objects := make(map[string]int64, len(s.packs))
 		for cs, p := range s.packs {
 			objects[cs] = p.objects
 		}
-		if err = c.canary(ctx, e, inc, s.staged, tailObjects(s.chain, objects), nil); err != nil {
+		share := func() {}
+		if s.layers.installer {
+			if share, err = c.takeInstallRead(ctx, true); err != nil {
+				return nil, err
+			}
+		}
+		err = c.canary(ctx, e, inc, s.staged, tailObjects(s.chain, objects), nil)
+		share()
+		if err != nil {
 			return nil, &canaryFailed{added: s.added, err: err}
 		}
 	}

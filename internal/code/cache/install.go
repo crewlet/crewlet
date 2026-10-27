@@ -570,7 +570,7 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 				closeAll(files)
 				err = context.Cause(lctx)
 			} else {
-				err = c.finishLayer(rctx, st, files, base)
+				err = c.finishLayer(rctx, st, files, base, c.git.HoldRead)
 			}
 			if err != nil {
 				st.remove(c)

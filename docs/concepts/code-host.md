@@ -1438,13 +1438,16 @@ publication hands the new layers to the node's **installer** and answers at
 once. A root layer of the largest repository the defaults admit is some
 2.6 GB, which inside a delta would hold every fetch waiting on that sync. The
 installer runs behind the serving, on at most half the node's downloads —
-sixteen parts at once, of the thirty-two the node runs at once — fetches
-each layer in chain order, and places them once all are held. Meanwhile the copy
-serves from its chain as it was, the new packs in its tail. A copy that moves
-while its layers download — a compaction's swap, a sync that reads the chain
-anew — costs no second download: what was fetched waits in the node's
-temporary space for the next placement, which takes it, or drops it once the
-rows have moved past it.
+sixteen parts at once, of the thirty-two the node runs at once — and one core
+of the node's read lane for checking what it fetched, as the scrub takes, and
+one for reading each placement through its bitmap, so the requests the lane
+serves keep the rest of it through a mass install. It fetches each layer in
+chain order, and places them once all are held. Meanwhile the copy serves from
+its chain as it was, the new packs in its tail. A copy that moves while its
+layers download — a compaction's swap, a sync that reads the chain anew —
+costs no second download: what was fetched waits in the node's temporary
+space for the next placement, which takes it, or drops it once the rows have
+moved past it.
 
 **The chain holds its packs.** A publication retires the packs its own repack
 merged, which the chain installed before it still names. Every pack an

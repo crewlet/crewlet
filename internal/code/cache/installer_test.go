@@ -542,6 +542,165 @@ func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
 	})
 }
 
+// THE INSTALLER HOLDS ONE SLOT OF THE READ LANE FOR ITS CHECKS AND ONE FOR ITS
+// CANARIES: a layer's check hashes its files a piece at a time in a slot of
+// the read lane, and a placement's canary is a git read there — the lane a
+// core a slot for the work requests wait on. The installer runs sixteen tasks
+// to keep sixteen GETs in flight, not to hash on sixteen cores: here sixteen
+// repositories' layers land together, and every piece of every check takes
+// the installer's one share for checks in turn, as the scrub, the cache's
+// other work behind the serving, holds one slot; and every canary takes the
+// one share for canaries (TestAnInstallersCanaryWaitsBehindNoCheck holds why
+// it is a share of its own).
+//
+// Mutations, each seen red: the shares as wide as the tasks
+// (installReadSlots 16) — each kind holds many at once; the canary outside a
+// share, or told as a check's — no canary takes the canaries' share.
+func TestTheInstallerHoldsOneReadSlotForItsChecksAndOneForItsCanaries(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	first := w.repo(t, 1)
+	p := w.pushN(t, first, 2)
+	chain := w.buildChain(t, p[:1], p[1:])
+	type share struct{ now, most, holds int }
+	var mu sync.Mutex
+	shares := map[bool]*share{false: {}, true: {}}
+	c := w.open(t, cache.InstallReadingWith(func(canary, held bool) {
+		mu.Lock()
+		s := shares[canary]
+		if !held {
+			s.now--
+			mu.Unlock()
+			return
+		}
+		s.now++
+		s.holds++
+		s.most = max(s.most, s.now)
+		mu.Unlock()
+		// Held a while, so any other task's work of the kind the share let
+		// through meanwhile would be seen beside it.
+		time.Sleep(20 * time.Millisecond)
+	}))
+	const repos = cache.FetchConcurrency
+	ids := []string{first}
+	for n := 2; n <= repos; n++ {
+		id := w.repo(t, n)
+		var rows []code.PackRow
+		for _, r := range rowsOf(p) {
+			rows = append(rows, w.storeBundle(t, w.bundle(r.GitChecksum), ""))
+		}
+		w.log.write(id, rows, map[string]string{"refs/heads/main": p[len(p)-1].oid})
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		w.sync(t, c, id).Release()
+		w.log.publish(id, chain, nil)
+		w.sync(t, c, id).Release()
+	}
+	if took := cache.InstallPass(c); len(took) != repos {
+		t.Fatalf("the pass took up %d repositories, want %d at once", len(took), repos)
+	}
+	for _, id := range ids {
+		if got := layerIDs(cache.Installed(c, id)); !slices.Equal(got, layerIDs(chain)) {
+			t.Fatalf("%s holds %v, want %v", id, got, layerIDs(chain))
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// Two layers a repository, each its three files' check, and one
+	// placement's canary.
+	for _, k := range []struct {
+		canary bool
+		what   string
+		least  int
+	}{{false, "check pieces", repos * 2 * 3}, {true, "canaries", repos}} {
+		s := shares[k.canary]
+		if s.holds < k.least {
+			t.Errorf("the installer's %s took their share of the read lane %d times, want every one: at least %d",
+				k.what, s.holds, k.least)
+		}
+		if s.most != 1 {
+			t.Errorf("the installer's %s held %d slots of the read lane at once, want one", k.what, s.most)
+		}
+	}
+}
+
+// AN INSTALLER'S CANARY WAITS BEHIND NO CHECK: a placement's canary runs
+// inside its swap, under the repository's write lock, which every round of the
+// repository waits for — so it takes the installer's share of the read lane
+// for canaries, never the share its checks' pieces take in turn, where it
+// waited behind up to fifteen other tasks' pieces with that lock held. Here
+// one repository's check holds the checks' share, a piece of it held there,
+// while another repository's placement — of a layer its maintainer adopted,
+// which the installer checks no piece of — reads its chain through the bitmap
+// and is made.
+//
+// Mutation: take a canary's share from the checks' (takeInstallRead's
+// semaphore for a canary in.checks) — the adopted layer's placement waits for
+// the held piece, and is not made while it is held.
+func TestAnInstallersCanaryWaitsBehindNoCheck(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	checked, adopted := w.repo(t, 1), w.repo(t, 2)
+	pc, pa := w.pushN(t, checked, 2), w.pushN(t, adopted, 2)
+	// The first piece the installer's check takes its share for is held
+	// there, the share with it, until the case lets it go.
+	piece, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	c := w.open(t, cache.InstallReadingWith(func(canary, held bool) {
+		if !canary && held {
+			once.Do(func() {
+				close(piece)
+				<-release
+			})
+		}
+	}))
+	let := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(let)
+	w.sync(t, c, checked).Release()
+	w.sync(t, c, adopted).Release()
+	chain := w.buildChain(t, pc)
+	w.log.publish(checked, chain, nil)
+	w.sync(t, c, checked).Release()
+	first := make(chan []string, 1)
+	go func() { first <- cache.InstallPass(c) }()
+	select {
+	case <-piece:
+	case <-time.After(hangDetector):
+		t.Fatalf("the installer's check of %s took no piece within %v", checked, hangDetector)
+	}
+
+	// The checks' share held: the other repository's maintainer adopts its
+	// layer, which the next pass places.
+	s := w.sync(t, c, adopted)
+	b := w.newChainBuild(t, pa)
+	layer := b.layer(t, pa, false)
+	sc, err := c.NewScratch(t.Context(), s, "0198a4f4-0000-7000-8000-000000000003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Remove()
+	b.into(t, sc.Dir)
+	if err := c.AdoptLayer(t.Context(), adopted, sc, layer); err != nil {
+		t.Fatalf("AdoptLayer: %v", err)
+	}
+	s.Release()
+	w.log.publish(adopted, []code.LayerRef{layer}, nil)
+	w.sync(t, c, adopted).Release()
+	second := make(chan []string, 1)
+	go func() { second <- cache.InstallPass(c) }()
+	eventually(t, "the adopted layer placed while the check's piece holds the checks' share", func() bool {
+		return slices.Equal(layerIDs(cache.Installed(c, adopted)), []string{layer.LayerID})
+	})
+
+	let()
+	<-first
+	<-second
+	if got := layerIDs(cache.Installed(c, checked)); !slices.Equal(got, layerIDs(chain)) {
+		t.Errorf("once its piece was let go, %s holds %v, want %v", checked, got, layerIDs(chain))
+	}
+}
+
 // holdFirst holds the first read of key in the world's store until the answer
 // is called, and refuses the first read of it that is not held — one a case
 // makes while the held one waits — with an error that may pass; every other

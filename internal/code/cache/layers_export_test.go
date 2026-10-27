@@ -141,6 +141,18 @@ func InstallWakesWith(o *Options, f func(at time.Time) <-chan time.Time) {
 	o.knobs.installWake = f
 }
 
+// InstallReadingWith makes the installer tell f each time it takes a share of
+// the node's read lane (held true) and gives it back (held false): its
+// canaries' where canary says so, else its checks'.
+func InstallReadingWith(f func(canary, held bool)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.installReading = f
+	}
+}
+
 // InstallSettlingWith makes every installer's task call f with its repository
 // once its try has ended, before the try is settled.
 func InstallSettlingWith(f func(id string)) func(*Options) {
