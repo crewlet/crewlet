@@ -32,6 +32,7 @@ const on: CardHandlers = {
   decline: () => {},
   prepareAgain: () => {},
   openHere: () => {},
+  ask: () => {},
   undo: () => {},
 };
 
@@ -311,4 +312,97 @@ test("a two-letter handle is drawn whole", () => {
     true,
   );
   expect(step!.detail).toBe("GET /agents/qa");
+});
+
+test("a brief's rows open the address the engine built, and its follow-ups ask in the conversation", () => {
+  const openHere = vi.fn();
+  const ask = vi.fn();
+  draw(
+    {
+      type: "brief",
+      brief: {
+        scope: { screen: "inbox", title: "Inbox" },
+        summary: "1 decision waits on you; the QA Engineer is stopped.",
+        needs: [
+          {
+            ref: { kind: "seat", id: "qa" },
+            text: "The QA Engineer is stopped on its budget",
+            tone: "danger",
+            action: {
+              kind: "open",
+              label: "Open the agent",
+              link: { label: "qa", screen: "seat", href: "#/company/org/seats/qa" },
+            },
+          },
+          {
+            ref: { kind: "task", id: "ENG-42" },
+            text: "QA asks which build to test",
+            tone: "warning",
+            action: { kind: "ask", label: "Ask", question: "What did QA test last?" },
+          },
+        ],
+        recommended: { text: "Answer ENG-42 first." },
+        follow_ups: ["Why is the QA Engineer out of budget?"],
+        as_of: "2026-10-26T09:00:00Z",
+      },
+    },
+    { ...on, openHere, ask },
+  );
+  expect(screen.getByRole("region", { name: "Brief 2 need you" })).toBeDefined();
+  expect(screen.getByText("Inbox")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Open the agent" }));
+  expect(openHere).toHaveBeenCalledWith(
+    expect.objectContaining({ path: ["company", "org", "seats", "qa"] }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+  expect(ask).toHaveBeenCalledWith("What did QA test last?");
+  fireEvent.click(screen.getByRole("button", { name: "Why is the QA Engineer out of budget?" }));
+  expect(ask).toHaveBeenCalledWith("Why is the QA Engineer out of budget?");
+  expect(screen.getByText("Answer ENG-42 first.")).toBeDefined();
+});
+
+test("a brief of one record names it, and nothing waiting is said in words", () => {
+  draw({
+    type: "brief",
+    brief: {
+      scope: {
+        screen: "inbox",
+        title: "Inbox",
+        record: { kind: "task", id: "ENG-7", noun: "decision" },
+      },
+      summary: "QA asked which build to test, and you answered.",
+      needs: [],
+      follow_ups: [],
+      as_of: "2026-10-26T09:00:00Z",
+    },
+  });
+  expect(screen.getByRole("region", { name: "Brief All clear" })).toBeDefined();
+  expect(screen.getByText("Decision ENG-7")).toBeDefined();
+  expect(screen.getByText("Nothing needs you.")).toBeDefined();
+});
+
+test("a brief's open whose address is not this dashboard's draws no press", () => {
+  draw({
+    type: "brief",
+    brief: {
+      scope: { screen: "inbox", title: "Inbox" },
+      summary: "One row.",
+      needs: [
+        {
+          ref: { kind: "task", id: "ENG-1" },
+          text: "A row",
+          tone: "warning",
+          action: {
+            kind: "open",
+            label: "Open ENG-1",
+            link: { label: "ENG-1", screen: "item", href: "https://example.com/" },
+          },
+        },
+      ],
+      follow_ups: [],
+      as_of: "2026-10-26T09:00:00Z",
+    },
+  });
+  expect(screen.getByText("A row")).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Open ENG-1" })).toBeNull();
 });

@@ -601,3 +601,116 @@ test("an answer that ended between the clock's ticks never reads as in the futur
     vi.useRealTimers();
   }
 });
+
+test("the home offers a brief of the page, and no list of its own of what waits", () => {
+  engine();
+  setFramePage({
+    screen: "worklet-tasks",
+    title: "Worklet › Tasks",
+    path: ["worklet", "tasks"],
+    params: {},
+    query: {},
+  });
+  mount();
+  expect(screen.getByRole("region", { name: "This page" })).toBeDefined();
+  expect(screen.getByRole("button", { name: /^Brief me on this page/ })).toBeDefined();
+  expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull();
+  expect(screen.getByRole("region", { name: "Anywhere in Crewlet" })).toBeDefined();
+});
+
+test("with a record open the row names it, and asks a brief of that record alone", async () => {
+  const sent = engine();
+  setFramePage({
+    screen: "item",
+    title: "Tasks › ENG-7",
+    path: ["worklet", "ENG-7"],
+    params: { id: "ENG-7" },
+    query: {},
+  });
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "half a question" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /^Brief me on this task/ }));
+  });
+  await waitFor(() =>
+    expect(sent.some((r) => new URL(r.url).pathname.endsWith("/turns"))).toBe(true),
+  );
+  const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
+  const body = JSON.parse(String(turn.init.body));
+  expect(body).toMatchObject({
+    mode: "brief",
+    input: { text: "Brief me on this task" },
+    page_context: { screen: "item", selection: { kind: "task", id: "ENG-7", noun: "task" } },
+  });
+  // WHAT THE READER WAS TYPING STAYS: a brief is not their question.
+  expect(box.value).toBe("half a question");
+});
+
+/** The golden's brief turn, and the engine that answers a brief with it. */
+const BRIEF_TURN = "b7d720ed-6183-5418-829b-8067fd903172";
+const BRIEF_CONVERSATION = "a51f5e8d-b74a-53fd-8dbc-db770396a8ad";
+const BRIEF = GOLDEN.split("\n\n")
+  .filter((block) => block.includes(`${BRIEF_TURN}.`))
+  .map((block) => `${block}\n\n`)
+  .join("");
+
+function briefEngine() {
+  const sent: { url: string; init: RequestInit }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      sent.push({ url, init });
+      const path = new URL(url).pathname;
+      if (path === "/assistant/conversations" && init.method === "POST") {
+        return json(
+          {
+            conversation: {
+              id: BRIEF_CONVERSATION,
+              title: "",
+              created_at: "2026-10-24T09:41:00Z",
+              updated_at: "2026-10-24T09:41:00Z",
+              last_activity_at: "2026-10-24T09:41:00Z",
+            },
+          },
+          201,
+        );
+      }
+      if (path.endsWith("/turns")) {
+        return json(
+          {
+            turn_id: BRIEF_TURN,
+            stream_url: `/assistant/conversations/${BRIEF_CONVERSATION}/stream?turn=${BRIEF_TURN}`,
+            after_seq: 0,
+          },
+          202,
+        );
+      }
+      if (path.endsWith("/stream")) {
+        return new Response(BRIEF, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return json({ error: "not_found" }, 404);
+    }),
+  );
+  return sent;
+}
+
+test("a brief is the conversation's first answer: its card, its press and its follow-ups", async () => {
+  const sent = briefEngine();
+  setFramePage({ screen: "inbox", title: "Inbox", path: ["inbox"], params: {}, query: {} });
+  mount();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /^Brief me on this page/ }));
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("completed"));
+  const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
+  expect(JSON.parse(String(turn.init.body))).toMatchObject({ mode: "brief" });
+  const brief = screen.getByRole("region", { name: "Brief 1 needs you" });
+  expect(brief.textContent).toContain("QA waits on your answer");
+  expect(brief.textContent).toContain("Decision ENG-133");
+  expect(screen.getByRole("button", { name: "Open ENG-133" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "What did QA test last?" })).toBeDefined();
+});

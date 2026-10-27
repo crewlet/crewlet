@@ -34,6 +34,7 @@ import {
   type AssistantProposalAnswer,
   type AssistantProposalCard,
   type AssistantProposalDecision,
+  type AssistantTurnMode,
 } from "~/contract/assistant.ts";
 import { SESSION_QUERIES } from "~/contract/domains.ts";
 import {
@@ -336,6 +337,7 @@ export async function send(
   text: string,
   page: PageSnapshot | null,
   attachments: readonly AssistantFileRef[] = [],
+  mode: AssistantTurnMode = "ask",
 ): Promise<void> {
   const key = newActOpID();
   const mine = generation;
@@ -345,6 +347,7 @@ export async function send(
     text,
     page: page ? { title: page.title, screen: page.context.screen } : null,
     attachments: [...attachments],
+    mode,
     at: new Date().toISOString(),
   });
   try {
@@ -355,6 +358,7 @@ export async function send(
         ...versioned,
         input: { text },
         page_context: page ? page.context : null,
+        ...(mode === "ask" ? {} : { mode }),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.file_id) } : {}),
       },
       { id, opKey: key },

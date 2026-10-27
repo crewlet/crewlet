@@ -84,6 +84,7 @@ import { rereadViewer } from "~/lib/viewer.ts";
 import { keyRow, matchesRow, pressText } from "../../keymap.ts";
 import { on as onBus, emit } from "../bus.ts";
 import { usePageSnapshot } from "../context.ts";
+import { briefQuestion } from "../brief.ts";
 import {
   ASSISTANT_COMPOSER_ID,
   takeQueuedQuestion,
@@ -283,6 +284,13 @@ export function Drawer({
     },
     [attached, take, draft],
   );
+  // A BRIEF IS OF THE PAGE AS IT IS NOW, attached whatever the chip says: it
+  // is what the brief is about. What the reader was typing stays in the box.
+  const brief = useCallback(() => {
+    if (page === null) return;
+    setAsked((n) => n + 1);
+    void send(briefQuestion(page.context), page, [], "brief");
+  }, [page]);
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.files);
@@ -599,7 +607,7 @@ export function Drawer({
               </Callout>
             ) : null}
             {view.turns.length === 0 ? (
-              <Home name={name} onAsk={ask} onFill={fill} now={now} />
+              <Home name={name} page={page} onBrief={brief} onAsk={ask} onFill={fill} now={now} />
             ) : (
               <Thread
                 view={view}
@@ -610,11 +618,12 @@ export function Drawer({
                   decline: (proposal) => void decline(proposal),
                   prepareAgain: (proposal) => ask(prepareAgainQuestion(proposal)),
                   openHere: (target) => openHere(target),
+                  ask: (question) => ask(question),
                   undo: undoAction,
                 }}
                 retryDisabledReason={disabledReason}
                 technical={admin}
-                onRetry={(text) => ask(text)}
+                onRetry={(text, _attachments, mode) => (mode === "brief" ? brief() : ask(text))}
                 onReconnect={reconnect}
               />
             )}

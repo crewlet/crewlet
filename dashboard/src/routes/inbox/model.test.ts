@@ -15,6 +15,7 @@ import {
   followThrough,
   inboxQuiet,
   inboxResources,
+  inboxSelection,
   inboxRows,
   nextAfter,
   noticeNote,
@@ -355,6 +356,49 @@ describe("what Needs you names for the assistant", () => {
       { kind: "seat", id: "qa" },
       { kind: "run", id: "turn-2" },
     ]);
+  });
+});
+
+describe("the row the reader opened, for the assistant", () => {
+  test("an ask or a parked run is a decision, an update its task, a stopped seat an agent", () => {
+    const ask = { kind: "ask", ask: { id: "t1", key: "FAIR-10" } };
+    const collided = { kind: "ask", ask: { id: "t9", key: "FAIR-1", key_collision: true } };
+    const run = { kind: "run", run: { turn_id: "turn-1" } };
+    const budget = { kind: "seat", seat: { row: { handle: "pm" } } };
+    const rows = [
+      { kind: "decision", key: "a", subject: ask, notices: [] },
+      { kind: "decision", key: "b", subject: collided, notices: [] },
+      { kind: "decision", key: "c", subject: run, notices: [] },
+      { kind: "decision", key: "d", subject: budget, notices: [] },
+      { kind: "condition", key: "e", item: { id: "stopped-y", subject: "seat", who: "qa" } },
+      { kind: "condition", key: "f", item: { id: "posture-draining", subject: "engine" } },
+      {
+        kind: "notice",
+        key: "g",
+        at: "2026-10-26T08:00:00Z",
+        notice: notice("g", { task: "t-3", subject_key: "FAIR-3" }),
+      },
+      {
+        kind: "answered",
+        key: "h",
+        at: "2026-10-26T08:00:00Z",
+        answered: { ask: { id: "t-4", key: "FAIR-4" } },
+      },
+    ] as unknown as InboxRow[];
+    expect(rows.map(inboxSelection)).toEqual([
+      { kind: "task", id: "FAIR-10", noun: "decision" },
+      { kind: "task", id: "t9", noun: "decision" },
+      { kind: "run", id: "turn-1", noun: "decision" },
+      { kind: "seat", id: "pm", noun: "agent" },
+      { kind: "seat", id: "qa", noun: "agent" },
+      null,
+      { kind: "task", id: "FAIR-3", noun: "update" },
+      { kind: "task", id: "FAIR-4", noun: "decision" },
+    ]);
+  });
+
+  test("no row opened is nothing selected: the Inbox is what a brief is of", () => {
+    expect(inboxSelection(null)).toBeNull();
   });
 });
 

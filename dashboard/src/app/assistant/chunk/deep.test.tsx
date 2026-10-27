@@ -46,6 +46,7 @@ function replay(upTo = Infinity): ConversationView {
     text: "Redesign the brand assets",
     page: null,
     attachments: [],
+    mode: "ask",
     at: "2026-10-24T09:41:00Z",
   });
   view = reduce(view, { type: "accepted", key: "g", turnId: first, afterSeq: 0 });
@@ -59,6 +60,7 @@ const on: CardHandlers = {
   decline: () => {},
   prepareAgain: () => {},
   openHere: () => {},
+  ask: () => {},
   undo: () => {},
 };
 

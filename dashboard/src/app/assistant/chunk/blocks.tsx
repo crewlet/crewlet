@@ -33,6 +33,7 @@
 
 import { type ReactNode } from "react";
 import {
+  BriefCard,
   Button,
   ButtonLink,
   Callout,
@@ -62,6 +63,8 @@ import {
 import { ArrowUpRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import {
   ASSISTANT_DEEP_ACTIVITY_LINES,
+  type AssistantBriefAction,
+  type AssistantBriefCard,
   type AssistantCardEvent,
   type AssistantDeepProgress,
   type AssistantEntityCard,
@@ -73,7 +76,7 @@ import { narrowCard } from "~/protocol/assistantWire.ts";
 import { exportFile } from "~/protocol/assistant.ts";
 import { statusLabel } from "~/lib/work.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
-import { fmtCount, fmtDateTime, fmtDuration, fmtExact } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, fmtDuration, fmtExact, fmtTime } from "~/lib/format.ts";
 import { youNeedWords } from "~/lib/access.ts";
 import { crumbsFor } from "../../crumbs.ts";
 import { href as hrefOf } from "../../router.tsx";
@@ -85,6 +88,7 @@ import { DraftFile } from "./DraftFile.tsx";
 import { drawValue } from "./changeValue.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 import { FilesCard } from "./files.tsx";
+import { recordWord } from "../brief.ts";
 
 type WireStepState = AssistantStepEvent["state"];
 type WireProposalState = AssistantProposalCard["state"];
@@ -621,6 +625,8 @@ export function prepareAgainQuestion(proposal: AssistantProposalCard): string {
 export interface CardHandlers extends ProposalHandlers {
   /** Go to an address the engine built, already checked to be this dashboard's own. */
   openHere: (target: InAppTarget) => void;
+  /** Ask a question in this conversation: a brief's follow-up, or its ask action. */
+  ask: (question: string) => void;
   /** Undo a page change from its receipt. */
   undo: (actionId: string) => void;
 }
@@ -915,6 +921,62 @@ function refusalBody(grants: readonly string[] | undefined, message: string): st
   return grants && grants.length > 0 ? youNeedWords(grants) : message;
 }
 
+/**
+ * A brief's action as the card's one press: an open the engine built, followed
+ * only where it is one of this dashboard's own addresses, or a question asked
+ * in the conversation. Anything else draws no button.
+ */
+function briefPress(
+  action: AssistantBriefAction | undefined,
+  on: CardHandlers,
+): { label: string; onSelect: () => void } | undefined {
+  if (action === undefined) return undefined;
+  if (action.kind === "ask") {
+    const question = action.question;
+    return question ? { label: action.label, onSelect: () => on.ask(question) } : undefined;
+  }
+  const target = action.link ? openInApp(action.link.href) : null;
+  return target ? { label: action.label, onSelect: () => on.openHere(target) } : undefined;
+}
+
+/**
+ * A brief, drawn by the design system's `BriefCard`: what it covers (the page,
+ * or the one record it was limited to) and when it was read, the summary, the
+ * rows with their presses, the recommendation, and the follow-ups, each asked
+ * in this conversation.
+ */
+function Brief({ brief, on }: { brief: AssistantBriefCard; on: CardHandlers }) {
+  const record = brief.scope.record;
+  const word = record ? recordWord(record) : null;
+  const scope =
+    record && word
+      ? `${word.charAt(0).toUpperCase()}${word.slice(1)} ${record.id}`
+      : brief.scope.title;
+  const recommended = brief.recommended;
+  return (
+    <BriefCard
+      scope={scope}
+      asOf={`As of ${fmtTime(brief.as_of)}`}
+      summary={brief.summary}
+      needs={brief.needs.map((need) => ({
+        key: `${need.ref.kind}:${need.ref.id}`,
+        text: need.text,
+        ...(need.detail ? { detail: need.detail } : {}),
+        tone: need.tone,
+        action: briefPress(need.action, on),
+      }))}
+      recommended={
+        recommended ? { text: recommended.text, action: briefPress(recommended.action, on) } : null
+      }
+      followUps={brief.follow_ups.map((question) => ({
+        key: question,
+        question,
+        onSelect: () => on.ask(question),
+      }))}
+    />
+  );
+}
+
 /** One card of an answer, drawn as the design system's component for its kind. */
 export function CardBlock({
   event,
@@ -1068,6 +1130,8 @@ export function CardBlock({
       );
     case "file":
       return <FilesCard card={card.file} />;
+    case "brief":
+      return <Brief brief={card.brief} on={on} />;
   }
 }
 
