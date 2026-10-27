@@ -369,7 +369,7 @@ func (e *Engine) seatCompactor(c *Company, handle string, use auxspend.Use) comp
 // auxSpendStopBudget is how long an orderly stop waits for the ledger's last
 // flush.
 //
-// FIVE SECONDS. A flush holds at most one [auxspend.FlushInterval] of records —
+// FIVE SECONDS. A flush holds at most one [coalesce.FlushInterval] of records —
 // a few dozen on a busy node — and each is one publish to a broker that is up,
 // so five seconds is orders of magnitude over what it needs; and its first
 // refusal ends it, so a stop with no member reachable spends at most this

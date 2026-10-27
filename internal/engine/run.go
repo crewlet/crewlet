@@ -2055,7 +2055,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
 	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
-	// it and on their cadence (auxspend.FlushInterval). Calls made before
+	// it and on their cadence (coalesce.FlushInterval). Calls made before
 	// it — an apply's first passes — wait in their buckets for its first
 	// tick, and [Engine.teardown] flushes whatever is left.
 	e.auxSpend.Run(context.WithoutCancel(ctx))

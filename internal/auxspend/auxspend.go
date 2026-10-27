@@ -44,26 +44,29 @@
 //
 // A [Ledger] holds a bucket per (stage, seat or person, turn, purpose, model,
 // provider entry, company day) and publishes each as one record when it
-// flushes — every [FlushInterval]; for one turn's buckets, before the turn's
-// end and before its reflection pass's sentinel are published; and at the
-// node's stop. A compaction of seventy rewrites is one record; an
+// flushes — every [coalesce.FlushInterval]; for one turn's buckets, before the
+// turn's end and before its reflection pass's sentinel are published; and at
+// the node's stop. A compaction of seventy rewrites is one record; an
 // ordinary turn's prefetch is one per call it made, which is what it always
 // was. The DAY IS IN THE KEY, so a bucket closes at midnight on the company's
 // clock rather than straddling it, and the record is stamped with its last
 // call's instant — the day the counters charged it in — however late its flush
-// ran.
+// ran. The fold, the flush, the backlog and the stop are internal/coalesce's,
+// which the reads of unit repositories are recorded by too: this package says
+// only what a record of spend is.
 //
 // # What a crash costs
 //
 // A bucket lives in memory until it is published, and so does a record whose
 // publish failed: such a record is kept — sealed, with its id and its instant,
 // so the retry the next flush makes is the same event and every reader's
-// de-duplication collapses a publish that in fact landed — up to [MaxPending]
-// of them, past which the oldest is dropped and said. So a process that dies
-// loses the buckets still open, at most one flush interval of records, PLUS
-// every refused record it was still holding — up to [MaxPending], most of an
-// hour of a busy company, when it dies during a broker outage. The counters
-// already hold that spend either way, and the rollups are short by it.
+// de-duplication collapses a publish that in fact landed — up to
+// [coalesce.MaxPending] of them, past which the oldest is dropped and said
+// with its tokens. So a process that dies loses the buckets still open, at
+// most one flush interval of records, PLUS every refused record it was still
+// holding — up to [coalesce.MaxPending], most of an hour of a busy company,
+// when it dies during a broker outage. The counters already hold that spend
+// either way, and the rollups are short by it.
 package auxspend
 
 import (

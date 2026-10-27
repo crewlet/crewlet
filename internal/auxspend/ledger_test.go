@@ -3,7 +3,6 @@ package auxspend_test
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // recorder is a publisher that keeps what it was handed, refusing while told
@@ -159,188 +157,10 @@ func TestATurnsEndFlushesThatTurnsBucketsAlone(t *testing.T) {
 	}
 }
 
-// A REFUSED PUBLISH IS PUBLISHED AGAIN, AS THE SAME EVENT.
-//
-// The record is the only account the rollups will ever have of those calls,
-// so a broker that refused it is asked again by the next flush — with the id
-// and the instant it was sealed with, so a publish reported failed that had in
-// fact landed is collapsed by the store's (time, id) key and the live window's
-// id index rather than counted twice.
-func TestARefusedRecordIsPublishedAgainAsTheSameEvent(t *testing.T) {
-	t.Parallel()
-	pub := &recorder{refuse: true}
-	l := auxspend.NewLedger(pub)
-	l.Add(call(types.AuxKnowledgeQuery, "t-1", 0, 100, 10))
-	l.Add(call(types.AuxMemoryFilter, "t-2", 0, 70, 7))
-	l.Flush(t.Context())
-	// ONE REFUSAL ENDS THE FLUSH: a broker that refused one record is down
-	// for the next, and a backlog asked record by record would spend every
-	// flush of an outage on refusals.
-	if pub.refused != 1 || len(pub.got) != 0 {
-		t.Fatalf("refused %d, published %d — want one attempt that was refused",
-			pub.refused, len(pub.got))
-	}
-	sealedID := map[string]bool{}
-	pub.mu.Lock()
-	pub.refuse = false
-	pub.mu.Unlock()
-	l.Add(call(types.AuxKnowledgeQuery, "t-1", time.Minute, 50, 5))
-	l.Flush(t.Context())
-	got := pub.records(t)
-	if len(got) != 3 {
-		t.Fatalf("records = %+v, want the two refused and the new one", got)
-	}
-	var knowledge []int
-	for _, r := range got {
-		if r.Purpose == types.AuxKnowledgeQuery {
-			knowledge = append(knowledge, r.InputTokens)
-		}
-	}
-	if len(knowledge) != 2 || knowledge[0] != 100 || knowledge[1] != 50 {
-		t.Errorf("the knowledge records = %v, want the refused 100 first and unchanged — a "+
-			"later call is a new record, never added to one already sealed", knowledge)
-	}
-	for _, ev := range pub.got {
-		if sealedID[ev.ID.String()] {
-			t.Errorf("record %s was published twice", ev.ID)
-		}
-		sealedID[ev.ID.String()] = true
-	}
-
-	// AND THE RETRY IS THE SAME EVENT: refused once more and then let
-	// through, a record keeps its id and its instant.
-	pub.mu.Lock()
-	pub.refuse = true
-	pub.mu.Unlock()
-	l.Add(call(types.AuxEpisodeSummary, "t-3", 0, 10, 1))
-	l.Flush(t.Context())
-	l.Flush(t.Context())
-	pub.mu.Lock()
-	pub.refuse = false
-	pub.mu.Unlock()
-	l.Flush(t.Context())
-	l.Flush(t.Context())
-	last := pub.got[len(pub.got)-1]
-	if rec, _ := events.DataAs[*types.AuxiliarySpend](last); rec.Purpose != types.AuxEpisodeSummary ||
-		!last.Timestamp.Equal(rec.EndedAt) || len(pub.got) != 4 {
-		t.Errorf("after two refusals the record was published %d times in all, last %+v",
-			len(pub.got)-3, rec)
-	}
-}
-
-// THE BACKLOG IS BOUNDED, and what leaves it is the OLDEST: a broker that has
-// refused for an hour costs the rollups that hour's oldest records, never an
-// unbounded heap.
-//
-// At [backlogBound] rather than MaxPending: the trim and the seal-order merge
-// are the same branches at any bound, and reaching 4096 took a refused flush
-// per record, each copying the whole backlog — 32 s of the suite under -race.
-// ONE FLUSH PER ADD all the same, because the open buckets are a map: only a
-// flush between adds seals records in the order they were added, which is the
-// order the assertions read.
-func TestARefusedBacklogIsBoundedOldestFirst(t *testing.T) {
-	t.Parallel()
-	pub := &recorder{refuse: true}
-	l := auxspend.NewLedgerBounded(pub, backlogBound, discard)
-	for i := range backlogBound + 3 {
-		c := call(types.AuxMemoryFilter, "t", time.Duration(i)*time.Second, i, 0)
-		c.Use.TurnID = "t-" + time.Duration(i).String()
-		l.Add(c)
-		l.Flush(t.Context())
-	}
-	pub.mu.Lock()
-	pub.refuse = false
-	pub.mu.Unlock()
-	l.Flush(t.Context())
-	got := pub.records(t)
-	if len(got) != backlogBound {
-		t.Fatalf("published %d after the outage, want the %d the backlog holds",
-			len(got), backlogBound)
-	}
-	for _, r := range got {
-		if r.InputTokens < 3 {
-			t.Fatalf("record with %d input tokens survived: the oldest three should "+
-				"have been dropped", r.InputTokens)
-		}
-	}
-}
-
-// A TURN'S REFUSED FLUSH JOINS THE BACKLOG AT ITS END, because its records are
-// the newest there are.
-//
-// A turn's flush takes only that turn's buckets, never the backlog, so what it
-// hands back is newer than everything already waiting. Put in front, the
-// bound's trim dropped the turn's fresh records as "the oldest" at every turn's
-// end of an outage while the hour-old backlog stayed, and the retry published
-// newest first.
-func TestARefusedTurnFlushIsTheNewestInTheBacklog(t *testing.T) {
-	t.Parallel()
-	pub := &recorder{refuse: true}
-	l := auxspend.NewLedgerBounded(pub, backlogBound, discard)
-	for i := range backlogBound {
-		c := call(types.AuxMemoryFilter, "t", time.Duration(i)*time.Second, i+1, 0)
-		c.Use.TurnID = "old-" + time.Duration(i).String()
-		l.Add(c)
-		l.Flush(t.Context())
-	}
-	// Two turns end during the outage, each flushing its own bucket.
-	for i, turn := range []string{"new-1", "new-2"} {
-		c := call(types.AuxKnowledgeQuery, turn, time.Hour, 1_000_000+i, 0)
-		l.Add(c)
-		l.FlushTurn(t.Context(), turn)
-	}
-	pub.mu.Lock()
-	pub.refuse = false
-	pub.mu.Unlock()
-	l.Flush(t.Context())
-	got := pub.records(t)
-	if len(got) != backlogBound {
-		t.Fatalf("published %d after the outage, want the %d the backlog holds",
-			len(got), backlogBound)
-	}
-	if got[0].InputTokens != 3 {
-		t.Errorf("the backlog's first record has %d input tokens, want 3 — the two oldest "+
-			"dropped and the rest published oldest first", got[0].InputTokens)
-	}
-	tail := got[len(got)-2:]
-	if tail[0].TurnID != "new-1" || tail[1].TurnID != "new-2" {
-		t.Errorf("the backlog ends with %s, %s — want the two turns' records, newest last",
-			tail[0].TurnID, tail[1].TurnID)
-	}
-	for i := 1; i < len(got)-2; i++ {
-		if got[i].InputTokens < got[i-1].InputTokens {
-			t.Fatalf("record %d (%d tokens) published after a newer one (%d tokens)",
-				i, got[i].InputTokens, got[i-1].InputTokens)
-		}
-	}
-}
-
-// backlogBound is the backlog cases' bound: past the three records the first
-// case overflows by and the two turns the second adds, so each trims from a
-// backlog that keeps a run of older records whose order can be checked.
-const backlogBound = 8
-
-// discard is the backlog cases' logger. Each refused flush warns once, and the
-// outage they stage is the point rather than news.
-var discard = slog.New(slog.DiscardHandler)
-
-// A RUNNING NODE KEEPS 4096 REFUSED RECORDS, the figure MaxPending argues for:
-// under three megabytes, most of an hour of a busy company's broker outage.
-// The backlog cases run at a bound of their own, so this is what ties the
-// figure they skip filling to the one every ledger NewLedger builds is held
-// to.
-func TestALedgerKeepsMaxPendingRefusedRecords(t *testing.T) {
-	t.Parallel()
-	if auxspend.MaxPending != 4096 {
-		t.Errorf("MaxPending = %d, want 4096", auxspend.MaxPending)
-	}
-	if got := auxspend.PendingBound(auxspend.NewLedger(&recorder{})); got != auxspend.MaxPending {
-		t.Errorf("NewLedger keeps %d refused records, want MaxPending (%d)", got, auxspend.MaxPending)
-	}
-}
-
 // THE STOP FLUSHES WHAT THE TIMER HAS NOT: the last calls a draining node's
-// passes made are published before the stream it publishes on closes.
+// passes made are published before the stream it publishes on closes. The
+// timer, the refusals and the backlog are internal/coalesce's, and its suite
+// holds them; this holds that the ledger runs on them.
 func TestAStopFlushesWhatTheTimerHasNot(t *testing.T) {
 	t.Parallel()
 	pub := &recorder{}
@@ -379,17 +199,6 @@ func TestAPersonsSpendNamesThePerson(t *testing.T) {
 	}
 	if pub.got[0].Source != "maya" {
 		t.Errorf("source = %q, want the person", pub.got[0].Source)
-	}
-}
-
-// THE LEDGER FLUSHES ON THE USAGE DOMAIN'S CADENCE, the one the live meters are
-// pushed on: a different one would leave the auxiliary spend in a figure
-// trailing the meter above it by more than one of the meter's refreshes.
-func TestTheLedgerFlushesOnTheUsageCadence(t *testing.T) {
-	t.Parallel()
-	if auxspend.FlushInterval != usage.FlushInterval {
-		t.Fatalf("auxspend.FlushInterval = %s, usage.FlushInterval = %s",
-			auxspend.FlushInterval, usage.FlushInterval)
 	}
 }
 
