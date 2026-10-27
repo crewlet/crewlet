@@ -1118,8 +1118,12 @@ a ticket and cannot submit its work. The URL has to reach a listener: an
 refused for its seats by naming `api.port` rather than handing a box an
 endpoint nothing answers (a node without `ingress` is reached through the
 ingress nodes, whatever its own port). With `api.public.port` set the bridge
-is served on that public listener and nowhere else, so the URL names it. Host
-mode needs none of this.
+is served on that public listener and nowhere else, so the URL names it. A
+loopback URL serves a box on the engine host in either local cell: a `direct`
+box dials it as written, and a `container` box is handed the runtime's name for
+the engine host in its place
+([Local sandboxes](code-sandbox.md#local-sandboxes)). Host mode needs none of
+this.
 
 > **In a fleet, that URL is the fleet's, the same on every node.** A session
 > is a live tool surface — the seat's MCP children, its skill guard, its

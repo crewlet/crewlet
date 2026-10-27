@@ -477,7 +477,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 				"ANTHROPIC_API_KEY":           "sk-test",
 			},
 		},
-	})
+	}, sandbox.NewFakeSandbox("box"))
 	if got := env["OTEL_EXPORTER_OTLP_ENDPOINT"]; got != "https://our-own-collector.example" {
 		t.Errorf("the engine overrode the operator's collector: %q", got)
 	}
@@ -488,5 +488,57 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	}
 	if env["ANTHROPIC_API_KEY"] != "sk-test" {
 		t.Errorf("the run environment lost a credential: %q", env["ANTHROPIC_API_KEY"])
+	}
+}
+
+// aliasedBox is a box whose network is not the engine host's, as a container
+// box's is: it names the host by alias.
+type aliasedBox struct {
+	*sandbox.FakeSandbox
+	alias string
+}
+
+func (b aliasedBox) EngineHost() string { return b.alias }
+
+// THE RECEIVER IS REACHED AS THE BOX DIALS IT. Its base is written in the
+// engine host's network, and on a single-host install that is loopback, which
+// inside a container is the container: every span a containerised run
+// exported went nowhere. An operator's own endpoint is in the box's network
+// already, and is left exactly as written.
+func TestTheRunsEndpointIsTheReceiverAsTheBoxDialsIt(t *testing.T) {
+	t.Parallel()
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "http://127.0.0.1:8000",
+		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Telemetry: receiver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := sandbox.LaunchRequest{
+		Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
+		Spec: sandbox.Spec{CodingAgent: "claude-code", TimeoutSec: 900},
+	}
+	container := aliasedBox{FakeSandbox: sandbox.NewFakeSandbox("c"), alias: "host.docker.internal"}
+
+	got := sandbox.RunEnvFor(manager, req, container)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+	if !strings.HasPrefix(got, "http://host.docker.internal:8000/otlp/") {
+		t.Errorf("a container box's endpoint = %q, want the receiver by the engine host's alias", got)
+	}
+	direct := sandbox.RunEnvFor(manager, req, sandbox.NewFakeSandbox("d"))["OTEL_EXPORTER_OTLP_ENDPOINT"]
+	if !strings.HasPrefix(direct, "http://127.0.0.1:8000/otlp/") {
+		t.Errorf("a box on the host's network was handed %q, want the receiver as written", direct)
+	}
+
+	req.Spec.Env = map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"}
+	if own := sandbox.RunEnvFor(manager, req, container)["OTEL_EXPORTER_OTLP_ENDPOINT"]; own != "http://127.0.0.1:4318" {
+		t.Errorf("the operator's own endpoint was rewritten to %q", own)
 	}
 }

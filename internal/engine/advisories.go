@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"runtime"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -52,5 +53,24 @@ func reportCompanyAdvisories(ctx context.Context, logger *slog.Logger,
 			attrs = append(attrs, slog.String("unit", w.Unit))
 		}
 		logger.LogAttrs(ctx, slog.LevelWarn, "config_advisory", attrs...)
+	}
+}
+
+// reportContainerReach logs [ContainerReachWarnings] for the applied revision
+// against this node's own Tier A and host, as config_advisory lines at WARN.
+//
+// AT APPLY, for [reportCompanyAdvisories]' reason, and because only this
+// node knows both halves: the bind is its Tier A and the cell is the company
+// it now runs. `config` names the tier the remedy is written in.
+func reportContainerReach(ctx context.Context, logger *slog.Logger,
+	target coord.Activation, boot *config.Bootstrap, cfg *config.Company,
+) {
+	for _, w := range ContainerReachWarnings(boot, cfg, runtime.GOOS) {
+		logger.LogAttrs(ctx, slog.LevelWarn, "config_advisory",
+			slog.String("config", "bootstrap"),
+			slog.String("revision", target.RevisionID),
+			slog.Int64("epoch", target.Epoch),
+			slog.String("path", w.Path),
+			slog.String("detail", w.Message))
 	}
 }
