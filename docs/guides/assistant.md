@@ -240,12 +240,11 @@ from that host's loopback only, and never relayed to another node. A run in a
 host in place of loopback
 ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)) and is held to
 loopback all the same, so it can do nothing a confined run cannot. A runtime
-that delivers the box's calls over the host's loopback (Docker Desktop) meets
-that hold, but the bridge refuses the host name such a call carries for now,
-as it refuses a seat's
-([Bring your own image](../concepts/code-sandbox.md#bring-your-own-image));
-one that delivers them from its bridge network (Docker Engine and Podman on
-Linux) does not meet it. So run deep work `direct` or remote on either.
+that delivers the box's calls over the host's loopback (Docker Desktop, and
+Podman's machine on macOS and Windows) meets that hold, and the bridge admits
+the runtime's name for the host those calls carry; one that delivers them from
+its bridge network (Docker Engine and Podman on Linux) does not, so run deep
+work `direct` or remote there.
 Don't do this where seats run boxes on other machines: they are given the same
 address, and a box on another machine cannot dial it.
 

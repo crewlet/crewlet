@@ -62,6 +62,21 @@ func EngineAddress(box Sandbox, raw string) string {
 	return rehost(raw, aliased.EngineHost())
 }
 
+// EngineHostName reports whether host — a bare name, no port — is one a
+// container runtime gives the engine host inside a box it starts: the name
+// [EngineAddress] hands a box in place of loopback, under Docker or under
+// Podman. In any case, as DNS compares names.
+//
+// For the engine's own listeners to admit, beside a loopback name, as the Host
+// of a call that arrives on loopback: Docker Desktop and Podman's machine on
+// macOS and Windows deliver a container's call to the engine host there,
+// under the name it dialled. Both names are in `.internal`, which ICANN keeps
+// for private use, so no public DNS answers either and no page a browser
+// loads from the internet is served under one.
+func EngineHostName(host string) bool {
+	return strings.EqualFold(host, dockerHostAlias) || strings.EqualFold(host, podmanHostAlias)
+}
+
 // EngineServers is servers as box dials them: [EngineAddress] applied to
 // every HTTP server's URL, in a map of its own. A stdio server runs inside
 // the box and dials nothing of the engine's, so it is copied as it is.

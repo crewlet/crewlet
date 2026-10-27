@@ -378,13 +378,7 @@ see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 | **Local — container** (recommended on one host) | `local: {image: …}` + `run_in: container` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the coding CLI in it, or a stock one plus a setup step that installs it. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
 | **Local — direct** | `local: {}` + `run_in: direct` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up, but the coding agent runs as the engine user with every permission, so it isolates *state*, not the host: it can read whatever your account can. A dedicated VM only. |
 
-For a local instance, a workstation included, put code work in a container —
-except, for now, on Docker Desktop, where a seat's executor in a container
-reaches none of its tools
-([Bring your own image](../concepts/code-sandbox.md#bring-your-own-image)), so
-code work there runs in **E2B**, or **direct** only on a host you are willing to
-hand an autonomous agent
-([Security model](../concepts/code-sandbox.md#security-model)). Elsewhere:
+For a local instance, a workstation included, put code work in a container:
 
 ```yaml
 providers:

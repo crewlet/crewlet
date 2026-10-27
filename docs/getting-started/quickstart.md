@@ -914,7 +914,7 @@ each), then wire them in:
   `direct` into a container with
   [an image of your own](../concepts/code-sandbox.md#bring-your-own-image),
   which dials `CREWLET_MCP_BRIDGE_URL` (on Linux with `api.host` not bound to
-  loopback, and not yet on Docker Desktop)
+  loopback)
 - Bring your team in: add a human seat for each person who is to sign in
   (**Org chart › Edit org › Add human seat**), then invite them onto it or create
   them on it from its card in **Company › Org chart**, every person holds a

@@ -105,6 +105,17 @@
 // relayed straight there ([route]). ADR-0056 records the decision, and why
 // neither a proxy to the holder's address nor an MCP session on the node a
 // call lands on would hold it.
+//
+// # The Host a call may name
+//
+// ITS OWN GUARD AGAINST DNS REBINDING, in place of the SDK's: a call that
+// arrives on a loopback address is admitted under a loopback host name or a
+// container runtime's name for the engine host, and refused 403 under any
+// other ([hostAdmitted]), on a box's own request and a relayed one alike. The
+// SDK's guard admitted loopback names alone, and Docker Desktop and Podman's
+// machine deliver a container box's call to the host's loopback under the
+// runtime's name, so every executor in a container there had none of its
+// seat's tools.
 package mcpbridge
 
 import (
@@ -134,6 +145,7 @@ import (
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -430,7 +442,11 @@ func New(opts Options) (*Bridge, error) {
 	// a coding agent legitimately goes quiet for as long as a build or a
 	// test suite takes, so an idle clock here would cut a live run off from
 	// its tools mid-job for no reason the run could see.
-	b.streamable = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+	//
+	// THE HOST CHECK IS THIS PACKAGE'S OWN ([admitHosts]), in front of the
+	// handler every request reaches, a box's own and a relayed one alike,
+	// in place of the SDK's: see [hostAdmitted] for what the SDK's refused.
+	b.streamable = admitHosts(mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		sub, ok := b.parse(r.PathValue("token"))
 		if !ok {
 			return nil
@@ -440,8 +456,77 @@ func New(opts Options) (*Bridge, error) {
 			return nil
 		}
 		return opened.server.MCP()
-	}, nil)
+	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true}))
 	return b, nil
+}
+
+// admitHosts is next behind the bridge's DNS-rebinding guard: a request that
+// arrived on a loopback address and names a Host [hostAdmitted] does not admit
+// is refused 403, as the SDK's own guard refuses it, before the MCP machinery
+// sees it.
+func admitHosts(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostAdmitted(r) {
+			// DEBUG, as every refusal anyone who reaches the listener can
+			// cause is ([Bridge.refuse]).
+			log.DebugContext(r.Context(), "mcp_bridge_host_refused", "host", r.Host,
+				"detail", "a request on a loopback address named a host that is neither "+
+					"loopback nor a container runtime's name for the engine host")
+			http.Error(w, fmt.Sprintf("Forbidden: invalid Host header %q", r.Host),
+				http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostAdmitted reports whether r's Host may reach the bridge over the
+// connection r arrived on.
+//
+// DNS REBINDING is what this guards against: a page in a browser on the engine
+// host, under a name its author points at 127.0.0.1, can send requests to a
+// loopback listener, and every one carries that page's own name as its Host.
+// So a request that arrived on a loopback address is admitted only under a
+// Host that is loopback ([sandbox.LoopbackHost]) — which is where the SDK's
+// guard stops — or one of the names a container runtime gives the engine host
+// inside a box ([sandbox.EngineHostName]).
+//
+// THE RUNTIME'S NAMES, because a container box dials the engine host by one
+// ([sandbox.EngineAddress]), and Docker Desktop and Podman's machine on macOS
+// and Windows deliver that call to the host's loopback, under the name the
+// box dialled. The SDK's guard refused every one of them with 403, so a seat's
+// executor in a container on such a host started with none of its seat's
+// tools. Neither name is one a page from the internet is served under: both
+// are in `.internal`, reserved for private use, and resolve, where they
+// resolve at all, through the runtime. Docker Engine and Podman on Linux
+// deliver the same call from the container's bridge network, to an address
+// this guard does not judge.
+//
+// A request on any other address came over a network the operator chose to
+// bind, and is the token's to admit or refuse. Read from the connection's own
+// address, which a relayed request carries from the node it landed on
+// (internal/httprelay), never from a header.
+func hostAdmitted(r *http.Request) bool {
+	local, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if !ok || local == nil || !loopbackAddr(local.String()) {
+		return true
+	}
+	host := r.Host
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	return sandbox.LoopbackHost(host) || sandbox.EngineHostName(host)
+}
+
+// loopbackAddr reports whether addr, a host and port or a bare host, is a
+// loopback address.
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // Open registers a run's session and returns the URL its box should dial.

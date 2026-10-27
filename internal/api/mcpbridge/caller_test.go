@@ -3,6 +3,7 @@ package mcpbridge_test
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -139,6 +140,61 @@ func TestAClosedDeepRunsTokenIsRefused(t *testing.T) {
 	}
 	if n := s.surface.calls.Load(); n != 0 {
 		t.Fatalf("%d calls reached a closed run's surface", n)
+	}
+}
+
+// A CALL ON LOOPBACK IS ADMITTED UNDER A LOOPBACK NAME OR A CONTAINER RUNTIME'S
+// NAME FOR THE ENGINE HOST, AND UNDER NO OTHER.
+//
+// Docker Desktop and Podman's machine on macOS and Windows deliver a container
+// box's call to the engine host's loopback, under the name the box dialled —
+// host.docker.internal, host.containers.internal — and the SDK's own guard
+// refused every such call with 403, so a seat's executor in a container there
+// had none of its tools. The guard against DNS rebinding still holds: any
+// other name on a loopback connection is refused, a name that merely starts
+// with a runtime's included. Over a real listener on 127.0.0.1, so the address
+// judged is the connection's own.
+func TestALoopbackCallIsAdmittedUnderTheRuntimesNameForTheHost(t *testing.T) {
+	t.Parallel()
+	s := serve(t)
+	url := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "run-1", Launch: "job-1",
+		Surface: s.surface, Caller: nobody{bound: true}})
+	if url == "" {
+		t.Fatal("the bridge opened no session")
+	}
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(s.server.URL, "http://"))
+	if err != nil {
+		t.Fatalf("server address: %v", err)
+	}
+	for host, admitted := range map[string]bool{
+		"127.0.0.1:" + port:                                true,
+		"localhost:" + port:                                true,
+		"[::1]:" + port:                                    true,
+		"host.docker.internal:" + port:                     true,
+		"host.containers.internal:" + port:                 true,
+		"Host.Docker.Internal:" + port:                     true,
+		"host.docker.internal":                             true,
+		"rebound.example.com:" + port:                      false,
+		"host.docker.internal.rebound.example.com:" + port: false,
+		"docker.internal:" + port:                          false,
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url,
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		res, err := s.server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("post as %s: %v", host, err)
+		}
+		_ = res.Body.Close()
+		if got := res.StatusCode != http.StatusForbidden; got != admitted {
+			t.Errorf("Host %s on loopback: admitted=%v (status %d), want %v",
+				host, got, res.StatusCode, admitted)
+		}
 	}
 }
 
