@@ -78,6 +78,45 @@ func TestALaunchDialsTheBridgeWhereItsCellReachesIt(t *testing.T) {
 	}
 }
 
+// A CONTAINER CELL'S FIX SAYS WHAT A LOOPBACK ADDRESS NEEDS THERE. The line
+// tells the operator to set the fleet's address, and that a loopback one
+// reaches a container box on this host under its runtime's name for the host,
+// which is so wherever the bridge hears that name: on Docker Desktop and
+// Podman's machine it arrives on the host's loopback, which the bridge admits,
+// and on Linux it arrives from the bridge network, which a loopback bind never
+// hears. A line without that condition sent an operator on Linux to a value
+// that leaves every executor without its tools.
+//
+// Mutation: drop the Linux clause from the fix and the bind goes unnamed.
+func TestAContainerCellsFixSaysWhatALoopbackAddressNeeds(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`name: Acme
+providers:
+  sandbox:
+    local: {image: example.com/coding:1}
+    default_run_in: container
+  llm:
+    main:
+      model: claude-golden
+roles:
+  - name: SWE
+    llm: main
+`))
+	if err != nil {
+		t.Fatalf("the fixture does not parse: %v", err)
+	}
+	gaps := bridgeGaps(cfg, false, hostOnlyBridge(t))
+	if len(gaps) != 1 || gaps[0].cell != config.PlacementContainer {
+		t.Fatalf("gaps = %+v, want the container cell alone", gaps)
+	}
+	for _, want := range []string{mcpbridge.BaseURLVar, "runtime's name for the host",
+		"on Linux", "beyond loopback", "api.host", "api.public.host"} {
+		if !strings.Contains(gaps[0].fix, want) {
+			t.Errorf("the container cell's fix does not say %q: %s", want, gaps[0].fix)
+		}
+	}
+}
+
 // bridgeReachCompany is a company with one seat whose executor can land in
 // the direct cell (its head) and the e2b cell (its fallback), and one whose
 // executor lands in direct alone.

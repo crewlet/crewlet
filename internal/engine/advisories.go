@@ -122,11 +122,20 @@ func bridgeGaps(cfg *config.Company, offline bool, bridge *mcpbridge.Bridge) []b
 			// network of its own, and a `direct` box on a node serving no API
 			// shares the loopback but has no listener there to dial. Either
 			// way the fleet's address is the box's only one.
+			//
+			// THE LINUX BIND IS PART OF THE FIX: a loopback address reaches a
+			// container box under its runtime's name for the host, which Docker
+			// Engine and Podman on Linux deliver from the bridge network, where
+			// a loopback bind never hears it (ContainerReachWarnings). Docker
+			// Desktop and Podman's machine deliver it on the host's loopback,
+			// which the bridge admits under that name (internal/api/mcpbridge).
 			fix = "this node hands a box in this cell no listener of its own (the box is " +
 				"not on this host's loopback, or this node serves no API there), so it " +
 				"dials the fleet's address alone: set " + mcpbridge.BaseURLVar + " to the " +
 				"fleet's address that box reaches (a loopback one reaches a container box " +
-				"on this host under its runtime's name for the host)"
+				"on this host under its runtime's name for the host, which on Linux needs " +
+				"the listener it names to bind beyond loopback: api.host, or " +
+				"api.public.host where api.public.port is set)"
 		}
 		at[box.Cell] = len(gaps)
 		gaps = append(gaps, bridgeGap{cell: box.Cell, seat: box.Seat.Handle, seats: 1, fix: fix})
