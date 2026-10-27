@@ -66,6 +66,8 @@ test("a key is matched exactly, at its token's edges", () => {
   expect(mark("GOP-110 and GOP-11-b and gop-11 are not it.", reads).named.size).toBe(0);
   expect(mark("Is it GOP-11?", reads).text).toBe("Is it [task:GOP-11|GOP-11]?");
   expect(mark("(GOP-11)", reads).text).toBe("([task:GOP-11|GOP-11])");
+  expect(mark("Hold GOP-11.", reads).text).toBe("Hold [task:GOP-11|GOP-11].");
+  expect(mark("GOP-11, then", reads).text).toBe("[task:GOP-11|GOP-11], then");
 });
 
 test("words in code, a code block or a link are never matched", () => {
@@ -115,6 +117,7 @@ test("a record read twice is one read, in the order first read, with the fresher
   const fresher = task("GOP-11", "Android 12 crash", "in_progress");
   const { reads, others } = readsOf([first, seat("qa", "QA"), fresher, table("Workload")]);
   expect(reads.map((r) => r.id)).toEqual(["task:GOP-11", "seat:qa", "table:Workload\u0000"]);
+  expect(reads[2]!.label).toBe("Workload (0)");
   expect(reads[0]!.event).toBe(fresher);
   expect(others).toEqual([]);
 });

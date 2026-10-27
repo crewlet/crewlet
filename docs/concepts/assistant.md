@@ -92,7 +92,12 @@ it for a peek with the record's facts, its body and the list under it, and
 **Open** to go to its page. A record it read and never named is on one
 **Also read** line under the answer, with a chip of its own. A table's peek
 holds its rows, and it can be downloaded as CSV or XLSX from there, from the
-snapshot you were shown.
+snapshot you were shown. A list is one chip, named by what it read and how
+much ("Matching tasks (first 50 of 210)"), and its peek says which screen
+shows the rest. A read whose answer was too large for one step is listed too
+("... (too large to show here)"): its peek links the screen that shows all of
+it and says what to narrow, and the assistant is told it saw none of it, so it
+never answers as though it had.
 
 A read of a part of the engine that has no record of its own is drawn from the
 answer's own shape and named for what it read, never for the request: a list

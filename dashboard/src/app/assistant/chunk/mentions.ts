@@ -24,8 +24,9 @@
  *     write (an agent, a team, a project, a page, a space, an artifact, a
  *     schedule), exactly, as a whole phrase at the same boundaries, and only
  *     two characters or longer. Never a task's title, which is a sentence
- *     (a task is matched by its key), and never a table's or a record of no
- *     kind: those are listed under the answer.
+ *     (a task is matched by its key), and never a table's, a record of no
+ *     kind or a read too large to show: those are listed under the answer,
+ *     a list as one chip named by what it read and how many rows.
  *  3. In each run of text, the earliest mention wins; where two start at one
  *     place, the longer. Only a record's FIRST mention, in reading order, is
  *     its chip; the rest stay text.
@@ -38,6 +39,7 @@
 import type { ReactNode } from "react";
 import type { AssistantCardEvent } from "~/contract/assistant.ts";
 import { narrowCard } from "~/protocol/assistantWire.ts";
+import { fmtExact } from "~/lib/format.ts";
 
 type EntityKind = NonNullable<NonNullable<AssistantCardEvent["card"]["entity"]>["kind"]>;
 
@@ -78,6 +80,22 @@ export interface Mention {
   by: "key" | "name";
 }
 
+/**
+ * How much a list read holds, as its chip says it: "8", or "first 50 of 210"
+ * where the card holds only the first rows, or "first 20" where the answer
+ * says more lie past its page.
+ */
+function tableCount(t: {
+  rows: unknown[];
+  row_count: number;
+  truncated: boolean;
+  more?: boolean;
+}): string {
+  if (t.truncated) return `first ${fmtExact(t.rows.length)} of ${fmtExact(t.row_count)}`;
+  if (t.more) return `first ${fmtExact(t.row_count)}`;
+  return fmtExact(t.row_count);
+}
+
 function readOf(event: AssistantCardEvent): Read | null {
   const card = narrowCard(event.card);
   if (card === null) return null;
@@ -88,8 +106,23 @@ function readOf(event: AssistantCardEvent): Read | null {
       event,
       key: undefined,
       name: undefined,
-      label: t.title,
+      // ONE CHIP FOR THE LIST, named by what it read and how much: "Matching
+      // tasks (10)", never a chip per row.
+      label: `${t.title} (${tableCount(t)})`,
       title: t.title,
+    };
+  }
+  if (card.type === "oversize") {
+    const o = card.oversize;
+    // A READ PAST WHAT ONE STEP READS IS STILL A READ: named for what it
+    // read, it is listed with the others, and its peek says where all of it is.
+    return {
+      id: `oversize:${o.title}`,
+      event,
+      key: undefined,
+      name: undefined,
+      label: `${o.title} (too large to show here)`,
+      title: o.title,
     };
   }
   if (card.type === "entity") {

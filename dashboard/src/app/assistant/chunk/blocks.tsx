@@ -892,6 +892,7 @@ export function CardBlock({
   switch (card.type) {
     case "table":
     case "entity":
+    case "oversize":
       // A READ IS NEVER A CARD: its answer draws it, as a chip where the
       // answer names it and on the Also read line where it does not
       // (`reads.tsx`). Reaching here is a caller drawing a read as a card.

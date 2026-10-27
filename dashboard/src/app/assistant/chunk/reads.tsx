@@ -28,6 +28,7 @@ import {
   ActivityGlyph,
   ArrowUpRightGlyph,
   BotGlyph,
+  CircleAlertGlyph,
   CalendarClockGlyph,
   FileTextGlyph,
   FolderGlyph,
@@ -76,6 +77,12 @@ function kindWord(entity: AssistantEntityCard): string | undefined {
   return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
 }
 
+/** Words joined as a sentence says them: "project", "project or status", "project, status or assignee". */
+function listWords(words: readonly string[]): string {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
+}
+
 /** "1 row", "8 rows". */
 function rowCount(n: number): string {
   return `${fmtExact(n)} ${n === 1 ? "row" : "rows"}`;
@@ -102,17 +109,25 @@ function follow(href: string, on: CardHandlers) {
  */
 function OpenLink({ read, on }: { read: Read; on: CardHandlers }) {
   const card = read.event.card;
-  const link = card.type === "table" ? card.table?.open : card.entity?.open;
+  const link =
+    card.type === "table"
+      ? card.table?.open
+      : card.type === "oversize"
+        ? card.oversize?.open
+        : card.entity?.open;
   const to = link ? follow(link.href, on) : null;
   if (!link || !to) return null;
-  const words = card.type === "table" ? `Open in ${link.label}` : "Open";
+  // A LIST OPENS IN ITS SCREEN, NAMED: "Open in Search". A record opens
+  // itself, "Open", its key already said in the peek's head.
+  const screen = card.type === "table" || card.type === "oversize";
+  const words = screen ? `Open in ${link.label}` : "Open";
   return (
     <ButtonLink
       size="small"
       variant="ghost"
       href={to.href}
       onClick={to.onClick}
-      aria-label={card.type === "table" ? undefined : `Open ${read.label}`}
+      aria-label={screen ? undefined : `Open ${read.label}`}
       trailingIcon={<ArrowUpRightGlyph size="sm" />}
     >
       {words}
@@ -185,6 +200,9 @@ function EntityBody({ entity, on }: { entity: AssistantEntityCard; on: CardHandl
         />
       ) : null}
       {entity.text ? <ReplyProse text={entity.text} /> : null}
+      {entity.items_total && entity.items_total > items.length ? (
+        <p>{`Showing the first ${fmtExact(items.length)} of ${fmtExact(entity.items_total)}.`}</p>
+      ) : null}
       {items.length > 0 ? (
         <EntityList
           label={entity.title}
@@ -242,17 +260,56 @@ export function ReadChip({
       ) : null}
     </>
   );
+  if (card.type === "oversize" && card.oversize) {
+    const o = card.oversize;
+    const narrow = o.narrow ?? [];
+    return (
+      <RecordChip
+        label={text}
+        title={o.title}
+        glyph={<CircleAlertGlyph size="xs" />}
+        meta="Too large to show here"
+        actions={actions}
+      >
+        <p>
+          {o.open
+            ? "This read found more than one answer can hold, so none of it is shown here. Its screen shows all of it."
+            : "This read found more than one answer can hold, so none of it is shown here."}
+        </p>
+        {narrow.length > 0 ? (
+          <p>{`To see it here, ask again narrowed by ${listWords(narrow)}.`}</p>
+        ) : null}
+      </RecordChip>
+    );
+  }
   if (card.type === "table" && card.table) {
     const t = card.table;
+    // HOW MUCH IS HERE, as the peek says it: "8 rows", "First 50 of 210 rows",
+    // "First 20 rows" (a page, more past it).
+    const rows = t.truncated
+      ? `First ${fmtExact(t.rows.length)} of ${rowCount(t.row_count)}`
+      : t.more
+        ? `First ${rowCount(t.row_count)}`
+        : rowCount(t.row_count);
+    // THE CARD SAYS IT IS A PAGE, where a notice beside it used to: how much
+    // is here, and that its screen holds the rest.
+    const partial = t.truncated || t.more;
     return (
       <RecordChip
         label={text}
         title={t.title}
         glyph={<TableGlyph size="xs" />}
-        meta={t.window ? `${t.window} · ${rowCount(t.row_count)}` : rowCount(t.row_count)}
+        meta={t.window ? `${t.window} · ${rows}` : rows}
         actions={actions}
       >
         <TableRows table={t} />
+        {partial ? (
+          <p>
+            {t.open
+              ? `${rows} are shown here; ${t.open.label} shows all of them.`
+              : `${rows} are shown here.`}
+          </p>
+        ) : null}
       </RecordChip>
     );
   }

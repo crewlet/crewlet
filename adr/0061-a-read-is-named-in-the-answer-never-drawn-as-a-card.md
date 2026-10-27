@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant/wire`
-- **Enforced-by:** `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx` and `lib/markdown.test.tsx` (`prose`)
+- **Enforced-by:** `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx` and `lib/markdown.test.tsx` (`prose`)
 - **Cost-when-tried:** the drawer drew a folded card for every read a turn made. An answer on the Inbox that read two tasks, a table and an agent, and then both tasks again, stood six cards of about 140px each between the reader and the answer in a 560px drawer, each saying its key twice (in its summary and as its link's label), and the same record twice. An answer on Company › Brand added a blue notice per read and table cards whose CSV, XLSX and link wrapped onto a second line or not depending on the length of the title.
 - **Tag-status:** unreleased
 
@@ -58,8 +58,30 @@ span, a code block or a link's label.
   width, compact cards still cost about 165px for four reads and stack a
   surface per record; chips cost none, and the owner chose them.
 
-## What this does not decide
+## A read too large to show, and a page of one
 
-How the engine's notices about a read (a result too large to show, a table's
-first page) are drawn: they stay notices, as cards, until a notice can say
-which read it is about.
+**A read past what one step reads is still a read.** Its answer is never
+shown, but it is an oversize card (`OversizeCard`): named for what it read
+(the table it would have been, or its step), with the screen that shows all
+of it, built from the read's own arguments through the same link table every
+card's Open uses, and what the tool takes that would narrow it. The drawer
+lists it on the Also read line as "Matching tasks, ... (too large to show
+here)", whose peek says so, links that screen and names what to narrow. It
+replaced a notice that told a person inside the app to "open it in the app".
+
+**The model is told the read was cut**, never handed a bare notice: what it
+read, that none of it was shown, the bound, the fields the cut answer began
+with and what narrows it, and not to answer as though it read it.
+
+**A card that is a page says so itself.** A table carries `truncated` (rows
+cut to fit the card) and `more` (rows past the page the read asked for), and
+a record its `items_total`; the drawer says "first 20" on the chip and which
+screen shows the rest in the peek. The notice beside each shortened card is
+gone.
+
+Measured on a real company before deciding: every dedicated read stays under
+the step's 64 KiB at its defaults (the largest, the token breakdown, 55 KB).
+What crossed it were generic `api_request` reads of routes whose defaults are
+heavy: `GET /agents/{id}` without `history=false` answers 2.1 MB of whole
+transcripts. The route's documentation already names the flag, and the model
+is now told which fields the cut answer began with, so it can ask for less.
