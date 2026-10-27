@@ -1046,7 +1046,7 @@ it refused:
 
 | Field | Meaning |
 |---|---|
-| `config` | `company`: which tier. A node's start logs its Tier A's advisories under the same event with `config=bootstrap` (see [`crewlet run`](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing)) |
+| `config` | `company`: which tier. A node's start logs its Tier A's advisories under the same event with `config=bootstrap` (see [`crewlet run`](../reference/cli.md#every-start-says-what-its-tier-a-is-worth-knowing)), and so does an apply for the one advisory only the two tiers together raise: on a Linux node, a company that reaches the `container` cell while the listener a box dials binds loopback alone, which no container box can reach ([Local sandboxes](code-sandbox.md#local-sandboxes)) |
 | `revision`, `epoch` | The revision and the activation the node applied |
 | `path` | Where in the document the remedy is written |
 | `seat`, `unit` | The seat's handle or the unit's name the advisory is about — present only when it is about one |

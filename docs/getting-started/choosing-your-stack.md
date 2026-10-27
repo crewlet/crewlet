@@ -374,8 +374,20 @@ see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 | **None** | omit `providers.sandbox` | Roles use the native executor tool-loop; no code authoring. |
 | **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` | Sign up at <https://e2b.dev>, create an API key in the dashboard. Fastest path. |
 | **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`. |
-| **Local — container** | `local: {image: …}` + `run_in: container` | Docker/Podman on the engine host. Real host isolation, no E2B account. You supply an image with the coding CLI installed. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
-| **Local — direct** | `local: {}` + `run_in: direct` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the coding agent runs as the engine user, so it isolates *state*, not the host. Workstation or dedicated VM only. |
+| **Local — container** (recommended on one host) | `local: {image: …}` + `run_in: container` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the coding CLI in it, or a stock one plus a setup step that installs it. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
+| **Local — direct** | `local: {}` + `run_in: direct` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up, but the coding agent runs as the engine user with every permission, so it isolates *state*, not the host: it can read whatever your account can. A dedicated VM only. |
+
+For a local instance, a workstation included, put code work in a container:
+
+```yaml
+providers:
+  sandbox:
+    local:
+      image: node:22-bookworm       # plus the setup step that installs the CLI:
+                                    #   see "Bring your own image"
+    default_run_in: container
+    default_coding_agent: claude-code
+```
 
 `providers.sandbox` is a **catalogue**, so these are not exclusive: configure
 `e2b:` and `local:` together and give each seat its own `run_in` — the seat
