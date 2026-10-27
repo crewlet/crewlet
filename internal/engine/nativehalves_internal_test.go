@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -88,7 +89,9 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 			for _, p := range parsers {
 				routed = append(routed, p.Source())
 			}
-			var want []string
+			// THE ALARMS' WAKES ROUTE ON EVERY NODE, whatever halves it
+			// runs: a transition is routed by the chart alone.
+			want := []string{alarmwake.Source}
 			if tc.tracker {
 				want = append(want, tracker.Source)
 			}

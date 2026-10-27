@@ -36,6 +36,20 @@ const alarmGauge = metrics.AlarmActive
 // reads as "no data" on every dashboard, and "no data" is indistinguishable
 // from a node that stopped reporting.
 //
+// # Every transition is handed on, once
+//
+// The same transitions the log lines say are handed, one [AlarmTransition]
+// each, to whoever the node asked to be told ([Tracker.OnTransition]): the
+// engine, which publishes each as the inbound delivery the seats holding the
+// health grant are woken by. A transition rather than a level for the log
+// line's reason — a wake per evaluation would wake a seat six times a minute
+// about one alarm — and the record the wake derives from, so nothing commits
+// beside it (ADR-0065). The first evaluation's finds are
+// [TransitionFiringAtBoot], never fired: the tracker cannot tell an alarm
+// that started then from one that stood through the node's restart, and that
+// second case is also how a clear the node did not live to hand on is
+// answered — what still stands is said again.
+//
 // A Tracker is safe for concurrent use: the heartbeat evaluates every
 // [AlarmInterval], the trim tick evaluates again the moment its own
 // measurements land, on a different goroutine, and the health envelope reads
@@ -50,6 +64,11 @@ type Tracker struct {
 
 	mu     sync.Mutex
 	firing map[instance]firing
+
+	// node and handOn are who is told of every transition, and as which
+	// node ([Tracker.OnTransition]); a nil handOn tells nobody.
+	node   string
+	handOn func(AlarmTransition)
 
 	// order is the kinds the latest evaluation reported, in the order it
 	// reported them (the table's own), and observed whether any evaluation
@@ -111,6 +130,33 @@ func NewTracker(rec *metrics.Recorder, now func() time.Time) *Tracker {
 	return &Tracker{rec: rec, now: now, logger: log, firing: map[instance]firing{}}
 }
 
+// OnTransition makes the tracker hand fn every transition it makes from now
+// on, each stamped as node's: an instance fired, cleared, or found up by the
+// tracker's first evaluation ([TransitionFiringAtBoot]) — one per instance, as
+// the log lines are, in the order the evaluation made them.
+//
+// fn IS CALLED UNDER THE TRACKER'S LOCK, so two evaluations that race (the
+// heartbeat and the trim tick) hand their transitions on in the order the
+// tracker made them; it must not block and must not call the tracker. Set it
+// before the first evaluation, or what that evaluation finds up is told to the
+// log alone.
+func (t *Tracker) OnTransition(node string, fn func(AlarmTransition)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.node, t.handOn = node, fn
+}
+
+// transition is one instance's change, as [Tracker.OnTransition] hands it on.
+func (t *Tracker) transition(key instance, change TransitionChange, detail string,
+	since, at time.Time) AlarmTransition {
+
+	return AlarmTransition{
+		ID:   TransitionID(t.node, key.kind, key.domain, change, since),
+		Node: t.node, Kind: key.kind, Domain: key.domain, Change: change, Detail: detail,
+		Since: since, At: at,
+	}
+}
+
 // Observe records one evaluation and returns the alarms currently up, in the
 // table's own order.
 //
@@ -154,6 +200,13 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// THE FIRST EVALUATION'S FINDS were up before the tracker looked, for
+	// all it can say: handed on as found at boot, never as fired.
+	raise := TransitionFired
+	if !t.observed {
+		raise = TransitionFiringAtBoot
+	}
+	var made []AlarmTransition
 	t.observed = true
 	t.order = t.order[:0]
 	for _, a := range alarms {
@@ -171,6 +224,9 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		t.firing[r.key] = firing{since: now, detail: r.detail}
 		t.logger.WarnContext(ctx, "alarm_raised", r.key.attrs(
 			"detail", r.detail, "remedy", r.remedy)...)
+		if t.handOn != nil {
+			made = append(made, t.transition(r.key, raise, r.detail, now, now))
+		}
 	}
 	for _, key := range slices.SortedFunc(maps.Keys(t.firing), compareInstances) {
 		if live[key] {
@@ -180,6 +236,12 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 		delete(t.firing, key)
 		t.logger.WarnContext(ctx, "alarm_cleared", key.attrs(
 			"for", spoken(now.Sub(was.since)), "detail", was.detail)...)
+		if t.handOn != nil {
+			made = append(made, t.transition(key, TransitionCleared, was.detail, was.since, now))
+		}
+	}
+	for _, tr := range made {
+		t.handOn(tr)
 	}
 
 	if t.rec != nil {

@@ -151,6 +151,11 @@ type retention struct {
 	// from a fleet with nothing wrong.
 	alarms *statelog.Tracker
 
+	// wakes publishes every transition alarms makes, for the seats whose
+	// role carries the health grant to be woken by (ADR-0065); nil on a
+	// node with no broker to publish to.
+	wakes *alarmOutbox
+
 	// coverage is the fraction of this node's sources carrying a current
 	// vector, or false when this company has no embeddings configured.
 	// Nil on a node that cannot measure it, which reads as "nothing to
@@ -289,6 +294,13 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 			return readFloorsOf(ctx, e.backends.Fleet, domains)
 		}),
 	}
+	// THE ALARMS' WAKES, told of every transition before the first
+	// evaluation, so what that evaluation finds firing is handed on too
+	// (as firing_at_boot) rather than said by the log alone.
+	if e.backends.Queue != nil {
+		r.wakes = newAlarmOutbox(e.backends.Queue, e.metrics)
+		r.alarms.OnTransition(s.nodeID, r.wakes.Add)
+	}
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at
 	// SIGTERM, which would make its lifetime differ from the appliers it
@@ -308,6 +320,13 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		defer r.done.Done()
 		r.heartbeat(loop)
 	}()
+	if r.wakes != nil {
+		// ENDED WITH THE TRIM AND THE HEARTBEAT, by the same cancel and
+		// the same wait: a transition still queued when the node stops is
+		// not recovered, and the next start's first evaluation says what
+		// is still firing.
+		r.done.Go(func() { r.wakes.run(loop) })
+	}
 }
 
 // stopRetention ends the trim and the alarm heartbeat, waiting for an

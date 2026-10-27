@@ -11,9 +11,14 @@ dashboard's health push carry `alarms: {count, worst}`, where `worst`
 is the alarm that has been firing longest), and the node's row on the fleet
 view: each node's presence heartbeat carries every alarm firing on it with when
 it was raised, and `GET /fleet` lists them per node (`alarms`), so
-one read covers every node. Nothing has to be polled for any
-of them: every node running a state log, which is every data node, evaluates
-the whole table on its own position heartbeat, every 10s, and again the moment
+one read covers every node. And it wakes the agents that may read the
+deployment's health: each time an alarm fires or clears on a node, or a node's
+first evaluation since it started finds it firing, every agent seat whose role
+carries `health_tools` is notified once and pointed at `fleet_health` for
+what is firing now (see [Alarm wakes](../concepts/event-system.md#alarm-wakes)).
+Nothing has to be polled for any of them: every node running a state log,
+which is every data node, evaluates the whole table on its own position
+heartbeat, every 10s, and again the moment
 the measurements it takes every 15m (each log's daily intake, the vector
 coverage, the store's connection-pool waits) land, so an alarm whose
 threshold is 1m is raised within a beat of passing it.

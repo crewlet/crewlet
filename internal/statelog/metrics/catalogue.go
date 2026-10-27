@@ -1633,6 +1633,24 @@ func Catalogue() []Instrument {
 				"the operator record renders and the CLI exits non-zero on, " +
 				"so a collector and a person see one answer.",
 		},
+		{
+			Name: AlarmTransitions, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"change"},
+			Shows: "Alarm transitions this node published for the seats whose " +
+				"role carries `health_tools` to be woken by, once the broker " +
+				"took each — `fired`, `cleared` or `firing_at_boot`, the last " +
+				"what a node's first evaluation found up. A gauge flipping " +
+				"while this stands still is a node whose wakes are not getting " +
+				"out: its `alarm_transition_unpublished` line names the error.",
+		},
+		{
+			Name: AlarmTransitionsDropped, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Alarm transitions this node dropped unpublished: its outbox " +
+				"holds 1024 while the broker refuses them and drops the oldest " +
+				"past that, so no seat is woken by those. Any rise is a broker " +
+				"this node could not publish to for a long while; " +
+				"`fleet_health` still reads what is firing now.",
+		},
 		// ---- the object store's bucket ----------------------------------
 		{
 			Name: ObjectsBucketBytes, Kind: KindGauge, Unit: UnitBytes,

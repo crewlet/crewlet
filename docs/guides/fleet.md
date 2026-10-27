@@ -819,6 +819,19 @@ repository the seat may not read and says how many (`withheld`), and a
 repository named with `repo` that the seat may not read is refused, as the
 code tools refuse it.
 
+**A granted seat is also woken by the alarms.** Each time an alarm fires or
+clears on a node — or a node's first evaluation since it started finds one
+firing — every agent seat whose role carries `health_tools` is notified once,
+with the alarm, the node, what was measured and the table's remedy, and is
+sent to `fleet_health` before it acts: the notification is one change on one
+node, and only the nodes' heartbeats say what is firing now. One alarm is one
+conversation wherever it stands, so a flapping alarm, or one fleet-wide
+condition raised by every data node at once, is one thread rather than a turn
+per flap or per node, and nobody is waiting on an answer, so a seat may look
+and do nothing. See [Alarm wakes](../concepts/event-system.md#alarm-wakes) for how
+a transition reaches the seats, and why a node that dies mid-alarm loses at
+most a notification, never the state `fleet_health` reads.
+
 ## How a node that fell behind catches up
 
 The work tracker, the knowledge base's pages and embeddings, the identity

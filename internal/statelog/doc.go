@@ -627,4 +627,17 @@
 // still its own pair of log lines ([Tracker]), since a log joining a kind that
 // is already up, and one leaving it, are things an operator has to be told
 // started and ended.
+//
+// # A node's alarm transition is the record its wake derives from
+//
+// Each of those onsets and clearings is also handed on, once, as an
+// [AlarmTransition] ([Tracker.OnTransition]) whose id is derived from the
+// node, the alarm, the log, the change and the instant the instance was raised
+// ([TransitionID]). The engine publishes it as an inbound delivery, retried
+// until the broker takes it, and the seats whose role carries the health grant
+// are woken by it (internal/alarmwake). That is ADR-0065: the publish IS the
+// write, so no publish trails a commit, and a republish collapses on the ids
+// derived from the transition's. A transition is one node's fact about
+// itself, never a record on a log — the alarms most worth a wake are about the
+// logs, and a log at its ceiling would refuse the record that says so.
 package statelog

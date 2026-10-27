@@ -151,12 +151,13 @@ type Role struct {
 
 	// HealthTools gives this AGENT seat the deployment's health: the
 	// fleet_health and code_status tools, an administrator's reads, which its
-	// role's grant admits it to (see [org.Role.HealthTools]). It is not a
+	// role's grant admits it to (see [org.Role.HealthTools]), and a wake each
+	// time an alarm fires or clears on a node (internal/alarmwake). It is not a
 	// lead's to set: a lead who could give a seat in their team the
 	// administrator's view would read it through that seat's trail, so the
 	// field is listed apart for admin wherever a write is judged against the
 	// subtree rule (internal/config's org diff).
-	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty" desc:"Agent seats: offer this seat fleet_health and code_status, the administrator's reads of the deployment's health. Setting or clearing it takes admin."`
+	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty" desc:"Agent seats: offer this seat fleet_health and code_status, the administrator's reads of the deployment's health, and wake it each time an alarm fires or clears on a node. Setting or clearing it takes admin."`
 
 	// Integrations is this seat's own identity on external surfaces: its
 	// chat apps and its GitHub App. See [RoleIntegrations].

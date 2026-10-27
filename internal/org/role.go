@@ -815,8 +815,9 @@ type Role struct {
 	// the health grant (internal/authz's SeatGrantHealth), which admits this
 	// agent to the fleet_health and code_status tools — an administrator's
 	// reads of the deployment — and which its surfaces offer it for that
-	// reason. False is no grant, the default: a seat never holds admin, and
-	// the deployment's health is given to a seat only by name.
+	// reason; the same grant is who an alarm's transition wakes
+	// (internal/alarmwake). False is no grant, the default: a seat never holds
+	// admin, and the deployment's health is given to a seat only by name.
 	//
 	// AN AGENT SEAT'S ALONE, refused on a human seat by the config layer as an
 	// admission rule (internal/config, validateHumanSeatGrants): a person is

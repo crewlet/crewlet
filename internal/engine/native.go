@@ -12,6 +12,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -982,24 +985,31 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 	}
 }
 
-// nativeParsers is what the native backends contribute to the inbound edge.
+// nativeParsers is what the engine's own sources contribute to the inbound
+// edge: the native backends' parsers, and the alarms' (internal/alarmwake).
 //
 // PER EPOCH, unlike everything else in this file: a parser's one
-// company-derived input is the LEAD MAP, and that is the org chart — which
-// is exactly what an apply changes. See [Engine.reconcileNative].
+// company-derived input is the org chart — the native backends' LEAD MAP, the
+// alarms' granted seats — which is exactly what an apply changes. See
+// [Engine.reconcileNative].
 func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	if c == nil {
 		return nil, nil
 	}
+	// THE ALARMS' WAKES, on every node whatever halves it runs: a
+	// transition is routed by the chart's health grant alone — to the
+	// seats the health tools admit, by the one rule that admits them
+	// (orgchart.GrantedSeats) — and reads no row, so every node routes one
+	// as a data node does.
+	parsers := []notify.Parser{alarmwake.NewParser(alarmwake.ParserOptions{
+		Granted: orgchart.GrantedSeats(c.Org, authz.SeatGrantHealth),
+	})}
+	prompts := []notify.Prompt{alarmwake.Prompt{}}
 	// THE HALVES THIS COMPANY RUNS NATIVELY, wherever they are held: a
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as
 	// a data node does.
 	run := e.nativeHalves()
-	var (
-		parsers []notify.Parser
-		prompts []notify.Prompt
-	)
 	if run.tracker {
 		// NO LEAD MAP AND NO BASE URL. The tracker's own parser reads a
 		// record's routing snapshot, which the WRITER resolved at commit
