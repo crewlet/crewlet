@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -163,6 +164,27 @@ func TestADamagedRefsFileIsRewrittenWhole(t *testing.T) {
 // code.MaxRefsPerRepo lines, so a line carried is checked and copied straight
 // from the read buffer — and moving one ref in a file twenty times larger
 // allocates no more.
+//
+// ONE MERGE A COUNT, AND THE LEAST OF TEN COUNTS. testing.AllocsPerRun reads
+// the whole process's allocations, and this binary is never quiet:
+// nats-server, which it links, samples the process's CPU on a timer of its own
+// once a second (server/pse), nine allocations a sample — the only ones a
+// memory profile found beside a hundred merges' own, the ten collections
+// among them making none. Samples come at a RATE, so more runs do not divide
+// them away: a window of n merges holds n merges' time of them, and carries
+// AllocsPerRun's rounded-down average once a merge takes a ninth of a second,
+// whatever n is. A merge of 20 000 refs takes 25 ms under the race detector on
+// two CPUs of its own, a margin of four that make test, running each test
+// binary beside three others on a four-CPU runner, can take; and over five
+// merges, the sample one window in ten held read as a carried line allocating.
+// A sample only ever adds to a count, and a window of one merge mostly holds
+// none, so the least of ten such counts is the merge's own, exactly: all ten
+// hold a sample only once ten merges and their warm-ups span nine seconds,
+// merges near half a second each.
+//
+// Mutation: carry a line as a string (io.WriteString(w, string(line.raw)))
+// and a merge of 20 000 refs allocates some 19 000 times more than one of
+// 1 000; allocate once every 10 000 lines carried, and it allocates two more.
 func TestADeltaMergeAllocatesForWhatMovedNotForTheFile(t *testing.T) {
 	// Not parallel: testing.AllocsPerRun counts every goroutine's
 	// allocations, and refuses to run beside a parallel case.
@@ -170,16 +192,23 @@ func TestADeltaMergeAllocatesForWhatMovedNotForTheFile(t *testing.T) {
 		dir, digest := packedRefsOf(t, refs)
 		moved := []code.RefRow{{Ref: fmt.Sprintf("refs/heads/b%06d", refs/2+1), OID: strings.Repeat("e", 40)}}
 		var err error
-		n := testing.AllocsPerRun(5, func() {
-			var got int
-			if got, err = cache.MergeRefs(dir, moved, digest, io.Discard); err == nil && got != refs {
-				err = fmt.Errorf("the merge wrote %d refs, want %d", got, refs)
+		merge := func() {
+			got, merr := cache.MergeRefs(dir, moved, digest, io.Discard)
+			if merr == nil && got != refs {
+				merr = fmt.Errorf("the merge wrote %d refs, want %d", got, refs)
 			}
-		})
-		if err != nil {
-			t.Fatalf("merging one ref onto %d: %v", refs, err)
+			if err == nil {
+				err = merr
+			}
 		}
-		return n
+		least := math.Inf(1)
+		for range 10 {
+			least = min(least, testing.AllocsPerRun(1, merge))
+			if err != nil {
+				t.Fatalf("merging one ref onto %d: %v", refs, err)
+			}
+		}
+		return least
 	}
 	small, large := allocs(1000), allocs(20000)
 	if large > small {
