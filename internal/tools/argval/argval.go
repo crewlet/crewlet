@@ -39,11 +39,14 @@ func String(v any) (string, bool) {
 		// (encoding/json is that rule): digits from 1e-6 to below 1e21, the
 		// exponent form outside them, the shortest spelling that reads back
 		// as the same number. So 1000000 is "1000000", where `%g` wrote
-		// "1e+06", and 1e300 is "1e+300", never 301 digits.
-		if text, err := json.Marshal(v); err == nil {
-			return string(text), true
+		// "1e+06", and 1e300 is "1e+300", never 301 digits. A non-finite
+		// number has no JSON spelling and is no value a model wrote, so it
+		// is read as no string, which the check names.
+		text, err := json.Marshal(v)
+		if err != nil {
+			return "", false
 		}
-		return strconv.FormatFloat(v, 'g', -1, 64), true
+		return string(text), true
 	case json.Number:
 		// THE LITERAL, not a rendering of it: this is the spelling the model
 		// sent, and it is exact where the float rendering is not.

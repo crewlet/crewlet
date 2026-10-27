@@ -37,6 +37,8 @@ func TestEachReadIsItsHelpers(t *testing.T) {
 		"1e300":         {1e300, "1e+300", true},
 		"a tenth":       {0.1, "0.1", true},
 		"1e-7":          {1e-7, "1e-7", true},
+		"infinity":      {math.Inf(1), "", false},
+		"NaN":           {math.NaN(), "", false},
 		"a literal":     {json.Number("1e3"), "1e3", true},
 		"a boolean":     {true, "true", true},
 		"an object":     {map[string]any{"a": 1}, "", false},
