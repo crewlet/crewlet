@@ -938,9 +938,15 @@ const (
 	// twenty-one were each publication as small as thirty-two objects —
 	// under thirty-two either way. What the bound costs is a lookup's: an
 	// object is looked for in every layer above the one that holds it, so a
-	// deeper chain is a slower answer on every git node, which a lookup
-	// through a chain of that depth (BenchmarkPackLookup) is what measures;
-	// past it a publisher merges the top layers whatever their sizes.
+	// deeper chain is a slower answer on every git node; past the bound a
+	// publisher merges the top layers whatever their sizes.
+	//
+	// PROVISIONAL (M3-decisions M3-O39): nothing yet measures what a chain's
+	// depth costs a lookup — no arm of BenchmarkPackLookup serves through a
+	// chain. The layers={1,8,32,64} arm the layer measurements add to it
+	// confirms the bound or moves it: thirty-two stays unless a lookup
+	// through thirty-two layers costs more than twice one through a single
+	// layer, and otherwise becomes the longest chain that does not.
 	MaxPublishedLayers = 32
 
 	// LayerPartBytes is the most bytes one stored object of a layer holds:
