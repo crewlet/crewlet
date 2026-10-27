@@ -161,7 +161,7 @@ func (s *surface) answerBrief(ctx context.Context, tool catalog.Tool,
 			"the last attempt."), nil
 	}
 	step := s.t.stepStart(tool, args, nil, "")
-	card, dropped, err := s.resolveBrief(ctx, draft)
+	card, err := s.resolveBrief(ctx, draft)
 	if err != nil {
 		if ctx.Err() != nil {
 			s.t.stepEnd(ctx, step, wire.StepStopped, "Stopped", nil, 0, 0)
@@ -173,9 +173,6 @@ func (s *surface) answerBrief(ctx context.Context, tool catalog.Tool,
 	s.t.stepEnd(ctx, step, wire.StepDone, "Written", nil, 0, 0)
 	s.t.emitCard(ctx, wire.Card{Type: wire.CardBrief, Brief: card}, s.t.appsNow())
 	s.t.svc.metrics.Add(metrics.AssistantBriefs, 1, metrics.Attrs{"outcome": "written"})
-	if dropped > 0 {
-		s.t.svc.metrics.Add(metrics.AssistantBriefRowsDropped, uint64(dropped), nil)
-	}
 	return toolloop.ToolResult{Output: "The brief is shown to the person. Your turn is over: " +
 		"write nothing more."}, nil
 }
@@ -183,21 +180,19 @@ func (s *surface) answerBrief(ctx context.Context, tool catalog.Tool,
 // resolveBrief turns a checked draft into the card: the scope from the page
 // context, each row kept only for a record this turn read that the person may
 // open, its tone held to the facts that read carried, and every action built
-// by the engine. dropped counts the rows left out.
-func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire.BriefCard, int, error) {
+// by the engine.
+func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire.BriefCard, error) {
 	card := &wire.BriefCard{Summary: d.Summary, Needs: []wire.BriefNeed{},
 		FollowUps: append([]string{}, d.FollowUps...), AsOf: s.t.svc.now().UTC()}
 	if page := s.t.page; page != nil {
 		card.Scope = wire.BriefScope{Screen: page.Screen, Title: page.Title, Record: page.Selection}
 	}
-	dropped := 0
 	for _, n := range d.Needs {
-		record, err := s.resolveRecord(ctx, n.Ref)
+		record, err := s.resolved(ctx, n.Ref)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		if record == nil {
-			dropped++
 			continue
 		}
 		need := wire.BriefNeed{Ref: record.ref, Text: n.Text, Detail: n.Detail,
@@ -214,9 +209,9 @@ func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire
 		step := &wire.BriefStep{Text: r.Text}
 		switch r.Action {
 		case catalog.BriefActionOpen:
-			record, err := s.resolveRecord(ctx, *r.Ref)
+			record, err := s.resolved(ctx, *r.Ref)
 			if err != nil {
-				return nil, 0, err
+				return nil, err
 			}
 			// THE STEP STAYS, ITS PRESS DOES NOT: a recommendation whose
 			// record cannot be opened for the person is still advice.
@@ -229,9 +224,9 @@ func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire
 		card.Recommended = step
 	}
 	if err := card.Validate(); err != nil {
-		return nil, 0, fmt.Errorf("%w: %w", errBriefInvalid, err)
+		return nil, fmt.Errorf("%w: %w", errBriefInvalid, err)
 	}
-	return card, dropped, nil
+	return card, nil
 }
 
 // briefRecord is a row's record as the engine resolved it for the person.
@@ -286,47 +281,82 @@ func toneOf(asked wire.BriefTone, urgent bool) wire.BriefTone {
 var briefNames = catalog.Tool{Kind: catalog.KindNavigate,
 	Names: map[string]catalog.Directory{"handle": catalog.DirSeat, "key": catalog.DirProject}}
 
-// resolveRecord resolves one cited record for the person, or nil where it may
-// not be drawn: one no read of this turn named, one the link table cannot
-// address, or one whose own read, sent as the person, does not answer it.
-// An error is the turn's own (its grant ended, it was stopped).
+// rowDropped is a cited record a brief may not draw a row for, and why: a
+// reason the drop is counted and logged by, and the error that decided it
+// where one did.
+type rowDropped struct {
+	reason string
+	cause  error
+}
+
+func (d *rowDropped) Error() string {
+	if d.cause == nil {
+		return "brief row dropped: " + d.reason
+	}
+	return "brief row dropped: " + d.reason + ": " + d.cause.Error()
+}
+
+func (d *rowDropped) Unwrap() error { return d.cause }
+
+// drop is a row left out for reason, decided by cause where one decided it.
+func drop(reason string, cause error) error { return &rowDropped{reason: reason, cause: cause} }
+
+// resolveRecord resolves one cited record for the person. A record that may
+// not be drawn is a [rowDropped]: one no read of this turn named, one the link
+// table cannot address or whose name resolves to nothing, or one whose own
+// read, sent as the person, does not answer it. Any other error is the turn's
+// own (its grant ended, it was stopped).
 func (s *surface) resolveRecord(ctx context.Context, ref wire.ResourceRef) (*briefRecord, error) {
 	if !s.t.cited(ref.ID) {
-		s.t.svc.log.InfoContext(ctx, "assistant_brief_row_dropped", "turn", s.t.id,
-			"kind", string(ref.Kind), "reason", "not_read")
-		return nil, nil
+		return nil, drop("not_read", nil)
 	}
 	args, ok := catalog.BriefOpensWith(ref)
 	if !ok {
-		return nil, nil
+		return nil, drop("no_link", nil)
 	}
 	resolved, err := s.names.Resolve(ctx, briefNames, args)
 	if err != nil {
-		return nil, nil
+		return nil, drop("unresolved", err)
 	}
 	link, probe, err := catalog.Open(catalog.Args(resolved))
-	if err != nil || probe == nil {
-		s.t.svc.log.InfoContext(ctx, "assistant_brief_row_dropped", "turn", s.t.id,
-			"kind", string(ref.Kind), "reason", "no_link")
-		return nil, nil
+	switch {
+	case err != nil:
+		return nil, drop("no_link", err)
+	case probe == nil:
+		return nil, drop("no_link", nil)
 	}
 	resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, *probe)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return nil, context.Cause(ctx)
 	case err != nil:
-		return nil, nil
+		return nil, drop("not_sent", err)
 	case resp.Status == http.StatusUnauthorized:
 		return nil, errGrantEnded
 	case !cards.Permitted(resp.Status):
-		s.t.svc.log.InfoContext(ctx, "assistant_brief_row_dropped", "turn", s.t.id,
-			"kind", string(ref.Kind), "reason", "not_permitted")
-		return nil, nil
+		return nil, drop("not_permitted", nil)
 	}
 	_, param, _ := catalog.BriefScreenOf(ref.Kind)
 	id := catalog.Args(resolved).String(param)
 	return &briefRecord{ref: wire.ResourceRef{Kind: ref.Kind, ID: id}, link: link,
 		urgent: urgentIn(ref.Kind, resp.Body)}, nil
+}
+
+// resolved is a cited record the brief may draw, or nil for one it may not,
+// counted and logged with its reason; an error is the turn's own.
+func (s *surface) resolved(ctx context.Context, ref wire.ResourceRef) (*briefRecord, error) {
+	record, err := s.resolveRecord(ctx, ref)
+	var dropped *rowDropped
+	if errors.As(err, &dropped) {
+		attrs := []any{"turn", s.t.id, "kind", string(ref.Kind), "reason", dropped.reason}
+		if dropped.cause != nil {
+			attrs = append(attrs, "error", redact.Secrets(dropped.cause.Error()))
+		}
+		s.t.svc.log.InfoContext(ctx, "assistant_brief_row_dropped", attrs...)
+		s.t.svc.metrics.Add(metrics.AssistantBriefRowsDropped, 1, nil)
+		return nil, nil
+	}
+	return record, err
 }
 
 // urgentIn reports whether a record's own read carries a fact a danger row

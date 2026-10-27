@@ -550,6 +550,7 @@ func (k ResourceKind) Valid() bool { return slices.Contains(ResourceKinds, k) }
 // is a decision the Inbox shows on a task, and a seat is an agent.
 type RecordNoun string
 
+// The nouns a screen names its open record by.
 const (
 	NounDecision RecordNoun = "decision"
 	NounUpdate   RecordNoun = "update"
@@ -597,6 +598,7 @@ func (m TurnMode) Valid() bool { return slices.Contains(TurnModes, m) }
 // chose without such a fact is drawn warning.
 type BriefTone string
 
+// The tones a brief's row is drawn in.
 const (
 	BriefDanger  BriefTone = "danger"
 	BriefWarning BriefTone = "warning"

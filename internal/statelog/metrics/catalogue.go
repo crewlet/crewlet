@@ -820,9 +820,10 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: AssistantBriefRowsDropped, Kind: KindCounter, Unit: UnitCount,
-			Shows: "Rows of written briefs the engine left out because the record a row " +
-				"cited was not in what its turn read, or the person may not open it. A " +
-				"steady climb is a model citing records it did not read.",
+			Shows: "Records a brief cited (a row, or its recommendation's press) that the " +
+				"engine left out because the record was not in what its turn read, or " +
+				"the person may not open it. A steady climb is a model citing records " +
+				"it did not read.",
 		},
 		{
 			Name: AssistantStreamsActive, Kind: KindGauge, Unit: UnitCount,
