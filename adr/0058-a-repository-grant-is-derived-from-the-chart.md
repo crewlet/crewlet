@@ -52,4 +52,7 @@ The decide's enforcement of the push rows for seats (M3 P5), a box's own grant o
 read-side directory access lists (not planned: sensitive code goes in its own repository with
 `visibility: unit`), the review and merge levels' use (M4, M5). Nor the requester ceiling of a seat's code
 WRITES (M3 P5's write tools, each held at the relation its write needs): the ceiling above bounds what a seat
-reads for somebody, and nothing it writes.
+reads for somebody, and nothing it writes. Nor a ceiling carried past its turn: a colleague a seat asks answers
+in a turn the asking seat woke, and the answer wakes the asking seat in a turn of its own work, so each turn is
+decided for whoever woke it and never for whoever woke the asker — as the artifacts tools' ceiling is — and
+nothing here bounds what a seat already knows, from its memory or a read made in a turn nobody woke.

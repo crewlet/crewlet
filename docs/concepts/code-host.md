@@ -1570,6 +1570,18 @@ calls them in no turn and reads for nobody but its caller. The ceiling bounds
 and never grants: what the seat reads is still its own read, judged by its
 own grant.
 
+**The ceiling holds the turn somebody woke, and no turn after it.** Each turn
+is decided for whoever woke that turn. A colleague the seat asks with
+`a2a_ask` answers in a turn the asking seat woke, so it reads for the asking
+seat and never for whoever woke the asker; the answer wakes the asking seat in
+a turn of its own work, which nothing beyond its own grant bounds; and a work
+item the seat files for itself is worked in a turn of its own too. Nor does
+the ceiling reach what a seat already holds: its memory, or what it read in a
+turn nobody woke. What a seat was refused for somebody can therefore still
+reach them through a colleague's answer or the seat's own memory: the ceiling
+decides what a turn reads for somebody, not what a seat may go on to tell
+them.
+
 ---
 
 ## Server-side reads

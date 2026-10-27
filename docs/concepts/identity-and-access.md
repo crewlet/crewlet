@@ -400,8 +400,8 @@ person's.
 an ask, or a change of theirs on a work item or a page, named by the kind its
 record holds — every artifact
 verb an agent takes is decided a second time for that requester, on the same
-artifact, and admitted only when both may take it: an agent never shows a
-requester an artifact the requester could not open, nor writes into one on
+artifact, and admitted only when both may take it: in that turn an agent shows
+a requester no artifact the requester could not open, and writes into none on
 their behalf what they could not write. The one exception is the agent's
 **edits to its own work** (publishing a fix, renaming it, adding an asset,
 reshaping or filling in its data, and creating a new one): anybody who can
@@ -413,7 +413,10 @@ only where the requester could read them. A turn woken by somebody the company d
 edits, and so does one a credential acting as no seat woke with a change on a
 work item or a page, since no seat stands behind it; a turn nobody woke (a
 schedule, a watch, the engine's own notice, the outcome of the agent's own act
-such as a workflow its own push failed) is bounded by the agent alone.
+such as a workflow its own push failed) is bounded by the agent alone. The
+bound is the turn's and no later one's: a colleague the agent asks reads for
+the agent, the turn the colleague's answer wakes is the agent's own, and what
+the agent already knows is no read at all ([Sharing](artifacts.md#sharing)).
 
 The decision is
 [ADR-0034](https://github.com/crewlet/crewlet/blob/main/adr/0034-an-artifact-is-shared-and-a-share-is-a-relation.md),

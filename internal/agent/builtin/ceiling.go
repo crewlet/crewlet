@@ -28,6 +28,17 @@ import (
 // its own, a turn woken by a sender nobody maps to would be a stranger's to
 // one family and nobody's to the next, and the second would read for the
 // stranger whatever the agent itself may.
+//
+// # The turn's, and no further
+//
+// The answer is read off what woke THIS turn (turnctx.Turn.Requester and
+// Senders), so it holds this turn alone: a colleague the seat asks with
+// a2a_ask answers in a turn the asking seat woke, decided for that seat and
+// not for whoever woke it, and the answer wakes the seat in a turn of its own
+// work. Carrying a requester into the turns a turn sets off would mean every
+// ask, answer and self-filed item carrying it, which none does; the docs say
+// where the bound ends (docs/concepts/code-host.md, "Reads made for somebody
+// else").
 
 // Requesters composes the principal a seat's turn is acting for.
 type Requesters interface {

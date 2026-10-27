@@ -206,12 +206,15 @@ as a seat does.
 
 **Every verb is decided twice inside a turn somebody woke.** The tool reads the
 stored artifact and asks the authority table for the seat, then for whoever the
-turn is acting for (the **requester ceiling**): an agent never shows an
-artifact to a requester who could not open it, and never writes for one what
-they could not write. The exception is an artifact the agent owns, which
-anybody who can message the agent may ask it to edit, as with all other agent
-work; reading and sharing are never exempt. A turn woken by somebody the
-company does not know opens no artifact at all. A caller with no relation to an
+turn is acting for (the **requester ceiling**): in that turn no tool shows an
+artifact to a requester who could not open it, or writes for one what they
+could not write. The exception is an artifact the agent owns, which anybody who
+can message the agent may ask it to edit, as with all other agent work; reading
+and sharing are never exempt. A turn woken by somebody the company does not
+know opens no artifact at all. The bound is the turn's, not the agent's: a
+colleague it asks reads for the agent, the turn the answer wakes is the agent's
+own, and what the agent already knows is no read
+([Sharing](../concepts/artifacts.md#sharing)). A caller with no relation to an
 artifact is told it does not exist, in exactly the words an id nothing holds is
 answered with. An agent is held to `contributor` on artifacts it does not own
 unless `artifacts.agents_manage_others` lifts it.
@@ -379,6 +382,8 @@ seats may — every other repository absent from its listing, and a read of one
 refused naming the colleague — and a turn a stranger woke, or a person who may
 not act in the company now, reads nothing
 ([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)).
+The bound is that turn's alone: a colleague the seat asks reads for the seat,
+and the turn the answer wakes is the seat's own work.
 An operator's own assistant calls the tools in no turn, for its caller alone.
 
 **A repository's text is fenced.** A file's lines and a patch are text its

@@ -281,7 +281,14 @@ What an **agent** may do is narrower than its shares, on purpose:
 - every artifact tool passes the **requester ceiling**: an agent reads for
   somebody only what that somebody could read, and writes for them only what
   they could write, except on an artifact the agent owns, which anybody who
-  can message the agent may ask it to change.
+  can message the agent may ask it to change. The ceiling holds the turn
+  somebody woke and no turn after it: a colleague the agent asks reads for the
+  agent, the turn the colleague's answer wakes is the agent's own, and what the
+  agent already knows — its memory, what it read in a turn nobody woke — is no
+  read at all, so an artifact refused to somebody in one turn can still reach
+  them through what the agent tells them later
+  ([Reads made for somebody else](code-host.md#reads-made-for-somebody-else)
+  says the same of a repository).
 
 "**Seen by**" lists who has opened an artifact, to its editors and above. It is
 on by default, and a company turns it off with `artifacts.seen_by: nobody`.
@@ -668,8 +675,9 @@ merges from.
 [ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-content-a-model-reads-carries-its-provenance.md)):
 another principal's page, a viewer's row, a colleague's file. The fence labels
 who wrote it and says it is data, never an instruction. Fencing reduces prompt
-injection and does not remove it; the requester ceiling, `humans_only` columns
-and the human-only verbs hold whatever a model does.
+injection and does not remove it; `humans_only` columns and the human-only
+verbs hold whatever a model does, and the requester ceiling whatever it does in
+the turn somebody woke.
 
 ---
 
