@@ -199,9 +199,15 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   // chart). SETTINGS NAMES ITS LANDING TOO: the column beside it lists Models
   // & keys as a row like any other, and "Settings" alone over the models
   // said nothing but the selected row did about which section it was.
+  //
+  // THE LANDING IS THE SECTION AT THE ROW'S OWN ADDRESS, never one as deep as
+  // it: Code lands on `#/code/repos`, and its Pushes, `#/code/pushes`, is as
+  // deep and is not its landing — judged by depth it lost its own crumb, and
+  // the trail and the tab both read "Code" over somebody's pushes.
   const listed = row.renderer === "column";
   const section = (key: string): Section | undefined => row.sections.find((s) => s.key === key);
-  const landing = (s: Section) => !listed && s.path.length === row.path.length;
+  const landing = (s: Section) =>
+    !listed && s.path.length === row.path.length && s.path.every((seg, i) => seg === row.path[i]);
   const sectionPage = (key: string): Crumb[] => {
     const s = section(key);
     if (!s || landing(s)) return [root(row, false)];
@@ -258,6 +264,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return where.id ? inside("views", named(labels, where.id)) : sectionPage("views");
     case "project":
       return [root(row, true), { ...projectCrumb(labels, where.key), switch: "project" }];
+    case "code-repos":
+      return sectionPage("repos");
+    case "code-pushes":
+      return sectionPage("pushes");
     case "item": {
       // AN ITEM KEY NAMES ITS PROJECT, so the trail carries the way to it
       // with no lookup. An id names nothing, and the trail is Work › item.

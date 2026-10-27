@@ -44,8 +44,11 @@ func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, err
 //
 // EVERY CALL SHAPE: the `useQuery` hook a screen renders from, the
 // `useSearchQuery` hook every ranked search is asked through (it applies the
-// search bound before `useQuery`), and the direct `socket.query` a pager or an
-// action uses. Read by [clientsource.Calls], so a
+// search bound before `useQuery`), the `useCodeQuery` hook every code question
+// is asked through over REST (lib/useCodeQuery.ts: never the socket's
+// in-flight slots), and the direct `query` a pager or an action uses — the
+// socket's, or the code questions' REST one for an older page. Read by
+// [clientsource.Calls], so a
 // call a formatter wrapped across lines, one with type arguments and one
 // inside markup are the calls they are. The sweep this replaced was a regular
 // expression whose name class once could not match `a2a_channels` and whose
@@ -57,12 +60,13 @@ func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, err
 // A kind handed over in anything but a string literal is invisible here —
 // [clientsource.Calls] can read nothing else — and that is safe only because
 // the dashboard refuses one: `app/source.test.ts`'s "every read names its
-// question" requires a literal at every `useQuery(`, `useSearchQuery(` and
-// `query(` call, bare or as a method, which is every call Calls is asked for
-// below.
+// question" requires a literal at every `useQuery(`, `useSearchQuery(`,
+// `useCodeQuery(` and `query(` call, bare or as a method, which is every call
+// Calls is asked for below.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
-	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "useSearchQuery", "query")
+	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "useSearchQuery", "useCodeQuery",
+		"query")
 	if err != nil {
 		// FAILS rather than skips. The dashboard source is committed, so it
 		// is always in a checkout — and a skip here is indistinguishable
@@ -373,20 +377,19 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 
 // readOutsideTheDashboard are the questions no room reads and something
 // outside the dashboard does, over their REST paths, each beside what reads
-// it: the code host's rows, which `crewlet code status` lists and shows
-// (cmd/crewlet/code.go, whose own suite reads them from a node) — routes of
-// the code host's own before they were questions, read by that command then as
-// now; and who read a unit's repository, an admin's script — the request the
-// code guide prints (docs/guides/code.md, "Who read a unit's repository") —
-// whose assistant asks the operator tool `code_repo_readers` for the same
-// answer (builtin.ReadersOf). The decision
-// [TestEveryQueryThisServerAnswersHasAReader] asks to be taken in the open,
-// and held both ways there: the first room that reads one of these deletes its
-// line.
+// it: one repository in detail, which `crewlet code status -repo` shows
+// (cmd/crewlet/code.go, whose own suite reads it from a node) — a route of the
+// code host's own before it was a question, read by that command then as now,
+// until the dashboard draws a repository's own page; and who read a unit's
+// repository, an admin's script — the request the code guide prints
+// (docs/guides/code.md, "Who read a unit's repository") — whose assistant asks
+// the operator tool `code_repo_readers` for the same answer
+// (builtin.ReadersOf). The decision [TestEveryQueryThisServerAnswersHasAReader]
+// asks to be taken in the open, and held both ways there: the first room that
+// reads one of these deletes its line, as the Code workspace's Repositories
+// and Pushes deleted the lines of `code_repos` and `code_pushes`.
 var readOutsideTheDashboard = map[string]string{
-	"code_repos":        "crewlet code status",
 	"code_repo":         "crewlet code status -repo",
-	"code_pushes":       "crewlet code status -repo",
 	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
 }
 

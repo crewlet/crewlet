@@ -1,16 +1,17 @@
 /**
  * Which of Crewlet's own services the company runs, as the engine says it.
  *
- * # Two services, three answers each
+ * # Three services
  *
  * A company runs Crewlet Works (the engine's own tracker: projects, tasks,
  * the Inbox's updates and My work) or another tracker in its place, Jira, or
- * none at all; and Crewlet Knowledge (the engine's own pages) or Confluence,
- * or none. The engine resolves which from the company document and hands it
- * to every reader on the org projection (`services`, `contract/services.ts`):
- * the socket's first frame, every `org` push and `GET /org`. So nothing here
- * probes for it, and a company that switches a backend is drawn anew on the
- * push that publishes it.
+ * none at all; Crewlet Knowledge (the engine's own pages) or Confluence, or
+ * none; and it hosts its git repositories in the engine (`code.native`, the
+ * Code workspace) or does not. The engine resolves which from the company
+ * document and hands it to every reader on the org projection (`services`,
+ * `contract/services.ts`): the socket's first frame, every `org` push and
+ * `GET /org`. So nothing here probes for it, and a company that switches a
+ * backend is drawn anew on the push that publishes it.
  *
  * # What the dashboard does with it
  *
@@ -38,20 +39,37 @@ export type { Service, ServicesRun } from "~/app/nav.ts";
 export type { OrgServices } from "~/contract/services.ts";
 
 /**
- * The four answers, each ONE object, so a memo keyed on what runs moves only
- * when the engine's answer does rather than on every render of the reader.
+ * Every answer, each ONE object, so a memo keyed on what runs moves only when
+ * the engine's answer does rather than on every render of the reader. Built
+ * once over every combination, keyed on the three in order.
  */
-const RUN: Readonly<Record<`${boolean}/${boolean}`, ServicesRun>> = {
-  "true/true": { tracker: true, knowledge: true },
-  "true/false": { tracker: true, knowledge: false },
-  "false/true": { tracker: false, knowledge: true },
-  "false/false": { tracker: false, knowledge: false },
-};
+const RUN = new Map<string, ServicesRun>();
+for (const tracker of [true, false]) {
+  for (const knowledge of [true, false]) {
+    for (const code of [true, false]) {
+      RUN.set(runKey(tracker, knowledge, code), { tracker, knowledge, code });
+    }
+  }
+}
+
+/** The key of one combination in [RUN]. */
+function runKey(tracker: boolean, knowledge: boolean, code: boolean): string {
+  return `${tracker}/${knowledge}/${code}`;
+}
+
+/** The one object for a combination. */
+function run(tracker: boolean, knowledge: boolean, code: boolean): ServicesRun {
+  return RUN.get(runKey(tracker, knowledge, code))!;
+}
 
 /** Which services run, from what the engine said: every one, until it has said. */
 export function servicesRun(services: OrgServices | null | undefined): ServicesRun {
-  if (!services) return RUN["true/true"];
-  return RUN[`${services.tracker === "native"}/${services.knowledge === "native"}`];
+  if (!services) return run(true, true, true);
+  return run(
+    services.tracker === "native",
+    services.knowledge === "native",
+    services.code === "native",
+  );
 }
 
 /** What the engine said the company runs, or null until it has. */
@@ -78,7 +96,7 @@ export function useServicesRun(): ServicesRun {
  */
 export function useServicesAsk(): ServicesRun {
   const org = useOrg();
-  return org === null ? RUN["false/false"] : servicesRun(org.services ?? null);
+  return org === null ? run(false, false, false) : servicesRun(org.services ?? null);
 }
 
 /** Whether the org projection has arrived, so what the company runs is no longer a guess. */

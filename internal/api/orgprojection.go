@@ -133,7 +133,8 @@ type OrgProjection struct {
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
 	// Services is which tracker and which knowledge base the company runs,
-	// as the engine resolves them: see [OrgServices].
+	// and whether the engine hosts its code, as the engine resolves them:
+	// see [OrgServices].
 	Services *OrgServices `json:"services,omitempty"`
 
 	Roles []OrgSeat `json:"roles,omitempty"`
@@ -162,28 +163,73 @@ type OrgProjection struct {
 // OrgServices is which tracker and which knowledge base the company runs, each
 // as [config.Company.TrackerBackendFor] and [config.Company.KnowledgeBackendFor]
 // resolve it: the backend the document names, else the vendor whose block is
-// connected, else the engine's own.
+// connected, else the engine's own — and whether the engine hosts the
+// company's git repositories, `code.native` ([CodeHosts]).
 //
-// AN OVERVIEW FIELD, and the one narrow exception to the `tracker:` and
-// `knowledge:` blocks being guarded. What decides which of the dashboard's own
-// surfaces exist is whether the company runs the engine's tracker and
-// knowledge base at all: a company on Jira or on none has no Work, no My work
-// and no task to file, and a reader shown those surfaces is shown screens
-// whose every question is refused. Every reader learns the first half already,
-// from that refusal, and the vendor's name is the one fact a screen needs to
-// say where the work went instead. NOTHING ELSE of either block reaches this
-// audience: no project or space key, no site, no URL and no credential, which
-// is what the blocks were guarded for (see the classification test).
+// AN OVERVIEW FIELD, and the one narrow exception to the `tracker:`,
+// `knowledge:` and `code:` blocks being guarded. What decides which of the
+// dashboard's own surfaces exist is whether the company runs the engine's
+// tracker, knowledge base and git host at all: a company on Jira or on none
+// has no Work, no My work and no task to file, one that hosts no code has no
+// Code workspace, and a reader shown those surfaces is shown screens whose
+// every question is refused. Every reader learns the first half already, from
+// that refusal, and the vendor's name is the one fact a screen needs to say
+// where the work went instead. NOTHING ELSE of those blocks reaches this
+// audience: no project or space key, no site, no URL, no credential, no
+// repository and no limit, which is what the blocks were guarded for (see the
+// classification test).
 //
 // A CLOSED SET on the wire, each member the backend's own constant: the
-// document's `backend` is refused at parse outside it, and a derived one is
-// one of the same constants. Present on every running company and absent only
-// on `{}`, so a reader tells "not known yet" from "none".
+// document's `backend` is refused at parse outside it, a derived one is one of
+// the same constants, and the code host is one of [CodeHosts]. Present on
+// every running company and absent only on `{}`, so a reader tells "not known
+// yet" from "none".
 type OrgServices struct {
 	// Tracker is `native`, `jira` or `none`.
 	Tracker string `json:"tracker"`
 	// Knowledge is `native`, `confluence` or `none`.
 	Knowledge string `json:"knowledge"`
+	// Code is `native` or `none`: [CodeHost].
+	Code string `json:"code"`
+}
+
+// CodeHost is whether a company hosts its git repositories in the engine, as
+// [OrgServices.Code] carries it.
+//
+// THE PROJECTION'S OWN CLOSED SET, because the document says it with a
+// boolean (`code.native`) rather than a backend: the tracker's and the
+// knowledge base's sets are the document's own `backend` values, which the
+// schema offers and the validator holds, and this one is spelled where the
+// one value carrying it is built. It names no vendor beside the engine's own:
+// a company's repositories on GitHub or GitLab are integrations its seats
+// call, never a host the dashboard draws in the engine's place, so where the
+// engine hosts nothing the answer is `none` whatever else the company runs.
+type CodeHost string
+
+const (
+	// CodeHostNative is a company that sets `code.native`: the engine hosts
+	// its repositories, and the dashboard draws its Code workspace.
+	CodeHostNative CodeHost = "native"
+	// CodeHostNone is a company that does not: the engine hosts none of its
+	// code, and the Code workspace is not drawn.
+	CodeHostNone CodeHost = "none"
+)
+
+// CodeHosts is the closed set, the one list the dashboard's copy
+// (`contract/services.ts`'s `CodeHost`) is held to.
+var CodeHosts = []CodeHost{CodeHostNative, CodeHostNone}
+
+// Valid reports a value this build sends.
+func (h CodeHost) Valid() bool { return slices.Contains(CodeHosts, h) }
+
+// codeHostOf is the company's code host: the engine's own exactly where the
+// document sets `code.native` — the one fact of the `code:` block a reader is
+// handed.
+func codeHostOf(c *config.Company) CodeHost {
+	if c.Code.Native {
+		return CodeHostNative
+	}
+	return CodeHostNone
 }
 
 // servicesOf is the company's resolved backends.
@@ -191,6 +237,7 @@ func servicesOf(c *config.Company) *OrgServices {
 	return &OrgServices{
 		Tracker:   string(c.TrackerBackendFor()),
 		Knowledge: string(c.KnowledgeBackendFor()),
+		Code:      string(codeHostOf(c)),
 	}
 }
 

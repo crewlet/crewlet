@@ -26,7 +26,7 @@ import { managedSentence } from "~/protocol/configAnswer.ts";
 import type { ServicesRun } from "./services.ts";
 
 /** A company running every service built into Crewlet. */
-const EVERY: ServicesRun = { tracker: true, knowledge: true };
+const EVERY: ServicesRun = { tracker: true, knowledge: true, code: true };
 
 const BOUND: ViewerState = {
   login: "jane.founder",
@@ -200,13 +200,13 @@ test("messaging your own seat is held after everything a person can clear", () =
 // the first two read `can: true`.
 test("a change into a service the company does not run is held, and says why", () => {
   const acting = { ...BOUND, acts: ["create_work_item", "write_page", "pause_seat"] };
-  const jira: ServicesRun = { tracker: false, knowledge: true };
+  const jira: ServicesRun = { tracker: false, knowledge: true, code: true };
   expect(writeAccess("create_work_item", acting, "open", jira)).toEqual({
     can: false,
     block: "held",
     reason: SERVICE_OFF_REASONS.tracker,
   });
-  const confluence: ServicesRun = { tracker: true, knowledge: false };
+  const confluence: ServicesRun = { tracker: true, knowledge: false, code: true };
   expect(writeAccess("write_page", acting, "open", confluence)).toEqual({
     can: false,
     block: "held",

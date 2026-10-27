@@ -246,6 +246,11 @@ var contract = []Entry{
 	{"OrgServices", ReadInterface, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"TrackerBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"KnowledgeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"CodeHost", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+
+	// code.ts
+	{"REPO_STATUSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryRepositoryState"},
+	{"REPO_NAME", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

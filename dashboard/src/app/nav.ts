@@ -12,8 +12,8 @@
  *     agents make looks and sounds), the Org chart, Schedules, Integrations
  *     (the services built into Crewlet above the third-party apps it
  *     connects) and Budgets, last.
- *   - WORKSPACE: what the company does with it. Work, Knowledge, Artifacts and
- *     Live.
+ *   - WORKSPACE: what the company does with it. Work, Code, Knowledge,
+ *     Artifacts and Live.
  *   - The FOOT: Settings, the engine's state and the reader. Account has no
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
@@ -32,7 +32,8 @@
  * says otherwise) and an address is in the row owning the LONGEST prefix of
  * it: `#/company/org/roster` is the Org chart's, `#/company` alone is the
  * Overview's. Settings lands on its first section, `#/settings/models`, and
- * owns all of `#/settings`.
+ * owns all of `#/settings`; Code lands on its Repositories, `#/code/repos`,
+ * and owns all of `#/code`.
  *
  * # Addresses that moved
  *
@@ -59,7 +60,8 @@
  * # Hidden for a service the company does not run, locked for access
  *
  * A row or section that reads one of Crewlet's own services (its tracker,
- * Crewlet Works, or its knowledge base, Crewlet Knowledge) names it
+ * Crewlet Works, its knowledge base, Crewlet Knowledge, or the git host the
+ * engine runs for a company that sets `code.native`) names it
  * ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
  * nothing to ask an admin for, and its addresses say so in place, to every
@@ -84,6 +86,7 @@ export type Workspace =
   | "integrations"
   | "budgets"
   | "work"
+  | "code"
   | "knowledge"
   | "artifacts"
   | "live"
@@ -93,10 +96,12 @@ export type Workspace =
 /**
  * A service built into Crewlet that a company may run elsewhere or not at
  * all: `tracker` is Crewlet Works (projects, tasks, the Inbox's updates and My
- * work), `knowledge` is Crewlet Knowledge (spaces and pages). Named here
- * because the navigation hides what reads one the company does not run.
+ * work), `knowledge` is Crewlet Knowledge (spaces and pages), `code` is the
+ * engine's own git host (the repositories a company that sets `code.native`
+ * keeps in it). Named here because the navigation hides what reads one the
+ * company does not run.
  */
-export type Service = "tracker" | "knowledge";
+export type Service = "tracker" | "knowledge" | "code";
 
 /** Whether the company runs each of Crewlet's own services: what `lib/services.ts` reads off the wire. */
 export type ServicesRun = Readonly<Record<Service, boolean>>;
@@ -682,6 +687,55 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
+    // THE COMPANY'S CODE, after its work: the git repositories the engine
+    // hosts for it and every push into them. A workspace of its own rather
+    // than a section of Work, because its objects are not tasks and read
+    // another log (the code host's), and nothing in it is the tracker's.
+    key: "code",
+    label: "Code",
+    icon: "code",
+    // IT LANDS ON ITS REPOSITORIES and holds every address under `#/code`, as
+    // Settings lands on its first section: each section is at the address it
+    // keeps for good, so a link copied today is still the page tomorrow.
+    path: ["code", "repos"],
+    owns: ["code"],
+    hint: "The repositories the engine hosts, and who pushed what into them",
+    keywords: ["git", "repositories", "repos", "clone", "source", "code host"],
+    // `g o`: `c` is Company's Principles and `p` switches project, so Code
+    // takes the one letter that moves no chord a reader already has.
+    chord: "o",
+    place: "workspace",
+    renderer: "tabs",
+    // CREWLET'S OWN GIT HOST: hidden, never locked, where the company does not
+    // set `code.native`.
+    //
+    // AND NO PERMISSION, because no app gates code (ADR-0033): every person
+    // reads every repository (ADR-0058), and the engine holds each answer to
+    // the asker's own grant on the repository, leaving out of a listing what
+    // a seat may not read. So nothing waits on the reader's access before a
+    // section mounts, and a write here carries its own reason where it is
+    // held.
+    service: "code",
+    sections: [
+      {
+        key: "repos",
+        label: "Repositories",
+        icon: "square-code",
+        path: ["code", "repos"],
+        hint: "Every repository the engine hosts, its owner and its last push",
+        keywords: ["repository", "default branch"],
+      },
+      {
+        key: "pushes",
+        label: "Pushes",
+        icon: "upload",
+        path: ["code", "pushes"],
+        hint: "One repository's pushes: who pushed what, and what landed",
+        keywords: ["push", "push history", "ref", "refs"],
+      },
+    ],
+  },
+  {
     key: "knowledge",
     label: "Knowledge",
     icon: "book-open",
@@ -1153,6 +1207,9 @@ export const RESERVED_SEGMENTS: string[] = [
   "folders",
   "new",
   "setup",
+  "code",
+  "repos",
+  "pushes",
 ];
 
 /**

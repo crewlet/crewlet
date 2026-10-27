@@ -168,6 +168,9 @@ describe("navigation identity", () => {
       integrations: "n",
       budgets: "b",
       work: "w",
+      // `o` (U42): `c` is the Principles', and Code takes the one letter that
+      // moves no chord a reader already has.
+      code: "o",
       knowledge: "k",
       artifacts: "f",
       live: "l",
@@ -215,13 +218,13 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // FOURTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // FIFTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
-  // is a second column of navigation arriving one row at a time. The FIFTEENTH
+  // is a second column of navigation arriving one row at a time. The SIXTEENTH
   // is the reader's own Account, which has no row (the user block at the
   // sidebar's foot is the reader, and its menu links it) and is a workspace
   // all the same, so the palette and its chord reach it.
-  test("the sidebar's rows are fourteen workspaces, in the story's order, and the menu holds the fifteenth", () => {
+  test("the sidebar's rows are fifteen workspaces, in the story's order, and the menu holds the sixteenth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
     expect(run("you")).toEqual(["home", "inbox", "me"]);
     expect(run("company")).toEqual([
@@ -232,7 +235,8 @@ describe("the navigation grammar", () => {
       "integrations",
       "budgets",
     ]);
-    expect(run("workspace")).toEqual(["work", "knowledge", "artifacts", "live"]);
+    // CODE AFTER WORK: what the company does, its work and then its code.
+    expect(run("workspace")).toEqual(["work", "code", "knowledge", "artifacts", "live"]);
     expect(run("foot")).toEqual(["settings"]);
     expect(run("menu")).toEqual(["account"]);
     // THE COMPANY'S FIRST ROW IS "Principles", the same name in the sidebar,
@@ -387,6 +391,10 @@ describe("the navigation grammar", () => {
       // the apps' state and connecting stay an Admin's, on the page itself.
       ["company", "integrations"],
       ["company", "budgets"],
+      // NO APP GATES CODE (ADR-0033): every person reads every repository,
+      // and the engine holds each answer to the reader's own grant.
+      ["code", "repos"],
+      ["code", "pushes"],
       ["live"],
       ["live", "runs"],
       ["settings", "spend"],
@@ -625,6 +633,30 @@ describe("the resolver", () => {
     expect(resolve(["company", "org", "seats"]).resolved).toBe(false);
   });
 
+  // CODE'S SECTIONS ARE ITS ADDRESSES and take no tail: the repository a
+  // history is narrowed to is `repo=`, never a segment, and the bare `#/code`
+  // names no section — the row lands on Repositories, as Settings' lands on
+  // Models & keys. Mutation: resolve the bare head to Repositories and its
+  // trail stops saying where the reader is.
+  test("Code's sections are its two lists, and nothing else under it is a page", () => {
+    expect(resolve(["code", "repos"])).toMatchObject({ screen: "code-repos", workspace: "code" });
+    expect(resolve(["code", "pushes"])).toMatchObject({ screen: "code-pushes", workspace: "code" });
+    const bare = resolve(["code"]);
+    expect(bare.resolved).toBe(false);
+    expect(bare.resolved ? "" : (bare.hint ?? "")).toBe("Code opens on Repositories");
+    for (const path of [
+      ["code", "repos", "web"],
+      ["code", "pushes", "web"],
+      ["code", "changes"],
+      ["code", "web"],
+    ]) {
+      expect(resolve(path).resolved, `#/${path.join("/")}`).toBe(false);
+      expect(workspaceOf(path), `#/${path.join("/")}`).toBe("code");
+    }
+    expect(workspaceRow("code")?.path).toEqual(["code", "repos"]);
+    expect(ownedBy(workspaceRow("code")!)).toEqual(["code"]);
+  });
+
   // A RESERVED WORD THAT IS NOT A WORK SECTION IS NOTHING HERE. Read as an item
   // id it would ask the tracker for an item called `turns`.
   test("a reserved word under a workspace that does not have it is Not Found", () => {
@@ -788,6 +820,18 @@ describe("the breadcrumb", () => {
       "Settings",
       "MCP Tools",
     ]);
+  });
+
+  // A LANDING IS THE SECTION AT THE ROW'S OWN ADDRESS, never one merely as
+  // deep: Code lands on Repositories, and Pushes, as deep, is named. Judged by
+  // depth, the trail and the tab read "Code" over a repository's pushes.
+  test("Code's landing is the workspace alone, and its other section is named", () => {
+    expect(crumbsFor(["code", "repos"]).map((c) => c.label)).toEqual(["Code"]);
+    const pushes = crumbsFor(["code", "pushes"]);
+    expect(pushes.map((c) => c.label)).toEqual(["Code", "Pushes"]);
+    expect(pushes[0]?.path).toEqual(["code", "repos"]);
+    expect(titleOf(pushes)).toBe("Pushes");
+    expect(crumbsFor(["code"]).map((c) => c.label)).toEqual(["Code", "Not found"]);
   });
 
   // EXCEPT SETTINGS', whose landing is one of the column's sections: "Settings"

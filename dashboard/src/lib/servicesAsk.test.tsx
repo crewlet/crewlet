@@ -29,15 +29,19 @@ test("nothing is asked until the projection arrives, and then only what the comp
       <Probe out={out} />
     </TestClient>,
   );
-  expect(out.ask).toEqual({ tracker: false, knowledge: false });
-  expect(out.run).toEqual({ tracker: true, knowledge: true });
+  expect(out.ask).toEqual({ tracker: false, knowledge: false, code: false });
+  expect(out.run).toEqual({ tracker: true, knowledge: true, code: true });
   act(() =>
     store.applyOrg(
-      withDerived({ name: "Acme", roles: [], services: { tracker: "jira", knowledge: "native" } }),
+      withDerived({
+        name: "Acme",
+        roles: [],
+        services: { tracker: "jira", knowledge: "native", code: "native" },
+      }),
     ),
   );
-  expect(out.ask).toEqual({ tracker: false, knowledge: true });
-  expect(out.run).toEqual({ tracker: false, knowledge: true });
+  expect(out.ask).toEqual({ tracker: false, knowledge: true, code: true });
+  expect(out.run).toEqual({ tracker: false, knowledge: true, code: true });
 });
 
 // A NODE RUNNING NO COMPANY names no services: every one is asked, as every
@@ -51,5 +55,5 @@ test("a projection naming no services asks every one", () => {
       <Probe out={out} />
     </TestClient>,
   );
-  expect(out.ask).toEqual({ tracker: true, knowledge: true });
+  expect(out.ask).toEqual({ tracker: true, knowledge: true, code: true });
 });

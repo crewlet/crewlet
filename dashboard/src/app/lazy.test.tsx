@@ -74,6 +74,7 @@ describe("which chunk draws a screen", () => {
         "agents",
         "artifacts",
         "brand",
+        "code",
         "home",
         "inbox",
         "knowledge",
@@ -113,6 +114,8 @@ describe("which chunk draws a screen", () => {
     expect(at("company", "budgets")).toBe("spend");
     expect(at("settings", "spend")).toBe("spend");
     expect(at("work", "ENG-4")).toBe("work");
+    expect(at("code", "repos")).toBe("code");
+    expect(at("code", "pushes")).toBe("code");
   });
 
   test("each kind's create page is a chunk of its own, and none is prefetched", () => {

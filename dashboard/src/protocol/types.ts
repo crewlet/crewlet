@@ -35,6 +35,7 @@ import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
+import type { REPO_STATUSES } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
@@ -6468,3 +6469,148 @@ export interface QueryMap {
 }
 
 export type QueryName = keyof QueryMap;
+
+/*
+ * THE CODE HOST'S QUESTIONS, asked over REST (`lib/useCodeQuery.ts`) rather
+ * than on the socket, so a screen of the Code workspace never holds one of
+ * the socket's in-flight slots: its answers are pages of rows a person
+ * scrolls, and an answer by object id is immutable and read again by its tag.
+ * They are registry questions all the same — the one answer every transport
+ * gives, read back at the tab's floor on the code log (`contract/domains.ts`'s
+ * `SESSION_QUERIES.code`) — and each answer is the engine's one read answer
+ * (`code.ReadAnswer`) as the question's kind fills it.
+ */
+
+/**
+ * Where a repository is in its life (`contract/code.ts`'s `REPO_STATUSES`,
+ * held to `code.RepoStatuses`), or a state a newer engine names, which a row
+ * shows as it is.
+ */
+export type CodeRepoStatus = (typeof REPO_STATUSES)[number] | (string & {});
+
+/** Who owns a repository: one unit, by its key, or one seat, by its handle (`code.Owner`). */
+export interface CodeOwner {
+  kind: "unit" | "seat" | (string & {});
+  ref: string;
+}
+
+/** One protection rule over the refs a pattern matches (`code.Protection`). */
+export interface CodeProtection {
+  pattern: string;
+  allow_force?: boolean;
+  allow_delete?: boolean;
+  /** `persons` lets a person push to a matching ref; `none` lets nobody. */
+  direct_push: "persons" | "none" | (string & {});
+}
+
+/** A repository as a listing draws it (`code.RepoSummary` over `code.RepoRef`). */
+export interface CodeRepoSummary {
+  id: string;
+  name: string;
+  status: CodeRepoStatus;
+  /** What decides its settings and its life: `config`, the company document's `code.repos`. */
+  managed_by: string;
+  owner: CodeOwner;
+  /** Which SEATS read it: `company`, every seat, or `unit`, the owner's. A person reads every repository. */
+  visibility: "company" | "unit" | (string & {});
+  default_branch: string;
+  description?: string;
+  protections?: CodeProtection[];
+  /** When it was deleted, absent for a repository that was not. */
+  deleted_at?: string;
+  /** Its live refs, branches and tags together. */
+  refs: number;
+  live_packs: number;
+  live_bytes: number;
+  live_objects: number;
+  /** How many expunges have begun on it; absent for one never expunged. */
+  drop_epoch?: number;
+  /** The checkpoint its rows were read at. */
+  position: LogPosition;
+  /** The reader's standing on it: read, review, write or maintain. */
+  access?: string;
+  /** The default branch's object id; absent for an empty repository. */
+  head?: string;
+  /** Pushes ever. */
+  pushes: number;
+  /** Absent for a repository nobody pushed to. */
+  last_push_at?: string;
+}
+
+/** One ref update a push asked for, and what became of it (`code.Command`). */
+export interface CodePushCommand {
+  ref: string;
+  old: string;
+  new: string;
+  forced?: boolean;
+  /** `ok` moved the ref, `noop` asked for the value it had, `ng` was refused. */
+  result: "ok" | "noop" | "ng" | (string & {});
+  /** Why an `ng` command was refused, as the engine names the refusal. */
+  reason?: string;
+  detail?: string;
+}
+
+/** What made a seat's push, as the engine stamped it from the call (`code.RunProvenance`). */
+export interface CodePushRun {
+  turn_id: string;
+  /** The tracker the turn's work item is in, and its key there. */
+  work_backend?: string;
+  work_key?: string;
+  model?: string;
+}
+
+/** One push as its repository's history keeps it (`code.PushRow`). */
+export interface CodePushRow {
+  push_id: string;
+  repo_id: string;
+  position: LogPosition;
+  /** When its record landed on the code log. */
+  at: string;
+  /** A seat's handle, or the credential an operator pushed through (`pat:…`, `session:…`). */
+  actor: string;
+  actor_kind: "agent" | "operator" | (string & {});
+  /** The seat: the seat itself, or the human seat an operator's credential is bound to. */
+  actor_seat?: string;
+  /** `git` for what a client's git sent, `engine` for a commit the engine built from a tool's call. */
+  via: "git" | "engine" | (string & {});
+  /** A seat's push: the turn, its work item and its model. */
+  run?: CodePushRun;
+  node?: string;
+  atomic?: boolean;
+  /** Every ref update it asked for — null only where the engine kept none. */
+  commands: CodePushCommand[] | null;
+  pack_id?: string;
+  pack_bytes?: number;
+  /** The commits it introduced, at most a bounded list of them; `introduced_count` is the whole. */
+  introduced?: string[];
+  introduced_count?: number;
+  received_at: string;
+}
+
+/** A page of a code listing: its cursor, and the checkpoint and level it was read at. */
+interface CodePage {
+  /** The cursor to the next page, absent at the end. */
+  next?: string;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
+/** `code_repos`: the repositories the asker may read, by name. */
+export interface CodeReposAnswer extends CodePage {
+  /** Absent on a page that holds none, which may still carry a `next`. */
+  repos?: CodeRepoSummary[];
+}
+
+/** `code_pushes`: one repository's pushes, newest first in log order. */
+export interface CodePushesAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  pushes?: CodePushRow[];
+}
+
+/** The code questions the dashboard asks, and what each answers. */
+export interface CodeQueryMap {
+  code_repos: CodeReposAnswer;
+  code_pushes: CodePushesAnswer;
+}
+
+export type CodeQueryName = keyof CodeQueryMap;

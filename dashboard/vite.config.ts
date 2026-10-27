@@ -410,6 +410,9 @@ export default defineConfig({
       // The adopted brand's files and its adoption (lib/brand/api.ts). The
       // brand itself is the socket's question.
       "/brand": { target: "http://localhost:8000" },
+      // The code host's questions, asked on the query registry's generic REST
+      // form rather than the socket (lib/useCodeQuery.ts).
+      "/query": { target: "http://localhost:8000" },
     },
   },
 });

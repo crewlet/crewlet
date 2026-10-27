@@ -124,6 +124,7 @@ const LOADERS = {
   inbox: () => import("~/routes/inbox/index.ts"),
   me: () => import("~/routes/me/index.ts"),
   work: () => import("~/routes/work/index.ts"),
+  code: () => import("~/routes/code/index.ts"),
   agents: () => import("~/routes/agents/index.ts"),
   org: () => import("~/routes/org/index.ts"),
   live: () => import("~/routes/live/index.ts"),
@@ -152,6 +153,7 @@ type ScreenDir =
   | "inbox"
   | "me"
   | "work"
+  | "code"
   | "agents"
   | "live"
   | "knowledge"
@@ -202,6 +204,8 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "work-search": "work",
   project: "work",
   item: "work",
+  "code-repos": "code",
+  "code-pushes": "code",
   knowledge: "knowledge",
   container: "knowledge",
   page: "knowledge",
@@ -255,6 +259,7 @@ export const CHUNKS: readonly Chunk[] = [
   "agents",
   "spend",
   "work",
+  "code",
   "knowledge",
   "artifacts",
   "live",
@@ -271,6 +276,7 @@ const CHUNK_LABELS: Readonly<Record<ScreenDir | "org" | "signin" | "palette", st
   inbox: "Inbox",
   me: "My work",
   work: "Work",
+  code: "Code",
   agents: "Org chart",
   live: "Live",
   knowledge: "Knowledge",

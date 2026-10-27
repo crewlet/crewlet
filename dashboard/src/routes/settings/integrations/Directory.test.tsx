@@ -131,7 +131,7 @@ const MEMBER = {
 };
 const NOBODY = { login: "", owner: "", grants: [], acts: [] };
 
-const NATIVE: OrgServices = { tracker: "native", knowledge: "native" };
+const NATIVE: OrgServices = { tracker: "native", knowledge: "native", code: "native" };
 
 interface Mounted {
   /** Every socket question the page asked. */
@@ -365,7 +365,7 @@ test("coming back to an app through the list does not reopen the arrival's form"
 
 // A HOME WITH NOTHING IN USE says so and points at the list.
 test("a company with nothing in use is told to pick from the list", async () => {
-  mount(MEMBER, undefined, { tracker: "none", knowledge: "none" });
+  mount(MEMBER, undefined, { tracker: "none", knowledge: "none", code: "none" });
   expect(await screen.findByText("Nothing is in use yet")).toBeTruthy();
   expect(screen.queryByRole("region", { name: /^In use/ })).toBeNull();
 });
@@ -500,7 +500,7 @@ test("a service the company runs is in use, with its way in", async () => {
 // asked of a service the company does not run. Mutation: ask the counts
 // whatever runs, and the list names `work_projects`.
 test("a service run elsewhere says what replaces it and asks nothing of it", async () => {
-  const { asked } = mount(ADMIN, "works", { tracker: "jira", knowledge: "native" });
+  const { asked } = mount(ADMIN, "works", { tracker: "jira", knowledge: "native", code: "none" });
   expect(await screen.findByText("Jira does this for your company")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open Jira" }).getAttribute("href")).toBe(
     "#/company/integrations/jira",
@@ -523,7 +523,7 @@ test("the Works settings say how long the company's inbox keeps a notice", async
 });
 
 test("a service the company runs none of says so, with no product to open", async () => {
-  mount(ADMIN, "knowledge", { tracker: "native", knowledge: "none" });
+  mount(ADMIN, "knowledge", { tracker: "native", knowledge: "none", code: "none" });
   expect(await screen.findByText("Nothing does this for your company")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Open Confluence/ })).toBeNull();
 });

@@ -664,9 +664,10 @@ test("a column with no word in its head declares one", () => {
 /**
  * EVERY READ NAMES ITS QUESTION.
  *
- * The first argument of a call that asks the engine something — `useQuery(`
- * and `query(`, bare or as a method — is a string literal: never a variable,
- * an expression, or a template with something substituted into it.
+ * The first argument of a call that asks the engine something — `useQuery(`,
+ * `useSearchQuery(`, `useCodeQuery(` (a code question, asked over REST) and
+ * `query(`, bare or as a method — is a string literal: never a variable, an
+ * expression, or a template with something substituted into it.
  *
  * THE ENGINE'S GATES READ THESE CALLS BY NAME, and a call they cannot read is
  * one they do not see. `internal/api/queries` holds this tree against the
@@ -707,7 +708,7 @@ test("a column with no word in its head declares one", () => {
  */
 
 /** Names the engine's gates read by spelling: `clientsource.Calls` is asked for exactly these. */
-const SPELLED = new Set(["useQuery", "query", "useSearchQuery"]);
+const SPELLED = new Set(["useQuery", "query", "useSearchQuery", "useCodeQuery"]);
 /** Names held by binding, imported from this tree, because a package exports one of the same spelling. */
 const BOUND = new Set(["act", "useAct"]);
 
@@ -857,6 +858,9 @@ describe("every read names its question", () => {
     expect(literal("query")).toBeGreaterThanOrEqual(2);
     expect(literal("useAct")).toBeGreaterThanOrEqual(4);
     expect(literal("useSearchQuery")).toBeGreaterThanOrEqual(8);
+    // THE CODE WORKSPACE'S: its Repositories and its Pushes, each asked
+    // through the REST hook.
+    expect(literal("useCodeQuery")).toBeGreaterThanOrEqual(3);
   });
 
   // A RANKED SEARCH IS ASKED THROUGH ITS HOOK, OR NOT AT ALL. The engine

@@ -1158,7 +1158,11 @@ test("a cold load of a service's page asks nothing until the company says what i
   expect(asked.filter((w) => w === "containers" || w === "pages")).toEqual([]);
   act(() =>
     store.applyOrg(
-      withDerived({ name: "Acme", roles: [], services: { tracker: "native", knowledge: "none" } }),
+      withDerived({
+        name: "Acme",
+        roles: [],
+        services: { tracker: "native", knowledge: "none", code: "none" },
+      }),
     ),
   );
   expect(await screen.findByText("This company runs no knowledge base")).toBeTruthy();

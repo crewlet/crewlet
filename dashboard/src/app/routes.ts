@@ -197,6 +197,8 @@ export type FramedScreen =
   | { screen: "work-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
+  | { screen: "code-repos" }
+  | { screen: "code-pushes" }
   | { screen: "principles" }
   | { screen: "brand" }
   | { screen: "brand-setup" }
@@ -321,6 +323,8 @@ export function resolve(path: string[]): Route {
       return company(rest, screen, under);
     case "work":
       return work(rest, screen, under);
+    case "code":
+      return code(rest, screen, under);
     case "live":
       return live(rest, screen, under);
     case "knowledge":
@@ -393,6 +397,29 @@ function work(rest: string[], screen: Make, under: Under): Route {
   // to come — asked the tracker for an item called that and drew its refusal
   // under a trail naming a page that does not exist.
   return missing("work", under("Work"));
+}
+
+/**
+ * Code's sections, each a list that takes no tail: the repositories the
+ * engine hosts, and one repository's pushes, which `repo=` names rather than a
+ * segment, since a section is a path and the repository is what it is
+ * narrowed to. The bare `#/code` names neither: the Code row lands on its
+ * Repositories, and an address is one page.
+ */
+function code(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  if (first === undefined) {
+    return missing("code", "Code itself", "Code opens on Repositories");
+  }
+  if (tail.length > 0) return missing("code", under("Code"));
+  switch (first) {
+    case "repos":
+      return screen({ screen: "code-repos" });
+    case "pushes":
+      return screen({ screen: "code-pushes" });
+    default:
+      return missing("code", under("Code"));
+  }
 }
 
 /**

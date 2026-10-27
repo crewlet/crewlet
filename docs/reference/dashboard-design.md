@@ -498,7 +498,7 @@ share does not move.
 ## Information architecture
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
-reader can go (fourteen **workspaces**, in three runs and a foot) and the
+reader can go (fifteen **workspaces**, in three runs and a foot) and the
 few objects they keep coming back to: the views and artifacts they pinned and
 the pages they starred. A workspace's own **sections** are paths drawn as tabs
 in its page header (Settings draws its fifteen as a column of four groups, and
@@ -752,7 +752,7 @@ what needs you, what reached you, what is yours. Then **Company**, what the
 company decides: who it is, the policies its agents read, its org chart, its
 schedules, the services and apps it runs, and, last, the ceilings it sets on
 what it spends. Then **Workspace**, what the company does with all of that:
-its work, what it knows, what it made and what is running. The engine stands
+its work, its code, what it knows, what it made and what is running. The engine stands
 beside the company's name in the head, and the foot is the reader, with
 Settings and Preferences as glyphs beside them.
 
@@ -770,6 +770,7 @@ Settings and Preferences as glyphs beside them.
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Work** | `#/work` | — |
+| **Code** | `#/code/repos` | none, and never a lock: no app gates code, every person reads every repository, and the engine holds each answer to the reader's own grant. Hidden where the company hosts no code in the engine (`code.native`). See [The Code workspace](#the-code-workspace) |
 | **Knowledge** | `#/knowledge` | — |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
 | **Live** | `#/live` | the agents working now, beside the working mark, the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on the org chart's row it sent a reader looking for a running turn to the chart |
@@ -930,18 +931,20 @@ it held — an outage keeps the last state, and a refusal is not an
 outage.
 
 **A service the company does not run is hidden, never locked.** A company
-runs Crewlet's own tracker (Crewlet Works) or Jira in its place, or none, and
-Crewlet's own knowledge base (Crewlet Knowledge) or Confluence, or none. The
+runs Crewlet's own tracker (Crewlet Works) or Jira in its place, or none,
+Crewlet's own knowledge base (Crewlet Knowledge) or Confluence, or none, and
+hosts its git repositories in the engine (`code.native`) or does not. The
 engine decides which from the company document and publishes it to every
-signed-in reader on the `viewer` answer, which the frame already reads
-(`lib/services.ts`). Where the company does not run one, the places that read
+signed-in reader as the org projection's `services`, which the frame already
+reads (`lib/services.ts`). Where the company does not run one, the places that read
 it are HIDDEN rather than locked, because there is nothing to ask an admin
 for and a lock would say there was (`serviceShown` in `nav.ts`): without
 Crewlet Works, Work and My work leave the sidebar, the palette and the `g`
 chords, and so does every way to file or move a task (New task, the palette's
 Create task, Ask an agent and Assign, a seat's Message and Assign, every
 create page's Ask an agent, and New design, whose one way to finish files a
-task); without Crewlet Knowledge, Knowledge does. The Inbox stays, because
+task); without Crewlet Knowledge, Knowledge does; and where the engine hosts
+no code, Code does. The Inbox stays, because
 the seat and budget conditions waiting on a person arrive under every
 backend: it draws those, and one line in place of its updates. Home leaves
 out the blocks and figures that cannot arrive, and each row of the board
@@ -1165,9 +1168,9 @@ and the tab.
 `g` then a letter jumps to a workspace: `g h`, `g i` and `g m` for the first
 run; `g c` for Company's Principles, `g e` for Brand, `g a` for the Org chart,
 `g d` for Schedules, `g n` for Integrations and `g b` for Budgets; `g w`,
-`g k`, `g f` for Artifacts and `g l` for Live; `g s` for Settings, and `g u`
-for your Account. A chord to a hidden place is not answered, as its row is not
-drawn. A chord rather than a
+`g o` for Code (its own initial is Company's), `g k`, `g f` for Artifacts and
+`g l` for Live; `g s` for Settings, and `g u` for your Account. A chord to a
+hidden place is not answered, as its row is not drawn. A chord rather than a
 modifier, because every single-modifier combination worth having is already
 the browser's. `g r` is the one `g` sequence that is not a workspace: it
 watches the running turn when exactly one seat is working, and opens Live ›
@@ -1259,6 +1262,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
+| `#/code/repos` | **Code › Repositories**, Code's landing: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its pushes *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))*. Code's bare head names no section and is Not Found, saying Code opens on Repositories | `status=active\|archived\|deleted\|purging` (none is active and archived) |
+| `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of each ref, the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
 | `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the adopted version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, adopting a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
 | `#/company/brand/setup` | **Brand › Set up**: the company's brand set up in six steps (Identity, Logos, Colours, Typography, Voice, Review) on a page of its own, never a dialog: a vertical step rail, the step's fields in one column under a lead sentence saying why the part matters, and the Brand page's preview beside them labelled "Preview of your draft" (under the content at 1024; a Preview disclosure and a horizontal step row on a phone). Every Continue saves the step into a draft version of the company's kit (a keyed publish, never an adoption; the first makes the kit, shared with the company to view), and opening the page again resumes at the first step not done. Colours carries the contrast panel: the pair that refuses an adoption (text on the light ground) in danger tone, the advisory pairs in warning tone with their reason, and one-click shades that keep the hue. Review lists a summary card per step with Edit, the full preview and an acknowledgement for each contrast warning; an Admin, a person, finishes with **Adopt as the company brand**, and a person the kit is shared with to edit with **Save for review**. Entered from the Brand page's empty state, the Make row chip an Admin sees with no brand, the notice over an unadopted draft ("Continue setting up") and the Brand page's **Run setup again** | |
@@ -6874,6 +6879,64 @@ table the socket's query errors use.
 
 ---
 
+## The Code workspace
+
+Code is the company's git repositories as the engine hosts them
+([Code Host](../concepts/code-host.md)): a Workspace row after Work, `g o`,
+landing on **Repositories** at `#/code/repos`, its sections drawn as tabs in
+the page header. It is drawn only where the company hosts code in the engine —
+`services.code` on the org projection — and is hidden, never locked, where it
+is `none`, an address under it answered by the service notice. It names no
+app: every person reads every repository (ADR-0058), and the engine holds each
+answer to the reader's own grant on the repository, leaving out of a listing
+what a seat may not read, so nothing waits on the reader's access before a
+section mounts.
+
+- **Repositories** is the engine's listing, `code_repos`, by name and a page
+  at a time. A page is what the engine SCANNED, not what it kept, so one can
+  be short, or empty with a cursor, and the grid pages with Load more until no
+  cursor comes back; the order is the engine's and no head re-sorts the pages
+  held. A row says its state where it is not active (archived, deleted, being
+  purged), who owns it (a unit by its name, a seat by its badge), which seats
+  read it, its default branch and the commit it stands at, its last push, its
+  pushes, its size and how many protection rules it carries. `status=` is the
+  engine's own filter (`REPO_STATUSES`, held to `code.RepoStatuses`). A row
+  opens its pushes. Nothing here writes: a repository's settings are the
+  company document's `code.repos`, and an empty listing offers the
+  configuration to a reader who may open it.
+- **Pushes** is one repository's history, `code_pushes`, newest first in the
+  order the pushes landed. The engine keeps a history per repository and none
+  that spans them, so the section is narrowed to one by `repo=` — chosen from
+  the repositories in its bar, or arriving from a Repositories row — and a
+  name no repository can have (`REPO_NAME`, held to `code.ValidName`) is said
+  in place rather than asked about. A row is when it landed, who pushed (the
+  seat, or the credential a person pushed through with the seat it acts as),
+  what became of each ref (created, moved, forced, deleted, unchanged, or
+  refused, in the danger tone with the engine's reason), the commits it
+  brought, a seat's turn and work item as the engine stamped them, how it was
+  built (a client's `git push`, or a commit the engine built from a tool's
+  call) and its pack. It is a log, so it reaches its older rows by fetching
+  them and holds its first page still while the reader pages back
+  ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)). It
+  draws no axis: the engine counts no series of pushes, and one folded from
+  the pages held would be true of those pages alone.
+
+**Code is read over REST, never on the socket** (`lib/useCodeQuery.ts`). Its
+questions are the registry's like every other, one answer on every transport,
+but a tab's socket carries its questions in four in-flight slots that the
+frame's own reads wait on, and a code answer is a page a reader scrolls or,
+once a repository's pages land, a tree, a file or a diff. So a code question
+is asked on the registry's generic REST form, `GET /query/{what}`, through the
+one REST loader (`useRest`): an answer belongs to its key, a refusal replaces
+what is on screen, and the engine's `Retry-After` is the retry. It keeps
+`useQuery`'s floor: a write this tab makes to the code log raises the floor
+there (`SESSION_QUERIES.code`), every ask of a code question names it, and the
+write asks again. An answer read by object id is immutable, a strong `ETag`
+and `Cache-Control: immutable`, and the hook keeps its tag, so a read again
+names it and a `304` is the answer it already holds. The engine's reader gates
+read a code question where it is asked, as they read every other:
+`useCodeQuery("…")`, and `codeRest.query("…")` for an older page.
+
 ## Knowledge: the spaces, a landing, and search with real modes
 
 Knowledge is the approved **Home** layout. No column of navigation stands
@@ -8535,7 +8598,7 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 324 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49) took it to 320.3 KiB, most of it their rules in the one sheet; the brand setup wizard (uilet 0.50) to 321.1 KiB; uilet 0.51 to 322.6 KiB, splitting Select and Kbd out of the entry into chunks compressed apart; and the code host's own changes to the frame (a refusal's sentence, a wait said in hours, Not Found's hint) to 323.0 KiB. The formatter cache's frozen shapes, whose key it reads once rather than on every date and number a list draws, and the fixes beside them took it from 323.7 KiB to 323.8 KiB, which 324 KiB still holds |
+| The initial load: the entry, its static imports and the linked stylesheet | 326 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49) took it to 320.3 KiB, most of it their rules in the one sheet; the brand setup wizard (uilet 0.50) to 321.1 KiB; uilet 0.51 to 322.6 KiB, splitting Select and Kbd out of the entry into chunks compressed apart; and the code host's own changes to the frame (a refusal's sentence, a wait said in hours, Not Found's hint) to 323.0 KiB. The formatter cache's frozen shapes, whose key it reads once rather than on every date and number a list draws, and the fixes beside them took it from 323.7 KiB to 323.8 KiB, which 324 KiB still held. The Code workspace took it to 325.6 KiB: its row, routes, trail, service notice and words in the entry (about 0.3 KiB), and the bundler regrouping what the first paint already loaded (about 1.4 KiB) — the code screens reach the peek rail through the grid and nothing of the lazy-screen table beside it, so the two are now compressed apart — and 326 KiB holds it |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
 | The whole of `static/dashboard`, which every binary and image carries | 4.25 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB for artifact folders and the company brand, which took it from about 3.99 MiB to about 4.14 MiB: the brand page, its adoption review and the brand kind's view (about 65 KB), the folder screens, the Move dialog and the gallery's selection (about 50 KB), and the design system's new rules in the one sheet (about 41 KB), each but the rules fetched only when it is opened. A doubled 2.3 MB baseline is still refused |

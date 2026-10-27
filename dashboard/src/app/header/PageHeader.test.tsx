@@ -30,7 +30,7 @@ import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { installWindow } from "~/testing.tsx";
 
 /** A company running every service built into Crewlet. */
-const EVERY = { tracker: true, knowledge: true } as const;
+const EVERY = { tracker: true, knowledge: true, code: true } as const;
 
 afterEach(cleanup);
 
@@ -570,7 +570,7 @@ describe("Settings' section picker on a phone", () => {
         query={new URLSearchParams()}
         grants={null}
         figures={{}}
-        runs={{ tracker: false, knowledge: true }}
+        runs={{ tracker: false, knowledge: true, code: true }}
       />,
     );
     expect(row("#/settings/spend")).not.toBeNull();

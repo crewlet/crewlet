@@ -403,7 +403,7 @@ describe("in the frame", () => {
 test("on a company running Jira the switcher asks no projects, even on a Work address", async () => {
   location.hash = "#/work/tasks";
   const asked: string[] = [];
-  mount({}, { tracker: "jira", knowledge: "native" }, asked);
+  mount({}, { tracker: "jira", knowledge: "native", code: "none" }, asked);
   await settle();
   expect(asked.filter((w) => w === "work_projects")).toEqual([]);
   location.hash = "#/";

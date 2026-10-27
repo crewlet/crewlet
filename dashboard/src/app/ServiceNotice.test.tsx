@@ -59,7 +59,7 @@ function mount(service: Service, path: string[], services: OrgServices, grants: 
   );
 }
 
-const JIRA: OrgServices = { tracker: "jira", knowledge: "native" };
+const JIRA: OrgServices = { tracker: "jira", knowledge: "native", code: "native" };
 
 // THE SERVICES' PAGES ARE EVERY READER'S: a reader holding only Tracker who
 // followed a link to Work is told in place and offered the page about the
@@ -74,9 +74,27 @@ test("a reader without Admin is told in place and offered the service's own page
 });
 
 test("a hidden knowledge base offers Crewlet Knowledge's page", async () => {
-  mount("knowledge", ["knowledge"], { tracker: "native", knowledge: "confluence" }, ["admin"]);
+  mount(
+    "knowledge",
+    ["knowledge"],
+    { tracker: "native", knowledge: "confluence", code: "native" },
+    ["admin"],
+  );
   const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
   expect(link.getAttribute("href")).toBe("#/company/integrations/knowledge");
+});
+
+// THE CODE HOST HAS NO CARD UNDER INTEGRATIONS: it is set in the company
+// document, which the sentence names, and a link to a page about something
+// else would send the reader looking there. Mutation: give the code host a
+// card, and the link below is drawn.
+test("a company hosting no code is told so in place, and offered no card", async () => {
+  mount("code", ["code", "pushes"], { tracker: "native", knowledge: "native", code: "none" }, [
+    "admin",
+  ]);
+  expect(await screen.findByText("This company does not host its code here")).toBeTruthy();
+  expect(screen.getByText(/does not set code\.native/)).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "See what is built into Crewlet" })).toBeNull();
 });
 
 // WHAT THE READER ASKED FOR IS NAMED: a New design address says why design is
@@ -89,10 +107,13 @@ test("each hidden place says why it is not here", () => {
     "My work is part of Crewlet Works, which is not in use here.",
   );
   expect(noticeText("knowledge", ["knowledge"])).toMatch(/Memory tab/);
-  expect(noticeTitle("tracker", { tracker: "none", knowledge: "native" })).toBe(
+  expect(noticeTitle("tracker", { tracker: "none", knowledge: "native", code: "native" })).toBe(
     "This company runs no work tracker",
   );
-  expect(noticeTitle("knowledge", { tracker: "native", knowledge: "confluence" })).toBe(
-    "Confluence holds this company's knowledge",
+  expect(
+    noticeTitle("knowledge", { tracker: "native", knowledge: "confluence", code: "native" }),
+  ).toBe("Confluence holds this company's knowledge");
+  expect(noticeTitle("code", { tracker: "jira", knowledge: "confluence", code: "none" })).toBe(
+    "This company does not host its code here",
   );
 });

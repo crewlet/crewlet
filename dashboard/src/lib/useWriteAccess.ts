@@ -145,6 +145,7 @@ export function actionService(tool: ActionTool): Service | null {
 export const SERVICE_OFF_REASONS: Readonly<Record<Service, string>> = {
   tracker: "Crewlet Works is not in use, so no task can be filed or changed here.",
   knowledge: "Crewlet Knowledge is not in use, so no page can be written here.",
+  code: "This company hosts no code in the engine, so no repository can be changed here.",
 };
 
 /** The sentence a change is held with when the reader lacks its app. */

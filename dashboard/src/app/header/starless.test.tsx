@@ -43,7 +43,7 @@ function bar(workspace: Workspace) {
               counts={{}}
               title={row.label}
               workspace={workspace}
-              runs={{ tracker: true, knowledge: true }}
+              runs={{ tracker: true, knowledge: true, code: true }}
               grants={null}
             />
           }

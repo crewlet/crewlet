@@ -7,7 +7,7 @@
 import { Button, Card, Divider, ErrorBoundary, Link, Note, Skeleton, Text } from "@crewlethq/ui";
 import { LinkGlyph } from "@crewlethq/icons/glyphs";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { useOrgArrived, useServicesRun, type ServicesRun } from "~/lib/services.ts";
+import { useOrgArrived, useServicesRun, type Service, type ServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WidgetNote, destinationOf, pageOpens, widgetMissing } from "./kit.tsx";
 import { canUse, widgetDef } from "./registry.tsx";
@@ -65,7 +65,7 @@ function Unavailable({ children }: { children: string }) {
 }
 
 /** No service at all: what a widget is measured against to ask whether it reads one. */
-const NONE_RUN: ServicesRun = { tracker: false, knowledge: false };
+const NONE_RUN: ServicesRun = { tracker: false, knowledge: false, code: false };
 
 /** The card a widget holds while the board waits to learn what the company runs. */
 function WidgetSkeleton() {
@@ -79,7 +79,11 @@ function WidgetSkeleton() {
 }
 
 /** Each of Crewlet's services by the name a reader knows it by. */
-const SERVICE_NAMES = { tracker: "Crewlet Works", knowledge: "Crewlet Knowledge" } as const;
+const SERVICE_NAMES: Readonly<Record<Service, string>> = {
+  tracker: "Crewlet Works",
+  knowledge: "Crewlet Knowledge",
+  code: "Crewlet's git host",
+};
 
 /**
  * A widget a section offers, drawn by the section's component, or the

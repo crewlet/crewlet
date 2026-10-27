@@ -1097,7 +1097,15 @@ const (
 	// month a budget is named by takes 3 back, and Home's budget weekday and
 	// the folder order's one collator a byte each. All of it is in the
 	// entry's graph, because every screen formats through lib/formatters.ts.
-	initialBudget = 324 << 10
+	// The Code workspace took it from 323.8 KiB (331,619 bytes) to 325.6 KiB:
+	// its row, its two routes, its trail, its service notice and its words
+	// in the frame, about 0.3 KiB of the entry; and about 1.4 KiB of the
+	// bundler regrouping what the first paint already loaded, with no module
+	// newly in it — the code screens reach the peek rail through the grid and
+	// nothing of the lazy-screen table beside it, so the two are compressed
+	// apart where they were one chunk. 326 KiB, still under two seconds on
+	// that link.
+	initialBudget = 326 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch

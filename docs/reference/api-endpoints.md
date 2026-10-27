@@ -4755,7 +4755,7 @@ response.
   "policies": ["..."],
   "timezone": "Europe/Berlin",
   "token_budget": {"month": 40000000},
-  "services": {"tracker": "native", "knowledge": "confluence"},
+  "services": {"tracker": "native", "knowledge": "confluence", "code": "native"},
   "roles": [
     {"name": "Founder", "kind": "human", "manages": ["cto"], "availability": "CET business hours"}
   ],
@@ -4866,18 +4866,24 @@ string a client would default to its own browser's zone. Every day the engine
 cuts is cut on it ("today", a due band, an overdue mark, a person's own day), so
 a screen deciding which day something falls on cuts on this.
 
-**`services` is which tracker and knowledge base the company runs**, as the
-engine resolves them, on every answer for a company and to every reader:
-`tracker` is `native` (Crewlet's own tracker), `jira` or `none`, and
-`knowledge` is `native` (Crewlet's own knowledge base), `confluence` or
-`none`. A `backend` the document leaves empty is resolved here as the engine
-resolves it: the vendor whose `integrations` block is connected, else
-`native`. Both are closed sets. It is what decides which of the dashboard's
-own surfaces exist: a company that does not run the native tracker has no
-Work and no My work, and every work question is refused there. It names the
-backend and nothing else of the `tracker:` and `knowledge:` blocks, which
-stay guarded: no project or space key, no site, no URL, no credential. Absent
-only from `{}`, so a reader never mistakes "no company yet" for `none`.
+**`services` is which tracker and knowledge base the company runs, and
+whether the engine hosts its code**, as the engine resolves them, on every
+answer for a company and to every reader: `tracker` is `native` (Crewlet's own
+tracker), `jira` or `none`, `knowledge` is `native` (Crewlet's own knowledge
+base), `confluence` or `none`, and `code` is `native` where the document sets
+[`code.native`](../getting-started/configuration.md#code) and `none` where it
+does not — whatever vendor the company connects beside it, since a repository
+on GitHub or GitLab is an integration its seats call rather than a host the
+dashboard draws. A `backend` the document leaves empty is resolved here as the
+engine resolves it: the vendor whose `integrations` block is connected, else
+`native`. All three are closed sets. It is what decides which of the
+dashboard's own surfaces exist: a company that does not run the native tracker
+has no Work and no My work, and every work question is refused there; one that
+hosts no code has no Code workspace. It names the backend and nothing else of
+the `tracker:`, `knowledge:` and `code:` blocks, which stay guarded: no
+project or space key, no site, no URL, no credential, no repository and no
+limit. Absent only from `{}`, so a reader never mistakes "no company yet" for
+`none`.
 
 **`token_budget` is the ceilings as written**, on the company and on each seat
 that names its own: one number per calendar window it caps (`day`, `week`,
