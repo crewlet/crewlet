@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/runner/steersourcetest"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -542,4 +543,104 @@ func TestARunsViewOfItsNotesWatchesAgainWhenItsWatchCloses(t *testing.T) {
 	if answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch); !strings.Contains(answer, "use staging") {
 		t.Errorf("the hook after a batch was answered %q, want the note filed after the watch closed", answer)
 	}
+}
+
+// stallingStore is a run store whose note reads — the record's read and a take
+// — wait while a case holds them.
+type stallingStore struct {
+	sandbox.PendingStore
+	mu   sync.Mutex
+	gate chan struct{}
+}
+
+func (s *stallingStore) wait(ctx context.Context) {
+	s.mu.Lock()
+	gate := s.gate
+	s.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func (s *stallingStore) Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error) {
+	s.wait(ctx)
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+func (s *stallingStore) TakeNotes(ctx context.Context, turnID string, take sandbox.NoteTake) ([]sandbox.RunNote, error) {
+	s.wait(ctx)
+	return s.PendingStore.TakeNotes(ctx, turnID, take)
+}
+
+// hold holds every note read until the function it answers is called.
+func (s *stallingStore) hold() func() {
+	gate := make(chan struct{})
+	s.mu.Lock()
+	s.gate = gate
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		if s.gate == gate {
+			s.gate = nil
+		}
+		s.mu.Unlock()
+		close(gate)
+	}
+}
+
+// A RUN'S RECORD IS A STEER SOURCE LIKE THE FIRST SEGMENT'S BOX: the one suite
+// every source runs (internal/agent/runner/steersourcetest), against the source
+// a segment resuming the turn reads — its takes pinned to the claimed job, the
+// resumed status and its lease, Waiting answered from its view of the record,
+// and a brief its relaunch recorded read handed back as expired.
+//
+// Mutation: answer Waiting false, read the store from Waiting, or return from
+// Return without recording anything, and the suite goes red.
+func TestARunsRecordIsASteerSource(t *testing.T) {
+	t.Parallel()
+	steersourcetest.Run(t, func(t *testing.T) steersourcetest.Source {
+		ctx := t.Context()
+		store := &stallingStore{PendingStore: sandbox.NewCoordStore(coordmem.NewFleet())}
+		runs, published := steersOver(t, steerRing, store)
+		launch := workingRun(t, store, runs, "run-1")
+		claimed, won, err := store.ClaimForResume(ctx, "run-1", sandbox.CompletionTail(launch), sandbox.Fence{})
+		if err != nil || !won {
+			t.Fatalf("ClaimForResume = %v, %v", won, err)
+		}
+		fence := sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch}
+		source := runs.source(ctx, claimed, fence)
+		t.Cleanup(source.Close)
+		return steersourcetest.Source{
+			SteerSource: source,
+			File: func(t *testing.T, n steer.Note) {
+				t.Helper()
+				fileSealed(t, runs, "run-1", n)
+			},
+			Expired: func() []string {
+				var out []string
+				for _, rec := range steered(published) {
+					if rec.Outcome == types.SteerExpired {
+						out = append(out, rec.NoteID)
+					}
+				}
+				return out
+			},
+			LaunchWrote: func(t *testing.T, notes []steer.Note) {
+				t.Helper()
+				sealed, err := runs.briefNotes("run-1", 2, notes)
+				if err != nil {
+					t.Fatal(err)
+				}
+				relaunch := claimed
+				relaunch.BriefNotes = sealed
+				if _, err := store.BeginLaunch(ctx, relaunch, fence); err != nil {
+					t.Fatalf("the relaunch's write: %v", err)
+				}
+			},
+			Stall: store.hold,
+		}
+	})
 }

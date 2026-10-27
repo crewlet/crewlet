@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
@@ -893,4 +894,175 @@ func pollAndConfirm(ctx context.Context, client *http.Client, route string, seen
 		return fmt.Errorf("the read answered %d", answered.StatusCode)
 	}
 	return nil
+}
+
+// watchedFor is a run store that tells a case when every watch of a run's notes
+// open on it has handed its follower a view holding one note: the moment the
+// follower's view — what the tool loop's Waiting reads — has it too.
+type watchedFor struct {
+	sandbox.PendingStore
+	note string
+
+	mu     sync.Mutex
+	next   int
+	active map[int]bool
+}
+
+func (w *watchedFor) WatchNotes(ctx context.Context, turnID string) (<-chan sandbox.NotesView, error) {
+	views, err := w.PendingStore.WatchNotes(ctx, turnID)
+	if err != nil {
+		return nil, err
+	}
+	w.mu.Lock()
+	id := w.next
+	w.next++
+	w.active[id] = false
+	w.mu.Unlock()
+	out := make(chan sandbox.NotesView)
+	go func() {
+		defer func() {
+			w.mu.Lock()
+			delete(w.active, id)
+			w.mu.Unlock()
+			close(out)
+		}()
+		for view := range views {
+			select {
+			case out <- view:
+			case <-ctx.Done():
+				return
+			}
+			if slices.ContainsFunc(view.Steer.Notes, func(n sandbox.RunNote) bool {
+				return n.ID == w.note && n.Waiting()
+			}) {
+				w.mu.Lock()
+				if _, open := w.active[id]; open {
+					w.active[id] = true
+				}
+				w.mu.Unlock()
+			}
+		}
+	}()
+	return out, nil
+}
+
+// everyWatchSaw reports whether every open watch has handed over the note.
+func (w *watchedFor) everyWatchSaw() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, saw := range w.active {
+		if !saw {
+			return false
+		}
+	}
+	return len(w.active) > 0
+}
+
+// A NOTE FILED WHILE THE REVIEWER WORKS ENDS ITS RUN, AND THE NEXT RUN OPENS
+// WITH IT. The reviewer of a turn resumed from its coding run is a run of the
+// engine's own loop, which asks its source whether a note waits after every
+// call (Waiting, under the dispatcher's lock): the segment's source is the run's
+// record, so a note a person files on it while the review works ends the run
+// once the response in flight has its answers, and the next run opens with the
+// note as a user message — read at that run's round, never inside a tool's
+// result.
+//
+// Mutation: answer Waiting from nothing (false), and the review's one run
+// submits without ever reading the note, which its ending then expires.
+func TestANoteFiledDuringTheReviewEndsTheReviewersRun(t *testing.T) {
+	t.Parallel()
+	const note = "the release branch, not main"
+	var (
+		mu      sync.Mutex
+		reviews []string
+	)
+	store := &watchedFor{note: "req-mid-review", active: map[int]bool{}}
+	var e *Engine
+	pick := func(offered []string) llmtest.Run {
+		if !offers(offered, runner.SubmitReviewTool) {
+			return scripted{}.run(offered)
+		}
+		mu.Lock()
+		first := len(reviews) == 1
+		mu.Unlock()
+		if !first {
+			return calling(runner.SubmitReviewTool, map[string]any{"decision": "done"}, llmtest.DefaultUsage)
+		}
+		// THE PERSON'S NOTE, filed as the review's first run starts — after
+		// the round's own read found nothing — and in the view the loop's
+		// Waiting reads before the run's first call is answered.
+		filed, err := e.RunSteers().File(context.Background(), "run-1", steer.Note{
+			ID: "req-mid-review", Text: note, By: "founder", ByKind: iam.ActorHuman})
+		if err != nil || filed.Status != steer.StatusAccepted {
+			t.Errorf("filing the note mid-review answered (%+v, %v)", filed, err)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for !store.everyWatchSaw() && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		// A SUBMISSION THE TOOL REFUSES, then one it takes: the run goes on
+		// past the first unless the note ends it.
+		return llmtest.Run{Responses: []llmtest.Response{
+			{Calls: []llmtest.Call{{Name: runner.SubmitReviewTool, Args: `{"decision":"not-a-decision"}`}}},
+			{Calls: []llmtest.Call{{Name: runner.SubmitReviewTool, Args: `{"decision":"done"}`}}},
+		}}
+	}
+	cli := phasedCLI{model: "scripted", pick: pick}
+	model := providerFunc(func(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+		if req.Tools != nil {
+			if offered, err := offeredTo(req); err == nil && offers(offered, runner.SubmitReviewTool) {
+				var b strings.Builder
+				for _, m := range req.Messages {
+					b.WriteString(m.Content)
+					b.WriteString("\n")
+				}
+				mu.Lock()
+				reviews = append(reviews, b.String())
+				mu.Unlock()
+			}
+		}
+		return cli.Complete(ctx, req)
+	})
+	e, _ = indicatingWith(t, notify.StatusAlways, model)
+	seals, err := newSteerSeals(steerRing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.PendingStore = sandbox.NewCoordStore(e.backends.Fleet)
+	e.runSteers = newRunSteers(seals, store, e.backends.Queue)
+	e.steers = mustSteerDesk(t, steerRing)
+	e.steers.runs = e.runSteers
+	q := e.backends.Queue.(*memory.Queue)
+	rig := rigRuns(t, e, modelPlayer(t, scripted{}.run))
+	parkOnARun(t, e, rig, "run-1")
+	if err := rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	mu.Lock()
+	got := slices.Clone(reviews)
+	mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("the review ran %d times, want the run the note ended and the one that read it", len(got))
+	}
+	if strings.Contains(got[0], note) {
+		t.Error("the review's first run read a note filed after it began")
+	}
+	if !strings.Contains(got[1], note) {
+		t.Errorf("the review's second run did not open with the note:\n%s", got[1])
+	}
+	c := &steerCase{e: e, rig: rig, q: q}
+	read := c.awaitSteered(t, 1)
+	if len(read) != 1 || read[0].Outcome != types.SteerDelivered || read[0].Phase != types.PhaseReview ||
+		read[0].Boundary != types.SteerBoundaryRound || read[0].Round != 2 {
+		t.Errorf("the note was recorded %+v, want delivered at round 2 of the review", read)
+	}
+}
+
+// providerFunc is a model answered by a function.
+type providerFunc func(ctx context.Context, req llm.Request) (*llm.Completion, error)
+
+func (providerFunc) Model() string { return "scripted" }
+
+func (f providerFunc) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	return f(ctx, req)
 }
