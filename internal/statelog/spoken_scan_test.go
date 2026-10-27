@@ -48,6 +48,9 @@ func TestAWaitIsSaidAsAPersonPlansBy(t *testing.T) {
 // "again in", "try again in", each optionally "about".
 var waitPhrase = regexp.MustCompile(`(?i)\b(retry|again) in (about )?$`)
 
+// secondsAfter is the word "seconds" straight after a verb.
+var secondsAfter = regexp.MustCompile(`^ ?(seconds|secs)\b`)
+
 // verb is one fmt verb, `%%` excluded by the caller.
 var verb = regexp.MustCompile(`%[-+ #0-9.*]*[a-zA-Z]`)
 
@@ -58,6 +61,11 @@ var verb = regexp.MustCompile(`%[-+ #0-9.*]*[a-zA-Z]`)
 // about %d seconds", the bulk lease's 81155 seconds) and a Duration printed by
 // its own String ("again in 1m23.456s") both fail, because neither argument
 // is that call.
+//
+// A VERB BEFORE "seconds" is not always a wait: it may be a fixed deadline or
+// a measurement, which [statelog.Spoken] says at the nearest unit. There the
+// scan takes either call, and its failure names both, so it never pushes a
+// deadline onto a wait's rounding up.
 func TestEveryWaitIsSaidThroughSpokenWait(t *testing.T) {
 	root := filepath.Join("..", "..")
 	var offenders []string
@@ -77,13 +85,47 @@ func TestEveryWaitIsSaidThroughSpokenWait(t *testing.T) {
 		}
 	}
 	if len(offenders) > 0 {
-		t.Fatalf("a wait is printed in machine form; say it through statelog.SpokenWait:\n%s",
-			strings.Join(offenders, "\n"))
+		t.Fatalf("%s\n%s", remedy, strings.Join(offenders, "\n"))
 	}
 }
 
-// unspokenWaits returns every wait verb in one file whose argument is not a
-// statelog.SpokenWait call.
+// remedy is what a failure tells its author: both calls, and which is which.
+const remedy = "a duration is printed in machine form. Say a WAIT the reader acts on " +
+	"(\"retry in about ...\") through statelog.SpokenWait, which rounds up; say a " +
+	"MEASUREMENT or a FIXED DEADLINE (\"did not answer within ...\") through " +
+	"statelog.Spoken, which rounds to the nearest unit:"
+
+// TestTheWaitScanIsRedOnMachineFormAndGreenOnSpokenForm proves the scan both
+// ways on fixtures: red on every shape that shipped, green on each correct
+// call, so a scan that stopped catching or started over-reaching fails here.
+func TestTheWaitScanIsRedOnMachineFormAndGreenOnSpokenForm(t *testing.T) {
+	for name, c := range map[string]struct {
+		body string
+		red  bool
+	}{
+		"a count before seconds":               {`fmt.Errorf("retry in about %d seconds", n)`, true},
+		"a Duration's own String in a wait":    {`fmt.Sprintf("holds it again in %s; retry then", d)`, true},
+		"the measuring speller in a wait":      {`fmt.Errorf("retry in about %s", statelog.Spoken(d))`, true},
+		"a deadline as a count of seconds":     {`fmt.Sprintf("did not answer within %d seconds", n)`, true},
+		"a wait through SpokenWait":            {`fmt.Errorf("retry in about %s", statelog.SpokenWait(d))`, false},
+		"a deadline through Spoken":            {`fmt.Sprintf("%s seconds of %s", statelog.Spoken(d), x)`, false},
+		"a deadline spoken without the word":   {`fmt.Sprintf("did not answer within %s", statelog.Spoken(d))`, false},
+		"a setting's unit, not printed by fmt": {`check("an interval is 60 to 86400 seconds")`, false},
+	} {
+		src := "package p\nfunc f() { _ = " + c.body + " }\n"
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, name+".go", src, 0)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", name, err)
+		}
+		if got := len(unspokenIn(fset, file)) > 0; got != c.red {
+			t.Errorf("%s: red = %v, want %v", name, got, c.red)
+		}
+	}
+}
+
+// unspokenWaits returns every wait verb in one file whose argument is not the
+// call its position takes.
 func unspokenWaits(t *testing.T, path string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -91,6 +133,13 @@ func unspokenWaits(t *testing.T, path string) []string {
 	if err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
+	return unspokenIn(fset, file)
+}
+
+// unspokenIn is [unspokenWaits] over a parsed file: a verb after a wait
+// phrase must print statelog.SpokenWait; a verb before "seconds" may print
+// SpokenWait or statelog.Spoken (a deadline, a measurement).
+func unspokenIn(fset *token.FileSet, file *ast.File) []string {
 	var out []string
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -122,10 +171,12 @@ func unspokenWaits(t *testing.T, path string) []string {
 		rest := strings.ReplaceAll(format, "%%", "")
 		for _, loc := range verb.FindAllStringIndex(rest, -1) {
 			before, after := rest[:loc[0]], rest[loc[1]:]
-			wait := waitPhrase.MatchString(before) ||
-				regexp.MustCompile(`^ ?(seconds|secs)\b`).MatchString(after)
-			if wait {
-				if index >= len(args) || !isSpokenWait(args[index]) {
+			wait := waitPhrase.MatchString(before)
+			unit := secondsAfter.MatchString(after)
+			if wait || unit {
+				ok := index < len(args) && (isSpokenCall(args[index], "SpokenWait") ||
+					(!wait && isSpokenCall(args[index], "Spoken")))
+				if !ok {
 					out = append(out, fset.Position(call.Pos()).String()+": "+strconv.Quote(format))
 				}
 			}
@@ -161,9 +212,9 @@ func constantString(e ast.Expr) (string, bool) {
 	return "", false
 }
 
-// isSpokenWait reports whether an argument is `statelog.SpokenWait(...)`, or
-// `SpokenWait(...)` inside this package.
-func isSpokenWait(e ast.Expr) bool {
+// isSpokenCall reports whether an argument is `statelog.<name>(...)`, or
+// `<name>(...)` inside this package.
+func isSpokenCall(e ast.Expr, name string) bool {
 	call, ok := e.(*ast.CallExpr)
 	if !ok {
 		return false
@@ -171,9 +222,9 @@ func isSpokenWait(e ast.Expr) bool {
 	switch fn := call.Fun.(type) {
 	case *ast.SelectorExpr:
 		pkg, ok := fn.X.(*ast.Ident)
-		return ok && pkg.Name == "statelog" && fn.Sel.Name == "SpokenWait"
+		return ok && pkg.Name == "statelog" && fn.Sel.Name == name
 	case *ast.Ident:
-		return fn.Name == "SpokenWait"
+		return fn.Name == name
 	}
 	return false
 }
