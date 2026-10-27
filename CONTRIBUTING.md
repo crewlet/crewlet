@@ -298,7 +298,8 @@ What follows are the prerequisites that legitimately vary by machine.
   JavaScript an OpenCode run's server loads, and `opencode_steer_test.go`
   drives it — as the engine writes it into a real box — under plain `node`,
   through `opencode_steer_probe.mjs` beside it, against a stand-in of the
-  bridge's notes route. That package is in the parallel half, so `make test`
+  bridge's notes route and against a real bridge's. That package is in the
+  parallel half, so `make test`
   requires node too and CI's `test (race)` job installs it, and its skip has
   no allowlist entry either. It needs no npm either: the plugin imports
   nothing.

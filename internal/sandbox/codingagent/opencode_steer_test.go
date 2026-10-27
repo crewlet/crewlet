@@ -3,6 +3,7 @@ package codingagent_test
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -286,23 +288,17 @@ func (p *probe) quiet(d time.Duration, why string) {
 	}
 }
 
-// steerNote is one note as the route answers it.
-type steerNote struct {
-	Seq     int    `json:"seq"`
-	ID      string `json:"id"`
-	Inbox   string `json:"inbox"`
-	Message string `json:"message"`
-}
-
-func noteNumbered(seq int) steerNote {
+// noteNumbered is a note as the bridge's route answers it — the bridge's own
+// type, so a field it renames is a field this stand-in renames too.
+func noteNumbered(seq int) mcpbridge.SteerNote {
 	id := "note-" + string(rune('0'+seq))
-	return steerNote{Seq: seq, ID: id, Inbox: codingagent.OpenCodeInboxID("job-1", id),
+	return mcpbridge.SteerNote{Seq: seq, ID: id, Inbox: codingagent.OpenCodeInboxID("job-1", id),
 		Message: "## A note from ada, sent while this turn was running\n\nnote " + id}
 }
 
-func notesBody(notes ...steerNote) string {
+func notesBody(notes ...mcpbridge.SteerNote) string {
 	if notes == nil {
-		notes = []steerNote{}
+		notes = []mcpbridge.SteerNote{}
 	}
 	raw, _ := json.Marshal(map[string]any{"notes": notes})
 	return string(raw)
@@ -311,7 +307,7 @@ func notesBody(notes ...steerNote) string {
 // wantAdmitted fails the case unless input is note admitted to session as the
 // plugin must admit it: under its inbox id, as a steer, without resuming the
 // session.
-func wantAdmitted(t *testing.T, input map[string]any, session string, note steerNote) {
+func wantAdmitted(t *testing.T, input map[string]any, session string, note mcpbridge.SteerNote) {
 	t.Helper()
 	want := map[string]any{"sessionID": session, "id": note.Inbox, "text": note.Message,
 		"delivery": "steer", "resume": false}
@@ -608,6 +604,93 @@ func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		}
 		route.none(time.Second, "the plugin was given nothing to poll")
 	})
+}
+
+// routeInbox is a run's inbox as the real bridge serves it to the plugin: the
+// notes it holds, answered past each poll's cursor, and every read the route
+// handed it.
+type routeInbox struct {
+	mu    sync.Mutex
+	notes []mcpbridge.SteerNote
+	reads chan []string
+}
+
+func (i *routeInbox) Take(context.Context, string) string { return "" }
+
+func (i *routeInbox) Wait(_ context.Context, after int) ([]mcpbridge.SteerNote, <-chan struct{}) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var out []mcpbridge.SteerNote
+	for _, n := range i.notes {
+		if n.Seq > after {
+			out = append(out, n)
+		}
+	}
+	// NOTHING MORE ARRIVES: a poll past the last note is held to the
+	// route's own hold.
+	return out, make(chan struct{})
+}
+
+func (i *routeInbox) Read(_ context.Context, ids []string) error {
+	i.reads <- ids
+	return nil
+}
+
+func (i *routeInbox) Close() {}
+
+// THE PLUGIN READS THE BRIDGE'S OWN NOTES ROUTE. The other cases answer the
+// plugin from a stand-in of the route; this one runs it against a real bridge
+// serving a run's session, its inbox a stand-in of the engine's, so the
+// route's answer and its read are crossed as a run's CLI crosses them — the
+// note's place, its id, the id it is admitted under and its message, the
+// cursor the plugin asks past and the ids it confirms. A field either side
+// renamed would leave every OpenCode run admitting nothing, with no error
+// anywhere: the plugin skips a note it cannot read, and the note waits for the
+// review.
+//
+// Mutation: rename `inbox`, `message` or `seq` on mcpbridge.SteerNote, or `ids`
+// on the route's read, or the field the plugin reads for any of them, and this
+// goes red.
+func TestThePluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
+	t.Parallel()
+	node := nodeForProbe(t)
+	_, box := openCodeBox(t, t.TempDir())
+	p := codingagent.PathsFor(box)
+	cfgPath, err := codingagent.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool,
+			URL: "http://127.0.0.1:9/mcp/run-token/steer"},
+	}, p)
+	if err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	entry := filepath.Join(steerPluginOf(t, cfgPath).Package, "index.js")
+
+	note := mcpbridge.SteerNote{Seq: 3, ID: "req-7", Inbox: codingagent.OpenCodeInboxID("job-1", "req-7"),
+		Message: "## A note from ada, sent while this turn was running\n\nTarget the release branch."}
+	inbox := &routeInbox{notes: []mcpbridge.SteerNote{note}, reads: make(chan []string, 4)}
+	endpoint := probeBridge(t, inbox, &probeLedger{})
+
+	pr := startProbe(t, node, entry)
+	pr.setup("a", mcpbridge.SteerURL(endpoint), steerSession)
+	pr.expect("setup")
+	pr.event("a", "session.execution.started", steerSession, nil)
+	wantAdmitted(t, pr.expect("prompt-started").Input, steerSession, note)
+	if !pr.expect("prompt").OK {
+		t.Fatal("the stand-in refused an admission it was not told to")
+	}
+	pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": note.Inbox})
+	select {
+	case ids := <-inbox.reads:
+		if len(ids) != 1 || ids[0] != note.ID {
+			t.Errorf("the route handed the inbox the read %v, want the note's id %q", ids, note.ID)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the plugin's confirmation never reached the run's inbox through the route\n%s",
+			pr.stderrText())
+	}
+	// AND THE NEXT POLL ASKS PAST THE NOTE IT ADMITTED: nothing is admitted
+	// twice.
+	pr.quiet(1500*time.Millisecond, "the only note was admitted already")
 }
 
 // openCodePlugin is a run configuration's plugin entry.

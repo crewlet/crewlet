@@ -3,8 +3,9 @@
 // (argv[2]), and set up against a stand-in of the context OpenCode hands a
 // plugin — its options, its event subscription, its session's prompt. Nothing
 // here decides anything: the Go suite plays the bridge's notes route over HTTP
-// and the server's events over this probe's standard input, and judges what
-// the plugin did from the route's requests and this probe's reports.
+// — or serves a real bridge's — and the server's events over this probe's
+// standard input, and judges what the plugin did from the route's requests and
+// this probe's reports.
 //
 // Commands, one JSON object a line on stdin:
 //   {"op":"setup","name":N,"url":U,"session":S}  set a plugin up as N

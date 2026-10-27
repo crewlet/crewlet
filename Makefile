@@ -496,12 +496,12 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # require-node, because this half runs a package that drives `node`:
 # internal/sandbox/codingagent's probe of the OpenCode notes plugin
 # (opencode_steer_test.go), which runs the plugin the engine embeds under node
-# against a stand-in of the bridge's notes route. Without node that case fails
-# where CI is set and skips elsewhere — a skip internal/skipgate declares
-# nowhere, so this target would fail on it after the whole run — and the
-# prerequisite says so before anything runs. ci.yml's `test (race)` installs
-# node for the same reason. (internal/e2e's dashboard replay is node's other
-# consumer, in the solo half below.)
+# against a stand-in of the bridge's notes route and a real bridge's. Without
+# node that case fails where CI is set and skips elsewhere — a skip
+# internal/skipgate declares nowhere, so this target would fail on it after the
+# whole run — and the prerequisite says so before anything runs. ci.yml's
+# `test (race)` installs node for the same reason. (internal/e2e's dashboard
+# replay is node's other consumer, in the solo half below.)
 test: require-node ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, or go list failing)" >&2; exit 1; }
 	$(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
