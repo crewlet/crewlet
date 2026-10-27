@@ -236,9 +236,9 @@ const (
 	// CardFile is the files a deep run delivered (ADR-0054).
 	CardFile CardKind = "file"
 
-	// CardBrief is a brief turn's answer ([TurnBrief]): what is going on,
-	// what waits on the person, and one next step, each row a record the
-	// engine read and resolved for them.
+	// CardBrief is a brief turn's answer ([TurnBrief]): what the page is
+	// about, and the ranked things the person has to do, each row a record
+	// the engine read and resolved for them.
 	CardBrief CardKind = "brief"
 )
 
@@ -600,23 +600,24 @@ var TurnModes = []TurnMode{TurnAsk, TurnBrief}
 // Valid reports whether m is a mode this build knows.
 func (m TurnMode) Valid() bool { return slices.Contains(TurnModes, m) }
 
-// BriefTone is how loud a brief's row is.
+// BriefTone is how loud a brief's row is. Every row is something the person
+// has to do, so there is no quiet tone: a fact merely worth knowing is the
+// brief's context line, never a row.
 //
 // DANGER IS THE ENGINE'S: a row is drawn danger only when the record it cites
 // carries a fact the engine read (a seat stopped, a task marked urgent, a
-// failed turn); the model may choose warning or neutral, and a danger it
-// chose without such a fact is drawn warning.
+// failed turn); a danger the model chose without such a fact is drawn
+// warning.
 type BriefTone string
 
 // The tones a brief's row is drawn in.
 const (
 	BriefDanger  BriefTone = "danger"
 	BriefWarning BriefTone = "warning"
-	BriefNeutral BriefTone = "neutral"
 )
 
-// BriefTones are the three, in declaration order.
-var BriefTones = []BriefTone{BriefDanger, BriefWarning, BriefNeutral}
+// BriefTones are the two, in declaration order.
+var BriefTones = []BriefTone{BriefDanger, BriefWarning}
 
 // Valid reports whether t is a tone this build knows.
 func (t BriefTone) Valid() bool { return slices.Contains(BriefTones, t) }

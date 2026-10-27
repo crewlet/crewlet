@@ -6,8 +6,9 @@
  * THIS PAGE LEADS: one row, "Brief me on this page", or on a page with one
  * record open, "Brief me on this decision" (the record's own word, from the
  * page context's selection, `../brief.ts`). It starts a conversation whose
- * first answer is the brief: what is going on, what waits on the reader with
- * a press for each, and one next step, which the reader goes on asking about.
+ * first answer is the brief: what the page is about, and whether anything
+ * needs the reader, ranked with a press for each, which the reader goes on
+ * asking about.
  * What waits on the reader is the brief's to say, read for the page they are
  * on, so the home keeps no list of its own beside it.
  *
@@ -126,8 +127,8 @@ export function Home({ name, page, onBrief, onAsk, onFill, now }: HomeProps) {
               icon={<ScrollTextGlyph size="sm" />}
               detail={
                 subject === "page"
-                  ? `What is going on in ${page.title}, what needs you, and what to do next`
-                  : `What is going on with this ${subject}, what needs you, and what to do next`
+                  ? `What ${page.title} is about, and whether anything needs you`
+                  : `What this ${subject} is about, and whether it needs you`
               }
               chevron
               onSelect={onBrief}

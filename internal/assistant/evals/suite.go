@@ -97,11 +97,15 @@ type Expect struct {
 }
 
 // ExpectBrief is what a brief's card must hold: the records its rows cite,
-// in order (none is "Nothing needs you"), and the tone each is drawn with,
-// where the case names them.
+// in order (none is "Nothing needs you"), the tone each is drawn with, and
+// the verdict the card says, where the case names them. The verdict is the
+// engine's count of the rows it kept, so a case that names it holds the
+// count to the rows that survived resolution, not to the rows the model
+// wrote.
 type ExpectBrief struct {
-	Needs []string         `yaml:"needs"`
-	Tones []wire.BriefTone `yaml:"tones"`
+	Needs   []string         `yaml:"needs"`
+	Tones   []wire.BriefTone `yaml:"tones"`
+	Verdict string           `yaml:"verdict"`
 }
 
 // empty reports whether e expects nothing.

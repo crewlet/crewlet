@@ -708,8 +708,8 @@ test("a brief is the conversation's first answer: its card, its press and its fo
   await waitFor(() => expect(conversation().turns[0]?.phase).toBe("completed"));
   const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
   expect(JSON.parse(String(turn.init.body))).toMatchObject({ mode: "brief" });
-  const brief = screen.getByRole("region", { name: "Brief 1 needs you" });
-  expect(brief.textContent).toContain("QA waits on your answer");
+  const brief = screen.getByRole("region", { name: "Brief 1 thing needs you" });
+  expect(brief.textContent).toContain("Answer ENG-133: test the store build");
   expect(brief.textContent).toContain("Decision ENG-133");
   expect(screen.getByRole("button", { name: "Open ENG-133" })).toBeDefined();
   expect(screen.getByRole("button", { name: "What did QA test last?" })).toBeDefined();

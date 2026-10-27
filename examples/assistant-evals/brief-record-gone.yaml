@@ -1,6 +1,7 @@
 # A brief of the decision open in the Inbox, whose task was deleted between
 # the list and the brief: the task's own read answers 404, so the row about it
-# is dropped and the recommendation keeps its words without a press.
+# is dropped, the verdict counts the rows the person can act on (none), and
+# the about line still says what the page was about.
 person:
   apps: [worklet]
 page:
@@ -29,15 +30,14 @@ script:
   - call: list_decisions
   - call: answer_brief
     args:
-      summary: The Product Manager asks whether to roll ENG-50 out today.
+      about: The Product Manager asks whether to roll ENG-50 out today.
       needs:
-        - {ref_kind: task, ref_id: ENG-50, text: The Product Manager waits on your answer on ENG-50, tone: warning, action: open}
-      recommended: {text: "Answer ENG-50 today.", ref_kind: task, ref_id: ENG-50, action: open}
-      follow_ups: []
+        - {ref_kind: task, ref_id: ENG-50, do: "Answer ENG-50: roll it out today?", tone: warning, action: open}
 expect:
   calls: [list_decisions, answer_brief]
   proposals: 0
   state: completed
   brief:
     needs: []
-  shows: [Answer ENG-50 today.]
+    verdict: Nothing needs you
+  shows: [The Product Manager asks whether to roll ENG-50 out today.]

@@ -353,11 +353,12 @@ test("a brief's rows open the address the engine built, and its follow-ups ask i
       type: "brief",
       brief: {
         scope: { screen: "inbox", title: "Inbox" },
-        summary: "1 decision waits on you; the QA Engineer is stopped.",
+        about: "QA waits on your answer on ENG-42, and the QA Engineer is stopped.",
         needs: [
           {
             ref: { kind: "seat", id: "qa" },
-            text: "The QA Engineer is stopped on its budget",
+            text: "Raise the QA Engineer's budget",
+            detail: "Stopped 2 hours ago",
             tone: "danger",
             action: {
               kind: "open",
@@ -367,20 +368,28 @@ test("a brief's rows open the address the engine built, and its follow-ups ask i
           },
           {
             ref: { kind: "task", id: "ENG-42" },
-            text: "QA asks which build to test",
+            text: "Answer ENG-42: which build QA tests",
             tone: "warning",
             action: { kind: "ask", label: "Ask", question: "What did QA test last?" },
           },
         ],
-        recommended: { text: "Answer ENG-42 first." },
+        context: "The beta ships Thursday.",
         follow_ups: ["Why is the QA Engineer out of budget?"],
         as_of: "2026-10-26T09:00:00Z",
       },
     },
     { ...on, openHere, ask },
   );
-  expect(screen.getByRole("region", { name: "Brief 2 need you" })).toBeDefined();
+  expect(screen.getByRole("region", { name: "Brief 2 things need you" })).toBeDefined();
   expect(screen.getByText("Inbox")).toBeDefined();
+  expect(
+    screen.getByText("QA waits on your answer on ENG-42, and the QA Engineer is stopped."),
+  ).toBeDefined();
+  expect(screen.getByText("Stopped 2 hours ago")).toBeDefined();
+  expect(screen.getByText("The beta ships Thursday.")).toBeDefined();
+  const rows = screen.getAllByRole("listitem").filter((row) => row.closest("ol") !== null);
+  expect(rows[0]?.textContent).toContain("Do first");
+  expect(rows[0]?.textContent).toContain("Raise the QA Engineer's budget");
   fireEvent.click(screen.getByRole("button", { name: "Open the agent" }));
   expect(openHere).toHaveBeenCalledWith(
     expect.objectContaining({ path: ["company", "org", "seats", "qa"] }),
@@ -389,10 +398,39 @@ test("a brief's rows open the address the engine built, and its follow-ups ask i
   expect(ask).toHaveBeenCalledWith("What did QA test last?");
   fireEvent.click(screen.getByRole("button", { name: "Why is the QA Engineer out of budget?" }));
   expect(ask).toHaveBeenCalledWith("Why is the QA Engineer out of budget?");
-  expect(screen.getByText("Answer ENG-42 first.")).toBeDefined();
 });
 
-test("a brief of one record names it, and nothing waiting is said in words", () => {
+test("a brief's verdict is the rows it carries, counted, at every length the engine sends", () => {
+  const row = (id: string) => ({
+    ref: { kind: "task" as const, id },
+    text: `Answer ${id}`,
+    tone: "warning" as const,
+    action: { kind: "ask" as const, label: "Ask", question: `What is ${id}?` },
+  });
+  const verdicts = [
+    "Nothing needs you",
+    "1 thing needs you",
+    "2 things need you",
+    "3 things need you",
+  ];
+  verdicts.forEach((verdict, n) => {
+    cleanup();
+    draw({
+      type: "brief",
+      brief: {
+        scope: { screen: "home", title: "Home" },
+        about: "Two agents are working.",
+        needs: ["ENG-1", "ENG-2", "ENG-3"].slice(0, n).map(row),
+        follow_ups: [],
+        as_of: "2026-10-26T09:00:00Z",
+      },
+    });
+    expect(screen.getByRole("region", { name: `Brief ${verdict}` })).toBeDefined();
+    expect(screen.queryAllByText("Do first")).toHaveLength(n > 1 ? 1 : 0);
+  });
+});
+
+test("a brief of one record names it, and nothing waiting is said once, in its head", () => {
   draw({
     type: "brief",
     brief: {
@@ -401,15 +439,16 @@ test("a brief of one record names it, and nothing waiting is said in words", () 
         title: "Inbox",
         record: { kind: "task", id: "ENG-7", noun: "decision" },
       },
-      summary: "QA asked which build to test, and you answered.",
+      about: "QA asked which build to test, and you answered.",
       needs: [],
       follow_ups: [],
       as_of: "2026-10-26T09:00:00Z",
     },
   });
-  expect(screen.getByRole("region", { name: "Brief All clear" })).toBeDefined();
+  expect(screen.getByRole("region", { name: "Brief Nothing needs you" })).toBeDefined();
   expect(screen.getByText("Decision ENG-7")).toBeDefined();
-  expect(screen.getByText("Nothing needs you.")).toBeDefined();
+  expect(screen.getAllByText("Nothing needs you")).toHaveLength(1);
+  expect(screen.getByText("QA asked which build to test, and you answered.")).toBeDefined();
 });
 
 test("a brief's open whose address is not this dashboard's draws no press", () => {
@@ -417,7 +456,7 @@ test("a brief's open whose address is not this dashboard's draws no press", () =
     type: "brief",
     brief: {
       scope: { screen: "inbox", title: "Inbox" },
-      summary: "One row.",
+      about: "One row.",
       needs: [
         {
           ref: { kind: "task", id: "ENG-1" },
