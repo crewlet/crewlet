@@ -266,12 +266,14 @@
 //
 // BenchmarkLandedIn over gittest.History's same 32 MB composition (14 080
 // commits, nothing on top) with a branch moved through it 2 000 times by
-// pushes, the commit asked about landed 1 000 moves ago, five reads of each
-// arm, git 2.56.0 on four cores of the same Core Ultra 7 265U, the copy of a
+// pushes, the commit asked about landed 1 000 moves ago, three reads of each
+// arm, git 2.56.0 on two E-cores of the same Core Ultra 7 265U, the copy of a
 // node that read the repository whole and so wrote its commit-graph at once: a
 // landed-in read of a branch never forced takes 32 ms and 11 checks, one
-// forced three times since 56 ms and 17, and one forced 66 times 284 ms and
-// all MaxLandedProbes, answered with how far it reached — 2.6 to 4.4 ms a
-// check, a git process each. One check walking by date over the same history,
-// with no commit-graph — the commit against the branch's tip — takes 24 ms.
+// forced three times since 56 ms and 17, and one forced 514 times 4.8 s and
+// all MaxLandedProbes, answered with how far it reached — one check's git
+// 6.7 ms at the 99th percentile and 11.3 ms at the slowest of 3 075, a git
+// process each, the figure MaxLandedProbes is derived from. One check walking
+// by date over the same history, with no commit-graph — the commit against
+// the branch's tip — takes 26 ms.
 package query

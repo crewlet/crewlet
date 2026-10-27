@@ -43,24 +43,36 @@ import (
 // MaxLandedProbes is the most ancestry checks a landed-in search runs beside
 // its first, against the tip.
 //
-// 64, A JUDGMENT (M3-decisions M3-O22's provisional value, which the measure
-// keeps): an unforced branch with a million moves in the window takes twenty
-// checks, so 64 search three forced segments of that size whole, and each
-// forced move since the landing costs about two. BenchmarkLandedIn measured a
-// check at 2.6 to 4.4 ms over gittest.History's 32 MB (14 000 commits, the
-// copy's commit-graph written) — a git process each, its start most of it — so
-// 64 take 0.28 s, 3% of the read's one budget of git (gitproc.ReadDeadline,
-// which every check of a search shares, as every process of a read's own git
-// does: server.go). The budget is NOT what sets the bound, though it would
-// admit hundreds more: each check is a process of the node's read lane under
-// the read's one unit of the seat share, and a branch force-pushed more than
-// thirty times since a commit landed on it is answered with how far the search
-// reached rather than with seconds of that lane. Without the graph a check
-// walks by date — 24 ms over the same history for the longest, the commit
-// against the tip — and the gigabyte's walks are thirty times longer; the
-// read's budget bounds those, and a search that runs it out answers how far
-// it reached, as one this bound ends does (landing.stopped).
-const MaxLandedProbes = 64
+// 1024, BY M3-decisions M3-O22's RULE for this provisional value: the largest
+// power of two whose checks fit the read's one budget of git
+// (gitproc.ReadDeadline, ten seconds) beside the one other process that
+// budget pays for, the check against the tip — n + 1 checks, each at the
+// 99th percentile of one. BenchmarkLandedIn measured that percentile at
+// 6.7 ms (11.3 ms the slowest of 3 075) over gittest.History's 32 MB, 14 080
+// commits with the copy's commit-graph written, on git 2.56.0 and two
+// E-cores of a Core Ultra 7 265U: 1 025 checks are 6.9 s of the budget and
+// 2 049 would be 13.7 s, past it, and the read that runs all 1 024 took
+// 4.8 s whole. A check is one git process, its start most of it, walking by
+// generation from the move it asks about down to the commit.
+//
+// THE BOUND IS WHERE THE SEARCH STOPS ASKING AND ANSWERS how far it reached,
+// before the budget would end it: every process of a read's own git shares
+// that one budget (server.go), so it is the budget, not this count, that
+// holds a search's time and its use of the read lane — no more than the ten
+// seconds any read's own git may run under its one unit of the seat share.
+// An unforced branch with a million moves in the window takes twenty checks
+// and each forced move since the landing two more, so a branch forced about
+// five hundred times since the commit landed on it — a seat's branch rewritten
+// at every review — is searched whole. A check that costs more than the
+// measure — an old commit's walk over a gigabyte (gittest.LargeEnv's arm,
+// which re-derives this by the same rule where it is run), a copy whose
+// commit-graph is not written yet (26 ms a check over the same history,
+// walking by date), a loaded node — runs the budget out first, and the search
+// answers how far it reached all the same (landing.stopped).
+//
+// It was 64, kept as a judgment while each check had a walk bound of its own,
+// so that this count was all that held a search's time.
+const MaxLandedProbes = 1024
 
 // landedRead answers whether the query's commit is in its target's history at
 // the tip it names, and the push that landed it there.

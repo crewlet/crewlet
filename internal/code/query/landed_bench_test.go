@@ -1,9 +1,12 @@
 package query_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,8 +34,12 @@ import (
 //     ago, as the large model's commit ten thousand pushes old is a few
 //     percent of its moves.
 //   - forced=F is F forced moves of the branch since the commit landed — each
-//     one a segment the search must look past, with one more check — 0, 3,
-//     and 66, past MaxLandedProbes: that read answers no push and says so.
+//     one a segment the search must look past, two checks a segment — 0, 3,
+//     and MaxLandedProbes/2 + 2, which takes the search past its bound: that
+//     read runs every one of MaxLandedProbes's checks, answers no push and
+//     says so, and its ns/op is what the bound costs a read whole — which must
+//     fit the read's budget of git (gitproc.ReadDeadline), or the budget, not
+//     the bound, ends the search and the arm fails saying so.
 //   - graph=with reads the copy of a git node that read the repository
 //     whole, which writes its commit-graph at once (code-host.md, "The
 //     commit-graph first"), and has read the repository's history back into
@@ -42,7 +49,10 @@ import (
 //     the search on a copy whose graph is not written yet.
 //
 // ns/op is the read whole; probes the checks its search ran beside the tip's
-// own, probe-ns what each cost on average.
+// own, probe-ns what each cost on average, and check-p99-ns and check-max-ns
+// the 99th percentile and the slowest of one check's git — the tip's
+// included, its run alone, which is what the read's budget is charged — the
+// figure MaxLandedProbes is derived from (landed.go).
 func BenchmarkLandedIn(b *testing.B) {
 	codetest.Quiet(b)
 	for _, shape := range []struct {
@@ -63,12 +73,20 @@ func BenchmarkLandedIn(b *testing.B) {
 	}
 }
 
-// landedForced is BenchmarkLandedIn's forced arms.
-var landedForced = []int{0, 3, 66}
+// landedForced is BenchmarkLandedIn's forced arms: none, a few, and enough to
+// take the search past MaxLandedProbes (landedPast).
+var landedForced = []int{0, 3, query.MaxLandedProbes/2 + 2}
+
+// landedPast reports whether a branch forced that many times since the
+// commit landed takes the search past MaxLandedProbes: each forced move costs
+// it two checks, one reaching the segment the move began and one asking the
+// move's old value.
+func landedPast(forced int) bool { return 2*forced >= query.MaxLandedProbes }
 
 // landedRig is BenchmarkLandedIn's fixture: a fleet of two git nodes, a
 // history pushed, one branch a forced arm moved through it, the commit asked
-// about, and a query server over the second node.
+// about, and a query server over the second node, whose ancestry checks it
+// times.
 type landedRig struct {
 	f      *codetest.SoloFleet
 	src    string
@@ -80,6 +98,7 @@ type landedRig struct {
 	at      statelog.Position
 	tips    map[int]string
 	s       *query.Server
+	checks  *checkTimes
 }
 
 // landedBranch is the branch a forced arm's moves are made on.
@@ -198,7 +217,8 @@ func (r *landedRig) coldIndexed(b *testing.B) *query.Server {
 		c.WantHistory(r.repo)
 		time.Sleep(50 * time.Millisecond)
 	}
-	s, err := query.New(query.Options{NodeID: n.ID(), Cache: c, Git: n.Pool(),
+	r.checks = &checkTimes{Pool: n.Pool()}
+	s, err := query.New(query.Options{NodeID: n.ID(), Cache: c, Git: r.checks,
 		Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
 		Roster: func() code.Roster { return nil }, Fetched: noFetched})
 	if err != nil {
@@ -210,6 +230,8 @@ func (r *landedRig) coldIndexed(b *testing.B) *query.Server {
 // read times the landed-in read of the forced arm's branch.
 func (r *landedRig) read(b *testing.B, forced int) {
 	q := landedQ(r.repo, r.commit, landedBranch(forced), r.tips[forced], r.at, false)
+	past := landedPast(forced)
+	r.checks.reset()
 	probes := 0
 	for b.Loop() {
 		a, err := r.s.Read(b.Context(), q)
@@ -221,14 +243,61 @@ func (r *landedRig) read(b *testing.B, forced int) {
 		switch {
 		case !l.Landed:
 			b.Fatalf("the commit is not landed in %s", landedBranch(forced))
-		case forced < query.MaxLandedProbes && (l.LandedBy == nil || l.LandedBy.PushID != r.landing[forced]):
+		case !past && (l.LandedBy == nil || l.LandedBy.PushID != r.landing[forced]):
 			b.Fatalf("landed by %+v (%s), want push %s", l.LandedBy, l.Detail, r.landing[forced])
-		case forced >= query.MaxLandedProbes && (l.LandedBy != nil || l.Probes != query.MaxLandedProbes):
-			b.Fatalf("past the bound the search named %+v after %d checks", l.LandedBy, l.Probes)
+		case past && l.LandedBy != nil:
+			b.Fatalf("past its bound the search named push %s", l.LandedBy.PushID)
+		case past && l.Probes != query.MaxLandedProbes:
+			b.Fatalf("the read's %s of git ended the search %d checks in, before its bound of %d (%s): the "+
+				"bound does not fit the budget here, one check's p99 being %v", gitproc.ReadDeadline, l.Probes,
+				query.MaxLandedProbes, l.Detail, r.checks.at(0.99))
 		}
 	}
 	b.ReportMetric(float64(probes), "probes")
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(probes+1), "probe-ns")
+	b.ReportMetric(float64(r.checks.at(0.99).Nanoseconds()), "check-p99-ns")
+	b.ReportMetric(float64(r.checks.at(1).Nanoseconds()), "check-max-ns")
+}
+
+// checkTimes is the rig's query.Pool: every process runs on the git node's
+// own pool, and the run of each ancestry check is kept — what the read's
+// budget of git is charged for it (gitproc.Result.Took), never its wait for a
+// read-lane slot — for the percentile of one check MaxLandedProbes is derived
+// from.
+type checkTimes struct {
+	query.Pool
+	mu   sync.Mutex
+	took []time.Duration
+}
+
+func (c *checkTimes) Run(ctx context.Context, cmd gitproc.Cmd) (gitproc.Result, error) {
+	res, err := c.Pool.Run(ctx, cmd)
+	if cmd.Args[0] == "merge-base" {
+		c.mu.Lock()
+		c.took = append(c.took, res.Took)
+		c.mu.Unlock()
+	}
+	return res, err
+}
+
+// reset forgets every check kept so far.
+func (c *checkTimes) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.took = c.took[:0]
+}
+
+// at is the q-th quantile of the checks kept since the last reset — the run q
+// of the way up them in order, as report takes one, the slowest at 1 — and
+// zero where none was kept.
+func (c *checkTimes) at(q float64) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.took) == 0 {
+		return 0
+	}
+	sorted := slices.Sorted(slices.Values(c.took))
+	return sorted[min(len(sorted)-1, int(q*float64(len(sorted))))]
 }
 
 // withoutGraph times the longest of the search's ancestry checks — the commit

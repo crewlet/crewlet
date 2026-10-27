@@ -2006,10 +2006,12 @@ and a later push put back is named with the push that put it back. It never
 names a move the commit was reachable before: where the commit already stood
 on the branch before the oldest move the index holds of it, or before the
 first move past its gap, the answer names no push and says which range the
-landing lies in. A search runs at most 64 ancestry checks, and they share the
-read's ten seconds of git with its check against the tip; whichever ends it
+landing lies in. A search runs at most 1 024 ancestry checks, and they share
+the read's ten seconds of git with its check against the tip; whichever ends it
 first, it names how far it reached and how many forced moves it did not search
-past, rather than refusing the read.
+past, rather than refusing the read. The count is the most checks that fit
+those ten seconds at what one check measured, so a branch forced about five
+hundred times since the commit landed on it is searched whole.
 
 **Kept like the rest of the copy.** The index is a set of immutable runs under
 `crewlet/` in the repository's directory, merged in the background eight
@@ -2053,13 +2055,15 @@ git node for each data node ([Scaling Out](scaling.md#git-nodes) for a larger
 fleet). Choosing the backfill's next step costs microseconds however many
 copies a node holds — under 3 µs at 10 000 — since the node keeps which
 copies have work due as their work changes, rather than looking at every copy
-for it. A
-`landed_in` over a branch of 2 000 moves through 14 000 commits took 32 ms and
-11 checks where the branch was never forced, 56 ms and 17 checks with three
-forced moves since the landing, and 284 ms for all 64 checks with 66, answered
-with how far it reached. Each check is a git process walking by generation
-once the node has written the copy's commit-graph; walking by date, without
-the graph, one check over the same history took 24 ms.
+for it. On two E-cores of the same machine, a `landed_in` over a branch of
+2 000 moves through 14 000 commits took 32 ms and 11 checks where the branch
+was never forced, 56 ms and 17 checks with three forced moves since the
+landing, and 4.8 s for all 1 024 checks with 514, answered with how far it
+reached. Each check is a git process walking by generation once the node has
+written the copy's commit-graph, 6.7 ms at the 99th percentile, so the 1 025
+checks of a search at its bound fit the read's ten seconds of git where 2 049
+would not; walking by date, without the graph, one check over the same history
+took 26 ms.
 
 ---
 
