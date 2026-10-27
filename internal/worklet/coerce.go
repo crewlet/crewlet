@@ -449,7 +449,7 @@ func coerceDay(what, text string, zone *time.Location) (day string, truncated bo
 	}
 	parsed, perr := time.Parse(time.DateOnly, text)
 	if perr != nil {
-		return "", false, invalid("%s is a date and %q is not one — "+
+		return "", false, invalid("%s is a date and %q is not one: "+
 			"write 2026-03-04, or 2026-03-04T09:00:00Z", what, clip(text))
 	}
 	return parsed.Format(time.DateOnly), false, nil

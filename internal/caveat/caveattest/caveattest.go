@@ -51,7 +51,7 @@ func Problems(text string) []string {
 	if strings.TrimSpace(text) == "" {
 		return []string{"it is empty"}
 	}
-	if strings.ContainsRune(text, '—') {
+	if strings.ContainsRune(text, '\u2014') {
 		out = append(out, "it carries an em dash")
 	}
 	if !strings.HasSuffix(strings.TrimSpace(text), ".") {

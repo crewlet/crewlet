@@ -614,7 +614,7 @@ func (e *UndeclaredArguments) Error() string {
 func (e *UndeclaredArguments) Is(target error) bool { return target == ErrUndeclaredArgument }
 
 // undeclared is the arguments a call carries that its tool's schema does not
-// declare, sorted — nil when there are none.
+// declare, sorted, or nil when there are none.
 //
 // THE SCHEMA IS THE LIST, read off the tool rather than typed beside it, so an
 // argument a tool gains is accepted the moment it can be read and one it loses

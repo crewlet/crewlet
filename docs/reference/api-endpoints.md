@@ -5905,7 +5905,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 | `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `reason` and `grants` (or the window), and the verb in `action` where the route decided it itself |
 | `403` | `forbidden` | The domain forbids this caller the gesture, such as rewriting somebody else's remark | `detail` in a person's words, where the refusal has them |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `If-Match`, a title taken, a race lost — or the state the request needs is not there | `message`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it (a stale `If-Match`, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item among them | `detail` in a person's words, where the refusal has them |
 | `500` | `internal_error` | The engine failed at something of its own, or a tool answered something that is not a receipt | nothing a retry changes; the reason, and anything the tool said instead, is in the node's log |
