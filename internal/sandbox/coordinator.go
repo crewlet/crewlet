@@ -1376,10 +1376,11 @@ type noteReader interface{ ReadsNotes() bool }
 // run's plugin asks as soon as the run's session starts working. So a run that
 // succeeded without asking is one whose reading never ran — for Claude Code, a
 // managed policy that allows only managed hooks or disables them all, or a
-// release that ignored the run's settings file; for OpenCode, a managed policy
-// that denies the plugin, or a plugin that failed to load — and every note sent
-// while it worked waited for its review, which a person sending one is told
-// reads at its next step.
+// release older than 2.1.163, which its script starts without the hooks
+// (codingagent, claudeNotesFloor); for OpenCode, a managed policy that denies
+// the plugin, or a plugin that failed to load — and every note sent while it
+// worked waited for its review, which a person sending one is told reads at its
+// next step.
 // Only for a run whose record names its seat: that anchor is what a launch
 // wired to its turn's notes writes ([LaunchRequest.SteerSeat]), and a run its
 // launch gave nothing to ask for is no sign of anything. Logged on the node
@@ -1406,8 +1407,8 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 			"steps. Something in the box switched the CLI's reading off: for Claude Code, a "+
 			"managed policy that allows only managed hooks (allowManagedHooksOnly, "+
 			"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a "+
-			"release older than 2.1.163, the oldest that reads every field of the run's "+
-			"settings file, whose print mode ignores a file it cannot validate without a word; "+
+			"release older than 2.1.163, the oldest whose Stop hook's answer reaches the model, "+
+			"which the run starts without its hooks and whose error stream says so; "+
 			"for OpenCode, a managed policy that denies the run's notes plugin "+
 			"(integration.use), or a plugin OpenCode failed to load, which its own log names")
 }

@@ -81,10 +81,16 @@ var ClaudeCodeCredentialEnv = []string{
 // NOTHING ELSE MOVES. No --setting-sources, which would drop the repository's
 // CLAUDE.md along with its settings; no --include-hook-events, since the engine
 // counts what the bridge hands over and a hook that stopped the loop is read
-// off the result line. What still switches the hooks off — a managed policy
-// that allows only managed hooks, or a CLI older than 2.1.163, the oldest that
-// reads every field the file holds — leaves a run that succeeded without asking
-// once, which the collection says (internal/sandbox, steer_reader_never_ran).
+// off the result line.
+//
+// A RELEASE OLDER THAN 2.1.163 IS STARTED WITHOUT THE HOOKS ([claudeNotesFloor]):
+// it runs them, and drops what a Stop hook answers, so a note taken as the run
+// finishes would be recorded read by a run that never saw it. What switches the
+// hooks off otherwise — a managed policy that allows only managed hooks
+// (allowManagedHooksOnly, strictPluginOnlyCustomization) or disables every hook
+// (disableAllHooks) — leaves, like that older release, a run that succeeded
+// without asking once, which the collection says (internal/sandbox,
+// steer_reader_never_ran).
 type ClaudeCode struct{}
 
 var _ CLI = ClaudeCode{}
@@ -146,9 +152,11 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 		"--permission-mode", "bypassPermissions",
 	}
 	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps
-	// — only where its launch wired it to them ([ClaudeCode.WriteConfig]).
+	// — only where its launch wired it to them ([ClaudeCode.WriteConfig]), and
+	// only on a release that reads what they answer: the gate below decides,
+	// and hands the flag in as the script's own arguments.
 	if req.Steer.Set() {
-		parts = append(parts, "--settings", shellQuote(paths.ClaudeSettings()))
+		parts = append(parts, `"$@"`)
 	}
 	// THE EARLIER RUN'S OWN CONVERSATION, carried on with the brief — an
 	// answer, an approval — as its next prompt ([sandbox.RunRequest.Resume]).
@@ -180,7 +188,63 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 		// happens to carry, which on a reused box is the previous run's.
 		parts = append(parts, "--mcp-config", shellQuote(configPath), "--strict-mcp-config")
 	}
-	return strings.Join(parts, " ")
+	cmd := strings.Join(parts, " ")
+	if !req.Steer.Set() {
+		return cmd
+	}
+	// ONE SCRIPT, so the wrapper's redirections — the brief on stdin, the
+	// stream, the error file — reach the gate and the CLI alike, and `exec`
+	// leaves the CLI where the script was.
+	return "sh -c " + shellQuote(claudeNotesGate(paths.ClaudeSettings())+"exec "+cmd)
+}
+
+// claudeNotesFloor is the oldest Claude Code release a run is started with its
+// notes hooks on: 2.1.163, the first whose Stop hook's additional context
+// reaches the model (its changelog: "Stop and SubagentStop hooks can now return
+// hookSpecificOutput.additionalContext").
+//
+// An older release that has mcp_tool hooks (2.1.118 onwards) runs both hooks,
+// and reads what the PostToolBatch one answers, but drops what the Stop one does
+// — measured on 2.1.150: the note was taken at Stop, so recorded read and
+// published delivered, and no request carried it, the run's answer the one from
+// before the note. Started without the hooks, that release takes nothing at a
+// boundary it drops: the notes wait for the review, the run is not recorded as
+// having asked ([sandbox.RunSteer.Pulled]), and its collection says so
+// (steer_reader_never_ran) — which tells an operator the box's CLI needs an
+// upgrade, where taking the notes would have told them nothing at all.
+const claudeNotesFloor = "2.1.163"
+
+// claudeNotesGate is the start of a run's script wired to its notes: it reads
+// the box's `claude --version` and sets the script's arguments to
+// `--settings <path>` on a release at or after [claudeNotesFloor], and to
+// nothing on an older one, which the run's error stream says. A version it
+// cannot read is taken for a current release: every release prints
+// `MAJOR.MINOR.PATCH (Claude Code)`, so one that prints anything else is newer
+// than this script, and a CLI that is not there fails at the run itself.
+//
+// POSIX parameter expansion, case and test alone, which every box's sh has
+// (dash, bash, busybox ash): no awk, no sort -V. The version is cut at its first
+// character that is neither a digit nor a dot, so each of its three parts is
+// digits or nothing, and a part that is nothing reads as the floor.
+func claudeNotesGate(settings string) string {
+	major, minor, patch := floorParts(claudeNotesFloor)
+	return "set --; " +
+		`v=$(claude --version < /dev/null 2> /dev/null); v=${v%%[!0-9.]*}; ` +
+		`a=${v%%.*}; r=${v#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}; ` +
+		`case "$a.$b.$c" in [0-9]*.[0-9]*.[0-9]*) ;; *) a=` + major + ` b=` + minor + ` c=` + patch + `;; esac; ` +
+		`if [ "$a" -gt ` + major + ` ] || { [ "$a" -eq ` + major + ` ] && { [ "$b" -gt ` + minor + ` ] || ` +
+		`{ [ "$b" -eq ` + minor + ` ] && [ "$c" -ge ` + patch + ` ]; }; }; }; then ` +
+		`set -- --settings ` + shellQuote(settings) + `; ` +
+		`else echo "crewlet: this box runs Claude Code $v, older than ` + claudeNotesFloor + `, the oldest ` +
+		`that reads a note at the run's finish; the run starts without the hooks that read its notes, ` +
+		`and they wait for its review" >&2; fi; `
+}
+
+// floorParts is a MAJOR.MINOR.PATCH version's three numbers, as text.
+func floorParts(version string) (major, minor, patch string) {
+	major, rest, _ := strings.Cut(version, ".")
+	minor, patch, _ = strings.Cut(rest, ".")
+	return major, minor, patch
 }
 
 // WriteConfig writes the run's system text and its settings file where

@@ -116,11 +116,13 @@ const (
 // claudeSettings is the settings file a Claude Code run is started with
 // (`--settings`, [Paths.ClaudeSettings]): its hooks, and nothing else.
 //
-// EVERY FIELD EXISTS AT 2.1.263, the release the run was measured on oldest
-// (mcp_tool hooks since 2.1.118, a Stop hook's additional context since
-// 2.1.163), and nothing newer is written: in print mode the CLI ignores a
-// settings file that fails its validation WITHOUT A WORD, so a field a CLI does
-// not know yet costs every hook in the file.
+// NO FIELD NEWER THAN THE mcp_tool HOOK (2.1.118 onwards) — a 2.1.150 reads the
+// file whole, measured — because in print mode the CLI ignores a settings file
+// that fails its validation WITHOUT A WORD, so a field a CLI does not know yet
+// costs every hook in the file. What a later release added is what the CLI
+// READS of a hook's answer: a Stop hook's additional context reaches the model
+// from 2.1.163, and a run on an older release is started without this file
+// ([claudeNotesFloor]).
 type claudeSettings struct {
 	// DisableAllHooks is written FALSE, never left out — the posture. A
 	// repository's own `.claude/settings.json` that sets it true switches

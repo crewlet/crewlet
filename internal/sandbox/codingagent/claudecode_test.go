@@ -3,6 +3,7 @@ package codingagent_test
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -50,7 +51,14 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 					t.Fatalf("the brief is on the command line (%q):\n%s", piece, cmd)
 				}
 			}
-			if !strings.HasPrefix(cmd, "claude -p --output-format stream-json --verbose ") {
+			// A RUN WIRED TO ITS NOTES is one script, which reads the CLI's
+			// version before it starts it ([claudeNotesFloor]).
+			invocation := "claude -p --output-format stream-json --verbose "
+			if tc.settings {
+				cmd = scriptOf(t, cmd)
+				invocation = "exec " + invocation
+			}
+			if !strings.HasPrefix(cmd, invocation) && !strings.Contains(cmd, "; "+invocation) {
 				t.Errorf("-p is not the bare print flag, with the prompt left to stdin:\n%s", cmd)
 			}
 			want := "--settings '" + p.ClaudeSettings() + "'"
@@ -86,7 +94,9 @@ func TestClaudesBriefIsReadFromStdin(t *testing.T) {
 	if want := `< '\''` + p.Brief() + `'\''`; !strings.Contains(script, want) {
 		t.Errorf("the CLI's stdin is not the brief's file (%s):\n%s", want, script)
 	}
-	if strings.Contains(script, "< /dev/null") {
+	// THE CLI'S OWN STDIN: the version the script reads first is asked with
+	// none, which is no prompt at all.
+	if _, cli, _ := strings.Cut(script, "claude -p"); strings.Contains(cli, "< /dev/null") {
 		t.Errorf("the CLI's stdin is closed, so it runs no prompt:\n%s", script)
 	}
 }
@@ -291,11 +301,13 @@ func fixture(t *testing.T, version, name string) string {
 }
 
 // installClaude puts a stand-in `claude` on a real box's PATH — the shim
-// directory the wrapper puts first — running body.
+// directory the wrapper puts first — running body, and answering `--version`
+// as the newest release measured does.
 func installClaude(t *testing.T, box sandbox.Sandbox, body string) {
 	t.Helper()
 	p := codingagent.PathsFor(box)
-	if err := box.WriteFile(t.Context(), p.BinDir()+"/claude", []byte("#!/bin/sh\n"+body+"\n")); err != nil {
+	version := `[ "$1" = --version ] && { echo '2.1.310 (Claude Code)'; exit 0; }` + "\n"
+	if err := box.WriteFile(t.Context(), p.BinDir()+"/claude", []byte("#!/bin/sh\n"+version+body+"\n")); err != nil {
 		t.Fatalf("write the stand-in: %v", err)
 	}
 	if _, err := box.Exec(t.Context(), "chmod +x '"+p.BinDir()+"/claude'", sandbox.ExecOptions{}); err != nil {
@@ -342,4 +354,84 @@ func after(argv []string, flag string) string {
 		return argv[i+1]
 	}
 	return ""
+}
+
+// A CLAUDE CODE OLDER THAN ITS NOTE FLOOR STARTS WITHOUT THE HOOKS. From 2.1.118
+// a release runs a settings file's mcp_tool hooks, and before 2.1.163 it drops
+// what a Stop hook answers: a note taken as the run finishes would be recorded
+// read, and published delivered, by a run that never saw it. So a run wired to
+// its notes reads the box's version first and names its settings only on
+// 2.1.163 or later, saying why on its error stream where it does not — its
+// notes then wait for the review, and its collection says it never asked. A
+// version it cannot read is taken for a current release. Under every sh a box
+// may run the script with.
+//
+// Mutation: name the settings whatever the version, or compare the patch alone,
+// and this goes red.
+func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
+	t.Parallel()
+	p := codingagent.Paths{Home: "/box"}
+	script := scriptOf(t, claude().Command(sandbox.RunRequest{Brief: "x", Steer: steerWiring}, p, ""))
+	standIn := `#!/bin/sh
+if [ "$1" = --version ]; then printf '%s' "$FAKE_VERSION"; exit 0; fi
+for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
+`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, tc := range []struct {
+			version  string
+			settings bool
+		}{
+			{"2.1.150 (Claude Code)", false},
+			{"2.1.162 (Claude Code)", false},
+			{"2.0.300 (Claude Code)", false},
+			{"1.9.999 (Claude Code)", false},
+			{"2.1.163 (Claude Code)", true},
+			{"2.1.310 (Claude Code)", true},
+			{"2.2.0 (Claude Code)", true},
+			{"10.0.0 (Claude Code)", true},
+			{"", true},
+			{"Claude Code, a version of its own", true},
+		} {
+			t.Run(tc.version, func(t *testing.T) {
+				dir := t.TempDir()
+				bin := filepath.Join(dir, "bin")
+				if err := os.MkdirAll(bin, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(standIn), 0o700); err != nil { //nolint:gosec // the stand-in must run
+					t.Fatal(err)
+				}
+				argv := sh.argv
+				if len(argv) == 0 {
+					argv = []string{"sh"}
+				}
+				cmd := exec.Command(argv[0], append(append([]string{}, argv[1:]...), "-c", sh.prelude+script)...) //nolint:gosec // the script under test
+				cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "FAKE_DIR=" + dir,
+					"FAKE_VERSION=" + tc.version}
+				var stderr strings.Builder
+				cmd.Stdin, cmd.Stderr = strings.NewReader("x"), &stderr
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("the script: %v\n%s", err, stderr.String())
+				}
+				raw, err := os.ReadFile(filepath.Join(dir, "argv")) //nolint:gosec // under the case's own dir
+				if err != nil {
+					t.Fatalf("the CLI never started: %v\n%s", err, stderr.String())
+				}
+				args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+				named := slices.Contains(args, "--settings")
+				if named != tc.settings {
+					t.Errorf("on %q the CLI was started with --settings: %v, want %v (argv %q)",
+						tc.version, named, tc.settings, args)
+				}
+				if named && args[slices.Index(args, "--settings")+1] != p.ClaudeSettings() {
+					t.Errorf("--settings names %q, want %q", args[slices.Index(args, "--settings")+1],
+						p.ClaudeSettings())
+				}
+				if said := strings.Contains(stderr.String(), "older than 2.1.163"); said == tc.settings {
+					t.Errorf("on %q the run's error stream said it ran without its hooks: %v, want %v\n%s",
+						tc.version, said, !tc.settings, stderr.String())
+				}
+			})
+		}
+	})
 }

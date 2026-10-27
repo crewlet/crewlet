@@ -651,15 +651,21 @@ policy. It holds two hooks and the setting that keeps them on, nothing else:
   a note, whatever it says. An OpenCode run is told its own CLI's carrier
   instead: a message from the user between steps. Worded as a fact rather than
   a command, as the vendor advises for text a hook adds.
-- **Claude Code 2.1.163 or later**: the file holds only fields 2.1.263 knows
-  (an `mcp_tool` hook since 2.1.118, a `Stop` hook's additional context since
-  2.1.163), because in print mode the CLI ignores a settings file it cannot
-  validate without a word.
+- **Claude Code 2.1.163 or later**, or no hooks at all. The file holds no
+  field newer than the `mcp_tool` hook (2.1.118 onwards), because in print mode
+  the CLI ignores a settings file it cannot validate, without a word. What
+  2.1.163 added is what the CLI reads of a hook's answer: from it, a `Stop`
+  hook's additional context reaches the model. An older release runs both
+  hooks and drops what the `Stop` hook answers, so a note taken as the run
+  finished would be recorded as read by a run that never saw it. The run's
+  script therefore reads `claude --version` first and starts an older release
+  without `--settings`, saying so on the run's error stream; that run's notes
+  wait for its review.
 
-What still switches the hooks off — a managed policy that allows only managed
-hooks (`allowManagedHooksOnly`, `strictPluginOnlyCustomization`) or sets
-`disableAllHooks`, or a CLI too old to read the file — leaves a run that
-succeeds without asking for its notes once, which the collection says as
+What leaves a run without its hooks — that older release, or a managed policy
+that allows only managed hooks (`allowManagedHooksOnly`,
+`strictPluginOnlyCustomization`) or sets `disableAllHooks` — leaves a run that
+succeeds without asking for its notes once, which the collection reports as
 [`steer_reader_never_ran`](#failure-modes); its notes still reach its review.
 
 ### OpenCode's notes plugin
@@ -975,7 +981,7 @@ What an operator should recognize:
 - **`sandbox_run_failed` with reason `launch_node_gone`**: the run's `direct` or `container` box was on the host of a node that left the fleet and did not come back within `default_timeout_seconds` — scaled away, or its host lost — so nothing could poll, collect or reclaim it (see [A node that never comes back](#durability-completion-and-observability)). Whatever the run pushed is on its branch. A node that only restarts within that bound never produces this; one that is routinely away longer needs a longer `default_timeout_seconds`.
 - **`sandbox_collect_host_silent`** (a log line, at warning): the seat's holder asked the node whose host a run's box is on to read it back, and it did not answer — stopped, restarting, or gone. The claim is handed back uncounted and that node announces the completion again from its own poll once it is back; a node that never comes back ends the run as `launch_node_gone`.
 - **`sandbox_run_failed` with reason `seat_removed`**: the seat left the company's agent seats — it was removed from the chart, or made a person's and not made an agent's again within the 24-hour retirement grace — so its runs were ended when its mailbox was retired. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
-- **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose CLI takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish, and an OpenCode run's plugin as soon as its session starts working — so something in its box switched its reading off: for Claude Code its [hooks](#claude-codes-hooks), by a managed policy that allows only managed hooks or disables them all, or a CLI older than 2.1.163; for OpenCode its [plugin](#opencodes-notes-plugin), by a managed policy that denies it or a load that failed, which OpenCode's own log names. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its CLI.
+- **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose CLI takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish, and an OpenCode run's plugin as soon as its session starts working — so something in its box switched its reading off: for Claude Code its [hooks](#claude-codes-hooks), by a managed policy that allows only managed hooks or disables them all, or a CLI older than 2.1.163, which the run starts without them (its error stream says so); for OpenCode its [plugin](#opencodes-notes-plugin), by a managed policy that denies it or a load that failed, which OpenCode's own log names. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its CLI.
 - **`a hook in the run stopped its loop before it finished (Claude Code terminal_reason hook_stopped)`** — a hook of the repository's or the image's own settings exited 2 or returned a block, and Claude Code ended the run part-way while reporting a success subtype. The run is a failure saying so; the run's own steering hooks never block. Fix or remove that hook in the repository or the image.
 - **`this box's home "…" cannot be named in an OpenCode run's configuration`** — an OpenCode run's configuration names its instruction file, its notes plugin and its servers' values by paths under the box's home ([OpenCode](#opencode)), and this home is one the configuration's text cannot carry: relative, or holding a brace, a quote, a backslash or a control character. A local box's home is under `providers.sandbox.local.state_dir`; move it to a path without one. The run starts nothing.
 - **`crewlet: the run has no OpenCode configuration at …`** (the run's error output) — the configuration the runner writes before every OpenCode run was not there, or was empty, when the run's script started: something in the box removed it between the two. The script stops before it imports a login or starts a server, and the next run writes the file again.

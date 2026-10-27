@@ -156,8 +156,9 @@ Claude Code's to decide, as they are at a terminal; see
 
 A seat's executor run on a Claude Code entry takes a person's notes between its
 own steps, through hooks the run is started with; that needs Claude Code 2.1.163
-or later, and was measured on 2.1.263 and 2.1.310 — see [The executor's run in
-a box](#the-executors-run-in-a-box).
+or later — an older release is started without them, and its notes wait for its
+review — and was measured on 2.1.263 and 2.1.310; see [The executor's run in a
+box](#the-executors-run-in-a-box).
 
 ### OpenAI's models: Codex
 
@@ -1097,8 +1098,8 @@ argument is capped at 128 KiB — and with `--settings` naming a file of two
 batch of the main agent's tool calls and as the run is about to finish. The
 wrapper unsets `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since
 either switches those hooks off. Measured on Claude Code 2.1.263 and 2.1.310;
-it needs 2.1.163 or later. See [Claude Code's
-hooks](code-sandbox.md#claude-codes-hooks).
+it needs 2.1.163 or later, and the run's script starts an older release without
+`--settings`. See [Claude Code's hooks](code-sandbox.md#claude-codes-hooks).
 
 **A person's notes reach an OpenCode run at its next step.** The run's
 configuration names a plugin the engine writes into the box beside it, which
