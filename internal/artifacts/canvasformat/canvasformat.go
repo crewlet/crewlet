@@ -223,8 +223,14 @@ var noteID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // Parse reads a canvas and holds it to the format and to the version it ships
 // in, m: every board an HTML page of m, and every HTML page of m a board. Every
 // problem is answered at once as an [*Error].
+//
+// Parse is the publish's read; a stored canvas is read with [Read].
 func Parse(data []byte, m artifacts.Manifest) (Canvas, error) {
-	c, problems := decode(data)
+	return parse(data, m, jsonform.Decode)
+}
+
+func parse(data []byte, m artifacts.Manifest, read jsonform.Reader) (Canvas, error) {
+	c, problems := decode(data, read)
 	if problems == nil {
 		problems = check(c, m)
 	}
@@ -241,12 +247,12 @@ var Form = jsonform.Of[Canvas]()
 // decode reads the JSON strictly: one document, no field this build does not
 // know, and the right type for every field, every structural fault at once
 // ([jsonform.Decode]).
-func decode(data []byte) (Canvas, []Problem) {
+func decode(data []byte, read jsonform.Reader) (Canvas, []Problem) {
 	if !utf8.Valid(data) {
 		return Canvas{}, []Problem{{Message: "the file is not UTF-8 text"}}
 	}
 	var c Canvas
-	d := jsonform.Decode(data, Form, jsonform.Subject{File: Path, Format: "the canvas format"}, &c)
+	d := read(data, Form, jsonform.Subject{File: Path, Format: "the canvas format"}, &c)
 	if len(d.Faults) == 0 {
 		return c, nil
 	}
@@ -506,13 +512,24 @@ type Source interface {
 }
 
 // Read reads a stored version's canvas from src and holds it to the version,
-// m, exactly as [Parse] held it at publish.
+// m, as [Parse] held it at publish, its JSON read as stored
+// ([jsonform.DecodeStored]) so a canvas accepted before ADR-0059 tightened its
+// keys reads as it did.
 func Read(src Source, m artifacts.Manifest) (Canvas, error) {
+	return readWith(src, m, jsonform.DecodeStored)
+}
+
+// Check is [Read] as a publish holds a canvas it writes ([Parse]).
+func Check(src Source, m artifacts.Manifest) (Canvas, error) {
+	return readWith(src, m, jsonform.Decode)
+}
+
+func readWith(src Source, m artifacts.Manifest, read jsonform.Reader) (Canvas, error) {
 	data, err := src.Read(Path)
 	if err != nil {
 		return Canvas{}, err
 	}
-	return Parse(data, m)
+	return parse(data, m, read)
 }
 
 // Outline is a design's structure without its pages: what the gallery draws

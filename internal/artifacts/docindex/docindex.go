@@ -235,7 +235,19 @@ func (r *Refused) Unwrap() error { return ErrRefused }
 // Read reads a whole doc from the version whose entry is entry: `doc.json` and
 // every tab it names, or the one Markdown file. A doc outside the format is a
 // [*Refused]; an error reading a file is answered as itself.
+//
+// The index is read as stored ([jsonform.DecodeStored]), so a doc accepted
+// before ADR-0059 tightened its keys reads as it did; [Check] is the publish's.
 func Read(src artifacts.FileSource, entry string) (Doc, error) {
+	return read(src, entry, jsonform.DecodeStored)
+}
+
+// Check is [Read] as a publish holds a doc whose index it writes.
+func Check(src artifacts.FileSource, entry string) (Doc, error) {
+	return read(src, entry, jsonform.Decode)
+}
+
+func read(src artifacts.FileSource, entry string, decode jsonform.Reader) (Doc, error) {
 	if entry != IndexPath {
 		return readOne(src, entry)
 	}
@@ -243,7 +255,7 @@ func Read(src artifacts.FileSource, entry string) (Doc, error) {
 	if err != nil {
 		return Doc{}, fmt.Errorf("docindex: read %s: %w", IndexPath, err)
 	}
-	idx, found := ParseIndex(raw)
+	idx, found := parseIndex(raw, decode)
 	if idx == nil {
 		return Doc{}, &Refused{Findings: found}
 	}
@@ -311,9 +323,11 @@ func tabFile(src artifacts.FileSource, p string) *Finding {
 // from [Index] ([jsonform.Of]).
 var IndexForm = jsonform.Of[Index]()
 
-// ParseIndex reads `doc.json`, answering every problem with it. A nil index is
-// one that could not be read at all.
-func ParseIndex(raw []byte) (*Index, []Finding) {
+// ParseIndex reads `doc.json` as a publish holds it, answering every problem
+// with it. A nil index is one that could not be read at all.
+func ParseIndex(raw []byte) (*Index, []Finding) { return parseIndex(raw, jsonform.Decode) }
+
+func parseIndex(raw []byte, decode jsonform.Reader) (*Index, []Finding) {
 	var found []Finding
 	bad := func(format string, args ...any) {
 		found = append(found, Finding{Path: IndexPath, Rule: RuleIndex,
@@ -321,7 +335,7 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 	}
 	var idx Index
 	// EVERY STRUCTURAL FAULT AT ONCE ([jsonform.Decode]).
-	d := jsonform.Decode(raw, IndexForm, jsonform.Subject{File: IndexPath, Format: "the doc index"}, &idx)
+	d := decode(raw, IndexForm, jsonform.Subject{File: IndexPath, Format: "the doc index"}, &idx)
 	for _, f := range d.Faults {
 		found = append(found, Finding{Path: IndexPath, Rule: RuleIndex, Message: f.Message})
 	}

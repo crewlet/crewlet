@@ -3,6 +3,7 @@ package brandformat_test
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -150,5 +151,38 @@ func TestTheBrandsOwnDomainIsItsName(t *testing.T) {
 		if (err == nil) != ok {
 			t.Errorf("%q: read error %v, want admitted %v", text, err, ok)
 		}
+	}
+}
+
+// THE BRAND INDEX ADMITS EXACTLY THE KEYS IT ADMITTED BEFORE ADR-0059, so no
+// kit, and no adopted snapshot, that read before reads differently now. Before
+// it, brand.json was walked against a hand-written key tree (the paths below)
+// that already matched keys exactly and refused a key written twice, then
+// decoded with encoding/json; the derived form must be that tree, key for key.
+// Its rules only loosened (the brand's own domain), so every index accepted
+// then is accepted now. An adoption decodes its snapshot when it is decided
+// (artifactsdomain.checkAdoption), never when the log is applied, and the
+// snapshot is the canonical bytes, exact keys by construction.
+//
+// Mutation: add a key to Brand, or rename one, and the tree differs.
+func TestTheBrandIndexAdmitsTheKeysItAlwaysDid(t *testing.T) {
+	t.Parallel()
+	before := []string{"v", "name", "tagline",
+		"logos", "logos.primary", "logos.on_dark", "logos.mark",
+		"colors", "colors.primary", "colors.secondary", "colors.text", "colors.light_ground",
+		"colors.dark_ground", "colors.primary_on_dark",
+		"type", "voice", "voice.summary", "voice.write_like", "voice.avoid"}
+	for _, face := range []string{"type.heading", "type.body"} {
+		before = append(before, face, face+".kit", face+".stack", face+".family", face+".licensed",
+			face+".files", face+".files[].path", face+".files[].weight", face+".files[].style")
+	}
+	var now []string
+	for _, p := range brandformat.IndexForm.Paths() {
+		now = append(now, p.Path)
+	}
+	slices.Sort(before)
+	slices.Sort(now)
+	if !slices.Equal(before, now) {
+		t.Errorf("the brand index admits\n%v\nand admitted\n%v", now, before)
 	}
 }

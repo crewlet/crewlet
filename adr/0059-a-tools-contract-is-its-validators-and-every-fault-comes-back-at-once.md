@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/jsonform`
-- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestAWriteToolThatKeepsRefusingIsStoppedInPlainWords`
+- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestAWriteToolThatKeepsRefusingIsStoppedInPlainWords`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`
 - **Measured:** GP-38 (brand kit): 14 refusals, rounds 11 to 24 and beyond, more than eight minutes of one turn, 12 distinct structural faults learned one per attempt. The brief (#407): 4 of 4 briefs ended `brief_invalid` at 7 steps. Replayed after this change: the GP-38 version gets all 14 of its findings in one refusal and its fixed version lands on the next attempt; a kit written from the format reference lands on the first.
 - **Cost-when-tried:** the brief fix (#407) repaired one tool: its caps went into its schema and its validator started naming every fault. Two days later the brand kit failed the same way through a different tool, because nothing had changed for any other tool.
 - **Tag-status:** unreleased
@@ -26,6 +26,21 @@ run over those in the same pass (`Decoded.Dropped` keeps a rule off a value
 the author never wrote). A publish refused for an asset is answered with the
 index's findings beside it. A tool answer lists the first 20 findings and
 counts the rest.
+
+**The stricter read is the publish's; a stored version reads as it did.**
+`jsonform.Decode` matches keys exactly and refuses a key written twice, and
+runs only where a publish writes an index (`slideformat.Check`,
+`docindex.Check`, `canvasformat.Check`, `dashspec.Check`, and `Parse` and
+`ParseIndex` beside them). Every read of a version already stored (a render,
+`get_artifact`, a dashboard's data, a compare, a publish that carries an index
+it does not rewrite) goes through the format's `Read`, which is
+`jsonform.DecodeStored`: keys matched without regard to case and a key written
+twice decoded as encoding/json decoded it. A fuzz holds `DecodeStored` to
+encoding/json's answer (`FuzzTheStoredReadIsEncodingJSONs`), and a walk of the
+tree refuses a strict read anywhere but the publish pipeline and the formats.
+`brand.json` needs neither: it was matched exactly and refused repeats before
+this record, and its key tree is held to the one it had then. So no stored
+version needs a migration.
 
 **A wrong key is answered with the keys that exist.** `load_tool_skill` answers
 a miss with the near keys and the catalogue, and a description names a skill

@@ -89,9 +89,40 @@ func parentOf(p string) (string, bool) {
 // [Decoded.Dropped] tells those rules which fields to leave to their fault.
 //
 // The subject names the file and its format in the faults.
+//
+// THIS IS THE PUBLISH READ: what a version is held to when it is written. A
+// version already stored is read with [DecodeStored].
 func Decode(raw []byte, form *Form, subject Subject, into any) *Decoded {
+	return decode(raw, form, subject, into, false)
+}
+
+// DecodeStored reads a version that was already accepted, with every fault in
+// one pass as [Decode] names them, but admitting exactly what encoding/json
+// with DisallowUnknownFields admitted when the format read that way: a key
+// matched without regard to case (an exact match first, then the first key
+// of the form that folds to it, as encoding/json does), and a key written
+// twice decoded as encoding/json decodes it (a struct field decoded again
+// into what the first wrote, a map's element and a list replaced, a null
+// leaving a scalar or a struct as it was). An unknown key and a value of the
+// wrong type are still faults, as they were.
+//
+// WHY TWO READS. A format tightened at publish must not turn a version it
+// stored under the older rule into one its own reader refuses: every read of
+// a stored version (a render, get_artifact, the dashboard's data, a compare)
+// would fail on bytes nobody can now republish without a person's edit. A
+// test fuzzes this read against encoding/json to hold the two to one answer.
+func DecodeStored(raw []byte, form *Form, subject Subject, into any) *Decoded {
+	return decode(raw, form, subject, into, true)
+}
+
+// Reader is [Decode] or [DecodeStored], for a format read both ways: the
+// publish of a version and the read of one already stored.
+type Reader func(raw []byte, form *Form, subject Subject, into any) *Decoded
+
+func decode(raw []byte, form *Form, subject Subject, into any, stored bool) *Decoded {
 	d := &Decoded{lines: map[string]int{}, dropped: map[string]bool{}}
-	w := &walker{d: d, raw: raw, subject: subject, dec: json.NewDecoder(bytes.NewReader(raw))}
+	w := &walker{d: d, raw: raw, subject: subject, stored: stored,
+		dec: json.NewDecoder(bytes.NewReader(raw))}
 	w.dec.UseNumber()
 	clean, keep, err := w.value(form, "")
 	if err != nil {
@@ -106,11 +137,16 @@ func Decode(raw []byte, form *Form, subject Subject, into any) *Decoded {
 		d.Fatal = true
 		return d
 	}
-	body, err := json.Marshal(clean)
-	if err != nil {
+	// UNESCAPED, so a value with its own reader is handed the text the author
+	// wrote (compacted), never `&` re-spelt as `\u0026`.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(clean); err != nil {
 		d.fatal(0, "%s cannot be read: %v", subject.File, err)
 		return d
 	}
+	body := buf.Bytes()
 	if decodeErr := json.Unmarshal(body, into); decodeErr != nil {
 		// A value with its own reader (an Any form) refused what it was
 		// handed: its own sentence, at the field it names.
@@ -147,6 +183,9 @@ type walker struct {
 	raw     []byte
 	subject Subject
 	dec     *json.Decoder
+
+	// stored reads as [DecodeStored] does.
+	stored bool
 }
 
 // Subject is what a fault calls the value it reads: the file (`brand.json`),
@@ -240,12 +279,15 @@ func (w *walker) object(f *Form, path string) (any, bool, error) {
 			return nil, false, err
 		}
 		key, _ := keyTok.(string)
+		if closed && w.stored {
+			key = f.fold(key)
+		}
 		at := w.line()
 		name := member(path, key, open)
 		var next *Form
 		ok := true
 		switch {
-		case seen[key]:
+		case seen[key] && !w.stored:
 			w.d.fault(name, at, "%s is written twice: write each key once", name)
 			ok = false
 		case closed && f.Field(key) == nil:
@@ -257,19 +299,25 @@ func (w *walker) object(f *Form, path string) (any, bool, error) {
 		case open:
 			next = f.Elem
 		}
-		seen[key] = true
 		w.d.lines[name] = at
 		if !ok {
+			seen[key] = true
 			if skipErr := w.discard(); skipErr != nil {
 				return nil, false, skipErr
 			}
 			continue
 		}
+		again := seen[key]
+		seen[key] = true
 		v, keep, err := w.value(next, name)
 		if err != nil {
 			return nil, false, err
 		}
-		if keep {
+		switch {
+		case !keep:
+		case again && closed:
+			out[key] = merge(out[key], v, f.field(key))
+		default:
 			out[key] = v
 		}
 	}
@@ -370,4 +418,71 @@ func scalarName(tok json.Token) string {
 		return "a number"
 	}
 	return "a value"
+}
+
+// fold is the key of the form a stored key decodes into, as encoding/json
+// matches it: the key itself when the form carries it, else the first key in
+// declaration order that equals it without regard to case, else the key as
+// written (which the caller then names as unknown).
+func (f *Form) fold(key string) string {
+	if f.Field(key) != nil {
+		return key
+	}
+	for _, fl := range f.Fields {
+		if strings.EqualFold(fl.Key, key) {
+			return fl.Key
+		}
+	}
+	return key
+}
+
+// merge is a key written twice as encoding/json decodes the second value over
+// the first: into a struct, the second's keys decoded into what the first
+// wrote, field by field; into a map, the second's elements replacing the
+// first's by name; a list or a scalar replaced. A null leaves a struct or a
+// scalar as it was and clears a list, a map or a pointer.
+func merge(old, next any, fl Field) any {
+	f := fl.Form
+	if f == nil || f.Type == Any {
+		return next
+	}
+	if next == nil {
+		switch {
+		case fl.Nullable, f.Type == Map, f.Type == Array:
+			return nil
+		}
+		return old
+	}
+	om, oldObject := old.(map[string]any)
+	nm, newObject := next.(map[string]any)
+	if !oldObject || !newObject || (f.Type != Object && f.Type != Map) {
+		return next
+	}
+	out := make(map[string]any, len(om)+len(nm))
+	for k, v := range om {
+		out[k] = v
+	}
+	for k, v := range nm {
+		if f.Type == Map {
+			out[k] = v
+			continue
+		}
+		prev, had := om[k]
+		if !had {
+			out[k] = v
+			continue
+		}
+		out[k] = merge(prev, v, f.field(k))
+	}
+	return out
+}
+
+// field is an Object's key with what it is, or the zero Field.
+func (f *Form) field(key string) Field {
+	for _, fl := range f.Fields {
+		if fl.Key == key {
+			return fl
+		}
+	}
+	return Field{}
 }

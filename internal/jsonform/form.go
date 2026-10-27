@@ -68,6 +68,10 @@ type Form struct {
 type Field struct {
 	Key  string
 	Form *Form
+
+	// Nullable reports the field is a pointer, which a null clears where
+	// it leaves a struct or a scalar as it was ([DecodeStored]).
+	Nullable bool
 }
 
 // Of is the form of T, by the rules encoding/json decodes T with: a struct is
@@ -154,7 +158,7 @@ func fieldsOf(t reflect.Type, seen map[reflect.Type]*Form) []Field {
 			// A `,string` field is a quoted scalar: its own grammar.
 			form = &Form{Type: Any}
 		}
-		out = append(out, Field{Key: name, Form: form})
+		out = append(out, Field{Key: name, Form: form, Nullable: sf.Type.Kind() == reflect.Pointer})
 	}
 	return out
 }

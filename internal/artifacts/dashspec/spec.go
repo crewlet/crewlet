@@ -217,9 +217,11 @@ func (e *Invalid) Unwrap() error { return ErrInvalid }
 //
 // EVERY STRUCTURAL FAULT AT ONCE ([jsonform.Decode]): an unknown key names the
 // keys its object takes, a wrong type the shape read there.
-func Parse(raw []byte) (*Spec, error) {
+func Parse(raw []byte) (*Spec, error) { return parse(raw, jsonform.Decode) }
+
+func parse(raw []byte, decode jsonform.Reader) (*Spec, error) {
 	s := &Spec{}
-	d := jsonform.Decode(raw, Form, jsonform.Subject{File: EntryPath, Format: "the dashboard format"}, s)
+	d := decode(raw, Form, jsonform.Subject{File: EntryPath, Format: "the dashboard format"}, s)
 	if len(d.Faults) == 0 {
 		return s, nil
 	}
