@@ -446,7 +446,8 @@ function Pick({
   return (
     <span className="cell-edit">
       <Menu
-        triggerFlush
+        // THE TRIGGER IS THE VALUE: flush, in the rail's own size and ink.
+        valueTrigger
         label={label}
         trigger={
           <>
@@ -500,7 +501,8 @@ function LabelsValue({
   return (
     <span className="cell-edit">
       <Menu
-        triggerFlush
+        // THE TRIGGER IS THE VALUE: flush, in the rail's own size and ink.
+        valueTrigger
         label={`Labels of ${itemKey}`}
         trigger={
           <>

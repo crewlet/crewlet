@@ -944,6 +944,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // ends in an ellipsis, over the tick's own label in the title.
                 key: "due",
                 header: "For the tick",
+                align: "right",
                 shrink: true,
                 drop: 2,
                 sortValue: (r) => tsKey(r.scheduled_at),

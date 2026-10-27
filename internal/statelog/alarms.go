@@ -1207,6 +1207,13 @@ func Kinds() []Kind {
 	return out
 }
 
+// Spoken is a duration as a person reads it ("45s", "2m 5s", "22h 33m"),
+// for a sentence outside this package that states one: a wait, a bound, an
+// age. The one spelling the engine uses, and the dashboard's own
+// (`fmtDuration`, lib/format.ts), so a figure and the sentence beside it
+// agree. Never a bare count of seconds.
+func Spoken(d time.Duration) string { return spoken(d) }
+
 // spoken is a duration as an operator reads it rather than as a computer
 // wrote it.
 //

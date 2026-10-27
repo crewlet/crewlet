@@ -51,6 +51,8 @@ export interface DisplayMenuProps {
   /** The company's list rather than one project's, which decides whether the
    *  grid has a Project column to offer. */
   workspace: boolean;
+  /** A trash listing, whose default order is the removal order. */
+  trash?: boolean;
   /**
    * The running SAVED view's own shape, or nothing where no saved view runs.
    * A builtin's shape is not "this view's own" to go back to: offered over a
@@ -123,6 +125,7 @@ function DisplayPanel({
   arrange,
   shape,
   workspace,
+  trash = false,
   viewShape,
   groupBy,
   groupBy2,
@@ -152,7 +155,13 @@ function DisplayPanel({
       {nested && (
         <label className="work-display-row">
           <span>Sort</span>
-          <OrderSelect shape={shape} workspace={workspace} sort={sort} onSort={onSort} />
+          <OrderSelect
+            shape={shape}
+            workspace={workspace}
+            trash={trash}
+            sort={sort}
+            onSort={onSort}
+          />
         </label>
       )}
       {nested && groupBy !== "" && (

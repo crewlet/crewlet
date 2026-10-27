@@ -24,20 +24,26 @@ test("a wait is said in the largest two units, rounded up", () => {
   expect(fmtWait(3600)).toBe("in 1h");
   expect(fmtWait(2 * 86_400 + 3 * 3600)).toBe("in 2d 3h");
   expect(fmtWait(3 * 86_400)).toBe("in 3d");
-  expect(fmtWait(Number.NaN)).toBe("in 1s");
+  // NO NUMBER, NO NUMBER SAID: an unknown wait is "later", one over is "now".
+  expect(fmtWait(Number.NaN)).toBe("later");
+  expect(fmtWait(Number.POSITIVE_INFINITY)).toBe("later");
+  expect(fmtWait(0)).toBe("now");
+  expect(fmtWait(-5)).toBe("now");
 });
 
 /**
- * THE PROTOCOL LAYER'S TIMEOUT SENTENCE is the one exception: it is built
- * from constants of a minute or two, never from a count the engine sent, and
- * it already switches to minutes past two (`protocol/rest.ts`'s `waitWords`).
- * It cannot import the app's formatters: the protocol is also built alone.
+ * THE FILES ALLOWED TO SPELL A WAIT THEMSELVES: the formatters, and the
+ * protocol layer's timeout sentence, which is built from constants of a minute
+ * or two, never from a count the engine sent, already switches to minutes past
+ * two (`protocol/rest.ts`'s `waitWords`), and cannot import the app's
+ * formatters because the protocol is also built alone.
  */
-const ALLOWED = new Set(["protocol/rest.ts"]);
+const ALLOWED = new Set(["lib/format.ts", "protocol/rest.ts"]);
 
-test("no screen prints a count of seconds", () => {
+/** Every non-test source file under `src/`, as [path, text]. */
+function sources(): [string, string][] {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-  const offenders: string[] = [];
+  const out: [string, string][] = [];
   (function walk(abs: string): void {
     for (const entry of readdirSync(abs)) {
       const full = join(abs, entry);
@@ -46,11 +52,70 @@ test("no screen prints a count of seconds", () => {
         continue;
       }
       if (!/\.(ts|tsx)$/.test(entry) || /\.test\.(ts|tsx)$/.test(entry)) continue;
-      const rel = relative(root, full);
-      if (ALLOWED.has(rel)) continue;
-      const text = readFileSync(full, "utf8");
-      if (/\$\{[^}]+\}\s*seconds\b/.test(text)) offenders.push(rel);
+      out.push([relative(root, full), readFileSync(full, "utf8")]);
     }
   })(root);
+  return out;
+}
+
+/**
+ * THE SHAPES A COUNT OF SECONDS TAKES ON A SCREEN, each of which has shipped:
+ * a number interpolated before "seconds" ("ask again in 81155 seconds"), a
+ * plural of "second" ("Try again in 81,155 seconds"), a bare `s` after an
+ * interpolated wait ("Try again in 900s"), a JSX number before "seconds", and
+ * the same built by concatenation.
+ */
+const RAW_SECONDS: [string, RegExp][] = [
+  ["interpolated before seconds", /\$\{[^}]+\}\s*(seconds|secs)\b/],
+  ["plural of second", /plural\([^)]*,\s*["'`]second["'`]\s*\)/],
+  ["interpolated wait with a bare s", /\b(in|again|after|within) \$\{[^}]+\}s\b/],
+  ["JSX number before seconds", /\{[^{}]+\}\s*(seconds|secs)\b/],
+  ["concatenated seconds", /\+\s*["'`]\s*(seconds|secs)\b/],
+];
+
+test("no screen prints a count of seconds", () => {
+  const offenders: string[] = [];
+  for (const [path, text] of sources()) {
+    if (ALLOWED.has(path)) continue;
+    for (const [shape, pattern] of RAW_SECONDS) {
+      if (pattern.test(text)) offenders.push(`${path}: ${shape}`);
+    }
+  }
   expect(offenders).toEqual([]);
+});
+
+/**
+ * AND STRUCTURALLY: a wait the engine sent (`retryAfterSeconds`) reaches a
+ * person only through [fmtWait]. Every place it is interpolated into text,
+ * outside the protocol layer that parses it, wraps it in `fmtWait(...)`;
+ * every other read is arithmetic for a timer.
+ */
+test("a wait the engine sent is said only through fmtWait", () => {
+  // What is left of an expression once its sanctioned reads are taken out:
+  // the wait said through `fmtWait(...)`, and a null check before it.
+  const unsaid = (expr: string) =>
+    expr
+      .replace(/fmtWait\([^()]*(\([^()]*\))?[^()]*\)/g, "")
+      .replace(/retryAfterSeconds\s*[!=]==?\s*null/g, "")
+      .includes("retryAfterSeconds");
+  const offenders: string[] = [];
+  for (const [path, text] of sources()) {
+    if (path.startsWith("protocol/") || ALLOWED.has(path)) continue;
+    // A template interpolation, and a JSX child expression (an element's `>`,
+    // never an arrow's `=>`).
+    for (const [, inside] of text.matchAll(/\$\{([^{}]*retryAfterSeconds[^{}]*)\}/g)) {
+      if (unsaid(inside!)) offenders.push(`${path}: \${${inside}}`);
+    }
+    for (const [, inside] of text.matchAll(/(?<!=)>\s*\{([^{}]*retryAfterSeconds[^{}]*)\}/g)) {
+      if (unsaid(inside!)) offenders.push(`${path}: {${inside}}`);
+    }
+  }
+  expect(offenders).toEqual([]);
+  // The guard sees the call sites it guards.
+  const said = sources()
+    .filter(([, text]) => /fmtWait\([^)]*retryAfterSeconds/.test(text))
+    .map(([path]) => path);
+  expect(said).toEqual(
+    expect.arrayContaining(["app/assistant/chunk/Thread.tsx", "lib/refusal.ts"]),
+  );
 });

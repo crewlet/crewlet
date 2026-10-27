@@ -127,9 +127,15 @@ func TestASecondBulkOnTheSameNodeIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admit the first bulk: %v", err)
 	}
-	if _, err := r.writer.Admit(t.Context(), 10); !errors.Is(err, worklet.ErrBulkInFlight) {
+	_, err = r.writer.Admit(t.Context(), 10)
+	if !errors.Is(err, worklet.ErrBulkInFlight) {
 		t.Fatalf("a second bulk on the node already running one got %v, want "+
 			"ErrBulkInFlight", err)
+	}
+	// THE WAIT IS SAID AS A DURATION ("retry in about 9m 58s"), never as a
+	// count of seconds a person has to divide.
+	if msg := err.Error(); strings.Contains(msg, " seconds") || !strings.Contains(msg, "retry in about ") {
+		t.Fatalf("the refusal says its wait as %q, want a spoken duration", msg)
 	}
 	release()
 	again, err := r.writer.Admit(t.Context(), 10)

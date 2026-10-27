@@ -2308,6 +2308,9 @@ function Principal({
                   // peek's column — cut its own header to "SESS…".
                   key: "started",
                   header: "Session",
+                  // A TIME: right-aligned, as the same session start is on the
+                  // account page's own list.
+                  align: "right",
                   width: "max-content",
                   sortValue: (s) => s.created_at ?? "",
                   cell: (s) => <TableDateCell value={s.created_at} now={now} />,

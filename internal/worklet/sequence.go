@@ -2888,8 +2888,10 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), bulkAdmission, er
 		if held, err := w.claims.Get(ctx, resource); err == nil && held != nil {
 			remaining = time.Until(held.ExpiresAt)
 		}
-		return nil, bulkRefused, fmt.Errorf("%w; retry in about %d seconds: %w",
-			ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
+		// THE WAIT AS A PERSON READS IT ("retry in about 2m 5s"), never a
+		// count of seconds to divide, and never under a second.
+		return nil, bulkRefused, fmt.Errorf("%w; retry in about %s: %w",
+			ErrBulkInFlight, statelog.Spoken(max(remaining.Round(time.Second), time.Second)),
 			statelog.ErrUnavailable)
 	}
 	epoch := lease.Epoch

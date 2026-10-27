@@ -57,7 +57,17 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { href } from "~/app/router.tsx";
-import { SORTS, groupAxisOptions, type Scope, type Shape } from "~/lib/work.ts";
+import {
+  MANUAL_ORDER,
+  RECENT_ORDER,
+  SORTS,
+  TIMELINE_ORDER,
+  TRASH_ORDER,
+  defaultOrderOf,
+  groupAxisOptions,
+  type Scope,
+  type Shape,
+} from "~/lib/work.ts";
 import { isGridShape } from "../shapes/Grid.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 
@@ -224,11 +234,14 @@ export function SubstringBox({
 export function OrderSelect({
   shape,
   workspace,
+  trash = false,
   sort,
   onSort,
 }: {
   shape: Shape;
   workspace: boolean;
+  /** A trash listing, whose default is the removal order. */
+  trash?: boolean;
   /** The effective order, never the URL key. */
   sort: string;
   onSort: (sort: string) => void;
@@ -245,7 +258,7 @@ export function OrderSelect({
       // container and shape (the engine's manual order inside a project, the
       // most recently touched across the company, the start date on a
       // timeline), and "Default" alone names none of them.
-      options={[{ value: "", label: defaultOrderLabel(shape, workspace) }, ...SORTS]}
+      options={[{ value: "", label: defaultOrderLabel(shape, workspace, trash) }, ...SORTS]}
     />
   );
 }
@@ -261,6 +274,7 @@ export function OrderSelect({
 export function ArrangeControls({
   shape,
   workspace,
+  trash = false,
   groupBy,
   sort,
   onGroupBy,
@@ -269,6 +283,8 @@ export function ArrangeControls({
 }: {
   shape: Shape;
   workspace: boolean;
+  /** A trash listing, whose default order is the removal order. */
+  trash?: boolean;
   groupBy: string;
   sort: string;
   /** Whether the order on screen is the manual one a drag changes. */
@@ -302,7 +318,13 @@ export function ArrangeControls({
           title={shape === "board" && !manual ? MANUAL_ORDER_HINT : undefined}
         >
           <span className="t-caption">Sort</span>
-          <OrderSelect shape={shape} workspace={workspace} sort={sort} onSort={onSort} />
+          <OrderSelect
+            shape={shape}
+            workspace={workspace}
+            trash={trash}
+            sort={sort}
+            onSort={onSort}
+          />
         </label>
       )}
     </span>
@@ -360,8 +382,15 @@ export const SCOPE_OPTIONS: { value: Scope; label: string; description: string }
  */
 export const MANUAL_ORDER_HINT = "Choose this to drag cards.";
 
-/** What the order is when nobody chose one, in the words the options use. */
-export function defaultOrderLabel(shape: Shape, workspace: boolean): string {
-  if (shape === "timeline") return "Start date (default)";
-  return workspace ? "Recently updated (default)" : "Manual (default)";
+/** Each default order, in the words the options use. */
+const DEFAULT_ORDER_WORDS: Readonly<Record<string, string>> = {
+  [TIMELINE_ORDER]: "Start date (default)",
+  [TRASH_ORDER]: "Recently removed (default)",
+  [RECENT_ORDER]: "Recently updated (default)",
+  [MANUAL_ORDER]: "Manual (default)",
+};
+
+/** What the order is when nobody chose one ([defaultOrderOf]), in the words the options use. */
+export function defaultOrderLabel(shape: Shape, workspace: boolean, trash = false): string {
+  return DEFAULT_ORDER_WORDS[defaultOrderOf(shape, workspace, trash)] ?? "Default";
 }

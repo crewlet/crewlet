@@ -175,6 +175,31 @@ test("a plain click on a project row goes into the project, and opens no peek", 
   expect(peeked()).toBeNull();
 });
 
+// AND FROM THE KEYBOARD: `j` puts the cursor on a project and Enter goes into
+// it, as a click does. The row's open key used to need a handler, and with the
+// peek gone the directory had none, so Enter did nothing.
+test("j then Enter goes into the project the cursor is on", async () => {
+  location.hash = "#/worklet";
+  Element.prototype.scrollIntoView = () => {};
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const followed: (string | null)[] = [];
+  const watch = (event: MouseEvent) => {
+    followed.push((event.target as Element).closest("a")?.getAttribute("href") ?? null);
+    event.preventDefault();
+  };
+  document.addEventListener("click", watch);
+  try {
+    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(window, { key: "Enter" });
+  } finally {
+    document.removeEventListener("click", watch);
+  }
+  expect(followed).toEqual([href(projectPath("ENG"))]);
+  expect(peeked()).toBeNull();
+});
+
 // THE NINTH COLUMN. It was declared `optional`, and on a screen with no Display
 // menu that means reachable only by hand-editing `cols=` — while the sentence
 // directly above the grid quotes the number it holds.

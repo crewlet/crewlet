@@ -178,7 +178,9 @@ test("a step too quick to time says no time, and one not yet ended none either",
   expect(stepDuration(undefined)).toBeUndefined();
   expect(stepDuration(30)).toBeUndefined();
   expect(stepDuration(99)).toBeUndefined();
-  expect(stepDuration(100)).toBe("0.1s");
-  expect(stepDuration(400)).toBe("0.4s");
+  // THE PRODUCT'S ONE DURATION ([fmtDuration]): milliseconds under a second.
+  expect(stepDuration(100)).toBe("100ms");
+  expect(stepDuration(400)).toBe("400ms");
   expect(stepDuration(12_400)).toBe("12s");
+  expect(stepDuration(845_000)).toBe("14m 5s");
 });

@@ -291,9 +291,15 @@ export function inTimeExact(ts: string | null | undefined, now: number): string 
  * a time to plan by. Two units past an hour, as [inTimeExact] reads an instant,
  * and ROUNDED UP at every magnitude, never to the nearest: a wait that says
  * "in 4m" when four and a half remain sends the reader back to a refusal.
+ *
+ * A WAIT WITH NO NUMBER IS SAID WITHOUT ONE: an unknown or unbounded wait
+ * (not finite) is "later", never a made-up "in 1s", and one already over
+ * is "now".
  */
 export function fmtWait(seconds: number): string {
-  const s = Number.isFinite(seconds) ? Math.max(1, Math.ceil(seconds)) : 1;
+  if (!Number.isFinite(seconds)) return "later";
+  if (seconds <= 0) return "now";
+  const s = Math.ceil(seconds);
   if (s < 60) return `in ${s}s`;
   const mins = Math.ceil(s / 60);
   if (mins < 60) return `in ${mins}m`;

@@ -10,7 +10,7 @@
  */
 
 import { RestError } from "~/protocol/index.ts";
-import { asSentence, plural } from "./format.ts";
+import { asSentence, fmtWait } from "./format.ts";
 
 /**
  * What a person is told when the sign-in surface refuses them — in the
@@ -50,7 +50,8 @@ export function refusalText(err: unknown): string {
   const parts = [said];
   if (err.hint) parts.push(asSentence(err.hint));
   if (err.status === 429 && err.retryAfterSeconds !== null) {
-    parts.push(`Try again in ${plural(err.retryAfterSeconds, "second")}.`);
+    // THE WAIT AS A TIME TO PLAN BY ("in 22h 33m"), never a count of seconds.
+    parts.push(`Try again ${fmtWait(err.retryAfterSeconds)}.`);
   }
   return parts.join(" ");
 }

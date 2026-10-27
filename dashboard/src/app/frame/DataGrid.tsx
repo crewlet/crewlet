@@ -116,8 +116,11 @@ export function DataGrid<T>({
   useKeymap({
     "list.next": { run: () => handle.current?.step(1), when: driving },
     "list.previous": { run: () => handle.current?.step(-1), when: driving },
+    // A ROW OPENS FROM THE KEYBOARD WHETHER IT ACTS OR ONLY LINKS: the kit's
+    // handle follows the cursor row's link where it has no handler, so a grid
+    // of links (a directory a row navigates from) has its Enter too.
     "list.open": {
-      when: driving && Boolean(onRowActivate),
+      when: driving && Boolean(onRowActivate || rowHref),
       run: (e) => {
         handle.current?.activate(e as KeyboardEvent);
       },

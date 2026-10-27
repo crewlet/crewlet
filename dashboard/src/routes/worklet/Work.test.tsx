@@ -1258,6 +1258,37 @@ test("the trash opened by its address asks for removed work in every state", asy
   expect(asked(query).status_group).toBeUndefined();
 });
 
+// THE TRASH'S HEADS DRAW THE ORDER ITS ROWS ARE IN: the engine orders a
+// removed listing by removal, newest first, when nothing names an order, and
+// the trash names none. Read from the company's default instead, Updated read
+// "descending" over rows in removal order, and two presses on it silently
+// handed the rows back to removal order.
+test("the trash draws its removal order on the Removed head", async () => {
+  location.hash = "#/worklet?removed=true&shape=table";
+  const query = serving({
+    work_views: strip("table"),
+    work_items: {
+      items: [row("1", { removed: true } as Partial<WorkSummary>)],
+      groups: [],
+      complete: true,
+    },
+    work_activity: { records: [], complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(asked(query).removed).toBe("true"));
+  // NO ORDER IS SENT: the engine's own removal order applies.
+  expect(asked(query).sort).toBeUndefined();
+  const head = (name: string) =>
+    screen.getAllByRole("columnheader").find((h) => h.textContent?.startsWith(name));
+  await waitFor(() => expect(head("Removed")?.getAttribute("aria-sort")).toBe("descending"));
+  expect(head("Updated")?.getAttribute("aria-sort")).toBeNull();
+  // AND THE PICKER NAMES THE SAME DEFAULT.
+  await openDisplay();
+  expect(screen.getByRole("combobox", { name: "Sort" }).textContent).toContain(
+    "Recently removed (default)",
+  );
+});
+
 // AND THE ORDINARY TABLE IS AN ORDINARY BOARD QUESTION. Same tab strip, same
 // screen, and none of the trash's parameters — so a reader on Table is not
 // quietly looking at deleted work.
