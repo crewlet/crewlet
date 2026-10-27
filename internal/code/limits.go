@@ -141,7 +141,7 @@ const (
 	// so the log the suites provision and the log a node creates are sized
 	// by one rule — config's DerivedCodeLogNumerator, whose arithmetic is
 	// what this log takes a day at the reference company once seats push:
-	// 3 000 pushes at the MEASURED 1 332 bytes a push alone in its record
+	// 3 000 pushes at the MEASURED 1 344 bytes a push alone in its record
 	// (BenchmarkPushLogBytes), 4.0 MB, and its git clients' barriers at
 	// BarrierRecordBytes, 2.4–5.0 MB, against the tracker's measured 9.9 MB
 	// of records and 2.2 MB of barriers, every record in its signed frame.
@@ -381,13 +381,14 @@ const (
 
 	// HorizonBytesPerRecord is how many BYTES of expired push rows one push
 	// record removes beside HorizonDeletesPerRecord's count — each row
-	// weighed by its row_bytes, the commands and introduced ids it carries —
-	// taking rows oldest first until their bytes reach it, so a removal
-	// passes it by at most one row.
+	// weighed by its row_bytes, the commands, introduced ids and seat's run
+	// it carries — taking rows oldest first until their bytes reach it, so a
+	// removal passes it by at most one row.
 	//
 	// MaxRecordBytes, the most push-row bytes one record can ADD: a row's
-	// commands and introduced ids are its record's own, stored with less
-	// (no refusal sentence, the ids space-separated rather than quoted). A
+	// commands, introduced ids and run are its record's own, stored with
+	// less (no refusal sentence, the ids space-separated rather than quoted,
+	// each run field its bytes with no key and no escape). A
 	// removal that stops at either bound has therefore taken at least the
 	// oldest record's whole contribution — its rows share one instant and
 	// one position, so they are first in the order and together — and the

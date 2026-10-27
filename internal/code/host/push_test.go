@@ -204,7 +204,11 @@ func TestAnUnboundTokenCannotPush(t *testing.T) {
 const gitrefZero = "0000000000000000000000000000000000000000"
 
 // Every push is one record on the receiving node, as the person
-// whose token pushed it; a fetch is none.
+// whose token pushed it; a fetch is none. The push's row names the same
+// person, and git as what built it.
+//
+// Mutation: the relay's landing names no way (Via unset in session.go) — the
+// proposal is refused naming via, and the push lands no row.
 func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -228,6 +232,13 @@ func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 	rows := pushRows(t, c)
 	if len(rows) != 1 {
 		t.Fatalf("one applied push left %d rows", len(rows))
+	}
+	// AND ITS ROW AS THE SAME PERSON'S, received by git: the credential the
+	// actor, the seat beside it, and no run — a person's push names none.
+	if r := rows[0]; r.Via != code.ViaGit || r.Actor != iam.TokenLogin("ceo") ||
+		r.ActorKind != string(code.PrincipalOperator) || r.ActorSeat != "ceo" || !r.Run.IsZero() {
+		t.Errorf("the applied push's row names it %q by %q (%s, seat %q, run %+v), want git's, by ceo's "+
+			"token and their seat, with no run", r.Via, r.Actor, r.ActorKind, r.ActorSeat, r.Run)
 	}
 	applied, refused := audited[0], audited[1]
 	// AS CEO: the seat as the author, kind human, and ceo's token — its login,

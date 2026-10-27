@@ -405,8 +405,8 @@ func proposeHistory(b *testing.B, f *codetest.SoloFleet, repo, first, second str
 					intro[j] = cache.DrawnOID(fmt.Sprintf("introduced-%d-%d", i, j))
 				}
 				res, err := f.Data().Served().Propose(ctx, code.Proposal{
-					PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo, Principal: pusher, Node: "bench",
-					ReceivedAt: time.Now().UTC(), Introduced: intro, IntroducedCount: len(intro),
+					PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo, Principal: pusher, Via: code.ViaGit,
+					Node: "bench", ReceivedAt: time.Now().UTC(), Introduced: intro, IntroducedCount: len(intro),
 					Commands: []code.Command{{Ref: ref, Old: at, New: next, Forced: forced}},
 				})
 				switch {

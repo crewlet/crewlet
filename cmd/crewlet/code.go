@@ -297,9 +297,17 @@ type codeProtectionView struct {
 type codePushView struct {
 	At        time.Time `json:"at"`
 	Actor     string    `json:"actor"`
+	ActorKind string    `json:"actor_kind"`
 	ActorSeat string    `json:"actor_seat"`
-	Node      string    `json:"node"`
-	Commands  []struct {
+	// Run is a seat's push's: the turn that made it and the work item it was
+	// charged to.
+	Run struct {
+		TurnID      string `json:"turn_id"`
+		WorkBackend string `json:"work_backend"`
+		WorkKey     string `json:"work_key"`
+	} `json:"run"`
+	Node     string `json:"node"`
+	Commands []struct {
 		Ref    string `json:"ref"`
 		Old    string `json:"old"`
 		New    string `json:"new"`
@@ -604,12 +612,28 @@ type codePushLine struct {
 	results      string
 }
 
-// pushLine is p as status prints it: who made it — the actor and, where
-// bound, its seat — the node that took it, and what became of every ref,
-// `ok|noop|ng <ref> <old>..<new> [(reason)]` joined with `; `.
+// pushLine is p as status prints it: who made it — a person's credential
+// and, where bound, the seat they hold; a seat by its handle and the turn and
+// work item behind its push — the node that took it, and what became of every
+// ref, `ok|noop|ng <ref> <old>..<new> [(reason)]` joined with `; `.
 func pushLine(p codePushView) codePushLine {
 	by := p.Actor
-	if p.ActorSeat != "" {
+	switch {
+	case p.ActorKind == string(code.PrincipalAgent):
+		// A SEAT IS ITS OWN ACTOR, so its seat beside it would say nothing:
+		// what its push says beside the handle is what made it.
+		by = p.ActorSeat
+		var made []string
+		if p.Run.TurnID != "" {
+			made = append(made, "turn "+p.Run.TurnID)
+		}
+		if p.Run.WorkKey != "" {
+			made = append(made, strings.TrimSpace(p.Run.WorkBackend+" "+p.Run.WorkKey))
+		}
+		if len(made) > 0 {
+			by += " (" + strings.Join(made, ", ") + ")"
+		}
+	case p.ActorSeat != "":
 		by += " (" + p.ActorSeat + ")"
 	}
 	node := p.Node

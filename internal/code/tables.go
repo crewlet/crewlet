@@ -44,6 +44,13 @@ var ReproducibleTables = []string{
 	// replacing the chain's top, and removed whole by its purge.
 	"code_layers", "code_layer_parts",
 
+	// A seat's pushes counted on its company day, one row a seat and day,
+	// for the decide's pushes_per_seat_day: the push apply's own counter,
+	// a function of the push records alone — each agent entry counted on
+	// the day its decide stamped — so a replay rebuilds it, and every node
+	// counts alike with no clock of its own.
+	"code_seat_days",
+
 	// The activation fence: the configuration activation every
 	// config-managed record is held to.
 	"code_activation",

@@ -177,42 +177,51 @@
 // adds no stream, since one log has one leader.
 //
 // THE PUSH'S TWO ROWS (BenchmarkPushHistoryBytes, the same figure every
-// count), measured as the replicated estate's growth after a truncating
-// checkpoint over records whose refs existed before, so a ref's own row is
-// rewritten in place and never counted. They have two lifetimes:
+// count; restated from one count of one iteration once a row named its way
+// and a seat's run), measured as the replicated estate's growth after a
+// truncating checkpoint over records whose refs existed before, so a ref's
+// own row is rewritten in place and never counted. A figure is whole pages
+// over the rows that filled them, so a row a few bytes wider moves it only
+// where it fits fewer rows a page. They have two lifetimes:
 //
 //   - its code_pushes row, which the push-history horizon keeps for the 181
 //     days of usage.History: 395.3 bytes with its index entries for a
 //     person's push of one commit — one command on a ref named in 40 bytes,
-//     one introduced id (4 000 records) — and 420 004 for the widest a push
-//     can leave ([MaxCommandsPerPush] commands on refs of
-//     [MaxRefNameBytes], [MaxIntroduced] ids; 100 records);
-//   - its pack's code_packs row, 357.3 bytes more with its index entries
-//     (752.6 with both), which lives as long as the pack does — until the
-//     repository is purged, since nothing in this release compacts a
-//     repository's packs.
+//     one introduced id (4 000 records) — 490.5 for the same commit pushed
+//     by a seat and built by the engine, its row naming the seat and the run
+//     behind it at a run's usual sizes (a UUID turn id, the work item
+//     `native ENG-1234`, a seventeen-byte model id; 4 000 records), and
+//     420 045 for the widest a push can leave ([MaxCommandsPerPush] commands
+//     on refs of [MaxRefNameBytes], [MaxIntroduced] ids; 100 records);
+//   - its pack's code_packs row, 376.8 bytes more with its index entries
+//     (772.1 with both; 847.9 for the seat's push, and 420 454 at the
+//     widest), which lives as long as the pack does — until the repository
+//     is purged, since nothing in this release compacts a repository's
+//     packs.
 //
 // So every data node, holding the whole estate, holds 395.3 bytes for each
-// push of the last 181 days and 357.3 for each push ANY repository not yet
+// push of the last 181 days and 376.8 for each push ANY repository not yet
 // purged has ever taken: a deployment of 3 000 pushes a day carries about
-// 215 MB of push rows at the horizon and grows by about 390 MB of pack rows
+// 215 MB of push rows at the horizon and grows by about 410 MB of pack rows
 // a year for as long as its repositories live. A forced update or a deletion
 // leaves one row more, its ref drop, a commit id and a ref without the
 // history row's commands, kept [PruneGrace] — two weeks of such commands,
 // against the history's half year of every push — and longer while the
 // repository's records are full of them (the REF DROPS horizon below).
 //
-// THE PUSH ON THE LOG (BenchmarkPushLogBytes, the same figure every count):
-// the code log's growth over the records the committer forms for that same
+// THE PUSH ON THE LOG (BenchmarkPushLogBytes, the same figure every count;
+// restated from one count of one iteration once an entry named its way): the
+// code log's growth over the records the committer forms for that same
 // person's push — its one command, its bundle named and its one introduced
-// id — is 1 332 bytes a push in a record of its own, and 744.0 a push for
+// id — is 1 344 bytes a push in a record of its own, and 756.0 a push for
 // sixty-four at once to one repository, which group commit lands as two
 // records: a record's envelope is about 610 bytes, forty of them the signed
 // frame every record is appended in (ADR-0031), and each push it carries
-// about 725 more. The log keeps the trim's window of records rather than the
-// history, so 3 000 pushes a day hold about 28 MB of it over the default
-// seven-day min_age, about a fortieth of the log's 1 GiB floor, and the bytes
-// of a push's pack are never on it: a record names its bundle.
+// about 737 more, twelve of them the way it names (`"via":"git",`). The log
+// keeps the trim's window of records rather than the history, so 3 000
+// pushes a day hold about 28 MB of it over the default seven-day min_age,
+// about a fortieth of the log's 1 GiB floor, and the bytes of a push's pack
+// are never on it: a record names its bundle.
 //
 // # The activation fence
 //

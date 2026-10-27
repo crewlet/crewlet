@@ -29,10 +29,11 @@ import (
 // indexAgainstLog is every way repo's index in c, read through s, says what
 // the push rows the log holds do not: within the coverage it claims, every
 // commit a push introduced answers that push — the newest the coverage holds
-// listing it — and every ref's moves are the log's moves of it, in log order;
-// outside its coverage, no commit answers any push; and it is level with the
-// incarnation (its Through is s's position). None for an index that says
-// exactly what the rows say.
+// listing it — as its row names it whole (who, how, and a seat's run), and
+// every ref's moves are the log's moves of it, in log order; outside its
+// coverage, no commit answers any push; and it is level with the incarnation
+// (its Through is s's position). None for an index that says exactly what the
+// rows say.
 func indexAgainstLog(c *cache.Cache, log *fakeLog, repo string, s cache.Synced) []string {
 	p, err := c.Provenance(s)
 	switch {
@@ -56,13 +57,13 @@ func indexAgainstLog(c *cache.Cache, log *fakeLog, repo string, s cache.Synced) 
 	// pushes in, whose last listing a commit is the one it answers; the moves
 	// in the order the pushes LANDED, which group commit decided one after
 	// another inside a record and the log wrote in that order.
-	introducer := map[string]string{}
+	introducer := map[string]code.PushedBy{}
 	listed := map[string]bool{}
 	for _, r := range log.pushRows(repo) {
 		for _, oid := range r.Introduced {
 			listed[oid] = true
 			if covered(r.Position.Packed()) {
-				introducer[oid] = r.PushID
+				introducer[oid] = r.PushedBy
 			}
 		}
 	}
@@ -81,9 +82,9 @@ func indexAgainstLog(c *cache.Cache, log *fakeLog, repo string, s cache.Synced) 
 		by, ok := p.Commit(oid)
 		want, in := introducer[oid]
 		switch {
-		case in && (!ok || by.PushID != want):
-			problems = append(problems, fmt.Sprintf("it answers %s as introduced by %q (%t), and push %s in its "+
-				"coverage introduced it", oid, by.PushID, ok, want))
+		case in && (!ok || by != want):
+			problems = append(problems, fmt.Sprintf("it answers %s as introduced by %+v (%t), and push %+v in "+
+				"its coverage introduced it", oid, by, ok, want))
 		case !in && ok:
 			problems = append(problems, fmt.Sprintf("it answers %s as introduced by %s, and no push in its "+
 				"coverage (%d, %d] less (%d, %d] lists it", oid, by.PushID, from, through, gapFrom, gapThrough))
@@ -214,6 +215,56 @@ func TestADeltaFoldsItsPushesBeforeItAnswers(t *testing.T) {
 	}
 	if problems := indexAgainstLog(c, w.log, repo, s); len(problems) > 0 {
 		t.Errorf("the index after the delta:\n\t%v", problems)
+	}
+}
+
+// THE INDEX NAMES THE TURN THAT PUSHED: a seat's push the engine built is
+// answered, from the index alone, on the sync that folded it, with the whole
+// run its row names — the turn, the work item's tracker and key, the model —
+// and its way; a person's push git received is answered with no run. So what
+// a git node says of who pushed a commit (code_landed_in, every server-side
+// read naming the push behind a commit) is all its push row says, never the
+// credential alone.
+//
+// Mutation: write no work key into a run (pushPayload skipping tag 5) — the
+// seat's push is answered without it.
+func TestTheProvenanceIndexNamesTheTurnThatPushed(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	w.sync(t, c, repo)
+
+	var seat, person bool
+	for range 3 {
+		oid, _ := w.push(t, repo, "refs/heads/main", nil)
+		want := lastPush(t, w.log, repo).PushedBy
+		s := w.sync(t, c, repo)
+		p, err := c.Provenance(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := p.Commit(oid)
+		if !ok || got != want {
+			t.Errorf("the pushed commit is answered as by %+v (%t), want its row's %+v", got, ok, want)
+		}
+		switch run := want.Principal.Run; want.Principal.Kind {
+		case code.PrincipalAgent:
+			if run.TurnID == "" || run.WorkBackend == "" || run.WorkKey == "" || run.Model == "" ||
+				want.Via != code.ViaEngine {
+				t.Fatalf("the log's seat push %+v names no whole run the engine built: the case holds none", want)
+			}
+			seat = true
+		case code.PrincipalOperator:
+			if !got.Principal.Run.IsZero() {
+				t.Errorf("a person's push is answered with the run %+v", got.Principal.Run)
+			}
+			person = true
+		}
+	}
+	if !seat || !person {
+		t.Fatalf("three pushes held a seat's (%t) and a person's (%t): the case needs both", seat, person)
 	}
 }
 

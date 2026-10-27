@@ -150,7 +150,7 @@ func addRefs(b *testing.B, f *codetest.SoloFleet, repo, tip string, from, to int
 		p := code.Proposal{
 			PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo,
 			Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "bench", Seat: "ceo"},
-			Node:      "bench", ReceivedAt: time.Now().UTC(), Commands: cmds,
+			Via:       code.ViaGit, Node: "bench", ReceivedAt: time.Now().UTC(), Commands: cmds,
 		}
 		res, err := f.Data().Served().Propose(b.Context(), p)
 		if err != nil {

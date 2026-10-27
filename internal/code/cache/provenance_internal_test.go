@@ -631,9 +631,14 @@ func TestTheBoundUnmapsTheRunLetGoLongestAgo(t *testing.T) {
 // its principal's kind by a code of one table each, so a kind or a way a later
 // build adds to code's closed sets is a code here — or a run could not be
 // written for a push of it, and its round's fold would leave the index a gap.
-// Each code is distinct and none is zero, and a push of each round-trips.
+// Each code is distinct and none is zero, and a push of each round-trips — a
+// seat's with the run behind it, each field at its bound and unlike the
+// others, so a field written under another's tag, or a length past one byte's
+// uvarint, reads back wrong.
 //
-// Mutation: drop the agent's code — a seat's push builds no run.
+// Mutations: drop the agent's code — a seat's push builds no run; write no
+// work key into a run (pushPayload skipping tag 5) — a seat's push reads back
+// without it.
 func TestEveryPushPrincipalAndWayHasARunCode(t *testing.T) {
 	t.Parallel()
 	seen := map[uint8]bool{}
@@ -656,8 +661,16 @@ func TestEveryPushPrincipalAndWayHasARunCode(t *testing.T) {
 		for _, v := range code.PushVias() {
 			row := synthetic(1, 0, "refs/heads/main")
 			row.Via, row.Principal = v, code.Principal{Kind: k, Seat: "eng-lead"}
-			if k == code.PrincipalOperator {
+			switch k {
+			case code.PrincipalOperator:
 				row.Principal.OperatorID = "pat:" + strings.Repeat("x", 300)
+			case code.PrincipalAgent:
+				row.Principal.Run = code.RunProvenance{
+					TurnID:      strings.Repeat("t", code.MaxProvenanceBytes),
+					WorkBackend: strings.Repeat("b", code.MaxProvenanceBytes),
+					WorkKey:     strings.Repeat("k", code.MaxProvenanceBytes),
+					Model:       strings.Repeat("m", code.MaxProvenanceBytes),
+				}
 			}
 			payload, err := pushPayload(row)
 			if err != nil {

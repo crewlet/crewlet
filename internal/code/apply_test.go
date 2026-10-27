@@ -264,7 +264,7 @@ func packOf(pushID string) *PackRef {
 func pushEntry(id string, cmds ...Command) PushEntry {
 	return PushEntry{
 		PushID: id, Principal: Principal{Kind: PrincipalOperator, OperatorID: "op", Seat: "op"},
-		Node: "node-a", Commands: cmds, Pack: packOf(id), ReceivedAt: applyClock,
+		Via: ViaGit, Node: "node-a", Commands: cmds, Pack: packOf(id), ReceivedAt: applyClock,
 	}
 }
 
@@ -582,8 +582,8 @@ func (e *estate) seed(id string, pushes, refs, packs int) {
 	vars := e.db.Caps().MaxVariables
 	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := store.InsertRows(ctx, tx, vars,
-			`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
-				received_at, row_bytes) VALUES `, `(?, ?, ?, ?, 'seed', 'operator', '[]', 0, 2)`, ``, pushes,
+			`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, via, commands,
+				received_at, row_bytes) VALUES `, `(?, ?, ?, ?, 'seed', 'operator', 'git', '[]', 0, 2)`, ``, pushes,
 			func(i int) []any { return []any{fmt.Sprintf("%s-push-%06d", id, i), id, i + 1, i} }); err != nil {
 			return err
 		}
@@ -628,9 +628,9 @@ func (e *estate) seedPacks(id string, from, n int) {
 func (e *estate) seedWeighed(id string, n, width int) {
 	e.t.Helper()
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
-		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
+		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, via, commands,
 			received_at, row_bytes)
-		SELECT printf('%s-weighed-%06d', ?, i), ?, i + 1, i, 'seed', 'operator', '[]', 0, ? FROM k`,
+		SELECT printf('%s-weighed-%06d', ?, i), ?, i + 1, i, 'seed', 'operator', 'git', '[]', 0, ? FROM k`,
 		n, id, id, width)
 }
 
@@ -747,23 +747,39 @@ func TestTheHistoryHorizonIsBoundedByWhatItsRowsWeigh(t *testing.T) {
 	}
 }
 
-// A PUSH ROW RECORDS WHAT IT WEIGHS: row_bytes is the bytes of the commands
-// and the introduced ids the row stores — what deleting it costs, and what
-// the horizon and a purge part are bounded by.
+// A PUSH ROW RECORDS WHAT IT WEIGHS: row_bytes is the bytes of the commands,
+// the introduced ids and, for a seat's push, the run the row stores — what
+// deleting it costs, and what the horizon and a purge part are bounded by.
+//
+// Mutation: weigh a row by its commands and introduced ids alone
+// (pushRowBytes dropping the run) — the seat's row weighs less than it holds.
 func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
 	e.apply(create(t, "repo-a", "a"))
-	entry := pushEntry("p1", move("refs/heads/main", ZeroOID, oid("A")),
+	person := pushEntry("p1", move("refs/heads/main", ZeroOID, oid("A")),
 		move("refs/tags/v1", ZeroOID, oid("B")))
-	entry.Introduced, entry.IntroducedCount = []string{oid("A"), oid("B")}, 2
-	e.apply(pushOf(t, "repo-a", entry))
-	got := e.num(`SELECT row_bytes FROM code_pushes WHERE push_id = 'p1'`)
-	want := e.num(`SELECT length(CAST(commands AS BLOB)) + length(CAST(introduced AS BLOB))
-		FROM code_pushes WHERE push_id = 'p1'`)
-	if got != want || e.str(`SELECT introduced FROM code_pushes WHERE push_id = 'p1'`) == "" {
-		t.Fatalf("the push row weighs %d bytes by row_bytes, and its commands and introduced "+
-			"ids are %d", got, want)
+	person.Introduced, person.IntroducedCount = []string{oid("A"), oid("B")}, 2
+	seat := pushEntry("p2", move("refs/heads/seats/docs-writer/eng-12", ZeroOID, oid("C")))
+	seat.Introduced, seat.IntroducedCount = []string{oid("C")}, 1
+	seat.Principal = Principal{Kind: PrincipalAgent, Seat: "docs-writer", Run: RunProvenance{
+		TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native", WorkKey: "ENG-12",
+		Model: "claude-sonnet-4-5"}}
+	seat.Via = ViaEngine
+	e.apply(pushOf(t, "repo-a", person, seat))
+	for _, id := range []string{"p1", "p2"} {
+		got := e.num(`SELECT row_bytes FROM code_pushes WHERE push_id = ?`, id)
+		want := e.num(`SELECT length(CAST(commands AS BLOB)) + length(CAST(introduced AS BLOB)) +
+			length(CAST(turn_id AS BLOB)) + length(CAST(work_backend AS BLOB)) +
+			length(CAST(work_key AS BLOB)) + length(CAST(model AS BLOB))
+			FROM code_pushes WHERE push_id = ?`, id)
+		if got != want || e.str(`SELECT introduced FROM code_pushes WHERE push_id = ?`, id) == "" {
+			t.Errorf("push %s's row weighs %d bytes by row_bytes, and its commands, introduced ids and run "+
+				"are %d", id, got, want)
+		}
+	}
+	if run := e.num(`SELECT length(turn_id) FROM code_pushes WHERE push_id = 'p2'`); run == 0 {
+		t.Fatal("the seat's push row holds no turn: the case weighs no run")
 	}
 }
 

@@ -35,6 +35,14 @@ type Proposal struct {
 	PushID    string    `json:"push_id"`
 	RepoID    string    `json:"repo_id"`
 	Principal Principal `json:"principal"`
+	// Via is how the push's pack was built, stamped by its builder — the
+	// relay's git, or the engine's own — and carried whole into the record's
+	// entry and the push row: a push's history says how it was made as the
+	// code that made it saw it, never as a commit says. It rides the estate's
+	// wire as it rides the record, under [PushEntry.Via]'s stated condition:
+	// a committer of a build without it would decide the push into an entry
+	// naming no way.
+	Via PushVia `json:"via"`
 	// Node is the node that received the push.
 	Node   string `json:"node"`
 	Atomic bool   `json:"atomic,omitempty"`
@@ -163,8 +171,12 @@ const EntryRoom = MaxRecordBytes - recordOverheadBytes
 // introduced ids a row lists, the push's id and the receive instant at their
 // longest spellings, and the push --atomic. p is the proposal as the receiver
 // holds it once it has read the client's commands, before receive-pack runs:
-// its principal, its node and its commands, with the receiver's refusals that
-// need no object; every other field is ignored.
+// its principal — a seat's run with it — how it is being built ([Proposal.Via]), its
+// node and its commands, with the receiver's refusals that need no object;
+// every other field is ignored. The principal and the way are MEASURED AS
+// STAMPED, since every proposer stamps both before its work: no work adds to
+// them, so taking them at a largest that is not theirs would refuse a push
+// that fits.
 //
 // WHAT IT REFUSES IS THE CLIENT'S PUSH, never the receiver's bug: the client
 // chose the commands, and every other field is taken at its largest. A push
@@ -179,6 +191,12 @@ const EntryRoom = MaxRecordBytes - recordOverheadBytes
 // enough.
 func (p Proposal) ValidateCommands() error {
 	switch {
+	case !p.Via.Valid():
+		// THE ASKER'S OWN BUG, never the client's: a measure of an entry
+		// whose way is unstamped is short of the entry that will be
+		// proposed, by up to the longest way's spelling.
+		return fmt.Errorf("%w: via: %q is not one of %v — a push is measured as built", ErrInvalidProposal,
+			p.Via, PushVias())
 	case len(p.Commands) == 0:
 		return fmt.Errorf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
 	case len(p.Commands) > MaxCommandsPerPush:
@@ -210,7 +228,8 @@ func (p Proposal) ValidateCommands() error {
 // blob, a protection) write into the proposal, beside which [entryBound] still
 // adds [commandResultBound] for the committer's decision — a pack whose every
 // field is spelled at its longest, the push id and the receive instant at
-// their longest spellings, and the push --atomic.
+// their longest spellings, and the push --atomic. The principal, its run among
+// it, and the way stay as their proposer stamped them: no work adds to them.
 func (p Proposal) completed() Proposal {
 	w := p
 	w.PushID, w.Atomic = largestEntry().PushID, true
@@ -315,6 +334,9 @@ func (p Proposal) validFields() error {
 	case p.Principal.Seat == "":
 		return fmt.Errorf("%w: principal.seat: a push names the person its token is bound to — a "+
 			"token bound to nobody fetches only", ErrInvalidProposal)
+	case !p.Via.Valid():
+		return fmt.Errorf("%w: via: %q is not one of %v — a push names how its pack was built",
+			ErrInvalidProposal, p.Via, PushVias())
 	case strings.TrimSpace(p.Node) == "":
 		return fmt.Errorf("%w: node: a push names the node that received it", ErrInvalidProposal)
 	case p.ReceivedAt.IsZero():
@@ -332,6 +354,18 @@ func (p Proposal) validFields() error {
 	}
 	if err := validCommands(p.Commands); err != nil {
 		return err
+	}
+	// AN ENGINE-BUILT PUSH IS ONE COMMIT ON ONE REF: the engine builds a
+	// write as one ref update, so a proposal of it moving more, or held
+	// together by --atomic — which one command has nothing to hold together
+	// with — is no push the engine built.
+	switch {
+	case p.Via == ViaEngine && len(p.Commands) != 1:
+		return fmt.Errorf("%w: commands: %d, and a push the engine built moves exactly one ref",
+			ErrInvalidProposal, len(p.Commands))
+	case p.Via == ViaEngine && p.Atomic:
+		return fmt.Errorf("%w: atomic: a push the engine built moves one ref, which --atomic has nothing "+
+			"to hold together with", ErrInvalidProposal)
 	}
 	if p.Pack != nil {
 		if err := p.validPack(); err != nil {
@@ -427,7 +461,7 @@ func (p Proposal) entryWith(cmds []Command) PushEntry {
 		stored[i] = c
 	}
 	return PushEntry{
-		PushID: p.PushID, Principal: p.Principal, Node: p.Node, Atomic: p.Atomic,
+		PushID: p.PushID, Principal: p.Principal, Via: p.Via, Node: p.Node, Atomic: p.Atomic,
 		Commands: stored, Pack: p.Pack, Introduced: p.Introduced,
 		IntroducedCount: p.IntroducedCount, ReceivedAt: p.ReceivedAt,
 	}

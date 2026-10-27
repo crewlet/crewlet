@@ -122,8 +122,8 @@ func newLandedRig(b *testing.B, size int64, moves int) *landedRig {
 			move := func(next string, force bool) (string, error) {
 				id := uuid.Must(uuid.NewV7()).String()
 				res, err := f.Data().Served().Propose(ctx, code.Proposal{
-					PushID: id, RepoID: r.repo, Principal: pusher, Node: "bench", ReceivedAt: time.Now().UTC(),
-					Commands: []code.Command{{Ref: ref, Old: old, New: next, Forced: force}},
+					PushID: id, RepoID: r.repo, Principal: pusher, Via: code.ViaGit, Node: "bench",
+					ReceivedAt: time.Now().UTC(), Commands: []code.Command{{Ref: ref, Old: old, New: next, Forced: force}},
 				})
 				switch {
 				case err != nil:

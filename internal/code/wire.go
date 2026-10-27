@@ -265,33 +265,54 @@ type PushOutcome struct {
 
 // PushRow is one push as its repository's history keeps it.
 type PushRow struct {
-	PushID          string            `json:"push_id"`
-	RepoID          string            `json:"repo_id"`
-	Position        statelog.Position `json:"position"`
-	At              time.Time         `json:"at"`
-	Actor           string            `json:"actor"`
-	ActorKind       string            `json:"actor_kind"`
-	ActorSeat       string            `json:"actor_seat,omitempty"`
-	Node            string            `json:"node,omitempty"`
-	Atomic          bool              `json:"atomic,omitempty"`
-	Commands        []Command         `json:"commands"`
-	PackID          string            `json:"pack_id,omitempty"`
-	PackBytes       int64             `json:"pack_bytes,omitempty"`
-	Introduced      []string          `json:"introduced,omitempty"`
-	IntroducedCount int               `json:"introduced_count,omitempty"`
-	ReceivedAt      time.Time         `json:"received_at"`
+	PushID   string            `json:"push_id"`
+	RepoID   string            `json:"repo_id"`
+	Position statelog.Position `json:"position"`
+	At       time.Time         `json:"at"`
+	// Actor is who pushed, as the history names it: an operator's credential
+	// — the person's own attribution, as every record a write leaves names
+	// it — or a seat's handle; ActorKind is the principal's kind, and
+	// ActorSeat the seat: the human seat an operator's principal holds, or
+	// the seat itself.
+	Actor     string `json:"actor"`
+	ActorKind string `json:"actor_kind"`
+	ActorSeat string `json:"actor_seat,omitempty"`
+	// Via is how the push's pack was built, and Run, for a seat's push, the
+	// turn, the work item and the model behind it — each stamped by the
+	// engine from the call that made the push, never read from a commit.
+	Via             PushVia       `json:"via"`
+	Run             RunProvenance `json:"run,omitzero"`
+	Node            string        `json:"node,omitempty"`
+	Atomic          bool          `json:"atomic,omitempty"`
+	Commands        []Command     `json:"commands"`
+	PackID          string        `json:"pack_id,omitempty"`
+	PackBytes       int64         `json:"pack_bytes,omitempty"`
+	Introduced      []string      `json:"introduced,omitempty"`
+	IntroducedCount int           `json:"introduced_count,omitempty"`
+	ReceivedAt      time.Time     `json:"received_at"`
 }
 
-// PushVia is how a push's pack was built. Every push this build lands is
-// received by git, so it is [ViaGit] for every row — DERIVED, never stored:
-// no column records it, and no record carries it.
+// PushVia is how a push's pack was built: STAMPED by whoever built it, carried
+// by its proposal and its record's entry, and stored on its push row — never
+// derived from the commits, whose committer header any client may write.
+//
+// THE ROW'S COLUMN HAS NO DOMAIN VALUE AS ITS DEFAULT (the empty string, in
+// replicated 0061), and a row naming no way this build knows is refused by
+// every reader of it (scanPush): an apply that forgot the column would
+// otherwise read as one way or the other.
 type PushVia string
 
-// ViaGit is a push a client's git sent and receive-pack received.
-const ViaGit PushVia = "git"
+const (
+	// ViaGit is a push a client's git sent and receive-pack received.
+	ViaGit PushVia = "git"
+	// ViaEngine is a push whose commit and pack the engine built itself, from
+	// a tool's call, rather than one git received — exactly one ref moved,
+	// never --atomic ([Proposal.Validate]).
+	ViaEngine PushVia = "engine"
+)
 
-// PushVias is the closed set.
-func PushVias() []PushVia { return []PushVia{ViaGit} }
+// PushVias is the closed set, in its documented order.
+func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine} }
 
 // Valid reports a way this build knows.
 func (v PushVia) Valid() bool { return slices.Contains(PushVias(), v) }
@@ -327,12 +348,12 @@ type IntroducedRow struct {
 }
 
 // introducedOf is a push row as the index is built from it: its principal
-// from the row's actor columns, and its ok commands as the refs it moved.
+// from the row's actor columns, how it was built from its via, and its ok
+// commands as the refs it moved.
 func introducedOf(row PushRow) IntroducedRow {
 	in := IntroducedRow{
 		PushedBy: PushedBy{PushID: row.PushID, Position: row.Position, At: row.At,
-			Principal: Principal{Kind: PrincipalKind(row.ActorKind), OperatorID: row.Actor, Seat: row.ActorSeat},
-			Via:       ViaGit},
+			Principal: row.principal(), Via: row.Via},
 		Introduced: row.Introduced, Count: row.IntroducedCount,
 	}
 	for _, c := range row.Commands {
@@ -341,6 +362,17 @@ func introducedOf(row PushRow) IntroducedRow {
 		}
 	}
 	return in
+}
+
+// principal is who made the push as its row's actor columns name it — the
+// inverse of the push apply's [Principal.rowActor]: an operator's credential
+// and the seat it is bound to, or a seat by its handle with the run its push
+// carried.
+func (row PushRow) principal() Principal {
+	if PrincipalKind(row.ActorKind) == PrincipalAgent {
+		return Principal{Kind: PrincipalAgent, Seat: row.ActorSeat, Run: row.Run}
+	}
+	return Principal{Kind: PrincipalKind(row.ActorKind), OperatorID: row.Actor, Seat: row.ActorSeat}
 }
 
 // IntroducedQuery is one page of a repository's pushes in LOG ORDER: (After,

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -60,8 +61,50 @@ func RecordedRef(ref string) string {
 	if len(ref) <= MaxRefNameBytes && utf8.ValidString(ref) {
 		return ref
 	}
-	sum := sha256.Sum256([]byte(ref))
-	tail := " [" + strconv.Itoa(len(ref)) + " bytes, sha256 " + hex.EncodeToString(sum[:16]) + "]"
-	opening := strings.ToValidUTF8(ref, string(utf8.RuneError))
-	return textcut.Within(opening, MaxRefNameBytes-len(tail)) + tail
+	return digestForm(ref, strings.ToValidUTF8(ref, string(utf8.RuneError)), MaxRefNameBytes)
+}
+
+// FitProvenance is s as a [RunProvenance] field carries it: s itself when it
+// is at most [MaxProvenanceBytes] of valid UTF-8 with no control character,
+// and otherwise RecordedRef's form at MaxProvenanceBytes — as much of its
+// opening as fits, each invalid byte and each control character shown as
+// U+FFFD, beside its length and a digest of the whole: `<opening>… [<n> bytes,
+// sha256 <32 hex>]`.
+//
+// FITTED, NEVER REFUSED: every site that STAMPS a run passes each field it
+// copies from outside the code domain through it — the work backend, the work
+// key, the model — because those are other systems' labels copied as they
+// arrived (a Jira key as the issue named it; a GitLab key is a project path
+// whose namespace may nest twenty levels of up to 255 bytes each), and a stamp
+// that copied one past the bound would have [RunProvenance.Validate] refuse
+// every write the seat makes on that item as an invalid proposal — the seat
+// stopped by a label it never chose. The digest is of the whole, so two keys
+// sharing their opening still differ, and the form is itself within the
+// rules, so fitting a fitted field changes nothing.
+func FitProvenance(s string) string {
+	if len(s) <= MaxProvenanceBytes && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	// strings.Map hands every invalid byte over as utf8.RuneError, one at a
+	// time, so each is shown as U+FFFD beside the controls it replaces.
+	opening := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return utf8.RuneError
+		}
+		return r
+	}, s)
+	return digestForm(s, opening, MaxProvenanceBytes)
+}
+
+// digestForm is s within limit bytes of valid UTF-8, as the domain carries a
+// value too long or too strange to carry whole: as much of opening — s as it
+// may be shown — as fits beside s's length and a SHA-256 digest of all of it,
+// sixteen bytes wide ([NameToken]'s). The digest is of the WHOLE, textcut's
+// rule for an identifier with a length limit, so two values sharing their
+// opening still differ. ONE FORM for a recorded ref and a fitted run field,
+// so a person reading either reads one spelling of "cut, and this long".
+func digestForm(s, opening string, limit int) string {
+	sum := sha256.Sum256([]byte(s))
+	tail := " [" + strconv.Itoa(len(s)) + " bytes, sha256 " + hex.EncodeToString(sum[:16]) + "]"
+	return textcut.Within(opening, limit-len(tail)) + tail
 }

@@ -658,10 +658,20 @@ func TestARepositorysDefaultBranchIsNoReservedSeatBranch(t *testing.T) {
 }
 
 // A PRINCIPAL NAMES ITSELF ONE WAY: an operator its credential and, where it is
-// bound, a person's handle; a seat its handle and no credential. A proposal
-// takes only a bound person's, since the push decide judges no seat's grant.
+// bound, a person's handle, and no run; a seat its handle and no credential,
+// and a run only one that names its turn and holds every field within the
+// rules. A proposal takes only a bound person's, since the push decide judges
+// no seat's grant.
 func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 	t.Parallel()
+	run := code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native",
+		WorkKey: "ENG-12", Model: "claude-sonnet-4-5"}
+	with := func(change func(*code.RunProvenance)) code.RunProvenance {
+		r := run
+		change(&r)
+		return r
+	}
+	long := strings.Repeat("k", code.MaxProvenanceBytes+1)
 	for _, tc := range []struct {
 		p     code.Principal
 		valid bool
@@ -670,7 +680,23 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 		{code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"}, true},
 		{code.Principal{Kind: code.PrincipalOperator, Seat: "ana"}, false},
 		{code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "Ana Smith"}, false},
+		{code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "ana", Run: run}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana"}, true},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: run}, true},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana",
+			Run: code.RunProvenance{TurnID: strings.Repeat("t", code.MaxProvenanceBytes)}}, true},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.TurnID = ""
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.WorkKey = long
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.Model = "claude\nsonnet"
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.WorkBackend = "nat\xffive"
+		})}, false},
 		{code.Principal{Kind: code.PrincipalAgent}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana/x"}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", OperatorID: "tok"}, false},
@@ -684,7 +710,7 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 	proposal := code.Proposal{PushID: "0190f3c4-0000-7000-8000-000000000002",
 		RepoID: "0190f3c4-0000-7000-8000-00000000b0b0", Node: "n1", ReceivedAt: time.Unix(1_800_000_000, 0),
 		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "ana"},
-		Commands:  []code.Command{commands["create a branch"]}}
+		Via:       code.ViaGit, Commands: []code.Command{commands["create a branch"]}}
 	if err := proposal.Validate(); err != nil {
 		t.Fatalf("a bound person's proposal: %v", err)
 	}

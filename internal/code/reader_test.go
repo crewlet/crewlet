@@ -922,6 +922,100 @@ func TestAPushListingIsNewestInLogOrder(t *testing.T) {
 	}
 }
 
+// A PUSH ROW NAMES WHO MADE THE PUSH AND HOW, as its record's entry says, and
+// the history and the index of pushes read it back as the entry said it: a
+// person's push names the credential it came through as its actor, beside
+// the seat they hold, built by git and with no run; a seat's push names the
+// seat's handle as its actor and its seat — never a blank, since a seat holds
+// no credential — built by the engine, with the turn, the work item and the
+// model its run names.
+//
+// Mutations: write the principal's credential as every row's actor
+// (Principal.rowActor answering OperatorID) — the seat's row names nobody;
+// read a seat's row back without its run (PushRow.principal dropping Run) —
+// the index of pushes names no turn.
+func TestAPushRowNamesWhoMadeItAndHow(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := seededRepo(t, n, "app")
+	person := entry("p-person", set("refs/heads/main", code.ZeroOID, oidOf("person")))
+	person.Principal = code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:019a2f4e", Seat: "founder"}
+	seat := entry("p-seat", set("refs/heads/seats/docs-writer/eng-12", code.ZeroOID, oidOf("seat")))
+	seat.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: code.RunProvenance{
+		TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native", WorkKey: "ENG-12",
+		Model: "claude-sonnet-4-5"}}
+	seat.Via = code.ViaEngine
+	n.push(id, person, seat)
+
+	type named struct {
+		actor, kind, seat string
+		via               code.PushVia
+		run               code.RunProvenance
+	}
+	want := map[string]named{
+		"p-person": {"pat:019a2f4e", string(code.PrincipalOperator), "founder", code.ViaGit, code.RunProvenance{}},
+		"p-seat":   {"docs-writer", string(code.PrincipalAgent), "docs-writer", code.ViaEngine, seat.Principal.Run},
+	}
+	history, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app",
+		Fresh: stale})
+	if err != nil {
+		t.Fatalf("Read(pushes): %v", err)
+	}
+	got := map[string]named{}
+	for _, r := range history.Pushes {
+		got[r.PushID] = named{r.Actor, r.ActorKind, r.ActorSeat, r.Via, r.Run}
+	}
+	for push, w := range want {
+		if g, ok := got[push]; !ok || g != w {
+			t.Errorf("push %s's row names %+v (%t), want %+v", push, g, ok, w)
+		}
+	}
+
+	// THE INDEX OF PUSHES IS BUILT FROM THE SAME ROWS, and its principal is
+	// the entry's, run and all — what a git node says of who pushed a commit.
+	index, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadIntroduced,
+		Introduced: &code.IntroducedQuery{RepoID: id}, Fresh: stale})
+	if err != nil {
+		t.Fatalf("Read(introduced): %v", err)
+	}
+	entries := map[string]code.PushEntry{person.PushID: person, seat.PushID: seat}
+	for _, r := range index.Introduced {
+		if e, ok := entries[r.PushID]; !ok || r.Principal != e.Principal || r.Via != e.Via {
+			t.Errorf("the index of pushes reads push %s as by %+v, %s; want its entry's %+v, %s", r.PushID,
+				r.Principal, r.Via, e.Principal, e.Via)
+		}
+		delete(entries, r.PushID)
+	}
+	if len(entries) > 0 {
+		t.Errorf("the index of pushes read none of %v", entries)
+	}
+}
+
+// A PUSH ROW NAMING NO WAY IS REFUSED BY EVERY READER of it, never read as
+// one: the via column's default is no way at all (replicated 0061), so a row
+// an apply wrote without it fails the read, naming the push — the history's
+// and the index of pushes' alike — where a default naming a way would have
+// answered every push the engine built as one a client's git sent.
+//
+// Mutation: scanPush taking any via — the row is read as a push built no way.
+func TestAPushRowNamingNoWayIsRefused(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := seededRepo(t, n, "app")
+	n.push(id, entry("p-forgot", set("refs/heads/main", code.ZeroOID, oidOf("forgot"))))
+	n.exec(`UPDATE code_pushes SET via = '' WHERE push_id = 'p-forgot'`)
+	for name, q := range map[string]code.ReadQuery{
+		"the history": {Asker: asker, Kind: code.ReadPushes, Repo: "app", Fresh: stale},
+		"the index of pushes": {Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: id},
+			Fresh: stale},
+	} {
+		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), "p-forgot") {
+			t.Errorf("%s of a push row naming no way: %v, want ErrInvalid naming the push", name, err)
+		}
+	}
+}
+
 // A CODE READ STATES ITS FRESHNESS: a point read and a snapshot's first page
 // name their level, a session read names the position it waits for, and a
 // person's listing is never a session read.

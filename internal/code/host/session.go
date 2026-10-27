@@ -184,7 +184,8 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	}
 	ld, err := s.land(ctx, landing{
 		Synced: sess.synced, Scratch: sess.scratch, Commands: cmds, Atomic: atomic, Principal: sess.principal,
-		PushID: sess.pushID, ReceivedAt: sess.receivedAt, Judged: sess.judged, Progress: sess.step,
+		Via: code.ViaGit, PushID: sess.pushID, ReceivedAt: sess.receivedAt, Judged: sess.judged,
+		Progress: sess.step,
 	})
 	if err != nil {
 		cause := err

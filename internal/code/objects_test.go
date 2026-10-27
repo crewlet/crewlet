@@ -81,8 +81,9 @@ func TestThePackReferencesAreReadThroughTheCodeEstate(t *testing.T) {
 	}
 }
 
-// A RECORD'S PACK REFERENCES ARE WHAT ITS APPLY WRITES: a push names the row
-// the applier writes for its pack, spelled as the walk spells it; a compaction
+// A RECORD'S PACK REFERENCES ARE WHAT ITS APPLY WRITES: a push record names the
+// row the applier writes for each of its pushes' packs — a person's and a
+// seat's, in the record's order — spelled as the walk spells it; a compaction
 // names each output's row and tells each input's removed; every other record
 // this build reads — a sweep of retired packs among them — names none; and a
 // record this build cannot read that may reach a repository refuses — the
@@ -95,10 +96,16 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := records(push)
-	want := suitePack("repo-a")
-	if err != nil || len(got) != 1 || !got[0].Names || got[0].Object != want.Content() ||
-		got[0].NamedBy != objstore.JoinOwner("repo-a", want.PackID, "pack") {
-		t.Fatalf("a push's references = %+v, %v; want its pack's row", got, err)
+	entries := suitePush("repo-a").Pushes
+	if err != nil || len(got) != len(entries) {
+		t.Fatalf("a push record's references = %+v, %v; want one for each of its %d pushes' packs", got, err,
+			len(entries))
+	}
+	for i, e := range entries {
+		if r := got[i]; !r.Names || r.Object != e.Pack.Content() ||
+			r.NamedBy != objstore.JoinOwner("repo-a", e.Pack.PackID, "pack") {
+			t.Errorf("a push record's reference %d = %+v; want push %s's pack row", i, r, e.PushID)
+		}
 	}
 	for _, kind := range []code.ObjectKind{code.KindName, code.KindEviction, code.KindGeneration, code.KindCompany} {
 		body, err := encodeSuiteRecord(string(kind), "repo-a", "op-1", code.RecordVersion)

@@ -103,7 +103,7 @@ func proposal(repo string, cmds ...code.Command) code.Proposal {
 	return code.Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo,
 		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ada"},
-		Node:      "node-a", Commands: cmds, ReceivedAt: harnessAt,
+		Via:       code.ViaGit, Node: "node-a", Commands: cmds, ReceivedAt: harnessAt,
 	}
 }
 

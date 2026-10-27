@@ -135,7 +135,7 @@ func chain(b *testing.B, batch int, repos []string, propose func(context.Context
 			p := code.Proposal{
 				PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repos[(pushes+k)%len(repos)],
 				Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "bench", Seat: "ceo"},
-				Node:      "bench", ReceivedAt: time.Now().UTC(),
+				Via:       code.ViaGit, Node: "bench", ReceivedAt: time.Now().UTC(),
 				Commands: []code.Command{{Ref: fmt.Sprintf("refs/heads/b%d-%d", pushes, k), Old: code.ZeroOID,
 					New: randomOID()}},
 			}

@@ -427,6 +427,7 @@ func entry(id string, cmds ...code.Command) code.PushEntry {
 		Principal: code.Principal{
 			Kind: code.PrincipalOperator, OperatorID: "op-harness", Seat: "harness",
 		},
+		Via:  code.ViaGit,
 		Node: "node-a", Commands: cmds, Pack: suitePack(id), ReceivedAt: harnessAt,
 	}
 }

@@ -187,7 +187,9 @@ func readCommands(r *bufio.Reader, maxBytes, maxCommands int) (section, error) {
 // its commands are more than one push may carry
 // (code.Proposal.ValidateCommands) — "" when they are not. The commands are
 // the section's as they will be proposed: each ref in its recorded form
-// (code.RecordedRef), and the refusals pre has already made.
+// (code.RecordedRef), and the refusals pre has already made — under the
+// principal the push is admitted as and the way the relay's landing names
+// (code.ViaGit), both of which its entry carries.
 //
 // The push's width is said in sizes a person reads, with what to do; any other
 // rule — a ref named twice, a command that moves nothing, which only a
@@ -206,7 +208,8 @@ func commandsRefusal(adm admission, node string, sec section, pre map[string]ans
 			cmds[i].Result, cmds[i].Reason = code.ResultNG, a.Reason
 		}
 	}
-	err := code.Proposal{Principal: adm.principal(), Node: node, Commands: cmds}.ValidateCommands()
+	err := code.Proposal{Principal: adm.principal(), Via: code.ViaGit, Node: node,
+		Commands: cmds}.ValidateCommands()
 	var wide *code.TooWideError
 	switch {
 	case err == nil:

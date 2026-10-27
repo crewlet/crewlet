@@ -630,8 +630,23 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 	pos := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1 << 20, Seq: 1 << 40}
 	stamp := time.Date(2026, 10, 14, 23, 59, 59, 999999999, time.UTC)
 
+	// A SEAT'S RUN AT ITS BOUND beside the longest way: every field of it
+	// code.MaxProvenanceBytes of `<`, which a stamp carries as it is.
+	runField := strings.Repeat("<", code.MaxProvenanceBytes)
+	if code.FitProvenance(runField) != runField {
+		t.Fatalf("a run field of %d `<` is no longer carried as it is: build the widest run from what "+
+			"code.FitProvenance admits", len(runField))
+	}
+	var via code.PushVia
+	for _, v := range code.PushVias() {
+		if len(v) > len(via) {
+			via = v
+		}
+	}
 	push := code.PushRow{PushID: strings.Repeat("p", 36), RepoID: strings.Repeat("r", 36), Position: pos,
 		At: stamp, Actor: strings.Repeat("a", 128), ActorKind: "operator", ActorSeat: strings.Repeat("s", 64),
+		Via:  via,
+		Run:  code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField},
 		Node: strings.Repeat("n", 128), Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: 1 << 40,
 		IntroducedCount: 1 << 30, ReceivedAt: stamp}
 	var longest code.Refusal
@@ -874,6 +889,39 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 	_, _, err = cli(t, "code", "status", h.cfg, "-repo", "nope")
 	if err == nil || !strings.Contains(err.Error(), `"nope"`) || !strings.Contains(err.Error(), "code.repos") {
 		t.Errorf("status of an undeclared repository = %v, want a refusal naming it and code.repos", err)
+	}
+}
+
+// A PUSH LINE NAMES WHO MADE THE PUSH AS ITS ROW DOES: a person's credential
+// with the seat they hold beside it; a seat by its handle — the actor and the
+// seat at once, so never twice — with the turn that made the push and the work
+// item it was charged to, where the row names them; and nothing for what a row
+// does not say.
+//
+// Mutation: print a seat's push as a person's (`<actor> (<seat>)`) — the
+// handle twice, and no turn.
+func TestAPushLineNamesWhoMadeIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, row, want string
+	}{
+		{"a person's", `{"actor":"pat:019a2f4e","actor_kind":"operator","actor_seat":"founder","via":"git"}`,
+			"pat:019a2f4e (founder)"},
+		{"an unbound token's", `{"actor":"token:ci","actor_kind":"operator","via":"git"}`, "token:ci"},
+		{"a seat's on a work item", `{"actor":"docs-writer","actor_kind":"agent","actor_seat":"docs-writer",` +
+			`"via":"engine","run":{"turn_id":"0192f00d-0000-7000-8000-000000000001","work_backend":"native",` +
+			`"work_key":"ENG-12","model":"claude-sonnet-4-5"}}`,
+			"docs-writer (turn 0192f00d-0000-7000-8000-000000000001, native ENG-12)"},
+		{"a seat's on no work item", `{"actor":"docs-writer","actor_kind":"agent","actor_seat":"docs-writer",` +
+			`"via":"engine","run":{"turn_id":"t-1"}}`, "docs-writer (turn t-1)"},
+	} {
+		var p codePushView
+		if err := json.Unmarshal([]byte(tc.row), &p); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := pushLine(p).by; got != tc.want {
+			t.Errorf("%s push is printed by %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

@@ -238,9 +238,9 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 6.4–9.0 MB a day: 3 000 pushes at 1 332 bytes,
+	//   - the code log 6.5–9.0 MB a day: 3 000 pushes at 1 344 bytes,
 	//     MEASURED for a push alone in its record (internal/code's
-	//     BenchmarkPushLogBytes; 744.0 a push in a burst group commit holds
+	//     BenchmarkPushLogBytes; 756.0 a push in a burst group commit holds
 	//     together), 4.0 MB; and the barriers of its git clients, 2.4–5.0 MB
 	//     — a push asks the log twice (its advertisement and its receive's
 	//     sync) and the fetch before it once (its ls-refs, whose sync brings
@@ -256,7 +256,7 @@ const (
 	// than the mutation log.
 	//
 	// So the code log takes 0.53–0.74 of the mutation log's day — 0.33 on
-	// its push records alone (0.40 of the tracker's records), which is what
+	// its push records alone (0.41 of the tracker's records), which is what
 	// the 1.5–2 KiB a record this ratio was first set from overstated — and
 	// TWO THIRDS is taken past the middle of that range, never past its
 	// top. Past the middle because the changes, reviews and checks that

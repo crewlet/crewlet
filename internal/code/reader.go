@@ -1129,16 +1129,27 @@ type scanner interface{ Scan(dest ...any) error }
 // encoding it again. A row a NEWER build applied may store a field this build
 // does not decode; its stored length is then the longer, and a page counted
 // by it ends early rather than late.
+//
+// A ROW NAMING NO WAY THIS BUILD KNOWS IS REFUSED ([ErrInvalid], naming the
+// push), never read as one: its column's default is the empty string rather
+// than a way (replicated 0061), so an apply that forgot to write it is a
+// failed read here, where a default naming a way would have answered every
+// push the engine built as one a client's git sent.
 func scanPush(s scanner) (PushRow, int, error) {
 	var (
-		row                    PushRow
-		position, at, received int64
-		commands, introduced   string
+		row                       PushRow
+		position, at, received    int64
+		via, commands, introduced string
 	)
 	if err := s.Scan(&row.PushID, &row.RepoID, &position, &at, &row.Actor, &row.ActorKind,
-		&row.ActorSeat, &row.Node, &row.Atomic, &commands, &row.PackID, &row.PackBytes,
-		&introduced, &row.IntroducedCount, &received); err != nil {
+		&row.ActorSeat, &via, &row.Run.TurnID, &row.Run.WorkBackend, &row.Run.WorkKey, &row.Run.Model,
+		&row.Node, &row.Atomic, &commands, &row.PackID, &row.PackBytes, &introduced, &row.IntroducedCount,
+		&received); err != nil {
 		return PushRow{}, 0, err
+	}
+	if row.Via = PushVia(via); !row.Via.Valid() {
+		return PushRow{}, 0, fmt.Errorf("%w: push %s's row names its way as %q, which is not one of %v",
+			ErrInvalid, row.PushID, via, PushVias())
 	}
 	row.Position, row.At, row.ReceivedAt = unpacked(position), store.DecodeTime(at), store.DecodeTime(received)
 	if err := json.Unmarshal([]byte(commands), &row.Commands); err != nil {
@@ -2477,8 +2488,9 @@ const (
 		INDEXED BY code_packs_retired_repo_idx WHERE repo_id = ? AND retired_position >= ?
 		AND retired_position <= ? AND (retired_position > ? OR pack_id > ? OR (pack_id = ? AND part > ?))
 		ORDER BY retired_position, pack_id, part LIMIT ?`
-	pushColumns = `push_id, repo_id, position, at, actor, actor_kind, actor_seat, node, atomic,
-		commands, pack_id, pack_bytes, introduced, introduced_count, received_at`
+	pushColumns = `push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
+		work_backend, work_key, model, node, atomic, commands, pack_id, pack_bytes, introduced,
+		introduced_count, received_at`
 	pushSQL        = `SELECT ` + pushColumns + ` FROM code_pushes WHERE push_id = ?`
 	pushesFirstSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		ORDER BY position DESC, push_id DESC LIMIT ?`

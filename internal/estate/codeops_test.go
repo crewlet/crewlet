@@ -212,6 +212,7 @@ func proposalTo(repo, pushID string) code.Proposal {
 	return code.Proposal{
 		PushID: pushID, RepoID: repo, Node: "agent-1",
 		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+		Via:       code.ViaGit,
 		Commands: []code.Command{{Ref: "refs/heads/main", Old: code.ZeroOID,
 			New: "1111111111111111111111111111111111111111"}},
 		ReceivedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC),

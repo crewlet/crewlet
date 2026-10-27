@@ -685,8 +685,8 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 				return err
 			}
 			if _, err := store.InsertRows(ctx, tx, vars,
-				`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
-					received_at, row_bytes) VALUES `, `(?, ?, ?, ?, 'op', 'operator', '[]', 0, 2)`, ``, 200,
+				`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, via, commands,
+					received_at, row_bytes) VALUES `, `(?, ?, ?, ?, 'op', 'operator', 'git', '[]', 0, 2)`, ``, 200,
 				func(i int) []any { return []any{fmt.Sprintf("%s-push-%06d", id, i), id, i, i} }); err != nil {
 				return err
 			}

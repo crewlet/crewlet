@@ -1836,7 +1836,8 @@ var importWidestNode = strings.Repeat("n", 64)
 // command's two ids are spelled at one width whatever they hold, so each
 // command is asked as a create of its value; the rule takes every command
 // forced and refused at its widest, so what the node decides of it never
-// widens it past what this answered.
+// widens it past what this answered. Every step is a push git sends, so it is
+// asked as one (code.ViaGit), which its record's entry names too.
 //
 // None fitting is no ref's fault: one update of the longest ref a push may
 // carry takes under two kibibytes, so the person's own id or handle fills the
@@ -1848,7 +1849,8 @@ func (imp *importer) recordHolds(refs []queuedRef) (int, error) {
 		for i, r := range refs[:n] {
 			cmds[i] = code.Command{Ref: code.RecordedRef(r.ref), Old: code.ZeroOID, New: r.oid}
 		}
-		err := code.Proposal{Principal: imp.principal, Node: importWidestNode, Commands: cmds}.ValidateCommands()
+		err := code.Proposal{Principal: imp.principal, Via: code.ViaGit, Node: importWidestNode,
+			Commands: cmds}.ValidateCommands()
 		var wide *code.TooWideError
 		switch {
 		case err == nil:

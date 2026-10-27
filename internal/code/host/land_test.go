@@ -35,7 +35,8 @@ import (
 // barrier, a scratch made over it under a fresh push id, and — revs given —
 // ONE pack of revs written into it by the person's own git, with the .idx
 // (version 2) and the .rev a push's bundle carries; its checksum is the
-// pack's. The landing names who pushes, when, and nothing it judged.
+// pack's. The landing names who pushes, when, and nothing it judged — and that
+// the engine built it (code.ViaEngine), as the builder it stands for will.
 func scratchFor(t *testing.T, c *codetest.Case, p *codetest.Person, person, work string,
 	revs ...string) (l host.TestLanding, checksum string) {
 
@@ -56,7 +57,8 @@ func scratchFor(t *testing.T, c *codetest.Case, p *codetest.Person, person, work
 		checksum = gittest.Pack(t, p.Git(), scratch.Dir, work, revs...)
 	}
 	return host.TestLanding{Synced: synced, Scratch: scratch, PushID: pushID, ReceivedAt: time.Now(),
-		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: person, Seat: person}}, checksum
+		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: person, Seat: person},
+		Via:       code.ViaEngine}, checksum
 }
 
 // gets is a backend that counts every read of each name.
@@ -99,7 +101,12 @@ func adoptions(node codetest.Node, outcome string) uint64 {
 // happens here: nothing else syncs the repository and the disk takes links.)
 // The adoption is the landing's, not the relay's: kept where only the hook's
 // session reached it, a push built any other way would land and cost its own
-// node a download of what it holds.
+// node a download of what it holds. And its row says how it was built — as
+// its builder named it, the engine — and who pushed: the person's credential
+// as the actor beside the seat they hold, with no run.
+//
+// Mutation: propose the relay's way whatever the landing names (Via: ViaGit in
+// land's proposal) — the row reads git.
 func TestAPushTheRelayNeverSawLands(t *testing.T) {
 	backend := &gets{Backend: memobj.New(), of: map[string]int{}}
 	c := newCase(t, codetest.SoloOptions{Objects: backend}, codetest.Settings())
@@ -126,6 +133,12 @@ func TestAPushTheRelayNeverSawLands(t *testing.T) {
 	}
 	if row == nil || !slices.Contains(row.Introduced, head) {
 		t.Fatalf("push %s's row is %+v, want one listing %s among the commits it introduced", l.PushID, row, head)
+	}
+	if row.Via != code.ViaEngine || row.Actor != "ceo" || row.ActorKind != string(code.PrincipalOperator) ||
+		row.ActorSeat != "ceo" || !row.Run.IsZero() {
+		t.Errorf("push %s's row names it built %q by %q (%s, seat %q, run %+v), want the engine's, by the "+
+			"person's credential and their seat, with no run", l.PushID, row.Via, row.Actor, row.ActorKind,
+			row.ActorSeat, row.Run)
 	}
 	var pack *code.PackRef
 	for _, r := range c.Rows().Packs {

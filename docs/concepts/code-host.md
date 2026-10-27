@@ -446,10 +446,17 @@ repository, never by a sweep:
 
 - **Push history** — a push row is kept **181 days**, the same horizon as the
   company's [usage history](../guides/retention.md), so "what happened over
-  the last half year" has one answer across the engine. A row names every
-  ref its push named, refused ones too. A ref the engine refused for being
-  longer than 255 bytes, or for not being UTF-8, is kept as much of it as
-  fits in 255 bytes beside its length and a digest of the whole
+  the last half year" has one answer across the engine. A row names who
+  pushed — a person's credential and the seat they hold, or a seat by its
+  handle — how the push's pack was built (`git`, sent by a client's git, or
+  `engine`, built by the engine itself), and for a seat's push the turn that
+  made it, the work item that turn was charged to and the model it ran on:
+  each stamped by the engine from the call that made the push, never read
+  from a commit, whose author, committer and trailers whoever made the commit
+  writes. A row names every ref its push named, refused ones too. A ref the
+  engine refused for being longer than 255 bytes, or for not being UTF-8, is
+  kept as much of it as fits in 255 bytes beside its length and a digest of
+  the whole
   (`refs/heads/x… [60013 bytes, sha256 <32 hex>]`), so a ref nothing can ever
   name costs every node's history no more than one that could. The history
   is kept, listed and forgotten in the order the pushes LANDED on the code
@@ -1536,9 +1543,11 @@ person's fetch through it does.
 Beside each copy, a git node keeps an index of which push introduced each
 commit and every update each push landed on a ref, built from the code
 host's push rows rather than from the packs. It names, on every server-side
-read, the push that brought in each commit the answer names, and it answers
-whether a commit is in a branch's history and which push landed it there
-(`landed_in`) with ancestry checks against the tip the asker was shown —
+read, the push that brought in each commit the answer names — who made it,
+how it was built and, for a seat's push, the turn and the work item behind
+it, as its row says — and it answers whether a commit is in a branch's
+history and which push landed it there (`landed_in`) with ancestry checks
+against the tip the asker was shown —
 never a walk of the log or of the history. (This is a commit's provenance,
 not [ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-content-a-model-reads-carries-its-provenance.md)'s,
 which fences text a model reads that somebody else wrote.)
@@ -1619,17 +1628,19 @@ is still behind on the node ([Metrics](../reference/metrics.md)).
 disk — a fifth of the cheapest delta sync there is (one ref, its pack from a
 store in the process, 4.2 ms) and 1.8% of one whose pack comes from a store
 answering in 30 ms (68 ms). The index holds about 64 bytes for each commit a
-push introduced — about 190 bytes for a push of three commits — inside the
-cache's budget. A lookup that misses, every run searched, is 15.5 µs at 32
-runs over four million commits, under 1% of a warm tree listing (3.1 ms). The
-backfill reads the data node's push rows in pages of about 7 500 pushes — the
-4 MB a page answers at most — each about 115 ms of the data node's read and
-150 ms in all, so a history of 18 million pushes, a large company's monorepo
-over 181 days, is read back in about 18 minutes with one git node for each
-data node ([Scaling Out](scaling.md#git-nodes) for a larger fleet). Choosing
-the backfill's next step costs microseconds however many copies a node
-holds — under 3 µs at 10 000 — since the node keeps which copies have work
-due as their work changes, rather than looking at every copy for it. A
+push introduced — about 190 bytes for a person's push of three commits, and
+for a seat's push the bytes of its turn id, work item and model more, about
+80 — inside the cache's budget. A lookup that misses, every run searched, is
+15.5 µs at 32 runs over four million commits, under 1% of a warm tree listing
+(3.1 ms). The backfill reads the data node's push rows in pages of about 7 500
+pushes — the 4 MB a page answers at most — each about 115 ms of the data
+node's read and 150 ms in all, so a history of 18 million pushes, a large
+company's monorepo over 181 days, is read back in about 18 minutes with one
+git node for each data node ([Scaling Out](scaling.md#git-nodes) for a larger
+fleet). Choosing the backfill's next step costs microseconds however many
+copies a node holds — under 3 µs at 10 000 — since the node keeps which
+copies have work due as their work changes, rather than looking at every copy
+for it. A
 `landed_in` over a branch of 2 000 moves through 14 000 commits took 32 ms and
 11 checks where the branch was never forced, 56 ms and 17 checks with three
 forced moves since the landing, and 284 ms for all 64 checks with 66, answered

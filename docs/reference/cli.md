@@ -1280,7 +1280,10 @@ PUSHED AT             BY                                                  NODE  
 `BY` is the credential that pushed, as every record a write leaves names it —
 `pat:<credential id>` for a machine token, `token:<id>` for a Tier A token —
 and, in parentheses, the human seat its principal holds: a person's own, or the
-one the identity directory binds a token to;
+one the identity directory binds a token to; a seat's own push is the seat's
+handle, and in parentheses the turn that made it and the work item it was
+charged to (`docs-writer (turn <turn id>, native ENG-12)`), as the engine
+stamped them when the push was made;
 each ref's result is `ok`, `noop` or `ng`, with git's own `..` for a fast
 forward and `...` for a forced move, and an `ng`'s reason. `limits` are the
 serving node's `code.limits`. A deleted repository's header says when it was

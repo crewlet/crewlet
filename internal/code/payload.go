@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -307,6 +308,25 @@ type PushEntry struct {
 	// which is what collapses a push decided twice.
 	PushID    string    `json:"push_id"`
 	Principal Principal `json:"principal"`
+	// Via is how the push's pack was built — received by git, or built by
+	// the engine itself — as its proposer stamped it ([Proposal.Via]), and
+	// what its push row's via column says.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a push record reads it. Once a build without it has run, a
+	// push the ENGINE built takes {Name: "PushEntry.Via engine", Since: 2,
+	// Op: "push", Path: []string{"mutation", "pushes", "via"}, Equals:
+	// string(ViaEngine)} in versionedFields, with RecordVersion at 2, its
+	// line under "What each version added" and a Carrying record in the
+	// statelogtest candidate — such a build reads every push as one git
+	// received, which is true of a push git received and false of the
+	// engine's, so only the engine's needs the newer reader, and the key
+	// alone would stamp every push — and the migration that adds the column
+	// writes `git` into the rows it finds there, every one a push such a
+	// build received, since the column's default names no way.
+	Via PushVia `json:"via"`
 	// Node is the node that received the push.
 	Node   string `json:"node"`
 	Atomic bool   `json:"atomic,omitempty"`
@@ -320,18 +340,41 @@ type PushEntry struct {
 }
 
 // Principal is who acts on a repository: an operator credential and the
-// person it is bound to ("" for nobody), or a seat.
+// person it is bound to ("" for nobody), or a seat — and on a seat's push, the
+// run behind it.
 type Principal struct {
 	Kind       PrincipalKind `json:"kind"`
 	OperatorID string        `json:"operator_id,omitempty"`
 	Seat       string        `json:"seat,omitempty"`
+	// Run is what made a SEAT'S PUSH — the turn, the work item it was charged
+	// to and the model — and nothing on any other principal: an operator acts
+	// with a credential and no run, and a seat that only READS names none
+	// (a read's asker is judged by who it is, never by what it is doing).
+	// THE ZERO VALUE IS "NO RUN", and a value, not a pointer: one spelling of
+	// the absence, omitted from the encoding whole, and a principal stays a
+	// value the cases and the index of pushes compare with ==.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a push record reads it. Once a build without it has run, it
+	// takes {Name: "Principal.Run", Since: 2, Op: "push", Path:
+	// []string{"mutation", "pushes", "principal", "run"}} in
+	// versionedFields, with RecordVersion at 2, its line under "What each
+	// version added" and a Carrying record in the statelogtest candidate — an
+	// older build would otherwise apply a seat's push as a row naming no turn
+	// and no actor at all, since it writes a push's credential as its actor
+	// and a seat holds none; every seat's push names its run, so the row
+	// holds the actor's rule too.
+	Run RunProvenance `json:"run,omitzero"`
 }
 
 // Validate refuses a principal no record or question may carry ([ErrInvalid],
 // naming the field): an operator names its credential, and the person it is
-// bound to by their handle or nobody; a seat names its handle and no
-// credential. A kind this build does not know is refused, since nothing here
-// could judge what one may do.
+// bound to by their handle or nobody, and no run; a seat names its handle and
+// no credential, and a run only as [RunProvenance.Validate] admits one. A kind
+// this build does not know is refused, since nothing here could judge what
+// one may do.
 func (p Principal) Validate() error {
 	if why := p.invalid(); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
@@ -349,6 +392,9 @@ func (p Principal) invalid() string {
 			return "principal.operator_id: an operator names the credential it acts with"
 		case p.Seat != "" && !org.ValidHandle(p.Seat):
 			return fmt.Sprintf("principal.seat: %q is not a seat's handle", p.Seat)
+		case !p.Run.IsZero():
+			return "principal.run: an operator acts with a credential, and only a seat's push names the run " +
+				"behind it"
 		}
 	case PrincipalAgent:
 		switch {
@@ -356,9 +402,89 @@ func (p Principal) invalid() string {
 			return fmt.Sprintf("principal.seat: %q is not a seat's handle — a seat acts by its handle", p.Seat)
 		case p.OperatorID != "":
 			return "principal.operator_id: a seat acts as itself, with no operator credential"
+		case !p.Run.IsZero():
+			if why := p.Run.invalid(); why != "" {
+				return "principal.run." + why
+			}
 		}
 	default:
 		return fmt.Sprintf("principal.kind: %q is not one of %v", p.Kind, PrincipalKinds())
+	}
+	return ""
+}
+
+// rowActor is who a push row names as its actor: the credential an operator
+// acted with — the person's attribution, as every record a write leaves names
+// it (iam.ActorFor), the seat they hold beside it in actor_seat — and a seat's
+// own handle, since a seat acts as itself with no credential.
+func (p Principal) rowActor() string {
+	if p.Kind == PrincipalAgent {
+		return p.Seat
+	}
+	return p.OperatorID
+}
+
+// RunProvenance is what made a seat's push, as the SERVER stamps it from the
+// call that made it — the tool call's turn, its work item and its model — and
+// never as a commit says it: a commit's headers and trailers are written by
+// whoever made the commit, a seat or the coding agent in its box, and the
+// engine trusts nothing it did not see itself. Every field is bounded
+// ([MaxProvenanceBytes]) and spelled as the push row stores it.
+type RunProvenance struct {
+	// TurnID is the turn that made the write (turnctx.Turn.RunID), the one
+	// field every run names.
+	TurnID string `json:"turn_id"`
+	// WorkBackend and WorkKey are the work item the turn is charged to
+	// (ADR-0022) — its tracker and the key that tracker shows — empty for a
+	// turn charged to none.
+	WorkBackend string `json:"work_backend,omitempty"`
+	WorkKey     string `json:"work_key,omitempty"`
+	// Model is the executor model of the round that called the tool, empty
+	// where the call named none.
+	Model string `json:"model,omitempty"`
+}
+
+// IsZero reports a principal's run that names nothing: no run at all, the
+// spelling every principal but a seat's push carries.
+func (r RunProvenance) IsZero() bool { return r == RunProvenance{} }
+
+// MaxProvenanceBytes bounds each [RunProvenance] field: a turn id is a UUID
+// (36 bytes), a work key a tracker's or a vendor's (Jira's are under 32), a
+// model id a provider's (the longest Bedrock ARN form is about 120). 256 is
+// past every one of them, and what the bound buys is a push entry whose size is
+// known before it is measured: four fields at it are about six kibibytes of a
+// record's mebibyte even where JSON spells every byte in six.
+const MaxProvenanceBytes = 256
+
+// Validate refuses a run no push may carry ([ErrInvalid], naming the field):
+// one that names no turn, or a field past [MaxProvenanceBytes], not valid
+// UTF-8, or holding a control character. A stamping site passes every field it
+// copies from outside the code domain through [FitProvenance] first, so a
+// field this refuses is the engine's own bug, never a seat's.
+func (r RunProvenance) Validate() error {
+	if why := r.invalid(); why != "" {
+		return fmt.Errorf("%w: run.%s", ErrInvalid, why)
+	}
+	return nil
+}
+
+// invalid is why r is no run, or "" — the field named as its JSON does.
+func (r RunProvenance) invalid() string {
+	if r.TurnID == "" {
+		return "turn_id: a seat's push names the turn that made it"
+	}
+	for _, f := range []struct{ name, value string }{
+		{"turn_id", r.TurnID}, {"work_backend", r.WorkBackend}, {"work_key", r.WorkKey}, {"model", r.Model},
+	} {
+		switch {
+		case len(f.value) > MaxProvenanceBytes:
+			return fmt.Sprintf("%s: %d bytes, past the %d one field may hold (MaxProvenanceBytes)", f.name,
+				len(f.value), MaxProvenanceBytes)
+		case !utf8.ValidString(f.value):
+			return f.name + ": not valid UTF-8"
+		case strings.ContainsFunc(f.value, unicode.IsControl):
+			return f.name + ": holds a control character"
+		}
 	}
 	return ""
 }

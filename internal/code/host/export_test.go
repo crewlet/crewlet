@@ -143,6 +143,7 @@ type TestLanding struct {
 	Commands   []code.Command
 	Atomic     bool
 	Principal  code.Principal
+	Via        code.PushVia
 	PushID     string
 	ReceivedAt time.Time
 	// Judged are the commands already asked of Synced.Repo's protections,
@@ -172,7 +173,7 @@ func Land(ctx context.Context, s *Server, l TestLanding) (TestLanded, error) {
 		}
 	}
 	ld, err := s.land(ctx, landing{Synced: l.Synced, Scratch: l.Scratch, Commands: l.Commands, Atomic: l.Atomic,
-		Principal: l.Principal, PushID: l.PushID, ReceivedAt: l.ReceivedAt, Judged: judged})
+		Principal: l.Principal, Via: l.Via, PushID: l.PushID, ReceivedAt: l.ReceivedAt, Judged: judged})
 	return TestLanded{Commands: ld.Commands, Outcome: ld.Result.outcome, Refusal: ld.Result.refusal,
 		Position: ld.Result.position, OK: ld.Result.ok, PackBytes: ld.Result.packBytes, Adopted: ld.Adopted}, err
 }

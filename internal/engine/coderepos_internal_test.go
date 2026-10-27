@@ -249,7 +249,7 @@ func TestAPushToARemovedRepositoryIsToldTheEpochsRetention(t *testing.T) {
 	push := code.Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: api.ID,
 		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"},
-		Node:      e.id, ReceivedAt: time.Now().UTC(),
+		Via:       code.ViaGit, Node: e.id, ReceivedAt: time.Now().UTC(),
 		Commands: []code.Command{{Ref: "refs/heads/main", Old: code.ZeroOID,
 			New: "0123456789abcdef0123456789abcdef01234567"}},
 	}

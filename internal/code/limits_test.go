@@ -108,23 +108,37 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 
 	// ONE MAXIMAL PUSH ROW FITS A PAGE: a page serves at least one row, so the
 	// largest row a pushes page can hold — every command at the longest ref,
-	// with the longest code a recorded command carries, and every introduced
-	// id it lists — must fit the page's bytes, or a page that has to serve it
-	// is past the reply ceiling. The longest ref in ENCODED bytes: every byte
-	// after its number a `<`, which a ref may hold and JSON writes as six.
+	// with the longest code a recorded command carries, every introduced id
+	// it lists, the longest way and every field of a seat's run at its bound
+	// — must fit the page's bytes, or a page that has to serve it is past the
+	// reply ceiling. The longest ref and run field in ENCODED bytes: every
+	// byte after a ref's number, and every byte of a run's field, a `<`, which
+	// both may hold and JSON writes as six.
 	longest := code.Refusal("")
 	for _, r := range code.Refusals() {
 		if r.Recorded() && len(r) > len(longest) {
 			longest = r
 		}
 	}
+	widestVia := code.PushVia("")
+	for _, v := range code.PushVias() {
+		if len(v) > len(widestVia) {
+			widestVia = v
+		}
+	}
+	runField := strings.Repeat("<", code.MaxProvenanceBytes)
 	row := code.PushRow{
 		PushID: strings.Repeat("p", 36), RepoID: strings.Repeat("r", 36),
 		Position: statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1 << 30, Seq: 1 << 50},
 		At:       time.Date(2031, 4, 2, 3, 14, 0, 999_999_000, time.UTC), Actor: strings.Repeat("a", 64),
-		ActorKind: "operator", ActorSeat: strings.Repeat("s", 64), Node: strings.Repeat("n", 64),
-		Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: code.MaxPackBytes,
+		ActorKind: "operator", ActorSeat: strings.Repeat("s", 64), Via: widestVia,
+		Run:  code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField},
+		Node: strings.Repeat("n", 64), Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: code.MaxPackBytes,
 		IntroducedCount: 1 << 30, ReceivedAt: time.Date(2031, 4, 2, 3, 14, 0, 999_999_000, time.UTC),
+	}
+	if code.FitProvenance(runField) != runField {
+		t.Fatalf("a run field of %d `<` is not one a stamp carries as it is: build the widest run from "+
+			"what FitProvenance admits", len(runField))
 	}
 	for c := range code.MaxCommandsPerPush {
 		ref := fmt.Sprintf("refs/heads/%08d", c)
@@ -158,8 +172,8 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 				Old: code.ZeroOID, New: oidOf(fmt.Sprint(p, c)), Result: code.ResultOK,
 			})
 		}
-		entries = append(entries, code.PushEntry{PushID: fmt.Sprint("push-", p), Commands: cmds,
-			Pack: suitePack(fmt.Sprint(p))})
+		entries = append(entries, code.PushEntry{PushID: fmt.Sprint("push-", p), Via: code.ViaGit,
+			Commands: cmds, Pack: suitePack(fmt.Sprint(p))})
 	}
 	body, err := json.Marshal(code.PushBatch{RepoID: "repo", Pushes: entries})
 	if err != nil {
@@ -373,7 +387,7 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	at := time.Date(2031, 4, 2, 3, 14, 0, 999_999_999, time.FixedZone("x", -(11*3600+59*60)))
 	minimal := code.Proposal{
 		PushID: "0190f3c4-0000-7000-8000-000000000001", RepoID: repo, Principal: principal,
-		Node: nodeID, ReceivedAt: at,
+		Via: code.ViaGit, Node: nodeID, ReceivedAt: at,
 		Commands: []code.Command{{Ref: "refs/heads/a", Old: code.ZeroOID, New: oidOf("a")}},
 	}
 	maximal := minimal

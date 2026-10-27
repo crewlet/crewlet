@@ -81,9 +81,24 @@ type fakePush struct {
 	introduced []string
 }
 
-// fakePusher is who every push of a fake log is made by: a person, through
-// the token bound to them.
+// fakePusher is who a fake log's pushes are made by but every third: a
+// person, through the token bound to them, received by git.
 var fakePusher = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
+
+// pusherOf is who made a fake log's n-th push, and how: every third a seat's
+// push the engine built, its run naming its turn, its work item and its model,
+// and every other fakePusher's — so every index a case builds holds both kinds
+// of push, and a case that holds an index to the rows (indexAgainstLog)
+// compares each push's whole PushedBy, its run included.
+func pusherOf(n int) (code.Principal, code.PushVia) {
+	if n%3 != 0 {
+		return fakePusher, code.ViaGit
+	}
+	return code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: code.RunProvenance{
+		TurnID:      uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("turn-%d", n))).String(),
+		WorkBackend: "native", WorkKey: fmt.Sprintf("ENG-%d", n), Model: "claude-sonnet-4-5",
+	}}, code.ViaEngine
+}
 
 // fakeRef is one ref's row; an empty oid is a tombstone.
 type fakeRef struct {
@@ -154,12 +169,13 @@ func (f *fakeLog) writePushes(repo string, pushes ...fakePush) statelog.Position
 			r.packs = append(r.packs, pack)
 		}
 		f.pushes++
+		principal, via := pusherOf(f.pushes)
 		row := code.IntroducedRow{
 			PushedBy: code.PushedBy{
 				PushID:    uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("push-%d", f.pushes))).String(),
 				Position:  pos,
 				At:        time.Unix(1_800_000_000+int64(f.pushes), 0).UTC(),
-				Principal: fakePusher, Via: code.ViaGit,
+				Principal: principal, Via: via,
 			},
 			Introduced: slices.Clone(p.introduced), Count: len(p.introduced),
 		}

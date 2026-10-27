@@ -328,7 +328,7 @@ func benchProposal(repo string, cmds []Command) Proposal {
 	return Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repo,
 		Principal: Principal{Kind: PrincipalOperator, OperatorID: "op", Seat: "op"},
-		Node:      "node-a", Commands: cmds, ReceivedAt: applyClock,
+		Via:       ViaGit, Node: "node-a", Commands: cmds, ReceivedAt: applyClock,
 	}
 }
 

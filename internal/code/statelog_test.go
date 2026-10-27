@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,18 +120,35 @@ func suitePack(id string) *code.PackRef {
 	}
 }
 
-// suitePush is one push of id's main branch with its pack.
+// suitePush is two pushes of id: a person's of its main branch with its pack,
+// received by git, and a seat's of a branch in its namespace, built by the
+// engine, whose run carries every field at its bound — so every column a push
+// row has is one the suite's replays and identity claims compare.
 func suitePush(id string) code.PushBatch {
+	bound := strings.Repeat("r", code.MaxProvenanceBytes)
 	return code.PushBatch{RepoID: id, Pushes: []code.PushEntry{{
 		PushID: "push-" + id,
 		Principal: code.Principal{
 			Kind: code.PrincipalOperator, OperatorID: "op-suite", Seat: "suite",
 		},
+		Via:  code.ViaGit,
 		Node: "suite-node",
 		Commands: []code.Command{{
 			Ref: "refs/heads/main", Old: code.ZeroOID, New: oidOf(id), Result: code.ResultOK,
 		}},
 		Pack:       suitePack(id),
+		ReceivedAt: suiteAt,
+	}, {
+		PushID: "push-seat-" + id,
+		Principal: code.Principal{Kind: code.PrincipalAgent, Seat: "suite-seat",
+			Run: code.RunProvenance{TurnID: bound, WorkBackend: bound, WorkKey: bound, Model: bound}},
+		Via:  code.ViaEngine,
+		Node: "suite-node",
+		Commands: []code.Command{{
+			Ref: "refs/heads/seats/suite-seat/work", Old: code.ZeroOID, New: oidOf("seat" + id),
+			Result: code.ResultOK,
+		}},
+		Pack:       suitePack("seat-" + id),
 		ReceivedAt: suiteAt,
 	}}}
 }

@@ -62,6 +62,11 @@ type landing struct {
 	Atomic bool
 	// Principal is who pushes.
 	Principal code.Principal
+	// Via is how the builder built the push's pack — the relay's is
+	// code.ViaGit — which the proposal and the push row carry as it says:
+	// the landing is one for every builder, so the builder says which it is,
+	// and nothing here guesses it from the commits.
+	Via code.PushVia
 	// PushID is the scratch's name and the proposal's id: a canonical UUIDv7
 	// (code.Proposal's rule, and a scratch's, which is a path component).
 	// Its builder mints it — the relay with uuid.NewV7 — and a derived one
@@ -300,7 +305,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	proposed, named := recordedCommands(cmds)
 	proposal := func(introduced []string, count int, pack *code.PackRef) code.Proposal {
 		return code.Proposal{
-			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Node: s.o.NodeID,
+			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Via: l.Via, Node: s.o.NodeID,
 			Atomic: l.Atomic, Commands: proposed, Pack: pack, Introduced: introduced, IntroducedCount: count,
 			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position,
 		}

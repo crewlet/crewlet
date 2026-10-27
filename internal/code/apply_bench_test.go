@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -65,9 +67,9 @@ func (e *estate) seedWide(b *testing.B, id string, n int) {
 	ctx := context.Background()
 	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := store.InsertRows(ctx, tx, e.db.Caps().MaxVariables,
-			`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
+			`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, via, commands,
 				introduced, introduced_count, received_at, row_bytes) VALUES `,
-			`(?, ?, ?, ?, 'seed', 'operator', ?, ?, ?, 0, ?)`, ``, n, func(i int) []any {
+			`(?, ?, ?, ?, 'seed', 'operator', 'git', ?, ?, ?, 0, ?)`, ``, n, func(i int) []any {
 				return []any{fmt.Sprintf("%s-wide-%04d", id, i), id, i + 1, i, commands, introduced,
 					MaxIntroduced, len(commands) + len(introduced)}
 			})
@@ -85,9 +87,9 @@ func (e *estate) seedNarrow(id string, n int) {
 	commands := `[` + strings.Repeat(`{"ref":"refs/heads/main","result":"ok"},`, 25) +
 		`{"ref":"refs/heads/main","result":"ok"}]`
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
-		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
+		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, via, commands,
 			received_at, row_bytes)
-		SELECT printf('%s-narrow-%06d', ?, i), ?, i + 1, i, 'seed', 'operator', ?, 0, ? FROM k`,
+		SELECT printf('%s-narrow-%06d', ?, i), ?, i + 1, i, 'seed', 'operator', 'git', ?, 0, ? FROM k`,
 		n, id, id, commands, len(commands))
 }
 
@@ -702,7 +704,12 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 // one holds the whole estate.
 //
 //   - push=typical: one command moving a ref named in 40 bytes, one
-//     introduced commit id — a person's push of a commit;
+//     introduced commit id — a person's push of a commit, received by git;
+//   - push=agent: the same commit pushed by a seat and built by the engine,
+//     its row naming the seat as its actor and the run behind it at each
+//     field's usual size — a turn id (a UUID), a tracker's work item
+//     (`native`, `ENG-1234`) and a model id of a provider's usual length —
+//     so the difference from typical is what a seat's provenance costs;
 //   - push=widest: MaxCommandsPerPush commands on refs of MaxRefNameBytes and
 //     MaxIntroduced introduced ids — the widest row a push stores.
 //
@@ -730,9 +737,13 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 		records   int
 		ref       func(c int) string
 		cmds, ids int
+		// seat is whether a seat made each push, through the engine, with
+		// the run behind it; a person through git otherwise.
+		seat bool
 	}{
-		{"typical", 4_000, func(int) string { return typicalRef }, 1, 1},
-		{"widest", 100, widestRef, MaxCommandsPerPush, MaxIntroduced},
+		{"typical", 4_000, func(int) string { return typicalRef }, 1, 1, false},
+		{"agent", 4_000, func(int) string { return typicalRef }, 1, 1, true},
+		{"widest", 100, widestRef, MaxCommandsPerPush, MaxIntroduced, false},
 	} {
 		for _, pack := range []string{"no", "yes"} {
 			b.Run("push="+shape.name+"/pack="+pack, func(b *testing.B) {
@@ -763,6 +774,13 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 						entry.IntroducedCount = shape.ids
 						if pack == "no" {
 							entry.Pack = nil
+						}
+						if shape.seat {
+							entry.Principal, entry.Via = Principal{Kind: PrincipalAgent, Seat: "docs-writer",
+								Run: RunProvenance{
+									TurnID:      uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("turn-", r))).String(),
+									WorkBackend: "native", WorkKey: "ENG-1234", Model: "claude-sonnet-4-5",
+								}}, ViaEngine
 						}
 						e.apply(pushOf(b, repo, entry))
 					}

@@ -54,7 +54,7 @@ func proposalOf(cmds ...Command) Proposal {
 	return Proposal{
 		PushID: uuid.Must(uuid.NewV7()).String(), RepoID: decideRepo,
 		Principal: Principal{Kind: PrincipalOperator, OperatorID: "op", Seat: "op"},
-		Node:      "node-a", Commands: cmds, ReceivedAt: decideAt,
+		Via:       ViaGit, Node: "node-a", Commands: cmds, ReceivedAt: decideAt,
 	}
 }
 
@@ -703,14 +703,14 @@ func TestAPushIdIsDecidedOnce(t *testing.T) {
 	e := decideEstate(t)
 	landed := proposalOf(cmd("refs/heads/feature", oid("F"), oid("G")))
 	e.apply(pushOf(t, decideRepo, PushEntry{
-		PushID: landed.PushID, Principal: landed.Principal, Node: landed.Node,
+		PushID: landed.PushID, Principal: landed.Principal, Via: landed.Via, Node: landed.Node,
 		Commands: []Command{move("refs/heads/feature", oid("F"), oid("G"))}, ReceivedAt: decideAt,
 	}))
 	other := proposalOf(cmd("refs/heads/x", ZeroOID, oid("X")))
 	const elsewhere = "0190f3c4-0000-7000-8000-00000000d0c2"
 	e.apply(create(t, elsewhere, "elsewhere"))
 	e.apply(pushOf(t, elsewhere, PushEntry{
-		PushID: other.PushID, Principal: other.Principal, Node: other.Node,
+		PushID: other.PushID, Principal: other.Principal, Via: other.Via, Node: other.Node,
 		Commands: []Command{move("refs/heads/x", ZeroOID, oid("X"))}, ReceivedAt: decideAt,
 	}))
 	e.exec(`UPDATE code_repos SET status = 'archived' WHERE id = ?`, decideRepo)

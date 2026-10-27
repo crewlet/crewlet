@@ -57,7 +57,7 @@ const (
 // repositories a minute where one runs.
 const (
 	referencePushesADay  = 3_000
-	codePushRecordBytes  = 1_332
+	codePushRecordBytes  = 1_344
 	referencePushReads   = 3 * referencePushesADay
 	referencePeopleReads = 30 * 8 * 60 / 3
 	referenceCIReads     = 10 * 60 * 24

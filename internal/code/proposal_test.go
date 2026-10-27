@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -98,68 +99,213 @@ func TestAProposalCarriesEveryRefInItsRecordedForm(t *testing.T) {
 // wide, typed with what the push takes and what one push may. Measured with
 // refs JSON spells six times over, the shape that reaches the bound: plain
 // refs at the longest take under half the room for every command a push may
-// carry.
+// carry. And for a SEAT'S push, whose principal carries the run behind it,
+// every field of the run at MaxProvenanceBytes of what JSON spells six times
+// over and the longest way: the principal and the way are measured as their
+// proposer stamped them, so the room they take is room the commands are not
+// admitted to.
+//
+// Mutation: measure the completed entry with the principal's run dropped
+// (completed() clearing w.Principal.Run) — the seat's push is admitted
+// commands its run then has no room beside, and its entry runs past EntryRoom.
 func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 	t.Parallel()
-	principal := code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 64),
-		Seat: strings.Repeat("s", 64)}
 	node := strings.Repeat("n", 64)
-	skeleton := func(n int, fill string) code.Proposal {
-		cmds := make([]code.Command, n)
-		for i := range cmds {
-			ref := fmt.Sprintf("refs/heads/%04d", i)
-			cmds[i] = code.Command{Ref: ref + strings.Repeat(fill, code.MaxRefNameBytes-len(ref)),
-				Old: oidOf(fmt.Sprint("old", i)), New: oidOf(fmt.Sprint("new", i))}
-		}
-		return code.Proposal{Principal: principal, Node: node, Commands: cmds}
-	}
+	costliest := strings.Repeat("&", code.MaxProvenanceBytes)
+	for _, arm := range []struct {
+		name      string
+		principal code.Principal
+		via       code.PushVia
+		// proposal is whether the completed push is one Validate takes
+		// whole: a seat's is held to the record's budget alone, since the
+		// decide takes no seat's push until it judges the seat's grant.
+		proposal bool
+	}{
+		{"a person's", code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 64),
+			Seat: strings.Repeat("s", 64)}, code.ViaGit, true},
+		{"a seat's", code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", 64),
+			Run: code.RunProvenance{TurnID: costliest, WorkBackend: costliest, WorkKey: costliest,
+				Model: costliest}}, code.ViaEngine, false},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			if code.FitProvenance(costliest) != costliest {
+				t.Fatalf("a run field of %d '&' is not one FitProvenance admits as it is", len(costliest))
+			}
+			skeleton := func(n int, fill string) code.Proposal {
+				cmds := make([]code.Command, n)
+				for i := range cmds {
+					ref := fmt.Sprintf("refs/heads/%04d", i)
+					cmds[i] = code.Command{Ref: ref + strings.Repeat(fill, code.MaxRefNameBytes-len(ref)),
+						Old: oidOf(fmt.Sprint("old", i)), New: oidOf(fmt.Sprint("new", i))}
+				}
+				return code.Proposal{Principal: arm.principal, Via: arm.via, Node: node, Commands: cmds}
+			}
 
-	if err := skeleton(code.MaxCommandsPerPush, "x").ValidateCommands(); err != nil {
-		t.Fatalf("MaxCommandsPerPush commands at the longest plain ref: %v", err)
-	}
+			if err := skeleton(code.MaxCommandsPerPush, "x").ValidateCommands(); err != nil {
+				t.Fatalf("MaxCommandsPerPush commands at the longest plain ref: %v", err)
+			}
 
-	// THE MOST COMMANDS OF THE COSTLIEST REF ONE PUSH IS ADMITTED WITH.
-	admitted := 0
-	for n := 1; n <= code.MaxCommandsPerPush; n++ {
-		if skeleton(n, "&").ValidateCommands() != nil {
-			break
-		}
-		admitted = n
-	}
-	if admitted == code.MaxCommandsPerPush {
-		t.Fatalf("MaxCommandsPerPush commands at the costliest ref are admitted: the case reaches no bound")
-	}
-	var wide *code.TooWideError
-	if err := skeleton(admitted+1, "&").ValidateCommands(); !errors.As(err, &wide) ||
-		!errors.Is(err, code.ErrInvalidProposal) || wide.Bytes <= wide.Room || wide.Room != code.EntryRoom {
-		t.Fatalf("%d commands at the costliest ref: %v, want a TooWideError past EntryRoom", admitted+1, err)
-	}
+			// THE MOST COMMANDS OF THE COSTLIEST REF ONE PUSH IS ADMITTED WITH.
+			admitted := 0
+			for n := 1; n <= code.MaxCommandsPerPush; n++ {
+				if skeleton(n, "&").ValidateCommands() != nil {
+					break
+				}
+				admitted = n
+			}
+			if admitted == code.MaxCommandsPerPush {
+				t.Fatalf("MaxCommandsPerPush commands at the costliest ref are admitted: the case reaches no bound")
+			}
+			var wide *code.TooWideError
+			if err := skeleton(admitted+1, "&").ValidateCommands(); !errors.As(err, &wide) ||
+				!errors.Is(err, code.ErrInvalidProposal) || wide.Bytes <= wide.Room || wide.Room != code.EntryRoom {
+				t.Fatalf("%d commands at the costliest ref: %v, want a TooWideError past EntryRoom", admitted+1, err)
+			}
 
-	// Completed as far as its work can take it, it is still a proposal.
-	p := skeleton(admitted, "&")
-	p.PushID, p.RepoID, p.ReceivedAt = "0190f3c4-0000-7000-8000-000000000002", "0190f3c4-0000-7000-8000-00000000b0b0",
-		harnessAt
-	longest := code.Refusal("")
-	for _, r := range code.Refusals() {
-		if r.Recorded() && len(r) > len(longest) {
-			longest = r
+			// Completed as far as its work can take it, it is still a
+			// proposal — or, for a seat, still an entry its record holds.
+			p := skeleton(admitted, "&")
+			p.PushID, p.RepoID, p.ReceivedAt = "0190f3c4-0000-7000-8000-000000000002",
+				"0190f3c4-0000-7000-8000-00000000b0b0", harnessAt
+			longest := code.Refusal("")
+			for _, r := range code.Refusals() {
+				if r.Recorded() && len(r) > len(longest) {
+					longest = r
+				}
+			}
+			for i := range p.Commands {
+				p.Commands[i].Forced, p.Commands[i].Result, p.Commands[i].Reason = true, code.ResultNG, longest
+			}
+			p.Commands[0] = update(p.Commands[0].Ref, p.Commands[0].Old, p.Commands[0].New)
+			p.Commands[0].Forced = true
+			p.Atomic = true
+			for i := range code.MaxIntroduced {
+				p.Introduced = append(p.Introduced, oidOf(fmt.Sprint("introduced", i)))
+			}
+			p.IntroducedCount = math.MaxInt
+			p.Pack = suitePack("completed")
+			p.Pack.PackID = p.PushID
+			bound, err := code.EntryBound(p)
+			switch {
+			case err != nil:
+				t.Fatalf("measure the completed push: %v", err)
+			case bound > code.EntryRoom:
+				t.Errorf("a push of %d commands ValidateCommands admitted, completed by the most its work adds, "+
+					"takes %d bytes of its record, past EntryRoom (%d)", admitted, bound, code.EntryRoom)
+			}
+			if !arm.proposal {
+				return
+			}
+			if err := p.Validate(); err != nil {
+				t.Errorf("a push of %d commands ValidateCommands admitted, completed by the most its work adds: %v",
+					admitted, err)
+			}
+		})
+	}
+}
+
+// A PROPOSAL NAMES HOW ITS PACK WAS BUILT, and an engine-built one is one
+// commit on one ref: a proposal naming no way, or one this build does not know,
+// is the proposer's bug and refused naming via — by ValidateCommands too, whose
+// measure would otherwise be short of the entry; a push the engine built moving
+// two refs, or --atomic, is refused naming what it broke; and a person's push
+// the engine built of one command is a proposal. A seat's push is still none,
+// whatever built it, since the decide judges no seat's grant.
+func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
+	t.Parallel()
+	one := proposal("0190f3c4-0000-7000-8000-00000000c0de", update("refs/heads/main", code.ZeroOID, oidOf("B")))
+	two := proposal("0190f3c4-0000-7000-8000-00000000c0de", update("refs/heads/main", code.ZeroOID, oidOf("B")),
+		update("refs/heads/other", code.ZeroOID, oidOf("C")))
+	for _, tc := range []struct {
+		name  string
+		p     code.Proposal
+		names string // the field a refusal names; "" for a proposal
+	}{
+		{"a push git received", one, ""},
+		{"a person's push the engine built", func() code.Proposal { p := one; p.Via = code.ViaEngine; return p }(), ""},
+		{"a push naming no way", func() code.Proposal { p := one; p.Via = ""; return p }(), "via"},
+		{"a push naming a way this build does not know", func() code.Proposal {
+			p := one
+			p.Via = "telepathy"
+			return p
+		}(), "via"},
+		{"two refs the engine built", func() code.Proposal { p := two; p.Via = code.ViaEngine; return p }(),
+			"commands"},
+		{"one ref the engine built --atomic", func() code.Proposal {
+			p := one
+			p.Via, p.Atomic = code.ViaEngine, true
+			return p
+		}(), "atomic"},
+		{"a seat's push the engine built", func() code.Proposal {
+			p := one
+			p.Via = code.ViaEngine
+			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
+				Run: code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
+			return p
+		}(), "principal.kind"},
+	} {
+		err := tc.p.Validate()
+		switch {
+		case tc.names == "" && err != nil:
+			t.Errorf("%s: %v, want a proposal", tc.name, err)
+		case tc.names != "" && (!errors.Is(err, code.ErrInvalidProposal) || !strings.Contains(err.Error(), tc.names+":")):
+			t.Errorf("%s: %v, want ErrInvalidProposal naming %s", tc.name, err, tc.names)
 		}
 	}
-	for i := range p.Commands {
-		p.Commands[i].Forced, p.Commands[i].Result, p.Commands[i].Reason = true, code.ResultNG, longest
+	for _, via := range []code.PushVia{"", "telepathy"} {
+		p := one
+		p.Via = via
+		if err := p.ValidateCommands(); !errors.Is(err, code.ErrInvalidProposal) ||
+			!strings.Contains(err.Error(), "via:") {
+			t.Errorf("ValidateCommands of a push naming the way %q: %v, want ErrInvalidProposal naming via", via, err)
+		}
 	}
-	p.Commands[0] = update(p.Commands[0].Ref, p.Commands[0].Old, p.Commands[0].New)
-	p.Commands[0].Forced = true
-	p.Atomic = true
-	for i := range code.MaxIntroduced {
-		p.Introduced = append(p.Introduced, oidOf(fmt.Sprint("introduced", i)))
+	if got := code.EntryOf(func() code.Proposal { p := one; p.Via = code.ViaEngine; return p }()).Via; got != code.ViaEngine {
+		t.Errorf("a proposal's entry names the way %q, want the proposal's own", got)
 	}
-	p.IntroducedCount = math.MaxInt
-	p.Pack = suitePack("completed")
-	p.Pack.PackID = p.PushID
-	if err := p.Validate(); err != nil {
-		t.Errorf("a push of %d commands ValidateCommands admitted, completed by the most its work adds: %v",
-			admitted, err)
+}
+
+// A PROVENANCE FIELD IS FITTED, NEVER REFUSED: a work key copied from another
+// system as it arrived — a GitLab key of a nested namespace's path past the
+// bound, a key holding a newline, one that is not UTF-8 — comes back at most
+// MaxProvenanceBytes of valid UTF-8 with no control character, a run carrying
+// it is one Validate takes, two keys sharing their first 256 bytes come back
+// different, a key already within the rules comes back as it is, and fitting a
+// fitted key changes nothing.
+//
+// Mutation: FitProvenance answering s as it is — the long key fails Validate.
+func TestAProvenanceFieldIsFittedNeverRefused(t *testing.T) {
+	t.Parallel()
+	// A merge request's key on a project eighteen namespaces deep: 300 bytes.
+	nested := "acme/" + strings.Repeat("platform-group/", 17)
+	gitlab := nested + strings.Repeat("s", 300-len(nested)-len("!12")) + "!12"
+	shared := strings.Repeat("k", code.MaxProvenanceBytes)
+	seen := map[string]string{}
+	for _, key := range []string{gitlab, "ENG-12\nInjected: line", "ENG-\xff12", "ENG-12\x00",
+		shared + strings.Repeat("a", 44), shared + strings.Repeat("b", 44), "ENG-12\u0085"} {
+		got := code.FitProvenance(key)
+		run := code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001", WorkKey: got}
+		switch {
+		case len(got) > code.MaxProvenanceBytes || !utf8.ValidString(got) || strings.ContainsFunc(got, unicode.IsControl):
+			t.Errorf("a key of %d bytes is fitted as %d bytes (UTF-8: %t): %q", len(key), len(got),
+				utf8.ValidString(got), got)
+		case run.Validate() != nil:
+			t.Errorf("a run carrying the fitted %q is refused: %v", got, run.Validate())
+		case !strings.Contains(got, fmt.Sprintf(" [%d bytes, sha256 ", len(key))):
+			t.Errorf("a key of %d bytes is fitted as %q, which names neither its length nor its digest", len(key), got)
+		case code.FitProvenance(got) != got:
+			t.Errorf("fitting the fitted %q changed it", got)
+		}
+		if other, ok := seen[got]; ok {
+			t.Errorf("keys %q and %q are both fitted as %q", other, key, got)
+		}
+		seen[got] = key
+	}
+	for _, key := range []string{"ENG-12", "acme/api#88", "日本-12", shared, "anthropic.claude-3-5-sonnet-20241022-v2:0"} {
+		if got := code.FitProvenance(key); got != key {
+			t.Errorf("a key within the rules, %q, is fitted as %q", key, got)
+		}
 	}
 }
 

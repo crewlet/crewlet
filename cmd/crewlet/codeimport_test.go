@@ -660,7 +660,8 @@ func TestABatchIsCutWhereThePushsRecordRuleCutsIt(t *testing.T) {
 		for i, r := range rs {
 			cmds[i] = code.Command{Ref: r.ref, Old: code.ZeroOID, New: r.oid}
 		}
-		return code.Proposal{Principal: person, Node: importWidestNode, Commands: cmds}.ValidateCommands()
+		return code.Proposal{Principal: person, Via: code.ViaGit, Node: importWidestNode,
+			Commands: cmds}.ValidateCommands()
 	}
 
 	if n, err := imp.recordHolds(refs("a")); err != nil || n != code.MaxCommandsPerPush {

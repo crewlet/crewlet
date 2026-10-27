@@ -37,7 +37,9 @@ import (
 //	offsets  pushes × u64          — each push record's offset in the push section
 //	pushes   push bytes            — the records back to back, in (position, push id) order:
 //	         push id [16] | position i64 | at unix-µs i64 | via u8 | principal kind u8 |
-//	         fields (tag u8 | uvarint length | bytes): 1 operator id, 2 seat; an unknown tag skipped
+//	         fields (tag u8 | uvarint length | bytes), each only when it is not empty:
+//	         1 operator id, 2 seat, and a seat's run — 3 turn id, 4 work backend,
+//	         5 work key, 6 model; an unknown tag skipped
 //	refs     refs × (ref key [8] | name offset u32 | name length u16 | ordinal u8 | reserved u8)
 //	                                                          sorted by (ref key, ordinal)
 //	names    name bytes            — the refs' names back to back
@@ -66,6 +68,11 @@ import (
 // Every record has a fixed width but a push's, whose start the offsets table
 // gives, so a lookup is a binary search over memory the page cache backs once
 // the run is mapped (provenance.go), never a read call a probe.
+//
+// A PUSH'S FIELDS ARE TAGGED, so a field a later build adds — a seat's run
+// gained four — moves no version: a reader skips a tag it does not know, a
+// run this build writes is read by an older one as the push less what it
+// cannot name, and the index is a cache any build rebuilds from the rows.
 
 // The format's fixed parts.
 const (
@@ -90,10 +97,15 @@ const (
 	moveDeleted = 1 << 1
 )
 
-// The push record's fields after its fixed part.
+// The push record's fields after its fixed part: the principal's credential
+// and seat, and a seat's run (code.RunProvenance).
 const (
-	fieldOperatorID = 1
-	fieldSeat       = 2
+	fieldOperatorID  = 1
+	fieldSeat        = 2
+	fieldTurnID      = 3
+	fieldWorkBackend = 4
+	fieldWorkKey     = 5
+	fieldModel       = 6
 )
 
 // The codes a push record names its way and its principal's kind by: one
@@ -101,7 +113,7 @@ const (
 // TestEveryPushPrincipalAndWayHasARunCode holds every value of code's closed
 // sets to one.
 var (
-	runViaCodes  = map[code.PushVia]uint8{code.ViaGit: 1}
+	runViaCodes  = map[code.PushVia]uint8{code.ViaGit: 1, code.ViaEngine: 2}
 	runKindCodes = map[code.PrincipalKind]uint8{code.PrincipalOperator: 1, code.PrincipalAgent: 2}
 )
 
@@ -402,15 +414,27 @@ func pushPayload(row code.IntroducedRow) ([]byte, error) {
 		return nil, fmt.Errorf("cache: push %s was made by a principal of kind %q, which a run has no code for",
 			row.PushID, row.Principal.Kind)
 	}
-	b := make([]byte, runPushFixed, runPushFixed+len(row.Principal.OperatorID)+len(row.Principal.Seat)+8)
+	run := row.Principal.Run
+	fields := []struct {
+		tag   byte
+		value string
+	}{
+		{fieldOperatorID, row.Principal.OperatorID}, {fieldSeat, row.Principal.Seat},
+		{fieldTurnID, run.TurnID}, {fieldWorkBackend, run.WorkBackend}, {fieldWorkKey, run.WorkKey},
+		{fieldModel, run.Model},
+	}
+	size := runPushFixed
+	for _, f := range fields {
+		if f.value != "" {
+			size += 1 + binary.MaxVarintLen64 + len(f.value)
+		}
+	}
+	b := make([]byte, runPushFixed, size)
 	copy(b, id[:])
 	binary.BigEndian.PutUint64(b[16:], uint64(row.Position.Packed()))
 	binary.BigEndian.PutUint64(b[24:], uint64(row.At.UnixMicro()))
 	b[32], b[33] = via, kind
-	for _, f := range []struct {
-		tag   byte
-		value string
-	}{{fieldOperatorID, row.Principal.OperatorID}, {fieldSeat, row.Principal.Seat}} {
+	for _, f := range fields {
 		if f.value == "" {
 			continue
 		}
@@ -462,6 +486,14 @@ func decodePush(payload []byte) (code.PushedBy, error) {
 			p.Principal.OperatorID = value
 		case fieldSeat:
 			p.Principal.Seat = value
+		case fieldTurnID:
+			p.Principal.Run.TurnID = value
+		case fieldWorkBackend:
+			p.Principal.Run.WorkBackend = value
+		case fieldWorkKey:
+			p.Principal.Run.WorkKey = value
+		case fieldModel:
+			p.Principal.Run.Model = value
 		}
 		rest = rest[1+w+int(n):]
 	}

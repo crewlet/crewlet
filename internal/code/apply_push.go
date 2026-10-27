@@ -233,9 +233,10 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the packs at %s: %w", at.position, err)
 	}
-	// THE ROW'S WIDTH IS WRITTEN BESIDE IT: the bytes of its two wide
-	// columns, which is what deleting it costs and what the history's
-	// horizon and a purge part are bounded by.
+	// THE ROW'S WIDTH IS WRITTEN BESIDE IT: the bytes of its wide columns —
+	// the commands, the introduced ids and a seat's run, up to four fields
+	// of MaxProvenanceBytes — which is what deleting it costs and what the
+	// history's horizon and a purge part are bounded by.
 	encoded := make([]string, len(pushRows))
 	introduced := make([]string, len(pushRows))
 	for i, e := range pushRows {
@@ -244,21 +245,26 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		}
 		introduced[i] = strings.Join(e.Introduced, " ")
 	}
+	// WHO PUSHED, AS THE HISTORY NAMES THEM (rowActor): an operator's
+	// credential beside the seat it is bound to, or a seat's own handle as
+	// both — and how the push was built and, for a seat's, the run behind it,
+	// each written as the record carries it.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat,
-			node, atomic, commands, pack_id, pack_bytes, introduced, introduced_count,
-			received_at, row_bytes) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
+			via, turn_id, work_backend, work_key, model, node, atomic, commands, pack_id, pack_bytes,
+			introduced, introduced_count, received_at, row_bytes) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
 		len(pushRows), func(i int) []any {
 			e := pushRows[i]
 			packID, size := "", int64(0)
 			if e.Pack != nil {
 				packID, size = e.Pack.PackID, e.Pack.Size
 			}
-			return []any{e.PushID, p.RepoID, at.packed, at.at(), e.Principal.OperatorID,
-				string(e.Principal.Kind), e.Principal.Seat, e.Node, e.Atomic, encoded[i],
-				packID, size, introduced[i], e.IntroducedCount,
-				store.EncodeTime(e.ReceivedAt), len(encoded[i]) + len(introduced[i])}
+			run := e.Principal.Run
+			return []any{e.PushID, p.RepoID, at.packed, at.at(), e.Principal.rowActor(),
+				string(e.Principal.Kind), e.Principal.Seat, string(e.Via), run.TurnID, run.WorkBackend,
+				run.WorkKey, run.Model, e.Node, e.Atomic, encoded[i], packID, size, introduced[i],
+				e.IntroducedCount, store.EncodeTime(e.ReceivedAt), pushRowBytes(encoded[i], introduced[i], run)}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the pushes at %s: %w", at.position, err)
 	}
@@ -452,6 +458,20 @@ func recordedCommands(cmds []Command) (string, error) {
 		return "", fmt.Errorf("code: encode a push's commands: %w", err)
 	}
 	return string(b), nil
+}
+
+// pushRowBytes is what a push row weighs as code_pushes.row_bytes records it:
+// the bytes of the columns that make one row wider than another — its
+// commands as stored, its introduced ids and a seat's run, which is four
+// fields of up to MaxProvenanceBytes — because deleting a wide row frees its
+// overflow pages, and that is what the history's horizon and a purge part are
+// bounded by. Every other column is a few dozen bytes on every row. Each of
+// these is its record's own, carried there with more (quoted, keyed, escaped),
+// so the bytes one record adds to the history are never more than the record
+// (HorizonBytesPerRecord).
+func pushRowBytes(commands, introduced string, run RunProvenance) int {
+	return len(commands) + len(introduced) + len(run.TurnID) + len(run.WorkBackend) + len(run.WorkKey) +
+		len(run.Model)
 }
 
 // expirePushes removes, inside the record's own repository and within the

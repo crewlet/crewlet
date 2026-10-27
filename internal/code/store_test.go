@@ -533,8 +533,8 @@ func (n *node) seedRows(repoID string, pushes, refs, packs int) {
 	vars := n.db.Caps().MaxVariables
 	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := store.InsertRows(ctx, tx, vars,
-			`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind,
-				commands, received_at, row_bytes) VALUES `, `(?, ?, ?, 0, 'seed', 'operator', '[]', 0, 2)`, ``,
+			`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, via,
+				commands, received_at, row_bytes) VALUES `, `(?, ?, ?, 0, 'seed', 'operator', 'git', '[]', 0, 2)`, ``,
 			pushes, func(i int) []any { return []any{uuid.NewString(), repoID, i + 1} }); err != nil {
 			return err
 		}
@@ -578,9 +578,9 @@ func TestAPurgeIsBoundedByWhatItsPushesWeigh(t *testing.T) {
 	// TEN ROWS, far under PurgePartRows, of 8 MiB each: 80 MiB in all.
 	const width, rows = 8 << 20, 10
 	n.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
-		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
+		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, via, commands,
 			received_at, row_bytes)
-		SELECT printf('wide-%02d', i), ?, i + 1, 0, 'seed', 'operator', '[]', 0, ? FROM k`,
+		SELECT printf('wide-%02d', i), ?, i + 1, 0, 'seed', 'operator', 'git', '[]', 0, ? FROM k`,
 		rows, id, width)
 	late, err := code.NewStore(code.StoreOptions{
 		Publisher: n.pub, DB: n.db.Reader(), NodeID: n.id,

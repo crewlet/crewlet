@@ -149,6 +149,24 @@ func (p Principal) encodedBytes() int {
 	if p.Seat != "" {
 		n += field("seat", stringBytes(p.Seat), false)
 	}
+	if !p.Run.IsZero() {
+		n += field("run", p.Run.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the run's JSON encoding.
+func (r RunProvenance) encodedBytes() int {
+	n := 2 + field("turn_id", stringBytes(r.TurnID), true)
+	if r.WorkBackend != "" {
+		n += field("work_backend", stringBytes(r.WorkBackend), false)
+	}
+	if r.WorkKey != "" {
+		n += field("work_key", stringBytes(r.WorkKey), false)
+	}
+	if r.Model != "" {
+		n += field("model", stringBytes(r.Model), false)
+	}
 	return n
 }
 
@@ -367,6 +385,10 @@ func (row PushRow) encodedBytes(commands int) int {
 		field("actor_kind", stringBytes(row.ActorKind), false)
 	if row.ActorSeat != "" {
 		n += field("actor_seat", stringBytes(row.ActorSeat), false)
+	}
+	n += field("via", stringBytes(string(row.Via)), false)
+	if !row.Run.IsZero() {
+		n += field("run", row.Run.encodedBytes(), false)
 	}
 	if row.Node != "" {
 		n += field("node", stringBytes(row.Node), false)
