@@ -317,7 +317,7 @@ Together the page is normally correct by the time you switch back to it. If it i
 | `name` | The company name and the seat's role name, joined and cut to 34 runes |
 | `url` | `https://crewlet.ai` |
 | `public` | `false`. The app is the company's own |
-| `hook_attributes` | `{"url": "<webhook address>/webhooks/github/<handle>", "active": true}`, or `{"active": false}` where GitHub cannot reach the webhook address |
+| `hook_attributes` | `{"url": "<webhook address>/webhooks/github/<handle>", "active": true}`, with `"active": false` where GitHub cannot reach the webhook address. The `url` is always there: GitHub refuses a manifest whose hook has none, inactive or not |
 | `redirect_url` | `<webhook address>/webhooks/github-app` |
 | `setup_url` | `<webhook address>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
@@ -616,10 +616,13 @@ and the two acts that build an app need only the operator's browser, which
 reaches the engine perfectly well.
 
 - **The app is created with its webhook off.** The begin route builds the
-  manifest with `hook_attributes: {"active": false}` and no delivery address
-  (`webhook_active: false` in its answer), rather than refusing or pointing the
-  hook at an address that fails every delivery while the app reads as healthy.
-  The browser returns to `api.external_url` as usual.
+  manifest with `hook_attributes: {"url": "<webhook address>/webhooks/github/<handle>", "active": false}`
+  (`webhook_active: false` in its answer), rather than refusing or letting the
+  hook fail every delivery while the app reads as healthy. The `url` is still
+  the seat's own address because GitHub refuses a manifest whose hook has
+  none. Switching delivery on later, once the engine has a public address, is
+  an edit of the app's webhook at GitHub rather than a new app. The browser
+  returns to `api.external_url` as usual.
 - **No hook is registered** on the organization or a repository, for the same
   reason.
 - **The card says so and stays ready.** One advisory, on the webhook

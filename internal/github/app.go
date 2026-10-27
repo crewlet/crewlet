@@ -126,11 +126,19 @@ type ManifestOptions struct {
 	// collide on the second one. [AppName] builds one that does not.
 	Name string
 
-	// DeliveryURL is where GitHub posts this app's events. Empty creates
-	// the app with delivery switched OFF rather than pointed nowhere,
-	// because an app delivering into a void looks healthy at GitHub and
-	// receives nothing here.
+	// DeliveryURL is where GitHub posts this app's events. GitHub requires
+	// it in every manifest (`hook_attributes.url`), delivering or not, and
+	// refuses the manifest without it, so it is always the seat's own
+	// delivery address on this engine.
 	DeliveryURL string
+
+	// DeliveryOff creates the app with its webhook INACTIVE: the address is
+	// recorded but GitHub sends nothing to it. It is set where GitHub cannot
+	// reach the address ([Deliverable]), because an app delivering into a
+	// void looks healthy at GitHub and receives nothing here. Switching the
+	// hook on later, once the engine has a public address, is an edit of
+	// the app's webhook rather than a new app.
+	DeliveryOff bool
 
 	// RedirectURL is where GitHub returns the browser with the one-time
 	// code. Required: without it the code is displayed to the operator
@@ -214,12 +222,15 @@ func runePrefix(s string, n int) string {
 // BuildManifest describes the app one seat needs.
 func BuildManifest(opts ManifestOptions) Manifest {
 	// BORN POINTING AT THE ENGINE, so an app never spends its first
-	// minutes delivering nowhere. With no address the hook is created
-	// INACTIVE rather than pointed at a placeholder, because an inactive
-	// hook is a state the operator can see and a wrong URL is not.
-	hook := map[string]any{"active": false}
+	// minutes delivering nowhere. The address is always the seat's own,
+	// because GitHub refuses a manifest whose hook has no `url` ("\"url\"
+	// wasn't supplied"), even an inactive one. Where GitHub cannot reach
+	// it the hook is created INACTIVE at that address rather than pointed
+	// at a placeholder: an inactive hook is a state the operator can see,
+	// and a wrong URL is not.
+	hook := map[string]any{"active": !opts.DeliveryOff}
 	if url := strings.TrimSpace(opts.DeliveryURL); url != "" {
-		hook = map[string]any{"url": url, "active": true}
+		hook["url"] = url
 	}
 	home := strings.TrimSpace(opts.Homepage)
 	if home == "" {

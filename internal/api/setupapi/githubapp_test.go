@@ -184,9 +184,11 @@ func TestAnAppForAnUnreachableEngineIsCreatedWithItsWebhookOff(t *testing.T) {
 			if hook["active"] != c.active {
 				t.Errorf("hook_attributes = %v, want active %v", hook, c.active)
 			}
-			if url, has := hook["url"]; has != c.active ||
-				(c.active && url != c.base+"/webhooks/github/builder") {
-				t.Errorf("hook url = %v, want one only where GitHub can deliver", url)
+			// ALWAYS THE SEAT'S OWN ADDRESS: GitHub refuses a manifest
+			// whose hook has no url ("\"url\" wasn't supplied"), even
+			// an inactive one.
+			if url := hook["url"]; url != c.base+"/webhooks/github/builder" {
+				t.Errorf("hook url = %v, want %q", url, c.base+"/webhooks/github/builder")
 			}
 			if manifest["redirect_url"] != c.base+"/webhooks/github-app" {
 				t.Errorf("redirect_url = %v, want the engine's own return", manifest["redirect_url"])

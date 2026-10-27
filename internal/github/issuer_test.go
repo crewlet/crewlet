@@ -304,10 +304,12 @@ func TestADeliverableAddressIsOneGitHubReaches(t *testing.T) {
 // never pointed at a placeholder: an inactive hook is a state GitHub's own
 // settings page shows, and an unreachable one fails every delivery while the
 // app reads as healthy.
-func TestAManifestWithNoDeliveryAddressHasItsWebhookOff(t *testing.T) {
+func TestAManifestGitHubCannotDeliverToHasItsWebhookOff(t *testing.T) {
 	t.Parallel()
 	off := github.BuildManifest(github.ManifestOptions{
 		Seat: "pm", Name: "GoPhrase Product Manager",
+		DeliveryURL: "http://localhost:8200/webhooks/github/pm",
+		DeliveryOff: true,
 		RedirectURL: "http://localhost:8200/webhooks/github-app",
 		SetupURL:    "http://localhost:8200/webhooks/github-app?installed=pm",
 		Access:      github.Access{Tier: github.TierReview},
@@ -315,8 +317,9 @@ func TestAManifestWithNoDeliveryAddressHasItsWebhookOff(t *testing.T) {
 	if off.HookAttributes["active"] != false {
 		t.Errorf("hook = %v, want it inactive", off.HookAttributes)
 	}
-	if _, has := off.HookAttributes["url"]; has {
-		t.Errorf("an inactive hook was given an address: %v", off.HookAttributes)
+	// GitHub refuses a manifest whose hook has no url, inactive or not.
+	if off.HookAttributes["url"] != "http://localhost:8200/webhooks/github/pm" {
+		t.Errorf("an inactive hook lost its address: %v", off.HookAttributes)
 	}
 	if off.RedirectURL == "" || off.SetupURL == "" {
 		t.Error("the browser's return addresses were dropped with the delivery address")

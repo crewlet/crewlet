@@ -136,23 +136,31 @@ func TestAnOptedInSeatsAppAsksForWorkflowWrites(t *testing.T) {
 	}
 }
 
-// AN APP WITH NOWHERE TO DELIVER IS CREATED SWITCHED OFF, not pointed at a
+// AN APP GITHUB CANNOT DELIVER TO IS CREATED SWITCHED OFF, not pointed at a
 // placeholder: an inactive hook is a state the operator can see, and a wrong
-// URL is one that looks healthy at GitHub and arrives nowhere.
-func TestAnAppWithNoAddressIsCreatedWithDeliveryOff(t *testing.T) {
+// URL is one that looks healthy at GitHub and arrives nowhere. It still names
+// its own address, because GitHub refuses a manifest whose hook has no `url`.
+func TestAnAppGitHubCannotReachIsCreatedWithDeliveryOff(t *testing.T) {
 	t.Parallel()
-	off := github.BuildManifest(github.ManifestOptions{Seat: "s", Access: github.Access{Tier: github.TierReadOnly}})
+	const address = "http://localhost:8200/webhooks/github/s"
+	off := github.BuildManifest(github.ManifestOptions{
+		Seat: "s", Access: github.Access{Tier: github.TierReadOnly},
+		DeliveryURL: address, DeliveryOff: true,
+	})
 	if active, _ := off.HookAttributes["active"].(bool); active {
-		t.Error("an app with no delivery address was created active")
+		t.Error("an app GitHub cannot deliver to was created active")
 	}
-	if _, has := off.HookAttributes["url"]; has {
-		t.Error("an app with no delivery address was given one anyway")
+	if off.HookAttributes["url"] != address {
+		t.Errorf("hook url = %v, want %q: GitHub refuses a hook without one", off.HookAttributes["url"], address)
 	}
 	on := github.BuildManifest(github.ManifestOptions{
 		Seat: "s", Access: github.Access{Tier: github.TierReadOnly}, DeliveryURL: "https://e.example.com/w",
 	})
 	if active, _ := on.HookAttributes["active"].(bool); !active {
-		t.Error("an app with an address was created inactive")
+		t.Error("an app with a deliverable address was created inactive")
+	}
+	if on.HookAttributes["url"] != "https://e.example.com/w" {
+		t.Errorf("hook url = %v, want the delivery address", on.HookAttributes["url"])
 	}
 }
 
