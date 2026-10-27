@@ -279,7 +279,7 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 	pinned := &Company{Config: current.Config, Org: current.Org, Models: executor.Models}
 	seat.LLM = executor.Org.Roles[0].LLM
 	l := launcherOn(e, pinned, seat, "t-after")
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
 		!strings.Contains(err.Error(), "providers.sandbox") {
 		t.Errorf("an executor launched for a company with no providers.sandbox (err %v), "+
 			"on a catalogue it no longer configures", err)

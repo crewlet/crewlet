@@ -1237,8 +1237,13 @@ const (
 	// live view's chunk and the runs board's, a seat whose last turn "was
 	// stopped" in the profile's, the task's "stopped by a person" pill in the
 	// worklet's, and the pause dialog's words in the writes chunk. 4549 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 453<<10
+	// which still refuses a doubled baseline. Steering a turn whose coding run
+	// is out took it to 4549.3 KiB: Steer offered on a parked turn with the
+	// toast saying when the note is read (`lib/steer.ts`, and the press label
+	// that reads its receipt in the shared write hook), and a note read inside
+	// a run drawn on the run's bar in the words of its step, in the live
+	// view's chunk. 4550 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 454<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

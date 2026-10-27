@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -45,10 +46,11 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no parked state")
 	}
 	state := r.cfg.Resume.State
-	// THE NOTES THE TURN READ BEFORE IT PARKED, so the phases after this
-	// one open with them as the phases before it did.
+	// THE NOTES THE TURN HAS READ, off the run's record in the order read —
+	// so the phases after this one open with them as the phases before it
+	// did. See [Resume.Steered].
 	r.mu.Lock()
-	r.steered = append([]string(nil), state.Steered...)
+	r.steered = slices.Clone(r.cfg.Resume.Steered)
 	r.mu.Unlock()
 
 	// THE RUN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED. A resume

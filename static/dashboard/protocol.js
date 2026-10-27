@@ -3142,7 +3142,6 @@ var ACT_ERRORS = {
 	reassignment_budget: "It has been handed between seats too many times. A person has to pick it up now.",
 	inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
 	not_running: "It is not running any more.",
-	steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
 	budget_exhausted: "The token budget for this window is spent. Raise it, or wait for the window to reset.",
 	unavailable: "This node could not make the change just now. Try again in a moment.",
 	internal_error: "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose."

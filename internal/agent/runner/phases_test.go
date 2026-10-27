@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -325,8 +324,9 @@ type buildOpts struct {
 	// register adds tools beyond the fixture's standard catalogue, for a
 	// case whose behaviour depends on a first-party tool the seat holds.
 	register func(t *testing.T, reg *tools.Registry)
-	// steer is the turn's note box, for the cases about a person's note.
-	steer *steer.Box
+	// steer is where the turn's notes wait, for the cases about a person's
+	// note: a box, or a source a case plays.
+	steer runner.SteerSource
 	// subagent arms delegate on the executor's surface.
 	subagent *runner.SubagentConfig
 

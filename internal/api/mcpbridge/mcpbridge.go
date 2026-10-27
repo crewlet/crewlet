@@ -67,9 +67,11 @@
 //     the one.
 //
 // What it does NOT add is what belongs to a tool loop: rounds, a terminator, a
-// budget's per-request refusal, a person's notes. A detached run's loop is its
-// CLI's own, the engine's phase is suspended while it runs, and those are
-// settled when the run is collected and its turn resumes.
+// budget's per-request refusal. A detached run's loop is its CLI's own, the
+// engine's phase is suspended while it runs, and those are settled when the run
+// is collected and its turn resumes. A person's notes to the turn it serves
+// from the run's note inbox, at the CLI's own boundaries — see steer.go, "A
+// NOTE INBOX" — and decides nothing about them.
 //
 // # A run outlives the process that opened its session
 //
@@ -238,6 +240,14 @@ type Session struct {
 	// is an open fence, which is a test's.
 	Fence func() error
 
+	// Steer is the run's note inbox, which the bridge serves to the run's
+	// CLI between its steps — see steer.go. Closed with the opening that
+	// serves it: the run's end, a relaunch that replaces it and the seat
+	// leaving this node all close it. Nil serves no notes: the notes route
+	// answers 404 and steer_take answers nothing, which is what a run with
+	// nothing to steer — the assistant's deep work — has.
+	Steer SteerInbox
+
 	mu sync.Mutex
 	// live is the session's current opening: what a token minted at its
 	// latest [Bridge.Open] reaches. Nil until it is opened.
@@ -352,6 +362,15 @@ type Bridge struct {
 	// call reaches a session opened here. See [Bridge.Reachable].
 	mounted atomic.Bool
 	fleet   atomic.Pointer[fleet]
+
+	// shutdown is closed by [Bridge.Shutdown], once: every poll for notes
+	// held here returns at once, and one that arrives after does not wait.
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
+
+	// hold is how long a poll for notes is held when none waits —
+	// [steerHold], which only a case of this package's shortens.
+	hold time.Duration
 }
 
 // Options configure [New].
@@ -424,6 +443,8 @@ func New(opts Options) (*Bridge, error) {
 		sessions: map[string]*binding{},
 		runs:     map[string]*binding{},
 		ready:    map[uuid.UUID]bool{},
+		shutdown: make(chan struct{}),
+		hold:     steerHold,
 	}
 	// NO IDLE TIMEOUT, deliberately. A session's lifetime is its RUN's —
 	// [Bridge.Close] ends every MCP session the moment the run ends — and
@@ -552,7 +573,9 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 		// expired.
 		log.Info("mcp_bridge_session_replaced", "run_id", s.RunID, "launch_id", s.Launch,
 			"seat", s.Handle, "recovered", previous.id == opened.id)
-		previous.end()
+		// AND ITS NOTE INBOX, unless the new opening serves the same one —
+		// the same session opened again.
+		previous.endKeeping(opened.steer)
 	}
 	ttl := b.ttl
 	if s.TTL > 0 && s.TTL < ttl {
@@ -971,6 +994,16 @@ func (b *Bridge) Reachable() bool {
 // fenced or not, or refuses.
 func (b *Bridge) Handler() http.Handler {
 	b.mounted.Store(true)
+	return b.routed(func(w http.ResponseWriter, r *http.Request, _ *binding) {
+		b.streamable.ServeHTTP(w, r)
+	})
+}
+
+// routed is the routing every route under the bridge's prefix takes — the MCP
+// endpoint ([Bridge.Handler]) and the notes route ([Bridge.SteerHandler]) alike,
+// so the two cannot come to disagree about which node answers a token: serve
+// is handed the opening where this node is the one to answer.
+func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// REFUSED BEFORE THE MCP MACHINERY SEES IT, so an unauthenticated
 		// caller cannot make this process allocate a session, and so the
@@ -992,7 +1025,7 @@ func (b *Bridge) Handler() http.Handler {
 			return
 		}
 		if opened != nil && fence(opened.session) == nil {
-			b.streamable.ServeHTTP(w, r)
+			serve(w, r, opened)
 			return
 		}
 		if f := b.fleet.Load(); f != nil {
@@ -1000,13 +1033,34 @@ func (b *Bridge) Handler() http.Handler {
 			return
 		}
 		if opened != nil {
-			// FENCED, AND NO FLEET TO DEFER TO: the opening's own refusal,
-			// that the run's tools are closed, is the answer.
-			b.streamable.ServeHTTP(w, r)
+			// FENCED, AND NO FLEET TO DEFER TO: the opening's own answer —
+			// that the run's tools are closed, and that nothing more is
+			// taken from its notes — is the answer.
+			serve(w, r, opened)
 			return
 		}
 		_, reason := b.Miss(r.PathValue("token"))
 		b.refuse(w, r, sub.run, reason)
+	})
+}
+
+// heldOnly serves a call relayed to this node on the opening the call's token
+// names, which the relay's admission already found here
+// ([Bridge.admitRelayed]); a token whose opening has gone since is refused.
+func (b *Bridge) heldOnly(serve func(http.ResponseWriter, *http.Request, *binding)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sub, ok := b.parse(r.PathValue("token"))
+		if !ok {
+			b.refuse(w, r, "", "the token is forged, malformed or expired")
+			return
+		}
+		opened := b.held(sub)
+		if opened == nil {
+			_, reason := b.Miss(r.PathValue("token"))
+			b.refuse(w, r, sub.run, reason)
+			return
+		}
+		serve(w, r, opened)
 	})
 }
 
@@ -1092,14 +1146,25 @@ type binding struct {
 	// the job's order — from [Session.LastSeq] — and so the one before the
 	// next [Call.Seq].
 	arrived int
+
+	// steer is the run's note inbox, fixed when the opening opened
+	// ([Session.Steer]), and closed when it ends; nil once it has.
+	steer SteerInbox
+
+	// unsubstituted says once, per opening, that the CLI's hooks name no
+	// agent the bridge can tell apart — see [binding.takeSteer].
+	unsubstituted sync.Once
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
 
 func newBinding(ctx context.Context, s *Session, where route) *binding {
 	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
-		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq}
+		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, steer: s.Steer}
 	opened.server = toolsession.NewServer(serverName, s.Role+" ("+s.Handle+")", opened)
+	// steer_take, ANSWERED BEFORE THE TOOLS ARE: never listed, never handed
+	// to the run's surface, never recorded — see steer.go.
+	opened.server.MCP().AddReceivingMiddleware(opened.steerMiddleware)
 	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
 	// ([toolsession.Server.HoldAnswersForRelist]): the coding CLIs that run in
 	// a box (Claude Code, OpenCode) re-read their tool list when told it
@@ -1136,18 +1201,44 @@ func (o *binding) subject() string {
 // Closing a server session runs the handler's own removal hook, so the session
 // leaves the SDK's table as well as ending on the wire — which is what makes
 // [Bridge.Close] release the surface rather than merely hide it.
-func (o *binding) end() {
+func (o *binding) end() { o.endKeeping(nil) }
+
+// endKeeping is [binding.end], closing the opening's note inbox unless it is
+// keep — the inbox an opening replacing this one serves too.
+func (o *binding) endKeeping(keep SteerInbox) {
 	if o == nil {
 		return
 	}
 	o.mu.Lock()
 	o.ended = true
+	inbox := o.steer
+	o.steer = nil
 	o.mu.Unlock()
+	if inbox != nil && inbox != keep {
+		inbox.Close()
+	}
 	for ss := range o.server.MCP().Sessions() {
 		if err := ss.Close(); err != nil {
 			log.Debug("mcp_bridge_session_close", "error", err)
 		}
 	}
+}
+
+// inbox is the opening's note inbox, nil once it ended or where it has none.
+func (o *binding) inbox() SteerInbox {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.ended {
+		return nil
+	}
+	return o.steer
+}
+
+// over reports whether the opening has ended.
+func (o *binding) over() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.ended
 }
 
 // Offered is what the surface offers now, with the hints the registry holds

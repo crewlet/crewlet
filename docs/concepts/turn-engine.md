@@ -726,26 +726,54 @@ constraint nobody wrote down. Stopping it (a [pause with
 `stop_running`](agent-runtime.md#pausing-a-seat)) throws away what it has done;
 waiting for it to finish costs a second turn. A **steer** is the third answer:
 a short note, sent with [`steer_turn`](../reference/api-endpoints.md#steering-a-running-turn),
-that enters the running conversation as soon as the tool calls in flight have
-their answers: the CLI's run ends there, and the next run **opens with the
-note**.
+that the turn reads at its **next step** and keeps to for the rest of the turn.
+
+### Where a turn's notes wait
+
+A turn's notes wait in one of two places, and which one is decided by whether
+the turn has launched its executor's [coding run](llm-backends.md#the-executors-run-in-a-box)
+yet:
+
+- **Before the launch, in the first segment's box** on the node running the
+  turn. The request is scattered, signed, on `crewlet.steer.note`; that node is
+  the only one holding the turn's box, so it is the only one that answers.
+- **From the launch until the turn ends, on the run's record** in the
+  [coordination store](coordination.md), which every node reads. The node
+  that takes the request files the note there itself and asks nobody — the
+  turn may move to another node with its seat, or resume on one after a
+  restart, and the note is on the record whichever node that is. Every note on
+  a record is **sealed** under the fleet keyring by the node that files it, and
+  the record carries a sealed anchor naming the seat the run serves, which a
+  person's authority is decided on; a reader opens both before using either
+  ([ADR-0059](https://github.com/crewlet/crewlet/blob/main/adr/0059-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
+
+The launch **hands the box over**: every note it held and nobody read is filed
+on the record in the write that opens the run, or carried in the run's brief.
+A note that read "no record" a moment before the launch wrote one is scattered
+to the node that held the box, which files it on the record — so a note to a
+turn that is running is never answered `closed`.
 
 ```mermaid
 sequenceDiagram
     participant P as Person (any node)
-    participant F as Every node
     participant N as Node running the turn
-    participant L as The turn's tool loop
-    P->>F: steer_turn{turn_id, note} — scattered on crewlet.steer.note
-    F-->>P: nothing (not their turn)
-    N-->>P: accepted → outcome "pending"
-    Note over L: the response's tool calls finish, and the CLI's run ends
-    L->>L: fence, then drain the box
-    L->>L: the note is a user message opening the next run
-    N->>N: agent_turn_steered{delivered, phase, round}
+    participant C as The run's record (coordination store)
+    participant B as The run's tool bridge
+    participant R as The review
+    Note over N: the turn launches its coding run
+    N->>C: the launch writes the record, the seat anchor, and the box's notes
+    P->>C: steer_turn{turn_id, note} — filed sealed, by the asking node
+    C-->>P: accepted → outcome "pending", reads "next_step"
+    B->>C: the run's CLI takes the note between its steps (where it takes notes)
+    C-->>B: recorded read by the run's job
+    Note over R: the run finishes, and the turn resumes
+    R->>C: the review takes any note still waiting, at its first round
+    R->>R: every note the turn read opens the review
 ```
 
-- **Where it lands, and nowhere else.** At the opening of a CLI run,
+### Where a note lands
+
+- **A round of the engine's own loop.** At the opening of a CLI run,
   immediately after the seat fence. The CLI drives its own requests and the
   engine never writes inside a run, so a note that arrives while one is going
   ends it once every call of the response it arrived during has its answer, and
@@ -757,59 +785,84 @@ sequenceDiagram
   moved or that a person stopped is not handed an instruction it will never act
   on. And as a **user** message, never a system message: the system prompt is
   the frozen prefix a provider caches on.
-- **It binds the rest of the turn.** The note is read by the executor or the
-  reviewer — whichever round comes next — and carried, as the same message,
-  into every later phase: the reviewer that judges the work opens with it, and
-  so does every executor iteration after it, across a parked coding run
-  included. Without that the reviewer would grade the work against the task the
-  person had corrected. An executor **resumed** from a parked coding run reads
-  notes at its own rounds exactly as the pass it continues did, on the phase's
-  round scale: a note offered while the box's result was collected is read at
-  the re-entered loop's first round.
+- **A coding run's brief.** A note waiting when the turn launches a run — the
+  first one, or a relaunch the reviewer sends back — goes into the run's brief,
+  recorded read by the write that opens the run's job. A brief that starts a
+  fresh session carries every note the turn has read; one that continues the
+  run's own session carries only the new ones, which the session lacks.
+- **Between the run's own steps.** The run's [tool bridge serves its
+  notes](code-sandbox.md#notes-to-a-running-run) to its coding CLI, and a CLI
+  that takes them there reads a note after its current step; the take is
+  recorded on the record by the write that hands it over, so a note is never
+  handed to a model twice.
+- **The review's first round.** A note the run never took is read by the
+  segment that reviews the run, before its first provider call — so the work
+  is always judged against the note.
+- **A run parked on its question** holds its notes: `steer_turn` answers
+  `reads: "after_answer"`, its CLI takes nothing while it waits, and the launch
+  that carries the answer carries the notes in its brief.
+
+### Rules
+
+- **It binds the rest of the turn.** A note read once is carried, as the same
+  message, into every later phase: the reviewer that judges the work opens with
+  it, and so does every executor iteration after it. A segment that resumes the
+  turn from its run carries every note the run's record says the turn read —
+  the record is the carry, whichever node resumes it. Without that the
+  reviewer would grade the work against the task the person had corrected.
 - **Not every loop reads it.** A [worker](#workers) is a leaf its parent
   directs, so a note offered while a worker runs waits for the executor's next
-  round. The onboarding pass and the extension judge do not read notes either.
-  A turn whose executor is running cannot take a note at all — its CLI runs
-  [detached in a box](llm-backends.md#the-executors-run-in-a-box), with no run
-  the engine can end and reopen — and says so: `steer_unsupported`.
+  round. A coding run's subagents take nothing: a note handed to a delegated
+  loop would bind that piece of work alone. The onboarding pass and the
+  extension judge do not read notes either.
 - **Whose turn it is to steer.** The seat's holder, whoever leads the seat,
   or an administrator (`admin`) — never a seat, and never any reader,
-  since everybody signed in holds a credential. The seat is the one thing the
-  asking node cannot know, because the turn runs wherever its seat is held, so
-  the decision takes two steps: first on the turn as named — `admin` admits
-  there and then, and a caller who leads nobody is refused with
-  exactly the answer a seat they do not lead gets — and otherwise a **probe**
-  asks the node running the turn which seat it is, and the note is decided on
-  that seat before it is offered. A probe nobody answers is `unavailable`,
-  never a refusal: no answer says nothing about whose turn it was.
-- **One node answers.** Every node serves the subject and the note names the
-  turn; the node running it is the only one that can answer, so nothing has to
-  know where a turn runs. It keeps answering `closed` (the tool's
-  `not_running`) for the last 256 turns it ended, because a note races a turn's
-  end by seconds. No answer at all inside the two-second budget is `unknown`,
-  never `not_running`: a reply lost on the way back looks exactly like none.
-- **Only a note the fleet signed reaches a turn.** The running node offers the
-  note as the person it names on the asking node's decision that they may, so
-  the scatter and every answer to it are signed under the fleet keyring and
-  bound to one request — an id and a deadline inside the signature, the answer
-  naming the id — by the same rule every state-log record and every estate
-  request is held to
+  since everybody signed in holds a credential. Once the turn's run is out the
+  seat is the one the record's sealed anchor names, read by the asking node
+  itself. Before that the seat is the one thing the asking node cannot know,
+  because the turn runs wherever its seat is held, so the decision takes two
+  steps: first on the turn as named — `admin` admits there and then, and a
+  caller who leads nobody is refused with exactly the answer a seat they do not
+  lead gets — and otherwise a **probe** asks the node running the turn which
+  seat it is, and the note is decided on that seat before it is offered. A
+  probe nobody answers is `unavailable`, never a refusal: no answer says nothing
+  about whose turn it was. An anchor that does not open decides nothing, and
+  the note is refused `unavailable` with the reason.
+- **One node answers a scatter.** Every node serves the subject and the note
+  names the turn; the node running it is the only one that can answer, so
+  nothing has to know where a turn runs. It keeps answering `closed` (the
+  tool's `not_running`) for the last 256 turns it ended, because a note races a
+  turn's end by seconds. No answer at all inside the two-second budget is
+  `unknown`, never `not_running`: a reply lost on the way back looks exactly
+  like none.
+- **Only a note the fleet signed reaches a turn.** The scatter and every answer
+  to it are signed under the fleet keyring and bound to one request — an id and
+  a deadline inside the signature, the answer naming the id — and every note on
+  a run's record is sealed under the same keyring, by the same rule every
+  state-log record and every estate request is held to
   ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md)).
-  A note the fleet did not sign, or one captured and sent again, is answered
-  by nobody; one under a key the running node does not hold is answered that
-  it took nothing, and the tool says the keyring is what to fix.
+  A note whose seal does not open is never handed to a model, carried or
+  recorded as anybody's (`steer_note_unverified`, at ERROR); one under a key a
+  node does not hold waits for a node that holds it (`steer_note_key_unknown`,
+  naming the keys this node holds).
 - **A note is one note.** Its id is the person's request id, so a retry of one
   request is answered `accepted` without being read twice. A turn holds at most
-  **five** unread notes (`conflict` past that) of at most **2,000 characters**
-  each: a paragraph re-points work in flight, and more than that is a brief that
-  belongs on the work item.
+  **five** unread notes and takes at most **ten** in all — each refused past its
+  bound with `conflict` and a sentence saying which — and each note is at most
+  **2,000 characters**: a paragraph re-points work in flight, and more than that
+  is a brief that belongs on the work item.
 - **What became of it is on the record.** A note the turn reads is recorded
   `agent_turn_steered{delivered}` with the phase, iteration and round that first
-  read it; the phase's `steers[]` and the live call's say the same. A note the
-  turn never reads — it ended, or parked on a coding run, before its next round
-  — is recorded `expired` when the turn's note box closes, before the turn's own
-  completion. It is not carried to a later turn: a note is about the work in
-  flight.
+  read it, the kind of step that read it (`boundary`: `round`, `brief`,
+  `tool_batch`, `finish` or `step`) and, for a read by a coding run, the run's
+  job (`launch_id`); the phase's `steers[]` and the live call's say the same. A
+  note a first segment's box held when the segment ended without launching a
+  run is recorded `expired` as the box closes; one still waiting on a run's
+  record when the turn ends is recorded `expired` by the node that finishes the
+  run's ending, before the record is deleted, under an id derived from the
+  ending — so a retried ending records it once. A park is never an ending: a
+  question can wait days, and the segment that resumes reads what waited. A
+  note is not carried to a later turn: it is about the work in flight.
 
 ---
 

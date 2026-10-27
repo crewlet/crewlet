@@ -224,8 +224,8 @@ func TestAStartingNodeAnswersEachRouteOnTheListenerThatWillServeIt(t *testing.T)
 // serve.
 func TestAStartingSeatsNodeServesOnlyItsProbes(t *testing.T) {
 	t.Parallel()
-	paths := []string{mcpbridge.PathPrefix + "a-token", "/webhooks/github", "/otlp/a-token/v1/traces",
-		"/agents", "/config"}
+	paths := []string{mcpbridge.PathPrefix + "a-token", mcpbridge.PathPrefix + "a-token/steer/notes",
+		"/webhooks/github", "/otlp/a-token/v1/traces", "/agents", "/config"}
 	for _, tc := range []struct {
 		name   string
 		public bool
@@ -330,6 +330,7 @@ func TestAStartingNodeLogsNoRunTokenItRefuses(t *testing.T) {
 	boot := bootFor(t, closedPosture())
 	for _, path := range []string{
 		mcpbridge.PathPrefix + "the-secret-run-token",
+		mcpbridge.PathPrefix + "the-secret-run-token/steer/notes",
 		auth.OTLPPrefix + "the-secret-run-token/v1/traces",
 	} {
 		if rec := sendTo(t, boot.Handler(), http.MethodPost, path); rec.Code != http.StatusServiceUnavailable {
@@ -343,7 +344,8 @@ func TestAStartingNodeLogsNoRunTokenItRefuses(t *testing.T) {
 	if strings.Contains(logged, "the-secret-run-token") {
 		t.Errorf("a refusal logged the run token its path carried: %q", logged)
 	}
-	for _, want := range []string{mcpbridge.PathPrefix + "{token}", auth.OTLPPrefix + "{token}/v1/traces"} {
+	for _, want := range []string{mcpbridge.PathPrefix + "{token}",
+		mcpbridge.PathPrefix + "{token}/steer/notes", auth.OTLPPrefix + "{token}/v1/traces"} {
 		if !strings.Contains(logged, want) {
 			t.Errorf("the refusals logged %q, want the route %q named with its token "+
 				"replaced", logged, want)

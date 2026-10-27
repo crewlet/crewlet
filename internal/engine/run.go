@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -797,6 +798,11 @@ type Engine struct {
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
 
+	// runSteers is this node's half of the notes a turn's coding run holds
+	// on its record, from the run's launch to the turn's end. See
+	// runsteer.go and ADR-0059.
+	runSteers *runSteers
+
 	// presenceWire seals this node's presence frames and opens its peers',
 	// and presence is the hub that holds its rooms. See presence.go.
 	presenceWire *presence.Wire
@@ -1137,6 +1143,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// AND A NOTE THAT WAITS ON A CODING RUN'S RECORD, which any node files
+	// and any node reads: sealed there, in domains of its own, for the reason
+	// the scatter's are (runsteer.go).
+	steerSeals, err := newSteerSeals(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// AND THE PRESENCE CHANNEL, which carries no instruction and is sealed
 	// all the same: a frame names a person (presence.go).
 	presenceWire, err := newPresenceWire(recordKeyring(opts.Bootstrap))
@@ -1296,8 +1309,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ON THE NODE'S OWN QUEUE, which on a node without `data` is the
 		// publish its custody hands to a data node — so a stateless node's
 		// auxiliary spend reaches the history like its phases do.
-		auxSpend:            auxspend.NewLedger(backends.Queue),
-		steers:              steers,
+		auxSpend: auxspend.NewLedger(backends.Queue),
+		steers:   steers,
+		// OVER THE FLEET'S RUN RECORDS, built here rather than with the
+		// sandbox runtime: a node with no runtime of its own — ingress only —
+		// still files a person's note on a run another node launched.
+		runSteers:           newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue),
 		presenceWire:        presenceWire,
 		answers:             answers,
 		dataTurns:           builtin.NewDataTurns(nil),
@@ -1325,6 +1342,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ever on the apply loop's own goroutine.
 		directoryNudge: make(chan struct{}, 1),
 	}
+	// THE DESK FILES WHAT IT HANDS OVER on the same records: a turn's box,
+	// once its run has launched, and a late offer to it (steer.go).
+	steers.runs = e.runSteers
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
 	// this node's admin posture and the Tier A tokens it declares — because
@@ -2998,9 +3018,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		task, reply, e.WithheldContacts())
 	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
-	// through ([turnSteerBox]).
+	// through until it launches its coding run, which hands what the box
+	// still holds to the run's record (steer.go).
 	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context)
-	box := turnSteerBox()
+	box := steer.New()
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Compact: e.compactorFor(company),
@@ -3067,7 +3088,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// returns — before its completion is published, so the record of a note
 	// the turn missed precedes the record that the turn ended — and the
 	// defer is the backstop for every other way out of this frame. Closing
-	// twice records nothing twice. See steer.go.
+	// twice records nothing twice, and a box the turn's launch handed to its
+	// run's record closes nothing here. See steer.go.
 	closeSteer := e.openSteer(req.RunID, req.Handle, box, r)
 	defer closeSteer(ctx)
 
@@ -3117,8 +3139,9 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// showed nothing to a model, so nothing was worked through.
 		res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered)
 	}
-	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
-	// a note, and one offered from here on is answered `closed`.
+	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later step of this
+	// segment will read a note, and one offered from here on is answered
+	// `closed` — or filed on the run's record, where the turn launched one.
 	closeSteer(ctx)
 	// THE SEGMENT'S CHARGE IS DECIDED FIRST, because a segment charged to
 	// nothing hands what it spent to the suspension written below.

@@ -1851,12 +1851,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           seven controls was a line scrolled half off the screen. */}
       <PageActions>
         <>
-          <SteerTurnButton
-            turnId={turnId}
-            seat={role || "the seat"}
-            running={running}
-            parked={view.parked}
-          />
+          <SteerTurnButton turnId={turnId} seat={role || "the seat"} running={running} />
           {view.handle && (
             <span className="page-action-folds">
               <PauseSeatButton

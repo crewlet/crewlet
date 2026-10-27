@@ -100,10 +100,6 @@ const (
 	// running, or not waiting for what the call supplies.
 	RefusalNotRunning Refusal = "not_running"
 
-	// RefusalSteerUnsupported — the running turn's runtime cannot take a
-	// note mid-turn.
-	RefusalSteerUnsupported Refusal = "steer_unsupported"
-
 	// RefusalBudgetExhausted — the company's token budget has no room left
 	// in one of its windows, so a call that would spend tokens was not
 	// made. Nothing was spent. It clears when that window turns over or
@@ -149,7 +145,7 @@ var Refusals = []Refusal{
 	RefusalInvalid, RefusalNotFound, RefusalForbidden,
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
-	RefusalNotRunning, RefusalSteerUnsupported, RefusalBudgetExhausted,
+	RefusalNotRunning, RefusalBudgetExhausted,
 	RefusalUnavailable, RefusalInternalError,
 }
 

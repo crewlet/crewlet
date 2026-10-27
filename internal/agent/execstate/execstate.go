@@ -41,6 +41,13 @@
 // a build that parked a row in it, so a reader for one would be code that
 // exists only for a build that never shipped. Versions 1 to 3 are such: this
 // build reads 4 alone and refuses the others as unknown.
+//
+// AND A VERSION NO RELEASE AND NO IMAGE OF MAIN WROTE IS NOT YET A FORMAT: the
+// rule that nothing is removed within a version protects rows some build
+// shipped, and nothing shipped 4 yet, so 4 lost its notes field (`steered`)
+// without a bump. The notes a turn has read are on its run's record now, read
+// there by every segment that resumes it (internal/engine, runsteer.go), and a
+// second copy here would be a second answer to the same question.
 package execstate
 
 import (
@@ -221,16 +228,6 @@ type State struct {
 	// memory filter, whose per-subject rule is judged against exactly that
 	// list. Empty for a turn no interaction woke.
 	Interactions []types.InboundInteraction `json:"interactions,omitempty"`
-
-	// Steered is every person's note the turn had read when it parked,
-	// rendered exactly as the model read it, in order.
-	//
-	// HERE because a note binds the rest of the turn, and the rest of the
-	// turn is often in another process: the reviewer and any later
-	// iteration open fresh conversations, and without this they would be
-	// handed the task the person had corrected. See internal/agent/steer.
-	// Empty when no note was read before the park.
-	Steered []string `json:"steered,omitempty"`
 
 	// Context is what the turn fetched and rendered ONCE, at its start, that
 	// every launch's prompt is built from: the prefetched blocks and the

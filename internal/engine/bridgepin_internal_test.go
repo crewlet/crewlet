@@ -82,7 +82,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		names = append(names, tool.Name())
 	}
 	launcher := launcherOn(e, c, seat, turnID)
-	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+	if _, err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
 		// BOUND TO THE LAUNCHER'S OWN TURN, as the runner binds every
 		// phase surface: the bridge acts as that turn's seat on every call

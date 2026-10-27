@@ -48,7 +48,14 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	// reports as a transport that does not support streaming rather than as
 	// a route that is registered wrong.
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
-	log.Info("mcp_bridge_mounted", "path", mcpbridge.PathPrefix+"{token}")
+	// AND THE RUN'S NOTES ROUTE beneath it, behind the same token and the
+	// same routing: a coding CLI's plugin polls it for its turn's notes
+	// between steps (internal/api/mcpbridge, steer.go). Under the bridge's
+	// prefix, so the exemption, the public listener, the drain and the access
+	// log's redaction that cover the bridge cover it.
+	mux.Handle(mcpbridge.SteerPattern, bridge.SteerHandler())
+	log.Info("mcp_bridge_mounted", "path", mcpbridge.PathPrefix+"{token}",
+		"notes", mcpbridge.SteerPattern)
 }
 
 // mountOperator registers the operator surface's two transports — MCP for an

@@ -64,7 +64,13 @@ func (e *Engine) joinBridgeFleet(ctx context.Context, boot *config.Bootstrap) er
 // stopBridgeFleet withdraws this node from the bridge's relay, before its seats
 // are released and the broker closes, so a call arriving during the teardown is
 // found another holder rather than answered from a session that is closing.
+//
+// AND RELEASES EVERY POLL FOR A RUN'S NOTES THIS NODE HOLDS FIRST
+// ([mcpbridge.Bridge.Shutdown]): a poll relayed here from another node is held
+// by no listener of this one, so nothing else lets it go before its hold runs
+// out — and the relay waits on it.
 func (e *Engine) stopBridgeFleet(ctx context.Context) {
+	e.bridge.Shutdown()
 	if e.leaveBridgeFleet == nil {
 		return
 	}

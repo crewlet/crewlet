@@ -306,7 +306,7 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 				model: "claude-golden", runIn: tc.runIn})
 			e := launchReadyEngine(t, c)
 			l := launcherOn(e, c, seat, "t1")
-			if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+			if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 				t.Fatalf("LaunchExecutor: %v", err)
 			}
 			row, _, err := e.sandbox.Load().pending.Get(t.Context(), "t1")
@@ -336,7 +336,7 @@ func TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt(t *testing.T) {
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	var handoffs []chain.Fallback
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	started := jobs.Started()
@@ -382,7 +382,7 @@ func TestALaunchRunsOnItsMembersOwnCLI(t *testing.T) {
 				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 			}))
 			l := launcherOn(e, c, seat, "t1")
-			if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+			if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 				t.Fatalf("LaunchExecutor: %v", err)
 			}
 			if got := runners["claude-code"].Started(); len(got) != 0 {
@@ -418,7 +418,7 @@ func TestALaunchPassesOverAMemberWithNoRunnerAndAnnouncesNothing(t *testing.T) {
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	var handoffs []chain.Fallback
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	if started := jobs.Started(); len(started) != 1 || started[0].Model != "claude-golden" {
@@ -440,7 +440,7 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
-	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	var exhausted *chain.Error
 	if !errors.As(err, &exhausted) || len(exhausted.Attempted) != 1 || exhausted.Attempted[0] != "plan" {
 		t.Fatalf("LaunchExecutor = %v, want the chain exhausted on its one runner", err)
@@ -462,7 +462,7 @@ func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
-	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if err == nil || !strings.Contains(err.Error(), "codex") || !strings.Contains(err.Error(), "claude-code") {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}
@@ -489,7 +489,7 @@ func TestTheCredentialGuardJudgesThePickedMembersLogin(t *testing.T) {
 	c, seat := chainCompany(t, plan, key)
 	e, jobs := launchRig(t, c, bridge())
 	l := launcherOn(e, c, seat, "t1")
-	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	var credErr *SandboxCredentialError
 	if !errors.As(err, &credErr) || !strings.Contains(err.Error(), `"plan"`) {
 		t.Fatalf("a remote run on a plan login that cannot follow it = %v, want it refused "+
@@ -501,7 +501,7 @@ func TestTheCredentialGuardJudgesThePickedMembersLogin(t *testing.T) {
 	c, seat = chainCompany(t, plan, key)
 	e, jobs = launchRig(t, c, bridge())
 	l = launcherOn(e, c, seat, "t1")
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 		t.Fatalf("the fallback onto an entry whose key travels was refused: %v", err)
 	}
 	if started := jobs.Started(); len(started) != 1 || started[0].Env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
@@ -531,7 +531,7 @@ func TestALaunchBelowTheExecutorFloorIsABudgetRefusal(t *testing.T) {
 		t.Fatalf("PostCharge: %v", err)
 	}
 	l := launcherOn(e, c, seat, "t1")
-	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) ||
 		!strings.Contains(err.Error(), "executor_min_budget_tokens") {
 		t.Fatalf("a launch with 20000 tokens left under a 25000 floor = %v, want a budget "+
@@ -587,7 +587,7 @@ func TestAStoppedSeatLaunchesNothing(t *testing.T) {
 	}}
 	e.pauses.known = true
 	l := launcherOn(e, c, seat, "t1")
-	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if !turn.Stopped(err) {
 		t.Fatalf("a launch on a stopped seat = %v, want the stop", err)
 	}
@@ -607,7 +607,7 @@ func TestALaunchedRunIsToldHowToGetAPersonsAnswer(t *testing.T) {
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	started := jobs.Started()
@@ -648,7 +648,7 @@ func TestALaunchPlacesItsBoxByItsEpochsCatalogue(t *testing.T) {
 	e.sandbox.Load().coordinator.SetManager(next)
 
 	l := launcherOn(e, c, seat, "t1")
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	row, _, _ := e.sandbox.Load().pending.Get(t.Context(), "t1")
@@ -682,7 +682,7 @@ func TestALaunchCarriesItsTurnsDeadline(t *testing.T) {
 			}))
 			l := launcherOn(e, c, seat, "t1")
 			l.turn.Deadline = deadline
-			if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+			if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 				t.Fatalf("LaunchExecutor: %v", err)
 			}
 			row, _, _ := e.sandbox.Load().pending.Get(t.Context(), "t1")
@@ -710,7 +710,7 @@ func TestALaunchAsksItsTurnsOwnFence(t *testing.T) {
 	moved := fmt.Errorf("%w: %q was held at epoch 3 and is now held at epoch 4", seatpkg.ErrSeatMoved, "swe")
 	asked := 0
 	req.Fence = func() error { asked++; return moved }
-	err := l.LaunchExecutor(t.Context(), req)
+	_, err := l.LaunchExecutor(t.Context(), req)
 	if !errors.Is(err, seatpkg.ErrSeatMoved) || asked != 1 {
 		t.Fatalf("a launch whose turn's grant moved = %v (fence asked %d times), want the move", err, asked)
 	}
@@ -718,7 +718,7 @@ func TestALaunchAsksItsTurnsOwnFence(t *testing.T) {
 
 	// AND NONE AT ALL IS AN ASSEMBLY FAULT, never an open fence.
 	req.Fence = nil
-	if err := l.LaunchExecutor(t.Context(), req); err == nil || !strings.Contains(err.Error(), "no fence") {
+	if _, err := l.LaunchExecutor(t.Context(), req); err == nil || !strings.Contains(err.Error(), "no fence") {
 		t.Fatalf("a launch with no fence from its turn = %v, want it refused", err)
 	}
 	refusedCleanly(t, e, "t1", jobs)
@@ -734,7 +734,7 @@ func TestAnExecutorIsRefusedWithoutACatalogueForItsCompany(t *testing.T) {
 	bare := &Engine{}
 	bare.epoch.current.Store(c)
 	l := launcherOn(bare, c, seat, "t1")
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
 		!strings.Contains(err.Error(), "providers.sandbox") {
 		t.Errorf("a launch on a node with no runtime = %v, want it refused naming providers.sandbox", err)
 	}
@@ -745,7 +745,7 @@ func TestAnExecutorIsRefusedWithoutACatalogueForItsCompany(t *testing.T) {
 	}))
 	dropped.Config.Providers.Sandbox = nil
 	l = launcherOn(e, dropped, seat, "t1")
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
 		!strings.Contains(err.Error(), "providers.sandbox") {
 		t.Errorf("a launch for a company with no catalogue = %v, want it refused", err)
 	}
@@ -772,7 +772,7 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	}))
 	for _, runID := range []string{"t1", "t2"} {
 		l := launcherOn(e, c, seat, runID)
-		if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+		if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 			t.Fatalf("LaunchExecutor(%s): %v", runID, err)
 		}
 	}
@@ -993,7 +993,7 @@ func TestAnExecutorIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
 	l := launcherOn(e, c, seat, "t1")
-	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if err == nil {
 		t.Fatal("an executor launched on a node whose bridge nothing reaches")
 	}
@@ -1019,7 +1019,7 @@ func TestAnExecutorOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing.T) 
 	l := launcherOn(e, c, seat, "t1")
 	req := launchRequest(l, nil)
 	req.Surface = tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)
-	err := l.LaunchExecutor(t.Context(), req)
+	_, err := l.LaunchExecutor(t.Context(), req)
 	if err == nil {
 		t.Fatal("an executor launched over a surface bound to no seat")
 	}
@@ -1045,7 +1045,7 @@ func TestAnExecutorRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
 	const system = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
 	req := launchRequest(l, nil)
 	req.System = system
-	if err := l.LaunchExecutor(t.Context(), req); err != nil {
+	if _, err := l.LaunchExecutor(t.Context(), req); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	started := jobs.Started()
@@ -1122,7 +1122,7 @@ func TestTheBridgeFollowsTheSeat(t *testing.T) {
 	}
 
 	l := launcherOn(e, c, seat, "t1")
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	if bridge.Live() != 1 {

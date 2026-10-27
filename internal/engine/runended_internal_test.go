@@ -37,7 +37,7 @@ func TestARunThatSpentItsPlanMovesTheNextLaunchOn(t *testing.T) {
 		Error: "Usage limit reached · resets 5pm", Text: "Usage limit reached · resets 5pm"})
 	l := launcherOn(e, c, seat, "t1")
 	var handoffs []chain.Fallback
-	if err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	if started := jobs.Started(); len(started) != 1 || started[0].Model != "haiku" {

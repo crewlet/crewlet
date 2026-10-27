@@ -184,6 +184,34 @@ func TestPhaseUserMessageCarriesTheNotesTheTurnHasRead(t *testing.T) {
 	}
 }
 
+// A NOTE READS THE SAME WHEREVER IT LANDS. It reaches a model at the opening of
+// a run of the engine's loop, in a coding run's brief, and inside a coding run
+// where its CLI places a hook's context — so it names who sent it and through
+// what, says it arrived while the work was under way and is the later word, and
+// says nothing about where it arrived, which would be false in every place but
+// one. The note itself is last and verbatim.
+func TestASteerMessageIsFactualWhereverItLands(t *testing.T) {
+	t.Parallel()
+	msg := SteerMessage("ada", "  post to #staging, not #general  ")
+	contains(t, msg,
+		"## A note from ada, sent while this turn was running",
+		"ada sent this through Crewlet while the work was under way",
+		"the note is the later word",
+		"What has already been done stays unless the note says otherwise.")
+	if !strings.HasSuffix(msg, "\n\npost to #staging, not #general") {
+		t.Errorf("the note is not last and verbatim:\n%s", msg)
+	}
+	for _, where := range []string{"between rounds", "round", "tool result", "hook"} {
+		if strings.Contains(strings.ToLower(msg), where) {
+			t.Errorf("the message says where it arrived (%q), which is false in every "+
+				"place but one:\n%s", where, msg)
+		}
+	}
+	anonymous := SteerMessage(" ", "x")
+	contains(t, anonymous, "## A note from a person who runs this company",
+		"\nA person who runs this company sent this through Crewlet")
+}
+
 func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 	t.Parallel()
 	withPrior := BuildPhaseUserMessage(UserMessage{

@@ -36,7 +36,6 @@ func parked() execstate.State {
 		WrittenMany: true,
 		Uncharged:   &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
 		SoFar:       &execstate.TurnSoFar{DurationMS: 42_000, Reviews: 2, SentBack: 1, Unaccepted: 1},
-		Steered:     []string{"use the staging database, not prod"},
 		Context: execstate.Frozen{
 			ThreadContext:       "- **Ana (ana)**: the login test flakes on main",
 			PersonalMemory:      "- always run the suite twice",
@@ -96,9 +95,6 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	// whole: lost, the turn's earlier spans and reviews count nowhere.
 	if got.SoFar == nil || *got.SoFar != *want.SoFar {
 		t.Fatalf("the turn's measurement so far did not survive: %+v", got.SoFar)
-	}
-	if len(got.Steered) != 1 || got.Steered[0] != want.Steered[0] {
-		t.Fatalf("the notes the turn had read did not survive: %v", got.Steered)
 	}
 	// AND THE CONTEXT THE TURN STARTED WITH, every block of it: the turn's
 	// next launch is built from it in whichever process collected this run,

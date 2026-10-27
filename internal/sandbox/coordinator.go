@@ -346,6 +346,10 @@ type CoordinatorOptions struct {
 	//
 	// A PARKED run is deliberately not ended: it is waiting on a person,
 	// not finished, and its box will resume into the same session.
+	//
+	// THE SESSION'S NOTE INBOX GOES WITH IT, and no note with it: the notes
+	// still waiting are on the run's record, which the ending publishes as
+	// expired before it deletes it ([CoordinatorOptions.SteersExpired]).
 	Ended func(runID string)
 
 	// Recovered is told of each run this node takes over still RUNNING in
@@ -456,6 +460,24 @@ type CoordinatorOptions struct {
 	// nothing — a coordinator built without an engine (a test's): the stop
 	// is still announced and the run still ended.
 	CloseStopped func(ctx context.Context, run PendingRun) error
+
+	// SteersExpired publishes, as expired, every note a person sent the run's
+	// turn that is still WAITING on the run's record ([RunSteer]) — the ones
+	// nothing will read now that the turn is over. The engine implements it,
+	// because only the engine opens a note's seal, and this package never
+	// publishes words it cannot verify.
+	//
+	// A STEP OF THE ENDING, as CloseStopped is: made before the record is
+	// deleted, once per attempt, and made again by any attempt that finishes
+	// the ending after a crash — so what it publishes it publishes under
+	// identities derived from the run, its ending and each note
+	// ([RecordedEnding.ID], [RecordedEnding.At]), which makes a repeat the
+	// same records. An error keeps the ending for its retry, as a refused
+	// announcement does. Nothing lands on the record between this step and
+	// the delete: a note filed once the ending is decided is refused
+	// ([PendingStore.FileNote]). Nil publishes nothing — a coordinator built
+	// without an engine (a test's).
+	SteersExpired func(ctx context.Context, run PendingRun) error
 
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes is waiting on its resume — see [SeatHold]. Nil holds
@@ -621,6 +643,8 @@ type Coordinator struct {
 	stopped   func(ctx context.Context, handle, turnID string)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
 	closeStopped func(ctx context.Context, run PendingRun) error
+	// steersExpired is [CoordinatorOptions.SteersExpired].
+	steersExpired func(ctx context.Context, run PendingRun) error
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -757,32 +781,33 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
-		answers:      opts.Answers,
-		condense:     opts.Condense,
-		ended:        opts.Ended,
-		recovered:    opts.Recovered,
-		stopped:      opts.Stopped,
-		closeStopped: opts.CloseStopped,
-		node:         opts.Node,
-		boxes:        opts.Boxes,
-		nudge:        opts.Nudge,
-		now:          opts.Now,
-		runs:         map[string]seatRuns{},
-		moves:        map[string]uint64{},
-		attempts:     map[answerKey]map[string]answerBudget{},
-		retries:      map[string]*answerRetry{},
-		owed:         map[string]map[string]struct{}{},
-		held:         map[string]bool{},
-		holdBusy:     map[string]bool{},
-		holdDirty:    map[string]bool{},
-		holdGen:      map[string]uint64{},
-		signals:      map[signal]uint64{},
-		launchStops:  map[string]launchStop{},
-		hold:         opts.Hold,
-		admit:        opts.Admit,
-		after:        opts.After,
-		spent:        opts.Spent,
-		lease:        opts.Lease,
+		answers:       opts.Answers,
+		condense:      opts.Condense,
+		ended:         opts.Ended,
+		recovered:     opts.Recovered,
+		stopped:       opts.Stopped,
+		closeStopped:  opts.CloseStopped,
+		steersExpired: opts.SteersExpired,
+		node:          opts.Node,
+		boxes:         opts.Boxes,
+		nudge:         opts.Nudge,
+		now:           opts.Now,
+		runs:          map[string]seatRuns{},
+		moves:         map[string]uint64{},
+		attempts:      map[answerKey]map[string]answerBudget{},
+		retries:       map[string]*answerRetry{},
+		owed:          map[string]map[string]struct{}{},
+		held:          map[string]bool{},
+		holdBusy:      map[string]bool{},
+		holdDirty:     map[string]bool{},
+		holdGen:       map[string]uint64{},
+		signals:       map[signal]uint64{},
+		launchStops:   map[string]launchStop{},
+		hold:          opts.Hold,
+		admit:         opts.Admit,
+		after:         opts.After,
+		spent:         opts.Spent,
+		lease:         opts.Lease,
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -3167,7 +3192,9 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 //  5. the announcement is published, under the ending's own identity;
 //  6. for a stop, the turn that was parked on the run is closed on the record
 //     as stopped ([CoordinatorOptions.CloseStopped]);
-//  7. the record is deleted ([PendingStore.Finish]).
+//  7. every note a person sent the turn that is still waiting on the record is
+//     published expired ([CoordinatorOptions.SteersExpired]);
+//  8. the record is deleted ([PendingStore.Finish]).
 //
 // # Across a crash at each step
 //
@@ -3189,7 +3216,7 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 // does not land is returned, and the caller keeps the ending.
 func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
 	var handed []string
-	reclaimed, announced, closed := false, false, false
+	reclaimed, announced, closed, expired := false, false, false, false
 	for range endingRounds {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
@@ -3249,6 +3276,13 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 					"on the record: %w", run.TurnID, err)
 			}
 			closed = true
+		}
+		if !expired && c.steersExpired != nil && run.waitingNotes() {
+			if err := c.steersExpired(ctx, run); err != nil {
+				return fmt.Errorf("sandbox: ending run %s, whose waiting notes could not be "+
+					"recorded expired: %w", run.TurnID, err)
+			}
+			expired = true
 		}
 		settled, _, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
 		switch {

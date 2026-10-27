@@ -225,6 +225,8 @@ func TestADrainKeepsTheEdgesOfTheRunsItCannotWaitFor(t *testing.T) {
 	for _, req := range []struct{ method, path string }{
 		{http.MethodPost, "/mcp/run-token"},
 		{http.MethodDelete, "/mcp/run-token"},
+		{http.MethodGet, "/mcp/run-token/steer/notes"},
+		{http.MethodPost, "/mcp/run-token/steer/read"},
 		{http.MethodPost, "/otlp/run-token/v1/traces"},
 	} {
 		if rec := send(t, a, req.method, req.path); refusedForDraining(t, rec) {

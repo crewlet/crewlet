@@ -67,7 +67,9 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // a runner refuses to be built without one.
 type stubLauncher struct{}
 
-func (stubLauncher) LaunchExecutor(context.Context, AgentRunRequest) error { return nil }
+func (stubLauncher) LaunchExecutor(context.Context, AgentRunRequest) (Launched, error) {
+	return Launched{}, nil
+}
 
 // THE OPEN-WORLD HALF OF THE PREDICATE REACHES THE TURN, or it is dead code.
 //

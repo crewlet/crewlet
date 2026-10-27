@@ -52,7 +52,8 @@ roles:
 func launchExecutor(t *testing.T, e *Engine, c *Company, seat *org.Role, turnID string) error {
 	t.Helper()
 	l := launcherOn(e, c, seat, turnID)
-	return l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	return err
 }
 
 // AN EXECUTOR'S RUN CARRIES WHAT ITS ENVIRONMENT RESOLVES, and leaves out what

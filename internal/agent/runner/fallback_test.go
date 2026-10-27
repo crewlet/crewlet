@@ -121,9 +121,9 @@ func TestAProviderHandOffIsPublishedAgainstTheTurnItHappenedIn(t *testing.T) {
 // the engine's launch does, and starts nothing.
 type fallingLauncher struct{ skipped chain.Fallback }
 
-func (l fallingLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) error {
+func (l fallingLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	req.OnFallback(l.skipped)
-	return nil
+	return runner.Launched{LaunchID: "job-1"}, nil
 }
 
 // A LAUNCH-TIME HAND-OFF IS PUBLISHED AGAINST THE TURN TOO.

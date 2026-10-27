@@ -373,14 +373,22 @@ agent_turn_stopped         # a pause with stop_running ended this turn — at
                            # from iam.ActorFor), reason. Its trigger is
                            # recorded as worked, not retried
 agent_turn_steered         # what became of a person's note to this running
-                           # turn, published by the node that ran it:
-                           # `delivered` with the phase, iteration and round
-                           # that first read it, or `expired` — the turn ended
-                           # or parked before its next round. Carries the
-                           # note, note_id (the request's id), steered_by,
-                           # steered_by_kind, operator_id and sent_at: the
-                           # note itself crossed an ephemeral scatter, so
-                           # this row is its only durable record
+                           # turn: `delivered` with the phase, iteration and
+                           # round that first read it, the kind of step
+                           # (`boundary`: round, brief, tool_batch, finish or
+                           # step) and, for a read by a coding run, its job
+                           # (`launch_id`) — or `expired`, the turn ended
+                           # first. Published by the node whose step read it
+                           # (the runner's, for a round or a run's brief; the
+                           # one serving the run's tool bridge, for a read
+                           # inside the run) or, for an expiry, by the node
+                           # that closed the first segment's box or finished
+                           # the run's ending, under an id derived from the
+                           # ending. Carries the note, note_id (the request's
+                           # id), steered_by, steered_by_kind, operator_id and
+                           # sent_at: a note crosses an ephemeral scatter or
+                           # waits on a run's record that is deleted with the
+                           # run, so this row is its only durable record
 agent_phase_started
 agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool calls, and `rounds[]` — each provider call's

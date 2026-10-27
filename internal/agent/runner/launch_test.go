@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -31,12 +32,16 @@ type playLauncher struct {
 	took time.Duration
 }
 
-func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) error {
+func (l *playLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	time.Sleep(l.took)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.reqs = append(l.reqs, req)
-	return l.err
+	if l.err != nil {
+		return runner.Launched{}, l.err
+	}
+	// EACH LAUNCH A JOB OF ITS OWN, named as a store names one.
+	return runner.Launched{LaunchID: fmt.Sprintf("job-%d", len(l.reqs))}, nil
 }
 
 // launched is how many launches the runner asked for, refused ones included.

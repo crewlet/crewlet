@@ -124,7 +124,8 @@ export const TURN_STOP: ReadonlySet<string> = new Set([
  * brief and the trail read and the Timeline starts its clock from — what its
  * prompt was assembled from before the first phase ran, and a person's note it
  * was handed mid-turn — `agent_turn_steered`, which says whether the turn read
- * the note or ended before its next round, drawn at the round that read it.
+ * the note or ended first, drawn at the round or on the coding run that read
+ * it.
  */
 export const GIVEN: ReadonlySet<string> = new Set([
   "agent_turn_started",

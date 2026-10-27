@@ -922,3 +922,32 @@ func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []
 	}
 	return s.inner.ClearHandBack(ctx, turnID, ids)
 }
+
+func (s *refusingStore) FileNote(ctx context.Context, turnID string, filing NoteFiling,
+) (NoteFiled, PendingRun, error) {
+	if s.called("FileNote") {
+		return "", PendingRun{}, errRefusedCall
+	}
+	return s.inner.FileNote(ctx, turnID, filing)
+}
+
+func (s *refusingStore) TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error) {
+	if s.called("TakeNotes") {
+		return nil, errRefusedCall
+	}
+	return s.inner.TakeNotes(ctx, turnID, take)
+}
+
+func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
+	if s.called("MarkPulled") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkPulled(ctx, turnID, launch)
+}
+
+func (s *refusingStore) WatchNotes(ctx context.Context, turnID string) (<-chan NotesView, error) {
+	if s.called("WatchNotes") {
+		return nil, errRefusedCall
+	}
+	return s.inner.WatchNotes(ctx, turnID)
+}

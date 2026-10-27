@@ -12,9 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -60,13 +62,20 @@ import (
 // what a detached run is, which member of the seat's executor chain takes it,
 // where it goes and how to reach it. Neither has to learn the other's half.
 type AgentLauncher interface {
-	// LaunchExecutor starts the run and returns once it is going. It does
-	// NOT wait for it: the phase suspends and the run's collection
-	// re-enters the turn later.
+	// LaunchExecutor starts the run and returns once it is going, naming
+	// the job it opened. It does NOT wait for it: the phase suspends and the
+	// run's collection re-enters the turn later.
 	//
 	// An error fails the phase: there is no other way to run the executor,
 	// and the error says why this run could not start.
-	LaunchExecutor(ctx context.Context, req AgentRunRequest) error
+	LaunchExecutor(ctx context.Context, req AgentRunRequest) (Launched, error)
+}
+
+// Launched is what a launch that started answers: the JOB it opened — the name
+// the run's record holds it under, which only the launch learns — so the notes
+// its brief carried are recorded delivered to that job.
+type Launched struct {
+	LaunchID string
 }
 
 // AgentRunRequest is one executor handed to its coding CLI's agent loop.
@@ -84,10 +93,16 @@ type AgentRunRequest struct {
 	// instructions.
 	System string
 
-	// Brief is the turn's own ask — with its earlier rounds, and every note
-	// a person sent the turn that it has already read — and the whole of
-	// what the CLI is prompted with.
+	// Brief is the turn's own ask — with its earlier rounds, every note a
+	// person sent the turn that it has already read, and then Notes — and
+	// the whole of what the CLI is prompted with.
 	Brief string
+
+	// Notes are the notes this brief is the FIRST to read, in the order the
+	// brief renders them ([SteerSource.Brief]): the launch records them read
+	// by the job it opens, in the write that opens it, so the job's own CLI
+	// never takes them again.
+	Notes []steer.Note
 
 	// Surface is what the run may call, bridged; see the package rule
 	// above.
@@ -134,7 +149,9 @@ type AgentRunRequest struct {
 // Continuation is how a launch carries on an asking run — see
 // [AgentRunRequest.Continue].
 type Continuation struct {
-	// SessionID is the asking run's CLI session; Brief its next prompt.
+	// SessionID is the asking run's CLI session; Brief its next prompt —
+	// the answer, and the notes [AgentRunRequest.Notes] carries: only those,
+	// because the session already holds every note it read before it asked.
 	SessionID string
 	Brief     string
 }
@@ -178,14 +195,20 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	surface = built
 
-	system, user := r.executorPrompt(ctx, notes, history, snapshot, built)
+	// THE NOTES THIS BRIEF IS THE FIRST TO READ, after every one the turn
+	// read before — and the launch's from here: handed back on every way out
+	// that does not launch ([Runner.steerReturn]), and recorded delivered
+	// only once the launch has opened its job ([Runner.steerBriefed]).
+	fresh := r.steerBrief(ctx)
+	system, user := r.executorPrompt(ctx, notes, history, snapshot, built, fresh)
 	// AND ASKED AGAIN once the brief exists, before anything is on the
 	// record: assembling it rewrites the prior rounds' payloads past their
 	// budgets with the seat's auxiliary model, charged to the same counters,
 	// and the rewrite can be what fills the window. Asked only at the top of
 	// the phase, that run was launched and paid for whole past the ceiling.
-	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
-		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
+	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
+		r.steerReturn(ctx, fresh)
+		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
 	// THE PROMPT REACHES THE RECORD, published here because nothing else
 	// will: the collection's own record deliberately carries no prompt (it
@@ -207,15 +230,18 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	caps := roundCaps{max: runRound, ceiling: runRound}
 	emit.started(ctx, phase.Execute, round, system, user, surface, caps)
 
-	if err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
+	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System:     system.Text,
 		Brief:      user.Text,
+		Notes:      fresh,
 		Surface:    surface,
 		Spend:      bridged,
 		Round:      round,
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, round, f) },
 		Fence:      r.cfg.Fence,
-	}); err != nil {
+	})
+	if err != nil {
+		r.steerReturn(ctx, fresh)
 		err = fmt.Errorf("runner: %s: launching the executor's run: %w", phase.Execute, err)
 		// A PHASE A PERSON STOPPED DID NOT FAIL, exactly as for every phase
 		// the engine drives: it carries the stop as its error and is not
@@ -230,6 +256,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		})
 		return turn.Work{}, describe(surface), err
 	}
+	r.steerBriefed(ctx, round, launched.LaunchID, fresh)
 
 	r.recordAgentSuspension(round, surface, history, began, time.Since(began))
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
@@ -278,26 +305,39 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	surface = built
 	r.observeLoads(logged)
 
-	system, user := r.executorPrompt(ctx, "", history, snapshot, built)
-	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
-		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, err)
+	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
+	// a fresh run's after every note the turn read, as any brief does; the
+	// asking run's own session after the answer alone, since that session
+	// already holds every note it read.
+	fresh := r.steerBrief(ctx)
+	system, user := r.executorPrompt(ctx, "", history, snapshot, built, fresh)
+	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
+		r.steerReturn(ctx, fresh)
+		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
 	emit := r.emitter()
 	caps := roundCaps{max: runRound, ceiling: runRound}
-	if err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
+	continued := asked.Continuation()
+	if rendered := renderedNotes(fresh); len(rendered) > 0 {
+		continued += "\n\n" + strings.Join(rendered, "\n\n")
+	}
+	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System: system.Text,
 		// A FRESH RUN'S BRIEF is the round's own, and what the run before it
 		// asked and was told: it remembers neither.
 		Brief: user.Text + "\n\n" + asked.Reseed(),
+		Notes: fresh,
 		Continue: &Continuation{
-			SessionID: asked.SessionID, Brief: asked.Continuation(),
+			SessionID: asked.SessionID, Brief: continued,
 		},
 		Surface:    surface,
 		Spend:      bridged,
 		Round:      state.Round,
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, state.Round, f) },
 		Fence:      r.cfg.Fence,
-	}); err != nil {
+	})
+	if err != nil {
+		r.steerReturn(ctx, fresh)
 		err = fmt.Errorf("runner: %s: carrying on the run with its answer: %w", phase.Execute, err)
 		emit.completed(ctx, phaseRecord{
 			Phase: phase.Execute, Iteration: state.Round, System: system, User: user,
@@ -308,6 +348,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		})
 		return turn.Work{Calls: logged}, describe(surface), err
 	}
+	r.steerBriefed(ctx, state.Round, launched.LaunchID, fresh)
 	launchedAt := state.LaunchedAt
 	if launchedAt.IsZero() {
 		launchedAt = began
@@ -335,9 +376,6 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 		LaunchedAt: began.UTC(),
 		Iterations: history,
 		Task:       r.cfg.Task,
-		// EVERY NOTE THE TURN HAD READ, for the phases after the run's
-		// collection. See [execstate.State.Steered].
-		Steered: r.carriedSteers(),
 		// AND WHAT THE TURN STARTED WITH, for the launches after it. See
 		// [execstate.State.Context].
 		Context: frozen(r.cfg.Context, r.cfg.Conversation),
@@ -510,6 +548,10 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 
 	run := r.cfg.Resume.Run
 	res := agentRunResult(answer, bridged, run, state.LaunchedAt, began)
+	// THE NOTES THE RUN READ, off the record every read is written on: in
+	// its brief, and at the boundaries of its CLI's own loop — its own job's
+	// reads, at the run's one round, each with where it was read.
+	res.RunSteers = runReads(r.cfg.Resume.Steered, run.LaunchID)
 	res.StartedAt = began.UTC()
 	res.Elapsed = time.Duration(state.LaunchMS)*time.Millisecond + time.Since(began)
 	work, described := r.finishWork(ctx, state.Round, work{
@@ -593,6 +635,23 @@ func agentRunResult(answer string, bridged []BridgedCall, run RunRecord,
 	}
 	return phaseResult{Text: answer, Rounds: runRound, Result: res,
 		Caps: roundCaps{max: runRound, ceiling: runRound}}
+}
+
+// runReads is the notes a collected run's job read, in the order read, as its
+// execute record lists them: at the run's one round ([runRound]), each with the
+// boundary that read it. Nil for a job that read none.
+func runReads(reads []steer.Read, launch string) []types.PhaseSteer {
+	if launch == "" {
+		return nil
+	}
+	var out []types.PhaseSteer
+	for _, read := range reads {
+		if read.Launch != launch {
+			continue
+		}
+		out = append(out, types.PhaseSteer{Round: runRound, NoteID: read.ID, Boundary: read.Boundary})
+	}
+	return out
 }
 
 // runRound is the one round an executor run's record has, which every call

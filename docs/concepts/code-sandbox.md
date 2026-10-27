@@ -502,6 +502,74 @@ box ──MCP/streamable-HTTP──▶  POST /mcp/{token}  ──▶  the seat's
 
 **A run outlives a restart, or a move, of the node that holds its seat.** Because the token names the job rather than a process, whichever node takes the seat over — the same node after a restart, or a peer — re-opens the run's session as it recovers the seat, before the seat's mailbox opens: the surface rebuilt from the run's own row — the tools and skills it launched with, those it activated or loaded over the bridge — with its call log and what its bridged calls have cost carried over. Only once the seat's running jobs are recovered does the node answer that a job it holds no session for is over. The node that hands the seat on ends its runs' sessions as it releases the seat, so the box's next request is routed afresh and reaches the new holder. The box's own MCP session lived on the node that let it go, so its next request there is answered `404`, which the MCP protocol answers by connecting again — through the same URL, to the new holder, with the box's unchanged token. A session that cannot be re-opened logs `bridge_not_reopened` and never fails the recovery. A run whose ending is already decided is not re-opened, and neither is one on a seat whose pause asks for its running work to stop: the node that takes that seat ends the run as it recovers it (see [Stop now](agent-runtime.md#pausing-a-seat)), so its box never gets the seat's tools back in between.
 
+## Notes to a running run
+
+A person can [steer](turn-engine.md#steering-a-running-turn) a turn while its
+coding run works. From the run's launch until its turn ends, the turn's notes
+wait on the **run's record** in the coordination store, each sealed under the
+fleet keyring by the node that filed it, beside a sealed anchor naming the seat
+the run serves ([ADR-0059](https://github.com/crewlet/crewlet/blob/main/adr/0059-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
+The run reads them at four kinds of step, and every read is recorded on the
+record by the write that hands the note over — so a note is never handed to a
+model twice, and the record's read notes are exactly what the turn carries into
+its review, whichever node resumes it:
+
+- **Its brief.** A note waiting when a run is launched — the first one, a
+  relaunch the reviewer sends back, or the one that carries a person's answer —
+  goes into the brief, read by the write that opens the job.
+- **Between its steps, through its tool bridge.** The run's bridge serves its
+  notes to its CLI two ways, behind the run's own token and nothing else:
+  - **`steer_take`**, a tool on the run's MCP server that a CLI's hook calls
+    after a batch of the main agent's tool calls (`PostToolBatch`) or as the
+    run is about to finish (`Stop`). It is **never listed**, so no CLI offers it
+    to its model, and it is answered before the seat's surface sees the call,
+    so it is never recorded on the run's ledger: it is the CLI asking, not the
+    model. Its answer is always text — the hook's answer, with the notes as its
+    additional context, or empty for nothing — and **never an error**, because a
+    hook whose call failed makes the CLI drop and re-initialise the run's whole
+    bridge. Only the main agent's loop takes notes: a subagent's batch, and a
+    hook whose agent id the CLI did not fill in, take nothing, because a note
+    handed to a delegated loop binds that piece of work alone. One answer
+    carries the oldest waiting notes within **9,000 UTF-16 code units**, measured
+    as the CLI measures its context, and the rest wait for the next step; it is
+    answered within **five seconds**, half the hook's timeout, or not at all.
+  - **The notes route**, `/mcp/{token}/steer/notes?after=<seq>` and
+    `/mcp/{token}/steer/read`, which a plugin inside the CLI polls: a poll is
+    held for up to **ten seconds** while no note waits, and answered at once
+    when one arrives, the run ends or the node stops; a read names the notes
+    (one to ten) the CLI put in front of its model, and is recorded read at the
+    run's next step. Each note carries an id the CLI admits it under, unique to
+    the note and the job, so a poller that admits it twice admits it once.
+
+  A CLI takes notes here only where its run is set up to ask for them; a run
+  whose CLI asks for none still has every note read, by its review.
+
+  A take is pinned to the run's **job** and to a run that is launching or
+  working with its ending undecided: a relaunch's job, a run parked on a
+  question, a collected run and a run whose tools are closed — its seat moved,
+  or a person stopped it — take nothing, and their notes wait for whatever reads
+  the turn next. The bridge itself decides nothing about notes; it routes the
+  call, like every bridged call, to the node holding the run's seat, whose
+  inbox for the run is rebuilt from the record — so a run whose node restarted
+  is served its notes by whichever node reopens its session.
+- **The review's first round.** A note the run never took is read by the
+  segment that reviews the run, before its first provider call.
+- **After its question is answered.** A run parked on a question takes nothing
+  while it waits; `steer_turn` answers `reads: "after_answer"`, and the launch
+  that carries the answer carries the notes.
+
+What became of each note is published as `agent_turn_steered`: `delivered` by
+the node whose step read it, with the kind of step (`boundary`: `brief`,
+`tool_batch`, `finish`, `step`, or `round` for the review) and, for a read by
+the run, its job (`launch_id`); or `expired`, for a note still waiting when the
+turn ends, by the node that finishes the run's ending — before the record is
+deleted, under an id derived from the ending, so a retried ending records it
+once. A park is never an ending.
+
+A proxy between the boxes and `CREWLET_MCP_BRIDGE_URL` holds a poll open for
+up to those ten seconds, so it needs a request timeout of at least fifteen —
+see [Deployment](../guides/deployment.md).
+
 ---
 
 ## Mid-run clarification (`crewlet-ask`)
@@ -522,7 +590,7 @@ The shim is **signal-only**: it records the question, its audience and the **bra
 
    **Recording and resuming were split because the inbox's retry order is the wrong order for an answer.** The answer used to be held by its delivery until a resume succeeded, and a resume that failed handed the *message* back to the broker with a NAK. On JetStream a NAK'd message comes back after its redelivery backoff, **behind** the conversation's newer mail ([event system](event-system.md#delivery-semantics)): so the person's next message reached the still-waiting run first and was spliced in as its answer, and the real answer came round afterwards to answer whatever the run asked next — or ran as a turn with no context. The in-memory twin replayed a NAK at the head, so every engine test certified the order production never gave. A resume that fails now is the **coordinator's** to retry, on its own schedule, and the person's message is never handed back for it.
 
-   **The seat's later mail waits behind the answer.** While a seat owes any of its runs an answer's resume, the coordinator holds the seat's inbox (the `sandbox` hold a busy seat is held under too) and lifts the hold once the resume has *returned*, so the person's follow-up is worked as an ordinary turn — with the run's own replies already in the thread it reads — rather than racing the resume. A hold rather than a park: the mail waits on the broker with its order and its delivery count intact. A later reply is an ordinary message, not a note to the resumed run: a [steer note](turn-engine.md#steering-a-running-turn) reaches a turn that is *running*, and while the answer's resume is owed no turn is.
+   **The seat's later mail waits behind the answer.** While a seat owes any of its runs an answer's resume, the coordinator holds the seat's inbox (the `sandbox` hold a busy seat is held under too) and lifts the hold once the resume has *returned*, so the person's follow-up is worked as an ordinary turn — with the run's own replies already in the thread it reads — rather than racing the resume. A hold rather than a park: the mail waits on the broker with its order and its delivery count intact. A later reply is an ordinary message, not a note to the resumed run: a [steer note](turn-engine.md#steering-a-running-turn) is sent with `steer_turn`, and one sent to a parked run waits on the run's record and is read in the brief of the launch that carries the answer ([notes to a running run](#notes-to-a-running-run)).
 
    **Every delivery to a seat with a question open is offered to that match first**, and that follows from step 2 rather than adding to it: a parked run frees its seat, so the answer arrives on the ordinary path looking like any other message — nothing about a chat reply says which coding run it ends. So the dispatcher offers each delivery to the parked run *before* consuming it, and only what no parked run claims becomes a turn. It is offered after the completion ledger has had its say, so a redelivered trigger that already produced a turn is never spliced in as an answer as well. A **held** seat offers nothing — its inbox is held, so a reply to a second run of the same seat, waiting while the first is still going, waits with the seat's mail and is offered when the first stops holding the seat. A delivery that **becomes** an answer is recorded in that same ledger, so a copy of it — a redelivery whose acknowledgement was lost — is dropped rather than run as a turn, on whichever node it reaches; while the run still holds the answer, a copy is recognised on the run itself and spent as the answer it is.
 

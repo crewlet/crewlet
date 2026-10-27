@@ -208,6 +208,15 @@ type LaunchRequest struct {
 	// it — the node takes the pause into its copy before it lists.
 	Fence func() error
 
+	// SteerSeat is the turn's seat, sealed by the engine — the anchor a
+	// person's authority to send the turn a note is decided on
+	// ([RunSteer.Seat]) — and BriefNotes the notes the job's brief carries,
+	// each sealed, which the write that opens the job records read by it
+	// ([PendingRun.BriefNotes]). Both written onto the record the launch
+	// opens, never anywhere else. Empty writes no anchor and reads nothing.
+	SteerSeat  []byte
+	BriefNotes []RunNote
+
 	// Opened is told the job's name the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
 	// name the job before its box can act: the run's bridge session, which
@@ -217,18 +226,30 @@ type LaunchRequest struct {
 	// — the name would be whichever job the row held by then, which for a
 	// call that outlived its job is the next one.
 	//
-	// It answers the MCP servers the job's box is given BESIDE MCPServers:
-	// the ones whose address can only be minted once the job has a name.
-	// The run's tool bridge is one — its token names the job, so a node that
+	// It answers what the job's box is given that can only be minted once
+	// the job has a name ([Opening]): MCP servers BESIDE MCPServers — the
+	// run's tool bridge is one, its token naming the job, so a node that
 	// takes the run over can serve the job's session again under the token
-	// the box already holds, and a relaunch's box cannot reach its
-	// predecessor's. A name it answers that MCPServers also has replaces it.
-	// An error abandons the launch, before any box exists. Nil tells nobody
-	// and adds nothing.
-	Opened func(launchID string) (map[string]MCPServer, error)
+	// the box already holds and a relaunch's box cannot reach its
+	// predecessor's; a name it answers that MCPServers also has replaces
+	// it — and where the job's CLI asks for its turn's notes, which is the
+	// same bridge. An error abandons the launch, before any box exists. Nil
+	// tells nobody and adds nothing.
+	Opened func(launchID string) (Opening, error)
 
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
+}
+
+// Opening is what a job's box is given once the job has a name — see
+// [LaunchRequest.Opened].
+type Opening struct {
+	// Servers join the box's MCP servers.
+	Servers map[string]MCPServer
+
+	// Steer is where the job's CLI asks for its turn's notes
+	// ([RunRequest.Steer]); the zero value takes none inside the run.
+	Steer SteerWiring
 }
 
 // Continuation is how a job continues the asking job before it — see
@@ -245,6 +266,10 @@ type Continuation struct {
 
 // LaunchResult reports what a launch produced.
 type LaunchResult struct {
+	// LaunchID is the job the launch opened, as the store named it
+	// ([PendingRun.LaunchID]).
+	LaunchID string
+
 	SandboxID   string
 	CommandID   string
 	CodingAgent string
@@ -360,8 +385,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Continues: req.Continue != nil,
 		// The model and the entry the run's phase record is filed under;
 		// the store keys the rest of that record on the launch it mints.
-		Launch:    LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey},
-		CreatedAt: now(),
+		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey},
+		// THE TURN'S NOTES: the seat anchor, and the brief's notes, read by
+		// the job this write opens — see [PendingStore.BeginLaunch].
+		Steer:      RunSteer{Seat: req.SteerSeat},
+		BriefNotes: req.BriefNotes,
+		CreatedAt:  now(),
 	}, fence)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
@@ -389,18 +418,20 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// and what it answers joins the box's servers, on the request every step
 	// below reads: the job's own runner and the standing instructions that
 	// list the servers a box has.
+	var steer SteerWiring
 	if req.Opened != nil {
 		named, openErr := req.Opened(opened.LaunchID)
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
 		}
-		if len(named) > 0 {
-			servers := make(map[string]MCPServer, len(req.MCPServers)+len(named))
+		if len(named.Servers) > 0 {
+			servers := make(map[string]MCPServer, len(req.MCPServers)+len(named.Servers))
 			maps.Copy(servers, req.MCPServers)
-			maps.Copy(servers, named)
+			maps.Copy(servers, named.Servers)
 			req.MCPServers = servers
 		}
+		steer = named.Steer
 	}
 
 	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
@@ -453,6 +484,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
 		Model:      req.Model,
 		MCPServers: req.MCPServers,
+		// WHERE THE JOB'S CLI ASKS FOR ITS TURN'S NOTES, as the job's own
+		// opening answered it — see [Opening.Steer].
+		Steer: steer,
 	})
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
@@ -522,7 +556,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		"reused", reused, "continues_session", session != "")
 
 	return LaunchResult{
-		SandboxID: box.ID(), CommandID: handle.CommandID,
+		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
 		CodingAgent: req.Spec.CodingAgent, Reused: reused,
 	}, nil
 }

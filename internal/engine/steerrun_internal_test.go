@@ -1,0 +1,690 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/steer"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
+
+// A person's note to a turn whose coding run is out, through the real turn: the
+// launch, the run's bridge, a go-sdk client playing the run's CLI, and the
+// resumed segment that reviews it. What each case holds is where the note goes
+// and what it is recorded as, whichever step reads it.
+
+// steerable gives e what every engine `crewlet run` builds to steer a turn: the
+// desk its turns' boxes register with and the run steers over its fleet's run
+// records — an engine a case builds by hand has neither.
+func steerable(t *testing.T, e *Engine) {
+	t.Helper()
+	seals, err := newSteerSeals(steerRing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.runSteers = newRunSteers(seals, sandbox.NewCoordStore(e.backends.Fleet), e.backends.Queue)
+	e.steers = mustSteerDesk(t, steerRing)
+	e.steers.runs = e.runSteers
+}
+
+// reviewWatch is [scripted], recording what its reviewer is opened with.
+type reviewWatch struct {
+	scripted
+	mu      sync.Mutex
+	reviews []string
+}
+
+func (r *reviewWatch) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if req.Tools != nil {
+		if offered, err := offeredTo(req); err == nil && offers(offered, runner.SubmitReviewTool) {
+			var b strings.Builder
+			for _, m := range req.Messages {
+				b.WriteString(m.Content)
+				b.WriteString("\n")
+			}
+			r.mu.Lock()
+			r.reviews = append(r.reviews, b.String())
+			r.mu.Unlock()
+		}
+	}
+	return r.scripted.Complete(ctx, req)
+}
+
+// reviewed is what the reviewer was opened with, every round.
+func (r *reviewWatch) reviewed() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.reviews)
+}
+
+// steerCase is a seat whose turn parks on its coding run, steerable, played by
+// a CLI that does pull with the run's bridge before its script.
+type steerCase struct {
+	e     *Engine
+	rig   *runRig
+	q     *memory.Queue
+	model *reviewWatch
+
+	// dial, when set, is the address the CLI dials instead of the one it
+	// was launched with: its node restarted under it.
+	mu   sync.Mutex
+	dial string
+}
+
+// pull is what a run's CLI does with its bridge before its script: its hooks
+// and its plugin, played by a case.
+type pull func(ctx context.Context, session *mcp.ClientSession, row func() sandbox.PendingRun)
+
+func newSteerCase(t *testing.T, before pull) *steerCase {
+	t.Helper()
+	model := &reviewWatch{}
+	e, _ := indicatingWith(t, notify.StatusAlways, model)
+	steerable(t, e)
+	c := &steerCase{e: e, q: e.backends.Queue.(*memory.Queue), model: model}
+	script := modelPlayer(t, model.run)
+	client := httpxtest.Pool(t)
+	c.rig = rigRuns(t, e, func(ctx context.Context, req sandbox.RunRequest) sandbox.Result {
+		endpoint := req.MCPServers[config.ToolServerName].URL
+		c.mu.Lock()
+		if c.dial != "" {
+			endpoint = c.dial
+		}
+		c.mu.Unlock()
+		if before != nil {
+			session, err := mcp.NewClient(&mcp.Implementation{Name: "claude-code", Version: "1"}, nil).
+				Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: client}, nil)
+			if err != nil {
+				return sandbox.Result{Error: "connecting to the bridge: " + err.Error()}
+			}
+			before(ctx, session, func() sandbox.PendingRun {
+				// THE CASE'S ONE TURN: every case here parks run-1.
+				row, _, _ := e.sandbox.Load().pending.Get(ctx, "run-1")
+				return row
+			})
+			_ = session.Close()
+		}
+		req.MCPServers = map[string]sandbox.MCPServer{config.ToolServerName: {URL: endpoint}}
+		return script(ctx, req)
+	})
+	return c
+}
+
+// file files a note to runID's turn as steer_turn does once the run is out.
+func (c *steerCase) file(t *testing.T, runID, id, text string) {
+	t.Helper()
+	filed, err := c.e.RunSteers().File(t.Context(), runID, steer.Note{
+		ID: id, Text: text, By: "founder", ByKind: iam.ActorHuman, OperatorID: "session:f",
+	})
+	if err != nil || filed.Status != steer.StatusAccepted {
+		t.Fatalf("filing %s = %+v, %v", id, filed, err)
+	}
+}
+
+// steered is every agent_turn_steered the case's queue has carried.
+func (c *steerCase) steered() []*events.Event {
+	var out []*events.Event
+	for _, ev := range c.q.History() {
+		if ev.Type == (types.AgentTurnSteered{}).EventType() {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// awaitSteered waits until the queue has carried n records of what became of a
+// note, and answers them.
+func (c *steerCase) awaitSteered(t *testing.T, n int) []types.AgentTurnSteered {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(c.steered()) < n && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	var out []types.AgentTurnSteered
+	for _, ev := range c.steered() {
+		rec, _ := events.DataAs[*types.AgentTurnSteered](ev)
+		out = append(out, *rec)
+	}
+	if len(out) < n {
+		t.Fatalf("%d records of a note were published, want %d", len(out), n)
+	}
+	return out
+}
+
+// takeAt is one steer_take a Claude Code hook makes, answered.
+func takeAt(ctx context.Context, session *mcp.ClientSession, args map[string]any) (string, bool, error) {
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: mcpbridge.SteerTool, Arguments: args})
+	if err != nil {
+		return "", false, err
+	}
+	var text []string
+	for _, content := range res.Content {
+		if tc, ok := content.(*mcp.TextContent); ok {
+			text = append(text, tc.Text)
+		}
+	}
+	return strings.Join(text, ""), res.IsError, nil
+}
+
+// batchTake is the hook after a batch of the main agent's tool calls, asked
+// again until it answers or its deadline passes — as the CLI asks at every
+// batch, the bridge answers from its view of the record, which follows a filing
+// by a moment.
+func batchTake(ctx context.Context, session *mcp.ClientSession) (string, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, failed, err := takeAt(ctx, session, map[string]any{"event": "PostToolBatch", "agent": ""})
+		if err != nil || failed {
+			return got, err
+		}
+		if got != "" || time.Now().After(deadline) {
+			return got, nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A NOTE TO A RUNNING RUN IS FILED ON ITS RECORD, sealed, where any node reads
+// it: the record holds the note under the person's request id and nothing of
+// its words in the clear, and steer_turn is told the run reads it at its next
+// step.
+func TestANoteToARunningRunIsFiledOnItsRecord(t *testing.T) {
+	t.Parallel()
+	c := newSteerCase(t, nil)
+	parkOnARun(t, c.e, c.rig, "run-1")
+	filed, err := c.e.RunSteers().File(t.Context(), "run-1", steer.Note{
+		ID: "req-1", Text: "use staging", By: "founder", ByKind: iam.ActorHuman})
+	if err != nil || filed.Status != steer.StatusAccepted || filed.Reads != steer.ReadsNextStep ||
+		filed.AgentHandle != "swe" {
+		t.Fatalf("File = %+v, %v, want accepted, read at the run's next step, on swe", filed, err)
+	}
+	row := c.rig.row(t, "run-1")
+	if len(row.Steer.Notes) != 1 || row.Steer.Notes[0].ID != "req-1" || !row.Steer.Notes[0].Waiting() {
+		t.Fatalf("the record holds %+v, want the note waiting", row.Steer.Notes)
+	}
+	// THE SEAL IS THE ONLY COPY: nothing beside it on the record carries the
+	// note's words or who sent them for a reader to use without opening it.
+	bare := row
+	bare.Steer.Notes = []sandbox.RunNote{row.Steer.Notes[0]}
+	bare.Steer.Notes[0].Sealed = nil
+	if raw, err := json.Marshal(bare); err != nil || strings.Contains(string(raw), "use staging") ||
+		strings.Contains(string(raw), "founder") {
+		t.Errorf("the record carries the note beside its seal: %s", raw)
+	}
+	if _, ok := c.e.runSteers.open("run-1", row.Steer.Notes[0]); !ok {
+		t.Error("the note on the record does not open as this turn's")
+	}
+	if seat := c.e.runSteers.openSeat(row); seat.Agent != row.AgentID || seat.Handle != "swe" {
+		t.Errorf("the record's anchor opens as %+v, want the run's seat", seat)
+	}
+}
+
+// STEER_TAKE ANSWERS THE HOOK WITH THE NOTE: a Claude Code hook after a batch of
+// the main agent's calls is answered with the note as the hook's additional
+// context, in the shape the CLI reads — and the note is read there, by this
+// job, at that kind of step.
+func TestSteerTakeAnswersTheHookWithTheNote(t *testing.T) {
+	t.Parallel()
+	var answer string
+	var takeErr error
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+		answer, takeErr = batchTake(ctx, s)
+	})
+	parkOnARun(t, c.e, c.rig, "run-1")
+	c.file(t, "run-1", "req-1", "use staging")
+	launch := c.rig.row(t, "run-1").LaunchID
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if takeErr != nil {
+		t.Fatalf("steer_take: %v", takeErr)
+	}
+	if !strings.Contains(answer, `"hookEventName":"PostToolBatch"`) ||
+		!strings.Contains(answer, `"additionalContext":"## A note from founder`) ||
+		!strings.Contains(answer, "use staging") {
+		t.Fatalf("the hook was answered %q, want the note as its additional context", answer)
+	}
+	got := c.awaitSteered(t, 1)[0]
+	if got.Outcome != types.SteerDelivered || got.Phase != types.PhaseExecute ||
+		got.Boundary != types.SteerBoundaryToolBatch || got.LaunchID != launch || got.Round != 1 {
+		t.Errorf("the note was recorded %+v, want delivered in execute at a tool batch of job %s",
+			got, launch)
+	}
+}
+
+// A TAKEN NOTE IS RECORDED DELIVERED ONCE: the hook that took it is the only
+// step that reads it — the run's later hooks take nothing, and the reviewer,
+// which reads every note the turn has read, records none of them again.
+func TestATakenNoteIsRecordedDeliveredOnce(t *testing.T) {
+	t.Parallel()
+	var again string
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+		if _, err := batchTake(ctx, s); err != nil {
+			return
+		}
+		again, _, _ = takeAt(ctx, s, map[string]any{"event": "Stop", "agent": ""})
+	})
+	parkOnARun(t, c.e, c.rig, "run-1")
+	c.file(t, "run-1", "req-1", "use staging")
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if again != "" {
+		t.Errorf("the run's finish took the note again: %q", again)
+	}
+	c.awaitSteered(t, 1)
+	time.Sleep(200 * time.Millisecond)
+	if got := c.steered(); len(got) != 1 {
+		t.Errorf("%d records of the note were published, want one", len(got))
+	}
+}
+
+// THE REVIEWER OPENS WITH A NOTE THE RUN TOOK: the run's read is on its record,
+// so the segment that reviews the run carries it — the reviewer judges the
+// work against the note the work was steered by.
+func TestTheReviewerOpensWithANoteTheRunTook(t *testing.T) {
+	t.Parallel()
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+		_, _ = batchTake(ctx, s)
+	})
+	parkOnARun(t, c.e, c.rig, "run-1")
+	c.file(t, "run-1", "req-1", "use the staging database")
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	reviews := c.model.reviewed()
+	if len(reviews) == 0 {
+		t.Fatal("no reviewer ran")
+	}
+	if !strings.Contains(reviews[0], "use the staging database") {
+		t.Errorf("the reviewer opened without the note the run took:\n%s", reviews[0])
+	}
+}
+
+// A SUBAGENT'S BATCH TAKES NOTHING, and neither does a hook whose agent the CLI
+// did not fill in: a note handed to a delegated loop binds that piece of work
+// alone and is lost with it. Both leave the note waiting, for the main agent's
+// next boundary or — as here, where it has none — the reviewer.
+func TestASubagentsBatchTakesNothing(t *testing.T) {
+	t.Parallel()
+	var answers []string
+	var waiting []string
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, row func() sandbox.PendingRun) {
+		time.Sleep(200 * time.Millisecond)
+		for _, agent := range []string{"a1", "${agent_id}"} {
+			got, _, _ := takeAt(ctx, s, map[string]any{"event": "PostToolBatch", "agent": agent})
+			answers = append(answers, got)
+		}
+		for _, n := range row().Steer.Notes {
+			if n.Waiting() {
+				waiting = append(waiting, n.ID)
+			}
+		}
+	})
+	parkOnARun(t, c.e, c.rig, "run-1")
+	c.file(t, "run-1", "req-1", "use staging")
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	for _, got := range answers {
+		if got != "" {
+			t.Errorf("a subagent's hook was answered %q", got)
+		}
+	}
+	if !slices.Equal(waiting, []string{"req-1"}) {
+		t.Errorf("after the subagents' hooks the notes waiting were %v, want the note", waiting)
+	}
+	if got := c.awaitSteered(t, 1)[0]; got.Phase != types.PhaseReview || got.Boundary != types.SteerBoundaryRound {
+		t.Errorf("the note was recorded %+v, want read by the reviewer", got)
+	}
+}
+
+// STEER_TAKE IS NEVER LISTED: the CLI's model is offered the seat's tools and
+// never the hook's, which only the CLI calls.
+func TestSteerTakeIsNeverListed(t *testing.T) {
+	t.Parallel()
+	var listed []string
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+		tools, err := s.ListTools(ctx, nil)
+		if err != nil {
+			return
+		}
+		for _, tool := range tools.Tools {
+			listed = append(listed, tool.Name)
+		}
+	})
+	parkOnARun(t, c.e, c.rig, "run-1")
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(listed) == 0 {
+		t.Fatal("the run listed no tools, so this asserts nothing")
+	}
+	if slices.Contains(listed, mcpbridge.SteerTool) {
+		t.Errorf("the run's model is offered %s: %v", mcpbridge.SteerTool, listed)
+	}
+}
+
+// A NOTE THE RUN NEVER PULLED IS READ BY THE REVIEWER, at its first round: a CLI
+// that never asked between its steps — one with no reader, or a run that
+// finished first — leaves its notes waiting on the record, and the segment that
+// reviews the run takes them before its first provider call.
+func TestANoteTheRunNeverPulledIsReadByTheReviewer(t *testing.T) {
+	t.Parallel()
+	c := newSteerCase(t, nil)
+	parkOnARun(t, c.e, c.rig, "run-1")
+	c.file(t, "run-1", "req-1", "use the staging database")
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	got := c.awaitSteered(t, 1)[0]
+	if got.Outcome != types.SteerDelivered || got.Phase != types.PhaseReview || got.Round != 1 ||
+		got.Boundary != types.SteerBoundaryRound || got.LaunchID != "" {
+		t.Errorf("the note was recorded %+v, want delivered at the reviewer's round 1", got)
+	}
+	if reviews := c.model.reviewed(); len(reviews) == 0 || !strings.Contains(reviews[0], "use the staging database") {
+		t.Errorf("the reviewer's first round did not read the note: %v", reviews)
+	}
+}
+
+// A RUN IS STEERABLE AFTER ITS LAUNCHING NODE RESTARTS: nothing that holds a note
+// lives in one process, so a note filed by another node onto a run whose bridge
+// was opened again after a restart reaches the run's CLI there — and a note the
+// run read before the restart is still the turn's, carried into its review.
+func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
+	t.Parallel()
+	var answer string
+	c := newSteerCase(t, func(ctx context.Context, s *mcp.ClientSession, _ func() sandbox.PendingRun) {
+		answer, _, _ = takeAt(ctx, s, map[string]any{"event": "Stop", "agent": ""})
+	})
+	endpoint := parkOnARun(t, c.e, c.rig, "run-1")
+	row := c.rig.row(t, "run-1")
+
+	// BEFORE THE RESTART the run reads one note at a batch.
+	c.file(t, "run-1", "req-before", "use the staging database")
+	before := c.e.runSteers.inbox(identityOfRun(row), 1, row.CodingAgent)
+	before.Bind(t.Context(), row.LaunchID)
+	if got := before.Take(t.Context(), mcpbridge.SteerEventFinish); !strings.Contains(got, "staging") {
+		t.Fatalf("the run did not read its first note before the restart: %q", got)
+	}
+	before.Close()
+
+	// THE NODE RESTARTS: a fresh bridge holding nothing, and the seat taken
+	// back. ANOTHER NODE files the second note, on the record.
+	dialed := restartBridge(t, c.e, endpoint)
+	seals, err := newSteerSeals(steerRing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := newRunSteers(seals, sandbox.NewCoordStore(c.e.backends.Fleet), c.e.backends.Queue)
+	if filed, err := other.File(t.Context(), "run-1", steer.Note{ID: "req-after",
+		Text: "and tag the release", By: "founder"}); err != nil || filed.Status != steer.StatusAccepted {
+		t.Fatalf("another node's filing = %+v, %v", filed, err)
+	}
+	c.e.reopenAgentRun(t.Context(), c.rig.row(t, "run-1"))
+	c.mu.Lock()
+	c.dial = dialed
+	c.mu.Unlock()
+
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if !strings.Contains(answer, "and tag the release") {
+		t.Errorf("the run's CLI was not handed the note after the restart: %q", answer)
+	}
+	reviews := c.model.reviewed()
+	if len(reviews) == 0 || !strings.Contains(reviews[0], "use the staging database") ||
+		!strings.Contains(reviews[0], "and tag the release") {
+		t.Errorf("the reviewer did not carry both notes the run read: %v", reviews)
+	}
+}
+
+// failingStore is a run store whose reads and takes fail, or whose watch never
+// hears — the two ways a run's inbox can be left without the record.
+type failingStore struct {
+	sandbox.PendingStore
+	reads     bool
+	deafWatch bool
+}
+
+func (s failingStore) Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error) {
+	if s.reads {
+		return sandbox.PendingRun{}, false, context.DeadlineExceeded
+	}
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+func (s failingStore) TakeNotes(ctx context.Context, turnID string, take sandbox.NoteTake) ([]sandbox.RunNote, error) {
+	if s.reads {
+		return nil, context.DeadlineExceeded
+	}
+	return s.PendingStore.TakeNotes(ctx, turnID, take)
+}
+
+func (s failingStore) WatchNotes(ctx context.Context, turnID string) (<-chan sandbox.NotesView, error) {
+	if s.deafWatch {
+		never := make(chan sandbox.NotesView)
+		go func() {
+			<-ctx.Done()
+			close(never)
+		}()
+		return never, nil
+	}
+	return s.PendingStore.WatchNotes(ctx, turnID)
+}
+
+// A STORE FAILURE ANSWERS EMPTY, NEVER AN ERROR: a hook whose call failed makes
+// Claude Code drop and re-initialise the run's whole bridge, so a take the
+// record cannot serve is answered with nothing, the note waits for the next
+// step, and a read that could not be written is the poller's to retry.
+func TestAStoreFailureAnswersEmptyNeverAnError(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	broken, _ := steersOver(t, steerRing, failingStore{PendingStore: store, reads: true})
+	inbox := boundInbox(t, broken, store, "run-1", launch)
+	for _, event := range []string{mcpbridge.SteerEventToolBatch, mcpbridge.SteerEventFinish} {
+		if got := inbox.Take(t.Context(), event); got != "" {
+			t.Errorf("a take the record could not serve at %s answered %q", event, got)
+		}
+	}
+	if err := inbox.Read(t.Context(), []string{"n-1"}); err == nil {
+		t.Error("a read that could not be written answered done")
+	}
+	if _, waiting := recordedNotes(t, store, "run-1"); !slices.Equal(waiting, []string{"n-1"}) {
+		t.Errorf("the note does not wait after the failures: %v", waiting)
+	}
+}
+
+// THE FINISH READS THE STORE EVEN WHEN THE VIEW IS STALE: the run's last
+// boundary is its last chance to read a note in its own loop, so it asks the
+// record itself, where a batch answers from a view one write behind.
+//
+// Mutation: answer the finish from the view, and the note is missed.
+func TestStopReadsTheStoreEvenWhenTheViewIsStale(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, failingStore{PendingStore: store, deafWatch: true})
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	if got := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch); got != "" {
+		t.Fatalf("a batch answered %q from a view that never heard the record", got)
+	}
+	if got := inbox.Take(t.Context(), mcpbridge.SteerEventFinish); !strings.Contains(got, "use staging") {
+		t.Errorf("the finish answered %q, want the note the record holds", got)
+	}
+}
+
+// A RUN PARKED ON ITS QUESTION HOLDS ITS NOTES FOR WHAT RESUMES IT: a note to it
+// is read after the answer — so steer_turn says — its CLI takes nothing while it
+// waits, and the launch that carries the answer carries the notes in its brief,
+// read there by the new job.
+func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-before", Text: "use staging", By: "founder"})
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+
+	if err := store.AttachSandbox(ctx, "run-1", sandbox.BoxRef{SandboxID: "box-1",
+		CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAwaiting(ctx, "run-1", sandbox.Clarification{Question: "which branch?",
+		Audience: "requester", Branch: "wip/run-1", AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	filed, err := runs.File(ctx, "run-1", steer.Note{ID: "n-parked", Text: "and tag it", By: "founder"})
+	if err != nil || filed.Status != steer.StatusAccepted || filed.Reads != steer.ReadsAfterAnswer {
+		t.Fatalf("a note to the parked run = %+v, %v, want accepted and read after the answer", filed, err)
+	}
+	if got := inbox.Take(ctx, mcpbridge.SteerEventFinish); got != "" {
+		t.Errorf("the parked run's CLI took %q", got)
+	}
+
+	// THE ANSWER ARRIVES and is claimed; the relaunch carries the notes.
+	if _, ok, err := store.RecordAnswer(ctx, "run-1", launch, sandbox.RecordedAnswer{
+		Sealed: []byte("sealed"), Via: types.AnswerViaChat, EventIDs: []string{"ev-1"},
+	}, sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("RecordAnswer = %v, %v", ok, err)
+	}
+	claimed, ok, err := store.ClaimForResume(ctx, "run-1", sandbox.RecordedAnswerTail(launch), sandbox.Fence{})
+	if err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	source := runs.source(ctx, claimed, sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch})
+	t.Cleanup(source.Close)
+	brief := source.Brief(ctx)
+	if len(brief) != 2 || brief[0].ID != "n-before" || brief[1].ID != "n-parked" {
+		t.Fatalf("the relaunch's brief carries %+v, want both notes, oldest first", brief)
+	}
+	sealed, err := runs.briefNotes("run-1", 2, brief)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relaunch := claimed
+	relaunch.BriefNotes = sealed
+	relaunched, err := store.BeginLaunch(ctx, relaunch, sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	carried := runs.carried(mustRow(t, store, "run-1"))
+	if len(carried) != 2 {
+		t.Fatalf("the turn carries %+v, want both notes read", carried)
+	}
+	for _, read := range carried {
+		if read.Boundary != types.SteerBoundaryBrief || read.Launch != relaunched.LaunchID {
+			t.Errorf("note %s was read %+v, want in the brief of job %s", read.ID, read.Reading,
+				relaunched.LaunchID)
+		}
+	}
+}
+
+// mustRow is turnID's record.
+func mustRow(t *testing.T, store sandbox.PendingStore, turnID string) sandbox.PendingRun {
+	t.Helper()
+	row, found, err := store.Get(t.Context(), turnID)
+	if err != nil || !found {
+		t.Fatalf("Get %s = %v, %v", turnID, found, err)
+	}
+	return row
+}
+
+// AN ENDING EXPIRES ITS WAITING NOTES ONCE, UNDER STABLE IDS: the step an ending
+// takes before it deletes the record records every note still waiting as
+// expired, at the ending's instant and under ids derived from the turn, the
+// ending and the note — so an ending retried after a failure publishes the same
+// records, which a reader of the event log keeps once — and a note the turn
+// read is not expired.
+//
+// Mutation: publish under fresh ids, and the retry's records differ.
+func TestAnEndingExpiresWaitingNotesOnceUnderStableIDs(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, p := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-read", Text: "use staging", By: "founder"})
+	fileSealed(t, runs, "run-1", steer.Note{ID: "n-unread", Text: "and tag it", By: "founder"})
+	if _, err := store.TakeNotes(ctx, "run-1", sandbox.NoteTake{IDs: []string{"n-read"}, Launch: launch,
+		Statuses: steerTakeStatuses, Read: sandbox.NoteRead{Phase: "execute", Boundary: "tool_batch",
+			Launch: launch}}); err != nil {
+		t.Fatal(err)
+	}
+	run := mustRow(t, store, "run-1")
+	run.Ending = &sandbox.RecordedEnding{ID: "end-1", At: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}
+	for range 2 {
+		if err := runs.expired(ctx, run); err != nil {
+			t.Fatalf("expired: %v", err)
+		}
+	}
+	p.mu.Lock()
+	published := slices.Clone(p.events)
+	p.mu.Unlock()
+	if len(published) != 2 || published[0].ID != published[1].ID {
+		t.Fatalf("the ending and its retry published %d records (%v), want one record twice", len(published),
+			published)
+	}
+	rec, _ := events.DataAs[*types.AgentTurnSteered](published[0])
+	if rec.NoteID != "n-unread" || rec.Outcome != types.SteerExpired || rec.Boundary != "" ||
+		!published[0].Timestamp.Equal(run.Ending.At) {
+		t.Errorf("the ending recorded %+v at %v, want the unread note expired at the ending's instant",
+			rec, published[0].Timestamp)
+	}
+	other := run
+	other.Ending = &sandbox.RecordedEnding{ID: "end-2", At: run.Ending.At}
+	if err := runs.expired(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.events[2].ID == published[0].ID {
+		t.Error("a different ending of the turn published under the same id")
+	}
+}
+
+// A LAUNCHED TURN'S LATE NOTE IS FILED ON ITS RECORD. The launch hands the
+// first segment's box over once the run is going, so a note that read "no
+// record" a moment before and was scattered to the node that held the box is
+// filed on the run's record by that node — answered as the record answers it,
+// never `closed` for a turn that is running.
+//
+// Mutation: drop the hand-over from the launch, and the segment's end closes
+// the box as an ended turn's.
+func TestALaunchedTurnsLateNoteIsFiledOnItsRecord(t *testing.T) {
+	t.Parallel()
+	c := newSteerCase(t, nil)
+	parkOnARun(t, c.e, c.rig, "run-1")
+	status, reads, seat, err := c.e.steers.offer(t.Context(), "run-1", steer.Note{
+		ID: "req-late", Text: "use staging", By: "founder", ByKind: iam.ActorHuman})
+	if err != nil || status != steer.StatusAccepted || reads != steer.ReadsNextStep || seat.handle != "swe" {
+		t.Fatalf("a late note to the launched turn answered (%s, %s, %+v, %v), want accepted on swe",
+			status, reads, seat, err)
+	}
+	row := c.rig.row(t, "run-1")
+	if len(row.Steer.Notes) != 1 || row.Steer.Notes[0].ID != "req-late" || !row.Steer.Notes[0].Waiting() {
+		t.Errorf("the run's record holds %+v, want the late note waiting", row.Steer.Notes)
+	}
+}

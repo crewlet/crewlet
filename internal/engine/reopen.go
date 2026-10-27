@@ -152,7 +152,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	for _, call := range run.BridgeCalls {
 		lastSeq = max(lastSeq, call.Seq)
 	}
-	if _, err := e.openBridge(ctx, &mcpbridge.Session{
+	session := &mcpbridge.Session{
 		RunID: run.TurnID, LastSeq: lastSeq, Handle: handle, Role: seat.Name,
 		Surface: surface, Ledger: ledger,
 		// AS THE LAUNCH OPENED IT, so the opening is refused or made on the
@@ -162,7 +162,16 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		// THE SEAT'S FENCE AS THIS NODE HOLDS IT NOW: the grant the launch
 		// was fenced on is another node's, or this one's before a restart.
 		Fence: e.seatFence(handle),
-	}, ledger, run.LaunchID); err != nil {
+	}
+	// AND THE RUN'S NOTE INBOX, built from its record alone — its turn, its
+	// job and its round — so a note to the turn reaches the run between its
+	// steps here as it did on the node that launched it (runsteer.go).
+	inbox := e.runSteers.inbox(identityOfRun(run), state.Round, run.CodingAgent)
+	if inbox != nil {
+		session.Steer = inbox
+	}
+	if _, err := e.openBridge(ctx, session, ledger, inbox, run.LaunchID); err != nil {
+		inbox.Close()
 		refuse("the bridge opened no session for the run's job", "error", err.Error())
 		return
 	}

@@ -99,7 +99,6 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalReassignmentBudget: {http.StatusConflict, httpjson.CodeReassignmentBudget},
 	crewletmcp.RefusalInboxFull:          {http.StatusConflict, httpjson.CodeInboxFull},
 	crewletmcp.RefusalNotRunning:         {http.StatusConflict, httpjson.CodeNotRunning},
-	crewletmcp.RefusalSteerUnsupported:   {http.StatusConflict, httpjson.CodeSteerUnsupported},
 	crewletmcp.RefusalBudgetExhausted:    {http.StatusConflict, httpjson.CodeBudgetExhausted},
 	crewletmcp.RefusalUnavailable:        {0, httpjson.CodeUnavailable},
 	crewletmcp.RefusalInternalError:      {http.StatusInternalServerError, httpjson.CodeInternalError},

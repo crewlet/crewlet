@@ -693,7 +693,9 @@ func (r *FakeRunner) Installed(sandboxID string) bool {
 	return r.installed[sandboxID]
 }
 
-// Started is every run request handed to Start, in order.
+// Started is every run request handed to Start, in order — whole, the steer
+// wiring a job was handed among it ([RunRequest.Steer]), so a case can play the
+// CLI's own side of the run against what the launch gave it.
 func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()

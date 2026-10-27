@@ -606,9 +606,6 @@ const (
 	// CodeNotRunning is a run or turn that is not running, or not waiting
 	// for what the call supplies.
 	CodeNotRunning Code = "not_running"
-	// CodeSteerUnsupported is a running turn whose runtime cannot take a
-	// note mid-turn.
-	CodeSteerUnsupported Code = "steer_unsupported"
 	// CodeBudgetExhausted is a call that would spend tokens refused because
 	// a window of the company's budget has no room left; nothing was spent.
 	CodeBudgetExhausted Code = "budget_exhausted"
@@ -1149,8 +1146,6 @@ var codes = map[Code]string{
 	CodeInboxFull: "The inbox holds as many marks as it may. Mark everything " +
 		"up to here read first.",
 	CodeNotRunning: "It is not running any more, or not waiting for this.",
-	CodeSteerUnsupported: "That turn cannot take a note: it runs in a coding " +
-		"agent's own loop.",
 	CodeBudgetExhausted: "The token budget for this window is spent, so " +
 		"nothing was spent on this. Raise it, or wait for the window to turn " +
 		"over.",

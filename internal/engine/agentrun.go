@@ -79,7 +79,14 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 // that job, and the job is on the run's durable row: a node that takes the
 // run over opens the same job's session again ([Engine.reopenAgentRun]), and
 // the token the box already holds reaches it.
-func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) error {
+//
+// AND WITH THE TURN'S NOTES (ADR-0059). The record the launch opens carries
+// the sealed anchor of the seat the run serves, and the notes the brief carries
+// ([runner.AgentRunRequest.Notes]), read by the job the write opens; the job's
+// session serves the run's note inbox, bound to the same job as its ledger; and
+// once the run is going, the turn's first segment hands what its box still
+// holds to the record ([steerDesk.handOff]).
+func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	e, company, handle := l.engine, l.company, l.seat.Handle()
 	// THE TURN'S OWN FENCE, the closure its runner was built with, asked
 	// again — never one built here. A fence captures the seat's grant when
@@ -90,11 +97,11 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// The turn's was built when the turn was admitted, which is the grant
 	// this launch has to still be covered by.
 	if req.Fence == nil {
-		return fmt.Errorf("seat %q's executor launch carries no fence from its turn; this "+
-			"is an assembly fault in the runner, not a setting", handle)
+		return runner.Launched{}, fmt.Errorf("seat %q's executor launch carries no fence from "+
+			"its turn; this is an assembly fault in the runner, not a setting", handle)
 	}
 	if err := req.Fence(); err != nil {
-		return err
+		return runner.Launched{}, err
 	}
 	var (
 		coordinator *sandbox.Coordinator
@@ -116,8 +123,8 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	manager := company.catalogue
 	if coordinator == nil || manager == nil || pending == nil ||
 		company.Config.Providers.Sandbox == nil {
-		return fmt.Errorf("seat %q's executor runs in a box, and this node has no sandbox "+
-			"runtime for this company: configure providers.sandbox", handle)
+		return runner.Launched{}, fmt.Errorf("seat %q's executor runs in a box, and this node "+
+			"has no sandbox runtime for this company: configure providers.sandbox", handle)
 	}
 	// NO BRIDGE IS A REFUSAL, not a degraded run. A coding agent with none
 	// of the seat's tools cannot answer anybody, cannot touch a ticket and
@@ -127,8 +134,8 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// case Open refuses is: the session is opened from inside the launch,
 	// and a refusal there costs a row opened and abandoned.
 	if e.bridge == nil {
-		return fmt.Errorf("an executor needs a tool bridge its box can dial, and this "+
-			"node has none: set %s to the fleet's address a box can reach (any node "+
+		return runner.Launched{}, fmt.Errorf("an executor needs a tool bridge its box can dial, "+
+			"and this node has none: set %s to the fleet's address a box can reach (any node "+
 			"serving the API, or a load balancer in front of them); a direct box on a "+
 			"node that serves the API reaches it on loopback without it",
 			mcpbridge.BaseURLVar)
@@ -138,8 +145,8 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// node that serves the API with no listener (api.port 0) is a second one
 	// the first message would send an operator past.
 	if !e.bridge.Reachable() {
-		return fmt.Errorf("an executor needs a node serving its tool bridge, and "+
-			"nothing here reaches it: this node serves the API with api.port 0, so "+
+		return runner.Launched{}, fmt.Errorf("an executor needs a node serving its tool "+
+			"bridge, and nothing here reaches it: this node serves the API with api.port 0, so "+
 			"it binds no listener for the bridge's route; set api.port, and point %s "+
 			"at the nodes that serve the API as a sandbox reaches them",
 			mcpbridge.BaseURLVar)
@@ -151,17 +158,17 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// otherwise be reported as a missing bridge URL, sending an operator to
 	// a variable that is set.
 	if _, err := mcpbridge.SeatOf(req.Surface); err != nil {
-		return fmt.Errorf("the executor's tool surface is bound to no seat, so a " +
-			"bridged call would have nobody to act as; this is an assembly fault " +
-			"in the runner, not a setting")
+		return runner.Launched{}, fmt.Errorf("the executor's tool surface is bound to no " +
+			"seat, so a bridged call would have nobody to act as; this is an assembly " +
+			"fault in the runner, not a setting")
 	}
 	if err := executorHeadroom(ctx, e.remainingFor(company, handle),
 		company.Config.TurnEngine.ExecutorFloor()); err != nil {
-		return err
+		return runner.Launched{}, err
 	}
 	member, agent, err := l.member(ctx, manager, req.OnFallback)
 	if err != nil {
-		return err
+		return runner.Launched{}, err
 	}
 
 	// THE CELL THE RUN GOES TO, resolved as the manager resolves it — the
@@ -178,9 +185,9 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// not on this host's loopback, and reaches the fleet only at the
 	// address the variable gives.
 	if e.bridge.Reaches(cell == sandbox.Direct) == "" {
-		return fmt.Errorf("an executor needs a tool bridge its box can dial, and a box in "+
-			"the %s cell cannot reach this node on its loopback: set %s to the fleet's "+
-			"address that box can reach", cell, mcpbridge.BaseURLVar)
+		return runner.Launched{}, fmt.Errorf("an executor needs a tool bridge its box can "+
+			"dial, and a box in the %s cell cannot reach this node on its loopback: set %s "+
+			"to the fleet's address that box can reach", cell, mcpbridge.BaseURLVar)
 	}
 
 	// The run's calls, and with each what they have cost the engine so far,
@@ -247,12 +254,27 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// a fallback launch on a later member is judged on that member's entry,
 	// never the chain's head.
 	if err = sandboxCredentials(agent, member.Key, handle, spec.Placement, run.env); err != nil {
-		return err
+		return runner.Launched{}, err
+	}
+
+	// THE TURN'S NOTES, sealed for the record the launch opens: the seat a
+	// person's authority is decided on, and what the brief carries, read by
+	// the job the write names — see runsteer.go.
+	ref := l.runTurnRef(ctx)
+	brief, err := e.runSteers.briefNotes(l.turn.RunID, req.Round, req.Notes)
+	if err != nil {
+		return runner.Launched{}, err
+	}
+	// AND THE RUN'S NOTE INBOX, which its session serves to its CLI between
+	// steps, bound to the job with the ledger once the job has a name.
+	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round, agent.Agent())
+	if inbox != nil {
+		session.Steer = inbox
 	}
 
 	var opened bool
-	_, err = coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
-		Turn:        l.runTurnRef(ctx),
+	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
+		Turn:        ref,
 		Spec:        spec,
 		Setup:       runEnv.setup,
 		MCPServers:  servers,
@@ -270,11 +292,13 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// A RUN CARRIED ON WITH A PERSON'S ANSWER, continued in its own
 		// session where the launch runs it in the asking run's box — see
 		// [runner.Asked].
-		Continue: sandboxContinuation(req.Continue),
-		Opened: func(launch string) (map[string]sandbox.MCPServer, error) {
-			bridge, openErr := e.openBridge(ctx, session, ledger, launch)
+		Continue:   sandboxContinuation(req.Continue),
+		SteerSeat:  e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
+		BriefNotes: brief,
+		Opened: func(launch string) (sandbox.Opening, error) {
+			opening, openErr := e.openBridge(ctx, session, ledger, inbox, launch)
 			opened = openErr == nil
-			return bridge, openErr
+			return opening, openErr
 		},
 		// THE SAME FENCE, asked again once the run's row exists — see
 		// [sandbox.LaunchRequest.Fence]: a stop that lands while this
@@ -284,8 +308,11 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	if err != nil {
 		if opened {
 			// The launch failed after the job's session opened, so
-			// nothing will ever close it on the completion path.
+			// nothing will ever close it on the completion path — and
+			// closing it closes its inbox.
 			e.bridge.Close(l.turn.RunID)
+		} else {
+			inbox.Close()
 		}
 		// A LAUNCH A PERSON'S STOP ENDED UNDER IT — its row's ending decided
 		// between the box and the job, so the attach was refused — is the
@@ -298,26 +325,36 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		decided, stopped := coordinator.LaunchStopped(l.turn.RunID)
 		switch {
 		case turn.Stopped(err):
-			return err
+			return runner.Launched{}, err
 		case stopped:
 			log.InfoContext(ctx, "executor_launch_stopped", "seat", handle, "turn_id", l.turn.RunID,
 				"error", err, "detail", "a person stopped the seat's running work while its "+
 					"executor was launching; the launch is ended and the turn stops")
-			return &stopError{pause: pauseOfStop(decided), handle: handle}
+			return runner.Launched{}, &stopError{pause: pauseOfStop(decided), handle: handle}
 		}
-		return err
+		return runner.Launched{}, err
 	}
-	return nil
+	// THE BOX'S NOTES GO TO THE RECORD NOW THAT THERE IS ONE: from here a
+	// note to the turn waits there, whichever node it reaches. Only once the
+	// run is going: a launch refused on any way out above leaves no record
+	// the notes could wait on — one it opened is ended with it — and the box
+	// keeps them.
+	e.steers.handOff(ctx, l.turn.RunID)
+	return runner.Launched{LaunchID: result.LaunchID}, nil
 }
 
 // openBridge opens a job's bridge session under the job's own name, with its
-// ledger bound to the same job, and answers the box's server entry for it:
+// ledger and its note inbox bound to the same job, and answers what the box is
+// given for it — its server entry, and where its CLI asks for its turn's notes:
 // [sandbox.LaunchRequest.Opened], for the launch, and the same opening for a
 // run taken over while it works ([Engine.reopenAgentRun]), whose box already
 // holds the endpoint and is never handed the one minted here.
+//
+// The inbox is bound once the session is open, never before: a session that
+// does not open serves no notes, and the caller closes the inbox.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
-	launch string,
-) (map[string]sandbox.MCPServer, error) {
+	inbox *runInbox, launch string,
+) (sandbox.Opening, error) {
 	ledger.bind(launch)
 	s.Launch = launch
 	endpoint := e.bridge.Open(ctx, s)
@@ -325,10 +362,18 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
 		// are every case Open refuses — said rather than assumed, because a
 		// box launched without its endpoint has none of the seat's tools.
-		return nil, fmt.Errorf("the tool bridge opened no session for run %s's job %s; "+
-			"this node's log says why (mcp_bridge_*)", s.RunID, launch)
+		return sandbox.Opening{}, fmt.Errorf("the tool bridge opened no session for run %s's "+
+			"job %s; this node's log says why (mcp_bridge_*)", s.RunID, launch)
 	}
-	return bridgeServer(endpoint), nil
+	inbox.Bind(ctx, launch)
+	opening := sandbox.Opening{Servers: bridgeServer(endpoint)}
+	if inbox != nil {
+		// THE SAME NAMES THE BRIDGE SERVES, so the box and the bridge cannot
+		// disagree about where the notes are.
+		opening.Steer = sandbox.SteerWiring{Server: config.ToolServerName,
+			Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)}
+	}
+	return opening, nil
 }
 
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox

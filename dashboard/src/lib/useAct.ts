@@ -62,6 +62,13 @@ export interface PressLabel {
   /** What happened, past tense, naming the object: "Assigned ENG-42 to Ana". */
   done: string;
   /**
+   * What the change came to, in the write's own words, read off the tool's
+   * answer — for a write whose answer says more than that it landed: a note
+   * the turn reads at its next step, or once its question is answered.
+   * Undefined, or an answer it cannot read, says the generic sentence.
+   */
+  landed?: (receipt: unknown) => string | undefined;
+  /**
    * The control draws what came back in place of a toast: an answer the
    * person asked for is shown where they asked, and a toast saying "Answered"
    * over the answer itself is the same fact twice. Applied, pending and
@@ -192,12 +199,18 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
               duration: 0,
             });
           } else {
-            toast.ok(press.label.done);
+            const said = press.label.landed?.(result.receipt);
+            if (said) toast.show({ variant: "success", title: press.label.done, message: said });
+            else toast.ok(press.label.done);
           }
           break;
         }
         case "pending":
-          toast.show({ variant: "info", title: press.label.done, message: PENDING_SENTENCE });
+          toast.show({
+            variant: "info",
+            title: press.label.done,
+            message: press.label.landed?.(result.receipt) ?? PENDING_SENTENCE,
+          });
           break;
         case "unknown":
           toast.show({

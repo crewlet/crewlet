@@ -370,6 +370,60 @@ describe("a person's note", () => {
     expect(screen.getByText("expired")).toBeTruthy();
   });
 
+  // A READ INSIDE A CODING RUN IS THE RUN'S: the engine's loop was parked
+  // while the run worked, so the note is drawn on the run's bar — the span
+  // the trace gives its job — and said as the kind of step that read it.
+  test("a read inside a coding run is drawn on the run's bar, in the words of its step", async () => {
+    const read = (note_id: string, ms: number, boundary: string) =>
+      event("agent_turn_steered", ms, {
+        note_id,
+        outcome: "delivered",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary,
+        launch_id: "L1",
+        note: `note ${note_id}`,
+      });
+    const events = [
+      ...PARKED,
+      read("b", 1_100, "brief"),
+      read("t", 2_000, "tool_batch"),
+      read("f", 3_000, "finish"),
+      read("s", 4_000, "step"),
+      // A RECORD FROM A BUILD BEFORE THE BOUNDARY was read at a round.
+      event("agent_turn_steered", 5_000, {
+        note_id: "old",
+        outcome: "delivered",
+        phase: "review",
+        iteration: 1,
+        round: 2,
+      }),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.boundary, m.spanId])).toEqual([
+      ["b", "brief", "run:L1"],
+      ["t", "tool_batch", "run:L1"],
+      ["f", "finish", "run:L1"],
+      ["s", "step", "run:L1"],
+      ["old", "round", "turn-1|review|1.r2"],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    for (const words of [
+      "read by the coding run in its brief of Execute",
+      "read by the coding run after a tool batch of Execute",
+      "read by the coding run as it was finishing of Execute",
+      "read by the coding run at its next step of Execute",
+      "read at round 2 of Review",
+    ]) {
+      expect(screen.getByText(new RegExp(words))).toBeTruthy();
+    }
+    // AND THE RUN'S ROW CARRIES THE MARK.
+    const run = screen.getByRole("button", { name: /Coding run/ });
+    expect(within(run).getByText("note")).toBeTruthy();
+  });
+
   // NAMED BY ITS HEADING, which a screen reader announces: an `aria-label` on
   // a plain `div` is ignored, so the list had no name and no landmark.
   test("the notes are a region a screen reader can find by name", async () => {

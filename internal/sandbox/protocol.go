@@ -656,7 +656,36 @@ type RunRequest struct {
 	// and an allowlist the engine could not enforce would be a claim rather
 	// than a control.
 	MCPServers map[string]MCPServer
+
+	// Steer is how the run's CLI reaches a person's notes to its turn while
+	// it works — see [SteerWiring]. The zero value takes no note inside the
+	// run: its notes wait for whatever reads the turn next, which is what a
+	// run with no tool bridge — the assistant's deep work — has. NEVER
+	// PERSISTED: it names the job's own endpoint, and a resumed turn's next
+	// launch is handed its own.
+	Steer SteerWiring
 }
+
+// SteerWiring is where a run's CLI asks for its turn's notes: one tool of the
+// MCP server the run's tool bridge is ([RunRequest.MCPServers]), which a hook
+// of the CLI's calls between its steps, and the URL of the bridge's notes
+// route, which a CLI that admits notes from a plugin of its own polls. The
+// engine fills it from the same names its bridge serves, so the box and the
+// bridge cannot disagree about them (internal/api/mcpbridge).
+type SteerWiring struct {
+	// Server is the name the bridge is listed under in the run's MCP
+	// configuration, and Tool the tool a hook calls on it — never listed,
+	// so no model is offered it.
+	Server string
+	Tool   string
+
+	// URL is the job's notes route: the bridge endpoint the box already
+	// dials, with the route's suffix.
+	URL string
+}
+
+// Set reports whether the wiring names anything a CLI could reach.
+func (w SteerWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // Run is the inline shape: start, wait, collect.
 //

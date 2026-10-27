@@ -1,6 +1,7 @@
 package steer_test
 
 import (
+	"slices"
 	"strconv"
 	"testing"
 
@@ -27,5 +28,29 @@ func TestTheDashboardBoundsANoteAtTheEnginesCap(t *testing.T) {
 	if client != steer.MaxNoteRunes {
 		t.Errorf("the dashboard bounds a note at %d characters and the engine at %d — "+
 			"change it in contract/steer.ts to the engine's figure", client, steer.MaxNoteRunes)
+	}
+}
+
+// THE DASHBOARD KNOWS WHEN EVERY NOTE IS READ, read out of its own source.
+//
+// steer_turn answers when the turn will read a note it took (`reads`), and the
+// Steer dialog says so in words chosen per value. A value the engine answers
+// that the dashboard does not list is told as the generic sentence — a note to
+// a run parked on its question announced as read at its next step — and one it
+// lists that the engine never answers is copy nobody can reach.
+func TestTheDashboardKnowsWhenANoteIsRead(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "STEER_READS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := clientsource.Strings(body)
+	engine := make([]string, 0, len(steer.ReadsAll))
+	for _, r := range steer.ReadsAll {
+		engine = append(engine, string(r))
+	}
+	if !slices.Equal(client, engine) {
+		t.Errorf("the dashboard lists %v as when a note is read and the engine answers %v — "+
+			"change STEER_READS in contract/steer.ts, and the dialog's words for each", client, engine)
 	}
 }

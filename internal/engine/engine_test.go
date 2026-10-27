@@ -96,7 +96,9 @@ func TestTheSeatListIsStable(t *testing.T) {
 // built only with one, and these cases are about building it.
 type noLaunch struct{}
 
-func (noLaunch) LaunchExecutor(context.Context, runner.AgentRunRequest) error { return nil }
+func (noLaunch) LaunchExecutor(context.Context, runner.AgentRunRequest) (runner.Launched, error) {
+	return runner.Launched{}, nil
+}
 
 func TestARunnerIsBuiltPerSeat(t *testing.T) {
 	t.Parallel()

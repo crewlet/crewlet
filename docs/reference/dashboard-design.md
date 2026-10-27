@@ -6737,11 +6737,16 @@ that can.
   its own value (`.fact-body`), never on a band a neighbour's two-line value
   can push away from it.
 - **The actions are the turn's.** *Steer* sends a note the turn reads at its
-  next round (`steer_turn`); it is held, with the reason, on a turn that has
-  ended and on one parked inside a coding agent's own loop, which reads no
-  notes. What became of a note is the turn's own `agent_turn_steered`, drawn
-  under the waterfall and at the round that read it — *delivered*, or
-  *expired — the turn finished before it read your note*. *Pause* is the seat's
+  next step (`steer_turn`) — offered on every turn still going, a turn parked
+  on its coding run included, whose note waits on the run's record, and held,
+  with the reason, only on a turn that has ended. The toast says when the turn
+  reads it, from the answer's `reads`: *at its next step*, or, for a run waiting
+  on a question, *once that is answered* (`lib/steer.ts`). What became of a note
+  is the turn's own `agent_turn_steered`, drawn under the waterfall and where it
+  was read — at the round, or for a read inside a coding run on the run's bar,
+  in the words of its step: *read by the coding run in its brief*, *after a
+  tool batch*, *as it was finishing*, *at its next step* — or *expired — the
+  turn finished before it read the note*. *Pause* is the seat's
   (with *Also stop the current turn*), *Open task* its item — by the task's
   id, since a turn's item carries no word on whether its key is one another
   task claimed first — and one menu

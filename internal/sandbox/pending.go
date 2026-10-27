@@ -1133,6 +1133,19 @@ type PendingRun struct {
 	// Every other relaunch is a new round, whose log starts empty.
 	Continues bool `json:"-"`
 
+	// Steer is the notes a person sent the run's turn from the run's launch
+	// to its turn's end, sealed, with the seat anchor authority to send one
+	// is decided on — see [RunSteer] and notes.go. Kept by every reset of the
+	// record: they are the TURN's, and a relaunch is the same turn.
+	Steer RunSteer `json:"steer,omitzero"`
+
+	// BriefNotes is TRANSIENT, an instruction to [PendingStore.BeginLaunch]
+	// as [PendingRun.Continues] is: the notes the job's brief carries, which
+	// the write that opens the job records read by it — a note the record
+	// holds already, and one it has never held (the turn's first segment's
+	// own), added already read. Never persisted as itself.
+	BriefNotes []RunNote `json:"-"`
+
 	// Prior is TRANSIENT as well: on the row a relaunch's
 	// [PendingStore.BeginLaunch] answers, the box the row named before the
 	// reset moved it onto the new job — its id, the cell that holds it, the
@@ -1278,6 +1291,16 @@ type PendingStore interface {
 	// launch told nothing went on to start a job on a row that never named
 	// it, in a box nothing would reclaim. A row that went between the create
 	// and the reset is created again.
+	//
+	// THE TURN'S NOTES ([PendingRun.Steer]) ARE KEPT by a reset — every note,
+	// read or waiting, with its numbering and the seat anchor — and created
+	// with the row: the anchor the launch sealed ([RunSteer.Seat]), written
+	// on a reset only where the row has none. Whether a job's CLI asked for
+	// them ([RunSteer.Pulled]) is the job's, and starts empty. And the notes
+	// the job's brief carries ([PendingRun.BriefNotes]) are recorded READ BY
+	// THE JOB THIS WRITE OPENS, in the same write — a note the row holds and
+	// one it has never held alike — so the job's own CLI can never take
+	// them again.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
@@ -1689,6 +1712,50 @@ type PendingStore interface {
 	// fact about the broker, true whoever published them. FALSE IS NOT AN
 	// ERROR — a run that is gone, or copies a peer already cleared.
 	ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error)
+
+	// FileNote files a person's note on a run's record ([RunSteer]), waiting,
+	// and answers what became of it with the record as it was written or —
+	// for any other answer — as the filing found it.
+	//
+	// IN EVERY LIVE STATUS, while the record exists and its ending is not
+	// decided: a note to a turn whose run is working, parked on a question
+	// or being collected is held for whatever reads the turn next. A note
+	// whose id the record holds is [NoteDuplicate], and nothing is added; a
+	// turn that holds [NoteFiling.MaxNotes] notes is [NoteSpent], and one with
+	// [NoteFiling.MaxWaiting] waiting [NoteFull]; a decided ending, or no
+	// record at all, is [NoteClosed]. NONE OF THOSE IS AN ERROR.
+	//
+	// NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an
+	// append to the turn, never an ownership decision. The note must carry
+	// its id and its seal; the store opens nothing.
+	FileNote(ctx context.Context, turnID string, filing NoteFiling) (NoteFiled, PendingRun, error)
+
+	// TakeNotes records the notes a take names read, where its Read says,
+	// and answers the ones THIS CALL recorded — each with its read. Pinned to
+	// the take's job, its statuses, an undecided ending and its lease
+	// ([NoteTake]); a take that fails any of them, a note no longer waiting
+	// and a record that is gone are each nothing taken, never an error.
+	//
+	// THE READ IS THE HANDOVER: a caller hands a note to a model only once
+	// this has recorded it read, so a note is never delivered twice by two
+	// takers racing for it, nor delivered without a record that says so.
+	TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error)
+
+	// MarkPulled records that the job named has asked for its notes at least
+	// once ([RunSteer.Pulled]), reporting whether this call recorded it.
+	// FALSE IS NOT AN ERROR: the record holds another job, already says so,
+	// or is gone.
+	MarkPulled(ctx context.Context, turnID, launch string) (bool, error)
+
+	// WatchNotes follows one run's notes: the record's state when the watch
+	// began — [NotesView.Found] false where it has none — then each state it
+	// reaches, as [coord.SandboxRuns.WatchSandboxRun] delivers them, each
+	// decoded only as far as a [NotesView] reads. A reader slower than the
+	// record is handed the newest state, never a queue of older ones.
+	//
+	// A CLOSED CHANNEL IS NOT A DELETE: the watcher has stopped hearing,
+	// keeps what it last knew and watches again.
+	WatchNotes(ctx context.Context, turnID string) (<-chan NotesView, error)
 }
 
 // ConversationRef is where an arriving delivery came from, as a parked run is

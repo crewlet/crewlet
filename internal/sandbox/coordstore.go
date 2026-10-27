@@ -132,17 +132,24 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// one's. Only the model and the entry it runs on are the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model,
 		ProviderKey: run.Launch.ProviderKey}
-	raw, err := encodeRun(run)
+	// THE TURN'S NOTES START HERE, on a record the launch creates: the seat
+	// anchor the caller sealed, and the brief's notes, read by this job —
+	// see [PendingStore.BeginLaunch]. Nothing else of the caller's: a record
+	// made here holds no note it did not hand over.
+	created := run
+	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
+	readBrief(&created.Steer, run.BriefNotes, run.LaunchID, now)
+	raw, err := encodeRun(created)
 	if err != nil {
 		return PendingRun{}, err
 	}
 	for range launchRounds {
-		created, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
+		made, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
 		if err != nil {
 			return PendingRun{}, fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
 		}
-		if created {
-			return run, nil
+		if made {
+			return created, nil
 		}
 		opened, reset, held, err := s.resetLaunch(ctx, run, fence)
 		if err != nil {
@@ -266,6 +273,18 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// it would tell this job's completion that its spend is already
 		// counted, and the company would never be billed for it.
 		existing.Charged, existing.CompanyCharged = false, false
+		// THE TURN'S NOTES ARE THE TURN'S, not the job's: every note, read
+		// or waiting, and their numbering stay, and so does the seat anchor
+		// — written here only where the record has none. What is the job's
+		// is whether its CLI asked for them ([RunSteer.Pulled]), which a new
+		// job has not; and the brief's notes are read BY THIS JOB, in the
+		// write that names it, so its CLI can never take them again.
+		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
+		if len(existing.Steer.Seat) == 0 {
+			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)
+		}
+		existing.Steer.Pulled = ""
+		readBrief(&existing.Steer, run.BriefNotes, run.LaunchID, s.clock())
 		return true
 	})
 	if err != nil {
@@ -1097,11 +1116,23 @@ func (s *CoordStore) mutateAny(ctx context.Context, turnID string, decide func(*
 func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
 	decide func(*PendingRun) bool,
 ) (PendingRun, bool, error) {
+	next, won, _, err := s.writeFound(ctx, turnID, live, decide)
+	return next, won, err
+}
+
+// writeFound is [CoordStore.write], answering as well whether the LAST attempt
+// found the record: decide is not asked about a record that is gone, so a
+// caller keeping what an earlier attempt decided — before it lost a race to a
+// write that removed the record — reads this to know that decision is not the
+// answer.
+func (s *CoordStore) writeFound(ctx context.Context, turnID string, live bool,
+	decide func(*PendingRun) bool,
+) (PendingRun, bool, bool, error) {
 	var (
 		next    PendingRun
 		refused error // the decision's own error, returned as it is
 	)
-	_, won, err := s.runs.MutateSandboxRun(ctx, turnID, func(record coord.Record) (coord.SandboxRunChange, error) {
+	last, won, err := s.runs.MutateSandboxRun(ctx, turnID, func(record coord.Record) (coord.SandboxRunChange, error) {
 		run, err := decodeRun(record)
 		if err != nil {
 			refused = err
@@ -1123,15 +1154,16 @@ func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
 		}
 		return coord.SandboxRunChange{Put: raw}, nil
 	})
+	found := last.Key != ""
 	switch {
 	case err != nil && refused != nil && errors.Is(err, refused):
-		return PendingRun{}, false, err
+		return PendingRun{}, false, true, err
 	case err != nil:
-		return PendingRun{}, false, fmt.Errorf("sandbox: update run %s: %w", turnID, err)
+		return PendingRun{}, false, found, fmt.Errorf("sandbox: update run %s: %w", turnID, err)
 	case !won:
-		return PendingRun{}, false, nil
+		return PendingRun{}, false, found, nil
 	}
-	return next, true, nil
+	return next, true, true, nil
 }
 
 // list decodes every record and returns the ones that match, oldest first.

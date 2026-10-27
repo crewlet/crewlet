@@ -168,6 +168,51 @@ test("pending tells the person this node has not applied it, and the reads wait 
   expect(session.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:901");
 });
 
+// A WRITE WHOSE ANSWER SAYS MORE SAYS IT: a press whose label reads the tool's
+// receipt (`landed`) is told in those words — a note the turn reads once its
+// question is answered is not "not applied yet" — and the generic sentence
+// stands where the receipt says nothing the label can read.
+test("a press that reads its receipt is told in the receipt's words", async () => {
+  engine(() =>
+    json(
+      { tool: "set_pins", outcome: "pending", receipt: { reads: "later" }, position: null },
+      200,
+    ),
+  );
+  function Said({ landed }: { landed: (receipt: unknown) => string | undefined }) {
+    const pin = useAct("set_pins");
+    return (
+      <WriteButton
+        write={pin}
+        onPress={() => void pin.run({ views: { add: ["v1"] } }, { done: "Pinned Triage", landed })}
+      >
+        Pin
+      </WriteButton>
+    );
+  }
+  const reading = (receipt: unknown) =>
+    (receipt as { reads?: string } | null)?.reads === "later" ? "It is read later." : undefined;
+  const view = render(
+    <ToastProvider>
+      <Said landed={reading} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText("It is read later.")).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/This node has not applied it yet/)).toBeNull();
+  view.unmount();
+
+  render(
+    <ToastProvider>
+      <Said landed={() => undefined} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText(/This node has not applied it yet/)).length).toBeGreaterThan(
+    0,
+  );
+});
+
 // UNKNOWN IS NEVER RETRIED ON ITS OWN, and a Retry the person presses sends
 // the SAME operation key: the engine takes it as the write's identity, so the
 // retry is the first attempt again rather than a second change.
