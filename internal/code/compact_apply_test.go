@@ -147,7 +147,7 @@ func TestACompactionCountsTheRowsItFinds(t *testing.T) {
 }
 
 // compactionDecidedIn runs one round of the compaction's decide over e's rows at now.
-func compactionDecidedIn(t *testing.T, e *estate, c Compaction, now time.Time) (compactDecision, error) {
+func compactionDecidedIn(t testing.TB, e *estate, c Compaction, now time.Time) (compactDecision, error) {
 	t.Helper()
 	var d compactDecision
 	err := e.db.Reader().Read(context.Background(), func(tx *sql.Tx) error {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -508,46 +509,180 @@ func BenchmarkApplyARetireSweep(b *testing.B) {
 // BenchmarkApplyACompaction is a compaction record APPLIED AND COMMITTED — the
 // time it holds the replicated estate's one write lane, on every data node —
 // into a repository of its own each iteration, holding MaxPacksPerRepo live
-// packs seeded outside the timer: inputs=8, 64 and MaxCompactInputs, each into
-// as many outputs as a compaction of that many inputs may write (at most
-// MaxCompactOutputs), so every arm is the most rows its input count can touch —
-// compactDecidedRows of them, every input retired and removed and every
-// output written.
+// packs seeded outside the timer:
 //
-// inputs=1024 is held under a third of statelog.ApplyTxTimeBudget, which a
-// record is checked against only at its boundary: it decides MaxCompactInputs,
-// which is halved until it is (doc.go's measured section).
+//   - inputs=8, 64 and MaxCompactInputs: a compaction of that many inputs
+//     into as many outputs as one of that many may write (at most
+//     MaxCompactOutputs), so every arm is the most rows its input count can
+//     touch — compactDecidedRows of them, every input retired and removed and
+//     every output written;
+//   - publication/inputs=0 and publication/inputs=1024: a PUBLICATION. The
+//     repository's chain is MaxPublishedLayers layers naming every live pack,
+//     MaxPacksPerRepo/MaxPublishedLayers of them a layer, each layer cut into
+//     MaxLayerParts parts and published as its packs arrived — every one
+//     decided and applied outside the timer. The publication's own layer, of
+//     MaxLayerParts parts, replaces every layer but the root — their
+//     MaxPublishedLayers−1 rows and their parts deleted — beside a repack of
+//     none of the packs they covered (545 rows) or of MaxCompactInputs of
+//     them into MaxCompactOutputs outputs: every bound at once, the 2 609
+//     rows compactDecidedRows counts. A publication's apply also reads what
+//     no other compaction's does — the chain whole before, 2 048 checksums
+//     here, and the live packs again for the recount after — so the widest
+//     record of the op is publication/inputs=1024, not inputs=1024.
+//
+// Every shape is held to what a committer forms: its proposal is Validated and
+// decided over the rows, outside the timer, before its record is applied.
+//
+// inputs=1024 and publication/inputs=1024 are held under a third of
+// statelog.ApplyTxTimeBudget, which a record is checked against only at its
+// boundary: MaxCompactInputs is halved until the first is, and a
+// publication's repack bounded below it until the second is (its doc, and
+// doc.go's measured section).
 func BenchmarkApplyACompaction(b *testing.B) {
 	quiet(b)
-	for _, inputs := range []int{8, 64, MaxCompactInputs} {
-		outputs := min(inputs, MaxCompactOutputs)
-		b.Run(fmt.Sprint("inputs=", inputs), func(b *testing.B) {
+	for _, arm := range []struct {
+		name        string
+		inputs      int
+		publication bool
+	}{
+		{"inputs=8", 8, false},
+		{"inputs=64", 64, false},
+		{fmt.Sprint("inputs=", MaxCompactInputs), MaxCompactInputs, false},
+		{"publication/inputs=0", 0, true},
+		{fmt.Sprint("publication/inputs=", MaxCompactInputs), MaxCompactInputs, true},
+	} {
+		outputs := min(arm.inputs, MaxCompactOutputs)
+		b.Run(arm.name, func(b *testing.B) {
 			e := openApplyEstate(b)
 			a := NewApplier()
 			b.ReportAllocs()
 			b.ResetTimer()
 			b.StopTimer()
 			for i := range b.N {
-				repo := fmt.Sprintf("repo-%06d", i)
+				// A UUID, as the committer takes a repository's id.
+				repo := fmt.Sprintf("0190f3c4-5b6a-7c8d-9e0f-%012d", i)
 				e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
-				e.seed(repo, 0, 0, MaxPacksPerRepo)
-				retire := make([]string, inputs)
-				for k := range retire {
-					retire[k] = fmt.Sprintf("%s-pack-%06d", repo, k)
+				var c Compaction
+				if arm.publication {
+					c = e.widestPublication(b, repo, e.seedChain(b, repo), arm.inputs)
+				} else {
+					e.seed(repo, 0, 0, MaxPacksPerRepo)
+					retire := make([]string, arm.inputs)
+					for k := range retire {
+						retire[k] = idOf(repo, k)
+					}
+					cid := statelog.NewOpID(applyClock, "")
+					add := make([]PackRef, outputs)
+					for k := range add {
+						add[k] = outputOf(cid, k, 1, applyClock)
+					}
+					c = Compaction{RepoID: repo, CompactionID: cid, Node: "node-a", Seen: codeAt(e.next - 1),
+						Retire: retire, Add: add}
 				}
-				cid := statelog.NewOpID(applyClock, "")
-				add := make([]PackRef, outputs)
-				for k := range add {
-					add[k] = outputOf(cid, k, 1, applyClock)
-				}
-				e.applyTimed(b, a, compactOf(b, repo, cid, retire, add...), compactDecidedRows(inputs, outputs, nil))
+				e.admitted(b, c)
+				e.applyTimed(b, a, recordOf(b, c), compactDecidedRows(len(c.Retire), len(c.Add), c.Layer))
 				if left := e.num(`SELECT live_packs FROM code_repos WHERE id = ?`, repo); left !=
-					int64(MaxPacksPerRepo-inputs+outputs) {
-					b.Fatalf("the compaction left %d live packs, want %d", left, MaxPacksPerRepo-inputs+outputs)
+					int64(MaxPacksPerRepo-arm.inputs+outputs) {
+					b.Fatalf("the compaction left %d live packs, want %d", left, MaxPacksPerRepo-arm.inputs+outputs)
+				}
+				if !arm.publication {
+					continue
+				}
+				// THE CHAIN IT LEAVES: the root and the layer, which covers
+				// every live pack the root does not.
+				if chain := e.chainOf(repo); len(chain) != 2 || chain[1] != c.Layer.LayerID {
+					b.Fatalf("the publication left the chain %v, want the root and %s", chain, c.Layer.LayerID)
+				}
+				if tail := e.num(`SELECT live_packs - published_packs FROM code_repos WHERE id = ?`, repo); tail != 0 {
+					b.Fatalf("the publication left %d live packs no layer covers, want none", tail)
 				}
 			}
 		})
 	}
+}
+
+// admitted fails b unless c is a compaction the committer takes and whose
+// decide over e's rows forms its record — so a record a benchmark applies is
+// one a committer appends, never one no build forms.
+func (e *estate) admitted(b *testing.B, c Compaction) {
+	b.Helper()
+	if err := (CompactionProposal{Compaction: c}).Validate(); err != nil {
+		b.Fatalf("the committer refuses the compaction's proposal: %v", err)
+	}
+	switch d, err := compactionDecidedIn(b, e, c, applyClock); {
+	case err != nil:
+		b.Fatalf("decide the compaction: %v", err)
+	case d.refusal != "":
+		b.Fatalf("the compaction is refused %s: %s", d.refusal, d.detail)
+	}
+}
+
+// widestLayer is a layer named for name over packs (git checksums) on base,
+// replacing replaces, its bytes cut into MaxLayerParts parts — the most rows
+// one layer writes, and deletes once it is replaced.
+func widestLayer(name, base string, replaces []string, packs ...string) LayerRef {
+	l := layerOver(name, base, replaces, applyClock, packs...)
+	l.Parts = make([]LayerPart, MaxLayerParts)
+	for i := range l.Parts {
+		l.Parts[i] = LayerPart{Object: objstore.KeyAt(applyClock),
+			Hash: objstore.HashOf([]byte(fmt.Sprint(name, i))), Size: LayerPartBytes}
+	}
+	l.MidxBytes, l.BitmapBytes = MaxLayerParts*LayerPartBytes-1<<20, 1<<20
+	return l
+}
+
+// seedChain publishes MaxPublishedLayers layers on repository id as its packs
+// arrive — MaxPacksPerRepo/MaxPublishedLayers packs seeded, then a layer of
+// MaxLayerParts parts over them on the layer before, decided over the rows
+// and applied — so the chain names every live pack and is one its committer
+// formed. It answers the layers, root first.
+func (e *estate) seedChain(b *testing.B, id string) []LayerRef {
+	b.Helper()
+	per := MaxPacksPerRepo / MaxPublishedLayers
+	chain := make([]LayerRef, 0, MaxPublishedLayers)
+	base := ""
+	for k := range MaxPublishedLayers {
+		e.seedPacks(id, k*per, per)
+		sums := make([]string, per)
+		for n := range sums {
+			sums[n] = sumOf(id, k*per+n)
+		}
+		c := publication(id, e.next-1, widestLayer(fmt.Sprint(id, "/", k), base, nil, sums...), nil)
+		e.admitted(b, c)
+		e.apply(recordOf(b, c))
+		chain = append(chain, *c.Layer)
+		base = c.Layer.LayerID
+	}
+	return chain
+}
+
+// widestPublication is the publication of repository id that replaces every
+// layer of chain but its root with one layer of MaxLayerParts parts, beside a
+// repack of inputs of the packs the replaced layers cover, the first after the
+// root's, into as many outputs as that many inputs may write: the layer covers
+// what the replaced layers did but those inputs, and the outputs.
+func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, inputs int) Compaction {
+	b.Helper()
+	per := MaxPacksPerRepo / MaxPublishedLayers
+	retire := make([]string, inputs)
+	for k := range retire {
+		retire[k] = idOf(id, per+k)
+	}
+	cid := statelog.NewOpID(applyClock, "")
+	add := make([]PackRef, min(inputs, MaxCompactOutputs))
+	sums := make([]string, 0, MaxPacksPerRepo)
+	for k := range add {
+		add[k] = outputOf(cid, k, 1, applyClock)
+		sums = append(sums, add[k].GitChecksum)
+	}
+	for n := per + inputs; n < MaxPacksPerRepo; n++ {
+		sums = append(sums, sumOf(id, n))
+	}
+	replaces := make([]string, 0, len(chain)-1)
+	for _, l := range chain[1:] {
+		replaces = append(replaces, l.LayerID)
+	}
+	return publication(id, e.next-1, widestLayer(id+"/top", chain[0].LayerID, replaces, sums...), retire, add...)
 }
 
 // BenchmarkPushHistoryBytes is what ONE PUSH LEAVES ON EVERY DATA NODE'S DISK:

@@ -883,14 +883,26 @@ const (
 	// code_packs — and one an output, so a compaction of MaxCompactInputs
 	// packs into MaxCompactOutputs is compactDecidedRows of them, 2 065, about
 	// half of MaxRecordRows; the record itself is about 45 bytes an input and
-	// 330 an output, some 52 KiB at the most, far under MaxRecordBytes.
-	// MEASURED, on one machine: BenchmarkApplyACompaction's inputs=1024 arm
-	// applies in 70 ms against a repository of MaxPacksPerRepo packs, under
-	// the third of statelog.ApplyTxTimeBudget (83 ms) a compaction's apply
-	// is held to (doc.go's measured section); a measurement past that third
-	// halves this until one is under. It bounds what this build's committer
-	// takes ([CompactionProposal.Validate]); the apply takes whatever a
-	// record carries, as a push's does.
+	// 330 an output, some 52 KiB at the most, far under MaxRecordBytes. A
+	// PUBLICATION's repack takes the same bound, and its record is the op's
+	// widest: beside those rows a layer of MaxLayerParts parts replacing
+	// MaxPublishedLayers − 1 layers of as many, 2 609 rows in all, about two
+	// thirds of MaxRecordRows, and the reads no other compaction's apply
+	// makes — the chain whole before, up to every live pack's checksum, and
+	// the live packs again for the recount after.
+	//
+	// MEASURED, on one machine, both against a repository of MaxPacksPerRepo
+	// packs: BenchmarkApplyACompaction's inputs=1024 arm applies in 62 ms,
+	// and its publication/inputs=1024 arm — the widest publication, every
+	// bound at once — in 68 ms, where its rows alone at the first's rate
+	// would have priced it at 78; both under the third of
+	// statelog.ApplyTxTimeBudget (83 ms) a compaction's apply is held to
+	// (doc.go's measured section). A measurement of inputs=1024 past that
+	// third halves this until it is under; one of the publication's alone
+	// bounds a publication's repack below this instead, halved until that
+	// arm is under, since its layer's rows are what it adds. It bounds what
+	// this build's committer takes ([CompactionProposal.Validate]); the
+	// apply takes whatever a record carries, as a push's does.
 	MaxCompactInputs = 1_024
 
 	// MaxCompactOutputs is the most outputs one compaction writes, all of

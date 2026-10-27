@@ -614,12 +614,13 @@
 //
 // ITS BOUNDS, each with its reason where it is defined: at most
 // [MaxCompactInputs] (1 024) inputs and [MaxCompactOutputs] (16) outputs, so
-// a record writes at most 2 065 rows (compactDecidedRows), about half of
-// [MaxRecordRows], and every output can be uploaded at once within
-// RecordWithin; outputs cut at [CompactPackBytes], the 1 GiB push ceiling, and
-// a pack FULL — merged by no later compaction — past [FullPackBytes] of pack
-// or [FullBundleBytes] of bundle; and the plan's own, [CompactFactor],
-// [CompactMinMerge], [CompactTargetPacks] and [MaxPacksPerRepo].
+// a compaction's record writes at most 2 065 rows (compactDecidedRows), about
+// half of [MaxRecordRows] — a publication's, the op's widest, 2 609 (below) —
+// and every output can be uploaded at once within RecordWithin; outputs cut
+// at [CompactPackBytes], the 1 GiB push ceiling, and a pack FULL — merged by
+// no later compaction — past [FullPackBytes] of pack or [FullBundleBytes] of
+// bundle; and the plan's own, [CompactFactor], [CompactMinMerge],
+// [CompactTargetPacks] and [MaxPacksPerRepo].
 //
 // THE BOUND HOLDS PUSHES BACK, never a compaction: a push carrying a pack into
 // a repository that holds [MaxPacksPerRepo] live packs, its batch's earlier
@@ -658,7 +659,12 @@
 // name, it names — the closure git's bitmap needs, since a layer over fewer
 // packs, a cut's full packs alone among them, is refused by git and writes no
 // bitmap. Its parts are held to the push's upload rule, at most
-// [MaxLayerParts] of [LayerPartBytes] each.
+// [MaxLayerParts] of [LayerPartBytes] each. Its record is the op's WIDEST:
+// beside a repack at the compaction's bounds, a layer of MaxLayerParts parts
+// replacing [MaxPublishedLayers] − 1 layers of as many is 2 609 rows
+// (compactDecidedRows), about two thirds of [MaxRecordRows], and its apply
+// alone reads the chain whole and the live packs again — held, measured, to
+// the third of statelog.ApplyTxTimeBudget a compaction's apply is (# Measured).
 //
 // THE APPLY REPLACES THE TOP: the replaced layers and their parts go — at
 // once, a derived row owes no grace — the layer takes its base's place plus
@@ -823,12 +829,23 @@
 // A COMPACTION RECORD (BenchmarkApplyACompaction, the record applied and
 // committed against a repository of [MaxPacksPerRepo] live packs, each arm
 // writing the most outputs its inputs allow, so the most rows its input count
-// can touch; on four E-cores of a Core Ultra 7 265U, one count of five
-// iterations): 2.7 ms for eight inputs, 5.3 ms for sixty-four, and 70 ms for
-// [MaxCompactInputs] — 2 065 rows — under the third of
-// statelog.ApplyTxTimeBudget (83 ms) that bound is held to, by a sixth: an
-// arm past the third on a slower machine halves MaxCompactInputs until it is
-// under.
+// can touch, and each shape Validated and decided over the rows before it is
+// applied; on two E-cores of a Core Ultra 7 265U at a load average of about
+// 3.5, in one bounded run, -benchtime 5x and one count: five iterations an
+// arm): 3.3 ms for eight inputs, 8.0 ms for sixty-four, and 62 ms for
+// [MaxCompactInputs] — 2 065 rows. A PUBLICATION over a chain of
+// [MaxPublishedLayers] layers naming every live pack, sixty-four a layer and
+// each of [MaxLayerParts] parts, whose layer of as many parts replaces every
+// layer but the root: 18.5 ms with no repack — 545 rows, the chain's 2 048
+// checksums read whole before and the live packs again for the recount — and
+// 68 ms beside a repack of MaxCompactInputs inputs into [MaxCompactOutputs]
+// outputs, every bound at once: 2 609 rows, the widest record of the op,
+// which its rows alone would have priced at 78 ms (2 609 at the 1 024-input
+// arm's rate): a layer's rows cost less each than an input's. Both
+// 1 024-input arms are under the third of statelog.ApplyTxTimeBudget (83 ms)
+// that bound is held to, the publication by 15 ms: an arm past the third on a
+// slower machine halves MaxCompactInputs — or, where the publication's alone
+// is past it, bounds a publication's repack below it — until it is under.
 //
 // A RECONCILE (BenchmarkAnUnchangedActivation): an activation that changes
 // nothing, over ten thousand declared repositories — the most a configuration
