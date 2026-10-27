@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -246,9 +247,10 @@ func TestATargetDateIsCoercedOnTheCompanysClock(t *testing.T) {
 	if got := r.project(worklet.ProjectDetailQuery{Project: "ENG"}).TargetDate; got != "2026-12-19" {
 		t.Errorf("the instant was stored as %q, want the day it falls on in Tokyo", got)
 	}
-	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "2026-12-19") {
-		t.Errorf("the write warned %v, want one sentence naming the stored day — "+
-			"the caller's value was changed", result.Warnings)
+	if len(result.Caveats) != 1 || result.Caveats[0].Code() != caveat.CodeDateTruncated ||
+		!strings.Contains(result.Caveats[0].Person(), "2026-12-19") {
+		t.Errorf("the write told the caller %+v, want one caveat naming the "+
+			"stored day: the caller's value was changed", result.Caveats)
 	}
 
 	nonsense := "end of the quarter"

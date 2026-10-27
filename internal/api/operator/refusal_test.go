@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
@@ -79,9 +80,12 @@ func TestAStoreFaultIsAFiveHundredWithNoRetryAfter(t *testing.T) {
 	if strings.Contains(detail, "/var/lib") || strings.Contains(fmt.Sprint(answer), "/var/lib") {
 		t.Errorf("the store's own error reached the client: %v", answer)
 	}
-	if !strings.Contains(detail, "log") || answer["tool"] != worklet.UpdateWorkItemTool {
-		t.Errorf("the fault's answer %v does not say where its reason is, or for "+
-			"which tool", answer)
+	message, _ := answer["message"].(string)
+	if detail != "" || !strings.Contains(message, "log") ||
+		answer["tool"] != worklet.UpdateWorkItemTool {
+
+		t.Errorf("the fault's answer %v does not say, in its code's own words, "+
+			"where its reason is, or for which tool", answer)
 	}
 
 	behind := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
@@ -98,12 +102,13 @@ func TestAStoreFaultIsAFiveHundredWithNoRetryAfter(t *testing.T) {
 	}
 }
 
-// A WRITER'S ERROR IS WORDED FOR WHOEVER READS IT, on the surfaces that call a
-// writer without a tool. The human write surface handed [operator.Fail] the
-// error's own text whatever it was, so a disk error's path was the `detail`;
-// [operator.FailWrite] tells a fault in fixed words and leaves its error to
-// the log, a condition in its own words with its hint, and the domain's
-// refusal as the domain composed it.
+// A WRITER'S ERROR IS NEVER THE DETAIL, on the surfaces that call a writer
+// without a tool. The human write surface handed [operator.Fail] the error's
+// own text whatever it was, so a disk error's path was the `detail`, and a
+// domain refusal's sentence (written for a model) after it. [operator.FailWrite]
+// answers each in its code's own sentence, a condition with its hint, and only
+// a refusal the writer worded for a person with a detail: those words
+// (ADR-0060).
 func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -115,22 +120,25 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		retry  bool
 	}{
 		{"a fault of the node", fmt.Errorf("worklet: read the ledger: %s", diskFault),
-			http.StatusInternalServerError, httpjson.CodeInternalError, "node's log", false},
+			http.StatusInternalServerError, httpjson.CodeInternalError, "", false},
 		{"a coordination store that did not answer",
 			fmt.Errorf("dial nats://10.0.0.7:4222: %w", coord.ErrUnavailable),
-			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			"The coordination store did not answer", true},
-		{"a refusal the domain composed",
-			fmt.Errorf("%w: the comment is longer than a comment may be", worklet.ErrInvalid),
-			http.StatusUnprocessableEntity, httpjson.CodeInvalid, "longer than", false},
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable, "", true},
+		{"a refusal the domain composed for a model",
+			fmt.Errorf("%w: the `body` is longer than a comment may be", worklet.ErrInvalid),
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid, "", false},
+		{"a refusal the domain worded for a person",
+			caveat.Saying(fmt.Errorf("%w: the `body` is longer than a comment may be",
+				worklet.ErrInvalid), caveat.CommentTooLong()),
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid,
+			caveat.CommentTooLong().Person(), false},
 		// THE ESTATE'S ROUTER FINDING NO DATA NODE TO RUN IT ON, which a
 		// write through this surface meets whenever every copy is out of
 		// service: a condition of the fleet, never a fault of this node,
-		// and told in fixed words — its detail names the nodes it asked.
+		// and its detail names the nodes it asked.
 		{"an estate nobody served",
 			&estate.ErrUnserved{Detail: "10.0.0.7: out_of_service: applier halted"},
-			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			"No data node could serve it", true},
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable, "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -141,13 +149,15 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 			if rec.Code != tc.status || body["error"] != string(tc.code) {
 				t.Fatalf("answered %d %v, want %d %s", rec.Code, body, tc.status, tc.code)
 			}
-			detail, _ := body["detail"].(string)
-			if !strings.Contains(detail, tc.says) {
-				t.Errorf("detail = %q, want it to say %q", detail, tc.says)
+			if detail, _ := body["detail"].(string); detail != tc.says {
+				t.Errorf("detail = %q, want %q", detail, tc.says)
 			}
-			for _, never := range []string{"/var/lib", "10.0.0.7"} {
-				if strings.Contains(detail, never) {
-					t.Errorf("detail = %q carries the error's own %q", detail, never)
+			if body["message"] != tc.code.Message() {
+				t.Errorf("message = %v, want the code's own sentence", body["message"])
+			}
+			for _, never := range []string{"/var/lib", "10.0.0.7", "`body`"} {
+				if strings.Contains(fmt.Sprint(body), never) {
+					t.Errorf("the answer %v carries the error's own %q", body, never)
 				}
 			}
 			after := rec.Header().Get("Retry-After")
@@ -211,8 +221,8 @@ func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 // are fixed: the router's name the node it asked.
 //
 // Mutation: drop the UnknownCause step from ClassifyWrite and this answers
-// 500; drop the ErrOutcomeUnknown arm from writeSentence and the node's name
-// reaches the answer.
+// 500; answer the writer's error as the detail and the node's name reaches the
+// answer.
 func TestAWriteNobodyAnsweredForIsAnsweredAsAnUnknown(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
@@ -225,8 +235,8 @@ func TestAWriteNobodyAnsweredForIsAnsweredAsAnUnknown(t *testing.T) {
 		body["op_id"] != key {
 		t.Fatalf("answered %d %v, want 503 with outcome unknown under the key", rec.Code, body)
 	}
-	if said, _ := body["tool_detail"].(string); said != builtin.Unanswered {
-		t.Errorf("tool_detail = %q, want the fixed words %q", said, builtin.Unanswered)
+	if said, has := body["tool_detail"]; has {
+		t.Errorf("an unknown answered a sentence of the router's: %v", said)
 	}
 	if strings.Contains(fmt.Sprint(body), "10.0.0.7") {
 		t.Errorf("the node the router asked reached the answer: %v", body)

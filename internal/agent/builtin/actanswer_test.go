@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -383,9 +384,12 @@ type ledgerFake struct {
 	script []statelog.Outcome
 	// failAt refuses the Nth write with a conflict, 1-based; 0 never.
 	failAt int
-	seq    uint64
-	calls  int
-	ops    []string
+	// stop, when set, is what a move, a removal or a restore answers beside
+	// the record its root landed: the walk over the rest stopped.
+	stop  error
+	seq   uint64
+	calls int
+	ops   []string
 }
 
 func newLedgerFake(outcome statelog.Outcome) *ledgerFake {
@@ -502,12 +506,21 @@ func (f *ledgerFake) MergeDuplicates(_ context.Context, opID, _, _ string, _ boo
 
 func (f *ledgerFake) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *worklet.Notify) (worklet.WriteResult, error) {
-	return f.written(opID)
+	return f.stopped(f.written(opID))
 }
 
 func (f *ledgerFake) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *worklet.Notify) (worklet.WriteResult, error) {
-	return f.written(opID)
+	return f.stopped(f.written(opID))
+}
+
+// stopped is a walk's answer: its root's record, and [ledgerFake.stop] where
+// one is set.
+func (f *ledgerFake) stopped(r worklet.WriteResult, err error) (worklet.WriteResult, error) {
+	if err == nil && f.stop != nil {
+		return r, f.stop
+	}
+	return r, err
 }
 
 // PlaceTask appends the two records a drag across lanes is, each at its own
@@ -536,7 +549,7 @@ func (f *ledgerFake) MoveTaskToProject(_ context.Context, opID, _, target string
 	_ *worklet.Notify) (worklet.WriteResult, error) {
 	r, err := f.written(opID)
 	r.Key = target + "-3"
-	return r, err
+	return f.stopped(r, err)
 }
 
 func (f *ledgerFake) WriteView(_ context.Context, opID string, _ worklet.View,
@@ -581,7 +594,7 @@ func (f *ledgerFake) WriteTags(_ context.Context, opID, _ string, _ worklet.TagE
 	return f.written(opID)
 }
 
-func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string) ([]string, []string, error) {
+func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string) ([]string, []caveat.Caveat, error) {
 	if _, err := f.record(opID); err != nil {
 		return nil, nil, err
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -220,6 +221,12 @@ func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 	}
 	if text, _ := warnings[0].(string); !strings.Contains(text, "ask") {
 		t.Errorf("the warning is %q and does not name the remedy", warnings[0])
+	}
+	// AND A PERSON'S SURFACE IS HANDED THE SAME CAVEAT, whose words for a
+	// person are what the act route answers: the model's sentence above
+	// names an argument a person has no control for.
+	if len(got.Caveats) != 1 || got.Caveats[0] != caveat.UnaddressedComment("pm") {
+		t.Errorf("the result carries %+v, want the unaddressed comment's caveat", got.Caveats)
 	}
 	// AND AN ASK SILENCES IT, because then somebody IS being asked.
 	trk.patched = nil

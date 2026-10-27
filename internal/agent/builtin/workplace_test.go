@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -212,8 +213,16 @@ func TestAnUnplacedLaneChangeIsReportedNotFailed(t *testing.T) {
 		t.Fatalf("a lane change that landed answered failed: %v %s", err, got.Output)
 	}
 	answer := decodeAnswer(t, got)
-	if answer["placed"] != false || !strings.Contains(fmt.Sprint(answer["unplaced"]), "changed the item") {
-		t.Errorf("the answer does not say the card missed its place: %v", answer)
+	warnings, _ := answer[builtin.WarningsKey].([]any)
+	if answer["placed"] != false || len(warnings) != 1 ||
+		!strings.Contains(fmt.Sprint(warnings[0]), "changed the item") {
+		t.Errorf("the answer does not tell the model the card missed its place: %v", answer)
+	}
+	if len(got.Caveats) != 1 || got.Caveats[0].Code() != caveat.CodeLaneChangedNotPlaced {
+		t.Errorf("the missed place is not a caveat a person's surface answers: %v", got.Caveats)
+	}
+	if _, kept := answer["unplaced"]; kept {
+		t.Errorf("the receipt still carries the model's sentence as a field: %v", answer)
 	}
 	if answer["status"] != "in_progress" || answer["position"] != at.String() ||
 		answer["outcome"] != string(statelog.OutcomeApplied) {

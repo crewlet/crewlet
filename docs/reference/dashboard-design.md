@@ -747,8 +747,8 @@ which the project routes as its own unassigned work — to its default assignee
 where it names one and the chart still holds that seat, else triage — and
 the field says which before the press. Where the company does not run
 Worklet, none of those doors is drawn (see the rule on services above). An applied create that came
-back with a caveat — the engine's `warnings` — says it in its toast rather
-than a plain "Filed". The sheet files project, title,
+back with a caveat (the act answer's `caveats`, in a person's words) says it in
+its toast rather than a plain "Filed". The sheet files project, title,
 description, type, status, assignee, priority, due and labels as ONE
 `create_work_item`, sending only the fields the person set (an unset one is the
 engine's default, never the sheet's guess of it); the type, status words and
@@ -772,8 +772,10 @@ empty, the field says where the task lands — the project's default assignee
 field's help line is its control's description, so a screen reader hears it
 with the field. `applied` opens the new task by the
 key the engine minted; `pending` closes with the not-yet-applied toast; a
-refusal stays in the sheet in the engine's own sentence, which names the
-argument it refused (drawn as a value, not in backticks). What the engine would
+refusal stays in the sheet in the words the engine wrote for a person (a
+title over its cap is "The title is too long"), or, for a refusal nobody has
+worded for one yet, in its kind's own sentence: never the tool's sentence to a
+model, which names arguments (ADR-0060). What the engine would
 refuse is said on the field BEFORE the press: the title and the description are
 counted in the engine's unit (UTF-8 bytes, against `worklet.MaxTitle`, 256, and
 `MaxBody`, 32 KiB, held by `contract/work.ts`), counting down in the last fifth
@@ -4302,7 +4304,7 @@ four, and each tells you something different:
 
 | Outcome | What you see |
 |---|---|
-| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. |
+| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. When the engine answered **caveats** beside the change, the toast carries them in a person's words: it stays until you dismiss it when one of them needs somebody to act (a project's default assignee who has left the chart), and goes by itself when they are only something to know (a time stored as its date). |
 | `pending` | "Sent. This node has not applied it yet." The re-read waits until this node has. |
 | `unknown` | "Could not confirm. It may have landed", which **stays** until you dismiss it, with Retry. |
 | refused | The engine's reason, beside the control that caused it, until your next press. |

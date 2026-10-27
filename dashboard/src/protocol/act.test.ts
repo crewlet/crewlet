@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { ACT_ERRORS } from "../contract/errors.ts";
 import { act, newActOpID } from "./act.ts";
+import { UNCONFIRMED_SENTENCE } from "./writeOutcome.ts";
 import { SessionFloors } from "./session.ts";
 import { currentSessionNeed, sessionRestored, setStepUpConfirmer } from "./signin.ts";
 
@@ -140,6 +141,64 @@ describe("what a change came to", () => {
     expect(heard).toEqual([["tracker", []]]);
   });
 
+  // A CAVEAT IS READ IN A PERSON'S WORDS, from `caveats`, and a receipt's
+  // `warnings` (written for a model, naming tools and arguments) is never read
+  // as one, whatever an engine sends there.
+  test("carries the caveats the engine answered for a person, and only those", async () => {
+    stub(async () =>
+      json(
+        {
+          ...APPLIED,
+          receipt: { views: ["v1"], warnings: ["Use ask: ana, if you expect a reply."] },
+          caveats: [
+            { code: "default_assignee_gone", message: "Assign it.", action: "required" },
+            { code: "body_links_capped", message: "Only some are linked.", action: "none" },
+            { code: "from_a_newer_engine", message: "Something new.", action: "escalate" },
+            { code: "no_words", message: " ", action: "none" },
+            "not a caveat",
+          ],
+        },
+        200,
+      ),
+    );
+    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    expect(result.kind).toBe("applied");
+    if (result.kind !== "applied") return;
+    expect(result.caveats).toEqual([
+      { code: "default_assignee_gone", message: "Assign it.", action: "required" },
+      { code: "body_links_capped", message: "Only some are linked.", action: "none" },
+      // AN ACTION THIS BUILD DOES NOT KNOW asks nothing: a toast nobody can
+      // say why it stays must not demand dismissal.
+      { code: "from_a_newer_engine", message: "Something new.", action: "none" },
+    ]);
+    expect(JSON.stringify(result.caveats)).not.toContain("ask:");
+  });
+
+  // A ROLLING UPGRADE: an older node answers no `caveats` and still carries
+  // its model's `warnings` on the receipt. The answer reads as one with
+  // nothing to add, and the model's words stay where nothing draws them.
+  test("an older node's answer, with no caveats and the model's warnings, adds nothing", async () => {
+    stub(async () =>
+      json(
+        {
+          ...APPLIED,
+          receipt: { views: ["v1"], warnings: ["Use ask: ana, if you expect a reply."] },
+        },
+        200,
+      ),
+    );
+    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    expect(result.kind).toBe("applied");
+    if (result.kind !== "applied") return;
+    expect(result.caveats).toEqual([]);
+  });
+
+  test("an answer with no caveats carries an empty list", async () => {
+    stub(async () => json(APPLIED, 200));
+    const result = await act("set_pins", {}, { floors: new SessionFloors() });
+    expect(result.kind === "applied" && result.caveats).toEqual([]);
+  });
+
   test("pending raises the floor too: the reads that follow wait for it", async () => {
     stub(async () => json({ ...APPLIED, outcome: "pending" }, 200));
     const floors = new SessionFloors();
@@ -178,6 +237,9 @@ describe("what a change came to", () => {
     expect((await act("set_pins", {}, { floors: new SessionFloors() })).kind).toBe("unknown");
   });
 
+  // THE ENGINE'S UNKNOWN IS TOLD IN A PERSON'S WORDS: its `detail` is the
+  // operation key's retry rule for a client sending the header, which a
+  // person never sees (ADR-0060).
   test("the engine saying an interrupted call's outcome is unknown is unknown", async () => {
     stub(async () =>
       json(
@@ -185,16 +247,15 @@ describe("what a change came to", () => {
           error: "unavailable",
           tool: "set_pins",
           outcome: "unknown",
-          detail: "the call was interrupted before it answered",
+          detail:
+            "Couldn't confirm this change was saved. Retry with the same op_id as the Idempotency-Key header.",
         },
         503,
       ),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });
-    expect(result).toMatchObject({
-      kind: "unknown",
-      reason: "the call was interrupted before it answered",
-    });
+    expect(result).toMatchObject({ kind: "unknown", reason: UNCONFIRMED_SENTENCE });
+    expect(JSON.stringify(result)).not.toMatch(/op_id|Idempotency-Key/);
   });
 
   test("the engine's unknown names the operation a retry sends again", async () => {
@@ -206,7 +267,7 @@ describe("what a change came to", () => {
       ),
     );
     const result = await act("set_pins", {}, { opId, floors: new SessionFloors() });
-    expect(result).toMatchObject({ kind: "unknown", opId, reason: "nobody can say" });
+    expect(result).toMatchObject({ kind: "unknown", opId, reason: UNCONFIRMED_SENTENCE });
   });
 
   // WHETHER WAITING CHANGES IT IS THE ENGINE'S TO SAY: a `503` it wrote
@@ -248,6 +309,16 @@ describe("what a change came to", () => {
       sentence: "status: no such status",
       retryable: false,
     });
+  });
+
+  // A REFUSAL NOBODY WORDED FOR A PERSON CARRIES NO DETAIL (ADR-0060), and
+  // its code's own sentence is the whole of what is shown.
+  test("an invalid refusal with no detail is shown in its code's own sentence", async () => {
+    const message =
+      "That change was refused, and nothing was written. Check what was entered, then try again.";
+    stub(async () => json({ error: "invalid", tool: "create_work_item", message }, 422));
+    const result = await act("create_work_item", {}, { floors: new SessionFloors() });
+    expect(result).toMatchObject({ kind: "refused", code: "invalid", sentence: message });
   });
 
   test("a stale version is shown in the dashboard's words", async () => {
