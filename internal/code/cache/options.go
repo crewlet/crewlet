@@ -105,10 +105,12 @@ type knobs struct {
 	hookStaged func(f *os.File)
 	// removing runs before the janitor removes each entry of trash/.
 	removing func(path string)
-	// measuring runs as the janitor's measure of scratch/ is about to list
-	// the directory at dir — scratch/ itself, then each directory a listing
-	// under it named: a case removes or replaces it there, as the host moves
-	// a view out from under a measure that has listed it.
+	// measuring runs as one of the janitor's measures is about to list the
+	// directory at dir — scratch/ itself, then each directory a listing under
+	// it named; and each cohort a copy's memo listing measures (one no state
+	// records): a case removes or replaces it there, or retires the copy that
+	// holds it, as the host moves a view out, or a purge a copy, from under a
+	// measure that has listed it.
 	measuring func(dir string)
 	// ticks, when set, is where the janitor takes its ticks from, in place
 	// of a ticker of EvictInterval: a case delivers a tick when it chooses

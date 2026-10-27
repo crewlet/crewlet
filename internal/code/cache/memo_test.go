@@ -867,17 +867,31 @@ func TestACopysMemoIsWrittenDownOnceATickAtMost(t *testing.T) {
 // the memo in one directory left them — which is no memo of this build's and
 // goes whole, unread. What the listing records, the tick writes down.
 //
+// The memo's lock keeps the tree still while it is listed, but not the copy:
+// a purge retires it and moves its directory into trash/ whole, with no memo
+// lock taken, between the listing that names a cohort and the measure that
+// opens it. That cohort is nothing to count and no failure, so nothing is
+// logged — code_cache_memo_unlisted says the copy is listed again at the next
+// pass, of a copy that is gone. A cohort still there that the measure cannot
+// read is logged: here one replaced by a file, the one such failure a case
+// can make whoever runs it.
+//
 // Mutations: pass over a cohort no state records (listMemo measuring nothing)
 // — the first row's record lacks it; keep a recorded cohort the tree no longer
 // holds — the second row's record keeps it; leave a tree of another layout's
-// names be — the third row's tree is still there.
+// names be — the third row's tree is still there; log a cohort gone from
+// under the measure (listMemo without its fs.ErrNotExist case) — the fourth
+// row logs it; excuse every error of a cohort's measure — the fifth row logs
+// nothing.
 func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 	t.Parallel()
 	block := memoEntry(0)
 	// crashed is a copy whose state a tick wrote over one run's four answers,
 	// then two runs more — the second in a cohort of its own — and a restart
-	// that kept that state; before runs before the restart.
-	crashed := func(t *testing.T, before func(dir string, first uint64)) (*cache.Cache, string, string, uint64) {
+	// that kept that state, the restarted cache opened with mutate; before
+	// runs before the restart.
+	crashed := func(t *testing.T, before func(dir string, first uint64),
+		mutate ...func(*cache.Options)) (*cache.Cache, string, string, uint64, *syncWorld) {
 		t.Helper()
 		w := newSyncWorld(t, onMemory)
 		repo := w.repo(t, 1)
@@ -897,12 +911,12 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		if before != nil {
 			before(dir, first)
 		}
-		return w.reopen(t, c), repo, dir, first
+		return w.reopen(t, c, mutate...), repo, dir, first, w
 	}
 
 	t.Run("a cohort no state records is counted", func(t *testing.T) {
 		t.Parallel()
-		c, repo, dir, first := crashed(t, nil)
+		c, repo, dir, first, _ := crashed(t, nil)
 		if st, _ := cache.MemoOf(c, repo); st.Listed || st.Bytes != 4*block {
 			t.Fatalf("the boot's record is %+v, want the tick's four answers, not yet listed", st)
 		}
@@ -932,7 +946,7 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 
 	t.Run("a recorded cohort gone is forgotten", func(t *testing.T) {
 		t.Parallel()
-		c, repo, _, first := crashed(t, func(dir string, first uint64) {
+		c, repo, _, first, _ := crashed(t, func(dir string, first uint64) {
 			if err := os.RemoveAll(cache.MemoCohortDir(dir, first)); err != nil {
 				t.Fatal(err)
 			}
@@ -966,6 +980,81 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 		if lines := w.logs.lines(t, "code_cache_memo_foreign"); len(lines) != 1 {
 			t.Errorf("code_cache_memo_foreign was logged %d times, want once for the tree", len(lines))
+		}
+	})
+
+	t.Run("a cohort gone with its copy under the listing is no failure", func(t *testing.T) {
+		t.Parallel()
+		var (
+			c         *cache.Cache
+			w         *syncWorld
+			repo, dir string
+			first     uint64
+			retired   bool
+		)
+		c, repo, dir, first, w = crashed(t, nil, func(o *cache.Options) {
+			cache.BeforeMeasuring(o, func(d string) {
+				// The listing has named the cohort no state records and is
+				// about to measure it: a purge takes the copy there.
+				if d == cache.MemoCohortDir(dir, first+1) {
+					retired = cache.Retire(c, repo)
+				}
+			})
+		})
+		cache.JanitorPass(c)
+		if !retired {
+			t.Fatal("the listing never came to measure the cohort no state records, so no purge met it")
+		}
+		if statOK(t, dir) {
+			t.Errorf("the purged copy's directory %s is still where it was", dir)
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_unlisted"); len(lines) != 0 {
+			t.Errorf("code_cache_memo_unlisted was logged %d times (%v) for a cohort gone with its copy, want never",
+				len(lines), lines)
+		}
+		if got := cache.MemoBytes(c); got != 0 {
+			t.Errorf("the node counts its memo at %d bytes once the one copy holding a memo is gone, want 0", got)
+		}
+	})
+
+	t.Run("a cohort the measure cannot read is logged", func(t *testing.T) {
+		t.Parallel()
+		var (
+			c         *cache.Cache
+			w         *syncWorld
+			repo, dir string
+			first     uint64
+			replaced  bool
+		)
+		c, repo, dir, first, w = crashed(t, nil, func(o *cache.Options) {
+			cache.BeforeMeasuring(o, func(d string) {
+				cohort := cache.MemoCohortDir(dir, first+1)
+				if d != cohort {
+					return
+				}
+				if err := os.RemoveAll(cohort); err != nil {
+					t.Error(err)
+					return
+				}
+				if err := os.WriteFile(cohort, []byte("no cohort"), 0o600); err != nil {
+					t.Error(err)
+					return
+				}
+				replaced = true
+			})
+		})
+		cache.JanitorPass(c)
+		if !replaced {
+			t.Fatal("the listing never came to measure the cohort no state records")
+		}
+		lines := w.logs.lines(t, "code_cache_memo_unlisted")
+		if len(lines) != 1 || lines[0]["cohort"] != float64(first+1) {
+			t.Errorf("code_cache_memo_unlisted was logged %d times (%v), want once, for cohort %d", len(lines),
+				lines, first+1)
+		}
+		if st, _ := cache.MemoOf(c, repo); st.Listed {
+			t.Errorf("the copy's record is %+v after a cohort of it could not be read, want it left to the next "+
+				"pass unlisted", st)
 		}
 	})
 }

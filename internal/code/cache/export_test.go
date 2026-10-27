@@ -82,9 +82,9 @@ func BeforeRemoving(o *Options, f func(path string)) {
 	o.knobs.removing = f
 }
 
-// BeforeMeasuring makes the janitor's measure of scratch/ call f as it is
-// about to list each directory there: scratch/ itself, then each directory a
-// listing under it named.
+// BeforeMeasuring makes the janitor's measures call f as each is about to
+// list a directory: scratch/ itself, then each directory a listing under it
+// named; and each memo cohort a copy's listing measures.
 func BeforeMeasuring(o *Options, f func(dir string)) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}

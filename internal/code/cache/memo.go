@@ -1043,8 +1043,11 @@ func (c *Cache) listMemos(ctx context.Context) {
 // holding anything but cohorts is no memo of this build's — a build of another
 // layout's, or something outside the engine's — and goes whole into trash/,
 // unread. Under the memo's lock, so nothing is placed, moved or removed in the
-// tree while it is read. A listing that fails leaves the copy to the next
-// pass.
+// tree while it is read — but the copy itself can go: a purge retires it, as
+// does the rebuild that replaced it once its last reader lets go, and its
+// directory moves into trash/ whole (Cache.trash), which no memo lock guards.
+// A cohort the listing named and then found gone is therefore nothing to
+// count and no failure. A listing that fails leaves the copy to the next pass.
 func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 	inc.memoMu.Lock()
 	defer inc.memoMu.Unlock()
@@ -1091,12 +1094,31 @@ func (c *Cache) listMemo(ctx context.Context, e *entry, inc *incarnation) {
 			cs = append(cs, ch)
 		}
 	}
+	var measuring func(dir string)
+	if c.knobs != nil {
+		measuring = c.knobs.measuring
+	}
 	for _, n := range found {
 		if holdsCohort(recorded, n) {
 			continue
 		}
-		bytes, err := measureCohort(ctx, cohortDir(inc.dir, n))
-		if err != nil {
+		dir := cohortDir(inc.dir, n)
+		if measuring != nil {
+			measuring(dir)
+		}
+		bytes, err := measureCohort(ctx, dir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// GONE SINCE THE LISTING NAMED IT: the copy was retired and its
+			// directory moved into trash/ while this listing held the memo's
+			// lock, or something outside the engine removed the cohort. It
+			// holds nothing to count. Logged, it would say this copy could
+			// not be listed and is listed again at the next pass — of a copy
+			// that is gone, on any node whose boot listing meets a purge. A
+			// discarded copy is let go below; a copy still here is recorded
+			// without the cohort, as a recorded cohort gone is forgotten.
+			continue
+		case err != nil:
 			c.log.Warn("code_cache_memo_unlisted", "repo", e.id, "incarnation", inc.n, "cohort", n, "error", err)
 			return
 		}
