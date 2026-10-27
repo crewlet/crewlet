@@ -57,14 +57,25 @@ import (
 // sixty-four kibibytes, every byte of which the person reads on the card
 // before approving it (the card's own bound is 256 KiB, and the before and
 // after rows share it). What a route takes beyond that (a file's bytes, an
+// artifact's bundle) has its own screen and its own upload path.
+const GenericBodyBytes = 64 << 10
+
 // GenericPage is the page a generic read asks a list route for when the model
 // names none: twenty-five rows, under a third of what one step reads at the
 // widest row a list route answers today (a turn, about a kilobyte), so the
 // read is answered whole with the route's cursor to read on.
 const GenericPage = 25
 
-// artifact's bundle) has its own screen and its own upload path.
-const GenericBodyBytes = 64 << 10
+// genericReadQuery is what a generic read asks a route for where the model
+// sets none of it, for a route whose own default answer is past what one step
+// reads: a seat's read answers its call history (whole transcripts) unless
+// asked not to. THE ROUTE'S DEFAULT STAYS ITS OWN: the dashboard and every
+// other caller read it as they always have, and only the assistant's read is
+// bounded, here, where it is sent (ADR-0061). A parameter the model names is
+// sent as it named it.
+var genericReadQuery = map[string]url.Values{
+	"GET /agents/{id}": seatAlone,
+}
 
 // The generic tools, by name.
 const (
@@ -439,6 +450,13 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 		// it can answer from, with the route's own cursor to read on, is the
 		// bounded read ([GenericPage]).
 		query.Set("limit", strconv.Itoa(GenericPage))
+	}
+	if reading {
+		for name, values := range genericReadQuery[pattern] {
+			if _, named := query[name]; !named {
+				query[name] = slices.Clone(values)
+			}
+		}
 	}
 	if _, asked := query[authz.DryRunQuery]; asked && !reading {
 		// A CHANGE IS THE WRITE: the preview asks the route's own check

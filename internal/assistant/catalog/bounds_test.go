@@ -18,6 +18,10 @@ type bound struct {
 	// why names the cap a route holds itself to, or what bounds a set the
 	// company configures, where kind is boundCapped or boundConfig.
 	why string
+	// asks is what the read must send besides, where the route's own default
+	// answer is past what one step reads and the read bounds it: a seat's
+	// read asks for the seat without its call history.
+	asks map[string]string
 }
 
 // The kinds of bound, each checked against the request the read sends.
@@ -58,7 +62,7 @@ var readBounds = map[string]bound{
 	"list_decisions":             {kind: boundCapped, why: "decisions answers at most 50, newest first, with its total"},
 	"list_agents":                {kind: boundConfig, why: "one row per agent seat"},
 	"get_agent/activity":         {kind: boundWindow},
-	"get_agent/detail":           {kind: boundRecord},
+	"get_agent/detail":           {kind: boundRecord, asks: map[string]string{"history": "false"}},
 	"get_org_chart/chart":        {kind: boundConfig, why: "the company's units and seats"},
 	"get_org_chart/seats":        {kind: boundConfig, why: "one row per human seat"},
 	"list_turns":                 {kind: boundPage},
@@ -116,8 +120,11 @@ func variantArgs(t *testing.T, tool catalog.Tool, variant string) catalog.Args {
 // EVERY DEFAULT READ IS BOUNDED. Each read tool's every card variant declares
 // how its default answer is held to a size that does not grow with the
 // company's work, and the request it sends is held to that: a page asks for
-// one, a window for its days, a record names it. Mutation: drop a read's
-// limit, or add a read without declaring it, and this fails.
+// one, a window for its days, a record names it, and a route whose own
+// default is past a step is asked for less. These are the assistant's reads:
+// the routes' defaults are their own (ADR-0061). Mutation: drop a read's
+// limit or a seat read's history=false, or add a read without declaring it,
+// and this fails.
 func TestEveryDefaultReadIsBounded(t *testing.T) {
 	t.Parallel()
 	seen := map[string]bool{}
@@ -167,6 +174,11 @@ func TestEveryDefaultReadIsBounded(t *testing.T) {
 				}
 			default:
 				t.Errorf("%s declares the bound %q, which is none of the kinds", name, b.kind)
+			}
+			for param, want := range b.asks {
+				if got := q.Get(param); got != want {
+					t.Errorf("%s asks %s?%s, want %s=%s", name, req.Path, q.Encode(), param, want)
+				}
 			}
 		}
 	}

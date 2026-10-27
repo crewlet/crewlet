@@ -127,8 +127,7 @@ export function Turns({
   // The seat's own phase history. Its `live` half is NOT read: the
   // projection pushes it onto the roster, and one fact with two sources on
   // one screen is two facts.
-  // ITS CALLS ARE ASKED FOR: the route answers the seat alone unless they are.
-  const history = useQuery("agent", { id: handle, history: true }, { enabled: handle !== "" });
+  const history = useQuery("agent", { id: handle }, { enabled: handle !== "" });
   const spend = useQuery(
     "tokens",
     { seat: handle, days: SPEND_DAYS },

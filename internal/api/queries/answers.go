@@ -916,13 +916,12 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// make a healthy new company look broken. Its history is answered the
 	// same way.
 	//
-	// THE SEAT ALONE UNLESS ITS CALLS ARE ASKED FOR (`history=true`): the
-	// finished calls' payloads are whole transcripts, fifty of them a busy
-	// seat's 2 MB, and a caller asking what a seat is doing (a status, the
-	// assistant's step, a preview) was handed that by default and could not
-	// read it. The one reader of the calls, the seat page's Turns, asks.
+	// `history=false` ASKS FOR THE SEAT ALONE, its status without the calls
+	// it finished: their payloads are whole transcripts, so a caller asking
+	// what a seat is doing (the assistant's step, held to a step's read)
+	// was handed a body too large to read and lost the status with it.
 	history, next, coverage := []store.EventRecord{}, "", (*eventfan.Coverage)(nil)
-	if p.Bool("history", false) {
+	if p.Bool("history", true) {
 		history, next, coverage = s.phaseHistory(ctx, agentID, p)
 	}
 	// WHAT THIS READER MAY SEE OF THE SEAT: its status, everybody's; its

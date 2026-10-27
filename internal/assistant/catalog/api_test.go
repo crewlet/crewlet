@@ -525,14 +525,18 @@ func TestTheRequestIsAnAdministratorsToRead(t *testing.T) {
 // is asked for GenericPage rows when the model names no limit, so a bare read
 // of the event log or the turns is answered whole with its cursor to read on
 // rather than cut at the step's bound and lost; a limit the model names is
-// kept, and a route that takes none is sent as asked. Mutation: drop the
-// default and the bare reads carry no limit.
+// kept, and a route that takes none is sent as asked. A SEAT'S READ IS THE
+// SEAT ALONE: the route answers its call history by default, for the
+// dashboard, so the assistant's read asks for none of it unless the model
+// names history itself. Mutation: drop either default and the bare reads
+// carry no bound.
 func TestAGenericListReadIsOnePage(t *testing.T) {
 	t.Parallel()
 	table, err := catalog.NewRouteTable([]catalog.Route{
 		{Pattern: "GET /events", Action: authz.ActionWorkRead},
 		{Pattern: "GET /turns", Action: authz.ActionWorkRead},
 		{Pattern: "GET /config", Action: authz.ActionWorkRead},
+		{Pattern: "GET /agents/{id}", Action: authz.ActionWorkRead},
 		// A WRITE TOO, since the generic tools are built as a set and the
 		// change tool needs a route to name.
 		{Pattern: "POST /worklet/items", Action: authz.ActionWorkCreate},
@@ -549,6 +553,10 @@ func TestAGenericListReadIsOnePage(t *testing.T) {
 		{map[string]any{"route": "GET /turns", "query": map[string]any{"seat": "qa"}}, "limit=25&seat=qa"},
 		{map[string]any{"route": "GET /events", "query": map[string]any{"limit": "5"}}, "limit=5"},
 		{map[string]any{"route": "GET /config"}, ""},
+		{map[string]any{"route": "GET /agents/{id}", "path": map[string]any{"id": "qa"}}, "history=false"},
+		{map[string]any{"route": "HEAD /agents/{id}", "path": map[string]any{"id": "qa"}}, "history=false"},
+		{map[string]any{"route": "GET /agents/{id}", "path": map[string]any{"id": "qa"},
+			"query": map[string]any{"history": "true"}}, "history=true"},
 	} {
 		req, err := read.Request(c.args)
 		if err != nil {
