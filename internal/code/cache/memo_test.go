@@ -1017,3 +1017,49 @@ func TestTheNodeKeepsAtMostMaxMemoCohorts(t *testing.T) {
 		t.Error("the tick dropped the one answer the memo held, in its newest cohort")
 	}
 }
+
+// A STATE WRITTEN BEHIND THE SERVING KEEPS THE COPY'S LAST USE. A boot reads a
+// copy's last use from its state's modification time, and the janitor writes
+// a copy's state at its tick once its memo moved — a trim that took the
+// copy's oldest cohort among the moves, which is no use of the copy: so the
+// state it writes carries the copy's last use, never the moment of the write,
+// and a copy nobody read since comes back from a restart no more recently
+// used than it was — not the one read last, which the budget would keep while
+// it evicted the copies seats do read.
+//
+// Mutation: write the state as it is staged (writeState's stamp dropped) — the
+// copy comes back from the restart used at the moment the trim's state was
+// written.
+func TestAStateWrittenBehindTheServingKeepsTheLastUse(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	dir := s.Dir
+	memoize(t, c, s, memoKeys("used", 4))
+	s.Release()
+	used := cache.LastUsed(c, repo)
+	cache.JanitorTick(c) // the use stamped, and the memo's state written
+	clk.Add(time.Hour)
+	// A share of one answer, so the trim takes the copy's one cohort.
+	cache.SetMaxBytes(c, cache.MemoShare*memoEntry(0))
+	cache.JanitorPass(c)
+	if st, _ := cache.MemoOf(c, repo); st.Stated || st.Bytes != 0 {
+		t.Fatalf("after the trim the memo is %+v, want its cohort gone and its state behind it", st)
+	}
+	cache.JanitorTick(c)
+	info, err := os.Stat(filepath.Join(dir, "crewlet-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(used) {
+		t.Errorf("the state the trim's tick wrote is stamped %v, want the copy's last use %v", info.ModTime(), used)
+	}
+	again := w.reopen(t, c, clk.on)
+	if got := cache.LastUsed(again, repo); !got.Equal(used) {
+		t.Errorf("after a restart the copy was last used %v, want %v: the trim's state is no use of it", got, used)
+	}
+}

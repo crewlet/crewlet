@@ -523,6 +523,7 @@ func (inc *incarnation) stateValue(id string) state {
 		Derived:       maps.Clone(inc.derived),
 		Maintained:    inc.maintained,
 		memoVersion:   inc.memoVersion,
+		lastUsed:      inc.lastUsed,
 	}
 }
 

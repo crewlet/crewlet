@@ -98,6 +98,10 @@ type state struct {
 	// (incarnation.memoVersion), never written: what the incarnation records
 	// as stated once the value is on the disk (writeState).
 	memoVersion uint64
+	// lastUsed is the incarnation's last use as the value was taken, never
+	// written as a field: the file's modification time, which is where a boot
+	// reads the last use from (lastUsedOn, writeState).
+	lastUsed time.Time
 }
 
 // derivedState is one declared derived file as the cache last left it on
@@ -376,12 +380,29 @@ func (c *Cache) writeState(ctx context.Context, e *entry, inc *incarnation, st s
 	if err = c.place(staged, filepath.Join(inc.dir, stateName)); err != nil {
 		return err
 	}
+	// A STATE CARRIES THE COPY'S LAST USE, never the moment it was written: a
+	// boot reads the last use from the state's modification time (lastUsedOn),
+	// and a state is written for work that is no use — the maintainer's run,
+	// the backfill's step, the memo's moves at the janitor's tick, every copy
+	// whose oldest cohort a trim took among them — which, stamped with the
+	// moment of the write, brought a copy nobody had read in a week back from
+	// a restart as the one read last, and the budget evicted the copies seats
+	// do read in its place. Stamped as the janitor's tick stamps it (stampUse),
+	// before the directory's sync that makes the rename durable.
+	if !st.lastUsed.IsZero() {
+		if err = stampUse(inc.dir, st.lastUsed); err != nil {
+			return fmt.Errorf("cache: stamping %s's state with its last use: %w", e.id, err)
+		}
+	}
 	if err = syncDir(inc.dir); err != nil {
 		return err
 	}
 	e.mu.Lock()
 	inc.state = &st
 	inc.memoStated = st.memoVersion
+	if st.lastUsed.After(inc.stamped) {
+		inc.stamped = st.lastUsed
+	}
 	e.mu.Unlock()
 	return nil
 }

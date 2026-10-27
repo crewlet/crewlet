@@ -424,7 +424,8 @@ var cacheWriters = []writerRow{
 		"the image's directories made again where a full round's sweep found them missing", nil},
 	{"internal/code/cache/evict.go", kindOS,
 		"the janitor: trash/ emptied, and a repository's last use stamped on its state file's " +
-			"modification time", nil},
+			"modification time — by its tick, and on every state written (stampUse, state.go's writeState)",
+		nil},
 	{"internal/code/cache/maintain.go", kindOS,
 		"the files a declared write holds while it runs (Write.Holds): what a maintenance run that did " +
 			"not succeed, or a round's index that failed, leaves behind",

@@ -943,7 +943,10 @@
 // time, and the janitor stamps each repository used since its last tick
 // there — a metadata write, never a rewrite of the state — so a repository
 // that is read all day and pushed to rarely is not the first a budget evicts
-// after every restart.
+// after every restart. A state written for any reason carries the last use
+// too, never the moment of the write (writeState): the maintainer's runs, the
+// backfill and the memo's moves write states for copies nobody read, which
+// would otherwise come back from a restart as the copies read last.
 //
 // # Measured
 //
