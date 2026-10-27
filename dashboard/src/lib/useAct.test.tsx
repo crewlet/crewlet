@@ -265,6 +265,29 @@ test("a refusal is drawn beside the control and stays until the next press", asy
   expect(refusal()?.textContent).toContain("views: v9 is not a view");
 });
 
+// A REFUSAL IS DRAWN IN A PERSON'S WORDS (ADR-0060): the engine's detail is a
+// sentence written for whoever pressed, drawn as plain text with no value
+// marked in it; and a refusal nobody worded for a person carries no detail,
+// so its code's own sentence is what is drawn.
+test("a refusal is drawn in the person's words, or in its code's own sentence", async () => {
+  const person =
+    "That choice is not one of this decision's options. Pick one of the options shown, or answer in words.";
+  engine(() => json({ error: "invalid", tool: "set_pins", detail: person }, 422));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  const refusal = () => document.querySelector(".crewlet-refusal-strip");
+  await waitFor(() => expect(refusal()?.textContent).toContain(person));
+  expect(refusal()?.querySelector("code")).toBeNull();
+  cleanup();
+
+  const floor =
+    "That change was refused, and nothing was written. Check what was entered, then try again.";
+  engine(() => json({ error: "invalid", tool: "set_pins", message: floor }, 422));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await waitFor(() => expect(refusal()?.textContent).toContain(floor));
+});
+
 /** A screen that pins a view and reads back the refusal its press came to. */
 function Refused({ onRefusal }: { onRefusal: (r: unknown) => void }) {
   const pin = useAct("set_pins");

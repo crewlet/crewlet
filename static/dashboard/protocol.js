@@ -3110,12 +3110,13 @@ var session = new SessionFloors();
 * read — the browser's session cookie is the whole of it — so a person is
 * told to sign in again, never to set anything.
 *
-* THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
-* which means "show the tool's own `detail`". Those are the two classes whose
-* sentence names the argument that was wrong (`invalid`) or the rule that
-* forbade it (`forbidden`); every other class's sentence is written for a
-* model reading a tool result, and a person reading it would be told about
-* `if_match` and record ids.
+* THE SENTENCE IS SECOND PERSON, and it is ours, except where it is `null`,
+* which means "show the engine's own words". Those are the two classes whose
+* words say what to change (`invalid`) or whom to ask (`forbidden`). The
+* engine answers them as a `detail` worded for a person, or, where nobody has
+* worded that refusal for one yet, with no detail and its code's own
+* `message` (ADR-0060): never the tool's sentence, which is written for a
+* model and names arguments and record ids.
 */
 var ACT_ERRORS = {
 	invalid_token: "Signed out. Sign in again.",
@@ -3155,7 +3156,7 @@ var ACT_ERRORS = {
 //#region src/contract/caveats.ts
 /**
 * What a caveat on a landed write asks of the person who reads it, as the
-* engine names it (`internal/caveat`, ADR-0059).
+* engine names it (`internal/caveat`, ADR-0060).
 *
 * `none` is something to know: shown, and gone by itself. `required` is
 * something somebody has to act on: shown until it is dismissed. The engine
@@ -3188,6 +3189,14 @@ var CAVEAT_ACTIONS = ["none", "required"];
 *    retry is the person's decision, made under the same operation;
 *  - `refused`: the engine said no, with a code from `contract/errors.ts` and
 *    the sentence a person is shown for it.
+*
+* # Every sentence drawn is a person's (ADR-0060)
+*
+* The engine answers a refusal's `detail` in a person's words, or with none
+* where nobody has worded it yet, and then its `message` (the code's own
+* sentence) is what is drawn. An answer from an older node during a rolling
+* upgrade may lack `caveats` (read as none) or carry no detail (its message
+* stands); neither is an error.
 */
 /**
 * The caveats an answer carries, as this build reads them: each with a code
@@ -3213,6 +3222,12 @@ function caveatsOf(raw) {
 	}
 	return out;
 }
+/**
+* What a person is told of a change nobody could confirm: the engine's own
+* `detail` on an unknown is the operation key's retry rule, written for a
+* client sending the header, and a person never sees the key (ADR-0060).
+*/
+var UNCONFIRMED_SENTENCE = "Nobody could confirm it was saved. Look again to see whether it was.";
 /** Whether a code off the wire is one this build knows. */
 function isActErrorCode(code) {
 	return Object.hasOwn(ACT_ERRORS, code);
@@ -3259,7 +3274,7 @@ var LOOK_AGAIN = /* @__PURE__ */ new Set([
 function writeFailed(err) {
 	if (err.body.outcome === "unknown") return {
 		kind: "unknown",
-		reason: err.detail || err.code
+		reason: UNCONFIRMED_SENTENCE
 	};
 	const code = isActErrorCode(err.code) ? err.code : "";
 	if (err.unanswered || err.status >= 500 && code === "") return {

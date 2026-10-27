@@ -18,6 +18,14 @@
  *    retry is the person's decision, made under the same operation;
  *  - `refused`: the engine said no, with a code from `contract/errors.ts` and
  *    the sentence a person is shown for it.
+ *
+ * # Every sentence drawn is a person's (ADR-0060)
+ *
+ * The engine answers a refusal's `detail` in a person's words, or with none
+ * where nobody has worded it yet, and then its `message` (the code's own
+ * sentence) is what is drawn. An answer from an older node during a rolling
+ * upgrade may lack `caveats` (read as none) or carry no detail (its message
+ * stands); neither is an error.
  */
 
 // RELATIVE, not through `~`: protocol/ is also built alone as protocol.js,
@@ -107,6 +115,14 @@ export type WriteFailed =
       lookAgain: boolean;
     };
 
+/**
+ * What a person is told of a change nobody could confirm: the engine's own
+ * `detail` on an unknown is the operation key's retry rule, written for a
+ * client sending the header, and a person never sees the key (ADR-0060).
+ */
+export const UNCONFIRMED_SENTENCE =
+  "Nobody could confirm it was saved. Look again to see whether it was.";
+
 /** Whether a code off the wire is one this build knows. */
 export function isActErrorCode(code: string): code is ActErrorCode {
   return Object.hasOwn(ACT_ERRORS, code);
@@ -166,7 +182,7 @@ export function writeFailed(err: RestError): WriteFailed {
   // beside an `unavailable` that is otherwise what a tool that wrote nothing
   // answers.
   if (err.body.outcome === "unknown") {
-    return { kind: "unknown", reason: err.detail || err.code };
+    return { kind: "unknown", reason: UNCONFIRMED_SENTENCE };
   }
   // NEVER ANSWERED, OR ANSWERED BY SOMETHING THAT IS NOT THE ENGINE
   // ([RestError.unanswered]: status 0, a body that is not the engine's JSON,
