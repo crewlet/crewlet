@@ -13,7 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
-import { caveatToast, useAct } from "./useAct.ts";
+import { caveatToast, readingDuration, useAct } from "./useAct.ts";
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
@@ -455,6 +455,67 @@ test("a press is told its caveats in a person's words, never the receipt's model
   expect(screen.queryByText(/Use ask:/)).toBeNull();
 });
 
+// A TOAST THAT GOES BY ITSELF STAYS AS LONG AS IT TAKES TO READ: the kit's
+// four seconds fit a title, and a thirty-word caveat was gone before its
+// second line was read. Never sooner than the kit's own default, never longer
+// than a cap past which the sentence is one somebody must act on.
+test("an info caveat stays as long as its sentence takes to read", () => {
+  expect(readingDuration("Saved.")).toBe(4_000);
+  const thirty = Array.from({ length: 30 }, () => "word").join(" ");
+  expect(readingDuration(thirty)).toBe(11_000);
+  expect(readingDuration(`${thirty} ${thirty}`)).toBe(15_000);
+  const pending = caveatToast(
+    [{ code: "date_truncated", message: thirty, action: "none" }],
+    "Sent. This node has not applied it yet.",
+  );
+  expect(pending?.message.startsWith("Sent. This node has not applied it yet.")).toBe(true);
+  expect(pending?.duration).toBe(readingDuration(pending?.message ?? ""));
+  expect(pending!.duration!).toBeGreaterThan(11_000);
+  expect(
+    caveatToast([{ code: "default_assignee_gone", message: thirty, action: "required" }])?.duration,
+  ).toBeUndefined();
+});
+
+// A CONTROL THAT DRAWS ITS PRESS'S CAVEATS ITSELF is not told them again in
+// the toast: the board draws a card's missed place beside the board.
+test("a press whose control draws its caveats toasts the press alone", async () => {
+  engine(() =>
+    json(
+      {
+        tool: "set_pins",
+        outcome: "applied",
+        position: "CREWLET_TRACKER_LOG@1:991",
+        receipt: {},
+        caveats: [
+          { code: "lane_changed_not_placed", message: "Drawn by the board.", action: "none" },
+        ],
+      },
+      200,
+    ),
+  );
+  function Drawer() {
+    const pin = useAct("set_pins");
+    return (
+      <WriteButton
+        write={pin}
+        onPress={() =>
+          void pin.run({ views: { add: ["v1"] } }, { done: "Pinned Triage", drawsCaveats: true })
+        }
+      >
+        Pin
+      </WriteButton>
+    );
+  }
+  render(
+    <ToastProvider>
+      <Drawer />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText("Pinned Triage")).length).toBeGreaterThan(0);
+  expect(screen.queryByText("Drawn by the board.")).toBeNull();
+});
+
 test("a caveat that asks nothing goes by itself, and one that needs a person stays", () => {
   expect(caveatToast([])).toBeNull();
   // NOTHING TO DO: the kit's info toast, which goes by itself.
@@ -463,7 +524,11 @@ test("a caveat that asks nothing goes by itself, and one that needs a person sta
       { code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" },
       { code: "body_links_capped", message: "Only the first 25 are linked.", action: "none" },
     ]),
-  ).toEqual({ variant: "info", message: "Saved as 2026-03-04. Only the first 25 are linked." });
+  ).toEqual({
+    variant: "info",
+    message: "Saved as 2026-03-04. Only the first 25 are linked.",
+    duration: readingDuration("Saved as 2026-03-04. Only the first 25 are linked."),
+  });
   // ONE THAT NEEDS A PERSON makes the press's toast a warning, which the kit
   // keeps until it is dismissed.
   expect(

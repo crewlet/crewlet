@@ -73,6 +73,13 @@ export interface PressLabel {
    * resolves with; a refusal is held on the hook exactly as for any press.
    */
   quiet?: boolean;
+  /**
+   * The control draws the press's caveats where it was made (a board draws
+   * a card's missed place beside the board), so the toast reports the press
+   * alone and the same sentence is never shown twice. The caveats are still
+   * on the result `run` resolves with, in the person's words.
+   */
+  drawsCaveats?: boolean;
 }
 
 /** How one press is sent. */
@@ -130,6 +137,40 @@ export interface CaveatToast {
   variant: "warning" | "info";
   /** Every caveat's sentence, in the order the engine answered them. */
   message: string;
+  /**
+   * How long an `info` toast stays, in milliseconds, from how long its
+   * message takes to read ([readingDuration]); absent on a `warning`, which
+   * the kit keeps until it is dismissed.
+   */
+  duration?: number;
+}
+
+/** A reader's pace, in milliseconds per word: two hundred words a minute. */
+const READ_MS_PER_WORD = 300;
+/** The time a toast takes to be noticed at all, before a word of it is read. */
+const READ_LEAD_MS = 2_000;
+/** No toast that goes by itself goes sooner than the kit's own info default. */
+const READ_FLOOR_MS = 4_000;
+/**
+ * No toast that goes by itself stays longer than this: past it, a sentence is
+ * long enough to be one somebody must act on, which is `required`'s sticky
+ * warning and not an info toast.
+ */
+const READ_CAP_MS = 15_000;
+
+/**
+ * How long a toast that goes by itself stays, from how long its message takes
+ * to read: the time to notice it, then a reader's pace per word, between the
+ * kit's own default and a cap.
+ *
+ * THE KIT'S FOUR SECONDS FIT A TITLE, not a caveat: "The launch date holds a
+ * date without a time, so it was saved as 2026-03-04, the day …" is thirty
+ * words, and a pending press's sentence beside one is forty-five, gone before
+ * the second line was read.
+ */
+export function readingDuration(message: string): number {
+  const words = message.trim().split(/\s+/).filter(Boolean).length;
+  return Math.min(READ_CAP_MS, Math.max(READ_FLOOR_MS, READ_LEAD_MS + words * READ_MS_PER_WORD));
 }
 
 /**
@@ -147,14 +188,15 @@ export interface CaveatToast {
  * The kit's `warning` toast stays until it is dismissed and its `info` toast
  * goes by itself, each by its own default, so one caveat that must be acted
  * on makes the press's toast a warning, and anything else is information that
- * does not demand a click to clear.
+ * does not demand a click to clear, for as long as it takes to read
+ * ([readingDuration]). lead is a sentence the toast says before the caveats
+ * (a pending press's), counted in that time.
  */
-export function caveatToast(caveats: readonly Caveat[]): CaveatToast | null {
+export function caveatToast(caveats: readonly Caveat[], lead = ""): CaveatToast | null {
   if (caveats.length === 0) return null;
-  return {
-    variant: caveats.some((c) => c.action === "required") ? "warning" : "info",
-    message: caveats.map((c) => c.message).join(" "),
-  };
+  const message = [lead, ...caveats.map((c) => c.message)].filter((s) => s !== "").join(" ");
+  if (caveats.some((c) => c.action === "required")) return { variant: "warning", message };
+  return { variant: "info", message, duration: readingDuration(message) };
 }
 
 /** One change a screen can make, as the signed-in person. */
@@ -210,12 +252,13 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
           // over it tells the person the opposite of what happened. How
           // long it stays is the caveat's to say ([caveatToast]); the
           // variant's own duration applies.
-          const caveated = caveatToast(result.caveats);
+          const caveated = press.label.drawsCaveats ? null : caveatToast(result.caveats);
           if (caveated) {
             toast.show({
               variant: caveated.variant,
               title: press.label.done,
               message: caveated.message,
+              duration: caveated.duration,
             });
           } else {
             toast.ok(press.label.done);
@@ -225,11 +268,14 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
         case "pending": {
           // A PENDING WRITE WAS DECIDED, so its caveats are as true as an
           // applied one's, and said beside the wait.
-          const caveated = caveatToast(result.caveats);
+          const caveated = press.label.drawsCaveats
+            ? null
+            : caveatToast(result.caveats, PENDING_SENTENCE);
           toast.show({
             variant: caveated?.variant ?? "info",
             title: press.label.done,
-            message: caveated ? `${PENDING_SENTENCE} ${caveated.message}` : PENDING_SENTENCE,
+            message: caveated?.message ?? PENDING_SENTENCE,
+            duration: caveated?.duration,
           });
           break;
         }
