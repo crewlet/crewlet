@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // BenchmarkPushLogBytes is what ONE PUSH COSTS THE CODE LOG: the stream's
@@ -27,10 +28,12 @@ import (
 //   - batch=64: MaxPushesPerRecord pushes to one repository at once, as many a
 //     record as group commit puts together with no linger.
 //
-// Each push is a person's push of one commit: one command moving a branch
-// named in 40 bytes on from its tip, its pack bundle and one introduced id,
-// decided and recorded by the committer as in production, through the
-// harness's real publisher and embedded broker. And beside them:
+// Each push is a person's push of one commit through the token bound to them
+// — its principal naming the token, `pat:` and its id, beside the human seat
+// they hold, as a person's push names it — one command moving a branch named
+// in 40 bytes on from its tip, its pack bundle and one introduced id, decided
+// and recorded by the committer as in production, through the harness's real
+// publisher and embedded broker. And beside them:
 //
 //   - push=agent: what a SEAT's push of that commit takes of the log beyond a
 //     person's (extra-bytes/push) — built by the engine, its principal naming
@@ -56,6 +59,10 @@ func BenchmarkPushLogBytes(b *testing.B) {
 	if got := len(fmt.Sprintf(branch, 0)); got != 40 {
 		b.Fatalf("the branch is named in %d bytes, not 40", got)
 	}
+	// person is who makes a person's push as git hands one over: the token
+	// bound to them, by its name, and the human seat they hold.
+	person := code.Principal{Kind: code.PrincipalOperator, Seat: "ada",
+		OperatorID: iam.MachineTokenName(uuid.NewSHA1(uuid.NameSpaceOID, []byte("ada's token")).String())}
 	for _, batch := range []int{1, code.MaxPushesPerRecord} {
 		// rounds is how many batches a log is measured over: enough records
 		// that one record's size is lost in the figure.
@@ -73,7 +80,7 @@ func BenchmarkPushLogBytes(b *testing.B) {
 					for k := range batch {
 						next := oidOf(fmt.Sprint("tip-", r, "-", k))
 						p := packed(proposal(repo, update(fmt.Sprintf(branch, k), tips[k], next)), harnessAt)
-						p.Introduced, p.IntroducedCount = []string{next}, 1
+						p.Principal, p.Introduced, p.IntroducedCount = person, []string{next}, 1
 						wg.Go(func() {
 							res, err := c.Propose(b.Context(), p)
 							if err != nil {
@@ -162,12 +169,11 @@ func BenchmarkPushLogBytes(b *testing.B) {
 				}
 				return float64(after.Bytes-before.Bytes) / rounds
 			}
-			person := grew(code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ada"},
-				code.ViaGit, fmt.Sprintf(branch, 0))
-			seat := grew(code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
+			persons := grew(person, code.ViaGit, fmt.Sprintf(branch, 0))
+			seats := grew(code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
 				Run: code.RunProvenance{WorkBackend: "native", WorkKey: "ENG-1234", Model: "claude-sonnet-4-5"}},
 				code.ViaEngine, fmt.Sprintf(branch, 1))
-			extra = seat - person
+			extra = seats - persons
 			b.StartTimer()
 		}
 		b.ReportMetric(extra, "extra-bytes/push")
