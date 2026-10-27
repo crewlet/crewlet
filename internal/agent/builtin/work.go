@@ -3558,6 +3558,13 @@ func unansweredWarning(task worklet.Task, actor Actor, comment *worklet.Comment)
 		return ""
 	case comment.Ask != "" || len(comment.Mentions) > 0:
 		return ""
+	// AN ANSWER EXPECTS NO REPLY: it closes a question, and the asker is
+	// woken to act on it, which is what the person answering wants. Warning
+	// them that nobody is asked to reply told a person who had just
+	// answered a decision to ask a question they never meant to ask, and the
+	// dashboard shows a write's warning as a toast that stays until closed.
+	case comment.Answers != nil:
+		return ""
 	}
 	return fmt.Sprintf("%s is woken by this but is not asked to answer it. "+
 		"Use ask: %s, or @-mention them, if you are expecting a reply.",
