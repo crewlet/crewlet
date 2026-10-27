@@ -1342,6 +1342,31 @@ func (c *Cache) trimCohortOf(e *entry, inc *incarnation, n uint64) (int64, bool,
 // disk at most one state's two syncs an EvictInterval. Only a copy with a
 // state — one a round or a boot gave it — is written: a state is never made
 // for a copy that has none, whose first full round writes it.
+//
+// A COPY IS HELD TO THAT RULE (memoStateDue) AS IT IS PICKED, AGAIN AS ITS
+// WRITE BEGINS, AND ONCE MORE IF ITS WRITE FAILS. The writes are made one copy
+// after another, two syncs each, holding nothing of the copy's — where every
+// other writer of a state holds the repository's write lock (a round, a swap)
+// or a pin (the maintainer, the backfill) — so meanwhile a purge, a rebuild's
+// promote or a swap may retire a copy and move its directory into trash/
+// under the write, the moment nobody holds it (Cache.trash), and a round may
+// write its state. Not a pin for the write, deliberately: the cache reads a
+// pin as a reader's — a boot's copy has its strays swept in place by its
+// first full round only because nothing pins a copy before that round
+// (sweep.go's packStrays), and pinned they would leave by a swap, a whole new
+// incarnation; the status counts a pin a reader — and a record of the memo,
+// a cache of a cache, is no reason to keep a retired copy's directory for two
+// syncs nobody reads. So a copy no longer due is not written: a retired
+// copy's state is read by nobody again, and one another writer wrote already
+// records the memo. And a write that fails for a copy no longer due is NO
+// FAILURE, as stampUse takes a copy moved into trash/ since it was chosen:
+// nothing is lost and no tick picks the copy again, so nothing is logged,
+// where code_cache_memo_unstated tells an operator the node tries again at its
+// next tick. A copy moved under its write fails it on its absence (the rename
+// into its directory, or the sync of the directory after), and retire marks a
+// copy under e.mu before its directory moves, so that failure is always a
+// retired copy's. A copy still due whose write fails is logged, and its next
+// tick writes it.
 func (c *Cache) stateMemos(ctx context.Context) {
 	type due struct {
 		e   *entry
@@ -1351,8 +1376,7 @@ func (c *Cache) stateMemos(ctx context.Context) {
 	c.mu.Lock()
 	for _, e := range c.entries {
 		e.mu.Lock()
-		if inc := e.current; inc != nil && inc.state != nil && !inc.retired && !inc.discarded &&
-			inc.memoVersion != inc.memoStated {
+		if inc := e.current; memoStateDue(inc) {
 			dues = append(dues, due{e: e, inc: inc})
 		}
 		e.mu.Unlock()
@@ -1362,10 +1386,31 @@ func (c *Cache) stateMemos(ctx context.Context) {
 		if ctx.Err() != nil || c.life.Err() != nil {
 			return
 		}
-		if err := c.persist(ctx, d.e, d.inc, false); err != nil {
+		if !d.e.memoStillDue(d.inc) {
+			continue
+		}
+		if err := c.persist(ctx, d.e, d.inc, false); err != nil && d.e.memoStillDue(d.inc) {
 			c.log.Warn("code_cache_memo_unstated", "repo", d.e.id, "incarnation", d.inc.n, "error", err)
 		}
 	}
+}
+
+// memoStateDue reports whether inc, its entry's current copy when the janitor
+// picked it, is due a state for its memo's moves (stateMemos): in service —
+// neither retired nor discarded, and so still its entry's current copy — with
+// a state, whose memo's record moved since that state was written. The
+// entry's mu is held.
+func memoStateDue(inc *incarnation) bool {
+	return inc != nil && !inc.retired && !inc.discarded && inc.state != nil && inc.memoVersion != inc.memoStated
+}
+
+// memoStillDue is memoStateDue of inc, a copy of e's, under e.mu: what
+// stateMemos asks of a copy it picked as the copy's write begins, and again if
+// the write fails.
+func (e *entry) memoStillDue(inc *incarnation) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return memoStateDue(inc)
 }
 
 // carryMemo moves the memo of from, an incarnation a rebuild replaces, into

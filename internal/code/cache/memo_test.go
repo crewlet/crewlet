@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -914,6 +915,252 @@ func TestACopysMemoIsWrittenDownOnceATickAtMost(t *testing.T) {
 	if n := written(); n != 1 {
 		t.Errorf("a tick with nothing moved since the last wrote the state again: %d writes", n)
 	}
+}
+
+// A TICK WRITES A COPY'S STATE ONLY WHILE THE COPY IS DUE ONE, and reports a
+// failed write only for a copy still due. The tick picks every copy whose memo
+// moved since its state was written, then writes them one after another, two
+// syncs each, holding no lock of theirs: a purge, a rebuild's promote or a swap
+// may retire a copy meanwhile — and move its directory into trash/ under the
+// write once nobody holds it — and a round may write its state. A copy no
+// longer due is not written. A write that fails for one is nothing lost and
+// nothing the next tick takes up, so it is not logged: code_cache_memo_unstated
+// tells an operator the node tries again at its next tick. A copy still due
+// whose write fails is logged once, and the next tick writes it.
+//
+// Mutations: log no failure of the tick's writes — the first row logs none;
+// log every failure (no look at the copy once its write failed) — the second
+// and third rows log one; excuse a failure only for a copy moved into trash/
+// (judged by discarded alone) — the third row, whose copy a reader still
+// holds, logs one; write every copy the tick picked (no look as each write
+// begins) — the fourth and fifth rows write the other copy's state.
+func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
+	t.Parallel()
+	refused := errors.New("the disk refused the state")
+
+	t.Run("a copy still due whose write fails is logged and written at the next tick", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		var refuse atomic.Bool
+		c := w.open(t, func(o *cache.Options) {
+			cache.StateWriteFails(o, func(_ string, round bool) error {
+				if !round && refuse.Load() {
+					return refused
+				}
+				return nil
+			})
+		})
+		s := w.sync(t, c, repo)
+		memoize(t, c, s, memoKeys("refused", 2))
+		refuse.Store(true)
+		cache.JanitorTick(c)
+		if lines := w.logs.lines(t, "code_cache_memo_unstated"); len(lines) != 1 || lines[0]["repo"] != repo {
+			t.Errorf("code_cache_memo_unstated was logged %d times (%v), want once, for %s", len(lines), lines,
+				repo)
+		}
+		if st, _ := cache.MemoOf(c, repo); st.Stated {
+			t.Error("the copy's state records its memo though the tick's write of it failed")
+		}
+		refuse.Store(false)
+		cache.JanitorTick(c)
+		if st, _ := cache.MemoOf(c, repo); !st.Stated {
+			t.Error("the next tick did not write the state of the copy whose write had failed")
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_unstated"); len(lines) != 1 {
+			t.Errorf("code_cache_memo_unstated was logged %d times once the next tick wrote the state, want the "+
+				"first failure's once", len(lines))
+		}
+	})
+
+	t.Run("a copy retired and moved into trash/ under its write is no failure", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		var (
+			c       *cache.Cache
+			mu      sync.Mutex
+			retired bool
+		)
+		c = w.open(t, func(o *cache.Options) {
+			cache.StateWriteFails(o, func(_ string, round bool) error {
+				if round {
+					return nil
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if !retired {
+					// A purge takes the copy, which nobody holds, as the tick
+					// writes its state: its directory goes into trash/.
+					retired = cache.Retire(c, repo)
+				}
+				return nil
+			})
+		})
+		s := w.sync(t, c, repo)
+		dir := s.Dir
+		memoize(t, c, s, memoKeys("purged", 2))
+		s.Release()
+		cache.JanitorTick(c)
+		mu.Lock()
+		defer mu.Unlock()
+		if !retired {
+			t.Fatal("the tick never wrote the copy's state, so no purge met its write")
+		}
+		if statOK(t, dir) {
+			t.Errorf("the purged copy's directory %s is still where it was", dir)
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_unstated"); len(lines) != 0 {
+			t.Errorf("code_cache_memo_unstated was logged %d times (%v) for a copy gone under its write, want never",
+				len(lines), lines)
+		}
+		if got := cache.MemoBytes(c); got != 0 {
+			t.Errorf("the node counts its memo at %d bytes once the one copy holding a memo is gone, want 0", got)
+		}
+	})
+
+	t.Run("a copy retired under its write while a reader holds it is no failure", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		var (
+			c       *cache.Cache
+			mu      sync.Mutex
+			retired bool
+		)
+		c = w.open(t, func(o *cache.Options) {
+			cache.StateWriteFails(o, func(_ string, round bool) error {
+				if round {
+					return nil
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if retired {
+					return nil
+				}
+				// A rebuild replaces the copy as the tick writes its state,
+				// a reader still holding it, and the disk refuses the write.
+				retired = cache.Retire(c, repo)
+				return refused
+			})
+		})
+		s := w.sync(t, c, repo)
+		memoize(t, c, s, memoKeys("replaced", 2))
+		cache.JanitorTick(c)
+		mu.Lock()
+		defer mu.Unlock()
+		if !retired {
+			t.Fatal("the tick never wrote the copy's state, so no rebuild met its write")
+		}
+		if !statOK(t, s.Dir) {
+			t.Errorf("the replaced copy's directory %s went while a reader holds it", s.Dir)
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_unstated"); len(lines) != 0 {
+			t.Errorf("code_cache_memo_unstated was logged %d times (%v) for a copy retired under its write, want "+
+				"never", len(lines), lines)
+		}
+	})
+
+	// two is a world of two repositories whose copies' memos moved since their
+	// states were written, its cache opened with a knob on the tick's state
+	// writes: the first of them meets the OTHER repository's copy with meet —
+	// what befalls that copy as the tick writes this one's state, whichever of
+	// the two the tick picked first. It answers the world, the cache, the
+	// repositories, and what the tick did: every repository whose state it
+	// wrote, in order, and the one meet met.
+	two := func(t *testing.T, meet func(c *cache.Cache, other string)) (*syncWorld, *cache.Cache, [2]string,
+		func() (written []string, met string)) {
+		t.Helper()
+		w := newSyncWorld(t, onMemory)
+		repos := [2]string{w.repo(t, 1), w.repo(t, 2)}
+		for _, repo := range repos {
+			w.push(t, repo, "refs/heads/main", nil)
+		}
+		var (
+			c       *cache.Cache
+			mu      sync.Mutex
+			written []string
+			met     string
+		)
+		c = w.open(t, func(o *cache.Options) {
+			cache.StateWriteFails(o, func(id string, round bool) error {
+				if round {
+					return nil
+				}
+				mu.Lock()
+				written = append(written, id)
+				first := len(written) == 1
+				if first {
+					met = repos[0]
+					if id == met {
+						met = repos[1]
+					}
+				}
+				other := met
+				mu.Unlock()
+				if first {
+					meet(c, other)
+				}
+				return nil
+			})
+		})
+		for _, repo := range repos {
+			s := w.sync(t, c, repo)
+			memoize(t, c, s, memoKeys(repo, 2))
+			s.Release()
+		}
+		return w, c, repos, func() ([]string, string) {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(written), met
+		}
+	}
+
+	t.Run("a copy retired since the tick picked it is not written", func(t *testing.T) {
+		t.Parallel()
+		w, c, _, did := two(t, func(c *cache.Cache, other string) {
+			// A purge takes the other copy, which nobody holds, as the tick
+			// writes this one's state.
+			if !cache.Retire(c, other) {
+				t.Errorf("the cache held no copy of %s to purge", other)
+			}
+		})
+		cache.JanitorTick(c)
+		if written, purged := did(); len(written) != 1 || written[0] == purged {
+			t.Errorf("the tick wrote the states of %v, %s purged once the tick had picked it, want the other "+
+				"copy's alone", written, purged)
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_unstated"); len(lines) != 0 {
+			t.Errorf("code_cache_memo_unstated was logged %d times (%v), want never", len(lines), lines)
+		}
+	})
+
+	t.Run("a copy another writer stated since the tick picked it is not written", func(t *testing.T) {
+		t.Parallel()
+		w, c, repos, did := two(t, func(c *cache.Cache, other string) {
+			// A round writes the other copy's state as the tick writes this
+			// one's.
+			if err := cache.Persist(context.Background(), c, other, true); err != nil {
+				t.Errorf("the round's write of %s's state: %v", other, err)
+			}
+		})
+		cache.JanitorTick(c)
+		if written, stated := did(); len(written) != 1 || written[0] == stated {
+			t.Errorf("the tick wrote the states of %v, %s's written by a round once the tick had picked it, want "+
+				"the other copy's alone", written, stated)
+		}
+		for _, repo := range repos {
+			if st, _ := cache.MemoOf(c, repo); !st.Stated {
+				t.Errorf("after the tick %s's state does not record its memo", repo)
+			}
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_unstated"); len(lines) != 0 {
+			t.Errorf("code_cache_memo_unstated was logged %d times (%v), want never", len(lines), lines)
+		}
+	})
 }
 
 // THE JANITOR LISTS EVERY COPY'S TREE ONCE A PROCESS, behind the serving, and
