@@ -347,7 +347,12 @@
 // plan uses it — or, while the commit that issues its read has not landed, to
 // the read its migration claims for it (claimedReads), which the gate judges
 // as it will judge that statement. So a new read lands with its plan
-// registered, or the build fails.
+// registered, or the build fails. What the gate does not see is the state
+// log's own statements over the domain's ledger and deferred records
+// (code_ops, code_log_deferred, code_log_deferred_scope): internal/statelog
+// assembles them for every domain alike from the table names [Domain]
+// declares, so their plans are the framework's to hold rather than this
+// package's, and no test holds them.
 //
 // # What a seat and a git node read
 //

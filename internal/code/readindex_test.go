@@ -53,8 +53,11 @@ import (
 // Reach every table of the replicated estate it reads by a SEARCH — on an
 // index the schema declares, or on the primary key — whatever else it does.
 // A SCAN reads every row of what it scans: an index's every entry is still
-// every row, and a LIMIT stops only a scan that reads in the order it answers,
-// which nothing holds a statement here to. So a scan is allowed only of
+// every row. A LIMIT is no bound on one either: nothing here requires a
+// scanning statement to carry a LIMIT, and a LIMIT bounds the rows a scan
+// RETURNS, not the rows it reads — every row a filter no index serves
+// rejects is read before the LIMIT fills, which is every row the table holds
+// when none qualifies. So a scan is allowed only of
 // json_each, the statement's own list; of a subquery's or a common table
 // expression's result, which is no table; and of a table [scanOK] names with
 // what bounds it, which is never a repository's size. A SEARCH on an index the

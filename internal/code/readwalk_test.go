@@ -71,9 +71,23 @@ import (
 // Read: every non-test file of the package, wherever it is built, and the
 // declarations its values are typed by — this module's and database/sql's
 // ([sqlPackage]). Not seen: a statement another package issues from text it
-// assembles over this package's declarations — objstore's builders over
-// [PackReferences] and [RetiredPackReferences] are the one kind there is, and
-// [planShapes] answers for them (holdReferences); a statement method reached
+// assembles over this package's declarations, of which there are two kinds.
+// One is objstore's builders over [PackReferences], [RetiredPackReferences]
+// and [LayerReferences], which [planShapes] answers for (holdReferences).
+// The other is the state log's own statements over the domain's machinery
+// tables, which internal/statelog assembles for every domain alike from
+// [Domain.OpsTable], [Domain.DeferredTable] and [Domain.ScopeIndex]: over
+// code_ops, the ledger's sweep and its lookups of an applied operation; over
+// code_log_deferred and code_log_deferred_scope, the coverage probes the
+// applier, a write's step 0 and a read make, the reprocess's pages and
+// releases, the check for a retained record, and the reads of the oldest one
+// and of a record's scope. They run on the applier's lane and in a write's
+// step 0 as surely as any statement here, and this gate plans none of them:
+// they are the framework's, written once over the shape replicated 0001
+// documents for those tables, so their plans are the framework's to hold —
+// and no test holds them, statelog's one plan gate
+// (TestEveryAnchorStatementSeeksItsKey) planning only its anchors', which
+// read no table of this domain's. Nor seen: a statement method reached
 // through reflection; one called on a value only a package the walk does not
 // read could type — a driver's own interfaces (database/sql/driver) among
 // them; and a constant of another package, which is not evaluated, so a text
