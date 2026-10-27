@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -41,14 +43,21 @@ type Requesters interface {
 var errNoRequesters = errors.New("builtin: this surface composes nobody a turn is acting for")
 
 // ceilingOf is who a seat's turn is acting for: nobody beyond the seat for a
-// turn nobody woke and for a call outside any turn; the requester a known
-// principal woke it as — never the seat itself; or a stranger, a sender on a
-// chat surface no seat or person maps to. A KNOWN REQUESTER IS READ BEFORE
-// THE SENDERS: a person's message carries both their seat and their own
-// identity as its sender, and only a turn whose senders nobody the company
-// holds stands behind is a stranger's. An error is a requester this node
-// could not compose, which is UNKNOWN: never read as a turn nobody woke,
-// which is the one kind that bounds nothing.
+// turn nobody woke, for one the outcome of its own act woke and for a call
+// outside any turn; the requester a known principal woke it as — never the
+// seat itself; or a stranger, a sender the turn names with no requester the
+// company knows behind it. A KNOWN REQUESTER IS READ BEFORE THE SENDERS: a
+// person's message carries both their seat and their own identity as its
+// sender. An error is a requester this node could not compose, which is
+// UNKNOWN: never read as a turn nobody woke, which is the one kind that bounds
+// nothing.
+//
+// THE SEAT'S OWN VOICE IS NO STRANGER'S. The outcome of a seat's own act — a
+// workflow or a pipeline its own push failed, which a code host tells the
+// actor of — wakes it with itself as the sender, and that is its own work.
+// Every OTHER sender of a turn no known requester woke is a stranger, beside
+// the seat's own voice or a colleague's: a thread somebody the company does
+// not know started is theirs, whoever else speaks in it.
 func ceilingOf(ctx context.Context, turn *turnctx.Turn, seat string, r Requesters) (authz.Ceiling, error) {
 	if turn == nil {
 		return authz.Ceiling{Kind: authz.CeilingNone}, nil
@@ -63,7 +72,12 @@ func ceilingOf(ctx context.Context, turn *turnctx.Turn, seat string, r Requester
 		}
 		return authz.Ceiling{Kind: authz.CeilingRequester, Principal: requester}, nil
 	}
-	if len(turn.Senders) > 0 {
+	if slices.ContainsFunc(turn.Senders, func(s types.CanonicalIdentity) bool {
+		// AN EMPTY HANDLE IS NOBODY'S, never the seat's: a seat the
+		// caller named as "" must not make every unknown sender its own.
+		handle := strings.TrimSpace(s.Handle)
+		return handle == "" || handle != seat
+	}) {
 		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
 	}
 	return authz.Ceiling{Kind: authz.CeilingNone}, nil

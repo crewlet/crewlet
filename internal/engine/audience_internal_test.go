@@ -123,12 +123,12 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 }
 
 // WHO WOKE THE TURN is the first event's asker or first speaker — never a later
-// voice, and nobody for a wake no seat made.
+// voice, never the seat itself, and nobody for a wake no seat made.
 func TestTheRequesterIsWhoseWakeStartedTheTurn(t *testing.T) {
 	t.Parallel()
 	ask := events.New(types.A2ARequest{ChannelID: "c1", Requester: "cto", Content: "why?"},
 		events.TraceContext{})
-	if got := requesterOf([]*events.Event{ask}, nil); got != "cto" {
+	if got := requesterOf([]*events.Event{ask}, nil, "swe"); got != "cto" {
 		t.Errorf("an ask's requester = %q, want the asking seat", got)
 	}
 	spoke := []types.InboundInteraction{
@@ -136,16 +136,31 @@ func TestTheRequesterIsWhoseWakeStartedTheTurn(t *testing.T) {
 		{Sender: types.CanonicalIdentity{Handle: "ada"}},
 	}
 	chat := events.New(types.ExternalNotification{NotificationSource: "slack"}, events.TraceContext{})
-	if got := requesterOf([]*events.Event{chat}, spoke); got != "" {
+	if got := requesterOf([]*events.Event{chat}, spoke, "swe"); got != "" {
 		t.Errorf("a thread started by a stranger names %q, want nobody — a later voice "+
 			"in it is not who asked", got)
 	}
-	if got := requesterOf([]*events.Event{chat}, spoke[1:]); got != "ada" {
+	if got := requesterOf([]*events.Event{chat}, spoke[1:], "swe"); got != "ada" {
 		t.Errorf("a colleague's message names %q, want ada", got)
 	}
 	tick := events.New(types.TaskAssigned{}, events.TraceContext{})
-	if got := requesterOf([]*events.Event{tick}, nil); got != "" {
+	if got := requesterOf([]*events.Event{tick}, nil, "swe"); got != "" {
 		t.Errorf("a schedule's wake names %q, want nobody", got)
+	}
+	// THE OUTCOME OF THE SEAT'S OWN ACT asks it nothing: whoever spoke first
+	// besides it is the requester, and nobody is when nobody did.
+	itself := types.InboundInteraction{Sender: types.CanonicalIdentity{Handle: "swe"}}
+	if got := requesterOf([]*events.Event{chat}, []types.InboundInteraction{itself}, "swe"); got != "" {
+		t.Errorf("the outcome of the seat's own act names %q, want nobody", got)
+	}
+	if got := requesterOf([]*events.Event{chat}, append([]types.InboundInteraction{itself}, spoke[1:]...),
+		"swe"); got != "ada" {
+		t.Errorf("a colleague who spoke after the seat's own act names %q, want ada", got)
+	}
+	if got := requesterOf([]*events.Event{chat}, append([]types.InboundInteraction{itself}, spoke...),
+		"swe"); got != "" {
+		t.Errorf("a stranger who spoke after the seat's own act names %q, want nobody — "+
+			"the first voice besides the seat's is who asked", got)
 	}
 }
 

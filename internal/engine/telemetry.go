@@ -245,7 +245,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	t.interactions = e.interactionsOf(req.Ask())
 	t.ask = turnAsk(req.Ask())
 	t.senders = sendersSpoken(t.interactions)
-	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions))
+	t.requester = requesterIdentity(company, requesterOf(req.Events, t.interactions, req.Handle))
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
@@ -975,7 +975,8 @@ func requesterIdentity(company *Company, handle string) string {
 	return ""
 }
 
-// requesterOf is the seat whose wake started a turn, or "" when no seat's did.
+// requesterOf is the seat whose wake started seat's turn, or "" when no other
+// seat's did.
 //
 // OFF THE FIRST EVENT, the one [Engine.describeTurn] describes the trigger
 // from: a colleague's ask names its asker, and a notification's first
@@ -985,7 +986,14 @@ func requesterIdentity(company *Company, handle string) string {
 // constituent's sender is known: "the requester" is who started the
 // conversation this turn answers, and a later voice in the same thread is not
 // them.
-func requesterOf(evs []*events.Event, interactions []types.InboundInteraction) string {
+//
+// BUT NEVER THE SEAT ITSELF. The outcome of a seat's own act — a workflow or
+// a pipeline its own push failed, which a code host tells the actor of — wakes
+// it with itself as the sender, and asks it nothing: the requester is whoever
+// spoke first besides it, or nobody. Read as the requester, the seat put its
+// own handle on a run's row for that run's questions to reach, and a
+// colleague who asked in the same thread was no requester at all.
+func requesterOf(evs []*events.Event, interactions []types.InboundInteraction, seat string) string {
 	for _, ev := range evs {
 		if ev == nil {
 			continue
@@ -995,10 +1003,13 @@ func requesterOf(evs []*events.Event, interactions []types.InboundInteraction) s
 		}
 		break
 	}
-	if len(interactions) == 0 {
-		return ""
+	for _, in := range interactions {
+		if in.Sender.Handle != "" && in.Sender.Handle == seat {
+			continue
+		}
+		return in.Sender.Handle
 	}
-	return interactions[0].Sender.Handle
+	return ""
 }
 
 // sendersSpoken is every distinct identifiable sender of a turn's

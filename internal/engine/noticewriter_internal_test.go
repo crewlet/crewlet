@@ -87,7 +87,7 @@ func TestAFirstPartyNoticeIsFromWhoeverWroteIt(t *testing.T) {
 				evs := []*events.Event{noticeOf(t, reg, parser, prompt, payload, "swe")}
 
 				interactions := e.interactionsOf(evs)
-				if got := requesterOf(evs, interactions); got != c.requester {
+				if got := requesterOf(evs, interactions, "swe"); got != c.requester {
 					t.Errorf("the turn is acting for %q, want %q", got, c.requester)
 				}
 				senders := sendersSpoken(interactions)

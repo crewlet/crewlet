@@ -302,6 +302,14 @@ func TestTheRequesterCeilingBoundsWhatAnAgentDoesForSomebody(t *testing.T) {
 		"artifact": private.ID.String()}); got.Failed {
 		t.Fatalf("the agent's own read failed: %s", got.Output)
 	}
+	// AND IN ONE THE OUTCOME OF ITS OWN ACT WOKE — a workflow its own push
+	// failed — which names the agent itself as the sender: its own work too.
+	itself := turnFor(t, "agent-cto")
+	itself.Senders = []types.CanonicalIdentity{{Handle: "agent-cto"}}
+	if got := r.call(t, itself, builtin.GetArtifactTool, map[string]any{
+		"artifact": private.ID.String()}); got.Failed {
+		t.Fatalf("the agent's read in a turn its own act woke failed, as a stranger's: %s", got.Output)
+	}
 
 	// THE AGENT'S OWN ARTIFACT, viewed by the founder: the founder may not
 	// publish over it, and may still ask the agent to (steerable).

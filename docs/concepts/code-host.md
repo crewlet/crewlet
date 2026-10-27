@@ -1539,7 +1539,7 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 
 | The turn was woken by | What the seat reads |
 |---|---|
-| nobody — a schedule, a watch, the seat's own work, or the engine's own notice on a work item, such as one it reports unblocked | what its own grant allows |
+| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked | what its own grant allows |
 | a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
@@ -1549,7 +1549,10 @@ A change on a work item or a page names who made it by the kind its record
 holds, never by how the name is spelled: a seat's change, or a person's made
 as the seat they hold, is that seat's, and the engine's own is nobody's. A
 credential acting as no seat holds no seat a ceiling could be decided for, so
-the turn its change wakes reads nothing, as a stranger's does.
+the turn its change wakes reads nothing, as a stranger's does. The seat's own
+voice is never its requester: when the outcome of its own act opens a thread,
+whoever speaks in it next is — a colleague or a person as above, and somebody
+the company does not know as a stranger.
 
 The colleague's grant is judged where the seat's own is: by the node that
 answers each read, from its own chart and the repository's row, and never

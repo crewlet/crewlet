@@ -587,45 +587,55 @@ func readsFor(t *testing.T, host *codeHost, ceiling string) {
 
 // A CODE READ IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN — the requester
 // ceiling the artifacts tools apply, here on a repository's grant. A turn
-// nobody woke, one the seat woke itself and one a person woke read for nobody
+// nobody woke, one the seat woke itself — the outcome of its own act among
+// them, with the seat as its sender — and one a person woke read for nobody
 // but the seat, since a person maintains every repository and so bounds
 // nothing; a turn a colleague seat woke names that seat on every question it
 // asks — the listing, a repository, the refs it resolves, every read by object
 // id — for the node that answers to judge the colleague's grant beside the
 // seat's own. A turn a stranger woke, or a person who may not act in the
 // company now, reads nothing: refused with the ceiling's reason before the
-// code host is asked anything, whoever else spoke in the turn. A requester
-// this node cannot compose is told as a node that could not tell, and never
-// read as a turn nobody woke. The operator surface has no turn: a person's
-// assistant reads as its caller, for nobody else.
+// code host is asked anything, whoever else spoke in the turn, the seat
+// itself included. A requester this node cannot compose is told as a node
+// that could not tell, and never read as a turn nobody woke. The operator
+// surface has no turn: a person's assistant reads as its caller, for nobody
+// else.
 //
 // Mutations: CodeDeps.caller skipping the ceiling → the stranger's and the
 // departed person's turns read; the colleague left off any one kind of
 // question (CodeDeps.read, resolveRef, gitRead) → red; a person's seat sent
 // as the ceiling → red; a requester this node cannot compose read as nobody →
 // red; the turn's senders read before its requester → the person's and the
-// colleague's turns refused as a stranger's.
+// colleague's turns refused as a stranger's; the seat's own voice counted as
+// a stranger's → the outcome of its own act refused; every sender beside the
+// seat's own ignored → the stranger in its thread reads.
 func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	t.Parallel()
+	// A turn's senders: somebody no seat or person maps to, the seat itself —
+	// the sender of the outcome of its own act — and a known requester.
+	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
+	itself := []types.CanonicalIdentity{{Handle: "agent-cto"}}
+	speaker := func(handle string) []types.CanonicalIdentity {
+		return []types.CanonicalIdentity{{Handle: handle}}
+	}
 	for _, c := range []struct {
 		name      string
 		requester string
-		senders   bool
+		senders   []types.CanonicalIdentity
 		ceiling   string
 	}{
-		{"a turn nobody woke", "", false, ""},
-		{"a turn the seat woke itself", "agent-cto", false, ""},
-		{"a turn a person woke", "founder", true, ""},
-		{"a turn a colleague seat woke", "agent-ceo", true, "agent-ceo"},
+		{"a turn nobody woke", "", nil, ""},
+		{"a turn the seat woke itself", "agent-cto", nil, ""},
+		{"a turn the outcome of the seat's own act woke", "agent-cto", itself, ""},
+		{"a turn a person woke", "founder", speaker("founder"), ""},
+		{"a turn a colleague seat woke", "agent-ceo", speaker("agent-ceo"), "agent-ceo"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			host := newCodeHost()
 			turn := codeTurn(t)
 			turn.Requester = c.requester
-			if c.senders {
-				turn.Senders = []types.CanonicalIdentity{{}}
-			}
+			turn.Senders = c.senders
 			everyCodeQuestion(t, codeRegistry(t, codeDeps(host)), turn)
 			readsFor(t, host, c.ceiling)
 		})
@@ -634,16 +644,20 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	for _, c := range []struct {
 		name      string
 		requester string
-		senders   bool
+		senders   []types.CanonicalIdentity
 		want      tools.Refusal
 		says      string
 		ceiling   bool
 	}{
-		{"a turn a stranger woke", "", true, tools.RefusalForbidden,
+		{"a turn a stranger woke", "", unknown, tools.RefusalForbidden,
 			"woken by somebody the company does not know", true},
-		{"a turn a departed person woke", "departed", true, tools.RefusalForbidden,
+		// A STRANGER WHO SPOKE IN THE SEAT'S OWN THREAD still bounds it:
+		// only the seat's own voice is no stranger's.
+		{"a turn a stranger spoke in beside the seat itself", "agent-cto", append(itself, unknown...),
+			tools.RefusalForbidden, "woken by somebody the company does not know", true},
+		{"a turn a departed person woke", "departed", speaker("departed"), tools.RefusalForbidden,
 			"may not act in the company now", true},
-		{"a turn whose requester this node cannot compose", "agent-gone", false, tools.RefusalUnavailable,
+		{"a turn whose requester this node cannot compose", "agent-gone", nil, tools.RefusalUnavailable,
 			"could not establish who this turn's work is for", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -652,9 +666,7 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 			reg := codeRegistry(t, codeDeps(host))
 			turn := codeTurn(t)
 			turn.Requester = c.requester
-			if c.senders {
-				turn.Senders = []types.CanonicalIdentity{{}}
-			}
+			turn.Senders = c.senders
 			for _, call := range []struct {
 				tool string
 				args map[string]any

@@ -412,7 +412,8 @@ publish answers with, and a conflicting data write's current rows, are shown
 only where the requester could read them. A turn woken by somebody the company does not know reaches only those
 edits, and so does one a credential acting as no seat woke with a change on a
 work item or a page, since no seat stands behind it; a turn nobody woke (a
-schedule, a watch, the engine's own notice) is bounded by the agent alone.
+schedule, a watch, the engine's own notice, the outcome of the agent's own act
+such as a workflow its own push failed) is bounded by the agent alone.
 
 The decision is
 [ADR-0034](https://github.com/crewlet/crewlet/blob/main/adr/0034-an-artifact-is-shared-and-a-share-is-a-relation.md),
