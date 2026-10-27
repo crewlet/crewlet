@@ -970,8 +970,8 @@ git clients' barriers, the same line is a count of the barriers:
 `CREWLET_CODE_LOG`, a day's increase of it on any one data node, which counts
 every barrier because every data node applies every record, so the nodes'
 counts are not added together. Beside the reference company's 3 000 pushes a
-day, that is **about 11 700 barriers a day**: its pushes' 4.0 MB and those
-barriers' 2.1 MB are half the 12.1 MB a day its tracker writes and its seats'
+day, that is **about 11 500 barriers a day**: its pushes' 4.0 MB and those
+barriers' 2.0 MB are half the 12.1 MB a day its tracker writes and its seats'
 reads take. That is fewer than the reference company's own git clients append
 with no CI at all — 13 800, three reads a push and thirty people fetching every
 three minutes of a working day — so a half is for a company whose people and

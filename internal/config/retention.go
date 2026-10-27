@@ -279,8 +279,8 @@ const (
 	// clients' barriers, the same line is a count of the barriers, its
 	// crewlet.statelog.barrier.applied (stream CREWLET_CODE_LOG), which any
 	// one data node counts whole, since every data node applies every
-	// barrier: beside the reference company's 4.0 MB of pushes, ABOUT 11 700
-	// BARRIERS A DAY, 2.1 MB, make half the mutation log's 12.1 MB day. The
+	// barrier: beside the reference company's 4.0 MB of pushes, ABOUT 11 500
+	// BARRIERS A DAY, 2.0 MB, make half the mutation log's 12.1 MB day. The
 	// reference company's own git clients append more than that with no CI
 	// at all (13 800), so a half is for a company whose people and CI fetch
 	// less.
