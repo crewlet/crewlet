@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -24,7 +25,15 @@ import (
 
 // remoteCommands are the subcommands that dial a remote: each takes a
 // [Cmd.Remote] and must, and no other subcommand takes one.
-var remoteCommands = []string{"fetch", "ls-remote", "push"}
+//
+// A SET, as gitproc spells its other sets of names (receivePackOptions,
+// crashFormats), never a []string: the cache's writers gate
+// (TestNothingButSyncWritesACache, internal/code/cache) reads a []string
+// literal that begins with a git writer, in any file that runs git, as an
+// argument list built away from its Cmd, and so read this one as a fetch run
+// outside the files allowed to. It runs nothing: a fetch or a push is judged
+// at the call site that spells its Cmd.
+var remoteCommands = map[string]bool{"fetch": true, "ls-remote": true, "push": true}
 
 // The configuration a remote run is given after the base, each written by the
 // pool from the run's [Cmd.Remote] (Remote.config) for the reason the package
@@ -710,7 +719,7 @@ func redactDamage(damage error, known *strings.Replacer) error {
 // argument would be read as the remote here, so a remote run writes each
 // option's value after an "=".
 func checkRemote(c Cmd) error {
-	dials := slices.Contains(remoteCommands, c.Args[0])
+	dials := remoteCommands[c.Args[0]]
 	switch {
 	case c.Remote == nil && dials:
 		return fmt.Errorf("%w: git %s dials a remote and carries no Cmd.Remote: name the remote it dials there "+
@@ -719,7 +728,7 @@ func checkRemote(c Cmd) error {
 		return nil
 	case !dials:
 		return fmt.Errorf("%w: git %s carries a Cmd.Remote: only %s dial a remote", ErrInvalid, c.Args[0],
-			strings.Join(remoteCommands, ", "))
+			strings.Join(slices.Sorted(maps.Keys(remoteCommands)), ", "))
 	case c.Remote.url == "":
 		return fmt.Errorf("%w: git %s's Cmd.Remote was not built by ResolveRemote, the one way to a remote a git "+
 			"process may dial", ErrInvalid, c.Args[0])
