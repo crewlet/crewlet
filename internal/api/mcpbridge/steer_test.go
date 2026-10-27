@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -552,5 +554,68 @@ func TestTheNotesRouteReachesTheSessionsHolderThroughTheRelay(t *testing.T) {
 	if read.StatusCode != http.StatusNoContent || len(reads) != 1 {
 		t.Errorf("a read through the fleet's address answered %d, the holder's inbox read %v",
 			read.StatusCode, reads)
+	}
+}
+
+// syncBuffer is a log sink the logger may write to from any goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A HOOK WHOSE AGENT THE CLI DID NOT FILL IN TAKES NOTHING, AND IS SAID ONCE.
+// Whose loop fired such a hook cannot be told, so it is answered as a
+// subagent's would be — the note waits for a boundary that can be told apart —
+// and the operator is told, once per session, with the run and the seat:
+// without that line, a run whose CLI never substitutes the variable takes no
+// note between its steps and nothing says why. A subagent's own batch is the
+// ordinary case and says nothing.
+//
+// NOT PARALLEL: it installs the process's log sink, which only a case running
+// alone may do.
+//
+// Mutation: drop the unsubstituted case, or say it on every call, and this goes
+// red.
+func TestAnUnsubstitutedAgentIsSaidOncePerSession(t *testing.T) {
+	logs := &syncBuffer{}
+	logging.Configure(slog.LevelInfo, logging.FormatText, logs)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+	f := newSteerFixture(t, time.Minute)
+	f.inbox.answer = `{"hookSpecificOutput":{"hookEventName":"PostToolBatch","additionalContext":"x"}}`
+	sess := dial(t, f.url)
+	for _, agent := range []string{"${agent_id}", "${agent_id}", "a1"} {
+		res := callTool(t, sess, mcpbridge.SteerTool, map[string]any{"event": "PostToolBatch", "agent": agent})
+		if res.IsError || text(res) != "" {
+			t.Errorf("steer_take for agent %q answered %q (error %v), want nothing", agent, text(res), res.IsError)
+		}
+	}
+	if taken := f.inbox.taken(); len(taken) != 0 {
+		t.Errorf("the inbox was asked at %v, want never", taken)
+	}
+	var said []string
+	for line := range strings.Lines(logs.String()) {
+		if strings.Contains(line, "mcp_bridge_steer_unsubstituted") {
+			said = append(said, line)
+		}
+	}
+	if len(said) != 1 {
+		t.Fatalf("mcp_bridge_steer_unsubstituted was logged %d times, want once:\n%s", len(said), logs.String())
+	}
+	for _, field := range []string{"run_id=run-1", "seat=dev", "level=WARN"} {
+		if !strings.Contains(said[0], field) {
+			t.Errorf("the warning does not say %s: %s", field, said[0])
+		}
 	}
 }
