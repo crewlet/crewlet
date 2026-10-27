@@ -300,11 +300,14 @@ func TestTheLayersPhaseFitsPageOne(t *testing.T) {
 }
 
 // THE PUBLICATION DUE LISTING IS LEAST RECENTLY PUBLISHED FIRST: every active
-// and archived repository holding a live pack no layer covers, the one never
-// published first and then by when each was last published, then by id —
-// paged by its cursor, a page's rows in that order across the pages — each
-// with what a publication is due by; and never a deleted one, nor one whose
-// every pack a layer covers.
+// and archived repository whose live packs are past its published ones, the
+// one never published first and then by when each was last published, then by
+// id — paged by its cursor, a page's rows in that order across the pages —
+// each with what a publication is due by; and never a deleted one, nor one
+// whose live packs are no more than its published ones (e). The counts are the
+// last recount's, so a repository whose every pack a layer covers is listed
+// after a byte-identical push, until the next recount
+// (TestAPackPushedLikeAPublishedOneIsListedUntilTheNextRecount).
 //
 // Mutation: list the most recently published first, and the repository
 // waiting longest is planned last.
@@ -326,8 +329,8 @@ func TestThePublicationDueListingIsLeastRecentlyPublishedFirst(t *testing.T) {
 			published_at = ?, publish_took_ms = ? WHERE id = ?`, r.live, r.published, r.objects, r.publishedObjects,
 			r.at, r.took, ids[name])
 	}
-	// AN ARCHIVED ONE IS LISTED, a deleted one never, nor one a layer covers
-	// whole (e).
+	// AN ARCHIVED ONE IS LISTED, a deleted one never, nor one whose live
+	// packs are no more than its published ones (e).
 	n.exec(`UPDATE code_repos SET status = 'archived' WHERE id = ?`, ids["d"])
 	if _, err := n.store.DeleteRepo(t.Context(), n.activate(t2), ids["g"]); err != nil {
 		t.Fatal(err)
