@@ -192,7 +192,7 @@ func (b *boundCase) compact(t *testing.T) statelog.Position {
 	checksum := gittest.Pack(t, b.p.Git(), dir, b.work, b.head)
 	packPath := filepath.Join(dir, "objects", "pack", "pack-"+checksum+".pack")
 	id := statelog.NewOpID(time.Now(), "")
-	out, err := code.LayBundle(code.DeriveCompactionPackID(id, 0), packPath, checksum)
+	out, err := code.LayBundle(code.DeriveOutputPackID(id, 0), packPath, checksum)
 	if err != nil {
 		t.Fatal(err)
 	}

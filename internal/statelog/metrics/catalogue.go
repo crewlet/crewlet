@@ -713,8 +713,12 @@ func Catalogue() []Instrument {
 			Name: CodeCommitBusy, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"kind"},
 			Shows: "Proposals refused `busy`, undecided, by `kind`: `push`, " +
-				"whose client runs `git push` again, and `compaction`, which " +
-				"the git node that built it plans again at its next pass. One " +
+				"whose client runs `git push` again; `compaction`, which " +
+				"the git node that built it plans again at its next pass; and " +
+				"`expunge`, a record of an expunge of a repository's " +
+				"unreachable objects — a person's purge request, which they " +
+				"ask for again, or the begin or the commit its maintainer " +
+				"built, which it plans again at its next pass. One " +
 				"of three causes that point at different remedies. A BACKLOG: a " +
 				"repository taking pushes faster than one node's committer " +
 				"commits them (its queue of 1 024 proposals, or sixteen " +
@@ -731,7 +735,8 @@ func Catalogue() []Instrument {
 				"whole. Or a record that lost every compare-and-set round it may " +
 				"take. A `compaction` busy is a repository whose pushes keep " +
 				"its committer's queue full, and whose pack count grows " +
-				"meanwhile. No repository is an attribute — which one is hot is " +
+				"meanwhile; an `expunge` busy, one whose unreachable objects " +
+				"stay in the store meanwhile. No repository is an attribute — which one is hot is " +
 				"a question for its rows, not a time series a repository.",
 		},
 		// ---- git ------------------------------------------------------

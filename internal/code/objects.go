@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -73,8 +74,12 @@ var LayerReferences = objstore.ReferenceTable{
 // which it answers as rows that name nothing once it applies (their objects
 // are kept for a grace by code_packs_retired, which no backup carries) — a
 // publication's repack among them; the layer a publication adds names its
-// objects in code_layer_parts, a Derived table no backup reads. Every
-// entry and output is answered whether or not this node's applier would skip
+// objects in code_layer_parts, a Derived table no backup reads. An EXPUNGE'S
+// BEGIN writes a row per pack it keeps and per pack it leaves dropping — a
+// dropping pack is a row of code_packs, naming its object as a live one does,
+// until its commit retires it — and removes its inputs'; its COMMIT writes a
+// row per rescue pack and removes its dropping packs'; a request writes none.
+// Every entry and output is answered whether or not this node's applier would skip
 // it as already applied — a backup reads a superset of what a restore's rows
 // name, never a subset. A purge REMOVES rows the record does not list (a part
 // takes the oldest rows the applier finds), so it answers none: a backup that
@@ -105,7 +110,7 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 			objstore.ErrRecordUnreadable, env.Subject, env.V, knownOrNot(env.Subject.Kind),
 			RecordVersion)
 	}
-	if env.Subject.Kind != KindRepo || (env.Op != OpPush && env.Op != OpCompact) {
+	if env.Subject.Kind != KindRepo || !slices.Contains(packOps, env.Op) {
 		return nil, nil
 	}
 	rec, err := Decode(payload)
@@ -129,25 +134,50 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 			})
 		}
 	case Compaction:
-		for _, a := range p.Add {
-			out = append(out, objstore.RecordReference{
-				NamedBy: objstore.JoinOwner(p.RepoID, a.PackID, "pack"),
-				Object:  a.Content(), Names: true,
-			})
-		}
+		out = append(out, written(p.RepoID, p.Add)...)
 		// THE INPUTS' ROWS LEAVE code_packs: told as removals, so a
 		// backup's walk past its copy reads the restore's rows as naming
 		// nothing there — each by `pack`, the one part every pack this
 		// build stores is.
-		for _, id := range p.Retire {
-			out = append(out, objstore.RecordReference{
-				NamedBy: objstore.JoinOwner(p.RepoID, id, "pack"),
-			})
-		}
+		out = append(out, removed(p.RepoID, p.Retire)...)
+	case ExpungeBegin:
+		// A DROPPING PACK NAMES ITS OBJECT as a live one does: it is a row
+		// of code_packs, Required, until its commit retires it.
+		out = append(out, written(p.RepoID, p.Add)...)
+		out = append(out, written(p.RepoID, p.Dropping)...)
+		out = append(out, removed(p.RepoID, p.Retire)...)
+	case ExpungeCommit:
+		out = append(out, written(p.RepoID, p.Add)...)
+		out = append(out, removed(p.RepoID, p.Retire)...)
 	default:
 		return nil, fmt.Errorf("code: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
 	}
 	return out, nil
+}
+
+// packOps are the ops whose records write or remove rows of code_packs that
+// a record names — a push's, a compaction's, an expunge's begin's and its
+// commit's; a purge removes rows its record does not list, and answers none.
+var packOps = []OpKind{OpPush, OpCompact, OpExpungeBegin, OpExpungeCommit}
+
+// written is the rows of code_packs refs write, each naming its object.
+func written(repoID string, refs []PackRef) []objstore.RecordReference {
+	out := make([]objstore.RecordReference, len(refs))
+	for i, r := range refs {
+		out[i] = objstore.RecordReference{NamedBy: objstore.JoinOwner(repoID, r.PackID, "pack"),
+			Object: r.Content(), Names: true}
+	}
+	return out
+}
+
+// removed is the rows of code_packs ids leave, each naming nothing once the
+// record applies.
+func removed(repoID string, ids []string) []objstore.RecordReference {
+	out := make([]objstore.RecordReference, len(ids))
+	for i, id := range ids {
+		out[i] = objstore.RecordReference{NamedBy: objstore.JoinOwner(repoID, id, "pack")}
+	}
+	return out
 }
 
 // knownOrNot words whether this build knows a kind.

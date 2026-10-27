@@ -129,7 +129,9 @@ import (
 // is read from the rows too — the outputs' rows the record wrote — never from
 // the decision. A committer runs ONE writer a repository, so a compaction and
 // the pushes queued around it can never contend on the repository's subject
-// from the same node.
+// from the same node. An EXPUNGE'S records — a person's request, and the
+// begin and the commit its maintainer builds ([Committer.ProposeExpunge]) —
+// wait and are decided the same way, each alone under its own operation id.
 //
 // # Bounded in count and in bytes
 //
@@ -226,16 +228,22 @@ type repoCommitter struct {
 	queued int
 }
 
-// queued is one proposal waiting for its batch: a push's, or a compaction's,
-// which waits in the same queue in the same arrival order and is decided as a
-// batch of its own ([Committer.ProposeCompaction]).
+// queued is one proposal waiting for its batch: a push's, or a compaction's or
+// an expunge record's, which wait in the same queue in the same arrival order
+// and are each decided as a batch of their own ([Committer.ProposeCompaction],
+// [Committer.ProposeExpunge]).
 type queued struct {
-	// p is the push this proposal is; compaction, where it is set, is the
-	// compaction it is instead, and p then its zero value.
+	// p is the push this proposal is; compaction or expunge, where one is
+	// set, is the compaction or the expunge record it is instead, and p then
+	// its zero value.
 	p          Proposal
 	compaction *CompactionProposal
-	bytes      int // entryBound(p), or a compaction's encoded length
-	rows       int // rowBound(p), or compactDecidedRows of a compaction
+	expunge    *ExpungeProposal
+	// bytes is entryBound(p), or a compaction's or an expunge record's
+	// encoded payload; rows is rowBound(p), compactDecidedRows of a
+	// compaction or decidedRows of an expunge record.
+	bytes int
+	rows  int
 	// arrived is when the proposal was queued, by the committer's clock;
 	// deadline is its caller's — the end of its asker's attempt, zero for a
 	// caller with none; gone is its caller's context ending — nil for a
@@ -262,8 +270,11 @@ const (
 
 // repoID is the repository q's queue is.
 func (q *queued) repoID() string {
-	if q.compaction != nil {
+	switch {
+	case q.compaction != nil:
 		return q.compaction.Compaction.RepoID
+	case q.expunge != nil:
+		return q.expunge.RepoID()
 	}
 	return q.p.RepoID
 }
@@ -272,22 +283,34 @@ func (q *queued) repoID() string {
 const (
 	kindPush       = "push"
 	kindCompaction = "compaction"
+	kindExpunge    = "expunge"
 )
 
 // kind is what q is, as the busy count names it.
 func (q *queued) kind() string {
-	if q.compaction != nil {
+	switch {
+	case q.compaction != nil:
 		return kindCompaction
+	case q.expunge != nil:
+		return kindExpunge
 	}
 	return kindPush
 }
 
+// alone reports a proposal decided as a batch of its own — a compaction's or
+// an expunge record's, each a record of its own op — never gathered with
+// pushes.
+func (q *queued) alone() bool { return q.compaction != nil || q.expunge != nil }
+
 // again is what q's asker does after a refusal that decided nothing: a person
-// runs git push again, and a compactor's next pass plans the repository again
-// from its rows.
+// runs git push again, or asks for a purge again, and a compactor's or a
+// maintainer's next pass plans the repository again from its rows.
 func (q *queued) again() string {
-	if q.compaction != nil {
+	switch {
+	case q.compaction != nil:
 		return "the next pass plans again"
+	case q.expunge != nil:
+		return q.expunge.again()
 	}
 	return "run git push again"
 }
@@ -332,10 +355,12 @@ func (q *queued) shortOfTime(left time.Duration) string {
 		ReplyMargin, q.again())
 }
 
-// answered is one proposal's answer: res a push's, compact a compaction's.
+// answered is one proposal's answer: res a push's, compact a compaction's,
+// expunge an expunge record's.
 type answered struct {
 	res     ProposeResult
 	compact CompactResult
+	expunge ExpungeResult
 	err     error
 }
 
@@ -465,11 +490,14 @@ func (c *Committer) await(ctx context.Context, q *queued) answered {
 }
 
 // busy counts q refused busy and answers it so, undecided: a push with every
-// command it carries refused, a compaction refused whole.
+// command it carries refused, a compaction or an expunge record refused whole.
 func (c *Committer) busy(q *queued, refusal string) answered {
 	c.countBusy(q.kind(), 1)
-	if q.compaction != nil {
+	switch {
+	case q.compaction != nil:
 		return answered{compact: CompactResult{Refusal: RefusalBusy, Detail: refusal}}
+	case q.expunge != nil:
+		return answered{expunge: ExpungeResult{Refusal: RefusalBusy, Detail: refusal}}
 	}
 	return answered{res: ProposeResult{Answer: refuseAll(q.p, RefusalBusy, refusal)}}
 }
@@ -590,9 +618,12 @@ func (c *Committer) run(rc *repoCommitter) {
 		if !c.admit(first) {
 			continue
 		}
-		if first.compaction != nil {
+		switch {
+		case first.compaction != nil:
 			c.compact(rc.repoID, first)
-		} else {
+		case first.expunge != nil:
+			c.expunge(rc.repoID, first)
+		default:
 			var batch []*queued
 			batch, carry = c.gather(rc, first)
 			c.commit(rc.repoID, batch)
@@ -613,8 +644,9 @@ func (c *Committer) run(rc *repoCommitter) {
 // first that does not fit is carried to lead the next batch, and admitted
 // again then, since that batch is the one it would start in.
 //
-// A COMPACTION IS NEVER GATHERED: a record carries one op, and a compaction is
-// a record of its own (OpCompact). Met behind pushes, it ends the batch and is
+// A COMPACTION OR AN EXPUNGE RECORD IS NEVER GATHERED: a record carries one
+// op, and each is a record of its own (OpCompact, OpExpungeRequest,
+// OpExpungeBegin, OpExpungeCommit). Met behind pushes, it ends the batch and is
 // carried to be decided alone, after them and before anything queued behind
 // it, so a repository's proposals still land in the order they arrived.
 func (c *Committer) gather(rc *repoCommitter, first *queued) ([]*queued, *queued) {
@@ -627,7 +659,7 @@ func (c *Committer) gather(rc *repoCommitter, first *queued) ([]*queued, *queued
 			if !c.admit(q) {
 				continue
 			}
-			if q.compaction != nil || bytes+q.bytes > MaxRecordBytes ||
+			if q.alone() || bytes+q.bytes > MaxRecordBytes ||
 				recordRows(rows+q.rows) > MaxRecordRows {
 				return batch, q
 			}

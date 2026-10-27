@@ -465,6 +465,20 @@ func registeredStatements() map[string]statement {
 		"layer parts of":        {layerPartsOfSQL, []any{"repo-1"}, []string{layerPartsKey + " (repo_id=?)"}},
 		"publication due first": {publicationDueFirstSQL, []any{MaxSnapshotItems}, []string{"code_repos_unpublished_idx (published_at>=?)"}},
 		"publication due after": {publicationDueAfterSQL, []any{30, 30, "repo-2", MaxSnapshotItems}, []string{"code_repos_unpublished_idx (published_at>=?)"}},
+		// AN EXPUNGE'S: a commit's read of the repository's dropping packs
+		// by the key's prefix; the applies' read of the repository's
+		// expunge and their counters by its key; whether a live pack was
+		// added at or before a request, over the packs' added index from
+		// the repository's start; and the maintainer's listing of the
+		// expunges owed, by id after a cursor.
+		"dropping packs":       {droppingPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
+		"expunge state":        {expungeStateSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"request pending":      {requestPendingSQL, []any{"repo-1", 25}, []string{"code_packs_added_idx (repo_id=? AND added_position<=?)"}},
+		"request":              {requestSQL, []any{"r", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"begin counters":       {beginCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"begin dropped layers": {beginDroppedLayersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"expunge due":          {expungeDueSQL, []any{"", MaxSnapshotItems}, []string{"code_repos_expunging_idx (id>?)"}},
 	}
 	return out
 }
@@ -620,6 +634,12 @@ func claimedReads() map[string]statement {
 			[]string{"code_changes_merge_idx (repo_id=? AND merge_oid=?)"}},
 		"code_revisions_head_idx": {`SELECT change_id, n FROM code_revisions WHERE head_oid = ?`,
 			[]any{oid("head-1-1")}, []string{"code_revisions_head_idx (head_oid=?)"}},
+		// THE WEEKLY EXPUNGE'S LISTING, least recently expunged first over
+		// the repositories an expunge may be due in, its partial predicate
+		// repeated verbatim.
+		"code_repos_expunge_due_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_expunge_due_idx
+			WHERE status IN ('active', 'archived') AND expunged_at <= ? ORDER BY expunged_at, id LIMIT ?`,
+			[]any{2, MaxSnapshotItems}, []string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
 	}
 }
 
@@ -789,6 +809,21 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 			if _, err := tx.ExecContext(ctx, `UPDATE code_repos SET published_packs = 30,
 				published_objects = 30, published_at = ?, live_packs = 50 WHERE id = ?`, r, id); err != nil {
 				return err
+			}
+			// AN EXPUNGE OPEN ON ONE, with its dropping packs, A PURGE
+			// REQUESTED OF ANOTHER, and every repository expunged at an
+			// instant of its own — so both of the expunge's partial indexes
+			// hold rows, and the rest of each table does not.
+			expunge, request := map[int]string{1: "expunge-1"}[r], map[int]string{2: "request-2"}[r]
+			if _, err := tx.ExecContext(ctx, `UPDATE code_repos SET expunge_id = ?, expunge_request = ?,
+				expunge_request_position = ?, expunged_at = ? WHERE id = ?`, expunge, request, 20*r, r, id); err != nil {
+				return err
+			}
+			if expunge != "" {
+				if _, err := tx.ExecContext(ctx, `UPDATE code_packs SET state = 'dropping', kind = 'cruft'
+					WHERE repo_id = ? AND added_position >= 45`, id); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

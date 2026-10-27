@@ -74,101 +74,26 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 			return 0, nil
 		}
 	}
-	retiring, err := namedPackRows(ctx, tx, c.RepoID, c.Retire)
+	plan, err := planRewrite(ctx, tx, c.RepoID, c.Retire, nil, len(c.Add), func(i int) (PackRef, PackKind,
+		PackState) {
+		return c.Add[i], PackCompact, PackLive
+	})
 	if err != nil {
-		return 0, fmt.Errorf("code: read the packs the compaction at %s retires: %w", at.position, err)
+		return 0, fmt.Errorf("code: the compaction at %s: %w", at.position, err)
 	}
-	ids := make([]string, len(c.Add))
-	for i, out := range c.Add {
-		ids[i] = out.PackID
-	}
-	held, err := namedPackRows(ctx, tx, c.RepoID, ids)
-	if err != nil {
-		return 0, fmt.Errorf("code: read the outputs of the compaction at %s: %w", at.position, err)
-	}
-	// AN OUTPUT IS WRITTEN WHERE code_packs WILL NOT HOLD IT once the inputs
-	// have left: one it holds is not written again, unless it is also an
-	// input — which no writer forms — and is leaving.
-	leaving := make(map[string]bool, len(retiring))
-	for _, p := range retiring {
-		leaving[p.id] = true
-	}
-	stays := make(map[string]bool, len(held))
-	for _, p := range held {
-		if !leaving[p.id] {
-			stays[p.id] = true
-		}
-	}
-	var adding []PackRef
-	for _, out := range c.Add {
-		if !stays[out.PackID] {
-			// NAMED ONCE: a record naming one output twice writes it once.
-			stays[out.PackID] = true
-			adding = append(adding, out)
-		}
-	}
-	if c.Layer == nil && len(retiring) == 0 && len(adding) == 0 {
+	if c.Layer == nil && plan.idle() {
 		// APPLIED ALREADY: nothing of it is left to move.
 		return 0, nil
 	}
-
-	var gonePacks int
-	var goneBytes, goneObjects int64
-	for _, p := range retiring {
-		if p.state == packLive {
-			gonePacks++
-			goneBytes += p.size
-			goneObjects += p.objects
-		}
-	}
-	retired, err := store.InsertRows(ctx, tx, at.maxVariables,
-		`INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, added_position, retired_position, retired_at) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
-		len(retiring), func(i int) []any {
-			p := retiring[i]
-			return []any{c.RepoID, p.id, p.part, p.object, p.hash, p.size, p.indexBytes, p.reverseBytes,
-				p.checksum, p.objects, p.kind, p.added, at.packed, at.at()}
-		})
+	m, err := plan.apply(ctx, tx, at, c.RepoID)
 	if err != nil {
-		return 0, fmt.Errorf("code: retire the packs the compaction at %s replaces: %w", at.position, err)
+		return 0, fmt.Errorf("code: the compaction at %s: %w", at.position, err)
 	}
-	var deleted int64
-	if len(retiring) > 0 {
-		list, listErr := jsonList(distinct(c.Retire))
-		if listErr != nil {
-			return 0, listErr
-		}
-		res, deleteErr := tx.ExecContext(ctx, deletePacksSQL, c.RepoID, list)
-		if deleteErr != nil {
-			return 0, fmt.Errorf("code: remove the packs the compaction at %s replaces: %w", at.position,
-				deleteErr)
-		}
-		deleted, _ = res.RowsAffected()
-	}
-	var addedBytes, addedObjects int64
-	for _, out := range adding {
-		addedBytes += out.Size
-		addedObjects += out.Objects
-	}
-	added, err := store.InsertRows(ctx, tx, at.maxVariables,
-		`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, state, added_position) VALUES `,
-		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, 'compact', 'live', ?)`,
-		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
-		len(adding), func(i int) []any {
-			out := adding[i]
-			return []any{c.RepoID, out.PackID, out.Object.String(), string(out.Hash), out.Size,
-				out.IndexBytes, out.ReverseBytes, out.GitChecksum, out.Objects, at.packed}
-		})
-	if err != nil {
-		return 0, fmt.Errorf("code: write the outputs of the compaction at %s: %w", at.position, err)
-	}
-	moved := retired + int(deleted) + added + 1
+	moved := m.rows + 1
 	if c.Layer == nil {
-		if _, err := tx.ExecContext(ctx, compactCountersSQL, gonePacks, len(adding), goneBytes, addedBytes,
-			goneObjects, addedObjects, at.packed, c.RepoID); err != nil {
+		if _, err := tx.ExecContext(ctx, compactCountersSQL, m.goneLive.packs, m.addedLive.packs,
+			m.goneLive.bytes, m.addedLive.bytes, m.goneLive.objects, m.addedLive.objects, at.packed,
+			c.RepoID); err != nil {
 			return 0, fmt.Errorf("code: count the compaction at %s: %w", at.position, err)
 		}
 		return moved, nil
@@ -182,12 +107,170 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil {
 		return 0, fmt.Errorf("code: recount the packs the publication at %s leaves published: %w", at.position, err)
 	}
-	if _, err := tx.ExecContext(ctx, publishCountersSQL, gonePacks, len(adding), goneBytes, addedBytes,
-		goneObjects, addedObjects, packs, objects, at.at(), c.Layer.TookMs, at.packed, at.packed,
-		c.RepoID); err != nil {
+	if _, err := tx.ExecContext(ctx, publishCountersSQL, m.goneLive.packs, m.addedLive.packs, m.goneLive.bytes,
+		m.addedLive.bytes, m.goneLive.objects, m.addedLive.objects, packs, objects, at.at(), c.Layer.TookMs,
+		at.packed, at.packed, c.RepoID); err != nil {
 		return 0, fmt.Errorf("code: count the publication at %s: %w", at.position, err)
 	}
 	return moved + placed, nil
+}
+
+// A REWRITE'S PACKS, MOVED IN ONE PLACE: a compaction's ([Applier.applyCompact])
+// and an expunge's begin's and commit's (apply_expunge.go) — every record that
+// replaces some of a repository's packs by others — so the rows it retires,
+// the outputs it writes and the counters it moves them by are one reading for
+// every kind of rewrite (ADR-0008).
+
+// packTally is what a set of pack rows holds.
+type packTally struct {
+	packs          int
+	bytes, objects int64
+}
+
+// add counts in one pack of size bytes holding objects objects.
+func (t *packTally) add(size, objects int64) {
+	t.packs++
+	t.bytes += size
+	t.objects += objects
+}
+
+// rewritePlan is what one rewrite's apply will move, read before it moves
+// anything: the rows it retires, and the outputs it writes.
+type rewritePlan struct {
+	leaving []namedPack
+	adds    []rewriteOutput
+}
+
+// rewriteOutput is one output a rewrite writes, and the kind and state it is
+// written in.
+type rewriteOutput struct {
+	out   PackRef
+	kind  PackKind
+	state PackState
+}
+
+// rewritten is what [rewritePlan.apply] moved: the rows it wrote or deleted,
+// what it retired — all of it, and the live part — and the live packs it
+// added, which are what the repository's live counters move by.
+type rewritten struct {
+	rows      int
+	goneAll   packTally
+	goneLive  packTally
+	addedLive packTally
+}
+
+// planRewrite reads what a rewrite of repoID's packs will move: every row of
+// code_packs whose pack id retire names — those retiring keeps, where it is
+// given — leaves; and of its n outputs, output(i) is the i-th and the kind and
+// state it is written in, each written where code_packs will not hold it once
+// those rows have left. An output code_packs holds already is not written
+// again, unless it is also an input — which no writer forms — and is leaving;
+// and a record naming one output twice writes it once.
+func planRewrite(ctx context.Context, tx *sql.Tx, repoID string, retire []string, retiring func(namedPack) bool,
+	n int, output func(i int) (PackRef, PackKind, PackState)) (rewritePlan, error) {
+
+	found, err := namedPackRows(ctx, tx, repoID, retire)
+	if err != nil {
+		return rewritePlan{}, fmt.Errorf("read the packs it retires: %w", err)
+	}
+	var plan rewritePlan
+	gone := make(map[string]bool, len(found))
+	for _, p := range found {
+		if retiring == nil || retiring(p) {
+			plan.leaving = append(plan.leaving, p)
+			gone[p.id] = true
+		}
+	}
+	ids := make([]string, n)
+	for i := range n {
+		out, _, _ := output(i)
+		ids[i] = out.PackID
+	}
+	held, err := namedPackRows(ctx, tx, repoID, ids)
+	if err != nil {
+		return rewritePlan{}, fmt.Errorf("read its outputs: %w", err)
+	}
+	stays := make(map[string]bool, len(held))
+	for _, p := range held {
+		if !gone[p.id] {
+			stays[p.id] = true
+		}
+	}
+	for i := range n {
+		out, kind, state := output(i)
+		if !stays[out.PackID] {
+			stays[out.PackID] = true
+			plan.adds = append(plan.adds, rewriteOutput{out: out, kind: kind, state: state})
+		}
+	}
+	return plan, nil
+}
+
+// idle reports a plan that moves nothing: a record whose rows another record,
+// or its own earlier apply, moved first.
+func (p rewritePlan) idle() bool { return len(p.leaving) == 0 && len(p.adds) == 0 }
+
+// apply moves what p planned, in repoID's rows: the leaving rows into
+// code_packs_retired, stamped with at's position and broker instant, and out
+// of code_packs; and the outputs into code_packs, added at at's position.
+func (p rewritePlan) apply(ctx context.Context, tx *sql.Tx, at applyContext, repoID string) (rewritten, error) {
+	var moved rewritten
+	for _, l := range p.leaving {
+		moved.goneAll.add(l.size, l.objects)
+		if l.state == PackLive {
+			moved.goneLive.add(l.size, l.objects)
+		}
+	}
+	retired, err := store.InsertRows(ctx, tx, at.maxVariables,
+		`INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,
+			reverse_bytes, git_checksum, objects, kind, added_position, retired_position, retired_at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
+		len(p.leaving), func(i int) []any {
+			l := p.leaving[i]
+			return []any{repoID, l.id, l.part, l.object, l.hash, l.size, l.indexBytes, l.reverseBytes,
+				l.checksum, l.objects, string(l.kind), l.added, at.packed, at.at()}
+		})
+	if err != nil {
+		return rewritten{}, fmt.Errorf("retire the packs it replaces: %w", err)
+	}
+	var deleted int64
+	if len(p.leaving) > 0 {
+		ids := make([]string, len(p.leaving))
+		for i, l := range p.leaving {
+			ids[i] = l.id
+		}
+		list, err := jsonList(distinct(ids))
+		if err != nil {
+			return rewritten{}, err
+		}
+		res, err := tx.ExecContext(ctx, deletePacksSQL, repoID, list)
+		if err != nil {
+			return rewritten{}, fmt.Errorf("remove the packs it replaces: %w", err)
+		}
+		deleted, _ = res.RowsAffected()
+	}
+	added, err := store.InsertRows(ctx, tx, at.maxVariables,
+		`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
+			reverse_bytes, git_checksum, objects, kind, state, added_position) VALUES `,
+		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
+		len(p.adds), func(i int) []any {
+			a := p.adds[i]
+			return []any{repoID, a.out.PackID, a.out.Object.String(), string(a.out.Hash), a.out.Size,
+				a.out.IndexBytes, a.out.ReverseBytes, a.out.GitChecksum, a.out.Objects, string(a.kind),
+				string(a.state), at.packed}
+		})
+	if err != nil {
+		return rewritten{}, fmt.Errorf("write its outputs: %w", err)
+	}
+	for _, a := range p.adds {
+		if a.state == PackLive {
+			moved.addedLive.add(a.out.Size, a.out.Objects)
+		}
+	}
+	moved.rows = retired + int(deleted) + added
+	return moved, nil
 }
 
 // layerFits is the apply's guard over a publication's layer, read against the

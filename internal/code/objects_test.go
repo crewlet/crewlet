@@ -223,6 +223,62 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 	}
 }
 
+// AN EXPUNGE RECORD NAMES THE PACKS ITS APPLY WRITES: a begin names a row for
+// each pack it keeps and each it leaves dropping — a dropping pack is a row of
+// code_packs that names its object as a live one does, until its commit — and
+// tells each input's row removed; a commit names its rescue's rows and tells
+// its dropping packs' removed; and a request writes no pack row at all. So a
+// backup taken while an expunge is open carries the dropping packs a restore's
+// rows name, and one taken after its commit reads them as gone.
+//
+// Mutation: answer a begin's kept packs alone, and a backup taken mid-expunge
+// misses the dropping packs its restore's rows name.
+func TestAnExpungeRecordNamesThePacksItsApplyWrites(t *testing.T) {
+	t.Parallel()
+	records := code.PackReferences.Records
+	seen := statelog.Position{Stream: code.Domain{}.Stream().Name, Generation: 1, Seq: 4}
+	xid := statelog.NewOpID(harnessAt, "")
+	kept, dropping := compactOutput(xid, 0, 2, harnessAt), compactOutput(xid, 1, 1, harnessAt)
+	cid := statelog.NewOpID(harnessAt, "")
+	rescue := compactOutput(cid, 0, 1, harnessAt)
+	named := func(p code.PackRef) objstore.RecordReference {
+		return objstore.RecordReference{NamedBy: objstore.JoinOwner("repo-a", p.PackID, "pack"),
+			Object: p.Content(), Names: true}
+	}
+	removed := func(id string) objstore.RecordReference {
+		return objstore.RecordReference{NamedBy: objstore.JoinOwner("repo-a", id, "pack")}
+	}
+	for name, tc := range map[string]struct {
+		op      code.OpKind
+		opID    string
+		payload any
+		want    []objstore.RecordReference
+	}{
+		"a begin": {code.OpExpungeBegin, xid, code.ExpungeBegin{RepoID: "repo-a", ExpungeID: xid, Node: "node-a",
+			Seen: seen, DropEpoch: 1, Grace: code.PruneGrace, Retire: []string{"push-a", "push-b"},
+			Add: []code.PackRef{kept}, Dropping: []code.PackRef{dropping}},
+			[]objstore.RecordReference{named(kept), named(dropping), removed("push-a"), removed("push-b")}},
+		"a commit": {code.OpExpungeCommit, cid, code.ExpungeCommit{RepoID: "repo-a", ExpungeID: xid,
+			CommitID: cid, Node: "node-a", Seen: seen, DropEpoch: 1, Retire: []string{dropping.PackID},
+			Add: []code.PackRef{rescue}},
+			[]objstore.RecordReference{named(rescue), removed(dropping.PackID)}},
+		"a request": {code.OpExpungeRequest, "op-request", code.ExpungeRequest{RepoID: "repo-a",
+			RequestID: "op-request", By: asker}, nil},
+	} {
+		body, err := json.Marshal(tc.payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := records(mustEncode(t, code.MutationRecord{RecordEnvelope: code.RecordEnvelope{
+			OpID: tc.opID, Subject: code.RepoSubject("repo-a"), Op: tc.op, Gen: 1,
+			Scope: code.Scope{code.RepoPath("repo-a")},
+		}, Mutation: body}))
+		if err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%s's references = %+v, %v; want %+v", name, got, err, tc.want)
+		}
+	}
+}
+
 // mustEncode encodes a hand-built record.
 func mustEncode(t *testing.T, rec code.MutationRecord) []byte {
 	t.Helper()

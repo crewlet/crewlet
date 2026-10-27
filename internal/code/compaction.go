@@ -31,12 +31,12 @@ import (
 //     sentence of the state it is in ([RepoGone]); archived is decided, since
 //     an archived repository is still read and every read of it pays for
 //     every pack it holds;
-//  2. every input: exactly one row, of part `pack`, live and not full
-//     ([PackRow.Full]), and named by no published layer the record does not
-//     replace — else stale, naming the first that is not: a compaction or a
-//     purge moved it first, a pack grew full under the plan's feet, or a
-//     publication put it in a layer, and the next pass plans again from the
-//     rows;
+//  2. every input: exactly one row, of part `pack`, live ([liveInput]) and not
+//     full ([PackRow.Full]), and named by no published layer the record does
+//     not replace — else stale, naming the first that is not: a compaction,
+//     an expunge or a purge moved it first, an expunge left it dropping, a
+//     pack grew full under the plan's feet, or a publication put it in a
+//     layer, and the next pass plans again from the rows;
 //  3. every output: a bundle [PackRef.Check] admits — the pack and both its
 //     indexes within MaxPackBytes, the one rule every holder of a row applies
 //     — else pack_too_large, and its key minted within objstore.RecordWithin
@@ -51,8 +51,9 @@ import (
 //     whole — moves a repository already near its ceiling by an object, where
 //     refusing it would leave that repository unable to compact at all.
 //
-// A compaction that carries a published layer — a PUBLICATION — is then held
-// to the layer's own six rules (publication.go). Nothing else is read — no
+// A compaction that carries a published layer — a PUBLICATION — is held to
+// the layer's own seven rules (publication.go): 6g, no expunge open, with the
+// repository's row, and 6a–6f after the rules above. Nothing else is read — no
 // ref, no protection, no push — so a decide costs the repository's row, its
 // published chain (at most MaxPublishedLayers rows, by the key) and a seek of
 // the key an input, and a publication its live packs besides; the rows of two
@@ -73,7 +74,7 @@ import (
 // not sorted and distinct or number fewer than two or more than
 // MaxCompactInputs, outputs that number none, more than MaxCompactOutputs or
 // more than the inputs, an output whose pack id is not its derivation
-// ([DeriveCompactionPackID]) or whose bundle [PackRef.Check] refuses, and a
+// ([DeriveOutputPackID]) or whose bundle [PackRef.Check] refuses, and a
 // compaction past what one record may carry. A PUBLICATION — one carrying a
 // Layer — may carry no inputs and no outputs at all, and is refused for a
 // layer [LayerRef.Check] refuses (with [ErrInvalidLayer] beside it), an
@@ -155,7 +156,7 @@ func (p CompactionProposal) validFields() error {
 		}
 	}
 	for i, out := range c.Add {
-		if want := DeriveCompactionPackID(c.CompactionID, i); out.PackID != want {
+		if want := DeriveOutputPackID(c.CompactionID, i); out.PackID != want {
 			return bad(fmt.Sprintf("add[%d].pack_id", i), "%q, and output %d of compaction %s is %s",
 				out.PackID, i, c.CompactionID, want)
 		}
@@ -224,6 +225,12 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 		d.refusal = RefusalRepoDeleted
 		return d, nil
 	}
+	if c.Layer != nil && repo.expungeID != "" {
+		// RULE 6g, read off the repository's row before anything else of a
+		// publication (publication.go).
+		d.refusal, d.detail = RefusalStale, expungingLayerDetail(repo.name, repo.expungeID)
+		return d, nil
+	}
 
 	// THE PUBLISHED CHAIN, READ FOR EVERY COMPACTION: no input may be a pack
 	// a layer names, unless the record replaces that layer.
@@ -250,10 +257,8 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 	for _, id := range c.Retire {
 		var why string
 		switch named := rows[id]; {
-		case len(named) == 0 || (len(named) == 1 && named[0].state != packLive):
-			why = "is no longer live: a compaction or a purge moved it first"
-		case len(named) > 1 || named[0].part != partPack:
-			why = "is split into parts"
+		case liveInput(named) != "":
+			why = liveInput(named)
 		case named[0].row().Full():
 			why = "is full"
 		case published[named[0].checksum] != "":
@@ -480,10 +485,12 @@ func (c *Committer) refusedCompaction(ctx context.Context, comp Compaction, err 
 // bundle, one row.
 const partPack = "pack"
 
-// namedPack is one row of code_packs as it is stored — what the compaction's
+// namedPack is one row of code_packs as it is stored — what a rewrite's
 // decide judges an input by and its apply moves into code_packs_retired whole.
 type namedPack struct {
-	id, part, object, hash, checksum, kind, state  string
+	id, part, object, hash, checksum               string
+	kind                                           PackKind
+	state                                          PackState
 	size, indexBytes, reverseBytes, objects, added int64
 }
 
@@ -491,6 +498,25 @@ type namedPack struct {
 func (p namedPack) row() PackRow {
 	return PackRow{PackID: p.id, Part: p.part, Size: p.size, IndexBytes: p.indexBytes,
 		ReverseBytes: p.reverseBytes, GitChecksum: p.checksum, Objects: p.objects, Kind: p.kind, State: p.state}
+}
+
+// liveInput is why rows — every row code_packs holds of one pack id — are no
+// pack a rewrite may take as an input, or "" for one it may: exactly one row,
+// of part `pack`, LIVE. ONE READING for every rewrite's decide, a
+// compaction's and an expunge's begin, so a pack one takes is a pack the other
+// may: a dropping pack is neither's, since its expunge's commit retires it.
+func liveInput(rows []namedPack) string {
+	switch {
+	case len(rows) == 0:
+		return "is no longer live: a compaction, an expunge or a purge moved it first"
+	case len(rows) == 1 && rows[0].state == PackDropping:
+		return "is dropping: an expunge left it for its commit to retire"
+	case len(rows) == 1 && rows[0].state != PackLive:
+		return fmt.Sprintf("is %q, no state this build rewrites", rows[0].state)
+	case len(rows) > 1 || rows[0].part != partPack:
+		return "is split into parts"
+	}
+	return ""
 }
 
 // namedPackRows is every row of code_packs of repoID whose pack id is among
@@ -551,9 +577,9 @@ func outputsMissing(ctx context.Context, tx *sql.Tx, comp Compaction, at statelo
 			missing = append(missing, "layer "+comp.Layer.LayerID)
 		}
 	}
-	lacking, err := outputsLacking(ctx, tx, comp, at)
+	lacking, err := packsLacking(ctx, tx, comp.RepoID, idsOf(comp.Add), at)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("code: read compaction %s's outputs: %w", comp.CompactionID, err)
 	}
 	for _, id := range lacking {
 		missing = append(missing, "output "+id)
@@ -561,16 +587,30 @@ func outputsMissing(ctx context.Context, tx *sql.Tx, comp Compaction, at statelo
 	return missing, nil
 }
 
-// outputsLacking is every output of comp whose row added at at no pack table
-// holds, by pack id — [outputsMissing]'s half for the packs.
-func outputsLacking(ctx context.Context, tx *sql.Tx, comp Compaction, at statelog.Position) ([]string, error) {
-	ids := make([]string, len(comp.Add))
-	for i, out := range comp.Add {
-		ids[i] = out.PackID
+// idsOf is the pack ids of refs, in order.
+func idsOf(refs []PackRef) []string {
+	ids := make([]string, len(refs))
+	for i, r := range refs {
+		ids[i] = r.PackID
 	}
-	live, err := namedPackRows(ctx, tx, comp.RepoID, ids)
+	return ids
+}
+
+// packsLacking is every pack of ids whose row added at at no pack table of
+// repoID holds — in code_packs in any state, or in code_packs_retired, where a
+// row a later record retired keeps the position it was added at, that table
+// read only for the ids code_packs lacks — by pack id: what a rewrite's
+// answer reads of the outputs its record applied ([outputsMissing], and an
+// expunge's).
+func packsLacking(ctx context.Context, tx *sql.Tx, repoID string, ids []string, at statelog.Position) (
+	[]string, error) {
+
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	live, err := namedPackRows(ctx, tx, repoID, ids)
 	if err != nil {
-		return nil, fmt.Errorf("code: read compaction %s's outputs: %w", comp.CompactionID, err)
+		return nil, err
 	}
 	present := make(map[string]bool, len(ids))
 	for _, p := range live {
@@ -591,9 +631,9 @@ func outputsLacking(ctx context.Context, tx *sql.Tx, comp Compaction, at statelo
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, retiredAddedSQL, comp.RepoID, list)
+	rows, err := tx.QueryContext(ctx, retiredAddedSQL, repoID, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read compaction %s's retired outputs: %w", comp.CompactionID, err)
+		return nil, fmt.Errorf("the retired rows: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -602,14 +642,14 @@ func outputsLacking(ctx context.Context, tx *sql.Tx, comp Compaction, at statelo
 			added    int64
 		)
 		if err := rows.Scan(&id, &part, &added); err != nil {
-			return nil, fmt.Errorf("code: read compaction %s's retired outputs: %w", comp.CompactionID, err)
+			return nil, fmt.Errorf("the retired rows: %w", err)
 		}
 		if part == partPack && added == at.Packed() {
 			present[id] = true
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("code: read compaction %s's retired outputs: %w", comp.CompactionID, err)
+		return nil, fmt.Errorf("the retired rows: %w", err)
 	}
 	var missing []string
 	for _, id := range lacking {

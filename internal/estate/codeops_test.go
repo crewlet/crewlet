@@ -69,6 +69,21 @@ func (f *fakeNode) ProposeCompaction(_ context.Context, p code.CompactionProposa
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
+// ProposeExpunge is a committer that commits every expunge record it is given
+// at the next position on the code log — or refuses every one with codeErr.
+func (f *fakeNode) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	f.note("code.expunge")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.expunges = append(f.expunges, p)
+	if f.codeErr != nil {
+		return code.ExpungeResult{}, f.codeErr
+	}
+	f.codeSeq++
+	return code.ExpungeResult{Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
+}
+
 // codeRefusal is what this node's code half refuses every operation with, or
 // nil.
 func (f *fakeNode) codeRefusal() error {
@@ -265,6 +280,7 @@ type codeAnswers struct {
 	resolved  code.RefAnswer
 	git       code.GitAnswer
 	compacted code.CompactResult
+	expunged  code.ExpungeResult
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -300,6 +316,11 @@ func (d *codeDesk) Propose(ctx context.Context, p code.Proposal) (code.ProposeRe
 func (d *codeDesk) ProposeCompaction(_ context.Context, p code.CompactionProposal) (code.CompactResult, error) {
 	held, err := d.took(p)
 	return held.compacted, err
+}
+
+func (d *codeDesk) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	held, err := d.took(p)
+	return held.expunged, err
 }
 
 func (d *codeDesk) Resolve(_ context.Context, q code.ResolveQuery) (code.RepoRef, error) {
@@ -353,11 +374,12 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 }
 
 // EVERY CODE OPERATION CROSSES WHOLE: a push's proposal and a compaction's —
-// a publication's, its layer whole — the admission's resolve, a cache's
-// snapshot page, the receiver's pending wait, the REST routes' listing, a
-// seat's refs listing, a git node's introduced pages and its compactor's and
-// publisher's due listings, and a seat's resolve of a ref reach a data node
-// from a node that holds no data —
+// a publication's, its layer whole — and each of an expunge's three records,
+// the admission's resolve, a cache's snapshot page, the receiver's pending
+// wait, the REST routes' listing, a seat's refs listing, a git node's
+// introduced pages and its compactor's, publisher's and maintainer's due
+// listings, and a seat's resolve of a ref reach a data node from a node that
+// holds no data —
 // and a read by object id the git node — with their arguments as they were
 // sent, their answers come back as they were given — a snapshot's layers,
 // packs, refs, pushes, retirements and cursor, a repository's detail and its
@@ -374,7 +396,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
 		DefaultBranch: "main", Description: "the app",
 		Protections: []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectNone}},
-		Refs:        3, LivePacks: 2, LiveBytes: 9_000, LiveObjects: 1_200, Position: at,
+		Refs:        3, LivePacks: 2, LiveBytes: 9_000, LiveObjects: 1_200, DropEpoch: 3, Position: at,
 	}
 	pack := code.PackRow{
 		PackID: "push-1", Part: "push", Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("p1")),
@@ -433,6 +455,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Publish: []code.PublicationCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, PublishedPacks: 30,
 				LiveObjects: 4_000, PublishedObjects: 3_000, LastPushAt: created, PublishedAt: created,
 				PublishTook: 1200 * time.Millisecond, Version: at}},
+			Expunge: []code.ExpungeCandidate{{ID: ref.ID, Name: "app", Open: "019a0c2e-0000-7000-8000-0000000000e1",
+				Request: "019a0c2e-0000-7000-8000-0000000000e0", Requested: at, ExpungedAt: created, LivePacks: 40,
+				LiveBytes: 90_000, Version: at}},
 			Next: "c-2", Position: at, Level: statelog.ReadSession},
 	}}
 	serveDesk(t, f, d)
@@ -470,6 +495,40 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	}
 	if got := d.last(); !reflect.DeepEqual(got, compaction) {
 		t.Errorf("the committer was proposed the compaction %+v, want %+v", got, compaction)
+	}
+
+	// AN EXPUNGE'S THREE RECORDS, every field of each and of the answer: a
+	// person's request, and a maintainer's begin and commit.
+	bundle := func(id, sum string) code.PackRef {
+		return code.PackRef{PackID: id, Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte(id)),
+			Size: 1_300, IndexBytes: 1_100, ReverseBytes: 60, GitChecksum: sum, Objects: 2}
+	}
+	for name, p := range map[string]code.ExpungeProposal{
+		"a request": {Request: &code.ExpungeRequest{RepoID: ref.ID,
+			RequestID: "019a0c2e-0000-7000-8000-0000000000e0.code_purge_unreachable",
+			By:        code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"}}},
+		"a begin": {Begin: &code.ExpungeBegin{RepoID: ref.ID, ExpungeID: "019a0c2e-0000-7000-8000-0000000000e1",
+			RequestID: "019a0c2e-0000-7000-8000-0000000000e0.code_purge_unreachable", Node: "git-a", Seen: at,
+			DropEpoch: 4, Retire: []string{"push-0", "push-1"},
+			Add:        []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e2", "8888888888888888888888888888888888888888")},
+			Dropping:   []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e3", "9999999999999999999999999999999999999999")},
+			DropLayers: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Grace: code.PruneGrace}},
+		"a commit": {Commit: &code.ExpungeCommit{RepoID: ref.ID, ExpungeID: "019a0c2e-0000-7000-8000-0000000000e1",
+			CommitID: "019a0c2e-0000-7000-8000-0000000000e4", RequestID: "019a0c2e-0000-7000-8000-0000000000e0",
+			Node: "git-a", Seen: at, DropEpoch: 4, Retire: []string{"019a0c2e-0000-7000-8000-0000000000e3"},
+			Add: []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000e5",
+				"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")}}},
+	} {
+		d.mu.Lock()
+		d.expunged = code.ExpungeResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
+			Detail: "the next pass plans again", Position: at, Request: "019a0c2e-0000-7000-8000-0000000000e0"}
+		d.mu.Unlock()
+		if got, err := seam.Expunge(ctx, p); err != nil || !reflect.DeepEqual(got, d.expunged) {
+			t.Errorf("expunge %s = (%+v, %v), want %+v", name, got, err, d.expunged)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, p) {
+			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)
+		}
 	}
 
 	resolveQ := code.ResolveQuery{Name: "app", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}}
@@ -518,6 +577,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Kind: code.ReadExpungeDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 	} {
 		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {
 			t.Errorf("read %s = (%+v, %v), want %+v", q.Kind, got, err, d.read)
@@ -690,6 +750,40 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		}
 		if got := f.client.Code().FloorOf("repo-floor"); got != landed {
 			t.Fatalf("a compaction of another repository moved repo-floor's floor to %v", got)
+		}
+	}
+
+	// AND AN EXPUNGE RECORD THIS NODE PROPOSED raises them to the record — a
+	// request answered with the one already open, to that one's — where it
+	// landed, and never where it was refused with no record: the floor of the
+	// repository it is about and of no other.
+	expunged := statelog.Position{Stream: codeStream, Generation: 1, Seq: 80}
+	for _, tc := range []struct {
+		answer code.ExpungeResult
+		// want is the session's floor after it, and repo the expunged
+		// repository's own.
+		want, repo statelog.Position
+	}{
+		{code.ExpungeResult{Refusal: code.RefusalStale, Detail: "expunge e1 is open"}, compacted, statelog.Position{}},
+		{code.ExpungeResult{Outcome: statelog.OutcomeApplied, Position: expunged}, expunged, expunged},
+	} {
+		d.mu.Lock()
+		d.expunged = tc.answer
+		d.mu.Unlock()
+		if _, err := f.client.Code().Expunge(t.Context(), code.ExpungeProposal{
+			Request: &code.ExpungeRequest{RepoID: "repo-expunged"}}); err != nil {
+			t.Fatalf("expunge: %v", err)
+		}
+		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
+			[]statelog.Position{tc.want}) {
+			t.Fatalf("after an expunge answered %+v the code floor is %v, want %v", tc.answer, got, tc.want)
+		}
+		if got := f.client.Code().FloorOf("repo-expunged"); got != tc.repo {
+			t.Fatalf("after an expunge answered %+v the expunged repository's floor is %v, want %v",
+				tc.answer, got, tc.repo)
+		}
+		if got := f.client.Code().FloorOf("repo-compacted"); got != compacted {
+			t.Fatalf("an expunge of another repository moved repo-compacted's floor to %v", got)
 		}
 	}
 }

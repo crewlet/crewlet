@@ -9,9 +9,10 @@ import (
 
 // repoFloors is how far this node's own writes reached in each repository:
 // per repository, the furthest position a write of this node to it landed at
-// — a push or a compaction it proposed that applied or is pending, a push it
-// proposed found landed — which [CodeSeam.FloorOf] answers. Nothing else
-// raises an entry: a read's position is somebody else's writes.
+// — a push, a compaction or an expunge record it proposed that applied or is
+// pending, a push it proposed found landed — which [CodeSeam.FloorOf]
+// answers. Nothing else raises an entry: a read's position is somebody else's
+// writes.
 //
 // BOUNDED at [maxRepoFloors] repositories: past it the entry at the LOWEST
 // position goes, the write likeliest to be held by every copy already. A

@@ -774,21 +774,22 @@ func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) 
 }
 
 // CodeSeam is the code host's reach into the estate, from every node: a push's
-// proposal and a compaction's to their repository's committer, and the reads
-// the host's admission, a cache's sync and the REST routes make — each
-// answered by a data node whose copy of the code log serves, this one where it
-// does. Its consumers declare what they call of it.
+// proposal, a compaction's and an expunge record's to their repository's
+// committer, and the reads the host's admission, a cache's sync and the REST
+// routes make — each answered by a data node whose copy of the code log
+// serves, this one where it does. Its consumers declare what they call of it.
 //
 // ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed — a
-// push's or a compaction's — and a push this node proposed found landed. A
-// read's position is somebody else's writes, and observing it would hold
-// every later read this node routes — a `stale` one included — behind the
-// newest linearizable read anybody on the node made, which is the tracker's
-// and the knowledge base's rule too. Each such write raises two floors: the
-// session's, on the whole code log, which every operation this node routes to
-// a data node carries; and the floor of the REPOSITORY it wrote
-// ([CodeSeam.FloorOf]), which a read of that repository's content by object id
-// carries to its git node — and a read of any other repository does not.
+// push's, a compaction's or an expunge record's — and a push this node
+// proposed found landed. A read's position is somebody else's writes, and
+// observing it would hold every later read this node routes — a `stale` one
+// included — behind the newest linearizable read anybody on the node made,
+// which is the tracker's and the knowledge base's rule too. Each such write
+// raises two floors: the session's, on the whole code log, which every
+// operation this node routes to a data node carries; and the floor of the
+// REPOSITORY it wrote ([CodeSeam.FloorOf]), which a read of that repository's
+// content by object id carries to its git node — and a read of any other
+// repository does not.
 type CodeSeam struct{ r *Router }
 
 // Code answers the code host.
@@ -813,6 +814,20 @@ func (c CodeSeam) Compact(ctx context.Context, p code.CompactionProposal) (code.
 	out, err := call(ctx, c.r, opCodeCompact, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
 		c.wrote(p.Compaction.RepoID, out.Position)
+	}
+	return out, err
+}
+
+// Expunge asks the repository's committer to decide an expunge record — a
+// person's purge request, or a maintainer's begin or commit — and raises this
+// node's floors past the record it landed in — this node's own write, which
+// its next read of the repository must see on whichever node answers it. A
+// request answered with the one already open raises them past that one's
+// record, which is the request this node's caller now holds.
+func (c CodeSeam) Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	out, err := call(ctx, c.r, opCodeExpunge, nil, p)
+	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
+		c.wrote(p.RepoID(), out.Position)
 	}
 	return out, err
 }

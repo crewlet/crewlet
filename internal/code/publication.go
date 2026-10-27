@@ -27,9 +27,18 @@ import (
 //
 // Everything [decideCompaction] holds a compaction to — the repository, the
 // inputs, the outputs and the arithmetic — with the inputs' rule amended and
-// six rules of the layer's own after it, each against the rows of the same
-// snapshot:
+// seven rules of the layer's own, each against the rows of the same snapshot:
 //
+//   - 6g, NO EXPUNGE OPEN, read with the repository's row before anything
+//     else: a publication decided while the repository's expunge has begun
+//     and not committed ([ExpungeBegin]) is stale, and the next pass plans
+//     again once it commits. Its live packs need not be closed then — a ref a
+//     push moved between the expunge's scan and its begin may reach an object
+//     only a dropping pack holds, until the commit's rescue makes it live —
+//     so a layer covering them may cover no history git can bitmap, and one
+//     covering a dropping pack would be over a pack the commit retires. Held
+//     off until the commit, every layer the chain holds names live packs
+//     alone, and the commit keeps every one;
 //   - THE INPUTS (rule 2, amended for every compaction): an input's pack is
 //     named by NO layer of the chain unless the record replaces that layer —
 //     else stale. A layer names its packs by checksum, and a node's chain is
@@ -71,8 +80,9 @@ import (
 // from what git reads; a push's arithmetic carries exactly that drift, in the
 // tail, until the next recount (replicated 0062 says why no push recounts).
 // Every pack a layer row of an active or archived repository names is then a
-// live pack's: rule 2 retires none a layer that stays names, and 6c names none
-// that is not live.
+// live pack's: rule 2 retires none a layer that stays names, an expunge's
+// begin removes every layer over a pack it retires and every layer above that
+// one (decide_expunge.go), and 6c names none that is not live.
 
 // Check is what every layer row must be before any byte moves — the
 // committer's decide and a git node's install alike — each refusal
@@ -287,7 +297,9 @@ type livePack struct {
 
 // livePacksOf is every live pack row of a repository, of the one part every
 // pack this build stores is — one read of the repository's own rows, by the
-// key's prefix: the decide's 6c and 6d read them, and the apply's recount.
+// key's prefix: the decide's 6c and 6d read them, and the apply's recount,
+// a publication's and an expunge's begin's. LIVE: a dropping pack an expunge
+// left is no pack a layer may name or a recount count.
 func livePacksOf(ctx context.Context, tx *sql.Tx, repoID string) ([]livePack, error) {
 	rows, err := tx.QueryContext(ctx, livePacksSQL, repoID)
 	if err != nil {
@@ -432,5 +444,5 @@ const (
 	layersOfSQL = `SELECT seq, layer_id, base_id, graph_id, packs, midx_bytes, bitmap_bytes, graph_bytes,
 		objects, commits, git, took_ms, added_position FROM code_layers WHERE repo_id = ? ORDER BY seq`
 	livePacksSQL = `SELECT pack_id, git_checksum, objects, added_position FROM code_packs
-		WHERE repo_id = ? AND part = 'pack'`
+		WHERE repo_id = ? AND part = 'pack' AND state = 'live'`
 )

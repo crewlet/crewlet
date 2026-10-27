@@ -27,9 +27,10 @@ import (
 // installing cache holds a bundle to, so a second writer that laid a bundle
 // out or sealed it by its own reading would be judged by a rule it did not
 // write against — and the first difference would be a row no git node can
-// install, fleet-wide. The id a compaction's output is laid out under is one
-// derivation for the same reason ([DeriveCompactionPackID]): the build that
-// names the output and the check of the proposal that carries it must agree.
+// install, fleet-wide. The id a rewrite's output is laid out under — a
+// compaction's, an expunge's — is one derivation for the same reason
+// ([DeriveOutputPackID]): the build that names the output and the check of the
+// proposal that carries it must agree.
 //
 // Unlike bundle.go, this half does I/O: it reads the three files and streams
 // them to the store it is handed. It still runs no git — the files are a
@@ -107,36 +108,39 @@ func LayBundle(packID, packPath, checksum string) (*PackRef, error) {
 		ReverseBytes: sizes[2], GitChecksum: checksum, Objects: count}, nil
 }
 
-// DeriveCompactionPackID is the pack id of output n of the compaction
-// compactionID — the id [LayBundle] lays that output out under, and its
-// row's — n counting the outputs from 0 in the order the build wrote them:
-// an UNNAMED derivation ([statelog.DeriveOpID]) over the compaction's id and
-// n, at the instant that id was minted ([statelog.OpMintedAt]).
+// DeriveOutputPackID is the pack id of output n of the rewrite whose record's
+// operation id is rewriteID — a compaction's ([Compaction.CompactionID]), an
+// expunge's begin ([ExpungeBegin.ExpungeID]) or its commit
+// ([ExpungeCommit.CommitID]) — the id [LayBundle] lays that output out under,
+// and its row's, n counting the record's outputs from 0 in the order it lists
+// them: an UNNAMED derivation ([statelog.DeriveOpID]) over the rewrite's id
+// and n, at the instant that id was minted ([statelog.OpMintedAt]).
 //
 // ONE FUNCTION, because two packages must agree on every byte of it without
-// asking each other (ADR-0008): the git node that builds a compaction names
-// each output by it before the output is stored, and a proposal of the
-// compaction is held to it output by output before any committer decides it.
-// A copy that disagreed in one byte would have every compaction's outputs
-// refused, and a repository nothing compacts keeps every pack each push
-// stored.
+// asking each other (ADR-0008): the git node that builds a rewrite names each
+// output by it before the output is stored, and a proposal of the rewrite is
+// held to it output by output before any committer decides it. A copy that
+// disagreed in one byte would have every rewrite's outputs refused, and a
+// repository nothing rewrites keeps every pack each push stored. One for every
+// kind of rewrite, since each names its outputs by the one id its record
+// carries, and no two records carry one id.
 //
 // DERIVED rather than minted, as a push's pack carries the push's own id: an
-// output's id is its compaction's, so a proposal's outputs are held to the
-// compaction that wrote them — none can take another pack's id — with nothing
-// to look up, and the same compaction proposed again names the same outputs.
+// output's id is its rewrite's, so a proposal's outputs are held to the
+// rewrite that wrote them — none can take another pack's id — with nothing to
+// look up, and the same rewrite proposed again names the same outputs.
 // UNNAMED, because a stored pack's id is a bare UUIDv7 in its canonical
 // spelling, as a push's is: a name would follow it after a dot. AT THE
-// COMPACTION'S INSTANT, the one its id carries, never the clock of the call,
-// so whoever derives it, wherever and whenever, derives the same id.
+// REWRITE'S INSTANT, the one its id carries, never the clock of the call, so
+// whoever derives it, wherever and whenever, derives the same id.
 //
 // An id that carries no instant derives at the zero instant — statelog's
 // reading of such an id, which the layout writes as the Unix epoch — and is
 // still the same id on every node, which is all the two sides need of it. A
-// compaction's own id always carries one: it is a bare UUIDv7.
-func DeriveCompactionPackID(compactionID string, n int) string {
-	at, _ := statelog.OpMintedAt(compactionID)
-	return statelog.DeriveOpID(at, "", compactionID, strconv.Itoa(n))
+// rewrite's own id always carries one: it is a bare UUIDv7.
+func DeriveOutputPackID(rewriteID string, n int) string {
+	at, _ := statelog.OpMintedAt(rewriteID)
+	return statelog.DeriveOpID(at, "", rewriteID, strconv.Itoa(n))
 }
 
 // UploadDeadline is a bundle put's own bound: objstore.ReadBase — the store's

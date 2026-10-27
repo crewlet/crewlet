@@ -308,6 +308,12 @@ func TestOnlyTheGateKindsStopTheApplier(t *testing.T) {
 			Kind: string(code.KindRepo), Op: string(code.OpRetireSweep)}, false},
 		"a compaction, which moves packs its outputs replace": {statelog.Envelope{
 			Kind: string(code.KindRepo), Op: string(code.OpCompact)}, false},
+		"a purge request, which only asks": {statelog.Envelope{
+			Kind: string(code.KindRepo), Op: string(code.OpExpungeRequest)}, false},
+		"an expunge's begin, which keeps every object": {statelog.Envelope{
+			Kind: string(code.KindRepo), Op: string(code.OpExpungeBegin)}, false},
+		"an expunge's commit, which retires what its begin left dropping": {statelog.Envelope{
+			Kind: string(code.KindRepo), Op: string(code.OpExpungeCommit)}, false},
 		"a create": {statelog.Envelope{Kind: string(code.KindName), Op: string(code.OpCreate)}, false},
 		"a kind this build has never heard of": {statelog.Envelope{Kind: "something-new",
 			Op: "something-new"}, false},

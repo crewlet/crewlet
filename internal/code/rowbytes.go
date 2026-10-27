@@ -217,8 +217,8 @@ func (r PackRow) encodedBytes() int {
 		field("reverse_bytes", intBytes(r.ReverseBytes), false) +
 		field("git_checksum", stringBytes(r.GitChecksum), false) +
 		field("objects", intBytes(r.Objects), false) +
-		field("kind", stringBytes(r.Kind), false) +
-		field("state", stringBytes(r.State), false) +
+		field("kind", stringBytes(string(r.Kind)), false) +
+		field("state", stringBytes(string(r.State)), false) +
 		field("added", positionBytes(r.Added), false)
 }
 
@@ -246,6 +246,27 @@ func (c PublicationCandidate) encodedBytes() int {
 		n += field("published_at", timeBytes(c.PublishedAt), false)
 	}
 	return n + field("publish_took", intBytes(int64(c.PublishTook)), false) +
+		field("version", positionBytes(c.Version), false)
+}
+
+// encodedBytes is the length of the candidate's JSON encoding.
+func (c ExpungeCandidate) encodedBytes() int {
+	n := 2 + field("id", stringBytes(c.ID), true) +
+		field("name", stringBytes(c.Name), false)
+	if c.Open != "" {
+		n += field("open", stringBytes(c.Open), false)
+	}
+	if c.Request != "" {
+		n += field("request", stringBytes(c.Request), false)
+	}
+	if !c.Requested.IsZero() {
+		n += field("requested", positionBytes(c.Requested), false)
+	}
+	if !c.ExpungedAt.IsZero() {
+		n += field("expunged_at", timeBytes(c.ExpungedAt), false)
+	}
+	return n + field("live_packs", intBytes(c.LivePacks), false) +
+		field("live_bytes", intBytes(c.LiveBytes), false) +
 		field("version", positionBytes(c.Version), false)
 }
 
@@ -348,11 +369,14 @@ func (r RepoRef) members() int {
 	if !r.DeletedAt.IsZero() {
 		n += field("deleted_at", timeBytes(r.DeletedAt), false)
 	}
-	return n + field("refs", intBytes(r.Refs), false) +
+	n += field("refs", intBytes(r.Refs), false) +
 		field("live_packs", intBytes(r.LivePacks), false) +
 		field("live_bytes", intBytes(r.LiveBytes), false) +
-		field("live_objects", intBytes(r.LiveObjects), false) +
-		field("position", positionBytes(r.Position), false)
+		field("live_objects", intBytes(r.LiveObjects), false)
+	if r.DropEpoch != 0 {
+		n += field("drop_epoch", intBytes(r.DropEpoch), false)
+	}
+	return n + field("position", positionBytes(r.Position), false)
 }
 
 // encodedBytes is the length of the listing row's JSON encoding.

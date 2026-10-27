@@ -405,8 +405,8 @@ func refuseEvery(cmds []Command, code Refusal, detail string) []Command {
 	return out
 }
 
-// pushRepo is what a decide reads of a repository's row: a push batch's, and a
-// compaction's ([decideCompaction]).
+// pushRepo is what a decide reads of a repository's row: a push batch's, a
+// compaction's ([decideCompaction]) and an expunge's ([decideExpunge]).
 type pushRepo struct {
 	name      string
 	status    RepoStatus
@@ -419,6 +419,15 @@ type pushRepo struct {
 	// deletedAt is when a deleted or purging repository was deleted, and
 	// zero for any other.
 	deletedAt time.Time
+	// dropEpoch is how many expunges have begun on the repository,
+	// expungeID the one open ("" for none), and expungeRequest and
+	// requestedAt the purge requested and not yet served ("" and zero for
+	// none) — what an expunge's three records are decided by, and a
+	// publication refused by while one is open.
+	dropEpoch      int64
+	expungeID      string
+	expungeRequest string
+	requestedAt    int64
 }
 
 // pushRepoIn reads a repository's row for a decide.
@@ -427,7 +436,8 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	var status string
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
-		&r.liveBytes, &r.livePacks, &r.version, &deleted)
+		&r.liveBytes, &r.livePacks, &r.version, &deleted, &r.dropEpoch, &r.expungeID, &r.expungeRequest,
+		&r.requestedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -1169,7 +1179,8 @@ func UnheldDetail(old string) string {
 // The push decide's statements, each registered in plan_test.go. The refs a
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
-	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at
+	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at,
+		drop_epoch, expunge_id, expunge_request, expunge_request_position
 		FROM code_repos WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
 	pushesNamedSQL    = `SELECT ` + pushColumns + ` FROM code_pushes

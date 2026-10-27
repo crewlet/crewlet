@@ -86,7 +86,10 @@
 // one queue beside the pushes and is decided there as a record of its own, so
 // everything that moves a repository's packs meets on one node, and an
 // unanswered one is asked of the runner-up under its own compaction id, which
-// the domain's ledger collapses as it does a push id.
+// the domain's ledger collapses as it does a push id. An EXPUNGE RECORD'S
+// PROPOSAL (`code.expunge`) — a person's purge request, or the begin or the
+// commit a repository's maintainer built — is asked the same way, under the
+// record's own operation id.
 //
 // These are the operations keyed on the DATA nodes (a read of a repository's
 // git objects is keyed on the git nodes: below); [op.keyedBy] is the

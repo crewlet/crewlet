@@ -66,7 +66,7 @@ func compactionOf(n *node, repo string, retire []string, objects int64, minted t
 // whose key was minted at minted.
 func compactOutput(cid string, i int, objects int64, minted time.Time) code.PackRef {
 	return code.PackRef{
-		PackID: code.DeriveCompactionPackID(cid, i), Object: objstore.KeyAt(minted),
+		PackID: code.DeriveOutputPackID(cid, i), Object: objstore.KeyAt(minted),
 		Hash:         objstore.HashOf([]byte(fmt.Sprint(cid, i))),
 		Size:         32*objects + code.IndexBytesFor(objects) + code.ReverseBytesFor(objects),
 		IndexBytes:   code.IndexBytesFor(objects),
@@ -597,14 +597,15 @@ func TestACompactionIsAnsweredOnlyFromItsOutputsRows(t *testing.T) {
 	}
 }
 
-// A BUSY COMPACTION IS COUNTED APART FROM A BUSY PUSH: both meet the same
-// queue and the same node's bounds, and both are refused busy undecided past
-// them — a push's commands each refused, a compaction whole, told its next
-// pass plans again — each counted under its own `kind`, so an operator tells
-// pushes refused for a backlog from a compaction that met one.
+// A BUSY COMPACTION IS COUNTED APART FROM A BUSY PUSH, and a busy expunge
+// record from both: all meet the same queue and the same node's bounds, and
+// all are refused busy undecided past them — a push's commands each refused, a
+// compaction and an expunge record whole — each counted under its own `kind`,
+// so an operator tells pushes refused for a backlog from a compaction or an
+// expunge that met one.
 //
-// Mutation: count every busy refusal without its kind, and neither series
-// names whose proposal it was.
+// Mutation: count every busy refusal without its kind, and no series names
+// whose proposal it was.
 func TestABusyCompactionIsCountedApartFromABusyPush(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -621,7 +622,13 @@ func TestABusyCompactionIsCountedApartFromABusyPush(t *testing.T) {
 		!strings.Contains(compaction.Detail, "across this node's repositories") {
 		t.Fatalf("a compaction past the node's bytes answered %+v, %v; want busy, the node full", compaction, err)
 	}
-	for _, kind := range []string{"push", "compaction"} {
+	ask := purgeOf(repo)
+	expunge, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Request: &ask})
+	if err != nil || expunge.Refusal != code.RefusalBusy || expunge.Outcome != "" ||
+		!strings.Contains(expunge.Detail, "across this node's repositories") {
+		t.Fatalf("an expunge record past the node's bytes answered %+v, %v; want busy, the node full", expunge, err)
+	}
+	for _, kind := range []string{"push", "compaction", "expunge"} {
 		if got := readingOf(rec, metrics.CodeCommitBusy, metrics.Attrs{"kind": kind}).Total; got != 1 {
 			t.Errorf("the busy counter reads %d of kind %s, want 1", got, kind)
 		}
@@ -760,15 +767,15 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	}
 }
 
-// A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due` read and the
-// publisher's `publication_due` read are the engine's own, so the domain
-// refuses either with an asker — the one place every surface a principal reads
-// the code host through meets — answers it with none, and still refuses a
-// principal's read that names none; and each takes nothing its listing does
-// not read.
+// A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due` read, the
+// publisher's `publication_due` read and the maintainer's `expunge_due` read
+// are the engine's own, so the domain refuses each with an asker — the one
+// place every surface a principal reads the code host through meets — answers
+// it with none, and still refuses a principal's read that names none; and each
+// takes nothing its listing does not read.
 //
-// Mutation: accept an asker on either duty listing, and a principal's read
-// could list every repository's packs past its grant.
+// Mutation: accept an asker on any duty listing, and a principal's read could
+// list every repository's packs past its grant.
 func TestADutyListingNamesNoAsker(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -792,6 +799,12 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 			Fresh: stale}, "limit"},
 		"a publication listing naming a repository": {code.ReadQuery{Kind: code.ReadPublicationDue, Repo: "web",
 			Fresh: stale}, "repo"},
+		"an expunge listing naming an asker": {code.ReadQuery{Kind: code.ReadExpungeDue, Asker: asker,
+			Fresh: stale}, "asker"},
+		"an expunge listing naming a floor": {code.ReadQuery{Kind: code.ReadExpungeDue, MinPacks: 1,
+			Fresh: stale}, "min_packs"},
+		"an expunge listing naming a limit": {code.ReadQuery{Kind: code.ReadExpungeDue, Limit: 5,
+			Fresh: stale}, "limit"},
 		"a principal's listing naming no asker": {code.ReadQuery{Kind: code.ReadRepos, Fresh: stale}, "asker"},
 		"a principal's listing naming a floor": {code.ReadQuery{Kind: code.ReadRepos, Asker: asker, MinPacks: 1,
 			Fresh: stale}, "min_packs"},
@@ -804,6 +817,7 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 	for _, q := range []code.ReadQuery{
 		{Kind: code.ReadCompactionDue, MinPacks: 1, Fresh: stale},
 		{Kind: code.ReadPublicationDue, Fresh: stale},
+		{Kind: code.ReadExpungeDue, Fresh: stale},
 	} {
 		if _, err := n.reader.Read(t.Context(), q); err != nil {
 			t.Fatalf("a %s listing naming no asker: %v", q.Kind, err)

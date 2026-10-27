@@ -721,7 +721,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 				return 0, fmt.Errorf("code: read %s's packs to purge: %w", p.RepoID, err)
 			}
 			packIDs = append(packIDs, id)
-			if state == packLive {
+			if PackState(state) == PackLive {
 				livePacksGone++
 				liveBytesGone += size
 				liveObjectsGone += objects
@@ -842,9 +842,6 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	n, _ = res.RowsAffected()
 	return deleted + int(n), nil
 }
-
-// packLive is a pack row's state while a repository names it.
-const packLive = "live"
 
 // keySet reads the keys among keys a statement over json_each finds.
 func keySet(ctx context.Context, tx *sql.Tx, query string, keys []string) (map[string]bool, error) {

@@ -224,7 +224,8 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 	err := tx.QueryRowContext(ctx, repoViewSQL, id).Scan(&v.ref.ID, &v.ref.Name, &status, &managed,
 		&owners, &v.ref.Owner.Ref, &visibility, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs,
 		&v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects,
-		&v.tombstonesThrough, &v.retiredThrough, &v.layersPosition, &v.pushes, &v.lastPushAt, &v.createdAt)
+		&v.ref.DropEpoch, &v.tombstonesThrough, &v.retiredThrough, &v.layersPosition, &v.pushes, &v.lastPushAt,
+		&v.createdAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return repoView{}, false, nil
@@ -1316,6 +1317,12 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// the committer's own snapshot.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.publicationDue(ctx, tx, q, &out) }
+	case ReadExpungeDue:
+		// A SET READ OF THE DOMAIN, as the compaction's listing is, for the
+		// same reason: every expunge record that follows is decided again
+		// from the committer's own snapshot.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeDue(ctx, tx, q, &out) }
 	}
 	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		out = ReadAnswer{}
@@ -1350,6 +1357,8 @@ func (q ReadQuery) validate() error {
 		return q.validateCompactionDue()
 	case ReadPublicationDue:
 		return q.validatePublicationDue()
+	case ReadExpungeDue:
+		return q.validateExpungeDue()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1492,12 +1501,38 @@ func (q ReadQuery) validatePublicationDue() error {
 	return nil
 }
 
+// validateExpungeDue is [ReadQuery.validate] for an `expunge_due` read: the
+// engine's own — a repository's maintainer polling for the expunges it owes —
+// so it names NO asker, for the `compaction_due` read's reason, and nothing
+// else at all: no repository, no filter, no range, no floor and no limit,
+// since its partial index holds exactly the repositories it lists and a page
+// is MaxSnapshotItems of them.
+func (q ReadQuery) validateExpungeDue() error {
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	if q.Asker != (Principal{}) {
+		return refused("asker", "an expunge_due read is the engine's own, which no principal makes")
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
+		{"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0},
+	} {
+		if f.set {
+			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
+				"purge requested, a page of MaxSnapshotItems at a time, and names nothing else")
+		}
+	}
+	return nil
+}
+
 // freshness is the level a read is served at: for every kind a principal
-// reads, and for the duty listings `compaction_due` and `publication_due`, one
-// of [ReadLevels], stale unless asked; for the engine's own `introduced`, any
-// level a point read serves ([pointLevel]) — named, since whoever builds an
-// index names the level its pages must be read at, and a session read with the
-// position it must include.
+// reads, and for the duty listings `compaction_due`, `publication_due` and
+// `expunge_due`, one of [ReadLevels], stale unless asked; for the engine's own
+// `introduced`, any level a point read serves ([pointLevel]) — named, since
+// whoever builds an index names the level its pages must be read at, and a
+// session read with the position it must include.
 func (q ReadQuery) freshness() (statelog.Freshness, error) {
 	fresh := q.Fresh
 	switch {
@@ -1572,7 +1607,7 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		)
 		if err := rows.Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &owners, &v.ref.Owner.Ref,
 			&visibility, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &v.ref.Refs, &v.ref.LivePacks,
-			&v.ref.LiveBytes, &v.ref.LiveObjects, &v.pushes, &v.lastPushAt, &head); err != nil {
+			&v.ref.LiveBytes, &v.ref.LiveObjects, &v.ref.DropEpoch, &v.pushes, &v.lastPushAt, &head); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("code: list repositories: %w", err)
 		}
@@ -2026,6 +2061,59 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 	return rows.Err()
 }
 
+// expungeDue serves one page of an `expunge_due` read: the active and archived
+// repositories with an expunge open or a purge requested and not served, BY
+// ID, each with the expunge, the request and its position, when the
+// repository was last expunged, its live packs and bytes, and the version its
+// row was read at.
+//
+// ONE WALK of code_repos_expunging_idx (replicated 0063), its partial
+// predicate repeated verbatim, which holds exactly the repositories with an
+// expunge open or a request waiting — a handful in a fleet of any size, every
+// one of which its maintainer finishes or serves before it plans anything
+// else — keyset on the id after a cursor. A deleted or purging repository's
+// stays out: its open expunge waits for its restore, or goes with its purge.
+// A FULL LISTING, never a delta from the last poll's, for the compaction's
+// listing's reason.
+func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	// THE CURSOR IS THE LAST ID SERVED, and "" before the first: every id
+	// is a UUID, past "" in byte order, so one statement serves every page.
+	if q.Cursor != "" && validRepoID("cursor", q.Cursor) != nil {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	rows, err := tx.QueryContext(ctx, expungeDueSQL, q.Cursor, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	for rows.Next() {
+		var (
+			c                            ExpungeCandidate
+			requested, expunged, version int64
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &c.Open, &c.Request, &requested, &expunged, &c.LivePacks,
+			&c.LiveBytes, &version); err != nil {
+			return fmt.Errorf("code: list the repositories an expunge is owed in: %w", err)
+		}
+		if c.Request != "" {
+			c.Requested = unpacked(requested)
+		}
+		// ZERO IS NEVER: the column's default, and no commit's broker
+		// instant.
+		if expunged != 0 {
+			c.ExpungedAt = store.DecodeTime(expunged)
+		}
+		c.Version = unpacked(version)
+		out.Expunge = append(out.Expunge, c)
+		if pg.add(c.encodedBytes()) {
+			out.Next = c.ID
+			break
+		}
+	}
+	return rows.Err()
+}
+
 // publishCursor is "<published_at>/<id>", the instant as the column stores it:
 // a repository's place in a `publication_due` listing's order.
 func publishCursor(publishedAt int64, id string) string {
@@ -2443,8 +2531,8 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 const (
 	repoViewSQL = `SELECT id, name, status, managed_by, owner_kind, owner, visibility, default_branch,
 		description, deleted_at, refs, branches, tags, tombstones, live_packs, live_bytes,
-		live_objects, tombstones_through, retired_through, layers_position, pushes, last_push_at, created_at
-		FROM code_repos WHERE id = ?`
+		live_objects, drop_epoch, tombstones_through, retired_through, layers_position, pushes, last_push_at,
+		created_at FROM code_repos WHERE id = ?`
 	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position`
 	packsFullFirstSQL = `SELECT ` + packColumns + ` FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`
@@ -2499,7 +2587,7 @@ const (
 		ORDER BY position DESC, push_id DESC LIMIT ?`
 	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.owner_kind, r.owner, r.visibility,
 		r.default_branch, r.description, r.deleted_at, r.refs, r.live_packs, r.live_bytes,
-		r.live_objects, r.pushes, r.last_push_at, h.target
+		r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target
 		FROM code_repos r LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
 		WHERE r.status IN (SELECT value FROM json_each(?)) AND r.name > ?
@@ -2576,6 +2664,12 @@ const (
 		WHERE live_packs > published_packs AND status IN ('active', 'archived')
 			AND published_at >= ? AND (published_at > ? OR id > ?)
 		ORDER BY published_at, id LIMIT ?`
+	// THE EXPUNGES OWED, by id over code_repos_expunging_idx — its partial
+	// predicate repeated verbatim — after the cursor, "" from its start.
+	expungeDueSQL = `SELECT id, name, expunge_id, expunge_request, expunge_request_position, expunged_at,
+		live_packs, live_bytes, version FROM code_repos INDEXED BY code_repos_expunging_idx
+		WHERE (expunge_id != '' OR expunge_request != '') AND status IN ('active', 'archived') AND id > ?
+		ORDER BY id LIMIT ?`
 	// A SNAPSHOT'S LAYERS PHASE: every part of a repository's chain, in its
 	// key's order, joined to its layer (layersOfSQL) in Go.
 	layerPartsOfSQL = `SELECT layer_id, part, object, hash, size FROM code_layer_parts

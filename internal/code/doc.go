@@ -460,17 +460,18 @@
 // # What this package does not do
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits
-// the pushes a receiving node proposes and the compactions a git node
-// proposes, answers reads of the rows, holds a bundle's bytes to the row that
-// names them when a caller tees them through a [SealWriter], and holds a
-// published layer's files to theirs ([CheckLayer]). It moves object bytes in
-// TWO places, each the one way its kind of object moves: [StoreBundle], the
-// upload of a pack bundle [LayBundle] laid out from the files a git wrote,
-// sealed on its way — the one store every writer of a stored pack takes,
-// through the [Putter] it is handed, so none lays a bundle out or seals it by
-// a copy of its own — and a published layer's parts, cut by one rule both
-// ways: [StoreLayer] uploads them at once, and [FetchLayerPart] lays each back
-// where it came from, read through the store's verified read.
+// the pushes a receiving node proposes, the compactions and expunges a git
+// node proposes and the purges a person asks for, answers reads of the rows,
+// holds a bundle's bytes to the row that names them when a caller tees them
+// through a [SealWriter], and holds a published layer's files to theirs
+// ([CheckLayer]). It moves object bytes in TWO places, each the one way its
+// kind of object moves: [StoreBundle], the upload of a pack bundle
+// [LayBundle] laid out from the files a git wrote, sealed on its way — the one
+// store every writer of a stored pack takes, through the [Putter] it is
+// handed, so none lays a bundle out or seals it by a copy of its own — and a
+// published layer's parts, cut by one rule both ways: [StoreLayer] uploads
+// them at once, and [FetchLayerPart] lays each back where it came from, read
+// through the store's verified read.
 //
 // # Five horizons, each a function of the record that applies it
 //
@@ -733,6 +734,45 @@
 // bytes, the three files back to back, are stored as [LayerPartBytes] parts
 // ([LayerContentType]), every part uploaded at once so every key is named
 // within objstore.RecordWithin.
+//
+// # An expunge drops what no ref reaches, in two records
+//
+// Nothing else ever removes an object a push stored — a force-push or a
+// deletion leaves the history behind it in the repository's packs — so an
+// EXPUNGE is the one rewrite that drops objects, in two records of their own
+// on the repository's subject, each decided alone by its committer in its one
+// queue ([Committer.ProposeExpunge], decide_expunge.go), as a compaction is:
+//
+//   - its BEGIN ([ExpungeBegin]) rewrites some live packs — a full pack among
+//     them — into packs holding what a ref reached at its maintainer's scan,
+//     which stay live (kind expunge), and packs holding the rest, which are
+//     DROPPING (kind cruft, [PackDropping]): still rows of code_packs naming
+//     their objects, still served, and never a pack a new push may rely on.
+//     It keeps every object of its inputs, so it needs no fence; it moves the
+//     repository's DROP EPOCH, which every push carries as its receiver read
+//     it, so a push checked before the begin is refused rather than land a
+//     ref onto an object the begin made dropping; and it removes the
+//     published layers over its inputs, from the lowest naming one up;
+//   - its COMMIT ([ExpungeCommit]) retires the dropping packs into
+//     code_packs_retired, where each keeps its object for [RetireGrace], and
+//     keeps as a live RESCUE (kind rescue) whatever of them a push that
+//     landed between the scan and the begin made reachable again. Its one
+//     precondition is its expunge, open at its epoch with exactly those
+//     dropping packs — no ref — so a repository pushed to all day still
+//     commits.
+//
+// A person may ask for one: a REQUEST ([ExpungeRequest]) records a purge and
+// nothing else, the repository holds it open — a second request while one is
+// open is that one — and it is SERVED, cleared, once no live pack of the
+// repository was added at or before it, at a commit or, for a repository
+// holding no live pack, at once. While an expunge is open, a second begin is
+// stale and so is a publication (publication.go's rule 6g); a compaction of
+// live packs is decided as ever. The repository's maintainer finds the
+// expunges it owes by the [ReadExpungeDue] listing — the active and archived
+// repositories with an expunge open or a request waiting, by id, one walk of
+// code_repos_expunging_idx (replicated 0063), the engine's own read. Its
+// bounds: at most [MaxExpungeInputs] inputs and [MaxExpungeOutputs] outputs a
+// begin, so its record writes at most 2 625 rows (expungeBeginRows).
 //
 // # Measured
 //

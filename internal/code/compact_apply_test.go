@@ -24,7 +24,7 @@ import (
 // key was minted at minted — as a builder lays one out ([LayBundle]).
 func outputOf(cid string, n int, objects int64, minted time.Time) PackRef {
 	return PackRef{
-		PackID: DeriveCompactionPackID(cid, n), Object: objstore.KeyAt(minted),
+		PackID: DeriveOutputPackID(cid, n), Object: objstore.KeyAt(minted),
 		Hash:         objstore.HashOf([]byte(fmt.Sprint(cid, n))),
 		Size:         32*objects + IndexBytesFor(objects) + ReverseBytesFor(objects),
 		IndexBytes:   IndexBytesFor(objects),

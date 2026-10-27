@@ -45,7 +45,7 @@ func layerOver(name, base string, replaces []string, minted time.Time, packs ...
 func publication(id string, seen uint64, l LayerRef, retire []string, add ...PackRef) Compaction {
 	cid := statelog.NewOpID(applyClock, "")
 	for i := range add {
-		add[i].PackID = DeriveCompactionPackID(cid, i)
+		add[i].PackID = DeriveOutputPackID(cid, i)
 	}
 	return Compaction{RepoID: id, CompactionID: cid, Node: "node-a", Seen: codeAt(seen), Retire: retire,
 		Add: add, Layer: &l}

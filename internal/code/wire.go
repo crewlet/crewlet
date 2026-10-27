@@ -48,6 +48,12 @@ type RepoRef struct {
 	// beside LiveBytes: the most a fetch request to the repository can
 	// legitimately name, which the code host bounds a request it spools by.
 	LiveObjects int64 `json:"live_objects"`
+	// DropEpoch is how many expunges have begun on the repository
+	// ([ExpungeBegin]): what a push carries of the row its receiver checked
+	// it against, and the committer refuses it `expunging` where the
+	// repository's has moved since. Omitted at zero, a repository never
+	// expunged.
+	DropEpoch int64 `json:"drop_epoch,omitempty"`
 	// Position is the checkpoint the rows were read at — read in the same
 	// transaction as them.
 	Position statelog.Position `json:"position"`
@@ -183,18 +189,21 @@ type RepoSnapshot struct {
 
 // PackRow is one pack bundle a repository's rows name.
 type PackRow struct {
-	PackID       string            `json:"pack_id"`
-	Part         string            `json:"part"`
-	Object       objstore.Key      `json:"object"`
-	Hash         objstore.Hash     `json:"hash"`
-	Size         int64             `json:"size"`
-	IndexBytes   int64             `json:"index_bytes"`
-	ReverseBytes int64             `json:"reverse_bytes"`
-	GitChecksum  string            `json:"git_checksum"`
-	Objects      int64             `json:"objects"`
-	Kind         string            `json:"kind"`
-	State        string            `json:"state"`
-	Added        statelog.Position `json:"added"`
+	PackID       string        `json:"pack_id"`
+	Part         string        `json:"part"`
+	Object       objstore.Key  `json:"object"`
+	Hash         objstore.Hash `json:"hash"`
+	Size         int64         `json:"size"`
+	IndexBytes   int64         `json:"index_bytes"`
+	ReverseBytes int64         `json:"reverse_bytes"`
+	GitChecksum  string        `json:"git_checksum"`
+	Objects      int64         `json:"objects"`
+	// Kind is the record that added it, and State whether the repository
+	// holds it live or an expunge's begin has left it dropping
+	// ([PackDropping]).
+	Kind  PackKind          `json:"kind"`
+	State PackState         `json:"state"`
+	Added statelog.Position `json:"added"`
 }
 
 // Ref is the PackRef a cache installs and [CheckBundle] reads.
@@ -499,12 +508,18 @@ const (
 	// repository's maintainer polls for the repositories a publication may
 	// be due in. The engine's own read, as `compaction_due` is.
 	ReadPublicationDue ReadKind = "publication_due"
+	// ReadExpungeDue is the active and archived repositories with an
+	// expunge open or a purge requested, by id, each with what its
+	// maintainer finishes or serves it by: the listing a repository's
+	// maintainer polls for the expunges it owes. The engine's own read, as
+	// `compaction_due` is.
+	ReadExpungeDue ReadKind = "expunge_due"
 )
 
 // ReadKinds is the closed set.
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadIntroduced, ReadCompactionDue,
-		ReadPublicationDue}
+		ReadPublicationDue, ReadExpungeDue}
 }
 
 // Valid reports a kind this build knows.
@@ -519,9 +534,9 @@ type ReadQuery struct {
 	// repository the asker may not read, and a read of one answers
 	// [ErrNotPermitted]. Required rather than defaulted, because a default
 	// would be a reader nobody named, and an optional asker is a hole any
-	// caller that forgot it opens. REFUSED on `introduced`, on
-	// `compaction_due` and on `publication_due`, which no principal makes:
-	// an asker there would be judged by nothing.
+	// caller that forgot it opens. REFUSED on `introduced` and on the duty
+	// listings `compaction_due`, `publication_due` and `expunge_due`, which no
+	// principal makes: an asker there would be judged by nothing.
 	Asker Principal `json:"asker"`
 	// Repo is the repository's NAME, for repo, pushes and refs.
 	Repo string `json:"repo,omitempty"`
@@ -541,8 +556,8 @@ type ReadQuery struct {
 	Cursor   string `json:"cursor,omitempty"`
 	// Limit is repos 1..500 (0 = 100), pushes 1..200 (0 = 50), refs
 	// 1..1 000 (0 = 200) and introduced 1..MaxSnapshotItems (0 = the most);
-	// a `compaction_due` page and a `publication_due` page are
-	// MaxSnapshotItems and name none.
+	// a page of a duty listing — `compaction_due`, `publication_due`,
+	// `expunge_due` — is MaxSnapshotItems and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
@@ -556,9 +571,36 @@ type ReadAnswer struct {
 	Introduced []IntroducedRow        `json:"introduced,omitempty"`
 	Due        []CompactionCandidate  `json:"due,omitempty"`
 	Publish    []PublicationCandidate `json:"publish,omitempty"`
+	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
 	Next       string                 `json:"next,omitempty"`
 	Position   statelog.Position      `json:"position"`
 	Level      statelog.ReadLevel     `json:"level"`
+}
+
+// ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
+// open on it and the purge requested of it, whichever it holds — what its
+// maintainer finishes or serves first — when it was last expunged, its live
+// packs and bytes, which a cycle's inputs are cut from, and the version its
+// row was read at.
+type ExpungeCandidate struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Open is the expunge begun and not yet committed — its id — and ""
+	// for none: what the maintainer finishes, from the rows, before it
+	// begins another.
+	Open string `json:"open,omitempty"`
+	// Request is the purge requested and not yet served — its id — and
+	// Requested the position its record landed at: a cycle serving it
+	// rewrites the live packs added at or before that position. "" and zero
+	// for none.
+	Request   string            `json:"request,omitempty"`
+	Requested statelog.Position `json:"requested,omitzero"`
+	// ExpungedAt is the last commit's broker instant, zero for a repository
+	// never expunged.
+	ExpungedAt time.Time         `json:"expunged_at,omitzero"`
+	LivePacks  int64             `json:"live_packs"`
+	LiveBytes  int64             `json:"live_bytes"`
+	Version    statelog.Position `json:"version"`
 }
 
 // CompactionCandidate is one repository a `compaction_due` read lists: its id
@@ -629,6 +671,42 @@ type CompactResult struct {
 	// applied one — and, for a not_applied or repo_deleted refusal the log
 	// made after the append, where that record lies applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
+}
+
+// ExpungeProposal is what an expunge's asker hands the repository's committer
+// to decide ([Committer.ProposeExpunge]): EXACTLY ONE of a person's request, a
+// maintainer's begin and its commit, each decided alone as a record of its
+// own op. The set field's own id is the record's operation id — a request's
+// RequestID, a begin's ExpungeID, a commit's CommitID — and a begin's or a
+// commit's Seen its publish's session floor, so it carries nothing beside it.
+type ExpungeProposal struct {
+	Request *ExpungeRequest `json:"request,omitempty"`
+	Begin   *ExpungeBegin   `json:"begin,omitempty"`
+	Commit  *ExpungeCommit  `json:"commit,omitempty"`
+}
+
+// ExpungeResult is what became of one expunge proposal.
+type ExpungeResult struct {
+	// Outcome is applied, pending or unknown for a proposal whose record was
+	// appended, and empty for one refused with none — and applied, with no
+	// record of its own, for a request answered with the one already open
+	// (Request names it). A begin's and a commit's applied is answered only
+	// from the rows of the packs the record added, never from the decision.
+	Outcome statelog.Outcome `json:"outcome,omitempty"`
+	// Refusal is why it was refused with no record — stale, repo_deleted,
+	// upload_expired, pack_too_large, busy, not_applied or unavailable —
+	// and Detail its one sentence.
+	Refusal Refusal `json:"refusal,omitempty"`
+	Detail  string  `json:"detail,omitempty"`
+	// Position is where its record landed — or, for a request answered with
+	// the one already open, where that one's did — and, for a not_applied or
+	// repo_deleted refusal the log made after the append, where that record
+	// lies applying nowhere.
+	Position statelog.Position `json:"position,omitzero"`
+	// Request is the purge a request's answer is about: its own id once its
+	// record applied, and the open request's where it was answered with that
+	// one. Empty for a begin and a commit.
+	Request string `json:"request,omitempty"`
 }
 
 // RepoSummary is a repository as a listing renders it.

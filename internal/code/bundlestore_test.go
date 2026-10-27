@@ -141,7 +141,7 @@ func TestEveryNodeNamesACompactionsOutputsAlike(t *testing.T) {
 		{"", 0, "00000000-0000-73d0-89f6-dc618e4cfdbb"},
 		{"not-an-operation-id", 0, "00000000-0000-790a-939f-64b799c4a4ee"},
 	} {
-		if got := code.DeriveCompactionPackID(tc.compaction, tc.n); got != tc.want {
+		if got := code.DeriveOutputPackID(tc.compaction, tc.n); got != tc.want {
 			t.Errorf("output %d of compaction %q is named %s, want %s", tc.n, tc.compaction, got, tc.want)
 		}
 	}
@@ -158,7 +158,7 @@ func TestACompactionsOutputsTakeIDsOfTheirOwnAtItsInstant(t *testing.T) {
 	named := map[string]string{}
 	for _, compaction := range []string{statelog.NewOpID(minted, ""), statelog.NewOpID(minted, "")} {
 		for n := range 3 {
-			id := code.DeriveCompactionPackID(compaction, n)
+			id := code.DeriveOutputPackID(compaction, n)
 			what := fmt.Sprintf("output %d of compaction %s", n, compaction)
 			if other, taken := named[id]; taken {
 				t.Errorf("%s is named %s, as %s is", what, id, other)

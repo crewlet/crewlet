@@ -166,6 +166,75 @@ func RepoStatuses() []RepoStatus {
 // Valid reports a value this build knows.
 func (s RepoStatus) Valid() bool { return slices.Contains(RepoStatuses(), s) }
 
+// PackKind is what added a pack row to code_packs: which record wrote it.
+//
+// READ BY NOTHING THAT DECIDES: a cache installs a pack by its [PackState],
+// and a decide judges one by its state, its part and its size, so a row of a
+// kind this build does not know — a newer build's — is installed and judged
+// as any other. It is the repository's history of what rewrote its packs, for
+// whoever reads the rows. Every value is in the base format, under the code
+// domain's stated condition ([OpCompact], [OpExpungeBegin]).
+type PackKind string
+
+const (
+	// PackPush is a push's pack: the bundle its receive-pack stored.
+	PackPush PackKind = "push"
+	// PackCompact is a compaction's output.
+	PackCompact PackKind = "compact"
+	// PackMerge is the pack of objects a change's merge record builds (M5):
+	// no record of this build writes one.
+	PackMerge PackKind = "merge"
+	// PackCandidate is the pack a speculative queue's candidate is recorded
+	// with (M5): no record of this build writes one.
+	PackCandidate PackKind = "candidate"
+	// PackLand is the pack a post-land lane's landing records (M5): no
+	// record of this build writes one.
+	PackLand PackKind = "land"
+	// PackExpunge is a pack an expunge's begin keeps: what of its inputs a
+	// ref reached, live.
+	PackExpunge PackKind = "expunge"
+	// PackCruft is a pack an expunge's begin leaves dropping: what of its
+	// inputs no ref reached.
+	PackCruft PackKind = "cruft"
+	// PackRescue is a pack an expunge's commit keeps of its dropping packs:
+	// what a push that landed before its begin made reachable again, live.
+	PackRescue PackKind = "rescue"
+)
+
+// PackKinds is the closed set, in the order the records that write them were
+// added — the merge's three among them, which the merge records extend, so
+// one list names every kind code_packs may hold.
+func PackKinds() []PackKind {
+	return []PackKind{PackPush, PackCompact, PackMerge, PackCandidate, PackLand, PackExpunge, PackCruft,
+		PackRescue}
+}
+
+// Valid reports a kind this build knows.
+func (k PackKind) Valid() bool { return slices.Contains(PackKinds(), k) }
+
+// PackState is where a pack row is in its repository's life.
+type PackState string
+
+const (
+	// PackLive is a pack the repository holds: every cache installs it among
+	// the repository's objects, every receiver lets a push rely on it, and
+	// every rewrite may take it as an input.
+	PackLive PackState = "live"
+	// PackDropping is a pack an expunge's begin left holding what no ref
+	// reached when it was planned: a cache still serves it, so a reader
+	// already on one of its objects finishes, and no new push may rely on it
+	// — until the expunge's commit retires it into code_packs_retired. Never
+	// a compaction's input, a published layer's pack or an expunge's input,
+	// and never counted among the repository's live packs, bytes or objects.
+	PackDropping PackState = "dropping"
+)
+
+// PackStates is the closed set, in this order.
+func PackStates() []PackState { return []PackState{PackLive, PackDropping} }
+
+// Valid reports a state this build knows.
+func (s PackState) Valid() bool { return slices.Contains(PackStates(), s) }
+
 // Owner is who owns a repository, as resolved at the activation that wrote it.
 type Owner struct {
 	Kind OwnerKind `json:"kind"`
@@ -563,8 +632,9 @@ type Purge struct {
 // with no pack excluded — an object an input shares with a pack that is not
 // an input is written again rather than left to that pack, because two
 // compactions decided from different snapshots may each retire the pack the
-// other relied on. Expunge, which drops objects, is the one rewrite that needs
-// a fence, and it is not this record.
+// other relied on. An expunge, which drops objects, is the one rewrite that
+// needs a fence — the drop epoch its begin moves, which every push is held to
+// ([ExpungeBegin]) — and it is not this record.
 //
 // Every field is in the base format, under the condition [OpCompact] states.
 type Compaction struct {
@@ -575,7 +645,7 @@ type Compaction struct {
 	// after a committer went silent is the same compaction, collapsed by the
 	// operation ledger, and its instant is what the ledger judges a late
 	// retry by and what each output's id is derived at
-	// ([DeriveCompactionPackID]).
+	// ([DeriveOutputPackID]).
 	CompactionID string `json:"compaction_id"`
 	// Node is the git node that built it, for whoever reads the log.
 	Node string `json:"node"`
@@ -590,7 +660,7 @@ type Compaction struct {
 	Retire []string `json:"retire"`
 	// Add are the outputs, each one bundle in the stored format at most
 	// MaxPackBytes WHOLE — the pack and both its indexes ([PackRef.Check])
-	// — the n-th's pack id [DeriveCompactionPackID] of CompactionID and n,
+	// — the n-th's pack id [DeriveOutputPackID] of CompactionID and n,
 	// in the order the build wrote them.
 	Add []PackRef `json:"add"`
 	// Layer is the published layer this record adds to the repository's
@@ -722,6 +792,151 @@ type RetireSweep struct {
 	Through statelog.Position `json:"through"`
 }
 
+// ExpungeRequest asks for an expunge of a repository's unreachable objects — a
+// person's purge. Its record writes the request and nothing else: the
+// repository's maintainer serves it, with no grace for the objects a ref drop
+// left, through as many begins and commits as the repository's live packs
+// need, and it is SERVED — the repository holds it no more — once no live pack
+// of the repository was added at or before it: at its own apply, for a
+// repository holding no live pack, and at a commit's otherwise. A request
+// asked while one is open is that one: decided as nothing, and answered with
+// the open one's id and position.
+//
+// Every field is in the base format, under the condition [OpExpungeRequest]
+// states.
+type ExpungeRequest struct {
+	RepoID string `json:"repo_id"`
+	// RequestID is the record's operation id, minted once by whoever asks —
+	// an operation id this engine accepts (statelog.CheckCallerOpID) — so a
+	// request asked again after its answer was lost is the same request,
+	// collapsed by the operation ledger.
+	RequestID string `json:"request_id"`
+	// By is the person who asked, by the credential they asked with and the
+	// human seat it is bound to: the request's attribution, which its
+	// record's actor — the deciding node, as for every expunge record — does
+	// not say.
+	By Principal `json:"by"`
+}
+
+// ExpungeBegin begins an expunge of a repository's packs: the packs it
+// rewrites (Retire) leave code_packs for code_packs_retired, and the packs
+// that replace them join it — Add, holding every object a ref reached when it
+// was planned, LIVE; Dropping, holding the rest, DROPPING ([PackDropping]) —
+// while the repository's drop epoch moves to DropEpoch and ExpungeID is its
+// open expunge until its commit ([ExpungeCommit]). Decided by the
+// repository's committer ([Committer.ProposeExpunge]) and applied as ONE
+// record, which also removes the published layers over its inputs.
+//
+// IT KEEPS EVERY OBJECT: Add and Dropping hold every object of the inputs,
+// and a cache serves a dropping pack beside the live ones, so no read loses
+// an object to it and it judges no reachability any record needs a fence
+// for. What it decides is which objects a new push may rely on: none in a
+// dropping pack, which a receiver's view of the repository leaves out, and
+// none at all of a push whose receiver read the repository at an earlier drop
+// epoch, which its committer refuses `expunging`.
+//
+// Every field is in the base format, under the condition [OpExpungeBegin]
+// states.
+type ExpungeBegin struct {
+	RepoID string `json:"repo_id"`
+	// ExpungeID is minted ONCE by the node that builds the expunge — a bare
+	// UUIDv7 (statelog.NewOpID with no name) — and is the record's
+	// operation id, the repository's open expunge until its commit, and
+	// what each output's pack id is derived from ([DeriveOutputPackID]):
+	// a begin asked again of the repository's runner-up after a committer
+	// went silent is the same begin, collapsed by the operation ledger.
+	ExpungeID string `json:"expunge_id"`
+	// RequestID is the open request this expunge serves, "" for one on the
+	// maintainer's own schedule. PROVENANCE: a commit serves a request by its
+	// position, never by this.
+	RequestID string `json:"request_id,omitempty"`
+	// Node is the git node that built it, for whoever reads the log.
+	Node string `json:"node"`
+	// Seen is the code log's position the builder's scan read the
+	// repository's refs and ref drops at — the tips its outputs were cut by.
+	// The committer decides at or past it (the publish's session floor).
+	Seen statelog.Position `json:"seen"`
+	// DropEpoch is the repository's drop epoch once the begin applies: the
+	// one its row held when the builder planned, plus one.
+	DropEpoch int64 `json:"drop_epoch"`
+	// Grace is how long before the scan a ref drop's object was still kept
+	// reachable: PruneGrace for an expunge on the maintainer's own schedule,
+	// and 0 for one serving a request — a purge drops what a force-push left
+	// at once. PROVENANCE: the decide reads no ref.
+	Grace time.Duration `json:"grace"`
+	// Retire are the pack ids the outputs replace, sorted and distinct, each
+	// live when the committer decides — a full pack among them: an expunge is
+	// the one rewrite that takes a full pack, since what it drops may be in
+	// any pack.
+	Retire []string `json:"retire"`
+	// Add are the packs holding what a ref reached and Dropping the packs
+	// holding the rest, each one bundle in the stored format at most
+	// MaxPackBytes WHOLE ([PackRef.Check]); the n-th of Add then Dropping,
+	// counted together from 0 in that order, has pack id
+	// [DeriveOutputPackID] of ExpungeID and n. Either may be empty, never
+	// both.
+	Add      []PackRef `json:"add,omitempty"`
+	Dropping []PackRef `json:"dropping,omitempty"`
+	// DropLayers are the published layers the begin removes, in chain order:
+	// the chain's top from the lowest layer naming an input — a layer over a
+	// pack the begin retires is one no git node can load, and a layer above
+	// it one whose base is gone — and none where no layer names an input.
+	// The repository's maintainer publishes again once the expunge commits.
+	DropLayers []string `json:"drop_layers,omitempty"`
+}
+
+// ExpungeCommit ends a repository's open expunge: its dropping packs (Retire)
+// leave code_packs for code_packs_retired, where each keeps its object from
+// the collector for [RetireGrace] — so a reader already on one finishes — and
+// its RESCUE (Add) joins code_packs live: what of the dropping packs a ref
+// reached at the rescue's sync, which a push that landed between the
+// expunge's scan and its begin made reachable again. The repository's open
+// expunge is cleared, and the request it served with it once no live pack of
+// the repository was added at or before the request.
+//
+// ITS ONE PRECONDITION IS ITS EXPUNGE: still open at its epoch, with exactly
+// the dropping packs the commit retires. No ref and no push is read, so a
+// repository pushed to all day still commits — a push checked after the begin
+// relies on no dropping object, and one checked before it is refused
+// `expunging`.
+//
+// Every field is in the base format, under the condition [OpExpungeCommit]
+// states.
+type ExpungeCommit struct {
+	RepoID string `json:"repo_id"`
+	// ExpungeID is the expunge this commit ends: the repository's open one.
+	ExpungeID string `json:"expunge_id"`
+	// CommitID is minted ONCE by the node that builds the commit — a bare
+	// UUIDv7 — and is the record's operation id and what each rescue pack's
+	// id is derived from ([DeriveOutputPackID]). Not ExpungeID, the begin's
+	// own: the ledger would answer the commit with the begin's record. And
+	// minted a build, never derived from the expunge, so a commit asked again
+	// of the repository's runner-up is the same commit, collapsed by the
+	// ledger, while one its builder built again over a newer sync is another
+	// — answered stale if the first landed, rather than collapsed onto a
+	// record that names other rescue packs.
+	CommitID string `json:"commit_id"`
+	// RequestID is the request the expunge serves, "" for none: provenance,
+	// as on the begin.
+	RequestID string `json:"request_id,omitempty"`
+	// Node is the git node that built it, for whoever reads the log.
+	Node string `json:"node"`
+	// Seen is the code log's position the rescue's tips were read at, at or
+	// past the begin: the committer decides at or past it, so one that has
+	// not applied the begin yet refuses `behind`, about itself, and the
+	// runner-up decides — rather than refuse the commit stale.
+	Seen statelog.Position `json:"seen"`
+	// DropEpoch is the epoch the expunge's begin moved the repository to.
+	DropEpoch int64 `json:"drop_epoch"`
+	// Retire are the repository's dropping packs — every one — sorted and
+	// distinct: none where the begin left none.
+	Retire []string `json:"retire,omitempty"`
+	// Add is the rescue, each one bundle in the stored format at most
+	// MaxPackBytes WHOLE, the n-th's pack id [DeriveOutputPackID] of CommitID
+	// and n; none where nothing dropping was reached again.
+	Add []PackRef `json:"add,omitempty"`
+}
+
 // Activated raises the activation fence to a configuration activation.
 //
 // PINNED AT [GateRecordVersion] FOR EVER, as every gate is: a node that
@@ -786,6 +1001,12 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Compaction](rec)
 	case kind == KindRepo && op == OpRetireSweep:
 		return decodePayload[RetireSweep](rec)
+	case kind == KindRepo && op == OpExpungeRequest:
+		return decodePayload[ExpungeRequest](rec)
+	case kind == KindRepo && op == OpExpungeBegin:
+		return decodePayload[ExpungeBegin](rec)
+	case kind == KindRepo && op == OpExpungeCommit:
+		return decodePayload[ExpungeCommit](rec)
 	case kind == KindCompany && op == OpActivate:
 		return decodePayload[Activated](rec)
 	case kind == KindEviction && op == OpEviction:

@@ -136,12 +136,57 @@ const (
 	// base-format loop — an older build would otherwise FAIL on the record
 	// at DecodeMutation's default arm rather than retain it. It is no gate.
 	OpRetireSweep OpKind = "retire_sweep"
+
+	// OpExpungeRequest asks for an expunge of a repository's unreachable
+	// objects — a person's purge — and records the request and nothing else,
+	// on the repository's own subject ([ExpungeRequest]): the repository's
+	// maintainer serves it with as many begins and commits as its live packs
+	// need.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this op — none of the domain is on main, so no
+	// image and no release holds it — and while that is so, every build
+	// that meets an expunge_request record reads it. Once a build without it
+	// has run, a new op is a versionedFields row and this one takes {Name:
+	// "RecordEnvelope.Op expunge_request", Since: 2, Path: []string{"op"},
+	// Equals: string(OpExpungeRequest)}, with RecordVersion at 2 and its line
+	// under "What each version added", a Carrying record in the statelogtest
+	// candidate, and the op excepted from the stamp test's base-format loop —
+	// an older build would otherwise FAIL on the record at DecodeMutation's
+	// default arm rather than retain it. It is no gate.
+	OpExpungeRequest OpKind = "expunge_request"
+
+	// OpExpungeBegin begins an expunge: some of a repository's live packs
+	// leave code_packs for code_packs_retired, and the packs that replace
+	// them join it — those holding what a ref reaches live, those holding the
+	// rest DROPPING — while the repository's drop epoch moves and its open
+	// expunge is named, on the repository's own subject ([ExpungeBegin]),
+	// decided by the repository's committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// expunge_begin", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpExpungeBegin)}, with the same companions. It is no gate.
+	OpExpungeBegin OpKind = "expunge_begin"
+
+	// OpExpungeCommit ends an expunge: the repository's dropping packs leave
+	// code_packs for code_packs_retired, and its rescue — what of them a push
+	// that landed before the begin made reachable again — joins it live, on
+	// the repository's own subject ([ExpungeCommit]), decided by the
+	// repository's committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// expunge_commit", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpExpungeCommit)}, with the same companions. It is no gate.
+	OpExpungeCommit OpKind = "expunge_commit"
 )
 
-// OpKinds are the fourteen, in the order they are documented.
+// OpKinds are the seventeen, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
+	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -162,8 +207,9 @@ const (
 	ActorConfig ActorKind = "config"
 
 	// ActorSystem is the engine on its own account: the committer's push
-	// batches and compactions, and the code-retention pass's sweeps and
-	// purges.
+	// batches, compactions and expunge records — a person's purge request
+	// among them, whose person its payload names — and the code-retention
+	// pass's sweeps and purges.
 	ActorSystem ActorKind = "system"
 )
 

@@ -1,0 +1,227 @@
+package code_test
+
+import (
+	"log/slog"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// AN EXPUNGE THROUGH THE WHOLE PATH: its records proposed to a committer,
+// decided in one snapshot, published on a real embedded broker, applied by the
+// shipped applier and answered from the rows they wrote.
+
+// beginFor is an expunge's begin of repo on n at epoch, rewriting retire into a
+// pack it keeps holding kept objects and a pack it leaves dropping holding
+// dropping objects — either left out at zero — its id minted now and its
+// outputs' keys at the harness's clock, planned at n's own position.
+func beginFor(n *node, repo string, epoch int64, retire []string, kept, dropping int64) code.ExpungeBegin {
+	xid := statelog.NewOpID(time.Now(), "")
+	b := code.ExpungeBegin{RepoID: repo, ExpungeID: xid, Node: n.id, Seen: n.waiter.Committed(),
+		DropEpoch: epoch, Grace: code.PruneGrace, Retire: slices.Clone(retire)}
+	if kept > 0 {
+		b.Add = append(b.Add, compactOutput(xid, 0, kept, harnessAt))
+	}
+	if dropping > 0 {
+		b.Dropping = append(b.Dropping, compactOutput(xid, len(b.Add), dropping, harnessAt))
+	}
+	return b
+}
+
+// commitFor is the commit of b on n, retiring its dropping packs and keeping a
+// rescue pack holding rescue objects — none at zero.
+func commitFor(n *node, b code.ExpungeBegin, rescue int64) code.ExpungeCommit {
+	c := code.ExpungeCommit{RepoID: b.RepoID, ExpungeID: b.ExpungeID, CommitID: statelog.NewOpID(time.Now(), ""),
+		RequestID: b.RequestID, Node: n.id, Seen: n.waiter.Committed(), DropEpoch: b.DropEpoch}
+	for _, out := range b.Dropping {
+		c.Retire = append(c.Retire, out.PackID)
+	}
+	slices.Sort(c.Retire)
+	if rescue > 0 {
+		c.Add = append(c.Add, compactOutput(c.CommitID, 0, rescue, harnessAt))
+	}
+	return c
+}
+
+// purgeOf is a purge of repo, asked now by the harness's person.
+func purgeOf(repo string) code.ExpungeRequest {
+	return code.ExpungeRequest{RepoID: repo, RequestID: statelog.NewOpID(time.Now(), "code_purge_unreachable"),
+		By: asker}
+}
+
+// requireExpunged fails t unless res is an expunge record applied at a
+// position.
+func requireExpunged(t *testing.T, res code.ExpungeResult, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("ProposeExpunge: %v", err)
+	}
+	if res.Outcome != statelog.OutcomeApplied || res.Position.IsZero() || res.Refusal != "" {
+		t.Fatalf("the expunge record answered %+v, want applied at a position", res)
+	}
+}
+
+// AN EXPUNGE IS DECIDED IN ITS REPOSITORY'S QUEUE, record by record: a
+// person's request applied at its position; a second request answered with
+// the open one, appending nothing; a begin applied and answered from the rows
+// of the packs it added; a second begin while it is open refused stale; and
+// its commit applied, serving the request — every pack the repository held
+// when it was asked rewritten. A request asked again under its own id is the
+// same request, answered at its record by the ledger.
+//
+// Mutation: answer a second request with a record of its own, and two
+// requests are open where one covers both; publish an expunge record under an
+// operation id minted for its batch, and the request asked again is decided
+// again.
+func TestAnExpungeIsDecidedInItsRepositorysQueue(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 3)
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+
+	asked := purgeOf(repo)
+	first, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &asked})
+	requireExpunged(t, first, err)
+	if first.Request != asked.RequestID {
+		t.Fatalf("the request was answered as %q, want its own %s", first.Request, asked.RequestID)
+	}
+	before := n.end()
+	second := purgeOf(repo)
+	res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &second})
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position != first.Position ||
+		res.Request != asked.RequestID {
+		t.Fatalf("a second request answered %+v, %v; want the open one %s at %s", res, err, asked.RequestID,
+			first.Position)
+	}
+	if got := n.end(); got != before {
+		t.Fatalf("a second request appended %d records, want none", got-before)
+	}
+
+	b := beginFor(n, repo, 1, ids, 2, 1)
+	b.RequestID, b.Grace = asked.RequestID, 0
+	res, err = c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	other := beginFor(n, repo, 2, []string{b.Add[0].PackID}, 2, 0)
+	if res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &other}); err != nil ||
+		res.Refusal != code.RefusalStale || !strings.Contains(res.Detail, "expunge "+b.ExpungeID+" is open") {
+		t.Fatalf("a second begin answered %+v, %v; want stale naming the open expunge", res, err)
+	}
+
+	cm := commitFor(n, b, 1)
+	res, err = c.ProposeExpunge(ctx, code.ExpungeProposal{Commit: &cm})
+	requireExpunged(t, res, err)
+	if got := n.count(`SELECT COUNT(*) FROM code_repos WHERE id = ? AND expunge_id = '' AND expunge_request = ''
+		AND drop_epoch = 1`, repo); got != 1 {
+		t.Fatalf("after the commit the repository holds an expunge or a request open, or another epoch")
+	}
+	if got := n.livePacks(repo); !slices.Equal(got, sorted(b.Add[0].PackID, cm.Add[0].PackID)) {
+		t.Fatalf("the repository's packs are %v, want the kept pack and the rescue", got)
+	}
+
+	before = n.end()
+	again, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &asked})
+	requireExpunged(t, again, err)
+	if again.Position != first.Position || again.Request != asked.RequestID || n.end() != before {
+		t.Fatalf("the request asked again answered %+v, and %d records were appended; want its record at %s",
+			again, n.end()-before, first.Position)
+	}
+}
+
+// AN EXPUNGE IS ANSWERED ONLY FROM THE ROWS OF THE PACKS IT ADDED: a publish
+// that answers applied for a begin that wrote no row is answered unknown,
+// never applied — which would hand its builder packs no row names — and logged
+// at ERROR, since no committer of this domain forms such a record.
+//
+// Mutation: answer a begin applied from the publish's word, and it is applied
+// with none of its packs in the rows.
+func TestAnExpungeIsAnsweredOnlyFromTheRowsOfThePacksItAdded(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, ids := packedRepo(t, n, "web", 2)
+	logs := &lineLog{}
+	c, _ := committerOn(t, n, decideOnly{n}, func(o *code.CommitterOptions) {
+		o.Logger = slog.New(slog.NewJSONHandler(logs, nil))
+	})
+	b := beginFor(n, repo, 1, ids, 1, 1)
+	res, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Begin: &b})
+	if err != nil || res.Outcome != statelog.OutcomeUnknown || !strings.Contains(res.Detail, "not in the rows") {
+		t.Fatalf("a begin whose record wrote no row answered %+v, %v; want unknown", res, err)
+	}
+	if lines := logs.lines("code_expunge_unanswerable"); len(lines) != 1 || lines[0]["level"] != "ERROR" {
+		t.Fatalf("logged %v, want code_expunge_unanswerable once at ERROR", lines)
+	}
+}
+
+// THE EXPUNGE LISTING NAMES THE EXPUNGES OWED: the active and archived
+// repositories with an expunge open or a purge requested, by id, each with
+// the open expunge, the request and its position, its live packs and bytes
+// and the version its row was read at — and no repository with neither, nor
+// a deleted one, whose request waits for its restore — paged by id.
+//
+// Mutation: drop the listing's status rule, and the deleted repository's
+// request is listed; page by name, and the cursor skips a repository.
+func TestTheExpungeListingNamesTheExpungesOwed(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	requested, _ := packedRepo(t, n, "requested", 2)
+	ask := purgeOf(requested)
+	asked, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &ask})
+	requireExpunged(t, asked, err)
+	expunging, ids := packedRepo(t, n, "expunging", 2)
+	b := beginFor(n, expunging, 1, ids, 1, 1)
+	res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, res, err)
+	packedRepo(t, n, "idle", 2)
+	gone, _ := packedRepo(t, n, "gone", 1)
+	goneAsk := purgeOf(gone)
+	res, err = c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &goneAsk})
+	requireExpunged(t, res, err)
+	if _, err := n.store.DeleteRepo(ctx, n.activate(t2), gone); err != nil {
+		t.Fatalf("delete %s: %v", gone, err)
+	}
+	n.drain()
+
+	want := map[string]code.ExpungeCandidate{
+		requested: {ID: requested, Name: "requested", Request: ask.RequestID, Requested: asked.Position,
+			LivePacks: 2},
+		expunging: {ID: expunging, Name: "expunging", Open: b.ExpungeID, LivePacks: 1},
+	}
+	order := slices.Sorted(maps.Keys(want))
+	code.SetPageLimits(n.reader, 1, 1<<20)
+	var listed []string
+	cursor := ""
+	for page := 0; ; page++ {
+		got, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadExpungeDue, Cursor: cursor,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		if err != nil {
+			t.Fatalf("list page %d: %v", page, err)
+		}
+		for _, cand := range got.Expunge {
+			w, ok := want[cand.ID]
+			if !ok {
+				t.Fatalf("the listing names %s (%s), which owes no expunge", cand.ID, cand.Name)
+			}
+			if cand.Name != w.Name || cand.Open != w.Open || cand.Request != w.Request ||
+				cand.Requested != w.Requested || cand.LivePacks != w.LivePacks || cand.LiveBytes == 0 ||
+				cand.Version.IsZero() {
+				t.Fatalf("the listing names %+v, want %+v with its live bytes and version", cand, w)
+			}
+			listed = append(listed, cand.ID)
+		}
+		if got.Next == "" {
+			break
+		}
+		cursor = got.Next
+	}
+	if !slices.Equal(listed, order) {
+		t.Fatalf("the listing named %v, want %v by id", listed, order)
+	}
+}

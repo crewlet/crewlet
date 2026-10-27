@@ -10,11 +10,11 @@ import (
 // the router ONE adapter rather than each writing its own (ADR-0008).
 //
 // Committer is nil on a node that does not publish — a node in a maintenance
-// mode, which may append nothing — and a proposal, a push's or a
-// compaction's, is then refused [ErrNotServing], which the router reads as a
-// node that ran nothing and asks the repository's runner-up with the same push
-// or compaction id. Handing a maintenance-mode node's committer to peers would
-// be the publish the mode exists to rule out.
+// mode, which may append nothing — and a proposal, a push's, a compaction's or
+// an expunge record's, is then refused [ErrNotServing], which the router reads
+// as a node that ran nothing and asks the repository's runner-up with the same
+// operation id. Handing a maintenance-mode node's committer to peers would be
+// the publish the mode exists to rule out.
 //
 // Reader is what every read is answered from. A Served with none — its zero
 // value — runs NOTHING rather than panicking on the goroutine that serves the
@@ -44,6 +44,19 @@ func (s Served) ProposeCompaction(ctx context.Context, p CompactionProposal) (Co
 			"no compaction", ErrNotServing)
 	}
 	return s.Committer.ProposeCompaction(ctx, p)
+}
+
+// ProposeExpunge decides one expunge record — a person's request, or a
+// maintainer's begin or commit — on this node's committer — see
+// [Committer.ProposeExpunge] — and, on a node that publishes nothing, refuses
+// it as a push is refused there: the router asks the repository's runner-up
+// with the same operation id.
+func (s Served) ProposeExpunge(ctx context.Context, p ExpungeProposal) (ExpungeResult, error) {
+	if s.Committer == nil {
+		return ExpungeResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
+			"no expunge", ErrNotServing)
+	}
+	return s.Committer.ProposeExpunge(ctx, p)
 }
 
 // Resolve answers a repository by name — see [Reader.Resolve].

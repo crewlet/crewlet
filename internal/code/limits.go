@@ -995,3 +995,55 @@ func compactDecidedRows(n, m int, l *LayerRef) int {
 	}
 	return rows
 }
+
+// THE EXPUNGE'S BOUNDS: how many packs one expunge rewrites, and how many it
+// writes. An expunge is two records of their own on the repository's subject
+// — its begin and its commit ([ExpungeBegin], [ExpungeCommit]) — decided by
+// the repository's committer like a compaction, and built by the repository's
+// maintainer.
+const (
+	// MaxExpungeInputs is the most packs one expunge's begin rewrites:
+	// MaxCompactInputs, for its reason — the begin's apply writes two rows an
+	// input, its retired row and its deletion from code_packs, as a
+	// compaction's does, and the record names each by its id — so a begin at
+	// every bound is expungeBeginRows of them, 2 625, about two thirds of
+	// MaxRecordRows. It bounds what this build's committer takes
+	// ([ExpungeProposal.Validate]); the apply takes whatever a record carries,
+	// as a compaction's does.
+	MaxExpungeInputs = MaxCompactInputs
+
+	// MaxExpungeOutputs is the most packs one expunge's begin writes — the
+	// packs it keeps live and the packs it leaves dropping, together — and
+	// the most its commit's rescue writes.
+	//
+	// THIRTY-TWO: config.DefaultCodeRepoMaxBytes over CompactPackBytes, the
+	// cut every output is written at — twenty — rounded up to a power of two,
+	// so a repository at the default ceiling is rewritten in a cycle or two,
+	// whatever of it is reachable. Every output is uploaded AT ONCE, as a
+	// compaction's are ([MaxCompactOutputs]): each key is minted as its
+	// upload begins, so the last lands at most objstore.ReadBase +
+	// objstore.PaceFor(MaxPackBytes), 10 h 41 min, after the first at the
+	// store's pacing floor, under objstore.RecordWithin (12 h) however many
+	// there are; and thirty-two PUTs at once hold one first buffer of an S3
+	// part each (8 MiB), 256 MiB, on the maintainer that builds them.
+	MaxExpungeOutputs = 32
+)
+
+// expungeBeginRows is the most rows a begin of n inputs into m outputs — its
+// kept and its dropping packs together — dropping layers published layers
+// makes its record's apply touch: each input's retired row and its deletion,
+// each output's row, each dropped layer's row with up to [MaxLayerParts]
+// parts, which the proposal does not carry, and the repository's row, whose
+// counters and published recount ride one update — the bound the committer
+// holds a begin's decision to, as [withinRecord] holds a push batch's. At
+// every bound — MaxExpungeInputs inputs into MaxExpungeOutputs outputs,
+// MaxPublishedLayers layers dropped — that is 2 625 rows, about two thirds of
+// MaxRecordRows.
+func expungeBeginRows(n, m, layers int) int { return 2*n + m + layers*(1+MaxLayerParts) + 1 }
+
+// expungeCommitRows is the most rows a commit retiring n dropping packs and
+// writing m rescue packs makes its record's apply touch: each dropping pack's
+// retired row and its deletion, each rescue pack's row, and the repository's
+// row — 97 at every bound, since a repository holds no more dropping packs than
+// one begin wrote.
+func expungeCommitRows(n, m int) int { return 2*n + m + 1 }
