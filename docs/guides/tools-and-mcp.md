@@ -348,8 +348,8 @@ named like an abbreviation is named by its whole ref (`refs/heads/<name>`).
 read at linearizable as every seat tool's reads are; what a commit id names is
 the same object on every node, so a read by one is asked of the repository's
 [home git node](../concepts/code-host.md#the-home-git-node) with no level of
-its own — only a floor its copy is first brought to: this node's own pushes,
-and the push that last moved each ref the call names. Never where the call
+its own — only a floor its copy is first brought to: this node's own pushes to
+that repository, and the push that last moved each ref the call names. Never where the call
 read its refs: that read is linearizable, and its position is past every push,
 so a copy holding them all would be brought there for nothing. A turn reads
 each repository it names once, at its first call naming it — and again only

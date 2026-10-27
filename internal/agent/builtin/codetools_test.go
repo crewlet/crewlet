@@ -230,7 +230,15 @@ func (h *codeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, 
 	return out, nil
 }
 
-func (h *codeHost) Floor() statelog.Position { return h.floor }
+// FloorOf is this node's floor on the one repository it wrote to, site's id,
+// and none on any other: what a read of the repository a name names now — a
+// name declared again — carries.
+func (h *codeHost) FloorOf(repoID string) statelog.Position {
+	if repoID != siteID {
+		return statelog.Position{}
+	}
+	return h.floor
+}
 
 // asked is what the host was asked, copied under its lock.
 func (h *codeHost) asked() (reads []code.ReadQuery, resolves []code.RefQuery, gits []code.GitQuery) {

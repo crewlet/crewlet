@@ -609,10 +609,14 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		[]statelog.Position{pushed}) {
 		t.Fatalf("after a push applied at %v the code floor is %v", pushed, got)
 	}
-	// AND IT IS WHAT THE SEAM HANDS A READ BY OBJECT ID AS ITS FLOOR, which
-	// the git operation carries in its arguments rather than the router's.
-	if got := f.client.Code().Floor(); got != pushed {
-		t.Fatalf("after a push applied at %v the code seam's floor is %v", pushed, got)
+	// AND THE REPOSITORY'S OWN FLOOR, which the seam hands a read by object id
+	// of THAT repository — a git operation carries it in its arguments rather
+	// than the router's — and a read of any other repository is not handed.
+	if got := f.client.Code().FloorOf("repo-floor"); got != pushed {
+		t.Fatalf("after a push applied at %v the repository's floor is %v", pushed, got)
+	}
+	if got := f.client.Code().FloorOf("repo-elsewhere"); !got.IsZero() {
+		t.Fatalf("a push to repo-floor floored repo-elsewhere at %v", got)
 	}
 	covered := map[string]bool{}
 	for _, r := range codeReads(t.Context(), f.client.Code()) {
@@ -643,29 +647,90 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		[]statelog.Position{landed}) {
 		t.Fatalf("after a push found landed at %v the code floor is %v", landed, got)
 	}
+	if got := f.client.Code().FloorOf("repo-floor"); got != landed {
+		t.Fatalf("after a push found landed at %v the repository's floor is %v", landed, got)
+	}
 
-	// AND A COMPACTION THIS NODE PROPOSED raises it to the compaction's
+	// AND A COMPACTION THIS NODE PROPOSED raises them to the compaction's
 	// record, which its builder's next listing and sync must see — where it
-	// landed, and never where it was refused with no record.
+	// landed, and never where it was refused with no record — the floor of
+	// the repository it compacted and of no other.
 	compacted := statelog.Position{Stream: codeStream, Generation: 1, Seq: 70}
 	for _, tc := range []struct {
 		answer code.CompactResult
-		want   statelog.Position
+		// want is the session's floor after it, and repo the compacted
+		// repository's own.
+		want, repo statelog.Position
 	}{
-		{code.CompactResult{Refusal: code.RefusalStale, Detail: "pack push-0 is full"}, landed},
-		{code.CompactResult{Outcome: statelog.OutcomeApplied, Position: compacted}, compacted},
+		{code.CompactResult{Refusal: code.RefusalStale, Detail: "pack push-0 is full"}, landed, statelog.Position{}},
+		{code.CompactResult{Outcome: statelog.OutcomeApplied, Position: compacted}, compacted, compacted},
 	} {
 		d.mu.Lock()
 		d.compacted = tc.answer
 		d.mu.Unlock()
 		if _, err := f.client.Code().Compact(t.Context(), code.CompactionProposal{
-			Compaction: code.Compaction{RepoID: "repo-floor"}}); err != nil {
+			Compaction: code.Compaction{RepoID: "repo-compacted"}}); err != nil {
 			t.Fatalf("compact: %v", err)
 		}
 		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
 			[]statelog.Position{tc.want}) {
 			t.Fatalf("after a compaction answered %+v the code floor is %v, want %v", tc.answer, got, tc.want)
 		}
+		if got := f.client.Code().FloorOf("repo-compacted"); got != tc.repo {
+			t.Fatalf("after a compaction answered %+v the compacted repository's floor is %v, want %v",
+				tc.answer, got, tc.repo)
+		}
+		if got := f.client.Code().FloorOf("repo-floor"); got != landed {
+			t.Fatalf("a compaction of another repository moved repo-floor's floor to %v", got)
+		}
+	}
+}
+
+// A REPOSITORY'S FLOOR IS ITS OWN, AND THE NODE KEEPS A BOUNDED NUMBER: a
+// write raises only its repository's floor, and never lowers it; a position
+// that names nothing is ignored; and past maxRepoFloors repositories the one
+// written at the lowest position is forgotten — floored at nothing again, which
+// costs a read of it one sync at the log's head where its copy lacks what this
+// node wrote, never a wrong answer — and no other.
+//
+// Mutation: observe keeping every repository, or evicting another than the
+// lowest → red.
+func TestARepositorysFloorIsItsOwnAndBounded(t *testing.T) {
+	t.Parallel()
+	at := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: codeStream, Generation: 1, Seq: seq}
+	}
+	var f repoFloors
+	f.observe("repo-a", at(5))
+	f.observe("repo-a", at(3))
+	f.observe("repo-b", statelog.Position{})
+	f.observe("", at(9))
+	if got := f.floor("repo-a"); got != at(5) {
+		t.Fatalf("repo-a's floor is %v after writes at 5 and 3, want 5", got)
+	}
+	if got := f.floor("repo-b"); !got.IsZero() {
+		t.Fatalf("a position naming nothing floored repo-b at %v", got)
+	}
+
+	// FULL: the oldest write is the one forgotten.
+	for i := range maxRepoFloors - 1 {
+		f.observe(fmt.Sprintf("repo-%05d", i), at(uint64(100+i)))
+	}
+	f.observe("repo-new", at(1_000_000))
+	if got := f.floor("repo-a"); !got.IsZero() {
+		t.Errorf("past %d repositories the lowest write, repo-a's at 5, is still held at %v", maxRepoFloors, got)
+	}
+	if got := f.floor("repo-new"); got != at(1_000_000) {
+		t.Errorf("the repository written past the bound is floored at %v", got)
+	}
+	if got := f.floor("repo-00000"); got != at(100) {
+		t.Errorf("a repository above the lowest write lost its floor: %v", got)
+	}
+	f.mu.Lock()
+	held := len(f.at)
+	f.mu.Unlock()
+	if held != maxRepoFloors {
+		t.Errorf("the node keeps %d repositories' floors, want its bound of %d", held, maxRepoFloors)
 	}
 }
 

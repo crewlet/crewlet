@@ -38,7 +38,7 @@ func (h *listingHost) GitRead(context.Context, code.GitQuery) (code.GitAnswer, e
 	return code.GitAnswer{}, code.ErrObjectNotFound
 }
 
-func (h *listingHost) Floor() statelog.Position { return statelog.Position{} }
+func (h *listingHost) FloorOf(string) statelog.Position { return statelog.Position{} }
 
 func (h *listingHost) askers() []code.Principal {
 	h.mu.Lock()

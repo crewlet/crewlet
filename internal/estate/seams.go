@@ -784,33 +784,44 @@ func (u Usage) ReadsElided(ctx context.Context, from, to string) (int64, error) 
 // read's position is somebody else's writes, and observing it would hold
 // every later read this node routes — a `stale` one included — behind the
 // newest linearizable read anybody on the node made, which is the tracker's
-// and the knowledge base's rule too.
+// and the knowledge base's rule too. Each such write raises two floors: the
+// session's, on the whole code log, which every operation this node routes to
+// a data node carries; and the floor of the REPOSITORY it wrote
+// ([CodeSeam.FloorOf]), which a read of that repository's content by object id
+// carries to its git node — and a read of any other repository does not.
 type CodeSeam struct{ r *Router }
 
 // Code answers the code host.
 func (r *Router) Code() CodeSeam { return CodeSeam{r: r} }
 
 // Propose asks the repository's committer to decide a push, and raises this
-// node's session floor past the record it landed in — this node's own write,
-// which its next read of the repository must see on whichever node answers.
+// node's floors past the record it landed in — this node's own write, which
+// its next read of the repository must see on whichever node answers.
 func (c CodeSeam) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
 	out, err := call(ctx, c.r, opCodePropose, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
-		c.r.Observe(out.Position)
+		c.wrote(p.RepoID, out.Position)
 	}
 	return out, err
 }
 
 // Compact asks the repository's committer to decide a compaction, and raises
-// this node's session floor past the record it landed in — this node's own
-// write, which the compactor's next listing and the cache's sync after it must
-// see on whichever data node answers them.
+// this node's floors past the record it landed in — this node's own write,
+// which the compactor's next listing and the cache's sync after it must see on
+// whichever data node answers them.
 func (c CodeSeam) Compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
 	out, err := call(ctx, c.r, opCodeCompact, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
-		c.r.Observe(out.Position)
+		c.wrote(p.Compaction.RepoID, out.Position)
 	}
 	return out, err
+}
+
+// wrote raises this node's floors past at, where its own write to repository
+// repoID landed: the session's on the code log, and the repository's own.
+func (c CodeSeam) wrote(repoID string, at statelog.Position) {
+	c.r.Observe(at)
+	c.r.codeWrites.observe(repoID, at)
 }
 
 // Resolve answers a repository by its name.
@@ -824,11 +835,11 @@ func (c CodeSeam) RepoState(ctx context.Context, q code.StateQuery) (code.RepoSn
 }
 
 // PushOutcome answers whether a push this node proposed landed — and, where it
-// did, raises this node's floor past it, for [CodeSeam.Propose]'s reason.
+// did, raises this node's floors past it, for [CodeSeam.Propose]'s reason.
 func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error) {
 	out, err := call(ctx, c.r, opCodePushOutcome, nil, q)
 	if out.Found {
-		c.r.Observe(out.Push.Position)
+		c.wrote(q.RepoID, out.Push.Position)
 	}
 	return out, err
 }
@@ -847,21 +858,24 @@ func (c CodeSeam) ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnsw
 
 // GitRead asks the repository's home git node for one read of its content by
 // object id, and its runner-up when the home cannot answer (ADR-0059). Its
-// floor is the query's own (code.GitQuery.Fresh), which [CodeSeam.Floor]
+// floor is the query's own (code.GitQuery.Fresh), which [CodeSeam.FloorOf]
 // supplies where the reader's own writes must be in the copy it reads.
 func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	return call(ctx, c.r, opCodeGitRead, nil, q)
 }
 
-// Floor is this node's session floor on the code log — the furthest of its own
-// writes there it has been told landed — or the zero position where it holds
-// none: what a reader hands a read by object id as its Fresh, so the home's
-// copy is brought to this node's own pushes before it is read, since a git
-// operation carries no floor of the router's ([GitCopy]).
-func (c CodeSeam) Floor() statelog.Position {
-	floors := c.r.session.Floors([]string{floorStreams[codeDomain]})
-	if len(floors) == 0 {
-		return statelog.Position{}
-	}
-	return floors[0]
+// FloorOf is this node's floor on repository repoID — the furthest of its own
+// writes TO THAT REPOSITORY it has been told landed — or the zero position
+// where it holds none: what a reader hands a read by object id of the
+// repository as its Fresh, so the home's copy is brought to this node's own
+// pushes there before it is read, since a git operation carries no floor of
+// the router's ([GitCopy]).
+//
+// NEVER THE SESSION'S FLOOR, which is the furthest of this node's writes
+// anywhere on the code log: a push to one repository would floor every later
+// read by object id of every other, whose home's copy — current to every push
+// of ITS repository — would sit below that floor and run a sync round for
+// nothing, on every read, for as long as this node goes on writing anywhere.
+func (c CodeSeam) FloorOf(repoID string) statelog.Position {
+	return c.r.codeWrites.floor(repoID)
 }

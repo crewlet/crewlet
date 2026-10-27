@@ -43,9 +43,10 @@ import (
 // level — linearizable on both surfaces ([seatReadLevel]), so an answer
 // includes every push that landed before the call. What an object id names is
 // the same object on every node at every position, so a read by one needs no
-// level: it is asked with the caller's floor on the code log — its own pushes,
-// and where each ref it named last MOVED, the push that set it — as the git
-// node's SYNC level, never a barrier. NEVER WHERE THE RESOLVE READ THE REF: a
+// level: it is asked with the caller's floor on the code log — this node's own
+// pushes to THAT repository (never its writes to any other, which no copy of
+// this one holds), and where each ref it named last MOVED, the push that set
+// it — as the git node's SYNC level, never a barrier. NEVER WHERE THE RESOLVE READ THE REF: a
 // linearizable read's checkpoint is past its own barrier, so a copy current to
 // every push of the repository still sits below it, and a floor there made the
 // git node run a sync round for nothing on every read by a ref; floored at the
@@ -111,10 +112,11 @@ type CodeReader interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
-	// Floor is this node's session floor on the code log — its own pushes —
-	// which every read by object id is asked with, so the copy that answers
+	// FloorOf is this node's floor on repository repoID — its own pushes to
+	// that repository, and none of its writes to any other — which every read
+	// by object id of the repository is asked with, so the copy that answers
 	// holds them.
-	Floor() statelog.Position
+	FloorOf(repoID string) statelog.Position
 }
 
 // CodeDeps are what the code tools read through. The zero value serves none
@@ -432,13 +434,13 @@ func (d CodeDeps) resolvePair(ctx context.Context, turn *turnctx.Turn, tool stri
 	return b, h, nil
 }
 
-// gitFresh is what a read by object id is asked with: the furthest of this
-// node's own floor on the code log and the positions the call's refs last
-// moved at — a SYNC level for the copy that answers, so it holds the commits
-// those refs named and this node's own pushes — or none, which reads the copy
-// as it stands.
-func (d CodeDeps) gitFresh(revs ...resolvedRev) statelog.Freshness {
-	floor := d.Code.Floor()
+// gitFresh is what a read by object id of repo is asked with: the furthest of
+// this node's own floor on the repository and the positions the call's refs
+// last moved at — a SYNC level for the copy that answers, so it holds the
+// commits those refs named and this node's own pushes to it — or none, which
+// reads the copy as it stands.
+func (d CodeDeps) gitFresh(repo code.RepoRef, revs ...resolvedRev) statelog.Freshness {
+	floor := d.Code.FloorOf(repo.ID)
 	for _, r := range revs {
 		floor = furthestOnLog(floor, r.at())
 	}
@@ -1064,7 +1066,7 @@ func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	path, pathB64 := argString(args, "path"), argString(args, "path_b64")
-	q := code.GitQuery{RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(rev),
+	q := code.GitQuery{RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, rev),
 		Cursor: strings.TrimSpace(argString(args, "cursor"))}
 	if recursive {
 		q.Kind, q.Tree = code.GitTree, &code.TreeQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
@@ -1188,7 +1190,7 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	diff := &code.DiffQuery{Base: base.oid, Head: head.oid, Paths: paths, File: argString(args, "file"),
 		FileB64: argString(args, "file_b64"), Renames: renames}
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitDiff,
-		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(base, head),
+		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, base, head),
 		Cursor: strings.TrimSpace(argString(args, "cursor")), Diff: diff})
 	if refusal != nil {
 		return *refusal, nil
@@ -1286,7 +1288,7 @@ func (t *codeCompare) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitCompare,
-		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(base, head),
+		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, base, head),
 		Compare: &code.CompareQuery{Base: base.oid, Head: head.oid}})
 	if refusal != nil {
 		return *refusal, nil
@@ -1376,7 +1378,7 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// up to the one that put the tip there are every move it had when it was
 	// resolved, which is all the index must hold.
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitLandedIn,
-		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(commit, resolved),
+		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, commit, resolved),
 		LandedIn: &code.LandedInQuery{Commit: commit.oid, Target: tip.Ref, TargetOID: tip.OID,
 			At: resolved.at()}})
 	if refusal != nil {

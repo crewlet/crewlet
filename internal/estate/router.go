@@ -352,6 +352,11 @@ type Router struct {
 	// admitted caches a REMOTE node's answer to the admission question —
 	// see [Router.Serves] — nil until one has been asked.
 	admitted *admission
+
+	// codeWrites is how far this node's own writes reached in each
+	// repository ([CodeSeam.FloorOf]), under a lock of its own: the code
+	// host's writes and reads touch nothing else of the router's state.
+	codeWrites repoFloors
 }
 
 // nodeCopy is one node's copies of what an operation reads ([opSpec.copies]).
