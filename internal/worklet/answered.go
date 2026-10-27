@@ -256,7 +256,7 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 		var a askRecord
 		var c closing
 		var resolved int
-		if err := rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at, &a.document,
+		if err = rows.Scan(&a.comment, &a.task, &a.author, &a.body, &a.at, &a.document,
 			&resolved, &c.resolvedBy, &c.resolvedAt, &c.askRecord,
 			&c.id, &c.author, &c.authorKind, &c.body, &c.at, &c.document,
 			&c.record); err != nil {
@@ -266,7 +266,7 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 		pending = append(pending, a)
 		closings = append(closings, c)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, false, fmt.Errorf("worklet: read the asks %s answered: %w", handle, err)
 	}
 	truncated := len(pending) > MaxAnswered
