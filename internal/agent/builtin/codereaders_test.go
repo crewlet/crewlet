@@ -62,8 +62,19 @@ func asAdmin() context.Context {
 }
 
 // readersCatalogue is the operator catalogue over host and readers, the
-// company's clock Santiago's at noon of 2026-09-23.
+// company's clock Santiago's at noon of 2026-09-23 — the code reads wired as
+// every surface wires them ([codeDeps]), so the catalogue serves them too.
 func readersCatalogue(host builtin.CodeReader, readers builtin.RepoReaders) map[string]tools.Callable {
+	var wired builtin.CodeDeps
+	if host != nil {
+		wired = codeDeps(host)
+	}
+	return readersCatalogueOver(wired, readers)
+}
+
+// readersCatalogueOver is [readersCatalogue] over the code reads as wired, their
+// Actor the request's principal.
+func readersCatalogueOver(wired builtin.CodeDeps, readers builtin.RepoReaders) map[string]tools.Callable {
 	santiago, err := time.LoadLocation("America/Santiago")
 	if err != nil {
 		panic(err)
@@ -74,12 +85,11 @@ func readersCatalogue(host builtin.CodeReader, readers builtin.RepoReaders) map[
 		deps = builtin.ReadersDeps{Readers: readers, Zone: func() *time.Location { return santiago },
 			Now: func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, santiago) }}
 	}
-	var codeDeps builtin.CodeDeps
-	if host != nil {
-		codeDeps = builtin.CodeDeps{Code: host, Actor: builtin.PrincipalActor}
+	if wired.Code != nil {
+		wired.Actor = builtin.PrincipalActor
 	}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Code: codeDeps, Readers: deps, Authorize: builtin.Decide(chartLeads),
+		Code: wired, Readers: deps, Authorize: builtin.Decide(chartLeads),
 	}) {
 		out[tool.Name()] = tool
 	}
@@ -88,17 +98,25 @@ func readersCatalogue(host builtin.CodeReader, readers builtin.RepoReaders) map[
 
 // WHO READ A REPOSITORY IS A PERSON'S QUESTION, AND AN ADMIN'S: the operator
 // catalogue serves code_repo_readers beside the code reads and on their terms
-// — not without them, nor without the usage domain's readers — no seat's
-// registry ever holds it, and a person who is not an admin is refused it at the
-// gate with nothing read.
+// — not without them, nor without the usage domain's readers, nor over a code
+// host wired without the requester ceiling's halves, which serves no code read
+// — no seat's registry ever holds it, and a person who is not an admin is
+// refused it at the gate with nothing read.
 //
-// Mutation: add code_repo_readers to CodeTools, and a seat's registry holds it.
+// Mutations: add code_repo_readers to CodeTools, and a seat's registry holds
+// it; offer it over the code host alone, and a catalogue serving no code read
+// serves it.
 func TestTheReadersToolIsAnAdminsAlone(t *testing.T) {
 	t.Parallel()
 	host := newCodeHost()
 	readers := &readersFake{}
-	if _, ok := readersCatalogue(host, readers)[builtin.CodeRepoReadersTool]; !ok {
+	served := readersCatalogue(host, readers)
+	if _, ok := served[builtin.CodeRepoReadersTool]; !ok {
 		t.Fatal("the operator catalogue does not serve code_repo_readers beside the code reads")
+	}
+	if _, ok := served[builtin.CodeReadTool]; !ok {
+		t.Fatalf("the operator catalogue serving code_repo_readers serves no %s, so it stands beside no "+
+			"code read", builtin.CodeReadTool)
 	}
 	if _, ok := readersCatalogue(host, nil)[builtin.CodeRepoReadersTool]; ok {
 		t.Error("the operator catalogue served code_repo_readers with no readers to read")
@@ -106,11 +124,24 @@ func TestTheReadersToolIsAnAdminsAlone(t *testing.T) {
 	if _, ok := readersCatalogue(nil, readers)[builtin.CodeRepoReadersTool]; ok {
 		t.Error("the operator catalogue served code_repo_readers to a company hosting no code")
 	}
-	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	for name, wired := range map[string]builtin.CodeDeps{
+		"no requesters": {Code: host, Chart: chartLeads},
+		"no chart":      {Code: host, Requesters: codeRequesters()},
+	} {
+		if _, ok := readersCatalogueOver(wired, readers)[builtin.CodeRepoReadersTool]; ok {
+			t.Errorf("the operator catalogue over a code host with %s, which serves no code read, served "+
+				"code_repo_readers", name)
+		}
+	}
+	reg := codeRegistry(t, codeDeps(host))
+	if _, ok := reg.Lookup(builtin.CodeReadTool); !ok {
+		t.Fatalf("a seat's registry over the code reads holds no %s, so it proves nothing about "+
+			"code_repo_readers", builtin.CodeReadTool)
+	}
 	if _, ok := reg.Lookup(builtin.CodeRepoReadersTool); ok {
 		t.Error("a seat's registry holds code_repo_readers")
 	}
-	for _, tool := range builtin.CodeTools(builtin.CodeDeps{Code: host}) {
+	for _, tool := range builtin.CodeTools(codeDeps(host)) {
 		if tool.Name() == builtin.CodeRepoReadersTool {
 			t.Error("CodeTools, the list a seat's registry takes, lists code_repo_readers")
 		}

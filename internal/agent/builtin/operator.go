@@ -52,8 +52,8 @@ type OperatorDeps struct {
 	Code CodeDeps
 
 	// Readers is `code_repo_readers`' half beside Code — who read a
-	// `visibility: unit` repository — served only with Code. A nil reader
-	// omits the tool.
+	// `visibility: unit` repository — served only where Code serves the
+	// code reads ([CodeDeps.serves]). A nil reader omits the tool.
 	Readers ReadersDeps
 
 	// Org is the company this surface is about, resolved per call because
@@ -186,9 +186,13 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// credentials and the seats that read its code — an audit, and
 		// admin's (authz.ActionCodeRepoReaders) — and a seat that could
 		// ask it would be a model watching the people it works for. See
-		// codereaders.go.
+		// codereaders.go. On the code reads' own terms ([CodeDeps.serves]),
+		// never the code host's alone: wired without the requester
+		// ceiling's halves those reads are not offered, and an audit of the
+		// reads beside none of them would be a code tool served where the
+		// rest are not.
 		{&codeRepoReaders{code: deps.Code, deps: deps.Readers},
-			deps.Code.Code != nil && deps.Readers.Readers != nil},
+			deps.Code.serves() && deps.Readers.Readers != nil},
 	}
 	candidates = slices.Concat(candidates,
 		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps),

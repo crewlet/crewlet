@@ -125,9 +125,13 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 		Runs: builtin.RunDeps{Desk: &deskFake{}, Actor: actor},
 		Pauses: builtin.SeatPauseDeps{Pauses: coordmem.NewFleet(), Announce: &announced{},
 			Org: func() *org.Organization { return company }, Actor: actor},
-		Steer:   builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: actor},
-		Answer:  builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
-		Code:    builtin.CodeDeps{Code: full.Code.Code, Actor: builtin.PrincipalActor},
+		Steer:  builtin.SteerDeps{Asker: &fleetAsker{}, Wire: steerWire, Actor: actor},
+		Answer: builtin.AnswerDeps{Models: answers.model, Budget: answers.budget, Actor: actor},
+		// THE CODE READS AS EVERY SURFACE WIRES THEM — the code host and
+		// the requester ceiling's halves — or the catalogue serves none of
+		// them, nor the readers audit that stands beside them.
+		Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters, Chart: full.Code.Chart,
+			Actor: builtin.PrincipalActor},
 		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
 	}) {
 		if !slices.Contains(seat, tool.Name()) {
