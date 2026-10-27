@@ -1050,10 +1050,11 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// rules no registered tool answers.
 		Code: codeDeps(newCodeHost()),
 		// AND THE HEALTH TOOLS, over a lease table and the git nodes' status
-		// scatter: left out, their two rows read as rules no registered tool
-		// answers.
+		// scatter — code_status's code half wired as the code reads are, the
+		// requester ceiling's halves beside the code host: left out, their two
+		// rows read as rules no registered tool answers.
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Status: &statusAsker{},
-			Code: builtin.CodeDeps{Code: newCodeHost()}},
+			Code: codeDeps(newCodeHost())},
 	}
 }
 

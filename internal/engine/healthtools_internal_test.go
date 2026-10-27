@@ -59,11 +59,17 @@ func TestASeatsModelIsShownTheHealthToolsOnlyWhereItsRoleIsGranted(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewCompany: %v", err)
 	}
+	// code_status registers on the code reads' terms: the code host, and who a
+	// turn is acting for with the chart that decides them, composed off this
+	// company's running chart as the engine composes them.
+	e := &Engine{}
+	e.epoch.current.Store(c)
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, builtin.Deps{
 		Authorize: builtin.Decide(orgchart.Of(c.Org)),
 		Health: builtin.HealthDeps{Leases: coordmem.New(), Self: "node-a", Status: idleGitNodes{},
-			Code: builtin.CodeDeps{Code: unreadCode{}}},
+			Code: builtin.CodeDeps{Code: unreadCode{}, Requesters: turnRequesters{engine: e},
+				Chart: orgchart.Of(c.Org)}},
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -248,7 +254,8 @@ func TestACodeStatusReportNamesEveryGitNodeItAsked(t *testing.T) {
 // deps. No engine, or one that runs nothing, offers neither.
 //
 // Mutation: HealthToolDeps handing Status where the code tools are not
-// offered, or equip dropping deps.Health, and a case goes red.
+// offered, or a code half without the requester ceiling's halves, or equip
+// dropping deps.Health, and a case goes red.
 func TestTheHealthToolsAreOfferedWhereTheirReadsAre(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -267,6 +274,13 @@ func TestTheHealthToolsAreOfferedWhereTheirReadsAre(t *testing.T) {
 			}
 			if got := deps.Status != nil && deps.Code.Code != nil; got != c.codeStatus {
 				t.Errorf("code_status's deps present = %v, want %v", got, c.codeStatus)
+			}
+			// ITS REPOSITORY READS ARE THE CODE READS', made for whoever woke
+			// the turn: the requester ceiling's halves ride beside the code
+			// host wherever code_status is offered.
+			if c.codeStatus && (deps.Code.Requesters == nil || deps.Code.Chart == nil) {
+				t.Errorf("code_status's code half wires no requester ceiling: Requesters %v, Chart %v",
+					deps.Code.Requesters, deps.Code.Chart)
 			}
 			if _, ok := e.Company().Tools.Lookup(builtin.FleetHealthTool); !ok {
 				t.Errorf("a seat's registry holds no %s", builtin.FleetHealthTool)

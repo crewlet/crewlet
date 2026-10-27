@@ -1654,6 +1654,14 @@ voice is never its requester: when the outcome of its own act opens a thread,
 whoever speaks in it next is — a colleague or a person as above, and somebody
 the company does not know as a stranger.
 
+The same holds for the repositories a seat with the
+[health tools](../guides/fleet.md#the-health-tools) reads through
+`code_status`: its hot list and the repository it names are read as the code
+tools read them, so in a colleague's turn the hot list leaves out what the
+colleague may not read as well, and a stranger's turn is answered nothing. Who
+woke the turn is asked only what a code read asks of them — the deployment's
+view beside the repositories is the seat's own grant.
+
 The colleague's grant is judged where the seat's own is: by the node that
 answers each read, from its own chart and the repository's row, and never
 from a chart the turn read once, so an activation that takes the colleague out

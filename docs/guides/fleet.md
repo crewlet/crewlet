@@ -817,7 +817,13 @@ never a repository: `code_status` holds a seat to its own
 [repository grant](../concepts/code-host.md), so its answer leaves out every
 repository the seat may not read and says how many (`withheld`), and a
 repository named with `repo` that the seat may not read is refused, as the
-code tools refuse it.
+code tools refuse it. Those repository reads are code reads, so in a turn
+somebody woke they are made for them too, as every code read is
+([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)):
+in a colleague seat's turn the answer also leaves out what the colleague may
+not read, and a turn a stranger woke is answered nothing. Whoever woke the
+turn need not hold `admin` themselves — the deployment's view is the seat's
+grant, as `fleet_health`'s whole answer is.
 
 **A granted seat is also woken by the alarms.** Each time an alarm fires or
 clears on a node — or a node's first evaluation since it started finds one

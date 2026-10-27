@@ -242,10 +242,13 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		// reads it stands with: left nil, it is a verb no seat holds and
 		// this walk would never see.
 		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
-		// THE HEALTH TOOLS, over the seams the seat's registry is built with,
-		// read as the request's principal as the surface reads them.
+		// THE HEALTH TOOLS, over the seams the seat's registry is built with —
+		// code_status's code half the code reads' own, the requester
+		// ceiling's halves included — read as the request's principal as the
+		// surface reads them.
 		Health: builtin.HealthDeps{Leases: full.Health.Leases, Status: full.Health.Status,
-			Code: builtin.CodeDeps{Code: full.Code.Code, Actor: builtin.PrincipalActor}},
+			Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters,
+				Chart: full.Code.Chart, Actor: builtin.PrincipalActor}},
 		Org: orgOf,
 		// The operator-only verbs: a parked run's answer, a seat's pause
 		// and resume, a note to a running turn and an answer from the

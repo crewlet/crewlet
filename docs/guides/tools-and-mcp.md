@@ -426,7 +426,10 @@ on both surfaces, like the code tools: a person's assistant holds them on the
 carries the grant (`health_tools: true`) — every other seat's registry holds
 them too, and its surfaces leave them out because the authority table refuses
 it them. Neither sets a threshold of its own; what is wrong is the alarm
-table's to say. See [The health tools](fleet.md#the-health-tools).
+table's to say. The repositories `code_status` names are read as the code
+tools read them — held to the seat's grant, and in a turn somebody woke to
+theirs too ([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)).
+See [The health tools](fleet.md#the-health-tools).
 
 ### Per-Role MCP Servers (GitHub)
 

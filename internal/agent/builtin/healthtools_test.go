@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/code"
@@ -22,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -50,13 +52,17 @@ func (s *statusAsker) CodeStatus(_ context.Context, repoID string) (builtin.Code
 }
 
 // grantHost is a code host that answers a read of one repository by name as
-// the repository's grant does: the repository, a refusal of the asker, or no
-// such repository — and counts the reads it was asked.
+// the repository's grant does: the repository, a refusal of the asker, a
+// refusal of the seat the read is made for, or no such repository — the asker
+// judged first, as code.JudgeRead does — and counts the reads it was asked and
+// whom each was made for.
 type grantHost struct {
 	mu      sync.Mutex
 	repos   map[string]code.RepoRef // name -> the repository it names
 	refused map[string]bool         // names whose repository the asker may not read
+	above   map[string]bool         // names whose repository a ceiling seat may not read
 	reads   int
+	madeFor []string // each read's ceiling seat, in the order asked
 }
 
 var _ builtin.CodeReader = (*grantHost)(nil)
@@ -65,11 +71,16 @@ func (h *grantHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.reads++
+	h.madeFor = append(h.madeFor, q.CeilingSeat)
 	if q.Kind != code.ReadRepo {
 		return code.ReadAnswer{}, fmt.Errorf("%w: kind %s", code.ErrInvalid, q.Kind)
 	}
 	if h.refused[q.Repo] {
 		return code.ReadAnswer{}, fmt.Errorf("%w: %s", code.ErrNotPermitted, q.Repo)
+	}
+	if q.CeilingSeat != "" && h.above[q.Repo] {
+		return code.ReadAnswer{}, fmt.Errorf("%w: seat %q holds no access to repository %q",
+			code.ErrAboveCeiling, q.CeilingSeat, q.Repo)
 	}
 	ref, ok := h.repos[q.Repo]
 	if !ok {
@@ -118,6 +129,23 @@ func healthChart(t *testing.T) (*org.Organization, authz.Chart) {
 		t.Fatalf("organization: %v", err)
 	}
 	return o, orgchart.Of(o)
+}
+
+// healthCode is the code tools' deps code_status reads through, wired as every
+// surface wires them: the code host, the caller named by the request's
+// principal, and who a turn may be acting for with the chart that decides them
+// (the requester ceiling), without which no code read — and no code_status —
+// is served. The requesters: dev, a colleague seat; the founder, a person of
+// the company who holds every app and not admin; and "departed", a person
+// whose seat's holder was removed, who acts as nobody now.
+func healthCode(host builtin.CodeReader, chart authz.Chart) builtin.CodeDeps {
+	return builtin.CodeDeps{Code: host, Actor: builtin.PrincipalActor, Chart: chart,
+		Requesters: requesters{
+			"dev":     {Kind: iam.KindSeat, Seat: "dev", Stage: iam.StageActive, Grants: iam.Apps},
+			"founder": founderPrincipal(iam.Apps...),
+			"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
+				Stage: iam.StageRetired, Grants: iam.Apps},
+		}}
 }
 
 // asSeat is a context carrying the seat handle as a turn's principal: every
@@ -300,8 +328,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 		Coverage: coverage,
 	}}
 	repos := &grantHost{repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"}}}
-	catalogue = healthTools(builtin.HealthDeps{Status: asker,
-		Code: builtin.CodeDeps{Code: repos, Actor: builtin.PrincipalActor}}, chart)
+	catalogue = healthTools(builtin.HealthDeps{Status: asker, Code: healthCode(repos, chart)}, chart)
 	status2 := healthAnswer(t, callTool(t, asAdmin(), catalogue[builtin.CodeStatusTool], nil))
 	if got := keysOf(t, status2); !slices.Equal(got, []string{"coverage", "hot", "nodes"}) {
 		t.Errorf("code_status answered the keys %v, want only coverage, hot and nodes", got)
@@ -363,7 +390,7 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 	deps := fullDeps(t)
 	deps.Authorize = builtin.Decide(chart)
 	deps.Health = builtin.HealthDeps{Leases: backend, Self: "node-a", Status: &statusAsker{},
-		Code: builtin.CodeDeps{Code: deps.Code.Code}}
+		Code: deps.Code}
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, deps); err != nil {
 		t.Fatalf("register: %v", err)
@@ -451,8 +478,8 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 		refused: map[string]bool{"vault": true},
 	}
 	_, chart := healthChart(t)
-	tool := healthTools(builtin.HealthDeps{Status: asker,
-		Code: builtin.CodeDeps{Code: repos, Actor: builtin.PrincipalActor}}, chart)[builtin.CodeStatusTool]
+	tool := healthTools(builtin.HealthDeps{Status: asker, Code: healthCode(repos, chart)},
+		chart)[builtin.CodeStatusTool]
 
 	hotOf := func(answer map[string]any) []string {
 		var out []string
@@ -493,15 +520,17 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 
 // THE HEALTH TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
 // built over the same deps, hold the same two tools with byte-identical
-// descriptions and schemas, each a proven read; and deps that reach no lease
-// table and no code host serve neither.
+// descriptions and schemas, each a proven read; deps that reach no lease
+// table and no code host serve neither; and code_status is served on the code
+// reads' own terms — never over a code host wired without the requester
+// ceiling's halves, whose reads would be made for nobody whoever woke a turn.
 //
-// Mutation: OperatorTools omitting healthCandidates, or a health tool
-// annotated as a write → red.
+// Mutation: OperatorTools omitting healthCandidates, a health tool annotated
+// as a write, or code_status served over the code host alone → red.
 func TestTheHealthToolsAreOneList(t *testing.T) {
 	t.Parallel()
 	deps := builtin.HealthDeps{Leases: coordmem.New(), Status: &statusAsker{},
-		Code: builtin.CodeDeps{Code: &grantHost{}}}
+		Code: codeDeps(&grantHost{})}
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, gated(builtin.Deps{Health: deps})); err != nil {
 		t.Fatalf("register: %v", err)
@@ -531,5 +560,183 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 	}
 	if got := builtin.HealthTools(builtin.HealthDeps{}); len(got) != 0 {
 		t.Errorf("deps reaching nothing serve %d health tools, want none", len(got))
+	}
+	served := func(code builtin.CodeDeps) bool {
+		for _, tool := range builtin.HealthTools(builtin.HealthDeps{Status: &statusAsker{}, Code: code}) {
+			if tool.Name() == builtin.CodeStatusTool {
+				return true
+			}
+		}
+		return false
+	}
+	wired := codeDeps(&grantHost{})
+	if !served(wired) {
+		t.Fatalf("code_status is not served over the code reads' whole wiring, so this case proves nothing")
+	}
+	for name, half := range map[string]builtin.CodeDeps{
+		"the code host alone":              {Code: wired.Code},
+		"the code host without Chart":      {Code: wired.Code, Requesters: wired.Requesters},
+		"the code host without Requesters": {Code: wired.Code, Chart: wired.Chart},
+	} {
+		if served(half) {
+			t.Errorf("code_status is served over %s, which serves no code read", name)
+		}
+	}
+}
+
+// A CODE STATUS ANSWER IN A TURN SOMEBODY WOKE IS HELD TO THEIR GRANT TOO.
+//
+// Its repository reads are code reads, and the requester ceiling holds every
+// code read (ADR-0058): in a turn a colleague seat woke, each grant read names
+// that seat, so the hot list also leaves out a repository the seat may read
+// and the colleague may not — counted withheld beside the one the seat itself
+// may not read — and that repository asked by name is refused as the code
+// tools refuse a read above the ceiling, forbidden with the ceiling's reason
+// over code.ErrAboveCeiling, and never asked of the git nodes. A turn nobody
+// woke, and one a person woke, read for nobody but the seat — a person bounds
+// nothing, since every person reads every repository — and the person who
+// woke it need not hold admin: whoever woke the turn is decided on the code
+// host's read verb, not on the health row, which the ceiling does not hold.
+// A turn a stranger woke, or a person who may not act in the company now, is
+// answered nothing, and nothing is read or asked.
+//
+// Mutation: read the hot list for the seat alone (no ceiling seat on the
+// reads), keep a repository answered ErrAboveCeiling, or decide whoever woke
+// the turn on code_status's own row → red.
+func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
+	t.Parallel()
+	const vaultID, infraID = "0192f6c1-0000-7000-8000-000000000001", "0192f6c1-0000-7000-8000-000000000004"
+	use := func(fetches int64) cache.Use { return cache.Use{Fetches: fetches} }
+	report := builtin.CodeStatusReport{Statuses: []host.CodeStatus{{Node: "node-a", Hot: []host.RepoStatus{
+		{RepoHeat: cache.RepoHeat{ID: siteID, Name: "site", Hour: use(9), Day: use(9)}},
+		{RepoHeat: cache.RepoHeat{ID: infraID, Name: "infra", Hour: use(8), Day: use(8)}},
+		{RepoHeat: cache.RepoHeat{ID: vaultID, Name: "vault", Hour: use(7), Day: use(7)}},
+	}}}}
+	o, chart := healthChart(t)
+	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
+	speaker := func(handle string) []types.CanonicalIdentity {
+		return []types.CanonicalIdentity{{Handle: handle}}
+	}
+	type setup struct {
+		asker *statusAsker
+		repos *grantHost
+		tool  tools.SeatCallable
+		turn  *turnctx.Turn
+	}
+	build := func(t *testing.T, requester string, senders []types.CanonicalIdentity) setup {
+		t.Helper()
+		s := setup{asker: &statusAsker{report: report}, repos: &grantHost{
+			repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"},
+				"infra": {ID: infraID, Name: "infra"}, "vault": {ID: vaultID, Name: "vault"}},
+			refused: map[string]bool{"vault": true},
+			above:   map[string]bool{"infra": true},
+		}}
+		tool := healthTools(builtin.HealthDeps{Status: s.asker, Code: healthCode(s.repos, chart)},
+			chart)[builtin.CodeStatusTool]
+		seated, ok := tool.(tools.SeatCallable)
+		if !ok {
+			t.Fatalf("code_status is not seat-callable")
+		}
+		s.tool = seated
+		s.turn = &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: o.AgentSeatByHandle("sre"), Org: o,
+			Lookups: turnctx.NewLookups(), Requester: requester, Senders: senders}
+		return s
+	}
+	call := func(t *testing.T, s setup, args map[string]any) tools.Result {
+		t.Helper()
+		got, err := s.tool.CallForTurn(asSeat("sre"), s.turn, args)
+		if err != nil {
+			t.Fatalf("code_status: %v", err)
+		}
+		return got
+	}
+	hotOf := func(answer map[string]any) []string {
+		var out []string
+		for _, h := range answer["hot"].([]any) {
+			out = append(out, h.(map[string]any)["id"].(string))
+		}
+		return out
+	}
+
+	for _, c := range []struct {
+		name      string
+		requester string
+		senders   []types.CanonicalIdentity
+		madeFor   string
+		hot       []string
+		withheld  float64
+	}{
+		{"a turn a colleague seat woke", "dev", speaker("dev"), "dev", []string{siteID}, 2},
+		{"a turn nobody woke", "", nil, "", []string{siteID, infraID}, 1},
+		{"a turn a person woke who holds no admin", "founder", speaker("founder"), "",
+			[]string{siteID, infraID}, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := build(t, c.requester, c.senders)
+			answer := healthAnswer(t, call(t, s, nil))
+			if got := hotOf(answer); !slices.Equal(got, c.hot) {
+				t.Errorf("the hot list = %v, want %v", got, c.hot)
+			}
+			if got := answer["withheld"]; got != c.withheld {
+				t.Errorf("the answer withheld %v, want %v", got, c.withheld)
+			}
+			if len(s.repos.madeFor) == 0 {
+				t.Fatalf("the hot list was judged without a read, so this case proves nothing")
+			}
+			for _, seat := range s.repos.madeFor {
+				if seat != c.madeFor {
+					t.Errorf("a grant read was made for %q, want %q", seat, c.madeFor)
+				}
+			}
+		})
+	}
+
+	t.Run("a repository the colleague may not read, asked by name", func(t *testing.T) {
+		t.Parallel()
+		s := build(t, "dev", speaker("dev"))
+		got := call(t, s, map[string]any{"repo": "infra"})
+		if tools.RefusalOf(got) != tools.RefusalForbidden {
+			t.Fatalf("answered %s %q, want refused forbidden", tools.RefusalOf(got), got.Output)
+		}
+		var refused *builtin.DecisionRefused
+		if !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonCeiling ||
+			!errors.Is(got.Cause, code.ErrAboveCeiling) || errors.Is(got.Cause, code.ErrNotPermitted) {
+			t.Errorf("the refusal's cause is %v, want the ceiling's reason over ErrAboveCeiling", got.Cause)
+		}
+		if len(s.asker.asked) != 0 {
+			t.Errorf("the git nodes were asked about %v for a repository refused the turn's colleague",
+				s.asker.asked)
+		}
+	})
+
+	for _, c := range []struct {
+		name      string
+		requester string
+		senders   []types.CanonicalIdentity
+		says      string
+	}{
+		{"a turn a stranger woke", "", unknown, "woken by somebody the company does not know"},
+		{"a turn a departed person woke", "departed", speaker("departed"), "may not act in the company now"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := build(t, c.requester, c.senders)
+			for _, args := range []map[string]any{nil, {"repo": "site"}} {
+				got := call(t, s, args)
+				if tools.RefusalOf(got) != tools.RefusalForbidden || !strings.Contains(got.Output, c.says) {
+					t.Errorf("code_status %v answered %s %q, want refused forbidden saying %q", args,
+						tools.RefusalOf(got), got.Output, c.says)
+				}
+				var refused *builtin.DecisionRefused
+				if !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonCeiling {
+					t.Errorf("code_status %v's refusal %v carries no ceiling reason", args, got.Cause)
+				}
+			}
+			if s.repos.reads != 0 || len(s.asker.asked) != 0 {
+				t.Errorf("the refused calls read %d repositories and asked the git nodes %v, want nothing",
+					s.repos.reads, s.asker.asked)
+			}
+		})
 	}
 }

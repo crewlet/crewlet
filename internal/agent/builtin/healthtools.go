@@ -62,6 +62,19 @@ import (
 // every repository its grant does not read and says how many it left out
 // (`withheld`). A person reads every repository, so a person's answer leaves
 // nothing out.
+//
+// # And, in a turn somebody woke, theirs too
+//
+// Those repository reads are code reads, which the requester ceiling holds
+// (ADR-0058, [CodeDeps.callerOn]): in a turn a colleague seat woke, each is
+// read for that seat as well, so the hot list leaves out what the colleague
+// may not read and counts it withheld, and the one-repository form is refused
+// as the code tools refuse a read above the ceiling; a turn a stranger woke,
+// or a person who may not act in the company now, is answered nothing, as
+// every code read is. Whoever woke the turn is decided on the code host's read
+// verb, never on the health row: the requester ceiling holds a repository
+// read, and the rest of the answer is the health grant's, as fleet_health's
+// whole answer is.
 
 // The health tools' names: each is its authority row's action.
 const (
@@ -107,24 +120,31 @@ type HealthDeps struct {
 	// clock.
 	Now func() time.Time
 
-	// Status asks the git nodes' status. Nil omits code_status, as does a
-	// nil Code.Code: a company that hosts no code has no git node to ask.
+	// Status asks the git nodes' status. Nil omits code_status, as do Code
+	// deps that serve no code tool ([CodeDeps.serves]): a company that hosts
+	// no code has no git node to ask.
 	Status StatusAsker
 
 	// Code is the code tools' own deps: code_status names a repository by
 	// name and judges a seat's grant over what it reports exactly as they
-	// do, through the same resolution, and Code.Actor names the caller.
+	// do, through the same resolution and for whoever woke the turn as they
+	// read for them, and Code.Actor names the caller.
 	Code CodeDeps
 }
 
 // HealthTools are the health tools a seat and an operator share: ONE list, so
 // a schema and a refusal's words are written once. Every one reads.
+//
+// code_status ON THE CODE TOOLS' TERMS ([CodeDeps.serves]): its repository
+// reads are theirs, made for whoever woke the turn, so deps wired without the
+// requester ceiling's halves serve it no more than they serve a code read —
+// never one that reads for whoever messaged a seat whatever the seat may.
 func HealthTools(deps HealthDeps) []tools.Callable {
 	var out []tools.Callable
 	if deps.Leases != nil {
 		out = append(out, &fleetHealth{deps: deps})
 	}
-	if deps.Status != nil && deps.Code.Code != nil {
+	if deps.Status != nil && deps.Code.serves() {
 		out = append(out, &codeStatus{deps: deps})
 	}
 	return out
@@ -385,12 +405,16 @@ type repoOnNode struct {
 func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.deps.Code.asker(ctx, turn, t.Name())
+	// WHO IT READS AS, AND FOR: the code tools' one composition, with
+	// whoever woke the turn decided on the code host's read verb — the
+	// repository reads below are the requester ceiling's, the rest of the
+	// answer the health grant's ([CodeDeps.callerOn]).
+	c, refusal := t.deps.Code.callerOn(ctx, turn, t.Name(), authz.ActionCodeRead)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	if strings.TrimSpace(argString(args, "repo")) != "" {
-		return t.oneRepo(ctx, turn, asker, args)
+		return t.oneRepo(ctx, turn, c, args)
 	}
 	report, err := t.deps.Status.CodeStatus(ctx, "")
 	if err != nil {
@@ -409,7 +433,7 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	slices.SortFunc(answer.Nodes, func(a, b gitNodeStatus) int { return cmp.Compare(a.Node, b.Node) })
-	readable, withheld, failure := t.judge(ctx, turn, asker, entries)
+	readable, withheld, failure := t.judge(ctx, turn, c, entries)
 	if failure != nil {
 		return *failure, nil
 	}
@@ -426,19 +450,19 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for _, i := range cache.Hottest(kept, cache.HotRepos) {
 		answer.Hot = append(answer.Hot, keptPairs[i])
 	}
-	return newForeignRead(turn, asker.Seat).page(ctx, t.Name(), answer,
+	return newForeignRead(turn, c.asker.Seat).page(ctx, t.Name(), answer,
 		"Name one repository with `repo` to read it alone.")
 }
 
 // oneRepo is code_status about the repository args names, on every git node.
-func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, asker code.Principal,
+func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	args map[string]any) (tools.Result, error) {
 
 	name, refusal := repoArg(t.Name(), args)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	repo, refusal := t.deps.Code.repo(ctx, turn, t.Name(), codeCaller{asker: asker}, name)
+	repo, refusal := t.deps.Code.repo(ctx, turn, t.Name(), c, name)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -457,26 +481,29 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, asker code
 		answer.Nodes = append(answer.Nodes, on)
 	}
 	slices.SortFunc(answer.Nodes, func(a, b repoOnNode) int { return cmp.Compare(a.Node, b.Node) })
-	return newForeignRead(turn, asker.Seat).page(ctx, t.Name(), answer,
+	return newForeignRead(turn, c.asker.Seat).page(ctx, t.Name(), answer,
 		"Ask again: one repository's state on every git node does not outgrow an answer.")
 }
 
-// judge is which of the repositories entries name the asker may read, and how
+// judge is which of the repositories entries name the caller may read, and how
 // many it may not.
 //
 // AN OPERATOR READS EVERY REPOSITORY (ADR-0058: a person maintains every one,
-// and a token reads every one), so a person's answer is judged without a read.
+// and a token reads every one), so a person's answer is judged without a read
+// — and a person's call is no deputy, so it reads for nobody else either.
 // A SEAT is held to its own grant, through the code tools' one resolution of a
 // name ([CodeDeps.repo]'s read, at the seat's level, judged by the node that
-// answers): a repository it may not read, one the name no longer names, or one
-// the name names under another id — renamed since the git node counted it — is
-// left out, never shown on a guess. A read that could not be made fails the
-// call, unavailable, rather than leaving out what it could not judge.
-func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, asker code.Principal,
+// answers) — and, in a turn a colleague seat woke, to that seat's too, judged
+// by the same node on the same read: a repository either may not read, one the
+// name no longer names, or one the name names under another id — renamed since
+// the git node counted it — is left out, never shown on a guess. A read that
+// could not be made fails the call, unavailable, rather than leaving out what
+// it could not judge.
+func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	entries []cache.RepoHeat) (map[string]bool, int, *tools.Result) {
 
 	readable := make(map[string]bool, len(entries))
-	if asker.Kind != code.PrincipalAgent {
+	if c.asker.Kind != code.PrincipalAgent {
 		for _, e := range entries {
 			readable[e.ID] = true
 		}
@@ -503,7 +530,7 @@ func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, asker code.P
 		wg.Go(func() {
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			ok, err := t.readable(ctx, turn, asker, id, name)
+			ok, err := t.readable(ctx, turn, c, id, name)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -528,23 +555,31 @@ func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, asker code.P
 	return readable, withheld, nil
 }
 
-// readable reports whether asker may read the repository a git node counted as
-// id by name: true where the code tools' resolution of the name admits the
-// asker and names that id, false where it refuses the asker or the name names
-// no repository or another one now, and an error where it could not say.
-func (t *codeStatus) readable(ctx context.Context, turn *turnctx.Turn, asker code.Principal,
+// readable reports whether c may read the repository a git node counted as id
+// by name: true where the code tools' resolution of the name admits the asker
+// — and whoever the call reads for — and names that id, false where it refuses
+// either or the name names no repository or another one now, and an error
+// where it could not say.
+//
+// THE CODE TOOLS' ONE READ ([CodeDeps.read]), so the seat a turn reads for
+// rides on it ([code.ReadQuery.CeilingSeat]) exactly as on theirs, and a
+// repository the asker may read and that seat may not is answered
+// code.ErrAboveCeiling — left out here as the asker's own refusal is. A
+// resolution the turn already holds was made by that read, for the same
+// asker and in the same turn, so for the same ceiling.
+func (t *codeStatus) readable(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	id, name string) (bool, error) {
 
-	key := codeRepoKey{asker: asker, name: name}
+	key := codeRepoKey{asker: c.asker, name: name}
 	if held, ok := turn.LookedUp().Load(key); ok {
 		if ref, ok := held.(code.RepoRef); ok {
 			return ref.ID == id, nil
 		}
 	}
-	answer, err := t.deps.Code.Code.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: asker,
-		Repo: name, Fresh: seatRead})
+	answer, err := t.deps.Code.read(ctx, c, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Fresh: seatRead})
 	switch {
-	case errors.Is(err, code.ErrNotPermitted), errors.Is(err, code.ErrRepoNotFound):
+	case errors.Is(err, code.ErrNotPermitted), errors.Is(err, code.ErrAboveCeiling),
+		errors.Is(err, code.ErrRepoNotFound):
 		return false, nil
 	case err != nil:
 		return false, err

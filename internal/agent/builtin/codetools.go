@@ -293,6 +293,25 @@ type codeCaller struct {
 // barrier on a log. A person's or a token's call is no deputy, and composes
 // nothing.
 func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (codeCaller, *tools.Result) {
+	return d.callerOn(ctx, turn, tool, authz.Action(tool))
+}
+
+// callerOn is [CodeDeps.caller] with whoever woke the turn decided on action
+// rather than on the tool's own row: for a tool that is no code read itself
+// but reads the code host as one — code_status, the health grant's
+// (healthtools.go), whose hot list and one-repository form read repositories
+// through the code tools' resolution — the requester is decided on the verb
+// those reads are, the code host's ([authz.ActionCodeRead]), and NO FURTHER.
+// The requester ceiling holds a repository read (ADR-0058), so every
+// repository such a call reads is read for its requester as a code tool's is;
+// what the tool reads beyond the repositories is its own row's, which the
+// call's gate has already decided for the seat, and deciding that row again
+// for the requester would make a ceiling of the tool's family that the family
+// does not keep (fleet_health, its sibling, reads no repository and keeps
+// none).
+func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
+	action authz.Action) (codeCaller, *tools.Result) {
+
 	asker, refusal := d.asker(ctx, turn, tool)
 	if refusal != nil {
 		return codeCaller{}, refusal
@@ -311,7 +330,6 @@ func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (
 	if ceiling.Kind == authz.CeilingNone {
 		return c, nil
 	}
-	action := authz.Action(tool)
 	dec := authz.DecideWithin(ctx, turnctx.Principal(turn), ceiling, action, authz.Object{}, d.Chart,
 		time.Now().UTC())
 	switch {
