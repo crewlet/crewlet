@@ -85,7 +85,7 @@ func TestEveryPagedStatementSeeksItsKeyAndStreams(t *testing.T) {
 // every repository's days in the range, which is what the head rows' day-first
 // key alone would read.
 //
-// Mutation: drop usage_repo_read_days_repo_idx (replicated 0063), and the plan
+// Mutation: drop usage_repo_read_days_repo_idx (replicated 0065), and the plan
 // seeks the primary key's days and reads every repository's head rows in them.
 func TestARepositorysElidedReadersAreCountedOffItsOwnDays(t *testing.T) {
 	t.Parallel()
