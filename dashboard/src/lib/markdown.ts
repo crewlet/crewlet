@@ -38,7 +38,7 @@
  * break and whose headings are lines of one transcript item.
  */
 
-import { createElement, type ReactNode } from "react";
+import { createElement, Fragment, type ReactNode } from "react";
 import {
   Highlight,
   InlineCode,
@@ -336,6 +336,19 @@ export interface RenderOptions {
    */
   highlight?: readonly string[];
   /**
+   * What each run of the PROSE a reader reads becomes, in reading order: the
+   * words between the code spans, the links (their labels included) and the
+   * images, never inside them, and never a code block's. Its `key` is unique
+   * within the render, and `opens` is true for the first run of a block's
+   * text (a paragraph, a heading, a table cell, a list item's line), so its
+   * first word starts a sentence. The Dashboard Assistant makes the first
+   * mention of each record a turn read its chip here
+   * (`app/assistant/chunk/mentions.ts`), so a key quoted in code or written
+   * into a link's label stays as written. A caller gives this or `highlight`;
+   * given both, this is the one applied.
+   */
+  prose?: (text: string, key: string, opens?: boolean) => ReactNode;
+  /**
    * Where an image's source is shown from, in place of the source itself: a
    * doc's pictures are files of its version, fetched with the reader's own
    * credential and shown through an object URL, never loaded from an address
@@ -365,7 +378,10 @@ export interface RenderOptions {
 }
 
 /** What the inline walk needs of [RenderOptions]. */
-export type InlineOptions = Pick<RenderOptions, "breaks" | "highlight" | "image" | "links">;
+export type InlineOptions = Pick<
+  RenderOptions,
+  "breaks" | "highlight" | "image" | "links" | "prose"
+>;
 
 /** Render one run of inline markdown to React nodes. */
 export function renderInline(
@@ -380,7 +396,7 @@ export function renderInline(
 
   for (const { index, end, groups: g } of markdownInline(text)) {
     if (index > at) {
-      out.push(breakLines(text.slice(at, index), `${keyPrefix}-t${n++}`, hard, options.highlight));
+      out.push(breakLines(text.slice(at, index), `${keyPrefix}-t${n++}`, hard, options));
     }
     const key = `${keyPrefix}-${n++}`;
     at = end;
@@ -421,7 +437,7 @@ export function renderInline(
             : createElement("span", { key }, alt),
       );
     } else if (g.href !== undefined && options.links === "inert") {
-      out.push(inertLink(key, renderInline(g.label ?? "", key, options), g.href));
+      out.push(inertLink(key, renderInline(g.label ?? "", key, unprosed(options)), g.href));
     } else if (g.auto !== undefined && options.links === "inert") {
       out.push(inertLink(key, [], g.auto));
     } else if (g.href !== undefined) {
@@ -429,11 +445,11 @@ export function renderInline(
       const label = g.label ?? "";
       // A LINK'S LABEL IS TEXT TO ANY LINK INSIDE IT: an anchor inside an
       // anchor is invalid, and a browser splits the outer one around it.
-      const inner = href ? { ...options, links: "text" as const } : options;
+      const inner = href ? { ...unprosed(options), links: "text" as const } : unprosed(options);
       out.push(
         href
           ? anchor(key, href, renderInline(label, key, inner))
-          : createElement("span", { key }, renderInline(label, key, options)),
+          : createElement("span", { key }, renderInline(label, key, inner)),
       );
     } else if (g.auto !== undefined) {
       const href = options.links === "text" ? null : safeHref(g.auto);
@@ -449,7 +465,7 @@ export function renderInline(
     }
   }
   if (at < text.length) {
-    out.push(breakLines(text.slice(at), `${keyPrefix}-t${n}`, hard, options.highlight));
+    out.push(breakLines(text.slice(at), `${keyPrefix}-t${n}`, hard, options));
   }
   return out;
 }
@@ -537,17 +553,24 @@ function inertLink(key: string, label: ReactNode[], raw: string): ReactNode {
  * for `breaks: "hard"`, where every newline is a break and the two markers
  * that ask for one are consumed with it rather than left as stray characters.
  */
-function breakLines(
-  text: string,
-  key: string,
-  hard: boolean,
-  highlight: readonly string[] | undefined,
-): ReactNode {
-  // A RUN OF PROSE, marked where a search matched it when the caller asked.
+/** A link's label is not prose: `prose` never runs inside one. */
+function unprosed(options: InlineOptions): InlineOptions {
+  if (options.prose === undefined) return options;
+  const rest = { ...options };
+  delete rest.prose;
+  return rest;
+}
+
+function breakLines(text: string, key: string, hard: boolean, options: InlineOptions): ReactNode {
+  const { highlight, prose } = options;
+  // A RUN OF PROSE, as the caller makes it, or marked where a search matched
+  // it when the caller asked.
   const run = (part: string, at: number): ReactNode =>
-    highlight && highlight.length > 0
-      ? createElement(Highlight, { key: `${key}-h${at}`, text: soften(part), terms: highlight })
-      : soften(part);
+    prose
+      ? createElement(Fragment, { key: `${key}-p${at}` }, prose(soften(part), `${key}-p${at}`))
+      : highlight && highlight.length > 0
+        ? createElement(Highlight, { key: `${key}-h${at}`, text: soften(part), terms: highlight })
+        : soften(part);
   const parts = text.split(hard ? /(?:  +|\\)?\n/ : /(?:  +|\\)\n/);
   if (parts.length === 1) return createElement("span", { key }, run(text, 0));
   const nodes: ReactNode[] = [];
@@ -563,6 +586,24 @@ function soften(text: string): string {
 }
 
 // --- block rendering -------------------------------------------------------
+
+/**
+ * `options` for one block's text: its first prose run is told it opens the
+ * block (`RenderOptions.prose`), every later one that it does not.
+ */
+function opening(options: RenderOptions): RenderOptions {
+  const { prose } = options;
+  if (prose === undefined) return options;
+  let first = true;
+  return {
+    ...options,
+    prose: (text, key) => {
+      const opens = first;
+      first = false;
+      return prose(text, key, opens);
+    },
+  };
+}
 
 function renderBlock(
   block: MarkdownBlock,
@@ -580,7 +621,7 @@ function renderBlock(
         return createElement(
           "p",
           { key, className: "md-heading" },
-          renderInline(block.text, key, options),
+          renderInline(block.text, key, opening(options)),
         );
       }
       // CLAMPED TO h2–h6. A page's own title is the h1 on the screen around
@@ -589,10 +630,10 @@ function renderBlock(
       return createElement(
         `h${Math.min(6, block.level + 1)}`,
         anchor ? { key, id: anchor } : { key },
-        renderInline(block.text, key, options),
+        renderInline(block.text, key, opening(options)),
       );
     case "paragraph":
-      return createElement("p", { key }, renderInline(block.text, key, options));
+      return createElement("p", { key }, renderInline(block.text, key, opening(options)));
     case "code":
       // `md-code`, in the same family as `md-table`, `md-tasks` and
       // `md-task-body`. It was `code plain`, two generic names (a table
@@ -701,7 +742,7 @@ function renderBlock(
                 createElement(
                   "th",
                   { key: i, style: { textAlign: block.align[i] ?? "left" } },
-                  renderInline(cell, `${key}-h${i}`, options),
+                  renderInline(cell, `${key}-h${i}`, opening(options)),
                 ),
               ),
             ),
@@ -717,7 +758,7 @@ function renderBlock(
                   createElement(
                     "td",
                     { key: c, style: { textAlign: block.align[c] ?? "left" } },
-                    renderInline(cell, `${key}-${r}-${c}`, options),
+                    renderInline(cell, `${key}-${r}-${c}`, opening(options)),
                   ),
                 ),
               ),

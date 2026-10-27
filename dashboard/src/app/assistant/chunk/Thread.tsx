@@ -25,7 +25,7 @@
  * waiting on them, a turn stopped.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   Callout,
   CopyButton,
@@ -43,7 +43,11 @@ import {
   announce,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
-import type { AssistantFileRef, AssistantTurnMode } from "~/contract/assistant.ts";
+import type {
+  AssistantCardEvent,
+  AssistantFileRef,
+  AssistantTurnMode,
+} from "~/contract/assistant.ts";
 import { fmtDateTime, fmtWait } from "~/lib/format.ts";
 import {
   ActionReceipt,
@@ -57,6 +61,7 @@ import {
   type CardHandlers,
 } from "./blocks.tsx";
 import { SentAttachments } from "./files.tsx";
+import { Answer } from "./reads.tsx";
 import { changedNothing } from "./pageActions.ts";
 import { isOpen, proposalOf, type ConversationView, type TurnView } from "./turn.ts";
 
@@ -132,6 +137,31 @@ function answerText(turn: TurnView): string {
   return turn.replies.map((r) => r.text).join("\n\n");
 }
 
+/** The cards no answer of the turn holds: none. */
+const NO_CARDS: readonly AssistantCardEvent[] = [];
+
+/**
+ * A turn's cards by the message each belongs to, and those whose message the
+ * turn holds no answer for, each in the order the turn sent them.
+ */
+function cardsByMessage(
+  cards: readonly AssistantCardEvent[],
+  replies: ReadonlySet<string>,
+): { cardsOf: ReadonlyMap<string, readonly AssistantCardEvent[]>; loose: AssistantCardEvent[] } {
+  const cardsOf = new Map<string, AssistantCardEvent[]>();
+  const loose: AssistantCardEvent[] = [];
+  for (const card of cards) {
+    if (!replies.has(card.message_id)) {
+      loose.push(card);
+      continue;
+    }
+    const list = cardsOf.get(card.message_id);
+    if (list) list.push(card);
+    else cardsOf.set(card.message_id, [card]);
+  }
+  return { cardsOf, loose };
+}
+
 /** One turn. */
 function Turn({
   turn,
@@ -159,9 +189,14 @@ function Turn({
   const steps = stepsOf(turn, technical);
   const deepRuns = deepRunsOf(turn);
   const thinking = thinkingOf(turn);
-  const placed = new Set(turn.replies.map((r) => r.id));
-  const cardsOf = (messageId: string) => turn.cards.filter((c) => c.message_id === messageId);
-  const loose = turn.cards.filter((c) => !placed.has(c.message_id));
+  // EACH ANSWER'S CARDS ARE ONE ARRAY while the turn's cards are, so an
+  // answer works out its reads and its mentions once per change of its cards,
+  // never on every render (a running turn's clock renders it every second).
+  const replyIds = turn.replies.map((r) => r.id).join("\n");
+  const { cardsOf, loose } = useMemo(
+    () => cardsByMessage(turn.cards, new Set(replyIds.split("\n"))),
+    [turn.cards, replyIds],
+  );
   // A PAGE CHANGE WITH NO CARD of its own (a pure view change, D11) is drawn
   // as its receipt; one a card proposed is drawn on that card.
   const carded = new Set(
@@ -221,12 +256,18 @@ function Turn({
         <DeepRunBlock key={run.step.step_id} run={run} now={now} technical={technical} />
       ))}
       {turn.replies.map((reply) => (
-        <Stack key={reply.id} gap={3}>
-          <ReplyProse text={reply.text} dimmed={turn.phase === "stopped"} />
-          {cardsOf(reply.id).map(card)}
-        </Stack>
+        <Answer
+          key={reply.id}
+          text={reply.text}
+          dimmed={turn.phase === "stopped"}
+          cards={cardsOf.get(reply.id) ?? NO_CARDS}
+          card={card}
+          on={on}
+        />
       ))}
-      {loose.map(card)}
+      {loose.length > 0 ? (
+        <Answer text="" dimmed={false} cards={loose} card={card} on={on} />
+      ) : null}
       {receipts.map((a) => (
         <ActionReceipt
           key={a.action_id}

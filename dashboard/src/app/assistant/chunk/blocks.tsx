@@ -14,10 +14,11 @@
  * asks of an approval is confirmed by the dashboard's one step-up dialog
  * (`protocol/rest.ts` replays the approval), never drawn as a failure.
  *
- * A SUPPORTING READ IS ONE LINE: a table or a record a read built is folded
- * to its head (its title, how much it holds, its downloads and its link) and
- * opened by the person, because the answer is the model's prose. A proposal,
- * a refusal and a receipt are the point of the turn and are drawn whole.
+ * A READ IS NEVER A CARD: a table or a record a read built is drawn by its
+ * answer (`reads.tsx`), as a chip where the prose names it and on one "Also
+ * read" line where it does not, because the answer is the model's prose. A
+ * proposal, a refusal and a receipt are the point of the turn and are drawn
+ * whole, here.
  *
  * EVERY CARD IS THE ENGINE'S: built from tool results and its own route
  * table, never from the model's words. Only prose is the model's, and it is
@@ -35,20 +36,15 @@ import { type ReactNode } from "react";
 import {
   BriefCard,
   Button,
-  ButtonLink,
   Callout,
   CopyButton,
   DeepWorkCard,
   DiffView,
-  EntityList,
   OpenInAppCard,
-  PropertyList,
   ProposalCard,
   Prose,
   ReceiptStrip,
   RefusalCard,
-  ResultTableCard,
-  StatusCard,
   type ChangeListRow,
   type DeepWorkMeasure,
   type DeepWorkState,
@@ -60,20 +56,18 @@ import {
   collapseDiff,
   diffLines,
 } from "@crewlethq/ui";
-import { ArrowUpRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import {
   ASSISTANT_DEEP_ACTIVITY_LINES,
   type AssistantBriefAction,
   type AssistantBriefCard,
   type AssistantCardEvent,
   type AssistantDeepProgress,
-  type AssistantEntityCard,
   type AssistantProposalCard,
   type AssistantStepEvent,
   type AssistantTableCard,
 } from "~/contract/assistant.ts";
 import { narrowCard } from "~/protocol/assistantWire.ts";
-import { exportFile } from "~/protocol/assistant.ts";
 import { statusLabel } from "~/lib/work.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, fmtExact, fmtTime } from "~/lib/format.ts";
@@ -81,7 +75,6 @@ import { youNeedWords } from "~/lib/access.ts";
 import { crumbsFor } from "../../crumbs.ts";
 import { href as hrefOf } from "../../router.tsx";
 import { openInApp, type InAppTarget } from "./openInApp.ts";
-import { useCardOpen } from "./fold.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import { DraftFile } from "./DraftFile.tsx";
@@ -181,6 +174,11 @@ const CELL: Record<WireColumnType, (value: string | number | boolean | null) => 
   // project's own status words aside, which a card does not carry).
   label: (v) => (typeof v === "string" && v !== "" ? statusLabel(v) : v === null ? "" : String(v)),
 };
+
+/** A table's cell as it is drawn, by its column's type. */
+export function cellText(type: WireColumnType, value: string | number | boolean | null): string {
+  return CELL[type](value);
+}
 
 /** The types whose wire value is a number, which a fact carries as a string. */
 const NUMERIC = new Set<WireColumnType>(["number", "tokens", "duration"]);
@@ -501,13 +499,26 @@ export function ReplyProse({ text, dimmed = false }: { text: string; dimmed?: bo
   // A SILENT ROUND IS STORED as an empty message its cards hang from, and
   // draws nothing of its own, streaming or not.
   if (text.trim() === "") return null;
+  return <ProseBlock dimmed={dimmed}>{renderMarkdown(text, ASSISTANT_WORDS)}</ProseBlock>;
+}
+
+/**
+ * Rendered Markdown as a reply draws it. A DIV, NOT PROSE'S DEFAULT PARAGRAPH:
+ * rendered Markdown is blocks (paragraphs, lists), which a <p> may not hold.
+ * `prose md` is the class pair the dashboard's Markdown rhythm is written for,
+ * as every other rendered body here carries it, so the reply's paragraphs are
+ * spaced. An answer whose mentions are chips (`reads.tsx`) is drawn by it too.
+ */
+export function ProseBlock({
+  children,
+  dimmed = false,
+}: {
+  children: ReactNode;
+  dimmed?: boolean;
+}) {
   return (
-    // A DIV, NOT PROSE'S DEFAULT PARAGRAPH: rendered Markdown is blocks
-    // (paragraphs, lists), which a <p> may not hold. `prose md` is the class
-    // pair the dashboard's Markdown rhythm is written for, as every other
-    // rendered body here carries it, so the reply's paragraphs are spaced.
     <Prose as="div" measure="narrow" dimmed={dimmed} className="prose md">
-      {renderMarkdown(text, ASSISTANT_WORDS)}
+      {children}
     </Prose>
   );
 }
@@ -781,121 +792,6 @@ export function scopeLine(scope: AssistantProposalCard["scope"], state: Proposal
   }
 }
 
-/** A count of things in words: "1 row", "7 rows". */
-function countOf(n: number, one: string, many: string): string {
-  return `${fmtExact(n)} ${n === 1 ? one : many}`;
-}
-
-/** What a folded table says after its title: how many rows the read answered. */
-export function tableSummary(table: AssistantTableCard): string {
-  return countOf(table.row_count, "row", "rows");
-}
-
-/** The most fact labels a folded record names before it is cut short. */
-const SUMMARY_FACTS = 3;
-
-/**
- * What a folded record says after its title: its subtitle where it has one
- * (a task's key, a page's place), else the names of the facts it holds
- * ("Mission, vision"), and how many entries its list holds ("6 policies").
- * Nothing where it holds neither.
- */
-export function entitySummary(entity: AssistantEntityCard): string | undefined {
-  const facts = (entity.facts ?? []).filter((fact) => !fact.detail).map((fact) => fact.label);
-  const head = entity.subtitle
-    ? [entity.subtitle]
-    : facts.slice(0, SUMMARY_FACTS).map((label, i) => (i === 0 ? label : inSentence(label)));
-  const items = entity.items?.length ?? 0;
-  const noun = entity.items_noun ?? { one: "entry", many: "entries" };
-  const parts = items > 0 ? [...head, countOf(items, noun.one, noun.many)] : head;
-  return parts.length > 0 ? parts.join(", ") : undefined;
-}
-
-/** A label inside a sentence: its first letter lowered, unless it opens an acronym ("URL"). */
-function inSentence(label: string): string {
-  const second = label.charAt(1);
-  return second !== "" && second === second.toUpperCase() && second !== second.toLowerCase()
-    ? label
-    : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
-}
-
-/** How a supporting read folds: closed until the person opens it, remembered for the session. */
-interface Fold {
-  collapsible: true;
-  summary: string | undefined;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-/** A table card with its downloads from the stored snapshot. */
-function Table({
-  table,
-  cardId,
-  on,
-  fold,
-}: {
-  table: AssistantTableCard;
-  cardId: string;
-  on: CardHandlers;
-  fold: Fold;
-}) {
-  // THE DRAWER DRAWS THE COLUMNS THE ENGINE CHOSE FOR IT, name first; the
-  // rest stay in the card's downloads.
-  const drawn = table.columns.flatMap((c, i) => (c.detail ? [] : [i]));
-  const align = drawn.map((i) => {
-    const c = table.columns[i]!;
-    return c.align ?? (c.type === "text" || c.type === "label" ? "start" : "end");
-  });
-  const cells = (row: (string | number | boolean | null)[]) =>
-    drawn.map((i) => CELL[table.columns[i]!.type](row[i] ?? null));
-  const base =
-    table.title
-      .replace(/[^a-z0-9]+/gi, "-")
-      .replace(/^-|-$/g, "")
-      .toLowerCase() || cardId;
-  const downloads = table.exports
-    ? [
-        { label: "CSV", filename: `${base}.csv`, file: () => exportFile(table.exports!.csv) },
-        { label: "XLSX", filename: `${base}.xlsx`, file: () => exportFile(table.exports!.xlsx) },
-      ]
-    : undefined;
-  return (
-    <ResultTableCard
-      {...fold}
-      title={table.title}
-      window={table.window}
-      headers={drawn.map((i) => table.columns[i]!.label)}
-      rows={table.rows.map(cells)}
-      align={align}
-      total={table.total ? cells(table.total) : undefined}
-      downloads={downloads}
-      link={table.open ? <EngineLink link={table.open} on={on} /> : undefined}
-      emptyMessage="No rows match."
-    />
-  );
-}
-
-/** A link the engine built, followed only where it is one of this dashboard's own routes. */
-function EngineLink({ link, on }: { link: { label: string; href: string }; on: CardHandlers }) {
-  const target = openInApp(link.href);
-  if (!target) return <span>{link.label}</span>;
-  return (
-    <ButtonLink
-      size="small"
-      variant="ghost"
-      href={hrefOf(target.path, target.query)}
-      trailingIcon={<ArrowUpRightGlyph size="sm" />}
-      onClick={(event) => {
-        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
-        event.preventDefault();
-        on.openHere(target);
-      }}
-    >
-      {link.label}
-    </ButtonLink>
-  );
-}
-
 /** A crumb that is a record's raw id (a UUID), which a person does not read. */
 const RAW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -986,14 +882,6 @@ export function CardBlock({
   opened: boolean;
 }): ReactNode {
   const card = narrowCard(event.card);
-  // EVERY CARD ASKS, so the hooks run in one order; only a read uses it.
-  const [open, setOpen] = useCardOpen(event.card_id);
-  const fold = (summary: string | undefined): Fold => ({
-    collapsible: true,
-    summary,
-    open,
-    onOpenChange: setOpen,
-  });
   if (card === null) {
     return (
       <Callout variant="neutral">
@@ -1003,61 +891,14 @@ export function CardBlock({
   }
   switch (card.type) {
     case "table":
-      return (
-        <Table
-          table={card.table}
-          cardId={event.card_id}
-          on={on}
-          fold={fold(tableSummary(card.table))}
-        />
-      );
+    case "entity":
+    case "oversize":
+      // A READ IS NEVER A CARD: its answer draws it, as a chip where the
+      // answer names it and on the Also read line where it does not
+      // (`reads.tsx`). Reaching here is a caller drawing a read as a card.
+      throw new Error(`a ${card.type} read is drawn by its answer, never as a card`);
     case "proposal":
       return <Proposal proposal={card.proposal} local={local} on={on} />;
-    case "entity": {
-      const entity = card.entity;
-      const folded = fold(entitySummary(entity));
-      const facts = (entity.facts ?? []).filter((fact) => !fact.detail);
-      const items =
-        entity.items && entity.items.length > 0
-          ? entity.items.map((item) => ({
-              id: `${item.kind ?? ""}:${item.id}`,
-              name: item.label,
-              ...(item.fact === undefined ? {} : { fact: item.fact }),
-              ...(item.open ? { action: <EngineLink link={item.open} on={on} /> } : {}),
-            }))
-          : null;
-      // A LIST AND NOTHING ELSE (a task's comments) is the list card. A RECORD
-      // WITH A LIST UNDER IT (a page and its comments, the company's mission and
-      // vision over its policies, a company over its units) keeps both: drawn
-      // as the list alone, the record's facts, text and link were dropped.
-      if (items && facts.length === 0 && !entity.subtitle && !entity.text && !entity.open) {
-        return <EntityList {...folded} title={entity.title} items={items} />;
-      }
-      return (
-        <StatusCard
-          {...folded}
-          title={entity.title}
-          subtitle={entity.subtitle}
-          actions={entity.open ? <EngineLink link={entity.open} on={on} /> : undefined}
-          actionsAlign="start"
-        >
-          {facts.length > 0 ? (
-            <PropertyList
-              groups={[
-                {
-                  items: facts.map((fact) => ({
-                    label: fact.label,
-                    value: fact.mono ? <code>{factText(fact)}</code> : factText(fact),
-                  })),
-                },
-              ]}
-            />
-          ) : null}
-          {entity.text ? <ReplyProse text={entity.text} /> : null}
-          {items ? <EntityList label={entity.title} items={items} /> : null}
-        </StatusCard>
-      );
-    }
     case "open_in_app": {
       const { link, permitted } = card.open_in_app;
       const target = permitted ? openInApp(link.href) : null;

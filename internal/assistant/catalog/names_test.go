@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -248,8 +249,9 @@ func TestASeatIsShownByItsNameAndAFailedTurnByItsReason(t *testing.T) {
 }
 
 // A PAGE IS NEVER READ AS THE WHOLE: an answer whose cursor says more rows lie
-// past it tells the model its count is a floor ("at least 5"), and the person
-// that there are more; one with no cursor is the whole. "Five turns in a row"
+// past it tells the model its count is a floor ("at least 5"), and the person,
+// on the card itself (`more`), that there are more; one with no cursor is the
+// whole. "Five turns in a row"
 // was once said of a seat that had failed twenty-five. Mutation: drop the
 // turns card's More path, or the summary's use of it, and this fails.
 func TestAPageWithMoreIsNeverTheWhole(t *testing.T) {
@@ -267,10 +269,31 @@ func TestAPageWithMoreIsNeverTheWhole(t *testing.T) {
 			t.Fatal(err)
 		}
 		saysFloor := strings.Contains(res.Model, "at least 2")
-		hasNotice := len(res.Cards) == 2 && strings.Contains(res.Cards[1].Notice.Text, "there are more")
-		if saysFloor != tc.more || hasNotice != tc.more {
+		marked := len(res.Cards) == 1 && res.Cards[0].Table.More
+		if saysFloor != tc.more || marked != tc.more {
 			t.Errorf("next %s: the model reads %s and the cards are %+v, want more=%v", tc.next,
 				res.Model, res.Cards, tc.more)
+		}
+	}
+	// A RECORD'S LIST IS A PAGE TOO: a thread whose answer has older
+	// comments past it says so on the card and to the model.
+	thread, _ := catalog.Lookup("get_task_thread")
+	for _, tc := range []struct {
+		next string
+		more bool
+	}{{`"b2xkZXI"`, true}, {`null`, false}} {
+		answer := []byte(`{"key":"GP-11","title":"Crash","comments":[{"id":"c1","body":"Seen",` +
+			`"author":"qa"},{"id":"c2","body":"Fixed","author":"dev"}],"next_cursor":` + tc.next + `}`)
+		res, err := catalog.Shape(thread, map[string]any{"item": "GP-11"}, exec.Response{
+			Status: http.StatusOK, Body: answer}, provenance.NewBoundary(), wednesday, cards.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		saysFloor := strings.Contains(res.Model, "at least 2")
+		marked := len(res.Cards) == 1 && res.Cards[0].Entity.ItemsMore
+		if saysFloor != tc.more || marked != tc.more {
+			t.Errorf("thread next %s: the model reads %s and the cards are %+v, want more=%v",
+				tc.next, res.Model, res.Cards, tc.more)
 		}
 	}
 }
@@ -305,5 +328,41 @@ func TestTheModelReadsTimesOnTheCompanysClock(t *testing.T) {
 	}
 	if got := res.Cards[0].Table.Rows[0]; !slices.Contains(got, any("2026-10-26T07:00:00Z")) {
 		t.Errorf("the card's row is %v, want the instant kept for the dashboard", got)
+	}
+}
+
+// EVERY TASK AND PROJECT CARD NAMES ITS KEY, and no seat card names one: the
+// drawer makes the answer's first mention of a record its chip, the model
+// writes a task or a project by its key and a seat by its name (the prompt's
+// rule), so a seat keyed by its handle would never be found. Mutation: drop
+// Key from a task spec, or key the seat detail by its handle.
+func TestARecordIsKeyedTheWayTheAnswerNamesIt(t *testing.T) {
+	t.Parallel()
+	keyed := 0
+	for _, tool := range catalog.Tools() {
+		for variant, spec := range tool.Cards {
+			e := spec.Entity
+			if e == nil {
+				continue
+			}
+			if err := spec.Validate(); err != nil {
+				t.Errorf("%s (%q): %v", tool.Name, variant, err)
+			}
+			switch e.Kind {
+			case wire.ResourceTask, wire.ResourceProject:
+				if e.Key == "" {
+					t.Errorf("%s (%q) cards a %s with no key", tool.Name, variant, e.Kind)
+				}
+				keyed++
+			case wire.ResourceSeat:
+				if e.Key != "" {
+					t.Errorf("%s (%q) keys a seat by %q; the answer names a seat by its name",
+						tool.Name, variant, e.Key)
+				}
+			}
+		}
+	}
+	if keyed == 0 {
+		t.Error("no read cards a task or a project")
 	}
 }

@@ -347,3 +347,41 @@ func cut(s string, limit int, more string) string {
 	}
 	return strings.ToValidUTF8(s, "") + "\n\n" + more
 }
+
+// queryRow is a row of the reference's question table: the question, the
+// parameters it takes, and the route it answers.
+var queryRow = regexp.MustCompile("^\\|\\s*`[a-z_]+`\\s*\\|\\s*`\\{([^}]*)\\}`\\s*\\|\\s*`GET (/[^`\\s]*)`")
+
+// queryIndex is every read route's query parameters as the reference's
+// question table documents them, by [docKey].
+var queryIndex = sync.OnceValue(func() map[string][]string {
+	return indexQuery(crewlet.APIReference)
+})
+
+// indexQuery reads the question table's rows of a reference: each route's
+// parameters, an optional one's `?` dropped, in the order documented.
+func indexQuery(md string) map[string][]string {
+	out := map[string][]string{}
+	for _, line := range strings.Split(md, "\n") {
+		m := queryRow.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		key := docKey("GET " + m[2])
+		for _, param := range strings.Split(m[1], ",") {
+			if name := strings.TrimSuffix(strings.TrimSpace(param), "?"); name != "" &&
+				!slices.Contains(out[key], name) {
+				out[key] = append(out[key], name)
+			}
+		}
+	}
+	return out
+}
+
+// queryParams is the query parameters the reference documents for a read
+// route, nil for a route its question table does not hold.
+func queryParams(pattern string) []string { return queryIndex()[docKey(pattern)] }
+
+// pagedByLimit reports whether the reference says a read route pages by
+// `limit`.
+func pagedByLimit(pattern string) bool { return slices.Contains(queryParams(pattern), "limit") }

@@ -223,9 +223,13 @@ const (
 	CardOpenInApp CardKind = "open_in_app"
 	// CardError is a refusal or a failure, in the engine's own words.
 	CardError CardKind = "error"
-	// CardNotice is a line the engine adds: a truncation, a withheld
+	// CardNotice is a line the engine adds: a shortened table, a withheld
 	// result.
 	CardNotice CardKind = "notice"
+	// CardOversize is a read whose answer was past what one step reads:
+	// named for what it read, with the screen that shows all of it and what
+	// would narrow it, never drawn as though it held the answer (ADR-0061).
+	CardOversize CardKind = "oversize"
 
 	// --- deep work (im-deep) ---
 
@@ -238,10 +242,10 @@ const (
 	CardBrief CardKind = "brief"
 )
 
-// CardKinds are the eight, in declaration order.
+// CardKinds are the nine, in declaration order.
 var CardKinds = []CardKind{
-	CardTable, CardEntity, CardProposal, CardOpenInApp, CardError, CardNotice, CardFile,
-	CardBrief,
+	CardTable, CardEntity, CardProposal, CardOpenInApp, CardError, CardNotice, CardOversize,
+	CardFile, CardBrief,
 }
 
 // Valid reports whether k is a kind this build knows.
@@ -543,6 +547,12 @@ var ResourceKinds = []ResourceKind{
 
 // Valid reports whether k is a kind this build knows.
 func (k ResourceKind) Valid() bool { return slices.Contains(ResourceKinds, k) }
+
+// Keyed reports whether a record of kind k is written in prose by a short key
+// of its own (a task's "GOP-11", a project's "GOP"), which its
+// [EntityCard.Key] then carries. Every other kind is written by its name, a
+// seat's included: the assistant names a seat by its name, never its handle.
+func (k ResourceKind) Keyed() bool { return k == ResourceTask || k == ResourceProject }
 
 // RecordNoun is what the person calls the record a screen has open, as the
 // drawer names it ("Brief me on this decision"): a selection's word for itself

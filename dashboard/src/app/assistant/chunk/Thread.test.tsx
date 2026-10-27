@@ -5,13 +5,20 @@
  * and the run chip is drawn from the first step, closed while the turn runs.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AssistantCardEvent } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
 import type { CardHandlers } from "./blocks.tsx";
+import { mentionsOf, readsOf } from "./mentions.ts";
 import { Thread } from "./Thread.tsx";
 import { EMPTY, type TurnView } from "./turn.ts";
+
+// THE READS AN ANSWER WORKS OUT, counted: the real ones, through a spy.
+vi.mock("./mentions.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./mentions.ts")>();
+  return { ...real, readsOf: vi.fn(real.readsOf), mentionsOf: vi.fn(real.mentionsOf) };
+});
 
 afterEach(cleanup);
 
@@ -246,4 +253,60 @@ test("a sent question shows the images it carried as chips under its bubble", as
   expect(bubble.querySelector("button")).toBeNull();
   await waitFor(() => expect(bubble.querySelector("img")?.getAttribute("src")).toBe("blob:sent/1"));
   vi.unstubAllGlobals();
+});
+
+test("an answer works out its reads and mentions once while its words and cards are the same", () => {
+  const keyed: AssistantCardEvent = {
+    card_id: "k",
+    message_id: "m",
+    card: {
+      type: "entity",
+      entity: {
+        kind: "task",
+        id: "FAIR-1",
+        key: "FAIR-1",
+        title: "Settle-up algorithm",
+        open: { label: "FAIR-1", screen: "item", href: "#/worklet/FAIR-1" },
+      },
+    },
+  } as AssistantCardEvent;
+  const answered: TurnView = {
+    ...turn,
+    phase: "working",
+    replies: [{ id: "m", text: "FAIR-1 is next." }],
+    cards: [keyed],
+  };
+  const view = { ...EMPTY, id: "c1", turns: [answered] };
+  // THE DRAWER BUILDS ITS HANDLERS INLINE: a fresh object every render.
+  const at = (now: string, handlers: CardHandlers) => (
+    <Router>
+      <Thread
+        view={view}
+        now={Date.parse(now)}
+        on={{ ...handlers }}
+        opened={new Set()}
+        onRetry={() => {}}
+        retryDisabledReason={undefined}
+        onReconnect={() => {}}
+      />
+    </Router>
+  );
+  const first = { ...on, openHere: vi.fn() };
+  const newest = { ...on, openHere: vi.fn() };
+  const { rerender } = render(at("2026-10-24T09:41:02Z", first));
+  const reads = vi.mocked(readsOf).mock.calls.length;
+  const mentions = vi.mocked(mentionsOf).mock.calls.length;
+  // THE CLOCK TICKS AND THE HANDLERS ARE REBUILT, the turn does not change:
+  // nothing is worked out again.
+  rerender(at("2026-10-24T09:41:03Z", first));
+  rerender(at("2026-10-24T09:41:04Z", newest));
+  expect(vi.mocked(readsOf).mock.calls.length).toBe(reads);
+  expect(vi.mocked(mentionsOf).mock.calls.length).toBe(mentions);
+  // AND A CHIP RUNS THE NEWEST HANDLER, not the one it was drawn with.
+  fireEvent.click(screen.getByRole("button", { name: /FAIR-1/ }));
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("link", { name: "Open FAIR-1" }), {
+    button: 0,
+  });
+  expect(newest.openHere).toHaveBeenCalledOnce();
+  expect(first.openHere).not.toHaveBeenCalled();
 });

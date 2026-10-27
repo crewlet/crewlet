@@ -89,6 +89,7 @@ func tableSummary(t *wire.TableCard, more bool, zone *time.Location, budget int)
 type entityDigest struct {
 	Kind         wire.ResourceKind `json:"kind,omitempty"`
 	ID           string            `json:"id,omitempty"`
+	Key          string            `json:"key,omitempty"`
 	Title        string            `json:"title"`
 	Subtitle     string            `json:"subtitle,omitempty"`
 	Facts        map[string]string `json:"facts,omitempty"`
@@ -97,6 +98,7 @@ type entityDigest struct {
 	Items        []itemDigest      `json:"items,omitempty"`
 	ItemsShown   int               `json:"items_shown,omitempty"`
 	ItemsTotal   int               `json:"items_total,omitempty"`
+	MoreExist    bool              `json:"more_exist,omitempty"`
 	ItemsPartial string            `json:"note,omitempty"`
 }
 
@@ -108,8 +110,8 @@ type itemDigest struct {
 }
 
 func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte, error) {
-	d := entityDigest{Kind: e.Kind, ID: e.ID, Title: e.Title, Subtitle: e.Subtitle,
-		Text: e.Text}
+	d := entityDigest{Kind: e.Kind, ID: e.ID, Key: e.Key, Title: e.Title,
+		Subtitle: e.Subtitle, Text: e.Text}
 	if len(e.Facts) > 0 {
 		d.Facts = map[string]string{}
 		for _, f := range e.Facts {
@@ -125,12 +127,16 @@ func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte,
 			Depth: it.Depth})
 	}
 	d.ItemsTotal = len(items)
+	d.MoreExist = e.ItemsMore
 	set := func(n int) {
 		d.Items, d.ItemsShown = items[:n], n
 		d.ItemsPartial = ""
-		if n < len(items) {
+		switch {
+		case n < len(items):
 			d.ItemsPartial = fmt.Sprintf("Only %d of %d entries are listed here; the "+
 				"person sees them all on the card.", n, len(items))
+		case e.ItemsMore:
+			d.ItemsPartial = fmt.Sprintf(MoreNote, len(items))
 		}
 	}
 	set(len(items))

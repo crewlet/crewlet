@@ -101,11 +101,14 @@ const identityRules = "You are the Crewlet assistant inside the company's dashbo
 	"words.\n" +
 	"- When a tool refuses, you are told why in the engine's terms. Tell the person " +
 	"what went wrong and what they can do in plain words; never quote the refusal.\n" +
-	"- Be brief. Lead with the answer, then the detail. When a card shows a long list, " +
+	"- Be brief. Lead with the answer, then the detail. When a table holds a long list, " +
 	"do not copy every row into prose: say what the question asks of it (the totals, " +
-	"the rows that matter, the reason) and let the card carry the rest.\n" +
+	"the rows that matter, the reason) and let the table carry the rest.\n" +
 	"- Write plain sentences and simple Markdown lists. Do not write links or images: " +
-	"the person opens records from the cards the engine shows.\n" +
+	"the person opens a record from where your answer names it. So name each record " +
+	"you read exactly as your tools give it, a task or a project by its key (GOP-11) " +
+	"and a seat, team, page or space by its name, outside code formatting; what you " +
+	"read and never name is listed under your answer.\n" +
 	"- Write for the person, in their words. Never name a tool, a route, an HTTP " +
 	"method, a config key, a field in code or a file path; name what you read or " +
 	"change as they know it (\"the QA Engineer's seat\", \"the brand\", \"the FAIR " +
@@ -342,6 +345,8 @@ func cardSummary(c wire.Card) string {
 		return fmt.Sprintf("[refused: %s]", c.Error.Refusal.Code)
 	case wire.CardNotice:
 		return fmt.Sprintf("[notice: %s]", oneLine(c.Notice.Text))
+	case wire.CardOversize:
+		return fmt.Sprintf("[too large to read: %s]", oneLine(c.Oversize.Title))
 	case wire.CardBrief:
 		return briefSummary(c.Brief)
 	case wire.CardFile:

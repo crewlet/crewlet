@@ -182,7 +182,7 @@ test("a question is sent with its page, streamed, and drawn with every card the 
     "Fix the flaky sign-in test",
   );
   expect(screen.getAllByText("Worklet › Tasks").length).toBeGreaterThan(0);
-  expect(screen.getAllByText("Matching tasks").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^Matching tasks/).length).toBeGreaterThan(0);
   expect(screen.getAllByText("No open task covers it yet.").length).toBeGreaterThan(0);
   // A CHANGE WAITS ON THE PERSON, and the Ask button would say so.
   expect(assistantActivity()).toBe("waiting");
@@ -204,7 +204,7 @@ test("a follow-up typed fast under a turn with cards keeps every keystroke and r
     fireEvent.keyDown(box, { key: "Enter" });
   });
   await waitFor(() => expect(conversation().turns[0]?.phase).toBe("awaiting_approval"));
-  expect(screen.getAllByText("Matching tasks").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^Matching tasks/).length).toBeGreaterThan(0);
 
   // KEYSTROKES AS A BROWSER DELIVERS THEM WHEN THEY QUEUE UP: one native
   // input event after another, each flushed by React on its own, outside

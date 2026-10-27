@@ -1,11 +1,12 @@
 /**
- * What the drawer draws of the engine's cards: the columns the engine chose for
- * its width, values worded by their type as the screens word them, the facts
- * kept for the model left out, a failed step's reason, "Prepare it again" on a
- * card that moved, and a run that took no step drawn without a count.
+ * What the drawer draws of the engine's cards: a read's peek (the columns the
+ * engine chose for its width, values worded by their type as the screens word
+ * them, the facts kept for the model left out), a failed step's reason,
+ * "Prepare it again" on a card that moved, and a run that took no step drawn
+ * without a count.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AssistantCardEvent, AssistantProposalCard } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
@@ -16,16 +17,15 @@ import {
   prepareAgainQuestion,
   ReplyProse,
   runChipOf,
+  stepDuration,
   stepsOf,
   type CardHandlers,
 } from "./blocks.tsx";
+import { readsOf } from "./mentions.ts";
+import { ReadChip } from "./reads.tsx";
 import type { TurnView } from "./turn.ts";
-import { resetCardFolds, setCardOpen } from "./fold.ts";
 
-afterEach(() => {
-  cleanup();
-  resetCardFolds();
-});
+afterEach(cleanup);
 
 const on: CardHandlers = {
   approve: () => {},
@@ -36,9 +36,8 @@ const on: CardHandlers = {
   undo: () => {},
 };
 
-/** Draws one card, opened: these cases are about what an open card holds (fold.test.tsx folds). */
+/** Draws one card that is not a read. */
 function draw(card: AssistantCardEvent["card"], handlers: CardHandlers = on) {
-  setCardOpen("c", true);
   return render(
     <Router>
       <CardBlock
@@ -51,8 +50,20 @@ function draw(card: AssistantCardEvent["card"], handlers: CardHandlers = on) {
   );
 }
 
-test("a table draws only the columns the engine chose for the drawer, a status in words", () => {
-  draw({
+/** Draws one read as its chip and opens its peek: these cases are about what a peek holds. */
+function peek(card: AssistantCardEvent["card"]) {
+  const read = readsOf([{ card_id: "c", message_id: "m", card }]).reads[0]!;
+  render(
+    <Router>
+      <ReadChip read={read} on={on} />
+    </Router>,
+  );
+  fireEvent.click(screen.getByRole("button"));
+  return screen.getByRole("dialog");
+}
+
+test("a table's peek draws only the columns the engine chose for the drawer, a status in words", () => {
+  const dialog = peek({
     type: "table",
     table: {
       title: "Tasks",
@@ -68,16 +79,18 @@ test("a table draws only the columns the engine chose for the drawer, a status i
       as_of: "2026-10-24T09:41:00Z",
     },
   });
-  const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+  const heads = within(dialog)
+    .getAllByRole("columnheader")
+    .map((h) => h.textContent);
   expect(heads).toEqual(["Title", "Status"]);
-  expect(screen.getByText("In progress")).toBeTruthy();
-  expect(screen.queryByText("FAIR-1")).toBeNull();
+  expect(within(dialog).getByText("In progress")).toBeTruthy();
+  expect(within(dialog).queryByText("FAIR-1")).toBeNull();
 });
 
 test("a fact is worded by its type, and one kept for the model is not drawn", () => {
   expect(factText({ value: "in_review", type: "label" })).toBe("In review");
   expect(factText({ value: "ada" })).toBe("ada");
-  draw({
+  const dialog = peek({
     type: "entity",
     entity: {
       kind: "task",
@@ -89,12 +102,12 @@ test("a fact is worded by its type, and one kept for the model is not drawn", ()
       ],
     },
   });
-  expect(screen.getByText("To do")).toBeTruthy();
-  expect(screen.queryByText("Version")).toBeNull();
+  expect(within(dialog).getByText("To do")).toBeTruthy();
+  expect(within(dialog).queryByText("Version")).toBeNull();
 });
 
-test("a record with a list under it keeps its facts: the principles over their policies", () => {
-  draw({
+test("a record with a list under it keeps its facts in its peek: the principles over their policies", () => {
+  const dialog = peek({
     type: "entity",
     entity: {
       kind: "unit",
@@ -110,13 +123,13 @@ test("a record with a list under it keeps its facts: the principles over their p
       ],
     },
   });
-  expect(screen.getByText("Help friends share costs fairly.")).toBeTruthy();
-  expect(screen.getByText("Settling up takes seconds.")).toBeTruthy();
-  expect(screen.getByText("Money is an integer number of cents.")).toBeTruthy();
+  expect(within(dialog).getByText("Help friends share costs fairly.")).toBeTruthy();
+  expect(within(dialog).getByText("Settling up takes seconds.")).toBeTruthy();
+  expect(within(dialog).getByText("Money is an integer number of cents.")).toBeTruthy();
 });
 
-test("a list with no record beside it is the list card alone", () => {
-  draw({
+test("a record's peek keeps the list under it, named by the record", () => {
+  const dialog = peek({
     type: "entity",
     entity: {
       kind: "task",
@@ -125,8 +138,25 @@ test("a list with no record beside it is the list card alone", () => {
       items: [{ kind: "task", id: "c1", label: "Looks right to me.", fact: "ada" }],
     },
   });
-  expect(screen.getByText("Looks right to me.")).toBeTruthy();
-  expect(screen.getByText("Settle up")).toBeTruthy();
+  expect(within(dialog).getByText("Looks right to me.")).toBeTruthy();
+  expect(within(dialog).getByRole("list", { name: "Settle up" })).toBeTruthy();
+});
+
+test("a step too quick to time says no time, and one not yet ended none either", () => {
+  expect(stepDuration(undefined)).toBeUndefined();
+  expect(stepDuration(30)).toBeUndefined();
+  expect(stepDuration(99)).toBeUndefined();
+  // THE PRODUCT'S ONE DURATION ([fmtDuration]): milliseconds under a second.
+  expect(stepDuration(100)).toBe("100ms");
+  expect(stepDuration(400)).toBe("400ms");
+  expect(stepDuration(12_400)).toBe("12s");
+  expect(stepDuration(845_000)).toBe("14m 5s");
+});
+
+test("a read handed to the card drawer is a caller's mistake, said as one", () => {
+  expect(() =>
+    draw({ type: "entity", entity: { kind: "task", id: "FAIR-1", title: "Settle up" } }),
+  ).toThrow(/drawn by its answer/);
 });
 
 const proposal = {
@@ -269,7 +299,6 @@ test("an open in app trail carries no raw id", () => {
 // administrator's step request ("GET /agents/qa") are drawn whole. Mutation:
 // drop a short value anywhere between the wire and the DOM, and this fails.
 test("a two-letter handle is drawn whole", () => {
-  setCardOpen("e2", true);
   const event: AssistantCardEvent = {
     card_id: "e2",
     message_id: "m",
@@ -286,13 +315,15 @@ test("a two-letter handle is drawn whole", () => {
       },
     },
   };
-  const { container, unmount } = render(
+  const { unmount } = render(
     <Router>
-      <CardBlock event={event} local={undefined} on={on} opened={false} />
+      <ReadChip read={readsOf([event]).reads[0]!} on={on} />
     </Router>,
   );
-  expect(container.textContent).toContain("Assigneeqa");
-  expect(container.textContent).toContain("Reviewerpm");
+  fireEvent.click(screen.getByRole("button"));
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.textContent).toContain("Assigneeqa");
+  expect(dialog.textContent).toContain("Reviewerpm");
   unmount();
   const [step] = stepsOf(
     {

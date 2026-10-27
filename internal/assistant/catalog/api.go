@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -58,6 +59,23 @@ import (
 // after rows share it). What a route takes beyond that (a file's bytes, an
 // artifact's bundle) has its own screen and its own upload path.
 const GenericBodyBytes = 64 << 10
+
+// GenericPage is the page a generic read asks a list route for when the model
+// names none: twenty-five rows, under a third of what one step reads at the
+// widest row a list route answers today (a turn, about a kilobyte), so the
+// read is answered whole with the route's cursor to read on.
+const GenericPage = 25
+
+// genericReadQuery is what a generic read asks a route for where the model
+// sets none of it, for a route whose own default answer is past what one step
+// reads: a seat's read answers its call history (whole transcripts) unless
+// asked not to. THE ROUTE'S DEFAULT STAYS ITS OWN: the dashboard and every
+// other caller read it as they always have, and only the assistant's read is
+// bounded, here, where it is sent (ADR-0061). A parameter the model names is
+// sent as it named it.
+var genericReadQuery = map[string]url.Values{
+	"GET /agents/{id}": seatAlone,
+}
 
 // The generic tools, by name.
 const (
@@ -328,7 +346,8 @@ func (g generic) read() Tool {
 			"parameters. Use a dedicated read tool whenever one answers the question, since " +
 			"its card is shaped for the person; use this for everything else. The answer is " +
 			"the route's own JSON, cut to what one step reads, so narrow it with the route's " +
-			"own filters and paging.",
+			"own filters and paging. A list route that pages by limit is read 25 rows at a " +
+			"time unless you name a limit; read on with the cursor it answers.",
 		schema: object([]string{"route"}, map[string]*schema{
 			"route": routeArgument, "path": pathArgument, "query": queryArgument,
 		}),
@@ -422,6 +441,22 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 	query, err := queryValues(args["query"])
 	if err != nil {
 		return exec.Request{}, Route{}, err
+	}
+	if reading && query.Get("limit") == "" && pagedByLimit(pattern) {
+		// A LIST READ IS ONE PAGE UNLESS THE MODEL ASKED FOR ONE: a route that
+		// pages by `limit` answers its own default page (a hundred events,
+		// fifty turns) when none is named, which is close to or past what one
+		// step reads, and a cut read gives the model nothing. A first page
+		// it can answer from, with the route's own cursor to read on, is the
+		// bounded read ([GenericPage]).
+		query.Set("limit", strconv.Itoa(GenericPage))
+	}
+	if reading {
+		for name, values := range genericReadQuery[pattern] {
+			if _, named := query[name]; !named {
+				query[name] = slices.Clone(values)
+			}
+		}
 	}
 	if _, asked := query[authz.DryRunQuery]; asked && !reading {
 		// A CHANGE IS THE WRITE: the preview asks the route's own check

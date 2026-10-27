@@ -97,6 +97,9 @@ type Entity struct {
 	Root string
 	// ID, Title and Subtitle are paths within the record.
 	ID, Title, Subtitle string
+	// Key is the path to the short name the record is written by in prose
+	// (a task's key, a project's), empty for a record with none.
+	Key string
 	// Name is the card's heading where the record names none of its own
 	// (Title is empty): the company's principles are three values, not a
 	// record with a name.
@@ -138,6 +141,10 @@ type Items struct {
 	Plain bool
 	// Prose marks an item list a person or an agent wrote.
 	Prose bool
+	// More, where named, is the path to the answer's own word that items lie
+	// past this page (a thread's `next_cursor`), as [Table.More] is a
+	// table's: the record's list is then a page, never the whole.
+	More string
 	// Noun is what one item and several are called ("policy", "policies"),
 	// which the drawer counts a folded card's list with.
 	Noun wire.Noun
@@ -200,7 +207,7 @@ func (s Spec) Paths() []Path {
 	}
 	if e := s.Entity; e != nil {
 		add("", e.Root)
-		for _, p := range []string{e.ID, e.Title, e.Subtitle, e.Text} {
+		for _, p := range []string{e.ID, e.Key, e.Title, e.Subtitle, e.Text} {
 			add("record", p)
 		}
 		for _, f := range e.Facts {
@@ -262,6 +269,13 @@ func (s Spec) Validate() error {
 			return fmt.Errorf("cards: an entity spec needs a kind of %v or none, and "+
 				"exactly one of a title path and a name", wire.ResourceKinds)
 		}
+		// A KEYED KIND CARRIES ITS KEY, and no other kind does: the drawer
+		// finds a record in the answer's words by it (ADR-0061), so a spec
+		// that left it out would draw a task it could never name.
+		if e.Kind.Keyed() != (e.Key != "") {
+			return fmt.Errorf("cards: an entity spec of kind %q needs a key path exactly when "+
+				"its kind is written by a key (a task's, a project's)", e.Kind)
+		}
 		for _, f := range e.Facts {
 			if f.Label == "" || f.Path == "" || !f.Type.Valid() {
 				return fmt.Errorf("cards: fact %q needs a label, a path and a type", f.Label)
@@ -291,11 +305,11 @@ func (s Spec) Validate() error {
 	return nil
 }
 
-// Built is a card and, when the card is not the whole answer, the notice that
-// says so.
+// Built is a card a read's answer built. A card that is not the whole answer
+// says so itself (a table's Truncated and More, an entity's ItemsTotal), never
+// in a notice beside it (ADR-0061).
 type Built struct {
-	Card   wire.Card
-	Notice *wire.Card
+	Card wire.Card
 	// Empty is an answer that holds nothing to show: a table no row reached,
 	// or an entity whose record carries no value at all. NO CARD IS DRAWN
 	// FROM ONE (the catalogue's Shape): an empty table under every search
@@ -312,14 +326,6 @@ type Built struct {
 	Zone *time.Location
 }
 
-// Cards are the card and its notice, in the order they are shown.
-func (b Built) Cards() []wire.Card {
-	if b.Notice == nil {
-		return []wire.Card{b.Card}
-	}
-	return []wire.Card{b.Card, *b.Notice}
-}
-
 // ErrNotJSON is an answer that is not one JSON value, which no card is built
 // from.
 var ErrNotJSON = errors.New("cards: the answer is not JSON")
@@ -327,9 +333,9 @@ var ErrNotJSON = errors.New("cards: the answer is not JSON")
 // Build is the card spec reads from answer, the route's own JSON, as of now.
 //
 // A table holds at most [MaxRows] rows and [MaxBytes] encoded, and a table cut
-// to fit says so twice: the card is marked truncated with the read's own row
-// count, and a notice names how many rows were shown. A field the answer does
-// not hold is an empty cell, never a guess.
+// to fit says so on itself: it is marked truncated with the read's own row
+// count, and More where the answer says rows lie past its page. A field the
+// answer does not hold is an empty cell, never a guess.
 func Build(spec Spec, answer []byte, now time.Time) (Built, error) {
 	return BuildWith(spec, answer, now, Options{})
 }
@@ -425,16 +431,7 @@ func buildTable(t *Table, doc any, now time.Time, o Options) (Built, error) {
 	if t.More != "" {
 		built.More = morePast(lookup(doc, t.More))
 	}
-	switch {
-	case card.Truncated:
-		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d of %d rows. "+
-			"Open it in the app to see the rest.", len(card.Rows), card.RowCount))
-		built.Notice = &notice
-	case built.More && card.RowCount > 0:
-		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d rows; there "+
-			"are more. Open it in the app to see the rest.", card.RowCount))
-		built.Notice = &notice
-	}
+	card.More = built.More && card.RowCount > 0
 	return built, out.Validate()
 }
 
@@ -455,7 +452,8 @@ func morePast(v any) bool {
 func buildEntity(e *Entity, doc any) (Built, error) {
 	record := lookup(doc, e.Root)
 	card := &wire.EntityCard{Kind: e.Kind, ID: text(field(record, e.ID)),
-		Title: text(field(record, e.Title)), Subtitle: text(field(record, e.Subtitle))}
+		Key: text(field(record, e.Key)), Title: text(field(record, e.Title)),
+		Subtitle: text(field(record, e.Subtitle))}
 	if card.Title == "" {
 		card.Title = card.ID
 	}
@@ -531,10 +529,12 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 	built := Built{Card: out, Empty: recordless && card.Text == "" &&
 		len(card.Facts) == 0 && total == 0}
 	if len(card.Items) < total {
-		notice := Notice(wire.NoticeInfo, fmt.Sprintf("Showing the first %d of %d entries. "+
-			"Open it in the app to see the rest.", len(card.Items), total))
-		built.Notice = &notice
+		card.ItemsTotal = total
 	}
+	if e.Items != nil && e.Items.More != "" {
+		built.More = morePast(lookup(doc, e.Items.More))
+	}
+	card.ItemsMore = built.More && total > 0
 	return built, out.Validate()
 }
 

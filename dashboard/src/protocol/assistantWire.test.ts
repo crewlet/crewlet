@@ -84,6 +84,7 @@ describe("the engine's golden stream", () => {
       "file",
       "notice",
       "open_in_app",
+      "oversize",
       "proposal",
       "table",
     ]);

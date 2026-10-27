@@ -23,6 +23,7 @@ type Card struct {
 	OpenInApp *OpenInAppCard `json:"open_in_app,omitempty"`
 	Error     *ErrorCard     `json:"error,omitempty"`
 	Notice    *NoticeCard    `json:"notice,omitempty"`
+	Oversize  *OversizeCard  `json:"oversize,omitempty"`
 	// --- deep work (im-deep) ---
 	File *FileCard `json:"file,omitempty"`
 	// Brief is a brief turn's answer ([TurnBrief]).
@@ -41,9 +42,14 @@ type TableCard struct {
 	Total []any   `json:"total,omitempty"`
 	// RowCount is the rows the read answered, which is more than Rows
 	// holds when Truncated.
-	RowCount  int       `json:"row_count"`
-	Truncated bool      `json:"truncated"`
-	AsOf      time.Time `json:"as_of"`
+	RowCount  int  `json:"row_count"`
+	Truncated bool `json:"truncated"`
+	// More is a read whose answer says rows lie past the page it read (a
+	// cursor, a "has more"), so RowCount is a page and never the total: the
+	// card's screen shows the rest. The drawer says so on the card itself
+	// rather than in a notice beside it (ADR-0061).
+	More bool      `json:"more,omitempty"`
+	AsOf time.Time `json:"as_of"`
 	// Exports are the stored snapshot's downloads, re-checked against the
 	// person's ownership and apps on every download.
 	Exports *Exports `json:"exports,omitempty"`
@@ -88,15 +94,30 @@ type Link struct {
 type EntityCard struct {
 	// Kind is the dashboard object the record is, absent for a record that
 	// is none of them: a generic read's answer, which is the API's.
-	Kind     ResourceKind `json:"kind,omitempty"`
-	ID       string       `json:"id"`
-	Title    string       `json:"title"`
-	Subtitle string       `json:"subtitle,omitempty"`
-	Facts    []Fact       `json:"facts,omitempty"`
+	Kind ResourceKind `json:"kind,omitempty"`
+	ID   string       `json:"id"`
+	// Key is the short name the record is written by in prose, where it has
+	// one: a task's key ("GOP-11"), a project's ("GOP"). The drawer makes the
+	// answer's first mention of it the record's chip. A record with no key is
+	// matched by its Title, and only where the title is a name a person writes
+	// (a seat's, a team's), never a task's sentence (dashboard
+	// app/assistant/mentions.ts). A seat has none: the answer names a seat by
+	// its name, never its handle.
+	Key      string `json:"key,omitempty"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Facts    []Fact `json:"facts,omitempty"`
 	// Text is a body the record carries, rendered in the restricted
 	// Markdown subset: no images, no raw HTML, no autolinks.
 	Text  string       `json:"text,omitempty"`
 	Items []EntityItem `json:"items,omitempty"`
+	// ItemsTotal is how many items the record holds where Items is only the
+	// first of them; absent where Items is the whole list.
+	ItemsTotal int `json:"items_total,omitempty"`
+	// ItemsMore is a record whose answer says items lie past the page it
+	// read (a thread's older comments), so Items is a page and never the
+	// whole list: the record's screen shows the rest (ADR-0061).
+	ItemsMore bool `json:"items_more,omitempty"`
 	// ItemsNoun is what one item and several are called ("policy",
 	// "policies"), so the drawer can say how many a folded card holds. Absent
 	// on a card with no list, and on one stored before it was carried.
@@ -282,6 +303,22 @@ type NoticeCard struct {
 	Text string     `json:"text"`
 }
 
+// OversizeCard is a read whose answer was past what one step reads, so none
+// of it is shown: what it read, where all of it is, and what would narrow it.
+// The drawer lists it with the turn's other reads (ADR-0061), never as a
+// result.
+type OversizeCard struct {
+	// Title is what the read was, as its card would have been titled
+	// ("Matching tasks, \"brand\"") or its step said ("Read this agent").
+	Title string `json:"title"`
+	// Open is the screen that shows the whole of it, where the engine's link
+	// table has one the read names.
+	Open *Link `json:"open,omitempty"`
+	// Narrow names what the read takes that would narrow it, in the words a
+	// person reads ("project", "status"), where it takes any.
+	Narrow []string `json:"narrow,omitempty"`
+}
+
 // bodies names each kind's body as set or not.
 func (c Card) bodies() map[CardKind]bool {
 	return map[CardKind]bool{
@@ -291,6 +328,7 @@ func (c Card) bodies() map[CardKind]bool {
 		CardOpenInApp: c.OpenInApp != nil,
 		CardError:     c.Error != nil,
 		CardNotice:    c.Notice != nil,
+		CardOversize:  c.Oversize != nil,
 		CardFile:      c.File != nil,
 		CardBrief:     c.Brief != nil,
 	}
@@ -348,6 +386,10 @@ func (c Card) Validate() error {
 		return c.File.validate()
 	case CardBrief:
 		return c.Brief.Validate()
+	case CardOversize:
+		if c.Oversize.Title == "" {
+			return fmt.Errorf("%w: an oversize card names what it read", ErrInvalid)
+		}
 	case CardNotice:
 		if !c.Notice.Tone.Valid() {
 			return fmt.Errorf("%w: notice tone %q is not one of %v", ErrInvalid,
