@@ -23,8 +23,8 @@ import { ArrowRightGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { decisionsHref } from "~/components/DecisionRow.tsx";
 import { fmtCount } from "~/lib/format.ts";
-import { useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
-import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
+import { useConnection, useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
+import { configWriteAccess, linkOf } from "~/lib/useWriteAccess.ts";
 import { WORKLET, accessNames } from "~/lib/access.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
@@ -43,7 +43,8 @@ import {
   type HomeRange,
   type Waiting,
 } from "./model.ts";
-import { remedyDestination } from "~/lib/remedy.ts";
+import { remedyOffer } from "~/lib/remedy.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
 
 /**
  * The five figures, in the order the row draws them by default. A board's
@@ -119,10 +120,7 @@ export function Kpis({
       case "completed":
         return <CompletedTile flow={flow} range={range} locked={workletLocked(viewer)} />;
       case "tokens":
-        // WHO MAY SET A BUDGET is whoever may write the company's configuration
-        // (Admin, the access a ceiling is written under, and on a managed
-        // document one of its writers), never a kind of credential.
-        return <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />;
+        return <TokensTile spend={spend} range={range} viewer={viewer} />;
     }
   };
   // THE ROW'S COLUMNS ARE ITS FIGURES', so one figure on its own fills its
@@ -309,12 +307,14 @@ function CompletedTile({
  * and a bare "−88%" in front of "No weekly budget" read as a claim about the
  * budget. The window-on-window change is Spend's, where it has its own axis.
  *
- * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: a reader who may
- * change the company's configuration (`mayChangeConfig` — an admin, and on a
- * managed document one of its writers) gets "No
- * weekly budget" as the link into Company › Budgets; anybody else gets the fact,
- * since the screen behind the link would only refuse them. The weekly budget
- * is the COMPANY's ceiling, so no lead path reaches it.
+ * THE WAY TO THE CEILING IS OFFERED BY THE ONE GATE EVERY REMEDY IS
+ * (`lib/remedy.ts`, the editor's own): a reader who may raise the company's
+ * ceiling gets "No weekly budget", or the spent week, as the link into
+ * Company › Budgets at the company's section; anybody else gets the fact, and
+ * for a spent week who can raise it ("An admin can raise this ceiling.", or
+ * who manages the document), since the screen behind the link would only
+ * refuse them. The weekly budget is the COMPANY's ceiling, so no lead path
+ * reaches it.
  *
  * AND ONLY ONCE IT IS A FACT. Before the engine's first `budget` report the
  * slice is `null` — nobody has read the counter — and the line says that
@@ -324,20 +324,21 @@ function CompletedTile({
 function TokensTile({
   spend,
   range,
-  mayConfigure,
+  viewer,
 }: {
   spend: QueryResult<TokenSeries>;
   range: HomeRange;
-  /**
-   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
-   * Admin and, on a managed document, are one of its writers.
-   */
-  mayConfigure: boolean;
+  viewer: ViewerState;
 }) {
   const label = `Tokens · ${range.words}`;
   const budget = useOrgBudget();
   const org = useOrg();
   const week = weekWindow(budget?.org?.windows);
+  // THE COMPANY'S CEILING, which no lead path reaches: the configuration
+  // gate is the whole of the editor's gate for it (`orgWriteAccess`).
+  const offer = remedyOffer(COMPANY_BUDGET, configWriteAccess(viewer, linkOf(useConnection())));
+  const toCeiling =
+    offer.kind === "open" ? href(offer.destination.path, { ...offer.destination.query }) : null;
   if (spend.error) return <RefusedTile label={label} />;
   if (!spend.data?.totals) return <StatCard label={label} value={EMPTY_VALUE} loading />;
   const total = spend.data.totals.total_tokens;
@@ -359,19 +360,25 @@ function TokensTile({
       }
       sub={
         week ? (
-          week.state === "refusing" && mayConfigure ? (
+          week.state === "refusing" && toCeiling ? (
             // A SPENT WEEK IS RAISED WHERE ITS CEILING IS, by a reader who
             // may; the same link table every budget refusal opens through.
-            <a className="t-link" href={href(companyBudget.path, { ...companyBudget.query })}>
+            <a className="t-link" href={toCeiling}>
               <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
             </a>
           ) : (
-            <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
+            <Parts
+              parts={[
+                ...budgetCaption(week, org?.timezone ?? budget?.timezone),
+                // WHO CAN RAISE IT, for a reader who may not.
+                ...(week.state === "refusing" && offer.kind === "who" ? [offer.sentence] : []),
+              ]}
+            />
           )
         ) : budget === null ? (
           "Weekly budget not reported yet"
-        ) : mayConfigure ? (
-          <a className="t-link" href={href(companyBudget.path, { ...companyBudget.query })}>
+        ) : toCeiling ? (
+          <a className="t-link" href={toCeiling}>
             No weekly budget
           </a>
         ) : (
@@ -385,14 +392,14 @@ function TokensTile({
   );
 }
 
+/** The company's own ceilings, the one a spent week is raised in. */
+const COMPANY_BUDGET: Remedy = { setting: "company_token_budget" };
+
 /**
  * A second line of whole facts: each part unbroken, the separator leading the
  * part it introduces, so a line too long for its tile breaks between facts —
  * see `joinParts` in `model.ts`.
  */
-/** Where the company's ceilings are raised: the link table's own destination. */
-const companyBudget = remedyDestination({ setting: "company_token_budget" });
-
 function Parts({ parts }: { parts: readonly string[] }) {
   if (parts.length === 0) return null;
   return (

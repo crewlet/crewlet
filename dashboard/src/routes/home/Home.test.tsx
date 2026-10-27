@@ -31,6 +31,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { ADMIN_RAISES } from "~/lib/remedy.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -361,6 +362,45 @@ describe("the figures", () => {
     });
     await settle();
     expect(within(tile(/^Tokens · /)).getByRole("link", { name: "No weekly budget" })).toBeTruthy();
+  });
+
+  // A SPENT WEEK OPENS THE CEILING BY THE ONE GATE EVERY REMEDY IS OFFERED BY:
+  // a reader who may raise it follows the line to the company's ceiling, and
+  // anybody else reads who can raise it rather than a fact alone.
+  //
+  // Mutation: gate the line on anything but the remedy's offer, and the
+  // reader without Admin is told nothing of who can raise it.
+  test("a spent week opens the company's ceiling, or says who can raise it", async () => {
+    const SPENT = {
+      ...UNCAPPED,
+      org: {
+        windows: [
+          {
+            period: "week" as const,
+            window: "2026-W39",
+            starts_at: "",
+            resets_at: "2026-09-28T00:00:00Z",
+            used: 1000,
+            limit: 1000,
+            state: "refusing" as const,
+          },
+        ],
+      },
+    };
+    mount({ budget: SPENT });
+    await settle();
+    const link = within(tile(/^Tokens · /)).getByRole("link", {
+      name: /This week's budget is spent/,
+    });
+    expect(link.getAttribute("href")).toBe("#/company/budgets?section=company");
+    cleanup();
+
+    mount({ viewer: { ...JANE, grants: ["worklet"] }, budget: SPENT });
+    await settle();
+    const card = tile(/^Tokens · /);
+    expect(within(card).queryByRole("link")).toBeNull();
+    expect(card.textContent).toContain("This week's budget is spent");
+    expect(card.textContent).toContain(ADMIN_RAISES);
   });
 
   test("today is asked of the engine as one company day", async () => {
