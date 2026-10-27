@@ -122,6 +122,14 @@ func (s *seatToken) Lookup(name string) (string, bool) {
 	return s.token.Token, true
 }
 
+// SourceName is how a shadow warning names this source: a stale value the
+// secret store or the environment holds under the seat's token variable is
+// hidden by the token issued here, and it is that value the operator removes
+// ([config.Resolver]).
+func (s *seatToken) SourceName() string {
+	return "the GitHub App token the engine issues for this seat"
+}
+
 // issued is the token this resolution handed out, and whether it handed one
 // out at all: a read that never named the variable mints nothing.
 func (s *seatToken) issued() (github.InstallationToken, bool) {

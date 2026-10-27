@@ -33,6 +33,27 @@ type Source interface {
 	Lookup(name string) (value string, ok bool)
 }
 
+// namedSource is a [Source] that says what it is, for the shadow warning to
+// name: a source the engine builds for one caller — a seat's issued token —
+// is neither the secret store nor the environment, and a warning that called
+// it either would send the operator to remove the wrong value.
+type namedSource interface {
+	SourceName() string
+}
+
+// sourceName is how the shadow warning names src: its own name where it has
+// one, the environment for [EnvSource], and otherwise the secret store, the
+// one other source a chain is built over ([WithStore]).
+func sourceName(src Source) string {
+	switch s := src.(type) {
+	case namedSource:
+		return s.SourceName()
+	case EnvSource:
+		return "the environment"
+	}
+	return "the secret store"
+}
+
 // EnvSource reads the process environment. It is the last link of every
 // chain: the fallback that made ${VAR} work before there was a store, and
 // the only source Tier A is allowed to consult.
@@ -61,8 +82,9 @@ func (m MapSource) Lookup(name string) (string, bool) {
 // an auth error from a provider rather than at the point of rotation — and
 // that failure is precisely what a secret store exists to remove. When a
 // name is answered by an earlier source and a LATER one holds a different
-// value, the resolver logs secret_shadowed_env once, with NAMES ONLY: a
-// value never reaches a log line.
+// value, the resolver logs secret_shadowed_env once, naming the source that
+// answered and the one it hid, with NAMES ONLY: a value never reaches a log
+// line.
 //
 // A Resolver is safe for concurrent use. It is passed explicitly rather than
 // installed as a process global. A global is what call sites that cannot be
@@ -70,18 +92,53 @@ func (m MapSource) Lookup(name string) (string, bool) {
 type Resolver struct {
 	sources []Source
 
-	// mu guards seen, which exists only so a name that is resolved on
-	// every turn logs its shadow warning once rather than forever.
-	mu   sync.Mutex
-	seen map[string]struct{}
+	// told is the shadow warnings already logged, SHARED with every chain
+	// [Resolver.Ahead] lays over this one: see [shadowsTold].
+	told *shadowsTold
 
 	log *slog.Logger
+}
+
+// shadowsTold is the shadow warnings a chain has logged, each a name and the
+// source that answered it, so a name that is resolved on every turn logs its
+// warning once rather than forever.
+//
+// A POINTER THE CHAINS LAID OVER ONE SHARE, because a seat's resolution is a
+// chain of its own ([Resolver.Ahead]) built for every turn and every pass
+// over the seat's values: a record of its own would start empty each time,
+// and a name the company's chain shadows would be warned again by every one
+// of them. Shared, it is warned once for as long as the chain under them
+// lives — until the next apply rebuilds it, as for a chain read directly.
+type shadowsTold struct {
+	mu   sync.Mutex
+	seen map[shadowTold]struct{}
+}
+
+// shadowTold is one warning: a name, and the source that answered it. The
+// source is part of it because one name can tell two stories — a seat's
+// issued token hiding a stored value, and the store hiding an export — each
+// with its own remedy.
+type shadowTold struct{ name, winner string }
+
+// first reports whether story has not been told yet, and records it as told.
+func (t *shadowsTold) first(story shadowTold) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, already := t.seen[story]; already {
+		return false
+	}
+	t.seen[story] = struct{}{}
+	return true
 }
 
 // NewResolver builds a chain. The FIRST source that answers wins, so the
 // authoritative one goes first: NewResolver(store, EnvSource{}).
 func NewResolver(sources ...Source) *Resolver {
-	return &Resolver{sources: sources, seen: map[string]struct{}{}, log: resolveLog}
+	return &Resolver{
+		sources: sources,
+		told:    &shadowsTold{seen: map[shadowTold]struct{}{}},
+		log:     resolveLog,
+	}
 }
 
 // EnvOnly resolves from the process environment alone.
@@ -105,15 +162,17 @@ func WithStore(store Source) *Resolver { return NewResolver(store, EnvSource{}) 
 // the company's chain for that seat's resolution only, so no other seat's
 // values can name it. The chain r keeps is shared, never changed.
 //
+// Its shadow warnings are r's ([shadowsTold]): a seat's chain is built for
+// every turn, and a name r's own sources disagree on is told once for r, not
+// once for every chain laid over it.
+//
 // A nil r is the environment alone, as everywhere else here.
 func (r *Resolver) Ahead(first Source) *Resolver {
-	sources := []Source{first}
 	if r == nil {
-		sources = append(sources, EnvSource{})
-	} else {
-		sources = append(sources, r.sources...)
+		return NewResolver(first, EnvSource{})
 	}
-	return NewResolver(sources...)
+	sources := append([]Source{first}, r.sources...)
+	return &Resolver{sources: sources, told: r.told, log: r.log}
 }
 
 // LookupOK answers one variable by NAME, reporting whether any source held
@@ -147,35 +206,46 @@ func (r *Resolver) Lookup(name string) string {
 }
 
 // warnShadowed reports a name a later source also holds, with a different
-// value. Names only — a credential never reaches a log line.
+// value: the source at index answered it with winner. Names only — a
+// credential never reaches a log line.
+//
+// IT NAMES BOTH SIDES, the one that answered and the first one it hid,
+// because the remedy is to remove the hidden value, and a chain is not always
+// the store over the environment: a seat's issued GitHub App token answers in
+// front of both ([Resolver.Ahead]), and a stale value stored or exported
+// under its name is the one to remove.
 func (r *Resolver) warnShadowed(name, winner string, index int) {
 	if index >= len(r.sources)-1 {
 		return // the last source cannot be shadowing anything
 	}
-	shadowed := false
+	var hidden Source
 	for _, src := range r.sources[index+1:] {
 		if v, ok := src.Lookup(name); ok && v != winner {
-			shadowed = true
+			hidden = src
 			break
 		}
 	}
-	if !shadowed {
+	if hidden == nil {
 		return
 	}
-	r.mu.Lock()
-	_, already := r.seen[name]
-	if !already {
-		r.seen[name] = struct{}{}
-	}
-	r.mu.Unlock()
-	if already {
+	won, lost := sourceName(r.sources[index]), sourceName(hidden)
+	if !r.told.first(shadowTold{name: name, winner: won}) {
 		return
+	}
+	remedy := "Remove the stale value " + lost + " holds under this name to silence this."
+	switch hidden.(type) {
+	case EnvSource:
+		remedy = "Remove the stale export or .env entry to silence this."
+	case MapSource:
+		remedy = "Remove the stale stored value (crewlet secrets unset " + name +
+			") to silence this."
 	}
 	r.log.Warn("secret_shadowed_env",
 		"name", name,
-		"detail", "the secret store and the environment disagree on this "+
-			"name; the stored value wins. Remove the stale export or .env "+
-			"entry to silence this.")
+		"answered_by", won,
+		"shadowed", lost,
+		"detail", won+" and "+lost+" disagree on this name, and the value "+
+			won+" holds wins. "+remedy)
 }
 
 // Expand substitutes every reference in value and reports the names that

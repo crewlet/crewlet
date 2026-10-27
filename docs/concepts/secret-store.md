@@ -116,7 +116,7 @@ The boot takes that snapshot **before it builds its company, and waits for it**.
 
 Deliberately, and not negotiable: env-first would let a stale `.env` shadow a freshly rotated secret, which is exactly the failure this removes. A rotation would appear to succeed and then quietly not take effect, surfacing days later as an auth error far from its cause.
 
-When a name exists in both with **different** values, boot logs `secret_shadowed_env` at WARNING with the names (never the values). That is a cue to delete the stale export, not a problem in itself.
+When a name exists in both with **different** values, its first read logs `secret_shadowed_env` at WARNING with the names (never the values): the variable, the source that answered it (`answered_by`) and the one it hid (`shadowed`). It is said once for the chain the node resolves through, which every apply rebuilds, however many seats and turns read the name. That is a cue to delete the stale value, not a problem in itself. An agent's own GitHub App token, which the engine issues for its seat and lays in front of both, is one more source: a stale value stored or exported under its `GITHUB_APP_TOKEN_<HANDLE>` is hidden by it, and the warning names the issued token as the source that answered and the stored or exported value as the one to remove.
 
 ### A keyring is required
 

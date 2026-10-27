@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/github"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -416,6 +418,103 @@ func TestARunEnvironmentCarriesTheSeatsAppToken(t *testing.T) {
 	}
 	if got := run.setup[0].Files[".config/crewlet/github-token"]; got != token {
 		t.Errorf("the token file holds %q, want the token the environment holds", got)
+	}
+}
+
+// A SHADOWED NAME IN A GITHUB-APP SEAT'S BOX IS WARNED ONCE, NOT EVERY TURN.
+//
+// Every agent turn is an executor launch, and a seat with a GitHub App reads
+// its box's values through a resolution of its own, the seat's issued token
+// laid in front of the company's chain. Each such resolution started its own
+// record of the shadow warnings it had logged, so a provider-wide setup value
+// the secret store and the environment disagree on was warned again on every
+// launch, at every seat. It is told once for the company's chain, however
+// many launches read it. Not parallel: it adds a destination to the
+// process-wide logger and sets a variable of the process's environment.
+func TestAShadowedBoxValueIsWarnedOnceAcrossLaunches(t *testing.T) {
+	logs := captureEngineLogs(t)
+	t.Setenv("NPM_TOKEN", "npm_exported_stale")
+
+	gh := newAppGitHub(t)
+	c := specCompany(t, `
+name: GoPhrase
+providers:
+  llm:
+    zulu:
+      model: claude-sonnet-5
+      auth: {mode: api-key, api_key: "sk-ant-fake-shadow-key"}
+  sandbox:
+    fake: true
+    setup:
+      - name: npm
+        env:
+          NPM_TOKEN: "${NPM_TOKEN}"
+integrations:
+  github:
+    enabled: true
+    url: "`+gh.url+`"
+    webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
+    provisioning:
+      org: gophrase
+roles:
+  - name: Owner
+    handle: owner
+    kind: human
+  - name: Builder
+    handle: builder
+    llm: zulu
+    sandbox:
+      env:
+        GITHUB_TOKEN: "${GITHUB_APP_TOKEN_BUILDER}"
+    integrations:
+      github:
+        tier: full_access
+        repos: [gophrase/backend]
+        app_id: 101
+        app_slug: gophrase-builder
+        installation_id: 9001
+        private_key: "${GITHUB_APP_KEY_BUILDER}"
+`)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	e.secretsMu.Lock()
+	e.installSecrets(map[string]string{
+		"NPM_TOKEN":              "npm_stored",
+		"GITHUB_APP_KEY_BUILDER": testAppKey(t),
+		"GITHUB_WEBHOOK_SECRET":  "s3cret",
+	})
+	e.secretsMu.Unlock()
+	builder := c.Org.AgentSeatByHandle("builder")
+
+	for _, turn := range []string{"t1", "t2", "t3"} {
+		if err := launchExecutor(t, e, c, builder, turn); err != nil {
+			t.Fatalf("launch %s: %v", turn, err)
+		}
+	}
+	started := jobs.Started()
+	if len(started) != 3 {
+		t.Fatalf("%d jobs started, want the three launches", len(started))
+	}
+	for i, job := range started {
+		if job.Env["NPM_TOKEN"] != "npm_stored" || !strings.HasPrefix(job.Env["GITHUB_TOKEN"], "ghs_test_") {
+			t.Fatalf("launch %d did not read its box's values through the seat's own resolution, "+
+				"the stored NPM_TOKEN and the issued app token", i+1)
+		}
+	}
+	logs.mu.Lock()
+	written := logs.buf.String()
+	logs.mu.Unlock()
+	var told int
+	for line := range strings.SplitSeq(strings.TrimSpace(written), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil &&
+			record["msg"] == "secret_shadowed_env" && record["name"] == "NPM_TOKEN" {
+			told++
+		}
+	}
+	if told != 1 {
+		t.Errorf("three launches of one seat warned of the shadowed NPM_TOKEN %d times, want once", told)
 	}
 }
 
