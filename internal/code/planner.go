@@ -68,9 +68,9 @@ const (
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
 	// changesNumberKey is code_changes_number_idx, (repo_id, number)
-	// (replicated migration 0058): a repository's changes in number order,
-	// which is the only way to a repository's revisions and authors — they
-	// carry no repo_id of their own.
+	// (replicated migrations 0058 and 0063): a repository's changes in number
+	// order, which is the only way to a repository's revisions, authors and
+	// bodies — they carry no repo_id of their own.
 	changesNumberKey = "code_changes_number_idx"
 	// liveChanges is the predicate code_changes_open_idx and
 	// code_changes_target_idx are partial on: a change in a [ChangeState.Live]

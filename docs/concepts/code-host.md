@@ -412,11 +412,12 @@ pushes that move its branches: the repository's one
 [committer](#the-committer) decides them in order and the broker arbitrates
 them together, so a change is never both merged and closed.
 
-Three tables hold a change, on every data node:
+Four tables hold a change, on every data node:
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_changes` | each change | Its number, title and description; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; and when it was opened, closed and merged, and how |
+| `code_changes` | each change | Its number and title; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; when it was opened, closed and merged, and how; and how many bytes its description holds |
+| `code_change_bodies` | each change with a description | Its description, up to 32 KiB |
 | `code_change_authors` | each of its authors | Who wrote the change: whoever opened it, and everyone whose push moved its head, each from the revision they first wrote. An author's approval of their own change counts for nothing |
 | `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened |
 
@@ -432,10 +433,15 @@ Three tables hold a change, on every data node:
   target was merged at.
 - **A revision is a row, never a ref.** Nothing a client fetches advertises
   one, so a clone holds the repository's branches and tags and nothing more.
+- **A description is a row of its own.** Every move of a change's head reads
+  and rewrites the change's row on every data node, and the store reads a row
+  whole: a description of up to 32 KiB on that row more than doubled what each
+  revision cost. Kept beside it, a description costs a head move nothing, and
+  the row still says how long it is, so a purge weighs it without reading it.
 - **A change has no horizon of its own.** It is kept as long as its
   repository, and the repository's [purge](#deletion-and-purge) removes it:
-  each change whole, its revisions and authors before its row, in the same
-  bounded steps as the rest of the repository's rows.
+  each change whole, its revisions, authors and description before its row,
+  in the same bounded steps as the rest of the repository's rows.
 
 ---
 
@@ -519,10 +525,14 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
   bounded part of the repository's rows — its push history, its refs, its
   packs and the ones a compaction retired, its
   [ref drops](#retention-and-history), then its [changes](#changes), each
-  whole: a change's revisions and authors, then its row — and the last leaves
-  only a **deletion marker**, which drops every later record about the
-  repository on every node, for ever
-  ([the deletion gate](../guides/replication.md#applied-is-not-permanent));
+  whole: a change's revisions, authors and description, then its row — and
+  the last leaves only a **deletion marker**, which drops every later record
+  about the repository on every node, for ever
+  ([the deletion gate](../guides/replication.md#applied-is-not-permanent)).
+  A step is bounded by how many rows it removes and by what its widest rows
+  weigh: the push records and the change descriptions it removes together
+  stop at about 32 MiB, so a repository with long descriptions takes more
+  steps rather than longer ones;
 - every data node applies every step on its one write lane, so the duty paces
   itself: after each step it waits twice the step's duration, a third of the
   lane, and a pass stops after a minute of steps and the next resumes from

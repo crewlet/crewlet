@@ -501,7 +501,7 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 		return 0, nil
 	}
 	horizon := store.EncodeTime(at.brokerAt.Add(-PushHistory))
-	expired, _, err := pushesWithin(ctx, tx, HorizonBytesPerRecord,
+	expired, _, _, err := pushesWithin(ctx, tx, HorizonBytesPerRecord,
 		func(instant int64) bool { return instant >= horizon }, expiredPushesSQL, repoID, limit)
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's expired pushes: %w", repoID, err)
@@ -620,15 +620,18 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 // applyPurgePart deletes one bounded part of a deleted repository's rows, in a
 // fixed order — its pushes, then its refs, then its packs, then the packs a
 // record retired, then its ref drops, then its changes, each whole: its
-// revisions, its authors and then its row ([purgeChanges]) — so every node
-// deletes the same rows. THE PART IS THE GUARD: only the row's purge_parts + 1
-// deletes anything, so a redelivered or stale part deletes nothing more.
+// revisions, its authors, its body and then its row ([purgeChanges]) — so
+// every node deletes the same rows. THE PART IS THE GUARD: only the row's
+// purge_parts + 1 deletes anything, so a redelivered or stale part deletes
+// nothing more.
 //
-// BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and push rows
-// only until their row_bytes reach PurgePartBytes — a push row is the
-// estate's one wide row, and deleting one costs its overflow pages, which a
-// count does not see. A part whose pushes were cut by bytes deletes nothing
-// else: the refs and packs wait for a part whose pushes are done.
+// BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and its wide rows
+// only until what they weigh reaches PurgePartBytes — the push rows by their
+// row_bytes, and after them the changes by their bodies' body_bytes, one
+// budget for both, because deleting either frees overflow pages a count does
+// not see. A part whose pushes were cut by bytes deletes nothing else: the
+// refs and packs wait for a part whose pushes are done, and the changes for
+// one whose wide rows left room.
 //
 // A RETIRED PACK'S ROW GOES WITH ITS REPOSITORY, its grace or not: the grace
 // is for a reader that began on the pack before it was retired, and no read
@@ -649,7 +652,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 	budget := PurgePartRows
 	deleted := 0
 
-	pushIDs, cut, err := pushesWithin(ctx, tx, PurgePartBytes, nil, purgePushesSQL, p.RepoID, budget)
+	pushIDs, weighed, cut, err := pushesWithin(ctx, tx, PurgePartBytes, nil, purgePushesSQL, p.RepoID, budget)
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's pushes to purge: %w", p.RepoID, err)
 	}
@@ -773,7 +776,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		budget -= int(n)
 	}
 	if budget > 0 {
-		n, err := purgeChanges(ctx, tx, p.RepoID, budget)
+		n, err := purgeChanges(ctx, tx, p.RepoID, budget, weighed)
 		if err != nil {
 			return 0, err
 		}
@@ -793,14 +796,14 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // deletes nothing and inserts nothing. Unbounded statements are safe because
 // the decide forms a purge only once at most PurgePartRows of the
 // repository's pushes, refs, packs, retired packs, ref drops and changes'
-// revisions, authors and rows remain AND the pushes among them weigh at most
-// PurgePartBytes — a part's own bounds — and it holds at most
-// MaxProtectionsPerRepo rules and a published chain of at most
+// revisions, authors, bodies and rows remain AND the pushes and the bodies
+// among them weigh at most PurgePartBytes — a part's own bounds — and it
+// holds at most MaxProtectionsPerRepo rules and a published chain of at most
 // MaxPublishedLayers layers of MaxLayerParts parts each: with the name claim,
 // the row and the marker that is PurgePartRows + MaxProtectionsPerRepo +
 // MaxPublishedLayers × (1 + MaxLayerParts) + 3 rows, which the limits test
-// holds within MaxRecordRows. A change's revisions and authors go before the
-// changes, through which alone they are found.
+// holds within MaxRecordRows. A change's revisions, authors and body go
+// before the changes, through which alone they are found.
 //
 // NO PART REMOVES A LAYER: the chain is bounded apart from the rows a part
 // counts, and a layer row naming a pack a part already removed harms no
@@ -811,8 +814,8 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	deleted := 0
 	for _, stmt := range []string{
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
-		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllChangesSQL, purgeAllLayerPartsSQL, purgeAllLayersSQL,
-		clearProtectionsSQL,
+		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllBodiesSQL, purgeAllChangesSQL, purgeAllLayerPartsSQL,
+		purgeAllLayersSQL, clearProtectionsSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {
@@ -871,10 +874,11 @@ func keySet(ctx context.Context, tx *sql.Tx, query string, keys []string) (map[s
 // pushesWithin reads the push ids query answers with their row_bytes, in its
 // order, and keeps them until their bytes reach bytes — always the first,
 // whatever it weighs, so a step always advances, and so at most one row past
-// the bound. cut reports that it left a row the query answered: the pushes
-// were bounded by what they weigh rather than by the query's LIMIT. Every
-// node holds the same rows with the same widths, so every node keeps the
-// same ids.
+// the bound — answering what the kept rows weigh, which a purge part's
+// changes take what is left of the same bound from ([purgeChanges]). cut
+// reports that it left a row the query answered: the pushes were bounded by
+// what they weigh rather than by the query's LIMIT. Every node holds the same
+// rows with the same widths, so every node keeps the same ids.
 //
 // stop, where it is given, ends the read at the first row it holds for: the
 // query then selects a THIRD column, which stop is asked of, and the row it
@@ -884,17 +888,16 @@ func keySet(ctx context.Context, tx *sql.Tx, query string, keys []string) (map[s
 // stop is not cut: what bounded it is the rows' age, not their weight. The
 // purge passes none and keeps its two-column statement.
 func pushesWithin(ctx context.Context, tx *sql.Tx, bytes int64, stop func(int64) bool, query string,
-	args ...any) (ids []string, cut bool, err error) {
+	args ...any) (ids []string, weighed int64, cut bool, err error) {
 
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	defer func() { _ = rows.Close() }()
-	var weighed int64
 	for rows.Next() {
 		if weighed >= bytes {
-			return ids, true, nil
+			return ids, weighed, true, nil
 		}
 		var id string
 		var width, third int64
@@ -903,15 +906,15 @@ func pushesWithin(ctx context.Context, tx *sql.Tx, bytes int64, stop func(int64)
 			dest = append(dest, &third)
 		}
 		if err := rows.Scan(dest...); err != nil {
-			return nil, false, err
+			return nil, 0, false, err
 		}
 		if stop != nil && stop(third) {
-			return ids, false, nil
+			return ids, weighed, false, nil
 		}
 		ids = append(ids, id)
 		weighed += width
 	}
-	return ids, false, rows.Err()
+	return ids, weighed, false, rows.Err()
 }
 
 // refsNamed is what the repository holds of each of refs — its target, empty

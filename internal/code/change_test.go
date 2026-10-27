@@ -56,11 +56,11 @@ func TestAChangesStatesAreAClosedSet(t *testing.T) {
 // in a snapshot, outside the identity claim — and its migration says so.
 //
 // THE REPOSITORY'S OWN ARE REPRODUCIBLE. What the records on a repository's
-// subject write of a change — its row, its authors and its revisions — is
-// rebuilt by a replay from zero and compared by the identity claim, never a
-// node's own: two data nodes that disagreed about a change's number or its
-// head would answer web!42 differently. A replicated table that a change's
-// own subject writes joins the list with the commit that lands it.
+// subject write of a change — its row, its body, its authors and its
+// revisions — is rebuilt by a replay from zero and compared by the identity
+// claim, never a node's own: two data nodes that disagreed about a change's
+// number or its head would answer web!42 differently. A replicated table that
+// a change's own subject writes joins the list with the commit that lands it.
 //
 // Mutation: leave a change table out of the domain's inventory; state another
 // class for it in its migration, even in a paragraph whose next sentence
@@ -77,7 +77,7 @@ func TestEveryChangeTableIsClassified(t *testing.T) {
 		}
 	}
 	slices.Sort(tables)
-	repository := []string{"code_change_authors", "code_changes", "code_revisions"}
+	repository := []string{"code_change_authors", "code_change_bodies", "code_changes", "code_revisions"}
 	for _, table := range repository {
 		if !slices.Contains(tables, table) {
 			t.Fatalf("the schema's change tables are %v, and %s is not among them — the walk below is "+
@@ -168,8 +168,8 @@ func classOf(t *testing.T, table string) string {
 }
 
 // changeShape is one change a case seeds: how many revisions and authors it
-// holds.
-type changeShape struct{ revisions, authors int }
+// holds, and what its body weighs — 0 for none, and so no body row.
+type changeShape struct{ revisions, authors, body int }
 
 // changesOf is count changes of shape.
 func changesOf(count int, shape changeShape) []changeShape {
@@ -181,16 +181,21 @@ func changesOf(count int, shape changeShape) []changeShape {
 }
 
 // seedChanges writes a repository's changes straight into a node's estate,
-// numbered from 1 in the order given, each with the revisions and authors its
-// shape names — the bulk a purge has to clear, which opening change by change
-// would spend minutes on and assert nothing more by. It answers the changes'
-// ids.
+// numbered from 1 in the order given, each with the revisions, the authors and
+// the body its shape names — the bulk a purge has to clear, which opening
+// change by change would spend minutes on and assert nothing more by. It
+// answers the changes' ids.
+//
+// A BODY ROW STANDS FOR THE WIDTH ITS CHANGE STATES, as seedWeighed's push
+// rows do: a purge weighs a body by its change's body_bytes and never reads
+// the body, so a case weighs mebibytes without writing them — a body row
+// carries the width itself only up to a kilobyte.
 func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 	n.t.Helper()
 	ctx := n.t.Context()
 	vars := n.db.Caps().MaxVariables
 	ids := make([]string, len(shapes))
-	var revisions, authors [][]any
+	var revisions, authors, bodies [][]any
 	for i, s := range shapes {
 		ids[i] = fmt.Sprintf("%s-change-%06d", repoID, i+1)
 		for r := 1; r <= s.revisions; r++ {
@@ -199,14 +204,17 @@ func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 		for a := range s.authors {
 			authors = append(authors, []any{ids[i], fmt.Sprintf("seat-%05d", a)})
 		}
+		if s.body > 0 {
+			bodies = append(bodies, []any{ids[i], strings.Repeat("b", min(s.body, 1<<10))})
+		}
 	}
 	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := store.InsertRows(ctx, tx, vars,
-			`INSERT INTO code_changes (id, repo_id, number, title, state, source_ref, target_ref, head_oid,
-				revision, owner, owner_kind, opened_at, opened_position, version, position) VALUES `,
-			`(?, ?, ?, 'a change', 'open', ?, 'refs/heads/main', ?, ?, 'seat-00000', 'agent', 0, ?, 1, ?)`, ``,
-			len(shapes), func(i int) []any {
-				return []any{ids[i], repoID, i + 1, fmt.Sprintf("refs/heads/change-%06d", i+1),
+			`INSERT INTO code_changes (id, repo_id, number, title, body_bytes, state, source_ref, target_ref,
+				head_oid, revision, owner, owner_kind, opened_at, opened_position, version, position) VALUES `,
+			`(?, ?, ?, 'a change', ?, 'open', ?, 'refs/heads/main', ?, ?, 'seat-00000', 'agent', 0, ?, 1, ?)`,
+			``, len(shapes), func(i int) []any {
+				return []any{ids[i], repoID, i + 1, shapes[i].body, fmt.Sprintf("refs/heads/change-%06d", i+1),
 					oidOf(fmt.Sprint(ids[i], shapes[i].revisions)), shapes[i].revisions, i + 1, i + 1}
 			}); err != nil {
 			return err
@@ -215,6 +223,11 @@ func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 			`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, position, at) VALUES `,
 			`(?, ?, ?, 'seat-00000', 'agent', 1, 0)`, ``, len(revisions),
 			func(i int) []any { return revisions[i] }); err != nil {
+			return err
+		}
+		if _, err := store.InsertRows(ctx, tx, vars,
+			`INSERT INTO code_change_bodies (change_id, body) VALUES `, `(?, ?)`, ``, len(bodies),
+			func(i int) []any { return bodies[i] }); err != nil {
 			return err
 		}
 		_, err := store.InsertRows(ctx, tx, vars,
@@ -228,37 +241,40 @@ func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 }
 
 // changeRows is every row of a repository's changes this node holds — the
-// changes by their repository, and their revisions and authors by the ids
-// seedChanges gave them, so a row the purge orphaned still counts.
-func (n *node) changeRows(repoID string) (changes, revisions, authors int) {
+// changes by their repository, and their revisions, authors and bodies by the
+// ids seedChanges gave them, so a row the purge orphaned still counts.
+func (n *node) changeRows(repoID string) (changes, revisions, authors, bodies int) {
 	n.t.Helper()
 	prefix := repoID + "-change-%"
 	return n.count(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ?`, repoID),
 		n.count(`SELECT COUNT(*) FROM code_revisions WHERE change_id LIKE ?`, prefix),
-		n.count(`SELECT COUNT(*) FROM code_change_authors WHERE change_id LIKE ?`, prefix)
+		n.count(`SELECT COUNT(*) FROM code_change_authors WHERE change_id LIKE ?`, prefix),
+		n.count(`SELECT COUNT(*) FROM code_change_bodies WHERE change_id LIKE ?`, prefix)
 }
 
 // A PURGE REMOVES A REPOSITORY'S CHANGES, each whole and its row last, counted
 // toward its parts: a part takes the changes that fit it whole and cuts only
-// the one it stops at — oldest revisions first — never more than PurgePartRows
-// rows, and the purge removes the rest, leaving no revision or author of a
-// change whose row is gone, and nothing of a neighbour's.
+// the one it stops at — oldest revisions first, its body and row left for
+// later — never more than PurgePartRows rows, and the purge removes the rest,
+// leaving no revision, author or body of a change whose row is gone, and
+// nothing of a neighbour's.
 //
-// Mutation: leave the revisions, the authors or the changes out of the bounded
-// count, and that case's purge is one record deleting more than a part may;
-// drop a part's delete of the whole changes' revisions, or the final purge's
-// of the revisions or the authors, and rows are left behind; delete the
-// changes before their dependents in the final purge, and the revisions and
-// authors are orphaned; cut a change newest revision first, and the oldest
-// revision outlives the part.
+// Mutation: leave the revisions, the authors, the bodies or the changes out of
+// the bounded count, and that case's purge is one record deleting more than a
+// part may; leave the bodies out of the walk's count, and a part of bodied
+// changes deletes past PurgePartRows; drop a part's delete of the whole
+// changes' revisions or bodies, or the final purge's of the revisions, the
+// authors or the bodies, and rows are left behind; delete the changes before
+// their dependents in the final purge, and the dependents are orphaned; cut a
+// change newest revision first, and the oldest revision outlives the part.
 func TestAPurgeRemovesARepositorysChanges(t *testing.T) {
 	t.Parallel()
-	// TEN CHANGES OF ONE REVISION AND ONE AUTHOR fit the first part whole, 30
-	// rows; the change after them needs a part and two rows more, so it is
-	// cut, PurgePartRows less 30 of its oldest revisions, and the purge takes
-	// its last 30, its author and its row.
-	small := changeShape{revisions: 1, authors: 1}
-	whole := 3 * 10
+	// TEN CHANGES OF ONE REVISION, ONE AUTHOR AND A BODY fit the first part
+	// whole, 40 rows; the change after them needs a part and three rows more,
+	// so it is cut, PurgePartRows less 40 of its oldest revisions, and the
+	// purge takes its last 40, its author, its body and its row.
+	small := changeShape{revisions: 1, authors: 1, body: 64}
+	whole := 4 * 10
 	for name, tc := range map[string]struct {
 		shapes []changeShape
 		steps  []int
@@ -267,16 +283,22 @@ func TestAPurgeRemovesARepositorysChanges(t *testing.T) {
 		oldest int
 	}{
 		"whole changes, then the one a part stops at": {
-			shapes: append(changesOf(10, small), changeShape{revisions: code.PurgePartRows, authors: 1}),
-			steps:  []int{code.PurgePartRows, 32}, oldest: code.PurgePartRows - whole + 1,
+			shapes: append(changesOf(10, small), changeShape{revisions: code.PurgePartRows, authors: 1, body: 64}),
+			steps:  []int{code.PurgePartRows, 43}, oldest: code.PurgePartRows - whole + 1,
 		},
 		"changes alone": {
 			shapes: changesOf(code.PurgePartRows+1, changeShape{}),
 			steps:  []int{code.PurgePartRows, 1},
 		},
-		"one change's authors": {
-			shapes: []changeShape{{revisions: 1, authors: code.PurgePartRows}},
+		// A BODY IS A ROW: a change of a body alone is two, so a part takes
+		// half as many of them as of bare changes.
+		"bodies past a part": {
+			shapes: changesOf(code.PurgePartRows/2+1, changeShape{body: 64}),
 			steps:  []int{code.PurgePartRows, 2},
+		},
+		"one change's authors": {
+			shapes: []changeShape{{revisions: 1, authors: code.PurgePartRows, body: 64}},
+			steps:  []int{code.PurgePartRows, 3},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -289,8 +311,8 @@ func TestAPurgeRemovesARepositorysChanges(t *testing.T) {
 			ids := n.seedChanges(id, tc.shapes)
 			n.seedChanges(other, changesOf(3, small))
 			left := func() int {
-				changes, revisions, authors := n.changeRows(id)
-				return changes + revisions + authors
+				changes, revisions, authors, bodies := n.changeRows(id)
+				return changes + revisions + authors + bodies
 			}
 			var steps []int
 			for range len(tc.steps) + 1 {
@@ -316,17 +338,96 @@ func TestAPurgeRemovesARepositorysChanges(t *testing.T) {
 				t.Fatalf("the purge removed %v rows of the changes a record, want %v: parts of at most "+
 					"PurgePartRows (%d), then the purge", steps, tc.steps, code.PurgePartRows)
 			}
-			if changes, revisions, authors := n.changeRows(id); changes+revisions+authors != 0 {
-				t.Fatalf("the purge left %d changes, %d revisions and %d authors of the repository",
-					changes, revisions, authors)
+			if changes, revisions, authors, bodies := n.changeRows(id); changes+revisions+authors+bodies != 0 {
+				t.Fatalf("the purge left %d changes, %d revisions, %d authors and %d bodies of the repository",
+					changes, revisions, authors, bodies)
 			}
 			if _, found := n.repo("app"); found {
 				t.Fatal("the repository still has a row after its purge")
 			}
-			if changes, revisions, authors := n.changeRows(other); changes != 3 || revisions != 3 ||
-				authors != 3 {
-				t.Fatalf("the neighbour holds %d changes, %d revisions and %d authors after the purge, "+
-					"want the 3 of each it was given", changes, revisions, authors)
+			if changes, revisions, authors, bodies := n.changeRows(other); changes != 3 || revisions != 3 ||
+				authors != 3 || bodies != 3 {
+				t.Fatalf("the neighbour holds %d changes, %d revisions, %d authors and %d bodies after the "+
+					"purge, want the 3 of each it was given", changes, revisions, authors, bodies)
+			}
+		})
+	}
+}
+
+// A PURGE IS BOUNDED BY WHAT ITS CHANGES' BODIES WEIGH, in one budget with its
+// pushes: a repository whose few changes carry wide bodies is purged in parts,
+// each taking whole changes only while its wide rows — the push rows first,
+// then the bodies — weigh under PurgePartBytes, and the final purge, whose
+// statements are unbounded, is formed only once what is left weighs no more
+// than that. A change's body is the one wide value it keeps, and deleting it
+// frees overflow pages a count of rows does not see.
+//
+// Mutation: leave the bodies' weight out of the bounded count, and the purge
+// is one record over every body; take a part's changes by their rows alone,
+// and its first part deletes every change; weigh them apart from the pushes,
+// and the part after the pushes takes four.
+func TestAPurgeIsBoundedByWhatItsChangesWeigh(t *testing.T) {
+	t.Parallel()
+	// TEN CHANGES OF A REVISION, AN AUTHOR AND AN 8 MiB BODY: 80 MiB in forty
+	// rows, far under PurgePartRows. A part takes changes until their bodies
+	// reach PurgePartBytes — four — and the purge takes what is left once it
+	// weighs no more than that.
+	const width = 8 << 20
+	for name, tc := range map[string]struct {
+		// pushes is how many push rows of width bytes the repository holds,
+		// which a part takes before any change.
+		pushes int
+		// steps is how many changes each record removed.
+		steps []int
+	}{
+		"bodies alone": {steps: []int{4, 4, 2}},
+		// THREE PUSHES leave a quarter of the first part's bytes: it takes
+		// them and the one change whose body reaches the bound.
+		"after the pushes": {pushes: 3, steps: []int{1, 4, 4, 1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n := newNode(t)
+			n.ensure("app", described("one"), t1)
+			id := n.mustID("app")
+			n.deleteAt(id, harnessAt.Add(-2*keep))
+			n.seedChanges(id, changesOf(10, changeShape{revisions: 1, authors: 1, body: width}))
+			if tc.pushes > 0 {
+				n.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+					INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, commands,
+						received_at, row_bytes)
+					SELECT printf('wide-%02d', i), ?, i + 1, 0, 'seed', 'operator', '[]', 0, ? FROM k`,
+					tc.pushes, id, width)
+			}
+			changes := func() int {
+				return n.count(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ?`, id)
+			}
+			var steps []int
+			for range len(tc.steps) + 1 {
+				before := changes()
+				res, err := n.store.PurgeStep(t.Context(), id, keep)
+				if err != nil {
+					t.Fatalf("PurgeStep: %v", err)
+				}
+				steps = append(steps, before-changes())
+				if len(steps) == 1 {
+					if pushes := n.count(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = ?`, id); pushes != 0 {
+						t.Errorf("the first part left %d of the %d pushes, which fit its bytes and go "+
+							"before any change", pushes, tc.pushes)
+					}
+				}
+				if res.Done {
+					break
+				}
+			}
+			if !slices.Equal(steps, tc.steps) {
+				t.Fatalf("the purge removed %v changes a record, want %v: whole changes until their "+
+					"bodies, after the pushes, reach PurgePartBytes (%d), then the purge once what is "+
+					"left fits", steps, tc.steps, code.PurgePartBytes)
+			}
+			if changes, revisions, authors, bodies := n.changeRows(id); changes+revisions+authors+bodies != 0 {
+				t.Fatalf("the purge left %d changes, %d revisions, %d authors and %d bodies",
+					changes, revisions, authors, bodies)
 			}
 		})
 	}

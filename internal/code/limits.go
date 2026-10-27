@@ -360,6 +360,15 @@ const (
 	// listing row.
 	MaxDescriptionBytes = config.CodeMaxDescriptionBytes
 
+	// MaxChangeBodyBytes is the longest body — a change's description — a
+	// change carries: as long as a task's body in the engine's own tracker,
+	// the text a change most often carries over from the work it is for.
+	// The one value of a change that outgrows a page, so it is a row of its
+	// own (code_change_bodies, replicated 0063) rather than a column of the
+	// row every head move reads and rewrites, weighed by its change's
+	// body_bytes, and a purge part counts it toward PurgePartBytes.
+	MaxChangeBodyBytes = 32 << 10
+
 	// HorizonDeletesPerRecord is how many expired PUSH ROWS one push record
 	// removes from its repository: no fewer than the push rows a record can
 	// add (MaxPushesPerRecord), so the push history's removal keeps pace on
@@ -395,8 +404,8 @@ const (
 	// history's removal keeps pace with its growth in rows and in bytes
 	// alike.
 	//
-	// NO MORE, because this is the push history, the one wide table in the
-	// estate (a push row reaches 461 000 bytes), and deleting a row frees its
+	// NO MORE, because this is the push history, the widest rows the domain
+	// keeps (a push row reaches 461 000 bytes), and deleting a row frees its
 	// overflow pages: about 2.4 ms a megabyte measured, which a count of
 	// rows does not see. Bounded by HorizonDeletesPerRecord alone, a record
 	// removed sixty-four maximal rows — 29 MB, 60–82 ms more of the write
@@ -410,29 +419,41 @@ const (
 	// the final purge's, which also removes every protection rule
 	// (MaxProtectionsPerRepo), the name claim, the repository's row and
 	// writes the marker — which the limits test pins. PurgePartBytes bounds
-	// a part's push rows by what they weigh as well.
+	// a part's wide rows — its push rows and its changes' bodies — by what
+	// they weigh as well.
 	PurgePartRows = 3_000
 
-	// PurgePartBytes is how many BYTES of push rows one purge step deletes
-	// beside PurgePartRows' count — each row weighed by its row_bytes —
-	// taking them oldest first until their bytes reach it: always at least
-	// one, and at most one row past it. A part whose pushes were cut by it
-	// deletes nothing else, so the refs and the packs wait for a part of
-	// their own; and the final purge, whose statements are unbounded, is
-	// formed only once the pushes left fit it as well as the rows do.
+	// PurgePartBytes is how many BYTES of wide rows one purge step deletes
+	// beside PurgePartRows' count, in one budget: its push rows first, each
+	// weighed by its row_bytes and taken oldest first until their bytes
+	// reach it — always at least one, and at most one row past it — and
+	// then its changes' bodies, each weighed by its change's body_bytes, a
+	// change taken whole only while the part weighs under it: the first
+	// whenever the pushes left room, and at most one past it. A part whose
+	// pushes were cut by it deletes nothing else, so the refs and the packs
+	// wait for a part of their own, and a part whose wide rows reached it
+	// takes no change; and the final purge, whose statements are unbounded,
+	// is formed only once the pushes and the bodies left fit it together as
+	// well as the rows do.
 	//
-	// A ROW COUNT BOUNDS A PART'S TIME ONLY FOR NARROW ROWS. A push row is
-	// the estate's one wide row — up to 461 000 bytes of commands and
-	// introduced ids — and deleting one frees its overflow pages: measured,
-	// a part of 3 000 push rows of a kilobyte holds the write lane 56–60 ms,
-	// and bounded by rows alone one of 1 000 rows of 460 KB held it
-	// 1.05–1.10 s, about 2.4 ms a megabyte — four times
-	// statelog.ApplyTxTimeBudget in a record the budget cannot split, on
-	// every data node, with every other domain's applier waiting behind it.
-	// THIRTY-TWO MEBIBYTES is a third of the budget: 81–88 ms for a part of
-	// the widest rows (seventy-three of them), and 76–103 ms for the most a
-	// part can take, rows just short of it and narrow refs for the rest of
-	// PurgePartRows (doc.go's measured section).
+	// A ROW COUNT BOUNDS A PART'S TIME ONLY FOR NARROW ROWS. The domain keeps
+	// two wide ones — a push row, up to 461 000 bytes of commands and
+	// introduced ids, and a change's body, up to MaxChangeBodyBytes — and
+	// deleting either frees its overflow pages: measured, a part of 3 000
+	// push rows of a kilobyte holds the write lane 56–60 ms, and bounded by
+	// rows alone one of 1 000 rows of 460 KB held it 1.05–1.10 s, about
+	// 2.4 ms a megabyte — four times statelog.ApplyTxTimeBudget in a record
+	// the budget cannot split, on every data node, with every other domain's
+	// applier waiting behind it. Bodies weighed by their rows alone took a
+	// part some 32 MB past the bound, on top of push rows just short of it:
+	// 112 ms against 64 ms for the same rows without bodies, in the run of
+	// the review that weighed them. THIRTY-TWO MEBIBYTES is a third of the
+	// budget: 81–88 ms for a part of the widest rows (seventy-three of
+	// them), and 76–103 ms for the most a part can take of push rows and
+	// narrow refs, rows just short of it and refs for the rest of
+	// PurgePartRows; and the most it can take of push rows and bodies, both
+	// bounds at once, held the lane 53 ms in a run where that rows-and-refs
+	// part held it 56 ms (doc.go's measured section).
 	PurgePartBytes = 32 << 20
 
 	// RetentionInterval is the code-retention pass's tick: a quarter of an

@@ -54,20 +54,32 @@
 //
 // # A change is rows on its repository's subject
 //
-// A change (web!42) is code_changes, code_change_authors and code_revisions
-// (replicated migration 0058), written by records on its REPOSITORY's subject
-// and on no subject of its own, so its lifecycle and the pushes that move its
-// branches meet at one committer and one arbitration, and its number — the
-// repository's code_repos.next_change, read and advanced by the apply that
-// opens it — follows the log's order and never repeats. A table is written by
-// the records of one subject only: what is said about a change on a subject of
-// its own goes to tables of its own. Its state is a [ChangeState], the live
-// ones the predicate two partial indexes hold ([ChangeState.Live]), and a
-// merged one names how in a [MergedVia]. The revisions and authors carry no
-// repo_id, reached by their change's key, so a purge takes a repository's
-// changes WHOLE in number order, each one's revisions and authors before its
-// row, and the bounded count reaches them as the final purge does
-// ([purgeChanges]).
+// A change (web!42) is code_changes, code_change_bodies, code_change_authors
+// and code_revisions (replicated migrations 0058 and 0063), written by records
+// on its REPOSITORY's subject and on no subject of its own, so its lifecycle
+// and the pushes that move its branches meet at one committer and one
+// arbitration, and its number — the repository's code_repos.next_change, read
+// and advanced by the apply that opens it — follows the log's order and never
+// repeats. A table is written by the records of one subject only: what is said
+// about a change on a subject of its own goes to tables of its own. Its state
+// is a [ChangeState], the live ones the predicate two partial indexes hold
+// ([ChangeState.Live]), and a merged one names how in a [MergedVia].
+//
+// ITS BODY IS A ROW OF ITS OWN. A change's description, up to
+// [MaxChangeBodyBytes], is the one value of a change that outgrows a page, and
+// this driver reads a row whole, overflow pages and all, whichever columns a
+// statement asks for: in code_changes it more than doubled the read and the
+// rewrite every head move makes of the row. So code_change_bodies keeps it,
+// written only where a change has one, and the change's body_bytes says what
+// it weighs, so nothing that walks the changes reads a body to learn its
+// width.
+//
+// The bodies, revisions and authors carry no repo_id, reached by their
+// change's key, so a purge takes a repository's changes WHOLE in number order,
+// each one's dependents before its row, and the bounded count reaches them as
+// the final purge does ([purgeChanges]). A part weighs the bodies in ONE BYTE
+// BUDGET with the push rows, [PurgePartBytes], since deleting either frees
+// overflow pages a count of rows does not see.
 //
 // # Group commit
 //
@@ -484,11 +496,11 @@
 //     removes up to [HorizonDeletesPerRecord] of its repository's push rows
 //     older than that, and no more once their bytes reach
 //     [HorizonBytesPerRecord] — the most a record can add, so removal keeps
-//     pace, and no more, because a push row is the estate's one wide row and
-//     its delete frees its overflow pages — so "what happened over the last
-//     half year" has one answer across the engine. It reads them oldest
-//     POSITION first and stops at the first inside the horizon, so a row
-//     stamped earlier than the one before it (a leader change) waits for
+//     pace, and no more, because a push row is the widest row the domain
+//     keeps and its delete frees its overflow pages — so "what happened over
+//     the last half year" has one answer across the engine. It reads them
+//     oldest POSITION first and stops at the first inside the horizon, so a
+//     row stamped earlier than the one before it (a leader change) waits for
 //     that one, at most the members' clock skew past its own horizon;
 //   - REF TOMBSTONES, [RefTombstoneHorizon] (48 hours), or sooner — oldest
 //     first — past [MaxTombstonesPerRepo] (100 000): a deleted ref is kept
@@ -530,13 +542,14 @@
 //     the committer counts them in its bound: a forced update two rows, a
 //     deletion three;
 //   - A PURGE, in bounded parts: a repository deleted longer ago than its
-//     retention is removed [PurgePartRows] rows a record, its push rows only
-//     until their bytes reach [PurgePartBytes] ([Store.PurgeStep]), its
-//     changes last and each whole, a change's revisions and authors before
-//     its row ([purgeChanges]), and the final record — formed only once what
-//     is left fits a part — leaves only its deletion marker, which drops
-//     every later record about the repository on every node, for ever. It
-//     is a horizon no record of the repository's own can reach, since
+//     retention is removed [PurgePartRows] rows a record, its push rows and
+//     then its changes' bodies only until together they weigh
+//     [PurgePartBytes] ([Store.PurgeStep]), its changes last and each whole,
+//     a change's revisions, authors and body before its row
+//     ([purgeChanges]), and the final record — formed only once what is left
+//     fits a part, in rows and in bytes — leaves only its deletion marker,
+//     which drops every later record about the repository on every node, for
+//     ever. It is a horizon no record of the repository's own can reach, since
 //     nothing else is written to a deleted repository, so the
 //     code-retention duty's pass ([Retention]) publishes its steps: every
 //     purge already begun first, whatever the retention, then the deleted
@@ -877,12 +890,20 @@
 // 76–103 ms for the most one part can take, the widest rows short of
 // PurgePartBytes and refs for the rest of the rows; and 57–65 ms for the
 // final purge over the same, with [MaxProtectionsPerRepo] rules. A part of a
-// repository's CHANGES (its changes and cut arms, three iterations of one
-// count beside its narrow arm, on four E-cores shared with another session's
-// runs, where narrow took 84 ms): 37 ms for a thousand changes of one
-// revision and one author each, taken whole — the most a part's walk counts
-// and its three deletes take — and 84 ms for a part that cuts one change of
-// [PurgePartRows] revisions, oldest first.
+// repository's CHANGES, each with a body at [MaxChangeBodyBytes] (the
+// changes, wide+changes, wide+bodies, final+bodies and cut arms, three
+// iterations of one count beside the rest, on two E-cores of a Core Ultra 7
+// 265U, where narrow took 44 ms and wide+refs 56 ms): 50 ms for 750 changes
+// of a revision, an author and a body each, taken whole — PurgePartRows rows
+// and 24 MiB of bodies, the most a part's walk counts and its four deletes
+// take; 53 ms for the most one part can take of push rows and bodies, both
+// bounds at once — nineteen of the widest push rows and 745 such changes —
+// and 43 ms for the final purge over the same, with the rules; 41 ms where
+// the widest push rows short of PurgePartBytes leave room for six bodies, of
+// which by their rows alone the part would take 732, 24 MB more (the review
+// that weighed them measured that shape, its bodies then on the change's
+// row, at 112 ms against 64 ms without bodies); and 23 ms for a part that
+// cuts one change of [PurgePartRows] revisions, oldest first.
 //
 // A RETIRE SWEEP (BenchmarkApplyARetireSweep, the record applied and
 // committed; BenchmarkRetireSweepStep, the whole step — the decide's read,

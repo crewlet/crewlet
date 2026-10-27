@@ -51,9 +51,11 @@ import (
 //
 // The reads bounded by what a push row WEIGHS are held to a COVERING seek:
 // they read the widths code_pushes_repo_idx carries, so weighing a wide row
-// never reads its overflow pages. And every statement reads in the order of
-// the index it seeks — a plan that sorts what it found reads all of it before
-// its LIMIT takes a row — but those [sortingStatements] names, over a set
+// never reads its overflow pages — and the purge's reads count a change's
+// body from its key's index alone, a covering seek too, weighing it by the
+// change's own narrow row. And every statement reads in the order of the
+// index it seeks — a plan that sorts what it found reads all of it before its
+// LIMIT takes a row — but those [sortingStatements] names, over a set
 // something else bounds.
 //
 // Mutation: drop `INDEXED BY` from liveRefSQL and the head seeks
@@ -291,6 +293,7 @@ const (
 	changeKey     = "sqlite_autoindex_code_changes_1"
 	authorKey     = "sqlite_autoindex_code_change_authors_1"
 	revisionKey   = "sqlite_autoindex_code_revisions_1"
+	bodyKey       = "sqlite_autoindex_code_change_bodies_1"
 	activationKey = "sqlite_autoindex_code_activation_1"
 	evictionKey   = "sqlite_autoindex_code_evictions_1"
 	layersKey     = "sqlite_autoindex_code_layers_1"
@@ -349,7 +352,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -404,15 +407,20 @@ func registeredStatements() map[string]statement {
 		"purge drops":     {purgeDropsSQL, []any{"repo-1", PurgePartRows}, []string{"COVERING INDEX " + dropsKey + " (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all drops": {purgeAllDropsSQL, []any{"repo-1"}, []string{dropsKey + " (repo_id=?)"}},
 		// A PURGE'S CHANGES: the walk in number order, each change's
-		// dependents counted by its key; the whole changes' rows by the list
-		// of their ids; the cut change's in its key's order; and the final
-		// purge's, the dependents through their changes.
+		// dependents counted by its key — its body from the key's index
+		// alone, never the body's row, whose overflow pages a read would
+		// walk; the whole changes' rows by the list of their ids; the cut
+		// change's in its key's order; and the final purge's, the dependents
+		// through their changes.
 		"purge change walk": {purgeChangeWalkSQL, []any{"repo-1", PurgePartRows},
-			[]string{changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)"}},
+			[]string{changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)",
+				"COVERING INDEX " + bodyKey + " (change_id=?)"}},
 		"purge changes' revisions": {purgeChangeRevisionsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", revisionKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' authors": {purgeChangeAuthorsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", authorKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge changes' bodies": {purgeChangeBodiesSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", bodyKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' rows": {purgeChangeRowsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", changeKey + " (id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge a cut change's revisions": {purgeCutRevisionsSQL, []any{"repo-1-change-000001", PurgePartRows},
@@ -423,6 +431,8 @@ func registeredStatements() map[string]statement {
 			[]string{changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all authors": {purgeAllAuthorsSQL, []any{"repo-1"},
 			[]string{changesNumberKey + " (repo_id=?)", authorKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all bodies": {purgeAllBodiesSQL, []any{"repo-1"},
+			[]string{changesNumberKey + " (repo_id=?)", bodyKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all changes": {purgeAllChangesSQL, []any{"repo-1"},
 			[]string{"COVERING INDEX " + changesNumberKey + " (repo_id=?)"}},
 		// THE FENCES the applier and a writer read — a node's eviction
@@ -652,9 +662,9 @@ func claimName(index string) string { return "the read claimed for " + index }
 const retiredRepoIdx = "code_packs_retired_repo_idx"
 
 // seededPlanEstate is an estate holding five repositories of 500 refs, 50
-// packs, 200 pushes, 200 retired packs, 200 ref drops, 50 changes and a
-// published chain of three layers of two parts each, with no statistics
-// gathered — the state every node's estate is in.
+// packs, 200 pushes, 200 retired packs, 200 ref drops, 50 changes — forty of
+// them with a body — and a published chain of three layers of two parts
+// each, with no statistics gathered — the state every node's estate is in.
 func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -736,14 +746,22 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 				return err
 			}
 			// FIFTY CHANGES ACROSS EVERY STATE, each of three revisions and
-			// two authors, a work item on every third and every merged one
-			// naming the commit it was merged at.
+			// two authors, a work item on every third, every merged one
+			// naming the commit it was merged at, and a body on all but
+			// every fifth — which has none, and so no body row.
 			states := ChangeStates()
+			body := strings.Repeat("what this change does, and why. ", 32)
+			var bodied []int
+			for i := range 50 {
+				if i%5 != 0 {
+					bodied = append(bodied, i)
+				}
+			}
 			if _, err := store.InsertRows(ctx, tx, vars,
-				`INSERT INTO code_changes (id, repo_id, number, title, state, source_ref, target_ref,
-					head_oid, revision, owner, owner_kind, work_backend, work_id, opened_at,
+				`INSERT INTO code_changes (id, repo_id, number, title, body_bytes, state, source_ref,
+					target_ref, head_oid, revision, owner, owner_kind, work_backend, work_id, opened_at,
 					opened_position, closed_at, merged_at, merged_via, merge_oid, version, position) VALUES `,
-				`(?, ?, ?, 'a change', ?, ?, 'refs/heads/main', ?, 3, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?, 3, ?)`,
+				`(?, ?, ?, 'a change', ?, ?, ?, 'refs/heads/main', ?, 3, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?, 3, ?)`,
 				``, 50, func(i int) []any {
 					state := states[i%len(states)]
 					var backend, work, via, merge string
@@ -755,11 +773,20 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 					if merged.Valid {
 						via, merge = string(MergedViaPush), oid(fmt.Sprintf("head-%d-3", i))
 					}
-					return []any{fmt.Sprintf("%s-change-%06d", id, i+1), id, i + 1, string(state),
+					weighs := 0
+					if slices.Contains(bodied, i) {
+						weighs = len(body)
+					}
+					return []any{fmt.Sprintf("%s-change-%06d", id, i+1), id, i + 1, weighs, string(state),
 						fmt.Sprintf("refs/heads/f%06d", i), oid(fmt.Sprintf("head-%d-3", i)),
 						fmt.Sprintf("seat-%d", i%7), backend, work, i, 2000 + i, closed, merged, via, merge,
 						2000 + i}
 				}); err != nil {
+				return err
+			}
+			if _, err := store.InsertRows(ctx, tx, vars,
+				`INSERT INTO code_change_bodies (change_id, body) VALUES `, `(?, ?)`, ``, len(bodied),
+				func(i int) []any { return []any{fmt.Sprintf("%s-change-%06d", id, bodied[i]+1), body} }); err != nil {
 				return err
 			}
 			if _, err := store.InsertRows(ctx, tx, vars,

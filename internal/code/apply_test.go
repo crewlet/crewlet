@@ -689,7 +689,7 @@ func TestAPurgePartIsBoundedAndIdempotent(t *testing.T) {
 // there are: push rows go oldest first until their widths reach
 // PurgePartBytes — at most one row past it — and a part whose pushes were cut
 // there deletes nothing else, so the refs wait for a part of their own. A
-// push row is the estate's one wide row and deleting one frees its overflow
+// push row is the domain's widest row and deleting one frees its overflow
 // pages, so a part of PurgePartRows wide rows held every node's write lane
 // for seconds.
 func TestAPurgePartIsBoundedByWhatItsPushesWeigh(t *testing.T) {
@@ -722,6 +722,86 @@ func TestAPurgePartIsBoundedByWhatItsPushesWeigh(t *testing.T) {
 			"part goes on to the refs", p, r)
 	}
 	e.countersMatchRows("repo-a")
+}
+
+// seedWeighedChanges writes n changes of a repository, numbered from 1, each
+// with a revision, an author and a body its change says weighs width bytes —
+// changes a purge part has to weigh, without carrying their bytes, as
+// seedWeighed's pushes are: a part reads a body's width from its change and
+// never reads the body.
+func (e *estate) seedWeighedChanges(id string, n, width int) {
+	e.t.Helper()
+	e.seedChangeRows(id, n, 1, 1, 1)
+	e.exec(`UPDATE code_changes SET body_bytes = ? WHERE repo_id = ?`, width, id)
+}
+
+// A PURGE PART WEIGHS ITS CHANGES' BODIES IN ONE BUDGET WITH ITS PUSHES: after
+// its push rows and its narrow rows, a part takes whole changes in number
+// order only while what its wide rows weigh — the pushes it took, then each
+// body — is under PurgePartBytes: the first change whenever the pushes left
+// room, and so at most one change past the bound, and none once the pushes
+// reached it. A walk the bytes stopped cuts nothing, so the change after the
+// last it took keeps every row. A change's body is the one wide value it
+// keeps, and deleting it frees its overflow pages, which a count of rows does
+// not see: by rows alone a part took every change here, on top of whatever
+// its pushes weighed.
+//
+// Mutation: take the changes by their rows alone, and the bodies alone go in
+// one part; weigh them apart from the pushes, and the parts after the pushes
+// take eleven; cut the change a walk the bytes stopped at, and it loses its
+// revision and its author.
+func TestAPurgePartIsBoundedByWhatItsChangesWeigh(t *testing.T) {
+	t.Parallel()
+	// A WIDTH THAT DOES NOT DIVIDE THE BUDGET: eleven bodies of 3 MiB are the
+	// first to reach 32 MiB.
+	const width, seeded = 3 << 20, 15
+	for name, tc := range map[string]struct {
+		// pushes push rows of pushWidth bytes each go before the changes.
+		pushes, pushWidth int
+		// left is how many of the changes the part leaves.
+		left int
+	}{
+		"bodies alone": {left: seeded - 11},
+		// THIRTY MEBIBYTES OF PUSHES leave room for one change, whose body
+		// takes the part past the bound.
+		"after the pushes": {pushes: 3, pushWidth: 10 << 20, left: seeded - 1},
+		// THIRTY-TWO leave none.
+		"pushes at the bound": {pushes: 4, pushWidth: 8 << 20, left: seeded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := openApplyEstate(t)
+			e.apply(create(t, "repo-a", "a"),
+				rec(t, RepoSubject("repo-a"), OpDelete, Scope{RepoPath("repo-a")},
+					LifecycleRecord{RepoID: "repo-a", ConfigEpoch: 1}))
+			if tc.pushes > 0 {
+				e.seedWeighed("repo-a", tc.pushes, tc.pushWidth)
+			}
+			e.seedWeighedChanges("repo-a", seeded, width)
+			e.apply(partOf(t, "repo-a", 1))
+			if left := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = 'repo-a'`); left != 0 {
+				t.Fatalf("the part left %d of its %d pushes, which fit its bytes and go first", left, tc.pushes)
+			}
+			changes := e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = 'repo-a'`)
+			if changes != int64(tc.left) {
+				t.Fatalf("the part left %d of %d changes whose bodies weigh %d bytes each, want %d: "+
+					"whole changes while the part's wide rows weigh under PurgePartBytes (%d)",
+					changes, seeded, width, tc.left, PurgePartBytes)
+			}
+			// THE CHANGES LEFT ARE WHOLE: nothing cut the first of them.
+			prefix := "repo-a-change-%"
+			for table, rows := range map[string]int64{
+				"code_revisions":      e.num(`SELECT COUNT(*) FROM code_revisions WHERE change_id LIKE ?`, prefix),
+				"code_change_authors": e.num(`SELECT COUNT(*) FROM code_change_authors WHERE change_id LIKE ?`, prefix),
+				"code_change_bodies":  e.num(`SELECT COUNT(*) FROM code_change_bodies WHERE change_id LIKE ?`, prefix),
+			} {
+				if rows != changes {
+					t.Errorf("%s holds %d rows of the %d changes left, one each: a walk the bytes stopped "+
+						"cuts nothing", table, rows, changes)
+				}
+			}
+		})
+	}
 }
 
 // THE PUSH HISTORY'S HORIZON IS BOUNDED BY WHAT ITS ROWS WEIGH: a push record

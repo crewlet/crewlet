@@ -31,7 +31,8 @@ func quiet(b *testing.B) {
 // widestPushRow is the commands and introduced ids of the widest row a push
 // stores: MaxCommandsPerPush commands at MaxRefNameBytes refs, each refused
 // with the longest code a command records, and MaxIntroduced ids — about
-// 470 KB, which is what makes code_pushes the estate's one wide table.
+// 470 KB, which is what makes code_pushes the domain's widest table, some
+// fourteen times a change's body at MaxChangeBodyBytes.
 func widestPushRow(b *testing.B) (commands, introduced string) {
 	b.Helper()
 	longest := Refusal("")
@@ -94,15 +95,21 @@ func (e *estate) seedNarrow(id string, n int) {
 }
 
 // seedChangeRows writes changes of a repository, numbered from 1, each with
-// revisions revisions and authors authors — the rows a purge part walks.
-func (e *estate) seedChangeRows(id string, changes, revisions, authors int) {
+// revisions revisions, authors authors and, where body is not 0, a body of
+// that many bytes, which its change weighs — the rows a purge part walks.
+func (e *estate) seedChangeRows(id string, changes, revisions, authors, body int) {
 	e.t.Helper()
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
-		INSERT INTO code_changes (id, repo_id, number, title, state, source_ref, target_ref, head_oid,
-			revision, owner, owner_kind, opened_at, opened_position, version, position)
-		SELECT printf('%s-change-%06d', ?, i), ?, i + 1, 'a change', 'open',
+		INSERT INTO code_changes (id, repo_id, number, title, body_bytes, state, source_ref, target_ref,
+			head_oid, revision, owner, owner_kind, opened_at, opened_position, version, position)
+		SELECT printf('%s-change-%06d', ?, i), ?, i + 1, 'a change', ?, 'open',
 			printf('refs/heads/change-%06d', i), 'refs/heads/main', printf('%040d', i), ?, 'seat', 'agent',
-			0, i + 1, 1, i + 1 FROM k`, changes, id, id, revisions)
+			0, i + 1, 1, i + 1 FROM k`, changes, id, id, body, revisions)
+	if body > 0 {
+		e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+			INSERT INTO code_change_bodies (change_id, body)
+			SELECT printf('%s-change-%06d', ?, i), ? FROM k`, changes, id, strings.Repeat("b", body))
+	}
 	if revisions > 0 {
 		e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
 			INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, position, at)
@@ -118,13 +125,15 @@ func (e *estate) seedChangeRows(id string, changes, revisions, authors int) {
 }
 
 // changeRowsOf is every row of a repository's changes seedChangeRows wrote
-// that the estate still holds, revisions and authors found by their ids.
+// that the estate still holds, revisions, authors and bodies found by their
+// ids.
 func (e *estate) changeRowsOf(id string) int64 {
 	e.t.Helper()
 	prefix := id + "-change-%"
 	return e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ?`, id) +
 		e.num(`SELECT COUNT(*) FROM code_revisions WHERE change_id LIKE ?`, prefix) +
-		e.num(`SELECT COUNT(*) FROM code_change_authors WHERE change_id LIKE ?`, prefix)
+		e.num(`SELECT COUNT(*) FROM code_change_authors WHERE change_id LIKE ?`, prefix) +
+		e.num(`SELECT COUNT(*) FROM code_change_bodies WHERE change_id LIKE ?`, prefix)
 }
 
 // seedTombstones writes n ref tombstones into a repository, deleted at, and
@@ -392,16 +401,27 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 //     one row past it;
 //   - wide+refs: the widest rows short of PurgePartBytes and as many refs as
 //     PurgePartRows leaves, which neither bound cuts — the most one part can
-//     take;
+//     take of push rows and narrow ones;
 //   - final: the purge itself over what wide+refs seeds, with
 //     MaxProtectionsPerRepo rules: the most the gate record's unbounded
 //     statements can meet, since the decide forms it only once what is left
 //     fits a part;
-//   - changes: a thousand changes of one revision and one author each,
-//     PurgePartRows rows the part takes whole — the most changes one part's
-//     walk counts and its three deletes take;
-//   - cut: one change of PurgePartRows revisions and an author, which the
-//     part cuts, its oldest revisions first, leaving the author and the row.
+//   - changes: a quarter of PurgePartRows changes of a revision, an author
+//     and a body at MaxChangeBodyBytes, which the part takes whole — the most
+//     changes one part's walk counts and its four deletes take, with 24 MiB
+//     of bodies;
+//   - wide+changes: the widest rows short of PurgePartBytes, then a thousand
+//     such changes: the bodies share the pushes' bytes, so the part takes only
+//     the few whose bodies fill what the pushes left — weighed by their rows
+//     alone it would take them to the row bound, 732 of them and 24 MB more;
+//   - wide+bodies: both bounds at once — as many such changes as the rows
+//     leave room for beside the widest rows that fill what their bodies leave
+//     of PurgePartBytes: the most one part can take of push rows and changes;
+//   - final+bodies: the purge itself over what wide+bodies seeds, with
+//     MaxProtectionsPerRepo rules;
+//   - cut: one change of PurgePartRows revisions, an author and a body at the
+//     bound, which the part cuts, its oldest revisions first, leaving the
+//     author, the body and the row.
 //
 // Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot
 // split a record; doc.go's measured section records the figures.
@@ -410,35 +430,63 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 	commands, introduced := widestPushRow(b)
 	width := len(commands) + len(introduced)
 	under := (PurgePartBytes - 1) / width
+	// A CHANGE AT ITS WIDEST is four rows: its own, a revision, an author and
+	// a body at MaxChangeBodyBytes.
+	const perChange = 4
+	bodied := func(e *estate, repo string, n int) { e.seedChangeRows(repo, n, 1, 1, MaxChangeBodyBytes) }
+	// after is how many of those a part takes behind the widest rows short of
+	// PurgePartBytes: the bodies that fill what the pushes left, the last
+	// reaching the bound.
+	after := (PurgePartBytes - under*width + MaxChangeBodyBytes - 1) / MaxChangeBodyBytes
+	// mixed widest rows and beside changes fill both bounds: the changes the
+	// rows leave room for, and the pushes their bodies leave room for.
+	mixed := (PurgePartBytes - PurgePartRows/perChange*MaxChangeBodyBytes) / (width - MaxChangeBodyBytes/perChange)
+	beside := (PurgePartRows - mixed) / perChange
+	ruled := func(e *estate, repo string) {
+		e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+			INSERT INTO code_protections (repo_id, pattern, direct_push)
+			SELECT ?, printf('refs/heads/rule-%03d', i), 'persons' FROM k`,
+			MaxProtectionsPerRepo, repo)
+	}
 	for _, shape := range []struct {
-		name       string
-		seed       func(e *estate, repo string)
-		final      bool
-		rows, left int
-		// changes counts what the record left of the repository's changes
-		// rather than of its pushes.
-		changes bool
+		name  string
+		seed  func(e *estate, repo string)
+		final bool
+		rows  int
+		// pushes and changes are what the record left of the repository's
+		// push rows and of the rows of its changes.
+		pushes, changes int
 	}{
 		{"narrow", func(e *estate, repo string) { e.seedNarrow(repo, PurgePartRows+500) },
-			false, PurgePartRows, 500, false},
+			false, PurgePartRows, 500, 0},
 		{"wide", func(e *estate, repo string) { e.seedWide(b, repo, 100) },
-			false, (PurgePartBytes + width - 1) / width, 100 - (PurgePartBytes+width-1)/width, false},
+			false, (PurgePartBytes + width - 1) / width, 100 - (PurgePartBytes+width-1)/width, 0},
 		{"wide+refs", func(e *estate, repo string) {
 			e.seedWide(b, repo, under)
 			e.seed(repo, 0, PurgePartRows-under, 0)
-		}, false, PurgePartRows, 0, false},
+		}, false, PurgePartRows, 0, 0},
 		{"final", func(e *estate, repo string) {
 			e.seedWide(b, repo, under)
 			e.seed(repo, 0, PurgePartRows-under, 0)
-			e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
-				INSERT INTO code_protections (repo_id, pattern, direct_push)
-				SELECT ?, printf('refs/heads/rule-%03d', i), 'persons' FROM k`,
-				MaxProtectionsPerRepo, repo)
-		}, true, PurgePartRows + MaxProtectionsPerRepo, 0, false},
-		{"changes", func(e *estate, repo string) { e.seedChangeRows(repo, PurgePartRows/3, 1, 1) },
-			false, PurgePartRows, 0, true},
-		{"cut", func(e *estate, repo string) { e.seedChangeRows(repo, 1, PurgePartRows, 1) },
-			false, PurgePartRows, 2, true},
+			ruled(e, repo)
+		}, true, PurgePartRows + MaxProtectionsPerRepo, 0, 0},
+		{"changes", func(e *estate, repo string) { bodied(e, repo, PurgePartRows/perChange) },
+			false, PurgePartRows, 0, 0},
+		{"wide+changes", func(e *estate, repo string) {
+			e.seedWide(b, repo, under)
+			bodied(e, repo, 1000)
+		}, false, under + after*perChange, 0, (1000 - after) * perChange},
+		{"wide+bodies", func(e *estate, repo string) {
+			e.seedWide(b, repo, mixed)
+			bodied(e, repo, beside)
+		}, false, mixed + beside*perChange, 0, 0},
+		{"final+bodies", func(e *estate, repo string) {
+			e.seedWide(b, repo, mixed)
+			bodied(e, repo, beside)
+			ruled(e, repo)
+		}, true, mixed + beside*perChange + MaxProtectionsPerRepo, 0, 0},
+		{"cut", func(e *estate, repo string) { e.seedChangeRows(repo, 1, PurgePartRows, 1, MaxChangeBodyBytes) },
+			false, PurgePartRows, 0, 3},
 	} {
 		b.Run(shape.name, func(b *testing.B) {
 			e := openApplyEstate(b)
@@ -456,12 +504,11 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 						Purge{RepoID: repo, Name: name, Reason: "past retention"})
 				}
 				e.applyTimed(b, a, r, shape.rows)
-				left, of := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = ?`, repo), "push rows"
-				if shape.changes {
-					left, of = e.changeRowsOf(repo), "rows of its changes"
+				if left := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = ?`, repo); left != int64(shape.pushes) {
+					b.Fatalf("the record left %d push rows, want %d", left, shape.pushes)
 				}
-				if left != int64(shape.left) {
-					b.Fatalf("the record left %d %s, want %d", left, of, shape.left)
+				if left := e.changeRowsOf(repo); left != int64(shape.changes) {
+					b.Fatalf("the record left %d rows of the changes, want %d", left, shape.changes)
 				}
 			}
 		})

@@ -63,11 +63,11 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	}
 	// AND SO DOES THE FINAL PURGE, whose statements are unbounded because the
 	// decide forms it only once at most PurgePartRows of the repository's
-	// pushes, refs, packs, retired packs and changes' revisions, authors and
-	// rows remain: those, every protection rule (MaxProtectionsPerRepo), the
-	// published chain — which no part removes: MaxPublishedLayers layers of
-	// MaxLayerParts parts each — the name claim, the repository's row and the
-	// deletion marker.
+	// pushes, refs, packs, retired packs and changes' revisions, authors,
+	// bodies and rows remain: those, every protection rule
+	// (MaxProtectionsPerRepo), the published chain — which no part removes:
+	// MaxPublishedLayers layers of MaxLayerParts parts each — the name claim,
+	// the repository's row and the deletion marker.
 	chain := code.MaxPublishedLayers * (1 + code.MaxLayerParts)
 	if final := code.PurgePartRows + code.MaxProtectionsPerRepo + chain + 3; final > code.MaxRecordRows {
 		t.Errorf("the final purge removes up to %d rows (PurgePartRows %d + MaxProtectionsPerRepo %d + "+

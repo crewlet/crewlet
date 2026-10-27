@@ -33,11 +33,12 @@ var ReproducibleTables = []string{
 	// those, so a replay rebuilds them too.
 	"code_ref_drops",
 
-	// A repository's changes, each with who wrote it and every revision of
-	// its head — written by the records on the repository's own subject,
-	// like its refs, and removed with the repository, a change's revisions
-	// and authors before its row.
-	"code_changes", "code_change_authors", "code_revisions",
+	// A repository's changes, each with who wrote it, every revision of its
+	// head and its body — a row of its own, kept off the row every head
+	// move rewrites — written by the records on the repository's own
+	// subject, like its refs, and removed with the repository, a change's
+	// revisions, authors and body before its row.
+	"code_changes", "code_change_authors", "code_revisions", "code_change_bodies",
 
 	// A repository's published chain and the objects its layers are stored
 	// in — written by the compaction records that carry a layer, each
