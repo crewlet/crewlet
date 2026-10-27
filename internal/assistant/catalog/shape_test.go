@@ -566,50 +566,66 @@ func jsonText(s string) string {
 }
 
 // A REFUSAL IS TOLD WHOLE, EACH SENTENCE HELD TO 2 KiB: a route that wrote a
-// detail past that has it cut on a character with a mark, its hint kept, and
-// the refusal still fits what the model is handed, fenced or defused as the
-// tool's results are. Mutation: drop the clip and a 20 KiB detail fails the
-// step rather than reaching the model as a refusal.
+// message or a hint past that has each cut on a character with a mark, a
+// short one kept as written, and the refusal still fits what the model is
+// handed, fenced or defused as the tool's results are. Mutation: drop the
+// clip from the message or from the hint and a 20 KiB sentence fails the step
+// rather than reaching the model as a refusal.
 func TestARefusalsSentencesAreHeldToTheirBound(t *testing.T) {
 	t.Parallel()
 	b := provenance.NewBoundary()
 	long := strings.Repeat("é the route said more than a sentence. ", 520)
-	body, err := json.Marshal(map[string]any{"error": "invalid", "message": long,
-		"hint": "Name a smaller window."})
-	if err != nil {
-		t.Fatal(err)
+	longHint := strings.Repeat("ü narrow it by a filter the route takes. ", 520)
+	cases := []struct {
+		message, hint string
+	}{{long, "Name a smaller window."}, {"Too wide.", longHint}, {long, longHint}}
+	// clipped holds a sentence to what the model is told of it: the original
+	// where it fits, else a prefix of at most 2 KiB on a character, marked.
+	clipped := func(name, field, got, sent string) {
+		t.Helper()
+		if len(sent) <= 2<<10 {
+			if got != sent {
+				t.Errorf("%s: the refusal's %s reads %q, want %q", name, field, got, sent)
+			}
+			return
+		}
+		if len(got) > 2<<10 || !strings.HasSuffix(got, " [cut]") || !utf8.ValidString(got) ||
+			!strings.HasPrefix(sent, strings.TrimSuffix(got, " [cut]")) {
+			t.Errorf("%s: the refusal's %s is %d bytes, ending %q", name, field, len(got),
+				got[max(0, len(got)-24):])
+		}
 	}
-	for _, name := range []string{"list_tasks", "get_page"} {
-		tool := mustTool(t, name)
-		res, err := catalog.Shape(tool, assistanttest.ExampleArgs(t, tool.Parameters),
-			exec.Response{Status: 400, Body: body}, b, evals.Epoch, cards.Options{})
+	for _, tc := range cases {
+		body, err := json.Marshal(map[string]any{"error": "invalid", "message": tc.message,
+			"hint": tc.hint})
 		if err != nil {
-			t.Fatalf("%s: a long refusal failed the step: %v", name, err)
+			t.Fatal(err)
 		}
-		if !res.Failed() || len(res.Model) > cards.ModelBytes {
-			t.Fatalf("%s: the refusal is %d bytes to the model, past %d", name, len(res.Model), cards.ModelBytes)
-		}
-		var refusal struct {
-			Refused struct{ Message, Hint string } `json:"refused"`
-		}
-		text := res.Model
-		var outer struct {
-			Answer *string `json:"answer"`
-		}
-		if json.Unmarshal([]byte(text), &outer) == nil && outer.Answer != nil {
-			text = provenance.Unfence(b, *outer.Answer)
-		}
-		if err := json.Unmarshal([]byte(text), &refusal); err != nil {
-			t.Fatalf("%s: the model reads no refusal: %s", name, res.Model)
-		}
-		msg := refusal.Refused.Message
-		if len(msg) > 2<<10 || !strings.HasSuffix(msg, " [cut]") || !utf8.ValidString(msg) ||
-			!strings.HasPrefix(long, strings.TrimSuffix(msg, " [cut]")) {
-			t.Errorf("%s: the refusal's message is %d bytes, ending %q", name, len(msg),
-				msg[max(0, len(msg)-24):])
-		}
-		if refusal.Refused.Hint != "Name a smaller window." {
-			t.Errorf("%s: the hint reads %q", name, refusal.Refused.Hint)
+		for _, name := range []string{"list_tasks", "get_page"} {
+			tool := mustTool(t, name)
+			res, err := catalog.Shape(tool, assistanttest.ExampleArgs(t, tool.Parameters),
+				exec.Response{Status: 400, Body: body}, b, evals.Epoch, cards.Options{})
+			if err != nil {
+				t.Fatalf("%s: a long refusal failed the step: %v", name, err)
+			}
+			if !res.Failed() || len(res.Model) > cards.ModelBytes {
+				t.Fatalf("%s: the refusal is %d bytes to the model, past %d", name, len(res.Model), cards.ModelBytes)
+			}
+			var refusal struct {
+				Refused struct{ Message, Hint string } `json:"refused"`
+			}
+			text := res.Model
+			var outer struct {
+				Answer *string `json:"answer"`
+			}
+			if json.Unmarshal([]byte(text), &outer) == nil && outer.Answer != nil {
+				text = provenance.Unfence(b, *outer.Answer)
+			}
+			if err := json.Unmarshal([]byte(text), &refusal); err != nil {
+				t.Fatalf("%s: the model reads no refusal: %s", name, res.Model)
+			}
+			clipped(name, "message", refusal.Refused.Message, tc.message)
+			clipped(name, "hint", refusal.Refused.Hint, tc.hint)
 		}
 	}
 }
