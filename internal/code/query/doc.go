@@ -128,14 +128,16 @@
 // # Time: one budget of git, and an answer while the asker listens
 //
 // A read's own git — every process of its kind, a comparison's two walks and
-// its stat or a landed-in search's ancestry checks as a listing's one — is
-// given ONE budget of run time, gitproc.ReadDeadline, each process what the
-// ones before it left: run out, the read is too large to answer anywhere —
-// save a landed-in search, which by then knows the oldest move that kept its
-// commit and answers how far it reached, as its bound of checks ends it
-// (landed.go). Its wait for each process's read-lane slot is charged nothing,
-// since it is the node's contention and not the read's size. The short checks
-// before it (objects.go) run to their own bound, outside it.
+// its stat, a patch's lookup and its diff or a landed-in search's ancestry
+// checks as a listing's one — is given ONE budget of run time,
+// gitproc.ReadDeadline, each process what the ones before it left, a lookup
+// that ends its own run once it has read what it needs included: run out, the
+// read is too large to answer anywhere — save a landed-in search, which by
+// then knows the oldest move that kept its commit and answers how far it
+// reached, as its bound of checks ends it (landed.go). Its wait for each
+// process's read-lane slot is charged nothing, since it is the node's
+// contention and not the read's size. The short checks before it
+// (objects.go) run to their own bound, outside it.
 //
 // And the caller's context ENDS WHEN THE ANSWER IS DUE (code.AnswerBy, the
 // estate's git arm and its in-process run alike): every wait takes it, and a

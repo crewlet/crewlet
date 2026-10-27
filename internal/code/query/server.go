@@ -803,9 +803,7 @@ func (r *read) budget() (time.Duration, error) {
 // its time to contention told its seat to narrow a question a quiet node
 // answers.
 func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err error, slice error) error {
-	if r.metered {
-		r.gitLeft -= res.Took
-	}
+	r.charge(res)
 	if res.Damage != nil {
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s's %s over repository %s met damage the node is "+
 			"repairing (%v); another git node answers meanwhile", r.s.o.NodeID, what, r.q.RepoID, res.Damage))
@@ -837,6 +835,17 @@ func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err 
 			"another git node answers meanwhile", r.s.o.NodeID, what, r.q.RepoID, err))
 	}
 	return fmt.Errorf("query: %s over repository %s: %w", what, r.q.RepoID, err)
+}
+
+// charge counts a process's run against the read's budget of git once the
+// read's own git has begun ([read.metered]) — its run alone, never its wait
+// for a read-lane slot: what [read.failed] charges every process it judges,
+// and a run the read ends itself, having read all it needs (errStop), is
+// charged here, since it judges none.
+func (r *read) charge(res gitproc.Result) {
+	if r.metered {
+		r.gitLeft -= res.Took
+	}
 }
 
 // cursorOf is q's cursor, read as one its kind issues.

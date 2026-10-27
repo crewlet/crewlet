@@ -849,6 +849,9 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 	})
 	switch {
 	case hit && res.Damage == nil:
+		// THE LOOKUP IS THE PATCH'S OWN GIT, and its run comes out of the
+		// budget the patch's diff-pairs is then given what is left of.
+		r.charge(res)
 		return e, true, nil
 	case err == nil:
 		err = recs.close()

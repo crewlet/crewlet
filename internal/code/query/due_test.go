@@ -167,9 +167,15 @@ func (p *budgetPool) deadlines(command string) []time.Duration {
 // the first one's page, whatever its count's process would have met — and
 // what this case holds is what each process of a read's own git is given.
 //
+// A patch's lookup of its file's record is its own git too, though it ends
+// that run itself once the record is read: its diff-pairs is given what the
+// lookup left.
+//
 // Mutations: give every process the whole budget — the count's deadline ten
 // seconds, red; charge the checks — the merge base's under ten, red; cut a
-// run's deadline to its asker's attempt — the listing's under ten, red.
+// run's deadline to its asker's attempt — the listing's under ten, red;
+// charge nothing for a lookup that ended its own run — the patch's
+// diff-pairs ten seconds, red.
 func TestAReadsOwnGitHasOneBudgetItsProcessesShare(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
@@ -200,6 +206,19 @@ func TestAReadsOwnGitHasOneBudgetItsProcessesShare(t *testing.T) {
 	if got := shared.deadlines("diff-tree"); len(got) != 1 || got[0] <= 0 ||
 		got[0] >= gitproc.ReadDeadline-6*time.Second {
 		t.Errorf("the stat, after both walks, was given %v, want what the two left of the budget", got)
+	}
+
+	// A PATCH'S LOOKUP IS ITS OWN GIT, though it ends its run itself once it
+	// has read the file's record: the diff-pairs after it is given what it
+	// left.
+	patched := &budgetPool{Pool: node.Pool(), took: map[string]time.Duration{"diff-tree": 4 * time.Second}}
+	s = x.server(0, query.Options{Git: patched, Cache: unkept})
+	if _, err := s.Read(t.Context(), diffQ(repo, code.DiffQuery{Base: first, Head: second, File: "f"})); err != nil {
+		t.Fatalf("a patch = %v", err)
+	}
+	if got := patched.deadlines("diff-pairs"); len(got) != 1 || got[0] != gitproc.ReadDeadline-4*time.Second {
+		t.Errorf("the patch's diff-pairs, after a lookup that ran four seconds, was given %v, want the %v it left",
+			got, gitproc.ReadDeadline-4*time.Second)
 	}
 
 	spent := &budgetPool{Pool: node.Pool(), ends: "rev-list"}
