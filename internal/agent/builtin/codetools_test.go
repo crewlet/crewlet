@@ -557,8 +557,11 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	}
 
 	reads, resolves, gits := host.asked()
-	if n := readsOf(reads, code.ReadRepo); n != 1 {
-		t.Errorf("the turn read repository site %d times, want once", n)
+	// THE TURN'S ONE ROW READ OF THE REPOSITORY is code_get_repo's page of
+	// branches, whose detail resolved it: no read of kind repo, ever.
+	if len(reads) != 1 || reads[0].Kind != code.ReadRefs || readsOf(reads, code.ReadRepo) != 0 {
+		t.Errorf("the turn read %+v, want one read, code_get_repo's page of branches, which resolved the "+
+			"repository", reads)
 	}
 	// main for the first read; none for the id; base and head in ONE; v1;
 	// main, the landed-in commit being an id.
@@ -597,8 +600,8 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	// delegated to reads with no barrier of its own.
 	worker := turn.WithCalls(turnctx.NewCallLog())
 	callCode(t, reg, worker, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID})
-	if reads, _, _ := host.asked(); readsOf(reads, code.ReadRepo) != 1 {
-		t.Errorf("a worker read the repository its parent resolved again: %d reads", readsOf(reads, code.ReadRepo))
+	if reads, _, _ := host.asked(); len(reads) != 1 {
+		t.Errorf("a worker read the repository its parent resolved again: %+v", reads)
 	}
 
 	// THE OPERATOR SURFACE: no turn, so once a call.
@@ -612,6 +615,56 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	}
 	if reads, _, _ := opHost.asked(); readsOf(reads, code.ReadRepo) != 2 {
 		t.Errorf("two operator calls read the repository %d times, want once a call", readsOf(reads, code.ReadRepo))
+	}
+}
+
+// CODE_GET_REPO'S FIRST CALL IN A TURN IS ONE READ: its first page of branches
+// carries the repository in detail, so that page resolves the repository too —
+// one linearizable read and one barrier, not a read of kind repo and then the
+// page — and every later call in the turn reuses the resolution. A call asking
+// a LATER page first carries no detail, so it resolves the repository by a
+// read of its own before the page. The operator surface, which has no turn,
+// pays the one read each call.
+//
+// Mutation: repoRead ignoring the call's first read (reading kind repo, then
+// the page) → red.
+func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	turn := codeTurn(t)
+	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
+	if reads, _, _ := host.asked(); len(reads) != 1 || reads[0].Kind != code.ReadRefs || reads[0].Cursor != "" {
+		t.Fatalf("code_get_repo's first call read %+v, want its one page of branches", reads)
+	}
+	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
+	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID})
+	if reads, _, gits := host.asked(); len(reads) != 2 || readsOf(reads, code.ReadRepo) != 0 ||
+		len(gits) != 1 || gits[0].RepoID != siteID {
+		t.Errorf("the turn's later calls read %+v and %+v, want the second call's page alone and a read of "+
+			"%s by the id the first resolved", reads, gits, siteID)
+	}
+
+	// A LATER PAGE FIRST: the repository is resolved by a read of its own.
+	later := newCodeHost()
+	callCode(t, codeRegistry(t, builtin.CodeDeps{Code: later}), codeTurn(t), builtin.CodeGetRepoTool,
+		map[string]any{"repo": "site", "branches_cursor": "refs/heads/feature"})
+	if reads, _, _ := later.asked(); len(reads) != 2 || reads[0].Kind != code.ReadRepo ||
+		reads[1].Kind != code.ReadRefs || reads[1].Cursor != "refs/heads/feature" {
+		t.Errorf("a later page asked first read %+v, want the repository, then the page", reads)
+	}
+
+	// THE OPERATOR SURFACE: no turn, one read a call.
+	opHost := newCodeHost()
+	op := operatorCode(t, opHost, nil)
+	for range 2 {
+		if got, err := op[builtin.CodeGetRepoTool].Call(asBoundPerson(), map[string]any{"repo": "site"}); err != nil ||
+			got.Failed {
+			t.Fatalf("an operator's detail: %v %s", err, got.Output)
+		}
+	}
+	if reads, _, _ := opHost.asked(); len(reads) != 2 || readsOf(reads, code.ReadRefs) != 2 {
+		t.Errorf("two operator calls read %+v, want one page of branches each", reads)
 	}
 }
 

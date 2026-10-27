@@ -257,7 +257,23 @@ func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 // asker may not read is refused before any git node is asked — and every
 // later call in the turn reuses the answer from the turn's lookups, its id
 // above all, which a read by object id names the repository by. The operator
-// surface has no turn, and resolves once a call.
+// surface has no turn, and resolves once a call. See [CodeDeps.repoRead],
+// whose read a call can make its own.
+func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
+	name string) (code.RepoRef, *tools.Result) {
+
+	ref, _, refusal := d.repoRead(ctx, turn, tool, asker, name, nil)
+	return ref, refusal
+}
+
+// repoRead is [CodeDeps.repo] whose read, on a turn's first call naming the
+// repository, may be the call's OWN: first, where it is not nil, is a read
+// whose answer carries the repository in detail — code_get_repo's first page
+// of refs, held by the reader to carry it — made in place of the read of kind
+// `repo` and answered back for the call to use, so that call is ONE
+// linearizable read rather than the resolution's and then its own. Its asker,
+// repository and level are this method's to set, never the call's. A hit
+// answers no read: the call makes its own.
 //
 // THE ONE RESOLUTION OF A `repo` ARGUMENT, so whatever has to happen before a
 // turn's first request about a repository happens in one place; every tool
@@ -266,28 +282,36 @@ func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 // node answering every later read judges the grant again. And it holds only
 // while it is true: a later read that answers the name with another id
 // ([CodeDeps.sameRepo]), or the id gone ([CodeDeps.failed]), forgets it.
-func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
-	name string) (code.RepoRef, *tools.Result) {
+func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
+	name string, first *code.ReadQuery) (code.RepoRef, *code.ReadAnswer, *tools.Result) {
 
 	key := codeRepoKey{asker: asker, name: name}
 	if held, ok := turn.LookedUp().Load(key); ok {
 		if ref, ok := held.(code.RepoRef); ok {
-			return ref, nil
+			return ref, nil, nil
 		}
 	}
-	answer, err := d.Code.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: asker, Repo: name, Fresh: seatRead})
+	q := code.ReadQuery{Kind: code.ReadRepo}
+	if first != nil {
+		q = *first
+	}
+	q.Asker, q.Repo, q.Fresh = asker, name, seatRead
+	answer, err := d.Code.Read(ctx, q)
 	if err != nil {
 		r := codeFailure(ctx, tool, name, err)
-		return code.RepoRef{}, &r
+		return code.RepoRef{}, nil, &r
 	}
 	if answer.Repo == nil {
-		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered repository %s with no "+
-			"detail", name), fmt.Sprintf("%s could not read repository %q: %s.", tool, name, faultSaid))
-		return code.RepoRef{}, &r
+		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered repository %s's %s read with "+
+			"no detail", name, q.Kind), fmt.Sprintf("%s could not read repository %q: %s.", tool, name, faultSaid))
+		return code.RepoRef{}, nil, &r
 	}
 	ref := answer.Repo.RepoRef
 	turn.LookedUp().Store(key, ref)
-	return ref, nil
+	if first == nil {
+		return ref, nil, nil
+	}
+	return ref, &answer, nil
 }
 
 // sameRepo refuses an answer read by NAME that names another repository than
@@ -875,12 +899,8 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	repo, refusal := t.deps.repo(ctx, turn, t.Name(), asker, name)
-	if refusal != nil {
-		return *refusal, nil
-	}
-	q := code.ReadQuery{Kind: code.ReadRefs, Asker: asker, Repo: repo.Name, Limit: codeBranchesPage,
-		Cursor: strings.TrimSpace(argString(args, "branches_cursor")), Fresh: seatRead}
+	q := code.ReadQuery{Kind: code.ReadRefs, Limit: codeBranchesPage,
+		Cursor: strings.TrimSpace(argString(args, "branches_cursor"))}
 	// A NAMESPACE UNDER refs/heads/, however the model spells it — with or
 	// without the root, with or without the closing slash the listing's
 	// prefix ends in.
@@ -888,9 +908,26 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if ns = strings.Trim(ns, "/"); ns != "" {
 		q.Prefix = branchRoot + ns + "/"
 	}
-	answer, err := t.deps.Code.Read(ctx, q)
-	if err != nil {
-		return t.deps.failed(ctx, turn, t.Name(), asker, repo, err), nil
+	// THE FIRST PAGE CARRIES THE REPOSITORY'S DETAIL, so on a turn's first
+	// call naming it that page IS the resolution: one linearizable read, not
+	// a read of kind repo and then the page. A later page carries none, and a
+	// turn whose first word of a repository is one resolves it by its own.
+	var first *code.ReadQuery
+	if q.Cursor == "" {
+		first = &q
+	}
+	repo, resolved, refusal := t.deps.repoRead(ctx, turn, t.Name(), asker, name, first)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	answer := resolved
+	if answer == nil {
+		q.Asker, q.Repo, q.Fresh = asker, repo.Name, seatRead
+		read, err := t.deps.Code.Read(ctx, q)
+		if err != nil {
+			return t.deps.failed(ctx, turn, t.Name(), asker, repo, err), nil
+		}
+		answer = &read
 	}
 	out := codeRepoAnswer{Repo: repo.Name, Position: answer.Position}
 	if d := answer.Repo; d != nil {
