@@ -135,6 +135,11 @@ const (
 	// loop, recorded once when it ends with every token it reported, and
 	// charged to the company's windows by the turn's meter (ADR-0054).
 	AuxAssistantDeepWork AuxPurpose = "assistant_deep_work"
+	// AuxAssistantBrief is a round of a person's brief turn (a Dashboard
+	// Assistant turn in brief mode): recorded apart from their questions,
+	// so what briefs cost is read on its own, and charged to the company's
+	// windows by the turn's own meter like any turn's.
+	AuxAssistantBrief AuxPurpose = "assistant_brief"
 )
 
 // auxCondensePrefix is what every compaction's purpose begins with.
@@ -163,6 +168,7 @@ var auxPurposes = []AuxPurpose{
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
 	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion,
 	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle, AuxAssistantDeepWork,
+	AuxAssistantBrief,
 }
 
 // AuxPurposes is every purpose this build publishes, compactions included.

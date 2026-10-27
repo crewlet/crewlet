@@ -169,12 +169,21 @@ func buildMessages(in promptInput) []llm.Message {
 	}
 
 	out := []llm.Message{{Role: llm.RoleSystem, Content: system.String()}}
-	if omitted := len(in.History) - HistoryMessages; omitted > 0 {
+	out = append(out, historyMessages(in.History)...)
+	out = append(out, llm.Message{Role: llm.RoleUser, Content: questionBlock(in)})
+	return out
+}
+
+// historyMessages is block 5: the conversation's last [HistoryMessages]
+// messages, each card as its one-line summary, and the older ones counted.
+func historyMessages(history []historyEntry) []llm.Message {
+	var out []llm.Message
+	if omitted := len(history) - HistoryMessages; omitted > 0 {
 		out = append(out, llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf(
 			"(%d earlier messages of this conversation are not shown.)", omitted)})
-		in.History = in.History[omitted:]
+		history = history[omitted:]
 	}
-	for _, h := range in.History {
+	for _, h := range history {
 		role := llm.RoleUser
 		if h.Role == wire.RoleAssistant {
 			role = llm.RoleAssistant
@@ -188,7 +197,6 @@ func buildMessages(in promptInput) []llm.Message {
 		}
 		out = append(out, llm.Message{Role: role, Content: text})
 	}
-	out = append(out, llm.Message{Role: llm.RoleUser, Content: questionBlock(in)})
 	return out
 }
 
@@ -334,6 +342,8 @@ func cardSummary(c wire.Card) string {
 		return fmt.Sprintf("[refused: %s]", c.Error.Refusal.Code)
 	case wire.CardNotice:
 		return fmt.Sprintf("[notice: %s]", oneLine(c.Notice.Text))
+	case wire.CardBrief:
+		return briefSummary(c.Brief)
 	case wire.CardFile:
 		names := make([]string, 0, len(c.File.Files))
 		for _, f := range c.File.Files {

@@ -5,7 +5,8 @@
  * # Identifiers, never content, but the open draft
  *
  * A page context names the screen, the route's own parameters and query, the
- * records in view by kind and id, what is selected, and a revision. It never
+ * records in view by kind and id, the one record the person has open (its
+ * selection, with what the screen calls it), and a revision. It never
  * carries a row's contents: what a record says is read by the assistant
  * through the person's own access, one request at a time, so nothing a screen
  * happened to hold reaches a model by a side door. The engine reads the
@@ -53,6 +54,8 @@ import {
   type AssistantDraftFileRef,
   type AssistantPageContext,
   type AssistantPageDraft,
+  type AssistantRecordNoun,
+  type AssistantResourceRef,
 } from "~/contract/assistant.ts";
 import { pageContextFits } from "~/protocol/assistantWire.ts";
 import { resolve } from "../routes.ts";
@@ -100,6 +103,54 @@ const WIRE_KIND: Record<ObjectKind, ResourceKind | null> = {
 export function resourceOf(ref: ObjectRef | null | undefined): PageResource | null {
   const kind = ref ? WIRE_KIND[ref.kind] : null;
   return ref && kind ? { kind, id: ref.id } : null;
+}
+
+/**
+ * What a person calls a record of each kind, where its kind alone says it: a
+ * seat is an agent. A screen that knows better says so itself (an ask in the
+ * Inbox is a decision); a kind with no record noun on the wire (a team, a
+ * space) is named by the drawer from its kind.
+ */
+const NOUN_OF_KIND: Partial<Record<ResourceKind, AssistantRecordNoun>> = {
+  task: "task",
+  project: "project",
+  seat: "agent",
+  page: "page",
+  artifact: "artifact",
+  turn: "turn",
+  run: "run",
+};
+
+/** A selection with its noun: the screen's own, or its kind's. */
+function withNoun(ref: {
+  kind: ResourceKind;
+  id: string;
+  noun?: AssistantRecordNoun;
+}): AssistantResourceRef {
+  const noun = ref.noun ?? NOUN_OF_KIND[ref.kind];
+  return noun === undefined ? { kind: ref.kind, id: ref.id } : { kind: ref.kind, id: ref.id, noun };
+}
+
+/**
+ * The record a record's own screen is of, by the route parameter that names
+ * it: a task's page is that task, a seat's page that agent. A list screen is
+ * of no one record and answers null.
+ */
+const SUBJECT_OF_SCREEN: Readonly<Record<string, { kind: ResourceKind; param: string }>> = {
+  item: { kind: "task", param: "id" },
+  project: { kind: "project", param: "key" },
+  seat: { kind: "seat", param: "handle" },
+  page: { kind: "page", param: "id" },
+  artifact: { kind: "artifact", param: "id" },
+  turn: { kind: "turn", param: "id" },
+  runs: { kind: "run", param: "id" },
+};
+
+/** The record `page` is the screen of, or null. */
+function subjectOf(page: FramePage): { kind: ResourceKind; id: string } | null {
+  const subject = SUBJECT_OF_SCREEN[page.screen];
+  const id = subject ? page.params[subject.param] : undefined;
+  return subject && id ? { kind: subject.kind, id } : null;
 }
 
 /**
@@ -191,10 +242,12 @@ export interface AssistantPageRegistration {
   /** The records in view, by kind and id. */
   resources?: readonly PageResource[];
   /**
-   * What is selected, if one thing is. Unset, it is the frame's peek, so a
-   * screen that registers nothing still says which row is open beside it.
+   * The one record the person has open, with what the screen calls it where
+   * its kind does not say ("decision" for an ask). Unset, it is the frame's
+   * peek, or on a record's own screen that record, so a screen that registers
+   * nothing still says what is open; null says nothing is.
    */
-  selection?: { kind: ResourceKind; id: string } | null;
+  selection?: { kind: ResourceKind; id: string; noun?: AssistantRecordNoun } | null;
   /** The version of the data the screen drew, so a change prepared against it can be judged stale. */
   dataVersion?: string;
   /** The actions this screen takes, by their contract id (`work.filter.apply`). */
@@ -371,12 +424,14 @@ export function buildPageContext(
     .filter((r) => r.version === undefined || plain(r.version, ID_MAX_BYTES))
     .slice(0, ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES)
     .map((r) => (r.version === undefined ? { kind: r.kind, id: r.id } : { ...r }));
+  // WHAT IS OPEN, in the order a person sees it: what the screen says it has
+  // open, else the row peeked over it, else the record the screen is of.
   const chosen =
-    reg?.selection !== undefined ? reg.selection : resourceOf(parseRef(page.query.peek));
+    reg?.selection !== undefined
+      ? reg.selection
+      : (resourceOf(parseRef(page.query.peek)) ?? subjectOf(page));
   const selection =
-    chosen && chosen.id !== "" && plain(chosen.id, ID_MAX_BYTES)
-      ? { kind: chosen.kind, id: chosen.id }
-      : null;
+    chosen && chosen.id !== "" && plain(chosen.id, ID_MAX_BYTES) ? withNoun(chosen) : null;
   // ONLY THE CONTRACT'S IDS, which the engine's catalogue holds too (its
   // client gate keeps the two equal): an id the engine does not know is one
   // every proposal for would be refused, so it is never offered.

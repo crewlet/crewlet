@@ -92,7 +92,7 @@ type AssistantStepState = "running" | "done" | "failed" | "refused" | "stopped" 
 
 /** An engine-built card's kind. */
 export type AssistantCardKind =
-  "table" | "entity" | "proposal" | "open_in_app" | "error" | "notice" | "file";
+  "table" | "entity" | "proposal" | "open_in_app" | "error" | "notice" | "file" | "brief";
 
 /** Where a proposal stands. */
 type AssistantProposalState =
@@ -144,7 +144,8 @@ export type AssistantErrorCode =
   | "turn_interrupted"
   | "grant_ended"
   | "internal_error"
-  | "access_withdrawn";
+  | "access_withdrawn"
+  | "brief_invalid";
 
 /** What a page context's resource or selection names. */
 type AssistantResourceKind =
@@ -159,6 +160,23 @@ type AssistantResourceKind =
   | "run"
   | "schedule"
   | "view";
+
+/**
+ * What the person calls the record a screen has open, as the drawer names it
+ * ("Brief me on this decision"): an ask in the Inbox is a decision, a seat an
+ * agent.
+ */
+export type AssistantRecordNoun =
+  "decision" | "update" | "task" | "project" | "agent" | "artifact" | "page" | "turn" | "run";
+
+/** What a question asks for: an answer, or a brief of the page or its open record. */
+export type AssistantTurnMode = "ask" | "brief";
+
+/** How loud a brief's row is; danger only where the engine read a fact that says so. */
+type AssistantBriefTone = "danger" | "warning" | "neutral";
+
+/** What a brief's action does: open a record's screen, or ask a question. Never a write. */
+type AssistantBriefActionKind = "open" | "ask";
 
 /** Why the assistant is not available to the viewer. */
 export type AssistantViewerReason =
@@ -324,6 +342,7 @@ export interface AssistantCard {
   notice?: AssistantNoticeCard;
   // --- deep work (im-deep) ---
   file?: AssistantFileCard;
+  brief?: AssistantBriefCard;
 }
 
 /** Rows from a read. */
@@ -604,10 +623,11 @@ interface AssistantResource {
   version?: string;
 }
 
-/** One thing, named. */
-interface AssistantResourceRef {
+/** One thing, named, with what the screen calls it where it says. */
+export interface AssistantResourceRef {
   kind: AssistantResourceKind;
   id: string;
+  noun?: AssistantRecordNoun;
 }
 
 /** A body carrying only the protocol version. */
@@ -620,6 +640,8 @@ export interface AssistantTurnRequest {
   protocol_version: number;
   input: AssistantTurnInput;
   page_context: AssistantPageContext | null;
+  /** What the question asks for; absent is `ask`. A brief needs the page context. */
+  mode?: AssistantTurnMode;
   // --- deep work (im-deep) ---
   /** Files uploaded to the conversation for this question. */
   attachments?: string[];
@@ -848,6 +870,50 @@ export interface AssistantFileRef {
 /** The files a deep run delivered. */
 export interface AssistantFileCard {
   files: AssistantFileRef[];
+}
+
+/**
+ * A brief: what is going on, what waits on the person (each row a record the
+ * engine read and resolved for them), one next step, and questions to ask
+ * next. Its actions only open an address the engine built or ask a question.
+ */
+export interface AssistantBriefCard {
+  scope: AssistantBriefScope;
+  summary: string;
+  needs: AssistantBriefNeed[];
+  recommended?: AssistantBriefStep;
+  follow_ups: string[];
+  as_of: string;
+}
+
+/** What a brief covers: the page, or the one record it has open. */
+interface AssistantBriefScope {
+  screen: string;
+  title: string;
+  record?: AssistantResourceRef;
+}
+
+/** One thing that waits on the person, citing its record. */
+interface AssistantBriefNeed {
+  ref: AssistantResourceRef;
+  text: string;
+  detail?: string;
+  tone: AssistantBriefTone;
+  action?: AssistantBriefAction;
+}
+
+/** A brief's recommended next step. */
+interface AssistantBriefStep {
+  text: string;
+  action?: AssistantBriefAction;
+}
+
+/** The one press a brief row offers: an engine-built link to open, or a question to ask. */
+export interface AssistantBriefAction {
+  kind: AssistantBriefActionKind;
+  label: string;
+  link?: AssistantLink;
+  question?: string;
 }
 
 /** An attachment's upload answer: `POST /assistant/conversations/{id}/files`. */

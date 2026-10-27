@@ -93,6 +93,7 @@ import {
   earlierOf,
   inboxQuiet,
   inboxResources,
+  inboxSelection,
   inboxRows,
   nextAfter,
   noticeRows,
@@ -235,10 +236,6 @@ export function Inbox() {
 
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
   const needs = useMemo(() => keepSettled(rows.needs, settled), [rows.needs, settled]);
-  // WHAT NEEDS YOU IS ABOUT, named for the assistant: the screen's list is
-  // built here and no route answers it, so a question asked on this screen
-  // reads these records rather than the task notices alone.
-  useAssistantContext({ resources: inboxResources(needs) });
   // ANSWERED BEFORE THIS VISIT: a row answered here is in Needs you, never
   // in both places.
   const answered = useMemo(
@@ -279,6 +276,11 @@ export function Inbox() {
   useEffect(() => {
     if (selected) held.current = selected;
   }, [selected]);
+  // WHAT NEEDS YOU IS ABOUT, named for the assistant: the screen's list is
+  // built here and no route answers it, so a question asked on this screen
+  // reads these records rather than the task notices alone. The row the
+  // reader opened is its selection, so a brief asked now is of that row.
+  useAssistantContext({ resources: inboxResources(needs), selection: inboxSelection(named) });
 
   const openRow = useCallback((key: string) => nav.filter({ row: key }), [nav]);
 

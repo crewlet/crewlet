@@ -43,7 +43,7 @@ import {
   announce,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
-import type { AssistantFileRef } from "~/contract/assistant.ts";
+import type { AssistantFileRef, AssistantTurnMode } from "~/contract/assistant.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import {
   ActionReceipt,
@@ -70,7 +70,11 @@ export interface ThreadProps {
   /** The cards whose place the reader opened beside the conversation. */
   opened: ReadonlySet<string>;
   /** Send a question again, with the images it carried, for a turn that failed on something that may pass. */
-  onRetry: (text: string, attachments: readonly AssistantFileRef[]) => void;
+  onRetry: (
+    text: string,
+    attachments: readonly AssistantFileRef[],
+    mode: AssistantTurnMode,
+  ) => void;
   /** Why a question cannot be sent now (Send's own reason), which holds Try again off too. */
   retryDisabledReason?: string | undefined;
   /** Dial the running turn's stream again. */
@@ -142,7 +146,11 @@ function Turn({
   now: number;
   on: CardHandlers;
   opened: ReadonlySet<string>;
-  onRetry: (text: string, attachments: readonly AssistantFileRef[]) => void;
+  onRetry: (
+    text: string,
+    attachments: readonly AssistantFileRef[],
+    mode: AssistantTurnMode,
+  ) => void;
   retryDisabledReason: string | undefined;
   technical: boolean;
 }) {
@@ -244,7 +252,7 @@ function Turn({
                 size="small"
                 variant="secondary"
                 disabledReason={retryDisabledReason}
-                onClick={() => onRetry(turn.question, turn.attachments)}
+                onClick={() => onRetry(turn.question, turn.attachments, turn.mode ?? "ask")}
               >
                 Try again
               </Button>

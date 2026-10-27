@@ -37,6 +37,7 @@ import type {
   AssistantActionEvent,
   AssistantCardEvent,
   AssistantFileRef,
+  AssistantTurnMode,
   AssistantDoneEvent,
   AssistantErrorEvent,
   AssistantPageContextEvent,
@@ -142,6 +143,12 @@ export interface TurnView {
   page: PageChip | null;
   /** The images the person attached to the question. */
   attachments: AssistantFileRef[];
+  /**
+   * What the question asked for, where this tab sent it: a brief's Try again
+   * asks for a brief again. Absent is an ordinary question, and a turn read
+   * back from the transcript, which does not say.
+   */
+  mode?: AssistantTurnMode;
   /** When the person asked, RFC 3339. */
   askedAt: string;
   /**
@@ -209,6 +216,7 @@ export type TurnEvent =
       text: string;
       page: PageChip | null;
       attachments: AssistantFileRef[];
+      mode: AssistantTurnMode;
       at: string;
     }
   | { type: "created"; id: string; title: string }
@@ -477,6 +485,7 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
             question: event.text,
             page: event.page,
             attachments: event.attachments,
+            ...(event.mode === "ask" ? {} : { mode: event.mode }),
             askedAt: event.at,
             answeredAt: null,
             stepsDone: 0,

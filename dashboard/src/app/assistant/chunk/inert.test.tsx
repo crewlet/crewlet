@@ -194,7 +194,15 @@ function view(): ConversationView {
   expect(faults).toEqual([]);
   expect(frames.filter((f) => f.kind === "card")).toHaveLength(cards().length);
   const start: TurnEvent[] = [
-    { type: "send", key: "k1", text: "What is on ENG-7?", page: null, attachments: [], at: AT },
+    {
+      type: "send",
+      key: "k1",
+      text: "What is on ENG-7?",
+      page: null,
+      attachments: [],
+      mode: "ask",
+      at: AT,
+    },
     { type: "accepted", key: "k1", turnId: TURN, afterSeq: 0 },
   ];
   return [...start, ...frames.map((frame): TurnEvent => ({ type: "frame", frame }))].reduce(
@@ -230,6 +238,7 @@ function renderThread() {
         decline: nothing,
         prepareAgain: nothing,
         openHere: nothing,
+        ask: nothing,
         undo: nothing,
       }}
       opened={new Set()}

@@ -22,6 +22,9 @@ type TurnRequest struct {
 	Input           TurnInput `json:"input"`
 	// PageContext is null when the person removed the page chip.
 	PageContext *PageContext `json:"page_context"`
+	// Mode is what the question asks for; absent is [TurnAsk]. A
+	// [TurnBrief] needs the page context, which says what it covers.
+	Mode TurnMode `json:"mode,omitempty"`
 	// --- deep work (im-deep) ---
 	// Attachments are files the person uploaded to the conversation for
 	// this question, at most [AttachmentsPerTurn].

@@ -44,6 +44,7 @@ import type {
   AssistantErrorEvent,
   AssistantEventKind,
   AssistantFileCard,
+  AssistantBriefCard,
   AssistantFileStored,
   AssistantFrame,
   AssistantNoticeCard,
@@ -102,6 +103,7 @@ export interface AssistantCardBodies {
   error: AssistantErrorCard;
   notice: AssistantNoticeCard;
   file: AssistantFileCard;
+  brief: AssistantBriefCard;
 }
 
 /** A card narrowed to the one body its type names. */
@@ -142,6 +144,7 @@ const CARD_KINDS: Record<AssistantCardKind, true> = {
   error: true,
   notice: true,
   file: true,
+  brief: true,
 };
 
 /**

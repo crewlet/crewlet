@@ -23,6 +23,7 @@ const on: CardHandlers = {
   decline: () => {},
   prepareAgain: () => {},
   openHere: () => {},
+  ask: () => {},
   undo: () => {},
 };
 

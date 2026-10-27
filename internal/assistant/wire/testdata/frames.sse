@@ -106,3 +106,27 @@ id: 75099765-5fa3-5aa4-b185-7d8dd69869bd.4
 event: done
 data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","seq":4,"at":"2026-10-24T09:41:00.4Z","kind":"done","done":{"state":"interrupted","duration_ms":0,"steps":0}}
 
+id: b7d720ed-6183-5418-829b-8067fd903172.1
+event: conversation
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":1,"at":"2026-10-24T09:41:00.1Z","kind":"conversation","conversation":{"title":"Brief: Inbox","created_at":"2026-10-24T09:41:00Z","resumed":false}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.2
+event: page_context
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":2,"at":"2026-10-24T09:41:00.2Z","kind":"page_context","page_context":{"used":true,"trimmed":false,"page":{"title":"Inbox","screen":"inbox"}}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.3
+event: step
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":3,"at":"2026-10-24T09:41:00.3Z","kind":"step","step":{"step_id":"8c43d23b-4619-5a58-9dc7-669a69af9688","index":1,"tool":"answer_brief","label":"Writing the brief","state":"done","started_at":"2026-10-24T09:41:00Z","duration_ms":40,"summary":"Written"}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.4
+event: delta
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":4,"at":"2026-10-24T09:41:00.4Z","kind":"delta","delta":{"message_id":"620faf8a-818d-5dc6-af51-b99b894ca0f7","text":""}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.5
+event: card
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":5,"at":"2026-10-24T09:41:00.5Z","kind":"card","card":{"card_id":"e88690dd-cd7c-5bbc-843a-d391c1859730","message_id":"620faf8a-818d-5dc6-af51-b99b894ca0f7","card":{"type":"brief","brief":{"scope":{"screen":"inbox","title":"Inbox","record":{"kind":"task","id":"ENG-133","noun":"decision"}},"summary":"QA asks which build to test on ENG-133; the release is Thursday.","needs":[{"ref":{"kind":"task","id":"ENG-133"},"text":"QA waits on your answer","detail":"Asked 2 hours ago","tone":"warning","action":{"kind":"open","label":"Open ENG-133","link":{"label":"ENG-133","screen":"item","href":"#/worklet/ENG-133"}}}],"recommended":{"text":"Test the store build.","action":{"kind":"ask","label":"Ask why","question":"Why the store build?"}},"follow_ups":["What did QA test last?"],"as_of":"2026-10-24T09:41:00Z"}}}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.6
+event: done
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":6,"at":"2026-10-24T09:41:00.6Z","kind":"done","done":{"state":"completed","duration_ms":2100,"steps":1,"message_id":"620faf8a-818d-5dc6-af51-b99b894ca0f7"}}
+

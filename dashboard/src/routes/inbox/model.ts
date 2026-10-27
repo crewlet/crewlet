@@ -75,6 +75,49 @@ export interface InboxResource {
   id: string;
 }
 
+/** The row the reader opened, as the assistant's selection names it: its record and what it is. */
+export interface InboxSelection extends InboxResource {
+  noun: "decision" | "update" | "agent" | "run";
+}
+
+/** A task as the Inbox addresses it: its key, or its id where another task claimed the key. */
+function taskId(ref: ItemRef): string | undefined {
+  return (ref.key_collision ? ref.id : ref.key) || ref.id || undefined;
+}
+
+/**
+ * The row the reader opened, for the assistant's page context, or null for
+ * none: an ask (open or answered) and a parked coding run's question are
+ * decisions, an update is the task it is about, a stopped seat is that
+ * agent. So "Brief me on this decision" briefs that row and not the Inbox.
+ *
+ * ONLY A ROW THE READER OPENED, never the one the pane opens for them on
+ * arrival: arriving, the Inbox is what they asked about.
+ */
+export function inboxSelection(row: InboxRow | null): InboxSelection | null {
+  const of = (kind: InboxResource["kind"], id: string | undefined, noun: InboxSelection["noun"]) =>
+    id ? { kind, id, noun } : null;
+  if (row === null) return null;
+  switch (row.kind) {
+    case "decision": {
+      const s = row.subject;
+      if (s.kind === "ask") return of("task", taskId(s.ask), "decision");
+      if (s.kind === "run") return of("run", s.run.turn_id, "decision");
+      return of("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined, "agent");
+    }
+    case "condition":
+      if (row.item.subject === "seat") return of("seat", row.item.who, "agent");
+      if (row.item.subject === "run" && row.item.id.startsWith("sandbox-")) {
+        return of("run", row.item.id.slice("sandbox-".length), "run");
+      }
+      return null;
+    case "notice":
+      return of("task", taskId(noticeItem(row.notice)), "update");
+    case "answered":
+      return of("task", taskId(row.answered.ask), "decision");
+  }
+}
+
 /**
  * The records Needs you is about, for the assistant's page context: the task
  * each question was asked on, each coding run waiting on an answer, and each
