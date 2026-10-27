@@ -332,6 +332,9 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			"the %s CLI answered: %w", p.agent, context.Cause(ctx)))
 	}
 	p.remember(err)
+	if err == nil {
+		p.answered()
+	}
 	return comp, err
 }
 
@@ -797,19 +800,9 @@ func (p *Provider) completion(
 	// sentinel may stand — see [classifyMarkers].
 	said := nonEmpty(out.text, res.stdout)
 	if hit, ok := classifyMarkers(p.profile, cliOutput{
-		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed,
+		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed, at: p.now(),
 	}); ok {
-		reason := nonEmpty(hit.Said, firstLine(said, res.stderr))
-		if hit.Kind == llm.KindRateLimit {
-			until := p.bench(hit.Retry, reason)
-			// WHERE IT MATCHED, beside what it matched: a sit-out takes the
-			// entry from every seat on this node, and the one question an
-			// operator who doubts it has is whether the vendor said it.
-			log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
-				"source", string(hit.Source), "said", reason)
-			return nil, p.limited(fmt.Errorf("%s", reason), until)
-		}
-		return nil, p.fail(hit.Kind, fmt.Errorf("%s", reason))
+		return nil, p.classified(ctx, hit, nonEmpty(hit.Said, firstLine(said, res.stderr)))
 	}
 
 	// A RUN THE CLI SAYS FAILED, FOR NO REASON A PROFILE RECOGNISES, IS A
@@ -998,6 +991,11 @@ func (p *Provider) completion(
 // The events scope reads the CLI's own failure events and nothing else, and
 // the stderr scope stderr alone — see [cliprofile.MarkerScope].
 func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
+	// THE CLI'S OWN STRUCTURED REPORT FIRST, whatever the scope: a status
+	// code survives the rewording that silently retires a sentinel.
+	if hit, ok := classifyLimitEvents(p, out.stdout, out.at); ok {
+		return hit, true
+	}
 	var haystacks []haystack
 	switch p.EffectiveMarkerScope() {
 	case cliprofile.MarkerScopeEvents:
@@ -1022,7 +1020,7 @@ func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 			}
 			return markerHit{
 				Kind:   llm.KindRateLimit,
-				Retry:  resetAfter(hay.text[idx:], marker),
+				Reset:  resetAt(lineAt(hay.text, idx), marker.Reset, out.at),
 				Said:   lineAt(hay.text, idx),
 				Source: hay.source,
 			}, true
@@ -1054,6 +1052,9 @@ type cliOutput struct {
 	// failed is the CLI's own word that the run failed: a non-zero exit, or
 	// the flag at the profile's error_paths.
 	failed bool
+	// at is when the run ended: what a reset the vendor names as a time of
+	// day, or as a delay, is read against.
+	at time.Time
 }
 
 // haystack is one text a sentinel may be found in, and on what terms.
@@ -1108,8 +1109,10 @@ const (
 // rate limit read `run.lifecycle.started`: correctly classified, and useless
 // to the operator who has to act on it.
 type markerHit struct {
-	Kind  llm.ErrorKind
-	Retry time.Duration
+	Kind llm.ErrorKind
+	// Reset is when the vendor said the limit lifts, zero where it named no
+	// instant ([resetAt]).
+	Reset time.Time
 	// Said is the line the sentinel matched on — the vendor's own words,
 	// in the place the vendor put them.
 	Said string
@@ -1125,43 +1128,6 @@ func lineAt(s string, idx int) string {
 		return strings.TrimSpace(s[start:])
 	}
 	return strings.TrimSpace(s[start : idx+end])
-}
-
-// resetAfter reads the reset instant a limit marker carries.
-//
-// Zero when the vendor gave none, which [Provider.bench] reads as "sit out
-// the default" — the honest answer, rather than inventing a window.
-func resetAfter(from string, marker cliprofile.LimitMarker) time.Duration {
-	if marker.ResetSeparator == "" {
-		return 0
-	}
-	_, rest, found := strings.Cut(from, marker.ResetSeparator)
-	if !found {
-		return 0
-	}
-	// The value ends at the first character that cannot be part of it, so
-	// a sentinel embedded in a longer sentence still yields its number.
-	end := 0
-	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
-		end++
-	}
-	if end == 0 {
-		return 0
-	}
-	value, err := time.ParseDuration(rest[:end] + "s")
-	if err != nil {
-		return 0
-	}
-	if marker.ResetUnit == "epoch" {
-		until := time.Until(time.Unix(int64(value.Seconds()), 0))
-		if until <= 0 {
-			// A reset already in the past means the window has turned
-			// over; the caller should try again rather than wait.
-			return 0
-		}
-		return until
-	}
-	return value
 }
 
 // fail wraps an error as a classified provider failure.

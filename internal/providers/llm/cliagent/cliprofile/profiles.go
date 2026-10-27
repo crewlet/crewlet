@@ -169,6 +169,13 @@ func (p Profile) Clone() Profile {
 	}
 	out.EventTypePath = append(Path(nil), p.EventTypePath...)
 	out.TextEvents = append([]string(nil), p.TextEvents...)
+	if p.LimitEvents != nil {
+		out.LimitEvents = make([]LimitEvent, len(p.LimitEvents))
+		for i, e := range p.LimitEvents {
+			out.LimitEvents[i] = LimitEvent{Match: cloneMatches(e.Match),
+				SaidPath: slices.Clone(e.SaidPath), Reset: e.Reset}
+		}
+	}
 	out.LimitMarkers = append([]LimitMarker(nil), p.LimitMarkers...)
 	out.AuthMarkers = append([]AuthMarker(nil), p.AuthMarkers...)
 	out.MarkerEvents = append([]string(nil), p.MarkerEvents...)

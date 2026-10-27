@@ -122,7 +122,7 @@ func TestACallQueuedWhenTheEntryIsSatOutLaunchesNothing(t *testing.T) {
 	<-arrived
 
 	// The call holding the slot reports the spent plan, and lets it go.
-	p.bench(time.Minute, "Claude AI usage limit reached")
+	p.bench(clock.read().Add(time.Minute), "Claude AI usage limit reached")
 	<-p.slots
 
 	err := <-done
@@ -135,16 +135,16 @@ func TestACallQueuedWhenTheEntryIsSatOutLaunchesNothing(t *testing.T) {
 	}
 }
 
-// A SPENT PLAN THAT NAMED NO RESET SITS OUT A MINUTE — every shipped profile's
-// case — and a reset beyond an hour is held to the hour, so an operator who
-// signs in again or raises the plan has the entry back within it.
-func TestASitOutIsAMinuteWithoutAResetAndNeverPastAnHour(t *testing.T) {
+// A SPENT PLAN THAT NAMED NO RESET SITS OUT THE FIRST STEP OF THE BACKOFF,
+// and a reset beyond an hour is held to the hour, so an operator who signs in
+// again or raises the plan has the entry back within it.
+func TestASitOutIsTheFirstBackoffStepWithoutAResetAndNeverPastAnHour(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		reset time.Duration
 		want  time.Duration
 	}{
-		"no reset named":        {0, limitBench},
+		"no reset named":        {0, limitBackoff[0]},
 		"a reset days away":     {72 * time.Hour, maxLimitBench},
 		"a reset inside a hour": {20 * time.Minute, 20 * time.Minute},
 	} {
@@ -162,6 +162,81 @@ func TestASitOutIsAMinuteWithoutAResetAndNeverPastAnHour(t *testing.T) {
 	}
 }
 
+// A LIMIT THAT NAMES NO RESET IS PROBED LESS OFTEN EACH TIME IT REFUSES AGAIN,
+// and from the first step once the entry answers. Every probe that finds the
+// window over and the limit still there takes the next step of [limitBackoff],
+// up to the last; reports that land while a window is in force (two seats'
+// calls refused together) take none, or one afternoon's concurrent refusals
+// would jump straight to the longest wait.
+//
+// Mutation: step the backoff on every report, and the concurrent report moves
+// the second window to two minutes.
+func TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered(t *testing.T) {
+	t.Parallel()
+	clock := &testClock{now: time.Date(2026, time.October, 27, 23, 16, 0, 0, time.UTC)}
+	p := &Provider{now: clock.read}
+	window := func() time.Duration {
+		at := clock.read()
+		return p.bench(time.Time{}, "limited").Sub(at)
+	}
+	if got := window(); got != time.Minute {
+		t.Fatalf("first window %v, want a minute", got)
+	}
+	if got := window(); got != time.Minute {
+		t.Errorf("a report inside the window moved it to %v, want the minute it set", got)
+	}
+	want := []time.Duration{2 * time.Minute, 5 * time.Minute, 15 * time.Minute, 15 * time.Minute}
+	for i, step := range want {
+		clock.advance(p.sitOut.until.Sub(clock.read()))
+		if got := window(); got != step {
+			t.Errorf("probe %d refused again sits out %v, want %v", i+1, got, step)
+		}
+	}
+	clock.advance(p.sitOut.until.Sub(clock.read()))
+	p.answered()
+	if got := window(); got != time.Minute {
+		t.Errorf("a limit after the entry answered sits out %v, want the first step again", got)
+	}
+}
+
+// THE REPORT OUTLIVES THE WINDOW. Between the end of a window and the probe
+// that meets the limit again, the entry is still limited as far as anybody
+// reading it knows: [Provider.Limit] keeps answering with what the vendor said
+// until a call answers or the named reset passes, so nothing built on it blinks.
+//
+// Mutation: answer Limit from the window alone, and the read between the
+// window and the probe finds no limit.
+func TestTheLimitReportHoldsUntilAnAnswerOrTheNamedReset(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, time.October, 27, 23, 16, 0, 0, time.UTC)
+	reset := start.Add(3 * time.Hour)
+	clock := &testClock{now: start}
+	p := &Provider{now: clock.read, key: "default"}
+	if _, limited := p.Limit(); limited {
+		t.Fatal("an entry nothing refused reports a limit")
+	}
+	p.bench(reset, "You've hit your 5-hour limit")
+	clock.advance(maxLimitBench + time.Second)
+	limit, limited := p.Limit()
+	if !limited || !limit.ResetsAt.Equal(reset) || !limit.Since.Equal(start) || limit.Key != "default" {
+		t.Fatalf("after the window, Limit() = %+v, %v; want the report naming %v", limit, limited, reset)
+	}
+	clock.advance(2 * time.Hour)
+	if _, limited := p.Limit(); limited {
+		t.Error("the report outlived the reset the vendor named")
+	}
+
+	p.bench(time.Time{}, "limited")
+	clock.advance(time.Hour)
+	if _, limited := p.Limit(); !limited {
+		t.Error("a report that named no reset lapsed with nothing answered")
+	}
+	p.answered()
+	if _, limited := p.Limit(); limited {
+		t.Error("the report outlived an answered call")
+	}
+}
+
 // A LATER REPORT NEVER SHORTENS THE WINDOW. Two seats' calls that both met the
 // spent plan report it, and the one that lands last must not cut the longer
 // window the first set.
@@ -169,8 +244,8 @@ func TestALaterBenchNeverShortensAnEarlierOne(t *testing.T) {
 	t.Parallel()
 	clock := &testClock{now: time.Now()}
 	p := &Provider{now: clock.read}
-	p.bench(30*time.Minute, "first")
-	p.bench(time.Minute, "second")
+	p.bench(clock.read().Add(30*time.Minute), "first")
+	p.bench(clock.read().Add(time.Minute), "second")
 	if left := p.sitOut.until.Sub(clock.read()); left != 30*time.Minute {
 		t.Errorf("sits out %v after a shorter report, want the 30 minutes the first set", left)
 	}

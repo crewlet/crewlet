@@ -397,35 +397,49 @@ claude-code:
   status_args: ["auth", "status", "--text"]
   logout_args: ["auth", "logout"]
   capture_token_args: ["setup-token"]
-  # A spent plan exits 0 with prose, so it is recognised by the vendor's own
-  # words rather than by a status code.
+  # A SPENT PLAN IS RECOGNISED BY ITS STATUS FIRST, and by the vendor's words
+  # second. The CLI's result event says it plainly: `is_error: true` and
+  # `api_error_status: 429`, with the vendor's sentence in `result`, on a
+  # zero exit or not (as Claude Code 2.1.312 writes it). The status is matched as a
+  # structured field of the CLI's own event (cliprofile.LimitEvent), where a
+  # model cannot write it, and it survives the rewording that retired every
+  # sentinel this profile shipped before.
   #
+  # The reset is read from the sentence: "You've hit your 5-hour limit ·
+  # resets 4:30pm (America/Vancouver)" names a time of day and the zone it is
+  # in, the occurrence of which nearest the report is the instant
+  # (reset_unit: clock). A sentence with no reset in that shape still
+  # classifies, and the entry sits out a growing window instead.
+  limit_events:
+    - match:
+        - {path: ["type"], equals: "result"}
+        - {path: ["is_error"], equals: true}
+        - {path: ["api_error_status"], equals: 429}
+      said_path: ["result"]
+      reset_separator: "resets "
+      reset_unit: clock
   # MEASURED AGAINST THE INSTALLED CLI, NOT REMEMBERED. The sentinel this
-  # profile shipped — "Claude AI usage limit reached", with the reset instant
-  # after a pipe — appears NOWHERE in 2.1.263: it was 1.x's wording, and the
-  # pipe-and-epoch field went with it. A sentinel that cannot match is a
-  # silent hole: a spent plan the CLI reports as a failed run then reaches
-  # the chain as SERVER, which moves the seat on but never sits the entry
-  # out, so every round of every seat starts a CLI to hear the same
-  # sentence again — and one it reports on a clean exit is taken for the
-  # model's answer. Nothing says so until somebody hits their cap.
+  # profile first shipped ("Claude AI usage limit reached", with the reset
+  # instant after a pipe) was 1.x's wording; "Usage limit reached" was 2.1.263's,
+  # and 2.1.312 says "You've hit your 5-hour limit". A sentinel that cannot
+  # match is a silent hole: a spent plan the CLI reports as a failed run then
+  # reaches the chain as SERVER, which never sits the entry out, so every round
+  # of every seat starts a CLI to hear the same sentence again. The status
+  # above is what closes that hole; the sentinels stay for a report that
+  # arrives without the result event (a run cut short before it wrote one).
   #
-  # Two sentinels, because a spent window reaches the operator either way:
-  # the CLI's own line (every live variant begins with this exact prefix —
-  # "… · continuing automatically", "… · finishing up", "… · resets") and the
-  # API error it relays. They are matched on different terms
-  # (cliprofile.MarkerScope): the line stands as the whole answer on a clean
-  # exit, so it counts where it OPENS the answer, and the relayed error sits
-  # after "API Error: 429", so it counts only in a run the CLI flags failed —
-  # a non-zero exit or is_error. Neither carries a reset instant any more, so
-  # there is no reset_separator: resetAfter then returns 0 and the entry sits
-  # out the backend's one minute, which is the honest answer rather than an
-  # invented window.
-  #
-  # The CLI's own wordings below, the limit line's variants and the auth
-  # failures alike, are present in the 2.1.303 and 2.1.310 binaries.
+  # The sentinels are matched on the terms cliprofile.MarkerScope gives: the
+  # CLI's own line counts where it OPENS the answer of a clean run, and
+  # anywhere in a run the CLI flags failed (a non-zero exit or is_error); the
+  # relayed API error sits after "API Error: 429", so it counts only in a
+  # failed run.
   limit_markers:
+    - sentinel: "You've hit your"
+      reset_separator: "resets "
+      reset_unit: clock
     - sentinel: "Usage limit reached"
+      reset_separator: "resets "
+      reset_unit: clock
     - sentinel: '"type":"rate_limit_error"'
   # "OAuth token has expired" was dead the same way. The live wording is
   # "OAuth token has been revoked", and every other auth failure this CLI
@@ -4238,6 +4252,8 @@ pi:
   marker_scope: stderr
   limit_markers:
     - sentinel: "Usage limit reached"
+      reset_separator: "resets "
+      reset_unit: clock
     - sentinel: '"type":"rate_limit_error"'
     - sentinel: "rate_limit_exceeded"
     - sentinel: "insufficient_quota"

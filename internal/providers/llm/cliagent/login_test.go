@@ -948,12 +948,11 @@ func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// Retired with the 1.x wording that carried them; the live lines put the
-	// reset in prose, and inventing a window is worse than the pool's own
-	// configured cooldown.
+	// The pipe-and-epoch reset retired with the 1.x wording that carried it:
+	// the live line names a time of day and its zone, read as `clock`.
 	for _, m := range p.LimitMarkers {
-		if m.ResetSeparator != "" || m.ResetUnit != "" {
-			t.Errorf("limit marker %q still claims a reset field: %+v", m.Sentinel, m)
+		if m.Reset.Unit == cliprofile.ResetEpoch {
+			t.Errorf("limit marker %q still reads a 1.x epoch reset: %+v", m.Sentinel, m)
 		}
 	}
 	for _, dead := range []string{"Claude AI usage limit reached", "OAuth token has expired"} {

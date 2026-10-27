@@ -657,11 +657,14 @@ roles:
     llm: [plan, key]                # flat-rate first, metered as the backstop
 ```
 
-A spent subscription window arrives as prose on a *successful* exit ("Usage
-limit reached · continuing automatically"). Crewlet matches that wording — and,
-where the CLI relays the API's own error instead, the
-`"type":"rate_limit_error"` in it — and reports it as `rate_limit`, so the seat
-moves to `key` for that call.
+A spent subscription window is recognised by the CLI's own **status** first:
+Claude Code's result event carries `is_error: true` and `api_error_status: 429`
+beside the vendor's sentence ("You've hit your 5-hour limit · resets 4:30pm
+(America/Vancouver)"), and the profile matches those fields as structure
+(`limit_events`), where a model cannot write them. The vendor's wording is the
+second signal (`limit_markers`), for a report that arrives without the event.
+Either way the failure is `rate_limit`, so the seat moves to `key` for that
+call.
 
 **And the entry then sits out, on this node.** A spent window lasts hours and a
 seat starts a CLI for every phase it runs and every side call around it, so
@@ -671,16 +674,28 @@ call to the entry fails at once as a rate limit — one already queued for a slo
 as soon as it gets one — saying `sitting out until …` with the CLI's own
 sentence, until the window ends:
 
-- at the reset instant the CLI named, where its profile can read one, and never
-  more than **an hour** away, so a plan you raised or a login you renewed has
-  the entry back within the hour even when the vendor's window runs for days;
-- otherwise after **one minute** — which is every shipped profile today: the
-  current Claude Code prints no reset instant at all. A probe costs at most
-  the entry's `max_concurrent` process launches a minute — the calls that take
-  a slot once the window ends, before the first of them answers; every call
-  queued behind them is refused as soon as one reports the plan still spent.
-  Sitting out a plan that has already reset costs the fallback's spend for as
-  long as it sits.
+- at the reset instant the vendor named, where its profile can read one, and
+  never more than **an hour** away, so a plan you raised or a login you renewed
+  has the entry back within the hour even when the vendor's window runs for
+  days. Claude Code names a time of day and its zone, which is read as the
+  occurrence of that time nearest the report: "resets 2am" at 11 pm is three
+  hours away, not twenty-one hours ago;
+- otherwise after a window that grows with each probe the limit refuses again:
+  **1, 2, 5, then 15 minutes**, and back to the first step once a call through
+  the entry answers. A limit that lifts in a minute costs a minute, and one that
+  lasts all afternoon costs four probes an hour. A probe costs at most the
+  entry's `max_concurrent` process launches — the calls that take a slot once
+  the window ends, before the first of them answers; every call queued behind
+  them is refused as soon as one reports the plan still spent.
+
+**What the vendor said is held, not the window.** The limit report stands from
+the first refusal until a call through the entry answers, or until the reset it
+named has passed, so the seats and the dashboard read one steady fact ("limit
+reached, resumes at 4:30 PM", or "resume time unknown") rather than one that
+blinks at every probe. A seat whose whole chain is sat out is **parked** until
+the entry is tried again: its mail waits on its inbox, in order, and is
+delivered once when the park lifts. See
+[A limit parks the seats that cannot run](../guides/budgets-and-spend.md#a-provider-limit-parks-the-seats-that-cannot-run).
 
 The sit-out is the entry's own, on the node that heard the sentence: every other
 node learns the same thing from its own calls, once per window. A later sit-out
@@ -696,9 +711,11 @@ a model call.
 ### What a sentinel may be
 
 Both recognitions are `limit_markers` / `auth_markers` on the profile: a
-literal substring the vendor emits, plus (where it carries one) the field
-holding the reset instant, so the sit-out is a datum rather than a
-guess. They are matched against what the CLI printed, and on a healthy call
+literal substring the vendor emits, plus (where it carries one) where the reset
+instant is and how to read it (`reset_separator` and `reset_unit`: `epoch`,
+`seconds`, or `clock` for a time of day followed by its zone in parentheses), so
+the sit-out is a datum rather than a guess. A limit is also recognised, before
+any sentinel, by the CLI's structured report (`limit_events`, below). They are matched against what the CLI printed, and on a healthy call
 that is **the model's own answer** — its prose and the arguments of every tool
 call it makes — while a limit match throws the answer away, sits the entry out
 for every seat on the node and hands the seat to the next entry in the chain.
@@ -3239,7 +3256,20 @@ providers:
 ```
 
 Take the sentinel from what your CLI actually prints, not from what it used
-to print.
+to print. Where the CLI reports the failure as a structured event with a status
+code, match that instead, since a status survives the rewording a sentinel does
+not:
+
+```yaml
+        limit_events:
+          - match:
+              - {path: ["type"], equals: "result"}
+              - {path: ["is_error"], equals: true}
+              - {path: ["api_error_status"], equals: 429}
+            said_path: ["result"]
+            reset_separator: "resets "
+            reset_unit: clock
+```
 
 **And say where it prints it, because the model's own words are a haystack.**
 Sentinels are matched against the extracted **answer** as well as stderr, and
@@ -3385,7 +3415,8 @@ it runs on.
 | `logout_args` | The command revoking the login. |
 | `stdin_login` | `{args, stdin_template, password_env}`: a real credential login, where the CLI has one. |
 | `credential_store` | `{export_args, import_args}`: a login the CLI keeps in a database of its own, moved as the document its export prints (stdout) and its import reads (stdin). Both, and never `{file}`. |
-| `limit_markers` | Sentences recognising a spent plan — see above. |
+| `limit_events` | The CLI's own structured limit report, matched before any sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence) and `reset_separator`/`reset_unit` (the reset in that sentence). `jsonl` output only. |
+| `limit_markers` | Sentences recognising a spent plan — see above. Each may carry `reset_separator` and `reset_unit` (`epoch`, `seconds` or `clock`). |
 | `auth_markers` | Sentences recognising an expired login. |
 | `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the CLI's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
 | `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the CLI reports a failure in. Refused beside any other scope. |

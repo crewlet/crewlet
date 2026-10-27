@@ -421,7 +421,43 @@ type Error struct {
 	// RetryAt is when the entry is tried again, for a [KindRateLimit] whose
 	// backend sits the entry out until then; zero where no instant is known.
 	RetryAt time.Time
-	Err     error
+	// ResetsAt is when the vendor said the limit lifts, for a
+	// [KindRateLimit] whose report named an instant; zero where it did not.
+	// It is the fact a person is told ("resumes at 4:30 PM"), and may lie
+	// past RetryAt, which a backend caps so that a raised plan is noticed.
+	ResetsAt time.Time
+	Err      error
+}
+
+// Limit is a provider entry's standing limit report: what its vendor said,
+// since when, when the entry is next tried and when the vendor said the limit
+// lifts. A backend that keeps one holds it from the first report until a call
+// through the entry answers (internal/providers/llm/cliagent).
+type Limit struct {
+	// Key is the providers.llm key of the entry.
+	Key string
+	// Said is the vendor's own sentence.
+	Said string
+	// Since is when the entry was first reported limited, in UTC.
+	Since time.Time
+	// RetryAt is when the entry is next tried, in UTC.
+	RetryAt time.Time
+	// ResetsAt is when the vendor said the limit lifts, in UTC; zero where
+	// it named no instant, which a person is told as "resume time unknown".
+	ResetsAt time.Time
+}
+
+// LimitedUntil reports whether err is a rate limit, and when the entry that
+// refused it is tried again and when its vendor said the limit lifts (either
+// zero where unknown): the question a caller that runs on a schedule of its
+// own asks, so that a limit already reported is treated as the wait it is
+// rather than as another failure.
+func LimitedUntil(err error) (retryAt, resetsAt time.Time, ok bool) {
+	var failure *Error
+	if KindOf(err) != KindRateLimit || !errors.As(err, &failure) {
+		return time.Time{}, time.Time{}, false
+	}
+	return failure.RetryAt, failure.ResetsAt, true
 }
 
 func (e *Error) Error() string {
