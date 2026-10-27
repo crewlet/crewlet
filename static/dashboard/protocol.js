@@ -2922,6 +2922,11 @@ var SESSION_QUERIES = {
 		"page_activity",
 		"page_revision",
 		"company_feed"
+	],
+	code: [
+		"code_repos",
+		"code_repo",
+		"code_pushes"
 	]
 };
 //#endregion

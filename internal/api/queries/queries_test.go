@@ -326,6 +326,14 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_data_schema":  "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_state":   "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_usage":   "decided_by:" + string(authz.ActionArtifactUsage),
+
+		// THE CODE HOST'S ROWS, each decided per repository by the grant the
+		// serving node derives from its chart (code.GrantOf, ADR-0058):
+		// a listing leaves out what the caller may not read, and a read of
+		// one such repository is refused.
+		"code_repos":  "decided_by:" + string(authz.ActionCodeRead),
+		"code_repo":   "decided_by:" + string(authz.ActionCodeRead),
+		"code_pushes": "decided_by:" + string(authz.ActionCodeRead),
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, everySeam(t))

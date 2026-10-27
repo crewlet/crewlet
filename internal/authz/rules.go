@@ -92,8 +92,10 @@ const (
 	// for. So the route admits everybody the guard resolved, and the grant
 	// decides. DOTTED, because no tool is named for either.
 	//
-	// ActionCodeRead admits the code host's REST reads: the repositories,
-	// one repository, its push history.
+	// ActionCodeRead admits the code host's rows: the repositories, one
+	// repository, its push history — the query registry's code questions,
+	// decided by this verb on whichever transport asks them, REST or the
+	// socket.
 	ActionCodeRead Action = "code.read"
 	// ActionCodeGit admits the git transport — the advertisement, a
 	// fetch's upload-pack and a push's receive-pack — whose grant then

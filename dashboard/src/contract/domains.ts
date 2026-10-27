@@ -46,4 +46,5 @@ export const SESSION_QUERIES = {
     "decisions",
   ],
   pages: ["pages", "page", "containers", "page_activity", "page_revision", "company_feed"],
+  code: ["code_repos", "code_repo", "code_pushes"],
 } as const;

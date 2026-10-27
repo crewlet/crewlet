@@ -127,6 +127,9 @@ func everySeam(t *testing.T) queries.Sources {
 		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
 		// Bootstrap on every node that serves the API.
 		SignIn: &queries.SignInPolicy{},
+		// THE CODE HOST'S ROWS, which internal/api fills from the code
+		// surface on every node that serves the API.
+		Code: &stubCode{},
 	}
 }
 
@@ -333,24 +336,53 @@ func registeredKinds(t *testing.T) []string {
 // answer nobody calls is code with tests, no readers, and no way to notice
 // it stopped being right.
 //
-// NO EXCEPTIONS. This carried a map of kinds "read by name from somewhere that
-// is not a room" — `stream` through a header poll in a file the React rewrite
-// deleted, `config_entities` through a guide — and both had long since gained
-// a room that reads them, so the map was consulted for nothing and excused
-// nothing. An exemption nobody reaches is how the next unread answer gets
-// waved through with a reason that stopped being true; a kind that genuinely
-// has no room reader is a decision this gate should make someone take in the
-// open.
+// NO SILENT EXCEPTIONS. This carried a map of kinds "read by name from
+// somewhere that is not a room" — `stream` through a header poll in a file the
+// React rewrite deleted, `config_entities` through a guide — and both had long
+// since gained a room that reads them, so the map was consulted for nothing and
+// excused nothing. An exemption nobody reaches is how the next unread answer
+// gets waved through with a reason that stopped being true; a kind that
+// genuinely has no room reader is a decision this gate should make someone
+// take in the open. Those decisions are [readOutsideTheDashboard], held both
+// ways here so none outlives its reason: a kind it names that a room reads is
+// red until its line goes, and so is one this build no longer answers.
 func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 	t.Parallel()
 	asked := roomQueries(t)
-	for _, kind := range registeredKinds(t) {
-		if _, ok := asked[kind]; !ok {
+	answered := registeredKinds(t)
+	for _, kind := range answered {
+		rooms, roomReads := asked[kind]
+		command, outside := readOutsideTheDashboard[kind]
+		switch {
+		case roomReads && outside:
+			t.Errorf("%s asks for %q now, so readOutsideTheDashboard's line for it "+
+				"(%s) excuses nothing — delete it", strings.Join(rooms, " and "), kind, command)
+		case !roomReads && !outside:
 			t.Errorf("this build answers %q and no room asks for it — either a "+
 				"reader was lost, or the answer should go with whatever used to "+
 				"call it", kind)
 		}
 	}
+	for kind, command := range readOutsideTheDashboard {
+		if !slices.Contains(answered, kind) {
+			t.Errorf("readOutsideTheDashboard names %q (%s), which this build does "+
+				"not answer — delete its line", kind, command)
+		}
+	}
+}
+
+// readOutsideTheDashboard are the questions no room reads and a `crewlet`
+// command does, over their REST paths, each beside the command that reads it:
+// the code host's rows, which `crewlet code status` lists and shows
+// (cmd/crewlet/code.go, whose own suite reads them from a node) — routes of
+// the code host's own before they were questions, read by that command then as
+// now. The decision [TestEveryQueryThisServerAnswersHasAReader] asks to be
+// taken in the open, and held both ways there: the first room that reads one
+// of these deletes its line.
+var readOutsideTheDashboard = map[string]string{
+	"code_repos":  "crewlet code status",
+	"code_repo":   "crewlet code status -repo",
+	"code_pushes": "crewlet code status -repo",
 }
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.

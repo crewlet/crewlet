@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -133,14 +132,16 @@ func unpacked(packed int64) statelog.Position {
 	}
 }
 
-// pointLevel refuses a freshness a point read cannot serve: an EMPTY level —
-// a code read states its freshness, because a cache's sync and a git
-// request each need a specific one — and a session read naming no position
-// on the code log, which would wait for nothing. A floor on ANOTHER log is the
-// request's mistake, refused first and as the framework's reader refuses it
-// ([statelog.ErrForeignPosition]), so a session read naming only such a floor
-// is told which floor is misplaced rather than that it named none.
-func pointLevel(f statelog.Freshness) error {
+// checkFreshness is EVERY code read's one rule for the freshness it is asked
+// at, a point read's and a listing's alike: any level, refusing an EMPTY one —
+// a code read states its freshness, because a cache's sync and a git request
+// each need a specific one, and [ReadQuery.freshness] states the REST read
+// path's for a principal's read that named none — and a session read naming no
+// position on the code log, which would wait for nothing. A floor on ANOTHER
+// log is the request's mistake, refused first and as the framework's reader
+// refuses it ([statelog.ErrForeignPosition]), so a session read naming only
+// such a floor is told which floor is misplaced rather than that it named none.
+func checkFreshness(f statelog.Freshness) error {
 	switch {
 	case f.Level == "":
 		return fmt.Errorf("%w: a code read states its freshness", ErrBadLevel)
@@ -253,7 +254,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 // instant nothing holds the purge to, and which a purge already begun does not
 // have at all.
 func (r *Reader) Resolve(ctx context.Context, q ResolveQuery) (RepoRef, error) {
-	if err := pointLevel(q.Fresh); err != nil {
+	if err := checkFreshness(q.Fresh); err != nil {
 		return RepoRef{}, err
 	}
 	if !ValidName(q.Name) {
@@ -392,7 +393,7 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 	first := q.Cursor == nil
 	var query statelog.Query
 	if first {
-		if err := pointLevel(q.Fresh); err != nil {
+		if err := checkFreshness(q.Fresh); err != nil {
 			return RepoSnapshot{}, err
 		}
 		query = q.Fresh.Query(scope, false)
@@ -1234,37 +1235,12 @@ const (
 	MaxRefsPerPage   = 1_000
 )
 
-// ReadLevels are the levels [Reader.Read] serves a principal's read at: every
-// level but session, which it refuses because a surface reading the code host
-// holds no position of its own on its log to wait for. The engine's own
-// `introduced` read is the one kind served at session too, with the position
-// it names: a git node's index reads the pushes of a round it synced, whose
-// position it holds.
-//
-// ONE LIST, read by the rule and spelled by its refusal, because the refusal
-// is a public answer — a REST read's 400 carries it to a person — and a
-// sentence written beside the rule rather than from it told that person two
-// levels existed while three were served.
-var ReadLevels = []statelog.ReadLevel{
-	statelog.ReadLinearizable, statelog.ReadStale, statelog.ReadConsistentPrefix,
-}
-
-// levelList spells levels as a sentence names them: "a, b and c".
-func levelList(levels []statelog.ReadLevel) string {
-	names := make([]string, len(levels))
-	for i, l := range levels {
-		names[i] = string(l)
-	}
-	if len(names) < 2 {
-		return strings.Join(names, "")
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}
-
 // Read answers a person's, a seat's or a surface's read — a listing of
 // repositories, one repository in detail, one repository's push history or
-// its refs — at one of [ReadLevels], stale unless asked; and the engine's own
-// `introduced` read at the level it names.
+// its refs — and the engine's own reads, at the level it is asked for
+// ([ReadQuery.freshness]): `session` only beside the position on the code log
+// it must include, and stale where a principal's read or a duty listing names
+// none.
 func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	if err := q.validate(); err != nil {
 		return ReadAnswer{}, err
@@ -1543,24 +1519,32 @@ func (q ReadQuery) validateExpungeDue() error {
 	return nil
 }
 
-// freshness is the level a read is served at: for every kind a principal
-// reads, and for the duty listings `compaction_due`, `publication_due` and
-// `expunge_due`, one of [ReadLevels], stale unless asked; for the engine's own
-// `introduced`, any level a point read serves ([pointLevel]) — named, since
-// whoever builds an index names the level its pages must be read at, and a
-// session read with the position it must include.
+// freshness is the level a read is served at: EVERY LEVEL, by every code
+// read's one rule ([checkFreshness]) — `session` only beside a position on the
+// code log, which is the position it waits for, and a floor on any other log
+// refused as the request's mistake. Where none is named, a principal's read and
+// a duty listing are read stale — the REST read path's level, and what a poll
+// of the duty listings needs — and the engine's own `introduced` is refused,
+// since whoever builds an index names the level its pages must be read at.
+//
+// # Why a principal's read serves `session`
+//
+// It refused the level, because a surface reading the code host held no
+// position of its own on the code log to wait for. A screen does now: a write
+// it makes to the code log answers with where its record landed, and the
+// dashboard reads its own writes back by asking every question of that log at
+// `session` with the position as `min_position` (its SESSION_QUERIES), so the
+// list it just changed never comes back from a node that has not applied the
+// change. Refused, every such read was a `400` the screen could only answer by
+// reading `stale` — rows from before the press. A bare `session` stays
+// refused: it would wait for the zero position and label this node's prefix
+// `session`, the wrong label the level exists to make impossible.
 func (q ReadQuery) freshness() (statelog.Freshness, error) {
 	fresh := q.Fresh
-	switch {
-	case q.Kind == ReadIntroduced:
-		return fresh, pointLevel(fresh)
-	case fresh.Level == "":
+	if fresh.Level == "" && q.Kind != ReadIntroduced {
 		fresh.Level = statelog.ReadStale
-	case !slices.Contains(ReadLevels, fresh.Level):
-		return statelog.Freshness{}, fmt.Errorf("%w: %q is not a level a code read serves: it serves %s",
-			ErrBadLevel, fresh.Level, levelList(ReadLevels))
 	}
-	return fresh, nil
+	return fresh, checkFreshness(fresh)
 }
 
 // validRefPrefix reports a prefix a refs listing may name: refs/heads/ or
@@ -2169,7 +2153,7 @@ func cutPublishCursor(s string) (int64, string, bool) {
 // resolved, never failing them: whether a call can go on without it is its
 // caller's to say. Its scope is the name's, as [Reader.Resolve]'s is.
 func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) {
-	if err := pointLevel(q.Fresh); err != nil {
+	if err := checkFreshness(q.Fresh); err != nil {
 		return RefAnswer{}, err
 	}
 	if !ValidName(q.Repo) {

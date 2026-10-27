@@ -4339,6 +4339,9 @@ REST route calls, so the two surfaces cannot diverge:
 | `artifact_data_schema` | `{id}` | `GET /artifacts/{id}/data/schema`. The collections the caller may read, the store's footprint and state digest, and the caller's role |
 | `artifact_data_state` | `{id}` | `GET /artifacts/{id}/data/state`. The caller's own per-viewer state keys |
 | `artifact_data_usage` | `{}` | `GET /artifacts/data/usage` *(needs `admin`)*. The company's datastore footprint against its quota |
+| `code_repos` | `{status, limit, cursor, read_level, …}` | `GET /code/repos`. The repositories the caller may read, a page at a time — see [The code reads](#the-code-reads), which say what the three code questions answer, at which level and with which refusals |
+| `code_repo` | `{name, read_level, …}` | `GET /code/repos/{name}`. One repository in detail |
+| `code_pushes` | `{name, limit, cursor, read_level, …}` | `GET /code/repos/{name}/pushes`. One repository's push history, newest first in log order |
 | `config` | `{}` | `GET /config` *(needs `admin`)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
@@ -7134,10 +7137,14 @@ What a route answers before git is reached:
 
 ### The code reads
 
-Every caller the guard resolved reaches these (`code.read`): what each answers
-is the caller's grant on each repository, decided once the repository is read
-([Who may read and push](../concepts/code-host.md#who-may-read-and-push)) — so
-a repository a caller may not read is left out of a listing, and answered
+The code host's rows are three questions of the query registry —
+`code_repos`, `code_repo` and `code_pushes` — answered on the routes below,
+and, like every question, by `GET /query/{what}` and the socket's query
+channel ([Queries](#queries)), by one implementation whichever way they are
+asked. Every caller the guard resolved reaches these (`code.read`): what each
+answers is the caller's grant on each repository, decided once the repository
+is read ([Who may read and push](../concepts/code-host.md#who-may-read-and-push))
+— so a repository a caller may not read is left out of a listing, and answered
 `403 not_permitted` alone.
 
 | Route | What it answers |
@@ -7148,10 +7155,19 @@ a repository a caller may not read is left out of a listing, and answered
 
 Every answer carries the `position` and the `level` it was read at. They read
 at the REST read path's level — `stale` by default — through the same
-freshness keys as every other read: `read_level` (`linearizable`, `stale` or
-`consistent_prefix`; `session` is refused naming the three, since none of the
-caller's writes lands on the code log through this surface), `max_lag_seconds`, `max_lag_seq`
-and `min_position` ([Read Consistency](../guides/consistency.md#which-surface-reads-at-which-level)).
+freshness keys as every other question: `read_level` (`linearizable`,
+`stale`, `consistent_prefix`, or `session` beside a `min_position` on the code
+log), `max_lag_seconds`, `max_lag_seq` and `min_position`
+([Read Consistency](../guides/consistency.md#which-surface-reads-at-which-level)).
+**`session` reads a write back**: a write that lands on the code log answers
+with the position its record landed at, and a read naming that position as
+its `min_position` at `read_level=session` is answered only once the serving
+node holds it — refused `503 unavailable` (`behind`) where it does not within
+the read's budget, never served from before the write — which is how a screen
+draws the list it just changed (the dashboard's `SESSION_QUERIES` lists the
+three under the code log). A bare `session`, naming no position, is refused
+`400 bad_params`: it would wait for nothing. A `min_position` on another log
+is `400 bad_params` too, since no read of the code log can wait on it.
 A client that must not conclude a repository is undeclared from an old copy —
 a script about to create one — asks `read_level=linearizable`: at `stale`, a
 repository declared a moment ago may not have reached this node's copy, and is
@@ -7169,15 +7185,15 @@ A refusal is the read surface's:
   `visibility: unit` repository shuts out, that visibility and who among the
   seats does read it ([Visibility](../concepts/code-host.md#visibility)). A
   person reads every repository, so a person is never answered it;
-- the guard's own answers for a caller it could not resolve, which a read
-  repeats rather than judge a request for nobody: `401 invalid_token` for one
-  that presented no credential the node accepts, and `503
+- the guard's own answers for a caller it could not resolve, given before any
+  question is asked, so no read is judged for nobody: `401 invalid_token` for
+  one that presented no credential the node accepts, and `503
   identity_unavailable` with `Retry-After: 2` for one this node could not tell
-  who it is — a node that cannot read its identity estate, or a request that
-  reached the route past no guard at all;
+  who it is — a node that cannot read its identity estate;
 - `400 bad_params` naming the parameter or the level refused;
 - `503 unavailable` with `Retry-After` for what clears by waiting — this node
-  behind the code log, no quorum, no data node serving the read;
+  behind the code log, or behind a `session` read's floor, no quorum, no data
+  node serving the read;
 - and `500 query_failed` for anything else.
 
 A company that hosts code on a node that serves none of it now — or a
@@ -7188,7 +7204,9 @@ git routes name above, as the envelope's `error`, with its `message` and a
 before the node could read the configuration, the `detail` naming what it
 could not read) or `native_backend_needs_restart` — the last three with no
 `Retry-After`, since waiting clears none of them and another node serves the
-read. Every one of them is served through a drain.
+read. Asked over the socket, the same answer is an `unavailable` frame whose
+`refusal` is that code, with the same `detail` and `retry_after`. Every one of
+them is served through a drain.
 
 ### `GET /code/repos/{name}/readers`
 

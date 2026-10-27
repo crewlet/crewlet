@@ -29,10 +29,12 @@ import (
 // else. The operator surface is walked beside them, because its one refusal
 // mapping is what the act route, the human write surface and every tool-less
 // verb answer through: a status it chose by hand would be every write
-// surface's. And the code host's reads and its cache's verify (code.go), which
-// answered their own `{"error": …}` maps and set their own Retry-After: a git
-// route's refusal beside them is git's text/plain, written through
-// auth.GitText and auth.GitUnavailable, and never the envelope.
+// surface's. And the code host's cache's verify (code.go), which answered its
+// own `{"error": …}` maps and set its own Retry-After — as the code host's
+// reads did there before they were registry questions, refused through the
+// registry's one mapping: a git route's refusal beside them is git's
+// text/plain, written through auth.GitText and auth.GitUnavailable, and never
+// the envelope.
 //
 // Each of those shapes is visible in the SOURCE and nowhere else — a route
 // that builds its own body answers correctly on every case somebody thought

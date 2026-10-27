@@ -4,15 +4,21 @@ import (
 	"net/http"
 	"slices"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/code"
 )
 
-// CodeRead is the handler of one kind of code read with no guard in front of
-// it, for the case that holds what a request carrying no operator identity is
-// answered — a request no route the app mounts lets through, since the guard
-// stamps every caller it admits.
-func (a *App) CodeRead(kind code.ReadKind) http.Handler { return a.serveCodeRead(kind, "code read") }
+// NamedRoute is one named read route — its method and pattern, and the
+// registry question behind it — for the case that holds every question to the
+// one path it is answered on.
+type NamedRoute struct{ Method, Pattern, What string }
+
+// NamedRoutes is [namedRoutes], in its order.
+func NamedRoutes() []NamedRoute {
+	out := make([]NamedRoute, len(namedRoutes))
+	for i, r := range namedRoutes {
+		out[i] = NamedRoute{Method: r.method, Pattern: r.pattern, What: r.what}
+	}
+	return out
+}
 
 // GitRefusal is [gitRefusal], for the case that holds a git route's refusal to
 // git's own form: on every path the app serves, the guard in front of the

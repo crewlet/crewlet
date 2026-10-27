@@ -4113,10 +4113,12 @@ export interface Frame {
    *  admitted the caller. An EMPTY list is an answer — no grant would. */
   grants?: string[];
   /** On a QUERY's `unavailable` error frame: the state log's own refusal
-   *  code, when one is behind the answer, or `no_active_revision` for a work,
-   *  page or search question on a node that has no company yet — see
-   *  {@link LogRefusal}. Never on a watch's, whose words stay in the node's
-   *  log because what the directory says about a login names its seat. */
+   *  code, when one is behind the answer, or the code of a surface the node
+   *  serves none of now — `no_active_revision` for a work, page or search
+   *  question on a node that has no company yet, the code host's own for a
+   *  code question — see {@link LogRefusal}. Never on a watch's, whose words
+   *  stay in the node's log because what the directory says about a login
+   *  names its seat. */
   refusal?: string;
   /**
    * The refusal's own words, on two error frames and nowhere else: a query's
@@ -4167,10 +4169,12 @@ export interface QueryRefusal {
  * and says what would.
  */
 export interface LogRefusal {
-  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or
-   *  `no_active_revision` where the node has not been handed a company yet
-   *  and the question is over its tracker or knowledge base — the code a REST
-   *  503 carries for it — or null where neither is behind the answer. */
+  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or the
+   *  code of a surface the node serves none of now — `no_active_revision`
+   *  where it has not been handed a company yet and the question is over its
+   *  tracker or knowledge base, the code host's own (`applying`,
+   *  `config_apply_failed`, …) for a code question — the code a REST 503
+   *  carries for it, or null where none is behind the answer. */
   code: string | null;
   /** The refusal's own words: what it is about and what changes it. */
   detail: string | null;

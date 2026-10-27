@@ -185,6 +185,16 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/query", what: "artifact_data_query", path: map[string]string{"id": "id", "collection": "collection"}},
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}/{doc}", what: "artifact_data_doc", path: map[string]string{"id": "id", "collection": "collection", "doc": "doc"}},
 	{method: "GET", pattern: "/artifacts/{id}/data/{collection}", what: "artifact_data", path: map[string]string{"id": "id", "collection": "collection"}},
+	// THE CODE HOST'S ROWS: the repositories, one repository in detail, and
+	// one repository's push history, each decided per repository by the grant
+	// the serving node derives (code.GrantOf, ADR-0058). ON THESE PATHS
+	// ALONE: they were the code host's own routes, mounted beside git
+	// (code.go), and a question answered there too would be the second
+	// implementation this table exists to prevent. The verify and its read
+	// stay there: they are operations on THIS node's copy, not questions.
+	{method: "GET", pattern: "/code/repos", what: "code_repos"},
+	{method: "GET", pattern: "/code/repos/{name}", what: "code_repo", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/pushes", what: "code_pushes", path: map[string]string{"name": "name"}},
 }
 
 // mountReads registers the named read routes.
@@ -270,6 +280,21 @@ func (a *App) answerHTTP(w http.ResponseWriter, r *http.Request, what string, pa
 	data, err := a.queries.AnswerWith(r.Context(), what, params)
 	if err != nil {
 		writeQueryError(w, what, err)
+		return
+	}
+	writeAnswer(w, r, data)
+}
+
+// writeAnswer renders a question's answer, SHARED by every named route and the
+// generic form for [writeQueryError]'s reason: as JSON, and — for an answer
+// that is a function of the object ids its question named
+// ([queries.Immutable]) — with the entity tag and the caching that say it never
+// changes, answered `304` to a caller that already holds it
+// ([httpjson.Immutable]). The socket sends the same answer as JSON alone:
+// [queries.Immutable] encodes as what it wraps.
+func writeAnswer(w http.ResponseWriter, r *http.Request, data any) {
+	if answer, ok := data.(queries.Immutable); ok {
+		httpjson.Immutable(w, r, answer.Answer)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)

@@ -31,7 +31,8 @@ import (
 )
 
 // THE ENGINE'S OWN GIT HOST, ON THE API: smart HTTP under /git/ for a person's
-// git client, and the code host's REST reads under /code/.
+// git client, the cache's verify under /code/, and what every node answers
+// when it serves none of the code host now.
 //
 // Both prefixes are GUARDED, as every route the exemption list
 // ([auth.Unguarded]) does not name is, and neither is ever on api.public
@@ -41,24 +42,32 @@ import (
 // route, and on no other, that token may arrive as a Basic credential's
 // password, because a git client presents one no other way.
 //
+// THE CODE HOST'S ROWS ARE QUESTIONS, not routes of this file: `code_repos`,
+// `code_repo` and `code_pushes`, registered in internal/api/queries and served
+// on their /code/ paths through the named routes (rest.go), so a person, the
+// socket and the dashboard reading its own writes back at a session floor are
+// all answered by one implementation. This file hands them the code domain's
+// read, per question, with why this node has none ([codeQuestions]).
+//
 // # Mounted from what is known at New, served from what the engine has now
 //
 // Whether the GIT routes exist is a fact about THIS NODE, known when the app is
 // assembled: its Tier A roles name `git`, or name none. A node without the role
 // mounts none of them, and a git request to it is the mux's own `no_route`,
 // exactly as a route this node's configuration does not enable has always
-// answered. The READS are mounted on every API: a data node answers them from
-// its own copy, and any other node through the estate router.
+// answered. The READS are questions on every API: a data node answers them
+// from its own copy, and any other node through the estate router.
 //
-// Whether a route is SERVED is asked of the engine on every request
-// ([CodeSurface]), as the native halves are (native.go): the code host and its
-// reads are built with the native runtime, at boot or at the first apply whose
-// company sets code.native — on a node that booted with no company, after the
-// app was assembled. A route that finds nothing answers WHY, as the engine decides it
-// from what the fleet activated ([engine.Engine.CodeUnserved]): a company that
-// hosts no code is a 404, and a node that serves none of it now while the
-// configuration the fleet activated hosts code — or before this node has read
-// whether it does — a 503 that says which of four it is ([codeUnserved]).
+// Whether a route or a question is SERVED is asked of the engine on every
+// request ([CodeSurface]), as the native halves are (native.go): the code host
+// and its reads are built with the native runtime, at boot or at the first
+// apply whose company sets code.native — on a node that booted with no
+// company, after the app was assembled. One that finds nothing answers WHY, as
+// the engine decides it from what the fleet activated
+// ([engine.Engine.CodeUnserved]): a company that hosts no code is a 404, and a
+// node that serves none of it now while the configuration the fleet activated
+// hosts code — or before this node has read whether it does — a 503 that says
+// which of four it is ([codeUnserved]).
 
 // GitRoutes is the code host as the API mounts it; *host.Server satisfies it.
 type GitRoutes interface {
@@ -68,12 +77,6 @@ type GitRoutes interface {
 	StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
 	Verification(name string, id uuid.UUID) (host.Verification, bool)
 	AwaitVerification(ctx context.Context, name string, id uuid.UUID) (host.Verification, bool)
-}
-
-// CodeReads is the code domain's read, wherever its rows are served;
-// estate.CodeSeam satisfies it.
-type CodeReads interface {
-	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 }
 
 // CodeSurface is the code host and its reads ASKED ON EVERY REQUEST, each
@@ -90,14 +93,32 @@ type CodeSurface interface {
 	// GitRoutes is this node's code host, or why it serves none.
 	GitRoutes() (GitRoutes, error)
 
-	// CodeReads is the code domain's read, or why this node serves none.
-	CodeReads() (CodeReads, error)
+	// CodeReads is the code domain's read (estate.CodeSeam), or why this
+	// node serves none — which the code questions are answered from, the
+	// reason put in their vocabulary by [codeQuestions].
+	CodeReads() (queries.CodeReads, error)
 
 	// RepoReaders is who read a `visibility: unit` repository — the usage
 	// domain's readers, wherever its rows are served, and the company's
 	// clock a range that names no end is cut on — or why this node serves
 	// none, on CodeReads' terms: the readers stand with the code reads.
 	RepoReaders() (builtin.ReadersDeps, error)
+}
+
+// codeQuestions is the code surface as the code questions find it on every
+// question ([queries.CodeSource]): its read, or why this node serves none in
+// the read surface's vocabulary — the reason [codeUnserved] decides for the
+// git routes too, so a clone and a listing asked of one node say the same
+// thing about why it serves neither.
+type codeQuestions struct{ surface CodeSurface }
+
+// CodeReads is the surface's read, or why there is none ([unserved.question]).
+func (c codeQuestions) CodeReads() (queries.CodeReads, error) {
+	reads, why := c.surface.CodeReads()
+	if why != nil {
+		return nil, codeUnserved(why).question(why)
+	}
+	return reads, nil
 }
 
 // notHosted is what a code route answers where the company hosts no code: ONE
@@ -115,32 +136,15 @@ const notHosted = "this company does not host code (code.native is not set)"
 // somebody acts — so neither carries a Retry-After.
 const codeApplyingRetryAfter = stream.HealthInterval
 
-// THE REASONS a code route's 404 can name: every one is `not_found`, since none
-// has anything here to answer, and the reason is what tells them apart without
-// reading the sentence, because a client acts on each a different way.
-//
-//   - reasonNotDeclared — nobody declared a repository of that name: declaring
-//     one in code.repos, and waiting for the activation, is what makes it;
-//   - reasonNotHosted — the company hosts no code at all (code.native is not
-//     set): declaring a repository changes nothing until it does;
-//   - reasonNotHeld — a verify's repository is declared and THIS node holds no
-//     copy of it: a sweep of every repository on one git node passes over the
-//     ones that node does not keep (nothing there can be damaged) and fails on
-//     a name nobody declared.
-//
-// A git route says the same in git's one text/plain line, where nothing reads
-// a reason: the sentence is all git prints.
-const (
-	reasonNotDeclared = "not_declared"
-	reasonNotHosted   = "not_hosted"
-	reasonNotHeld     = "not_held"
-)
-
-// notDeclared is the sentence a repository nobody declared is answered with,
-// naming the setting that declares one.
-func notDeclared(name string) string {
-	return fmt.Sprintf("no repository named %q is declared in code.repos", name)
-}
+// reasonNotHeld is the reason a verify's 404 names beside the code questions'
+// two ([queries.ReasonNotDeclared], [queries.ReasonNotHosted]), every one
+// `not_found` and told apart by the reason, because a client acts on each a
+// different way: a verify's repository is declared and THIS node holds no copy
+// of it, so a sweep of every repository on one git node passes over the ones
+// that node does not keep (nothing there can be damaged) and fails on a name
+// nobody declared. A git route says each in git's one text/plain line, where
+// nothing reads a reason: the sentence is all git prints.
+const reasonNotHeld = "not_held"
 
 // unserved is why a node serves none of the code host now, as a code route
 // answers it ([codeUnserved]).
@@ -180,7 +184,8 @@ type unserved struct {
 //     the node's native runtime was running before code.native was set, and
 //     only its restart clears it; another node serves it.
 //
-// Any other error breaks the seam's contract: 500, logged.
+// Any other error breaks the seam's contract: 500, logged by whichever
+// rendering answers it.
 func codeUnserved(err error) unserved {
 	switch {
 	case errors.Is(err, engine.ErrCodeNotHosted):
@@ -204,8 +209,25 @@ func codeUnserved(err error) unserved {
 			detail: "this node's native runtime was running before code.native was set, and it serves the " +
 				"code host once restarted: ask another node, or restart this one"}
 	}
-	log.Warn("api_code_unserved_unexplained", "error", err)
 	return unserved{code: httpjson.CodeQueryFailed}
+}
+
+// question is u in the read surface's vocabulary, which the code questions
+// answer and every /code/ route renders ([writeQueryError]): a company hosting
+// no code is [queries.NotFound] (`not_hosted`); a node that will serve the code
+// host once something clears is [queries.ErrUnavailable] under the 503's own
+// code ([stream.Unserved]) — so the socket names the code as its frame's
+// `refusal`, with the same words and the same wait; and a reason the seam does
+// not name is why itself, a failure the surface answers 500 and logs.
+func (u unserved) question(why error) error {
+	switch u.code {
+	case httpjson.CodeNotFound:
+		return &queries.NotFound{Reason: queries.ReasonNotHosted, Detail: u.detail}
+	case httpjson.CodeQueryFailed:
+		return fmt.Errorf("api: the code surface answered a reason this build does not name: %w", why)
+	}
+	return fmt.Errorf("%w: %w", queries.ErrUnavailable,
+		&stream.Unserved{Code: u.code, Detail: u.detail, RetryAfter: u.retryAfter})
 }
 
 // servesGit reports whether a node of this Tier A serves git: its roles name
@@ -218,10 +240,12 @@ func servesGit(b *config.Bootstrap) bool {
 	return b != nil && b.Profile("").Roles.Has(seatplacement.RoleGit)
 }
 
-// mountCode registers the code host's routes — see the file's doc for which
-// are mounted where — each through [authz.Router] on the verb it is decided
-// by, and refuses a route mounted with no policy, as every guarded surface
-// does.
+// mountCode registers the code host's routes — the git transport and the
+// cache's verify, on a node whose roles name git and on no other, and who read
+// a unit's repository on every API — each through [authz.Router] on the verb
+// it is decided by, and refuses a route mounted with no policy, as every
+// guarded surface does. The code host's ROWS are not among them: they are
+// questions, on the named routes (rest.go).
 //
 // # Which verb, and why the guard alone was not enough
 //
@@ -230,11 +254,11 @@ func servesGit(b *config.Bootstrap) bool {
 // nothing but the overview, or a machine token carrying one app, could start a
 // verify, and its repair, of every repository a git node keeps. Now:
 //
-//   - THE READS AND THE GIT ROUTES admit everybody the guard resolved
-//     ([authz.ActionCodeRead], [authz.ActionCodeGit]): what each may read,
-//     fetch or push is the per-repository grant the serving node derives from
-//     the chart once the repository is read (code.GrantOf, ADR-0058), which
-//     no route can ask before it.
+//   - THE GIT ROUTES admit everybody the guard resolved
+//     ([authz.ActionCodeGit]), as the code questions do ([authz.ActionCodeRead]):
+//     what each may fetch or push is the per-repository grant the serving node
+//     derives from the chart once the repository is read (code.GrantOf,
+//     ADR-0058), which no route can ask before it.
 //   - A VERIFY AND ITS READ are the deployment's own controls, admin's as a
 //     backup is, decided by [deploymentPolicy] — a check of THIS NODE's copy
 //     that reads every byte of it and holds a maintenance slot, and with a
@@ -254,37 +278,34 @@ func servesGit(b *config.Bootstrap) bool {
 // git path a classifier gate would have to allow.
 func (a *App) mountCode(mux authz.Mux) error {
 	guard := authz.ContextGuard(authz.NoChart{})
-	rest := authz.NewRouter(mux, guard)
 	var failures []error
 	mount := func(router *authz.Router, pattern string, p authz.Policy, h http.Handler) {
 		if err := router.Handle(pattern, p, h); err != nil {
 			failures = append(failures, err)
 		}
 	}
-	if a.servesGit {
-		git := authz.NewRouter(mux, guard).Refusing(gitRefusal)
-		transport := authz.Policy{Action: authz.ActionCodeGit}
-		mount(git, host.PatternInfoRefs, transport, a.gitRoute(GitRoutes.InfoRefs))
-		mount(git, host.PatternUploadPack, transport, a.gitRoute(GitRoutes.UploadPack))
-		mount(git, host.PatternReceivePack, transport, a.gitRoute(GitRoutes.ReceivePack))
-		// A WRITE TO THE DRAIN GATE, refused while draining like every
-		// POST: a check is new work on the node, a repair a write into its
-		// copy. Only where git is served: it checks THIS node's cache, which
-		// a node without the role does not keep — and so is the read of one,
-		// which a draining node still answers.
-		for pattern, h := range map[string]http.HandlerFunc{
-			"POST /code/repos/{name}/verify":     a.serveCodeVerify,
-			"GET /code/repos/{name}/verify/{id}": a.serveCodeVerification,
-		} {
-			mount(rest, pattern, deploymentPolicy(pattern), h)
-		}
-	}
-	read := authz.Policy{Action: authz.ActionCodeRead}
-	mount(rest, "GET /code/repos", read, a.serveCodeRead(code.ReadRepos, "code_repos"))
-	mount(rest, "GET /code/repos/{name}", read, a.serveCodeRead(code.ReadRepo, "code_repo"))
-	mount(rest, "GET /code/repos/{name}/pushes", read, a.serveCodeRead(code.ReadPushes, "code_pushes"))
+	rest := authz.NewRouter(mux, guard)
 	mount(rest, "GET /code/repos/{name}/readers", authz.Policy{Action: authz.ActionCodeRepoReaders},
 		http.HandlerFunc(a.serveCodeRepoReaders))
+	if !a.servesGit {
+		return errors.Join(failures...)
+	}
+	git := authz.NewRouter(mux, guard).Refusing(gitRefusal)
+	transport := authz.Policy{Action: authz.ActionCodeGit}
+	mount(git, host.PatternInfoRefs, transport, a.gitRoute(GitRoutes.InfoRefs))
+	mount(git, host.PatternUploadPack, transport, a.gitRoute(GitRoutes.UploadPack))
+	mount(git, host.PatternReceivePack, transport, a.gitRoute(GitRoutes.ReceivePack))
+	// A WRITE TO THE DRAIN GATE, refused while draining like every POST: a
+	// check is new work on the node, a repair a write into its copy. Only
+	// where git is served: it checks THIS node's cache, which a node without
+	// the role does not keep — and so is the read of one, which a draining
+	// node still answers.
+	for pattern, h := range map[string]http.HandlerFunc{
+		"POST /code/repos/{name}/verify":     a.serveCodeVerify,
+		"GET /code/repos/{name}/verify/{id}": a.serveCodeVerification,
+	} {
+		mount(rest, pattern, deploymentPolicy(pattern), h)
+	}
 	return errors.Join(failures...)
 }
 
@@ -320,6 +341,7 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 			case httpjson.CodeNotFound:
 				auth.GitText(w, http.StatusNotFound, u.detail)
 			case httpjson.CodeQueryFailed:
+				log.Warn("api_code_unserved_unexplained", "error", why)
 				auth.GitText(w, http.StatusInternalServerError,
 					"this node could not say why it serves no code host; its log says what it was told")
 			default:
@@ -333,162 +355,14 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 }
 
 // codeNotServed answers a /code/ route this node serves none of the code host
-// for now, in the refusal envelope, with why ([codeUnserved]): a company
+// for now, in the read surface's vocabulary and through its one writer
+// ([writeQueryError]), as the code questions answer the same node: a company
 // hosting no code is `not_found` with the reason that tells it from a
 // repository nobody declared, and every 503 is written by
 // [httpjson.UnavailableWith], which sets its Retry-After — or, where waiting
 // clears nothing, none — with the envelope.
-func codeNotServed(w http.ResponseWriter, why error) {
-	u := codeUnserved(why)
-	switch u.code {
-	case httpjson.CodeNotFound:
-		httpjson.FailWith(w, http.StatusNotFound, u.code,
-			map[string]string{"reason": reasonNotHosted, "detail": u.detail})
-	case httpjson.CodeQueryFailed:
-		httpjson.Fail(w, http.StatusInternalServerError, u.code)
-	default:
-		httpjson.UnavailableWith(w, u.code, httpjson.RetrySeconds(u.retryAfter),
-			httpjson.Detail{"detail": u.detail})
-	}
-}
-
-// serveCodeRead answers one of the code domain's reads: a listing of
-// repositories, one repository in detail, or one repository's push history.
-//
-// AT THE CALLER'S LEVEL, read through the tree's ONE freshness grammar
-// ([queries.Freshness]) — `read_level`, `max_lag_seconds`, `max_lag_seq`,
-// `min_position` — at the REST read path's surface, so a stale listing is the
-// default and a client that must not conclude "not declared" from an old copy
-// asks for linearizable. The answer carries the position and the level it was
-// served at. A level the reader does not serve is the reader's to refuse,
-// naming the levels it serves ([code.ReadLevels]): `session` among them, since
-// it holds no position of a caller's on the code log.
-func (a *App) serveCodeRead(kind code.ReadKind, what string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reads, why := a.code.CodeReads()
-		if why != nil {
-			codeNotServed(w, why)
-			return
-		}
-		// A CODE READ IS HELD TO WHO ASKS, so one asked for nobody is
-		// refused rather than judged as somebody. The guard answers every
-		// request it admits to this route with a resolved principal, and
-		// [auth.Caller] writes the refusal for anything else in the
-		// engine's three arms: 401 for a caller who presented nothing it
-		// accepts, 503 for a node that could not tell — and a request that
-		// reached the route past no guard at all is that 503 too, logged
-		// as the wiring fault it is, never a read.
-		p, ok := auth.Caller(w, r)
-		if !ok {
-			return
-		}
-		q, err := codeReadQuery(kind, codeAsker(p), r)
-		if err != nil {
-			writeQueryError(w, what, err)
-			return
-		}
-		answer, err := reads.Read(r.Context(), q)
-		if err != nil {
-			codeRefusal(w, what, q.Repo, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, answer)
-	})
-}
-
-// codeAsker is who a REST code read asks as: the principal the guard resolved
-// for the request, written down as every surface writes its caller down
-// ([builtin.ActorOf], over [iam.ActorFor]), then judged as the code tools
-// judge theirs ([builtin.CodeAskerOf], the one conversion) — the credential it
-// came through, and the human seat it holds, a person's own or the one the
-// identity directory binds a token to, or none. Every principal a person
-// presents reads every repository (ADR-0058), so the answer a person gets is
-// the whole listing; what the asker buys here is that the reader judges every
-// read by who asked it, so a seat's read cannot be answered as a person's, nor
-// a person's REST read and their assistant's tool call as two people.
-func codeAsker(p iam.Principal) code.Principal {
-	return builtin.CodeAskerOf(builtin.ActorOf(p))
-}
-
-// codeReadQuery is a read's request, asked as asker, refused
-// [queries.ErrBadParams] naming the parameter that is not one this read takes.
-func codeReadQuery(kind code.ReadKind, asker code.Principal, r *http.Request) (code.ReadQuery, error) {
-	p := queries.FromQuery(r.URL.Query())
-	fresh, err := queries.Freshness(p)
-	if err != nil {
-		return code.ReadQuery{}, err
-	}
-	q := code.ReadQuery{Asker: asker, Kind: kind, Repo: r.PathValue("name"), Cursor: p.String("cursor"),
-		Fresh: fresh}
-	for v := range strings.SplitSeq(p.String("status"), ",") {
-		if v = strings.TrimSpace(v); v == "" {
-			continue
-		}
-		status := code.RepoStatus(v)
-		if !status.Valid() {
-			return code.ReadQuery{}, fmt.Errorf("%w: the status %q is not one of %v", queries.ErrBadParams,
-				v, code.RepoStatuses())
-		}
-		q.Status = append(q.Status, status)
-	}
-	if p.Has("limit") {
-		n, whole := p.WholeInt("limit")
-		// int is int64 on every platform the store builds for
-		// (internal/store/platform.go), so the conversion below is exact,
-		// and a limit past a page's bound is the reader's to refuse, naming
-		// its bound.
-		if !whole || n < 0 {
-			return code.ReadQuery{}, fmt.Errorf("%w: the limit %q is not a whole number of zero or more "+
-				"(0 is the read's own page size)", queries.ErrBadParams, p.String("limit"))
-		}
-		q.Limit = int(n)
-	}
-	return q, nil
-}
-
-// codeRefusal answers a code read's failure in the refusal envelope, in the
-// read surface's ONE vocabulary ([writeQueryError]): a repository that is not
-// declared is `not_found`, naming it; a repository the asker's grant does not
-// cover is `not_permitted` with the reader's own sentence; a level, a cursor
-// or a parameter the reader refuses is `bad_params` with the reader's own
-// sentence; and a read this node could not serve — a state-log refusal, no
-// data node serving — is `unavailable` with its own Retry-After (none where
-// waiting cannot clear it), by [queries.ClassifyFailure], the registry's own
-// classification rather than a second list here.
-//
-// NOT PERMITTED IS 403 AND NEVER THE 500 everything unnamed falls into: it is
-// a refusal of the CALLER ([code.ErrNotPermitted]) that every node judging the
-// same grant from the same chart makes alike, so no retry and no other node
-// answers it otherwise, and its sentence — who asked, which repository, the
-// visibility that shut the asker out and who does read it — is the whole of
-// what the caller can act on. [httpjson.CodeNotPermitted] is spelled as the
-// domain's own refusal class, the word a refused push prints
-// ([code.RefusalNotPermitted], held equal by test), so one refusal has one
-// spelling on every surface that names it.
-func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
-	switch {
-	case errors.Is(err, code.ErrRepoNotFound):
-		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
-			map[string]string{"reason": reasonNotDeclared, "detail": notDeclared(repo)})
-	case errors.Is(err, code.ErrNotPermitted):
-		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeNotPermitted,
-			map[string]string{"detail": refusalSentence(err, code.ErrNotPermitted)})
-	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
-		errors.Is(err, code.ErrInvalid):
-		writeQueryError(w, what, fmt.Errorf("%w: %w", queries.ErrBadParams, err))
-	default:
-		writeQueryError(w, what, queries.ClassifyFailure(err))
-	}
-}
-
-// refusalSentence is the sentence err carries past its sentinel's own Go text,
-// read by the one reading the code tools quote it by ([builtin.RefusalSentence]),
-// and err's text whole for a sentinel that carries no sentence of its own.
-func refusalSentence(err, sentinel error) string {
-	if sentence, ok := builtin.RefusalSentence(err, sentinel); ok {
-		return sentence
-	}
-	return err.Error()
+func codeNotServed(w http.ResponseWriter, what string, why error) {
+	writeQueryError(w, what, codeUnserved(why).question(why))
 }
 
 // serveCodeRepoReaders answers who read a `visibility: unit` repository over a
@@ -515,12 +389,12 @@ func (a *App) serveCodeRepoReaders(w http.ResponseWriter, r *http.Request) {
 	const what = "code_repo_readers"
 	reads, why := a.code.CodeReads()
 	if why != nil {
-		codeNotServed(w, why)
+		codeNotServed(w, what, why)
 		return
 	}
 	readers, why := a.code.RepoReaders()
 	if why != nil {
-		codeNotServed(w, why)
+		codeNotServed(w, what, why)
 		return
 	}
 	p, ok := auth.Caller(w, r)
@@ -540,6 +414,65 @@ func (a *App) serveCodeRepoReaders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, answer)
+}
+
+// codeAsker is who a REST code read asks as: the principal the guard resolved
+// for the request, written down as every surface writes its caller down
+// ([builtin.ActorOf], over [iam.ActorFor]), then judged as the code tools
+// judge theirs ([builtin.CodeAskerOf], the one conversion) — the credential it
+// came through, and the human seat it holds, a person's own or the one the
+// identity directory binds a token to, or none. Every principal a person
+// presents reads every repository (ADR-0058), so the answer a person gets is
+// the whole listing; what the asker buys here is that the reader judges every
+// read by who asked it, so a seat's read cannot be answered as a person's, nor
+// a person's REST read and their assistant's tool call as two people.
+func codeAsker(p iam.Principal) code.Principal {
+	return builtin.CodeAskerOf(builtin.ActorOf(p))
+}
+
+// codeRefusal answers a code read's failure in the refusal envelope, in the
+// read surface's ONE vocabulary ([writeQueryError]): a repository that is not
+// declared is `not_found`, naming it; a repository the asker's grant does not
+// cover is `not_permitted` with the reader's own sentence; a level, a cursor
+// or a parameter the reader refuses is `bad_params` with the reader's own
+// sentence; and a read this node could not serve — a state-log refusal, no
+// data node serving — is `unavailable` with its own Retry-After (none where
+// waiting cannot clear it), by [queries.ClassifyFailure], the registry's own
+// classification rather than a second list here.
+//
+// NOT PERMITTED IS 403 AND NEVER THE 500 everything unnamed falls into: it is
+// a refusal of the CALLER ([code.ErrNotPermitted]) that every node judging the
+// same grant from the same chart makes alike, so no retry and no other node
+// answers it otherwise, and its sentence — who asked, which repository, the
+// visibility that shut the asker out and who does read it — is the whole of
+// what the caller can act on. [httpjson.CodeNotPermitted] is spelled as the
+// domain's own refusal class, the word a refused push prints
+// ([code.RefusalNotPermitted], held equal by test), so one refusal has one
+// spelling on every surface that names it.
+func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
+	switch {
+	case errors.Is(err, code.ErrRepoNotFound):
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
+			map[string]string{"reason": queries.ReasonNotDeclared, "detail": queries.RepoNotDeclared(repo)})
+	case errors.Is(err, code.ErrNotPermitted):
+		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeNotPermitted,
+			map[string]string{"detail": refusalSentence(err, code.ErrNotPermitted)})
+	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
+		errors.Is(err, code.ErrInvalid):
+		writeQueryError(w, what, fmt.Errorf("%w: %w", queries.ErrBadParams, err))
+	default:
+		writeQueryError(w, what, queries.ClassifyFailure(err))
+	}
+}
+
+// refusalSentence is the sentence err carries past its sentinel's own Go text,
+// read by the one reading the code tools quote it by ([builtin.RefusalSentence]),
+// and err's text whole for a sentinel that carries no sentence of its own.
+func refusalSentence(err, sentinel error) string {
+	if sentence, ok := builtin.RefusalSentence(err, sentinel); ok {
+		return sentence
+	}
+	return err.Error()
 }
 
 // verificationView is a verification as the API answers it: the operation's
@@ -612,7 +545,7 @@ func verificationPath(v host.Verification) string {
 func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	g, why := a.code.GitRoutes()
 	if why != nil {
-		codeNotServed(w, why)
+		codeNotServed(w, "code_verify", why)
 		return
 	}
 	repair := false
@@ -662,7 +595,7 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, viewOf(v))
 	case errors.Is(err, code.ErrRepoNotFound):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
-			map[string]string{"reason": reasonNotDeclared, "detail": notDeclared(name)})
+			map[string]string{"reason": queries.ReasonNotDeclared, "detail": queries.RepoNotDeclared(name)})
 	case errors.Is(err, code.ErrInvalid):
 		// A floor on another log than the repositories' rows.
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
@@ -710,7 +643,7 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveCodeVerification(w http.ResponseWriter, r *http.Request) {
 	g, why := a.code.GitRoutes()
 	if why != nil {
-		codeNotServed(w, why)
+		codeNotServed(w, "code_verification", why)
 		return
 	}
 	name := r.PathValue("name")

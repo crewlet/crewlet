@@ -832,6 +832,13 @@ func New(opts Options) (*App, error) {
 		policy := queries.SignInPolicyOf(opts.Bootstrap.API.Auth)
 		sources.SignIn = &policy
 	}
+	// THE CODE HOST'S ROWS, AS QUESTIONS, read from the one code surface
+	// this app is handed and asked on every question, with why this node
+	// serves none in the read surface's vocabulary — the reason the git
+	// routes answer from that same surface (code.go). Never a caller's own
+	// source beside it: one surface, so a clone and a listing asked of one
+	// node cannot disagree about whether it hosts code.
+	sources.Code = codeQuestions{surface: opts.Code}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
@@ -1576,7 +1583,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 		writeQueryError(w, what, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, data)
+	writeAnswer(w, r, data)
 }
 
 // writeQueryError maps one failed question onto a status.
@@ -1591,6 +1598,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // one whose refusals carried no sentence, and the code a client branched on
 // was the only thing it had to show.
 func writeQueryError(w http.ResponseWriter, what string, err error) {
+	var unserved *stream.Unserved
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeUnknownQuery)
@@ -1622,6 +1630,18 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// have admitted the caller, carried on the registry's refusal
 		// rather than rewritten here — the same two fields every other
 		// refusal on authority answers with.
+		//
+		// A GRANT THE QUESTION'S OWN DOMAIN DERIVES — a repository's, from
+		// the chart — is not the table's, carries neither a reason nor a
+		// permission that would admit the caller, and answers under the
+		// domain's own word with the domain's sentence: `not_permitted`,
+		// the word a refused push prints for the same refusal.
+		var denied *queries.NotPermitted
+		if errors.As(err, &denied) {
+			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeNotPermitted,
+				map[string]string{"detail": denied.Detail})
+			return
+		}
 		var refusal *queries.Refusal
 		if !errors.As(err, &refusal) {
 			httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
@@ -1639,20 +1659,35 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			httpjson.Detail{"detail": queries.RefusalDetail(err)})
 	case errors.Is(err, queries.ErrNotFound):
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
-	case errors.Is(err, stream.ErrNoCompany):
-		// A NATIVE QUESTION ON A NODE WITH NO COMPANY YET, answered as
-		// every surface answers that node — the webhook edge, the human
-		// write surface, the operator's assistant — with the reconcile
-		// poll as the wait, rather than as the state log's `unavailable`,
-		// whose hint is the scale of a node catching up. See native.go.
+		// AND WHICH ABSENCE, where the question says: a repository nobody
+		// declared and a company hosting no code are both `not_found`, told
+		// apart by the `reason` a client branches on, since a declaration
+		// is the remedy of one and changes nothing about the other.
+		var missing *queries.NotFound
+		if !errors.As(err, &missing) {
+			httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+			return
+		}
+		said := map[string]string{"detail": missing.Detail}
+		if missing.Reason != "" {
+			said["reason"] = missing.Reason
+		}
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, said)
+	case errors.As(err, &unserved):
+		// A SURFACE THIS NODE SERVES NONE OF NOW, under its own code — a
+		// native question on a node with no company yet
+		// ([stream.ErrNoCompany]), answered as every surface answers that
+		// node, with the reconcile poll as the wait; a code question on a
+		// node applying, or failed to apply, the configuration that hosts
+		// code — rather than as the state log's `unavailable`, whose hint
+		// is the scale of a node catching up. See native.go and code.go.
 		//
 		// THE HINT AND THE WORDS ARE [stream.UnavailableOf]'s, the one
 		// reading the socket's frame is built from too: decided here
 		// alone, the REST route said fifteen seconds and why while the
 		// socket said five and nothing.
 		u := stream.UnavailableOf(err)
-		httpjson.UnavailableWith(w, httpjson.CodeNoActiveRevision, u.RetryAfter,
+		httpjson.UnavailableWith(w, unserved.Code, u.RetryAfter,
 			httpjson.Detail{"detail": u.Detail})
 	case errors.Is(err, queries.ErrUnavailable):
 		// 503, because this node could not serve the question and nothing

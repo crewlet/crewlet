@@ -81,10 +81,10 @@ import (
 // all — it renders the level and the lag beside the rows, so a person who
 // asked for a weaker answer is shown the one they got.
 //
-// EXPORTED for the REST code reads (internal/api/code.go), the other surface
-// whose caller may choose a level: one grammar, and no second reading of
-// `read_level`. What a reader does not serve stays its own refusal — the code
-// host's refuses `session`, holding no position of a caller's on its log.
+// What a reader does not serve stays its own refusal: a floor on a log the
+// question does not read, which the reader refuses as the request's mistake
+// ([ClassifyFailure]), never this grammar, which cannot know which log a
+// question reads.
 func Freshness(p Params) (statelog.Freshness, error) {
 	got, err := tracker.ParseFreshness(p)
 	if err != nil {

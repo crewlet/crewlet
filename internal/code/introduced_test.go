@@ -165,11 +165,16 @@ func TestAnIntroducedReadIsTheEnginesOwn(t *testing.T) {
 	if !errors.Is(err, code.ErrBadCursor) {
 		t.Errorf("an introduced read after a cursor it never issued = %v, want ErrBadCursor", err)
 	}
-	// AND THE OTHER WAY: a principal's read at session is still refused.
+	// AND A PRINCIPAL'S READ IS HELD TO THE SAME RULE: served at session
+	// beside its floor, refused at a bare one.
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app",
+		Fresh: statelog.FloorAt(statelog.ReadSession, at)}); err != nil {
+		t.Errorf("a principal's read at session beside its floor = %v, want it served", err)
+	}
 	_, err = n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app",
-		Fresh: statelog.FloorAt(statelog.ReadSession, at)})
-	if !errors.Is(err, code.ErrBadLevel) || !strings.Contains(err.Error(), "linearizable, stale and consistent_prefix") {
-		t.Errorf("a principal's read at session = %v, want ErrBadLevel naming the levels it serves", err)
+		Fresh: statelog.Freshness{Level: statelog.ReadSession}})
+	if !errors.Is(err, code.ErrBadLevel) {
+		t.Errorf("a principal's read at a bare session = %v, want ErrBadLevel", err)
 	}
 }
 

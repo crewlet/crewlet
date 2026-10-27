@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
@@ -53,7 +54,7 @@ func (c engineCode) GitRoutes() (GitRoutes, error) {
 // copy that serves, wherever it is (ADR-0049) — or why this node's running
 // runtime serves none ([engine.OperatorCode], [engine.Engine.CodeUnserved]),
 // asked again after the reason for GitRoutes' reason.
-func (c engineCode) CodeReads() (CodeReads, error) {
+func (c engineCode) CodeReads() (queries.CodeReads, error) {
 	if seam, ok := engine.OperatorCode(c.e); ok {
 		return seam, nil
 	}

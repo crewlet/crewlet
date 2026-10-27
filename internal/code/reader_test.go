@@ -1057,8 +1057,8 @@ func TestAPushRowNamingNoWayIsRefused(t *testing.T) {
 }
 
 // A CODE READ STATES ITS FRESHNESS: a point read and a snapshot's first page
-// name their level, a session read names the position it waits for, and a
-// person's listing is never a session read.
+// name their level, and a session read — a listing's too — names the position
+// it waits for.
 func TestACodeReadStatesItsFreshness(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -1077,9 +1077,9 @@ func TestACodeReadStatesItsFreshness(t *testing.T) {
 				Fresh: statelog.Freshness{Level: statelog.ReadSession}})
 			return err
 		},
-		"Read at session": func() error {
+		"Read at session with no position": func() error {
 			_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
-				Fresh: statelog.FloorAt(statelog.ReadSession, n.waiter.Committed())})
+				Fresh: statelog.Freshness{Level: statelog.ReadSession}})
 			return err
 		},
 	} {
@@ -1089,30 +1089,95 @@ func TestACodeReadStatesItsFreshness(t *testing.T) {
 	}
 }
 
-// A READ'S LEVEL REFUSAL NAMES EVERY LEVEL IT SERVES, from the list its rule
-// reads: the sentence reaches a person as a REST read's 400, and one written
-// beside the rule told them two levels existed while three were served.
-func TestARefusedLevelNamesEveryLevelTheReadServes(t *testing.T) {
+// A CODE ROW READ SERVES `session` AT ITS FLOOR, AND ONLY THERE.
+//
+// A screen reads its own write back by asking every question of the log it
+// wrote at `session`, the position the write answered with as its floor — so
+// the list it just changed never comes back from a node that has not applied
+// the change. Every kind a principal reads serves the level beside a position
+// on the code log: a node that has not applied that position refuses `behind`
+// rather than answer from before it, and once it has, answers WITH the write,
+// labelled `session`. A bare `session` names nothing to wait for and is refused
+// as a level; a floor on another log is the request's own mistake, refused
+// before any row is read. And every other level is served as well: none of them
+// is refused as a level (this node has no read index, so a linearizable read
+// is refused by the LOG, never as a level).
+//
+// Mutation: serve a session read without its floor (ReadQuery.freshness
+// dropping the floors once they are checked) → the held node answers every
+// kind from before the push it was asked to include, and the first half goes
+// red.
+func TestACodeRowReadServesSessionAtItsFloor(t *testing.T) {
 	t.Parallel()
-	n := newNode(t)
-	seededRepo(t, n, "app")
-	// Each level listed passes the reader's rule: this node has no read
-	// index, so a linearizable read is refused by the LOG, never as a level.
-	for _, level := range code.ReadLevels {
-		if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
-			Fresh: statelog.Freshness{Level: level}}); errors.Is(err, code.ErrBadLevel) {
-			t.Errorf("Read at %s = %v, want the level served", level, err)
+	a, b := newTwoNodes(t)
+	id := a.ensure("app", described("app"), t1).RepoID
+	a.push(id, entry("p1", set("refs/heads/main", code.ZeroOID, oidOf("c1"))))
+	b.drain()
+	b.hold()
+	at := a.push(id, entry("p2", set("refs/heads/main", oidOf("c1"), oidOf("c2")))).Position
+	if at.IsZero() {
+		t.Fatal("the push answered no position")
+	}
+	asked := func(kind code.ReadKind, fresh statelog.Freshness) code.ReadQuery {
+		q := code.ReadQuery{Asker: asker, Kind: kind, Fresh: fresh}
+		if kind != code.ReadRepos {
+			q.Repo = "app"
+		}
+		return q
+	}
+	// headOf is main's commit as each kind answers it.
+	headOf := func(answer code.ReadAnswer) string {
+		switch {
+		case len(answer.Repos) == 1:
+			return answer.Repos[0].Head
+		case len(answer.Refs) > 0:
+			return answer.Refs[0].OID
+		case answer.Repo != nil:
+			return answer.Repo.Head
+		case len(answer.Pushes) > 0:
+			return answer.Pushes[0].Commands[0].New
+		}
+		return ""
+	}
+	kinds := []code.ReadKind{code.ReadRepos, code.ReadRepo, code.ReadPushes, code.ReadRefs}
+	session := statelog.FloorAt(statelog.ReadSession, at)
+	for _, kind := range kinds {
+		_, err := b.reader.Read(t.Context(), asked(kind, session))
+		var refused *statelog.Refused
+		if !errors.As(err, &refused) || refused.Code != statelog.RefuseBehind {
+			t.Errorf("%s at session on a node that has not applied its floor = %v, want refused behind",
+				kind, err)
 		}
 	}
-	for _, level := range []statelog.ReadLevel{statelog.ReadSession, "eventual"} {
-		_, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepos,
-			Fresh: statelog.FloorAt(level, n.waiter.Committed())})
-		if !errors.Is(err, code.ErrBadLevel) {
-			t.Fatalf("Read at %s = %v, want ErrBadLevel", level, err)
+	b.release()
+	for _, kind := range kinds {
+		answer, err := b.reader.Read(t.Context(), asked(kind, session))
+		switch {
+		case err != nil:
+			t.Errorf("%s at session once its floor is applied: %v", kind, err)
+		case answer.Level != statelog.ReadSession:
+			t.Errorf("%s at session was answered at %q", kind, answer.Level)
+		case headOf(answer) != oidOf("c2"):
+			t.Errorf("%s at session floored at the push answered main at %q, want the push's %q",
+				kind, headOf(answer), oidOf("c2"))
 		}
-		const want = `"%s" is not a level a code read serves: it serves linearizable, stale and consistent_prefix`
-		if !strings.Contains(err.Error(), fmt.Sprintf(want, level)) {
-			t.Errorf("Read at %s refused with %q, want it to name every level the read serves", level, err)
+	}
+
+	elsewhere := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
+	for _, kind := range kinds {
+		if _, err := b.reader.Read(t.Context(), asked(kind,
+			statelog.Freshness{Level: statelog.ReadSession})); !errors.Is(err, code.ErrBadLevel) {
+			t.Errorf("%s at a bare session = %v, want ErrBadLevel", kind, err)
+		}
+		if _, err := b.reader.Read(t.Context(), asked(kind,
+			statelog.FloorAt(statelog.ReadSession, elsewhere))); !errors.Is(err, statelog.ErrForeignPosition) {
+			t.Errorf("%s at session floored on another log = %v, want the request's mistake", kind, err)
+		}
+		for _, level := range statelog.ReadLevels {
+			fresh := statelog.FloorAt(level, at)
+			if _, err := b.reader.Read(t.Context(), asked(kind, fresh)); errors.Is(err, code.ErrBadLevel) {
+				t.Errorf("%s at %s = %v, want the level served", kind, level, err)
+			}
 		}
 	}
 }

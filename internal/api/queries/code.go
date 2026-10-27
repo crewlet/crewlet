@@ -1,0 +1,226 @@
+package queries
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
+)
+
+// THE CODE HOST'S ROWS, AS QUESTIONS: `code_repos`, the repositories the asker
+// may read, a page at a time; `code_repo`, one repository in detail; and
+// `code_pushes`, one repository's push history. Each is decided PER
+// REPOSITORY, by the grant the serving node derives from its chart
+// (code.GrantOf, ADR-0058) — a listing leaves out what the asker may not read,
+// and a read of one such repository is refused [NotPermitted] — so each is
+// registered [DecidedBy] the authority table's `code.read`, which admits
+// everybody the guard resolved and decides nothing a repository's grant does.
+//
+// # Why questions, and not the code host's own routes
+//
+// They were answered by routes of the code host's own (internal/api's
+// code.go), with a parameter reading and an error mapping of their own beside
+// the registry's — a second implementation of what a question is, reachable
+// only over REST. As questions they are answered by the same function on
+// every transport, under the same posture check, and they read the caller's
+// freshness through the one grammar every question does ([Freshness]): which
+// is what lets a screen read its own code writes back at `session`, the
+// position the write answered with as its floor (the dashboard's
+// SESSION_QUERIES), as every other domain's questions are read back. Their
+// REST paths are the ones the code host's routes had, through the named
+// routes, and no other.
+//
+// # Found per question
+//
+// The code reads come up with the native runtime, at boot or at the first
+// apply whose company sets code.native — after the API was assembled on a node
+// that booted with no company — so the source ([CodeSource]) is asked for them
+// on every question, and answers, where this node serves none now, WHY, in
+// this surface's own vocabulary: a company hosting no code is [NotFound]
+// (`not_hosted`), and a node applying, or failed to apply, a configuration
+// that hosts code is [ErrUnavailable] under a code of its own (internal/api's
+// code.go decides which, from the engine's reason, for the git routes too).
+
+// The reasons a code question's `not_found` names ([NotFound.Reason]), a word
+// a client acts on without reading the sentence, because the two are remedied
+// differently:
+//
+//   - ReasonNotDeclared — nobody declared a repository of that name:
+//     declaring one in code.repos, and waiting for the activation, is what
+//     makes it;
+//   - ReasonNotHosted — the company hosts no code at all (code.native is not
+//     set): declaring a repository changes nothing until it does.
+//
+// The git routes say the same in git's one text/plain line, where nothing
+// reads a reason: the sentence is all git prints.
+const (
+	ReasonNotDeclared = "not_declared"
+	ReasonNotHosted   = "not_hosted"
+)
+
+// RepoNotDeclared is the sentence a repository nobody declared is answered
+// with, naming the setting that declares one.
+func RepoNotDeclared(name string) string {
+	return fmt.Sprintf("no repository named %q is declared in code.repos", name)
+}
+
+// CodeReads is the code domain's read, wherever its rows are served;
+// estate.CodeSeam satisfies it.
+type CodeReads interface {
+	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+}
+
+// CodeSource is the code domain's read as THIS NODE has it, asked on every
+// question: the read, or why this node serves none NOW, ALREADY in this
+// surface's vocabulary — [NotFound] for a company that hosts no code,
+// [ErrUnavailable] for a node that will serve it once something clears, and
+// any other error a failure the surface answers as one.
+//
+// AN INTERFACE ANSWERING (value, error) — never a bool — because "absent" is
+// several facts with several answers, and a typed nil inside an interface
+// would pass a nil check and panic on the first question.
+type CodeSource interface {
+	CodeReads() (CodeReads, error)
+}
+
+// codeRead is the answer to one kind of code question.
+//
+// THE SOURCE FIRST, so a node that serves no code host says why whatever the
+// request named; then the request, refused [ErrBadParams] naming what is not
+// a parameter this read takes; then the read, asked AS THE CALLER and
+// answered in this surface's vocabulary ([codeRefusal]).
+func (s Sources) codeRead(kind code.ReadKind, what string) Answer {
+	return func(ctx context.Context, p Params) (any, error) {
+		reads, err := s.Code.CodeReads()
+		if err != nil {
+			return nil, err
+		}
+		// A CODE READ IS HELD TO WHO ASKS, so one asked for nobody is never
+		// judged as somebody: the registry refuses an anonymous question and
+		// one this node could not tell before any answer runs
+		// ([Registry.AnswerWith]), [caller] holds the same rule for whatever
+		// reaches this answer without it, and the reader refuses an asker no
+		// principal can be.
+		principal, err := caller(ctx, what)
+		if err != nil {
+			return nil, err
+		}
+		q, err := codeReadQuery(kind, codeAsker(principal), p)
+		if err != nil {
+			return nil, err
+		}
+		answer, err := reads.Read(ctx, q)
+		if err != nil {
+			return nil, codeRefusal(q.Repo, err)
+		}
+		return answer, nil
+	}
+}
+
+// codeAsker is who a code question asks as: the principal the guard resolved,
+// written down as every surface writes its caller down ([builtin.ActorOf],
+// over [iam.ActorFor]), then judged as the code tools judge theirs
+// ([builtin.CodeAskerOf], the one conversion) — the credential it came
+// through, and the human seat it holds, a person's own or the one the
+// identity directory binds a token to, or none. Every principal a person
+// presents reads every repository (ADR-0058), so the answer a person gets is
+// the whole listing; what the asker buys here is that the reader judges every
+// read by who asked it, so a seat's read cannot be answered as a person's, nor
+// a person's question and their assistant's tool call as two people.
+func codeAsker(p iam.Principal) code.Principal {
+	return builtin.CodeAskerOf(builtin.ActorOf(p))
+}
+
+// codeReadQuery is a read's request, asked as asker, refused [ErrBadParams]
+// naming the parameter that is not one this read takes. The freshness is the
+// tree's one grammar ([Freshness]), so a stale listing is the default, a
+// client that must not conclude "not declared" from an old copy asks for
+// linearizable, and a screen reading its own write back asks for `session`
+// beside the position the write answered with.
+func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.ReadQuery, error) {
+	fresh, err := Freshness(p)
+	if err != nil {
+		return code.ReadQuery{}, err
+	}
+	q := code.ReadQuery{Asker: asker, Kind: kind, Cursor: p.String("cursor"), Fresh: fresh}
+	// THE REPOSITORY IS THE PATH'S, and only the reads of one take it: a
+	// listing named no repository on its route, and a `name` beside it is
+	// read as nothing, as the route always read it.
+	if kind != code.ReadRepos {
+		q.Repo = p.String("name")
+	}
+	for v := range strings.SplitSeq(p.String("status"), ",") {
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		status := code.RepoStatus(v)
+		if !status.Valid() {
+			return code.ReadQuery{}, fmt.Errorf("%w: the status %q is not one of %v", ErrBadParams,
+				v, code.RepoStatuses())
+		}
+		q.Status = append(q.Status, status)
+	}
+	if p.Has("limit") {
+		n, whole := p.WholeInt("limit")
+		// int is int64 on every platform the store builds for
+		// (internal/store/platform.go), so the conversion below is exact,
+		// and a limit past a page's bound is the reader's to refuse, naming
+		// its bound.
+		if !whole || n < 0 {
+			return code.ReadQuery{}, fmt.Errorf("%w: the limit %q is not a whole number of zero or more "+
+				"(0 is the read's own page size)", ErrBadParams, p.String("limit"))
+		}
+		q.Limit = int(n)
+	}
+	return q, nil
+}
+
+// codeRefusal is a code read's failure in this surface's ONE vocabulary: a
+// repository that is not declared is [NotFound] (`not_declared`), naming it;
+// a repository the asker's grant does not cover is [NotPermitted] with the
+// reader's own sentence; a level, a cursor or a parameter the reader refuses
+// is [ErrBadParams] with the reader's own sentence; and everything else — a
+// read this node could not serve, a floor on another log — is the registry's
+// to classify ([ClassifyFailure]), never a second list here of what clears by
+// waiting.
+//
+// NOT PERMITTED IS A REFUSAL OF THE CALLER and never the failure everything
+// unnamed falls into: every node judging the same grant from the same chart
+// makes it alike, so no retry and no other node answers it otherwise, and its
+// sentence — who asked, which repository, the visibility that shut the asker
+// out and who does read it — is the whole of what the caller can act on.
+func codeRefusal(repo string, err error) error {
+	switch {
+	case errors.Is(err, code.ErrRepoNotFound):
+		return &NotFound{Reason: ReasonNotDeclared, Detail: RepoNotDeclared(repo)}
+	case errors.Is(err, code.ErrNotPermitted):
+		return &NotPermitted{Detail: refusalSentence(err, code.ErrNotPermitted)}
+	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
+		errors.Is(err, code.ErrInvalid):
+		return fmt.Errorf("%w: %w", ErrBadParams, err)
+	}
+	return err
+}
+
+// refusalSentence is the sentence err carries past its sentinel's own Go text,
+// read by the one reading the code tools quote it by ([builtin.RefusalSentence]),
+// and err's text whole for a sentinel that carries no sentence of its own.
+func refusalSentence(err, sentinel error) string {
+	if sentence, ok := builtin.RefusalSentence(err, sentinel); ok {
+		return sentence
+	}
+	return err.Error()
+}
+
+// registerCode registers the code questions over s.Code — see the file's
+// doc for what each answers and why each is decided by `code.read`.
+func registerCode(r *Registry, s Sources) {
+	r.Register("code_repos", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepos, "code_repos"))
+	r.Register("code_repo", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepo, "code_repo"))
+	r.Register("code_pushes", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadPushes, "code_pushes"))
+}

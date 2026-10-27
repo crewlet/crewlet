@@ -1514,22 +1514,30 @@ var ErrTooLarge = errors.New("httpjson: body over the limit")
 func Write(w http.ResponseWriter, status int, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {
-		// The handler's body is unmarshalable, so the only thing left to
-		// send is this package's own. Written by hand rather than through
-		// Marshal, which is what just failed — and quoted through
-		// strconv rather than concatenated, so the envelope stays valid
-		// JSON whatever punctuation a sentence in [codes] carries.
-		slog.Error("http_encode_failed", "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"` + keyError + `":` +
-			strconv.Quote(string(CodeEncodeFailed)) + `,"` + keyMessage + `":` +
-			strconv.Quote(CodeEncodeFailed.Message()) + `}`))
+		encodeFailed(w, err)
 		return
 	}
+	writeEncoded(w, status, raw)
+}
+
+// writeEncoded answers status with raw, a body already encoded as JSON — the
+// one place the content type is set, for [Write] and [Immutable] alike.
+func writeEncoded(w http.ResponseWriter, status int, raw []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(raw)
+}
+
+// encodeFailed answers a handler's body that would not marshal: the only thing
+// left to send is this package's own refusal, written by hand rather than
+// through Marshal, which is what just failed — and quoted through strconv
+// rather than concatenated, so the envelope stays valid JSON whatever
+// punctuation a sentence in [codes] carries.
+func encodeFailed(w http.ResponseWriter, err error) {
+	slog.Error("http_encode_failed", "error", err)
+	writeEncoded(w, http.StatusInternalServerError, []byte(`{"`+keyError+`":`+
+		strconv.Quote(string(CodeEncodeFailed))+`,"`+keyMessage+`":`+
+		strconv.Quote(CodeEncodeFailed.Message())+`}`))
 }
 
 // Fail answers with status and the refusal envelope for code, carrying no

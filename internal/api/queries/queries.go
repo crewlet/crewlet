@@ -173,6 +173,53 @@ func (r *Refusal) Error() string {
 // already maps.
 func (r *Refusal) Unwrap() error { return ErrUnauthorized }
 
+// NotPermitted is a question refused by a GRANT ITS OWN DOMAIN DERIVES for the
+// record it named — the code host's on a repository, from the chart
+// (code.GrantOf, ADR-0058) — rather than by the authority table, which
+// admitted the question and decides nothing a repository's grant does. It is
+// [ErrUnauthorized] to [errors.Is].
+//
+// A TYPE OF ITS OWN BESIDE [Refusal], because it carries none of what a
+// Refusal does: no authority-table reason, and no permission that would admit
+// the caller — a repository's grant is derived, never granted. What it
+// carries is the domain's own sentence (who asked, which record, why they are
+// shut out and who does read it), which is the whole of what the caller can
+// act on; a REST route answers it `403 not_permitted` with that sentence, the
+// word a refused push prints for the same refusal.
+type NotPermitted struct {
+	// Detail is the domain's sentence, written for the caller.
+	Detail string
+}
+
+// Error renders the refusal for a log.
+func (r *NotPermitted) Error() string { return "queries: not permitted: " + r.Detail }
+
+// Unwrap makes it [ErrUnauthorized], a refusal of the caller.
+func (r *NotPermitted) Unwrap() error { return ErrUnauthorized }
+
+// NotFound is [ErrNotFound] saying WHICH absence it is: a Reason a client
+// branches on and the sentence a person reads, for a surface whose absences
+// are remedied differently — a code question's repository nobody declared
+// (`not_declared`, declared in code.repos) and its company hosting no code
+// (`not_hosted`, which declaring a repository changes nothing about until
+// code.native is set). A REST route carries both, as `reason` and `detail`;
+// the socket's frame carries codes and not prose, and answers `not_found`.
+type NotFound struct {
+	// Reason is which absence: a word a client switches on, never prose.
+	Reason string
+
+	// Detail is the sentence, written for the caller.
+	Detail string
+}
+
+// Error renders the absence for a log.
+func (e *NotFound) Error() string {
+	return "queries: no such record (" + e.Reason + "): " + e.Detail
+}
+
+// Unwrap makes it [ErrNotFound].
+func (e *NotFound) Unwrap() error { return ErrNotFound }
+
 // Params are one query's arguments.
 //
 // It exists so a single answer function can be fed from both transports: a
@@ -681,8 +728,9 @@ func unresolved(ctx context.Context, what string) error {
 // `unavailable`: a 503 telling a client to ask another node, which refused it
 // identically, and a dashboard telling a person an operator had to act.
 //
-// EXPORTED for the code routes (internal/api/code.go), which answer outside
-// the registry and in its vocabulary: their "not yet" and their misnamed
+// EXPORTED for the code host's verify routes (internal/api/code.go), which
+// answer outside the registry — an operation on THIS node's copy, not a
+// question — and in its vocabulary: their "not yet" and their misnamed
 // position are this classification, never a second list of what clears by
 // waiting.
 func ClassifyFailure(err error) error {
