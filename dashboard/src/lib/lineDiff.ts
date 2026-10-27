@@ -1,6 +1,6 @@
 /**
- * Two texts compared line by line: the one line diff every diff and preview of
- * a text the dashboard draws is compared by.
+ * Two texts compared line by line: the one line diff every diff, preview and
+ * merge of a text in the dashboard is compared by.
  *
  * # The shortest edit
  *

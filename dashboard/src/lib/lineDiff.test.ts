@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "vitest";
 import { collapseDiff, type DiffLine, type DiffSection } from "@crewlethq/ui";
+import { lineOf, modules, parse, walk, type Lang, type Node } from "~/test/source.ts";
 import {
   MAX_COMPARE_LINES,
   MAX_EDITS,
@@ -275,6 +276,52 @@ describe("two texts not compared", () => {
     expect(notComparedReason({ kind: "too-different" })).toBe(
       "more than 4,000 lines were removed or added",
     );
+  });
+});
+
+/**
+ * Where a module compares two texts with the design system's `diffLines`: an
+ * import of it by name from the package's root or any module of it.
+ */
+function kitDiffSites(path: string, text: string, lang: Lang): string[] {
+  const line = lineOf(text);
+  const out: string[] = [];
+  walk(parse(text, lang), (node: Node) => {
+    // An import is a statement of the module itself, never inside another.
+    if (node.type === "Program") return;
+    if (node.type !== "ImportDeclaration") return false;
+    const source = String((node.source as Node).value);
+    if (source !== "@crewlethq/ui" && !source.startsWith("@crewlethq/ui/")) return false;
+    for (const spec of node.specifiers as Node[]) {
+      if (spec.type !== "ImportSpecifier") continue;
+      const imported = spec.imported as Node;
+      const name = String(imported.type === "Identifier" ? imported.name : imported.value);
+      if (name === "diffLines") out.push(`${path}:${line(spec.start)} imports diffLines`);
+    }
+    return false;
+  });
+  return out;
+}
+
+// ONE LINE DIFF: the design system's `diffLines` stops comparing at 2,000
+// lines a side and answers a whole replacement past them, which the
+// dashboard drew as a page rewritten and merged as one conflict.
+describe("the dashboard's texts", () => {
+  test("are compared here and nowhere else", () => {
+    const sites = modules().flatMap((m) => kitDiffSites(m.path, m.text, m.lang));
+    expect(sites, "compare two texts with compareLines from lib/lineDiff.ts").toEqual([]);
+  });
+
+  test("it can tell — the package's line diff is reported however it is imported", () => {
+    const old = [
+      'import { collapseDiff, diffLines } from "@crewlethq/ui";',
+      'import { diffLines as compare } from "@crewlethq/ui/DiffView";',
+      'import { compareLines } from "~/lib/lineDiff.ts";',
+    ].join("\n");
+    expect(kitDiffSites("old.ts", old, "ts")).toEqual([
+      "old.ts:1 imports diffLines",
+      "old.ts:2 imports diffLines",
+    ]);
   });
 });
 

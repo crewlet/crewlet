@@ -227,7 +227,7 @@ A line's kind is said three ways, each enough alone:
   is two neighbours.
 
 Two texts are compared by the dashboard's one line diff, `lib/lineDiff.ts`,
-which every diff and preview of a text compares with: the shortest edit
+which every diff, preview and merge of a text compares with: the shortest edit
 between their lines (Myers' algorithm, the one git's own diff runs), in linear
 space, over lines interned to numbers, with the stretch the two share at their
 start and end walked once and compared no further, so what a comparison costs
@@ -7074,7 +7074,10 @@ page is one column and the outline is not drawn.
   before the person presses Save: the editor says "Somebody saved revision n
   while you edited", offers their change as a diff, and "Keep editing on top of
   it" MERGES their change into the draft by line before the base moves
-  (`lib/merge.ts`, a three-way merge over the revision the edit started from).
+  (`lib/merge.ts`, a three-way merge over the revision the edit started from,
+  each side compared with it by the dashboard's one line diff, so the merge
+  works on the edits "their change" shows; a side that diff does not compare
+  is one clash of the whole page, the person's to settle).
   A change only one side made is taken as it is; where both changed the same
   lines the base stays behind and each clash is shown, their lines beside the
   draft's, for the person to keep theirs, yours or both, with nothing
