@@ -16,10 +16,11 @@ import (
 
 // The bounds of the guarded client's dials.
 const (
-	// dialTimeout bounds one dial: the network's NAT64 prefixes asked of the
-	// resolver, and every address a name resolves to. net.Dialer races the
-	// name's address families inside it and splits what is left of it across
-	// a family's addresses, at least two seconds each. It is FetchTimeout
+	// dialTimeout bounds one dial: every address a name resolves to, the
+	// network's NAT64 prefixes asked of the resolver inside the share of the
+	// first address that needs them. net.Dialer races the name's address
+	// families inside it and splits what is left of it across a family's
+	// addresses, at least two seconds each. It is FetchTimeout
 	// because a connection is dialed for a fetch that gives up at
 	// FetchTimeout, and it is the only bound a dial has: net/http dials apart
 	// from the request's own deadline, so that the connection can serve a
@@ -69,11 +70,16 @@ const (
 // # The network's NAT64 prefixes
 //
 // The rule's NAT64 prefixes are asked of the resolver the CDN's name is
-// resolved with, the process's own (net.DefaultResolver), once a dial and
-// before it: on a network that reaches IPv4 through a translator, a CDN with
-// no IPv6 address of its own is dialed at an address under the network's
-// prefix, judged by the IPv4 address it carries. A resolver that cannot
-// answer for them fails the dial, which is never made on a guess.
+// resolved with, the process's own (net.DefaultResolver): on a network that
+// reaches IPv4 through a translator, a CDN with no IPv6 address of its own is
+// dialed at an address under the network's prefix, judged by the IPv4 address
+// it carries. They are asked at most once a dial, at the socket of the first
+// address whose verdict they can change (an IPv6 one in global unicast or in
+// 64:ff9b:1::/48; httpx.Rule.Public says why only there), so an IPv4
+// address's connect waits on no lookup, and a dial that tries none costs
+// none. When the resolver cannot answer for them, each address that needed
+// the answer is refused at its socket, never connected to on a guess, and
+// the dial goes on to the name's addresses that need none.
 //
 // A PROXY THE OPERATOR CONFIGURED IS DIALED AS ITSELF: the transport keeps the
 // process's proxy settings (httpx's rule), the proxy resolves the CDN's name,
@@ -104,9 +110,10 @@ type guard struct {
 
 	// cdn is what every other host is dialed with: net.Dialer resolves the
 	// host through its Resolver (the process's own when nil) and races its
-	// addresses. Each dial copies it and puts the network's rule in front
-	// of its ControlContext (judging), so an address that is not public is
-	// refused before the connection to it is made.
+	// addresses. Each dial copies it and puts a rule of its own, on that
+	// resolver's network, in front of its ControlContext (judging), so an
+	// address that is not public is refused before the connection to it is
+	// made.
 	cdn *net.Dialer
 
 	mu      sync.Mutex
@@ -142,8 +149,9 @@ func (g *guard) trust(u *url.URL) {
 
 // dial dials a proxy the transport chose as itself. Every other host it dials
 // through a copy of the CDN dialer that connects only to an address the
-// network's rule, asked of the resolver the dialer resolves with, calls
-// public. One bound, dialTimeout, covers the rule's discovery and the dial.
+// network's rule, made on the resolver the dialer resolves with, calls
+// public. One bound, dialTimeout, covers the dial and the one lookup the rule
+// may make inside it.
 func (g *guard) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	g.mu.Lock()
 	proxied := g.proxies[addr]
@@ -157,12 +165,8 @@ func (g *guard) dial(ctx context.Context, network, addr string) (net.Conn, error
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
-	rule, err := httpx.DiscoverRule(ctx, resolver)
-	if err != nil {
-		return nil, fmt.Errorf("vendor: %w", err)
-	}
 	cdn := *g.cdn
-	cdn.ControlContext = judging(rule, g.cdn.ControlContext)
+	cdn.ControlContext = judging(httpx.NewRule(resolver), g.cdn.ControlContext)
 	return cdn.DialContext(ctx, network, addr)
 }
 
@@ -173,12 +177,14 @@ type control = func(ctx context.Context, network, address string, c syscall.RawC
 // with each address it is about to connect to, once the socket for it exists
 // and before the connection is made, so the address judged is the address
 // connected to whatever a resolver answered, and an address refused here is
-// sent nothing. net.Dialer then moves on to the name's next address, and when
-// every address fails it answers with the first one's error, inside a
-// *net.OpError naming that address. An address rule lets through goes on to
-// then, the ControlContext the CDN dialer already carried (none, outside a
-// test that stops each dial at its connect).
-func judging(rule httpx.Rule, then control) control {
+// sent nothing: one that is not public, with httpx.ErrNotPublic, and one the
+// rule could not judge, with the failure of the lookup that names the
+// network's prefixes. net.Dialer then moves on to the name's next
+// address, and when every address fails it answers with the first one's error,
+// inside a *net.OpError naming that address. An address rule lets through
+// goes on to then, the ControlContext the CDN dialer already carried (none,
+// outside a test that stops each dial at its connect).
+func judging(rule *httpx.Rule, then control) control {
 	return func(ctx context.Context, network, address string, c syscall.RawConn) error {
 		ap, err := netip.ParseAddrPort(address)
 		if err != nil {
@@ -186,10 +192,13 @@ func judging(rule httpx.Rule, then control) control {
 			// refused rather than connected to unjudged.
 			return fmt.Errorf("%w: %q cannot be read as an address: %w", httpx.ErrNotPublic, address, err)
 		}
-		if !rule.Public(ap.Addr()) {
+		public, err := rule.Public(ctx, ap.Addr())
+		switch {
+		case err != nil:
+			return err
+		case !public:
 			return fmt.Errorf("%w: %s", httpx.ErrNotPublic, ap.Addr())
-		}
-		if then == nil {
+		case then == nil:
 			return nil
 		}
 		return then(ctx, network, address, c)

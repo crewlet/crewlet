@@ -250,9 +250,7 @@ func TestTheGuardRacesTheAddressFamiliesOfAName(t *testing.T) {
 // there, at its socket like any other. Both of the CDN's addresses lie in
 // 3ffe::/16, global unicast, where the allowlist alone would let the one
 // carrying the cloud metadata address through, so only the network's own
-// prefix, asked of that resolver, refuses it. A resolver that cannot answer
-// for the prefixes fails the dial before any address is tried: a dial is
-// never made on a guess.
+// prefix, asked of that resolver, refuses it.
 func TestTheGuardJudgesANAT64AddressByTheIPv4AddressItCarries(t *testing.T) {
 	t.Parallel()
 	g := newGuard()
@@ -274,21 +272,62 @@ func TestTheGuardJudgesANAT64AddressByTheIPv4AddressItCarries(t *testing.T) {
 		t.Fatal("a dial that reaches no connect connected")
 	}
 	mu.Lock()
-	got := slices.Clone(reached)
-	mu.Unlock()
-	if want := []string{"[3ffe:64:64:96::6810:1]:443"}; !slices.Equal(got, want) {
-		t.Errorf("the dial reached the connects of %v, want %v: 104.16.0.1 under the network's prefix alone", got, want)
-	}
-
-	g.cdn.Resolver = dnsServer{hosts: []string{"104.16.0.1"}, ipv4onlyFails: true}.resolver()
-	_, err := g.dial(t.Context(), "tcp", "cdn.example:443")
-	if dnsErr, ok := errors.AsType[*net.DNSError](err); !ok || dnsErr.IsNotFound ||
-		errors.Is(err, httpx.ErrNotPublic) || !strings.Contains(err.Error(), "ipv4only.arpa") {
-		t.Errorf("a dial whose resolver failed ipv4only.arpa answered %v, want that failure, naming the lookup", err)
-	}
-	mu.Lock()
 	defer mu.Unlock()
-	if !slices.Equal(reached, got) {
-		t.Errorf("a dial whose resolver failed ipv4only.arpa reached the connects of %v", reached[len(got):])
+	if want := []string{"[3ffe:64:64:96::6810:1]:443"}; !slices.Equal(reached, want) {
+		t.Errorf("the dial reached the connects of %v, want %v: 104.16.0.1 under the network's prefix alone",
+			reached, want)
+	}
+}
+
+// THE GUARD ASKS FOR THE NETWORK'S PREFIXES ONLY AT THE SOCKET OF AN ADDRESS
+// WHOSE VERDICT THEY CAN CHANGE: an IPv6 address in global unicast or in
+// 64:ff9b:1::/48. So a resolver that fails ipv4only.arpa keeps the guard from
+// no IPv4 address, nor from one under the well-known prefix, each of which
+// reaches its connect; and an address that needs the answer is refused at its
+// own socket with the resolver's failure, naming the lookup, never dialed on
+// a guess. A CDN's name that has both is dialed at the address that needs no
+// answer.
+func TestTheGuardAsksForTheNetworksPrefixesOnlyWhereTheyCanChangeAVerdict(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		hosts   []string
+		reached []string // the connects the dial reaches
+		refused string   // the address refused with the resolver's failure, if any
+	}{
+		{[]string{"104.16.0.1"}, []string{"104.16.0.1:443"}, ""},
+		{[]string{"64:ff9b::6810:1"}, []string{"[64:ff9b::6810:1]:443"}, ""},
+		{[]string{"2606:4700::1"}, nil, "[2606:4700::1]:443"},
+		{[]string{"2606:4700::1", "104.16.0.1"}, []string{"104.16.0.1:443"}, ""},
+	} {
+		g := newGuard()
+		g.cdn.Resolver = dnsServer{hosts: c.hosts, ipv4onlyFails: true}.resolver()
+		var (
+			mu      sync.Mutex
+			reached []string
+		)
+		reachConnect(g, func(_ context.Context, address string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			reached = append(reached, address)
+			return errDialedNothing
+		})
+		_, err := g.dial(t.Context(), "tcp", "cdn.example:443")
+		mu.Lock()
+		got := slices.Clone(reached)
+		mu.Unlock()
+		if !slices.Equal(got, c.reached) {
+			t.Errorf("a dial of %v, its resolver failing ipv4only.arpa, reached the connects of %v, want %v",
+				c.hosts, got, c.reached)
+		}
+		if c.refused == "" {
+			continue
+		}
+		var op *net.OpError
+		if dnsErr, ok := errors.AsType[*net.DNSError](err); !ok || dnsErr.IsNotFound ||
+			errors.Is(err, httpx.ErrNotPublic) || !strings.Contains(err.Error(), "ipv4only.arpa") ||
+			!errors.As(err, &op) || op.Addr == nil || op.Addr.String() != c.refused {
+			t.Errorf("a dial of %v, its resolver failing ipv4only.arpa, answered %v, want that failure, naming "+
+				"the lookup, at the socket of %s", c.hosts, err, c.refused)
+		}
 	}
 }

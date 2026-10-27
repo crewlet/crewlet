@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sync"
 )
 
 // notGlobal4 are the IPv4 blocks no address on the public internet is in.
@@ -67,7 +68,9 @@ var notGlobal6 = []netip.Prefix{
 // ErrNotPublic is an address the rule refuses: one that is not on the public
 // internet. [ResolvePublic] answers it for a host that is, or resolves to,
 // such an address; a dialer that judges each address at its socket with
-// [Rule.Public] wraps it naming the address it refused.
+// [Rule.Public] wraps it naming the address it refused. An address the rule
+// could not judge, because the network's resolver failed the lookup it
+// needed, is refused with that failure instead, never with this.
 var ErrNotPublic = errors.New("httpx: not an address on the public internet")
 
 // Resolver is what the rule asks of a resolver: the addresses a name has, of
@@ -80,39 +83,65 @@ type Resolver interface {
 
 // Rule is the public-address rule as it holds on one network: which addresses
 // are on the public internet there, given the NAT64 prefixes the network
-// translates IPv6 to IPv4 through. [DiscoverRule] is the only way to a Rule
-// that calls any address public, so no address is judged without the
-// network's prefixes: an address in a network-specific prefix inside
-// 2000::/3 that carries a private IPv4 address would otherwise be called
-// public. The zero Rule asked no network anything, and refuses every address.
+// translates IPv6 to IPv4 through, which its resolver names. [NewRule] is the
+// only way to a Rule that calls any address public, so no address whose
+// verdict the network's prefixes can change is judged without them: an
+// address in a network-specific prefix inside 2000::/3 that carries a private
+// IPv4 address would otherwise be called public. The zero Rule, and a nil
+// one, name no network, and refuse every address.
+//
+// A Rule is one dial's or one resolve's. It asks the network's resolver for
+// the prefixes at most once, when an address it judges first needs them
+// ([Rule.Public]), and nothing keeps the answer past it (discoverNAT64 says
+// why). It is safe for concurrent use, as a dialer racing a name's address
+// families uses it.
 type Rule struct {
-	// nat64 are the network-specific NAT64 prefixes the network's resolver
-	// named where they count ([honoured]). The well-known prefix counts on
-	// every network, and is not among them.
-	nat64 []netip.Prefix
+	// resolver is the network's own, the one the host judged is resolved
+	// with. It is nil in the zero Rule.
+	resolver Resolver
 
-	// discovered is set by DiscoverRule alone, which is what keeps the zero
-	// Rule from judging an address with no prefixes asked for.
-	discovered bool
+	// mu holds the one ask: a judgment that needs its answer while it is out
+	// waits for it.
+	mu sync.Mutex
+	// asked is set once the resolver has been asked. nat64 and err are what
+	// it answered: the network-specific NAT64 prefixes it named where they
+	// count ([honoured]), or the failure that kept it from naming any. The
+	// well-known prefix counts on every network, and is not among them.
+	asked bool
+	nat64 []netip.Prefix
+	err   error
 }
 
-// DiscoverRule asks r for the NAT64 prefixes of the network it resolves on
-// (RFC 7050; discoverNAT64 says how) and returns the rule on that network. r
+// NewRule returns the public-address rule on the network r resolves on. r
 // must be the resolver the host to be judged is resolved with, since only a
-// network's own resolver names the prefixes it translates through. A lookup
-// that fails, rather than answering that there is no record, fails the
-// discovery, so the rule is never applied on a guess. It is asked for every
-// dial and never kept (discoverNAT64 says why).
-func DiscoverRule(ctx context.Context, r Resolver) (Rule, error) {
-	nat64, err := discoverNAT64(ctx, r)
-	if err != nil {
-		return Rule{}, err
-	}
-	return Rule{nat64: nat64, discovered: true}, nil
+// network's own resolver names the prefixes it translates through (RFC 7050;
+// discoverNAT64 says how). It asks r nothing until an address needs it.
+func NewRule(r Resolver) *Rule {
+	return &Rule{resolver: r}
 }
 
 // Public reports whether ip is an address on the public internet on the
-// rule's network (public says which addresses those are).
+// rule's network (public says which addresses those are), or the failure that
+// kept it from being judged.
+//
+// THE NETWORK'S PREFIXES ARE ASKED FOR ONLY WHERE THEY CAN CHANGE THE VERDICT:
+// for an IPv6 address that a prefix the network names could hold where it
+// counts, in global unicast or in RFC 8215's local-use block (namedCanHold),
+// the first time the rule judges one. Every other address is judged as on a
+// network naming none, which is its verdict whatever the network names: an
+// IPv4 address, one in the well-known prefix, and one the allowlist refuses
+// outside those two places. So when the resolver cannot answer for the
+// prefixes, only an address that needed the answer is refused, with the
+// resolver's failure wrapped, and the rule is never applied on a guess; an
+// IPv4 host is never refused for a lookup it did not need, nor kept waiting
+// on one.
+//
+// What that one ask answers, a failure included, stands for the rule's life.
+// It runs under the context of the judgment that needs it first, in a dialer
+// that address's share of the dial's bound, and a judgment that needs the
+// answer while the ask is out waits for it: in a dial that never happens,
+// since net.Dialer tries one address of a family at a time, and an IPv4
+// address needs no answer.
 //
 // It judges ONE address, and what makes it a wall is where a dialer asks it:
 // of the very address each connection is made to, once the name is resolved,
@@ -123,14 +152,40 @@ func DiscoverRule(ctx context.Context, r Resolver) (Rule, error) {
 // stays net.Dialer's own: it resolves the name, races its address families
 // and splits its bound across a family's addresses, all of which a dialer
 // handing it one judged address at a time forgoes. The CDN fetch's dialer
-// (internal/artifactupload/vendor.Guarded) is the worked example: it discovers
-// the rule through the resolver its net.Dialer resolves with, once a dial.
-func (r Rule) Public(ip netip.Addr) bool {
-	return r.discovered && public(ip, r.nat64)
+// (internal/artifactupload/vendor.Guarded) is the worked example: it makes
+// the rule once a dial, on the resolver its net.Dialer resolves with.
+func (r *Rule) Public(ctx context.Context, ip netip.Addr) (bool, error) {
+	if r == nil || r.resolver == nil {
+		return false, nil
+	}
+	if !namedCanHold(ip) {
+		return public(ip, nil), nil
+	}
+	nat64, err := r.named(ctx)
+	if err != nil {
+		return false, fmt.Errorf("httpx: %s cannot be judged until the resolver answers an AAAA lookup of %s, "+
+			"even with no record: it names the NAT64 prefixes this network translates through (RFC 7050): %w",
+			ip, ipv4onlyArpa, err)
+	}
+	return public(ip, nat64), nil
+}
+
+// named is what the network's resolver answers when asked for its NAT64
+// prefixes, asked the first time it is called and kept for the rule's life.
+// Not a sync.OnceValues: the ask takes the context of the judgment that needs
+// it first, which a OnceValues' function cannot be handed.
+func (r *Rule) named(ctx context.Context) ([]netip.Prefix, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.asked {
+		r.nat64, r.err = discoverNAT64(ctx, r.resolver)
+		r.asked = true
+	}
+	return r.nat64, r.err
 }
 
 // ResolvePublic returns the addresses host names, once each is judged to be on
-// the public internet by the rule on r's network ([DiscoverRule]): host itself
+// the public internet by the rule on r's network ([NewRule]): host itself
 // where it is an address, and otherwise every address r resolves it to. Each
 // comes back as the address to dial, an IPv4 address written in IPv6 form
 // unmapped. One that is not public refuses the host with [ErrNotPublic]: a
@@ -145,9 +200,14 @@ func (r Rule) Public(ip netip.Addr) bool {
 // dialer that makes its connections itself judges each at its socket with
 // [Rule.Public] instead, and keeps net.Dialer's own resolution and races.
 //
-// THE NAT64 PREFIXES ARE DISCOVERED ON EVERY CALL, through r itself, the
-// resolver the host is resolved with, and a discovery that fails fails the
-// call ([DiscoverRule] says why).
+// THE NAT64 PREFIXES ARE ASKED OF r ITSELF, the resolver the host is resolved
+// with, at most once a call and only when one of the host's addresses needs
+// them ([Rule.Public] says which do): a host whose addresses are all IPv4
+// costs no lookup beyond its own, and no failure of that lookup refuses it.
+// One that fails refuses the host when an address needed it, unless another
+// of its addresses is not public, which refuses it with [ErrNotPublic]
+// instead: the more definite answer, given whichever order the resolver
+// answers in.
 func ResolvePublic(ctx context.Context, r Resolver, host string) ([]netip.Addr, error) {
 	var addrs []netip.Addr
 	literal, err := netip.ParseAddr(host)
@@ -161,20 +221,28 @@ func ResolvePublic(ctx context.Context, r Resolver, host string) ([]netip.Addr, 
 			return nil, fmt.Errorf("httpx: %s resolves to no address", host)
 		}
 	}
-	rule, err := DiscoverRule(ctx, r)
-	if err != nil {
-		return nil, err
-	}
+	rule := NewRule(r)
 	judged := make([]netip.Addr, 0, len(addrs))
+	var unjudged error
 	for _, ip := range addrs {
 		ip = ip.Unmap()
-		if !rule.Public(ip) {
+		ok, err := rule.Public(ctx, ip)
+		switch {
+		case err != nil:
+			if unjudged == nil {
+				unjudged = err
+			}
+		case !ok:
 			if literal.IsValid() {
 				return nil, fmt.Errorf("%w: %s", ErrNotPublic, host)
 			}
 			return nil, fmt.Errorf("%w: %s resolves to %s", ErrNotPublic, host, ip)
+		default:
+			judged = append(judged, ip)
 		}
-		judged = append(judged, ip)
+	}
+	if unjudged != nil {
+		return nil, unjudged
 	}
 	return judged, nil
 }
@@ -237,9 +305,16 @@ func public(ip netip.Addr, nat64 []netip.Prefix) bool {
 		if in, carriesPublic := translated(ip, nat64); in {
 			return carriesPublic
 		}
-		return global6.Contains(ip) && !inAny(notGlobal6, ip)
+		return allowlisted(ip)
 	}
 	return false
+}
+
+// allowlisted reports whether ip is in global unicast and outside every block
+// there that is not on the internet ([notGlobal6]): the allowlist an IPv6
+// address no NAT64 prefix holds is judged by.
+func allowlisted(ip netip.Addr) bool {
+	return global6.Contains(ip) && !inAny(notGlobal6, ip)
 }
 
 // inAny reports whether ip is in one of blocks.

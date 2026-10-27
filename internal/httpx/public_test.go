@@ -417,7 +417,8 @@ func TestAPrefixTheResolverNamesCountsOnlyWhereItCannotWidenTheRule(t *testing.T
 // DNS64, an answer carrying neither of the name's two addresses was not
 // synthesized, and a prefix whose own bits hold 192.0.0.170 is read from the
 // answer for 192.0.0.171, in either order. A lookup that fails, rather than
-// finding no record, fails the resolve with the resolver's own error.
+// finding no record, is
+// TestTheNetworksPrefixesAreAskedForOnlyWhereTheyCanChangeAVerdict's.
 func TestTheNetworksPrefixesAreReadFromIpv4onlyArpa(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -447,17 +448,102 @@ func TestTheNetworksPrefixesAreReadFromIpv4onlyArpa(t *testing.T) {
 			t.Errorf("%s: %s is judged public=%v, want %v", c.name, c.probe, got, c.want)
 		}
 	}
+}
 
+// THE NETWORK'S PREFIXES ARE ASKED FOR ONLY WHERE THEY CAN CHANGE A VERDICT:
+// for an IPv6 address that a prefix the network names could hold where it
+// counts, in global unicast or in 64:ff9b:1::/48. Every other address is
+// judged as on a network that names none, which is its verdict whatever the
+// network names, and the resolver is not asked: so one that fails
+// ipv4only.arpa refuses no IPv4 host, literal or name, nor an address in the
+// well-known prefix, and an address the allowlist refuses outside those places
+// is refused as not public. An address that needs the answer is refused with
+// the resolver's own failure, naming the lookup and the address. A name with
+// an address that is not public beside one that cannot be judged is refused
+// as not public, whichever its resolver answers first. And one resolve asks
+// once, however many of its addresses need the answer.
+func TestTheNetworksPrefixesAreAskedForOnlyWhereTheyCanChangeAVerdict(t *testing.T) {
+	t.Parallel()
 	misbehaving := &net.DNSError{Err: "server misbehaving", Name: "ipv4only.arpa.", Server: "192.0.2.53:53",
 		IsTemporary: true}
-	n := &network{answers: map[string][]string{"cdn.example": {"104.16.0.1"}},
-		fail: map[string]error{"ipv4only.arpa.": misbehaving}}
-	for _, host := range []string{"cdn.example", "104.16.0.1", "2606:4700::1"} {
-		judged, err := httpx.ResolvePublic(t.Context(), n, host)
+	names := map[string][]string{
+		"v4.example":     {"104.16.0.1", "151.101.1.1"},
+		"dns64.example":  {"151.101.1.1", "64:ff9b::6810:1"},
+		"ula.example":    {"fd00::5"},
+		"v6.example":     {"104.16.0.1", "2606:4700::1"},
+		"split.example":  {"2606:4700::1", "10.0.0.5"},
+		"split2.example": {"10.0.0.5", "2606:4700::1"},
+		"three.example":  {"2606:4700::1", "2606:4700::2", "3ffe:64:64:96::6810:1"},
+	}
+	failing := func() *network {
+		return &network{answers: names, fail: map[string]error{"ipv4only.arpa.": misbehaving}}
+	}
+	asks := func(n *network) int {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		count := 0
+		for _, q := range n.asked {
+			if q == "ip6 ipv4only.arpa." {
+				count++
+			}
+		}
+		return count
+	}
+
+	for _, c := range []struct {
+		host   string
+		public bool
+	}{
+		{"104.16.0.1", true},
+		{"10.0.0.5", false},
+		{"::ffff:104.16.0.1", true},
+		{"64:ff9b::6810:1", true}, // 104.16.0.1 under the well-known prefix, which no named prefix overlaps
+		{"64:ff9b::a00:5", false}, // 10.0.0.5 under it
+		{"fd00::5", false},
+		{"fe80::1%eth0", false},
+		{"2001:db8::1", false},
+		{"v4.example", true},
+		{"dns64.example", true},
+		{"ula.example", false},
+	} {
+		n := failing()
+		judged, err := httpx.ResolvePublic(t.Context(), n, c.host)
+		switch {
+		case c.public && err != nil, !c.public && !errors.Is(err, httpx.ErrNotPublic):
+			t.Errorf("%s, with the resolver failing ipv4only.arpa, answered %v and %v, want public=%v", c.host,
+				judged, err, c.public)
+		case asks(n) != 0:
+			t.Errorf("%s, whose verdict no prefix the network names can change, asked for them: %v", c.host, n.asked)
+		}
+	}
+
+	for _, c := range []struct{ host, addr string }{
+		{"2606:4700::1", "2606:4700::1"},
+		{"3ffe:64:64:96::6810:1", "3ffe:64:64:96::6810:1"},
+		{"64:ff9b:1::6810:1", "64:ff9b:1::6810:1"},
+		{"v6.example", "2606:4700::1"},
+	} {
+		judged, err := httpx.ResolvePublic(t.Context(), failing(), c.host)
 		if err == nil || errors.Is(err, httpx.ErrNotPublic) || !errors.Is(err, misbehaving) ||
-			!strings.Contains(err.Error(), "ipv4only.arpa.") {
-			t.Errorf("%s, with the resolver failing ipv4only.arpa, answered %v and %v, want the failure, "+
-				"naming the lookup", host, judged, err)
+			!strings.Contains(err.Error(), "ipv4only.arpa.") || !strings.Contains(err.Error(), c.addr) {
+			t.Errorf("%s, with the resolver failing ipv4only.arpa, answered %v and %v, want the failure, naming "+
+				"the lookup and %s", c.host, judged, err, c.addr)
+		}
+	}
+
+	for _, host := range []string{"split.example", "split2.example"} {
+		if _, err := httpx.ResolvePublic(t.Context(), failing(), host); !errors.Is(err, httpx.ErrNotPublic) ||
+			!strings.Contains(err.Error(), host+" resolves to 10.0.0.5") {
+			t.Errorf("%s, one of whose addresses is 10.0.0.5, answered %v with the resolver failing "+
+				"ipv4only.arpa, want it refused as not public", host, err)
+		}
+	}
+
+	for _, n := range []*network{failing(), {answers: names}} {
+		_, err := httpx.ResolvePublic(t.Context(), n, "three.example")
+		if got := asks(n); got != 1 {
+			t.Errorf("three.example, whose three addresses each need the prefixes, asked for them %d times "+
+				"(and answered %v), want once", got, err)
 		}
 	}
 }
@@ -496,19 +582,20 @@ func TestANameIsPublicOnlyWhenEveryAddressItResolvesToIs(t *testing.T) {
 	}
 }
 
-// A RULE IS HAD ONLY FROM THE NETWORK IT JUDGES ON. DiscoverRule asks the
-// resolver for the network's NAT64 prefixes and judges each address with
-// them, as ResolvePublic does; a discovery that fails gives no rule, with the
-// resolver's own error. The zero Rule asked no network anything and calls no
-// address public, so a dialer that never asked for the prefixes dials nothing
-// rather than judging without them.
+// A RULE IS HAD ONLY FROM THE NETWORK IT JUDGES ON. NewRule's rule asks the
+// network's resolver for its NAT64 prefixes and judges each address with them,
+// as ResolvePublic does, asking once however many addresses it judges. Where
+// the resolver fails that lookup, an address whose verdict needs it is refused
+// with the resolver's own error, and one whose verdict does not is judged. The
+// zero Rule, and a nil one, name no network and call no address public, so a
+// dialer that was never handed the network's resolver dials nothing rather
+// than judging without its prefixes.
 func TestARuleJudgesWithTheNetworksOwnPrefixes(t *testing.T) {
 	t.Parallel()
 	n := dns64("3ffe:64:64:96::c000:aa", "3ffe:64:64:96::c000:ab")
-	rule, err := httpx.DiscoverRule(t.Context(), n)
-	if err != nil {
-		t.Fatalf("discovering the rule on a network with DNS64: %v", err)
-	}
+	ruled := dns64("3ffe:64:64:96::c000:aa", "3ffe:64:64:96::c000:ab") // the same network, asked by rule alone
+	rule := httpx.NewRule(ruled)
+	var none *httpx.Rule
 	for _, c := range []struct {
 		addr string
 		want bool
@@ -523,24 +610,36 @@ func TestARuleJudgesWithTheNetworksOwnPrefixes(t *testing.T) {
 		{"2606:4700::1%eth0", false},
 	} {
 		addr := netip.MustParseAddr(c.addr)
-		if got := rule.Public(addr); got != c.want {
-			t.Errorf("the network's rule judges %s public=%v, want %v", addr, got, c.want)
+		if got, err := rule.Public(t.Context(), addr); got != c.want || err != nil {
+			t.Errorf("the network's rule judges %s public=%v (%v), want %v", addr, got, err, c.want)
 		}
 		if got := publicOn(t, n, addr); got != c.want {
 			t.Errorf("ResolvePublic on the same network judges %s public=%v, want %v", addr, got, c.want)
 		}
-		if (httpx.Rule{}).Public(addr) {
-			t.Errorf("the zero Rule calls %s public", addr)
+		for _, zero := range []*httpx.Rule{{}, none} {
+			if got, err := zero.Public(t.Context(), addr); got || err != nil {
+				t.Errorf("a Rule that names no network judges %s public=%v (%v), want it refused", addr, got, err)
+			}
 		}
+	}
+	ruled.mu.Lock()
+	asked := slices.Clone(ruled.asked)
+	ruled.mu.Unlock()
+	if want := []string{"ip6 ipv4only.arpa."}; !slices.Equal(asked, want) {
+		t.Errorf("the rule, judging eight addresses, asked its resolver %v, want %v", asked, want)
 	}
 
 	misbehaving := &net.DNSError{Err: "server misbehaving", Name: "ipv4only.arpa.", Server: "192.0.2.53:53",
 		IsTemporary: true}
-	failing := &network{fail: map[string]error{"ipv4only.arpa.": misbehaving}}
-	failed, err := httpx.DiscoverRule(t.Context(), failing)
-	if called := failed.Public(netip.MustParseAddr("104.16.0.1")); !errors.Is(err, misbehaving) || called {
-		t.Errorf("discovery through a resolver failing ipv4only.arpa answered %v, and a rule that calls "+
-			"104.16.0.1 public=%v; want the failure and no rule", err, called)
+	failing := httpx.NewRule(&network{fail: map[string]error{"ipv4only.arpa.": misbehaving}})
+	if got, err := failing.Public(t.Context(), netip.MustParseAddr("104.16.0.1")); !got || err != nil {
+		t.Errorf("a rule whose resolver fails ipv4only.arpa judges 104.16.0.1 public=%v (%v), want public: "+
+			"no prefix the network names can change an IPv4 address's verdict", got, err)
+	}
+	if got, err := failing.Public(t.Context(), netip.MustParseAddr("2606:4700::1")); got ||
+		!errors.Is(err, misbehaving) || errors.Is(err, httpx.ErrNotPublic) {
+		t.Errorf("a rule whose resolver fails ipv4only.arpa judges 2606:4700::1 public=%v (%v), want the "+
+			"failure", got, err)
 	}
 }
 
