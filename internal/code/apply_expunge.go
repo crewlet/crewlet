@@ -19,12 +19,11 @@ import (
 //
 //   - a record that finds the repository not in the state its decide held —
 //     a begin over an expunge already open or at another epoch than the
-//     next, a commit of an expunge not the open one, a request beside an open
-//     one, a begin whose layers to drop are not the chain's top — applies as
-//     NOTHING, whole, logged (code_expunge_not_applied): no correct log
-//     carries one but a record the ledger would have collapsed, met again,
-//     and applied in part it would leave a repository whose packs, epoch and
-//     layers disagree;
+//     next, a commit of an expunge not the open one, a begin whose layers to
+//     drop are not the chain's top — applies as NOTHING, whole, logged
+//     (code_expunge_not_applied): no correct log carries one but a record the
+//     ledger would have collapsed, met again, and applied in part it would
+//     leave a repository whose packs, epoch and layers disagree;
 //   - a pack the record retires that code_packs no longer holds is passed
 //     over, and a commit passes over a pack it names that is not dropping —
 //     retiring a live pack would drop objects a ref reaches;
@@ -103,21 +102,18 @@ func notApplied(ctx context.Context, at applyContext, repoID, why string) (int, 
 }
 
 // applyExpungeRequest records a purge request: the repository's open request,
-// and the position its record landed at — unless the request is SERVED at
-// once ([requestServed]): a repository holding no pack has nothing a cycle
-// could rewrite, and a request no cycle can serve would be open for ever. A
-// repository holding an open request already applies it as nothing.
+// and the position its record landed at — WIDENING a request already open,
+// which this one replaces: a request asks about everything that dates from
+// before it, so one at a later position asks about everything an earlier one
+// did and more — a pack pushed between the two, and whatever a ref dropped
+// between them left — and the repository's purge is served only once nothing
+// from before the latest request is left, never sooner for whoever asked
+// first. Unless the request is SERVED at once ([requestServed]): a repository
+// holding no pack has nothing a cycle could rewrite, and a request no cycle
+// can serve would be open for ever.
 func (a *Applier) applyExpungeRequest(ctx context.Context, tx *sql.Tx, at applyContext,
 	r ExpungeRequest) (int, error) {
 
-	state, err := expungeStateIn(ctx, tx, r.RepoID)
-	if err != nil {
-		return 0, err
-	}
-	if state.request != "" {
-		return notApplied(ctx, at, r.RepoID, fmt.Sprintf("request %s is open already, and a request "+
-			"asked beside it is decided as that one", state.request))
-	}
 	served, err := requestServed(ctx, tx, r.RepoID, at.packed)
 	if err != nil {
 		return 0, err

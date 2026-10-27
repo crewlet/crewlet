@@ -764,24 +764,23 @@ type ExpungeProposal struct {
 // ExpungeResult is what became of one expunge proposal.
 type ExpungeResult struct {
 	// Outcome is applied, pending or unknown for a proposal whose record was
-	// appended, and empty for one refused with none — and applied, with no
-	// record of its own, for a request answered with the one already open
-	// (Request names it). A begin's and a commit's applied is answered only
-	// from the rows of the packs the record added, never from the decision.
+	// appended, and empty for one refused with none. A begin's and a
+	// commit's applied is answered only from the rows of the packs the record
+	// added, never from the decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// Refusal is why it was refused with no record — stale, repo_deleted,
 	// upload_expired, pack_too_large, busy, not_applied or unavailable —
 	// and Detail its one sentence.
 	Refusal Refusal `json:"refusal,omitempty"`
 	Detail  string  `json:"detail,omitempty"`
-	// Position is where its record landed — or, for a request answered with
-	// the one already open, where that one's did — and, for a not_applied or
-	// repo_deleted refusal the log made after the append, where that record
-	// lies applying nowhere.
+	// Position is where its record landed — for one asked again under its
+	// own operation id, the record the ledger found — and, for a not_applied
+	// or repo_deleted refusal the log made after the append, where that
+	// record lies applying nowhere.
 	Position statelog.Position `json:"position,omitzero"`
-	// Request is the purge a request's answer is about: its own id once its
-	// record applied, and the open request's where it was answered with that
-	// one. Empty for a begin and a commit.
+	// Request is the purge a request's answer is about: its own id, the
+	// repository's open request from its record on — until a later request
+	// widens it, or a commit serves it. Empty for a begin and a commit.
 	Request string `json:"request,omitempty"`
 }
 

@@ -70,17 +70,18 @@ func requireExpunged(t *testing.T, res code.ExpungeResult, err error) {
 }
 
 // AN EXPUNGE IS DECIDED IN ITS REPOSITORY'S QUEUE, record by record: a
-// person's request applied at its position; a second request answered with
-// the open one, appending nothing; a begin applied and answered from the rows
-// of the packs it added; a second begin while it is open refused stale; and
-// its commit applied, serving the request — every pack the repository held
-// when it was asked rewritten. A request asked again under its own id is the
-// same request, answered at its record by the ledger.
+// person's request applied at its position; a second request applied at its
+// own, the repository's open request widened to it; a begin applied and
+// answered from the rows of the packs it added; a second begin while it is
+// open refused stale; and its commit applied, serving the request — every
+// pack the repository held when it was asked rewritten, by a scan past it. A
+// request asked again under its own id is the same request, answered at its
+// record by the ledger.
 //
-// Mutation: answer a second request with a record of its own, and two
-// requests are open where one covers both; publish an expunge record under an
-// operation id minted for its batch, and the request asked again is decided
-// again.
+// Mutation: answer a second request with the open one, and it appends no
+// record of its own and the repository holds the first; publish an expunge
+// record under an operation id minted for its batch, and the request asked
+// again is decided again.
 func TestAnExpungeIsDecidedInItsRepositorysQueue(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -94,21 +95,21 @@ func TestAnExpungeIsDecidedInItsRepositorysQueue(t *testing.T) {
 	if first.Request != asked.RequestID {
 		t.Fatalf("the request was answered as %q, want its own %s", first.Request, asked.RequestID)
 	}
-	before := n.end()
 	second := purgeOf(repo)
-	res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &second})
-	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position != first.Position ||
-		res.Request != asked.RequestID {
-		t.Fatalf("a second request answered %+v, %v; want the open one %s at %s", res, err, asked.RequestID,
-			first.Position)
+	widened, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &second})
+	requireExpunged(t, widened, err)
+	if widened.Request != second.RequestID || widened.Position.Packed() <= first.Position.Packed() {
+		t.Fatalf("a second request answered %+v; want its own %s, at a record of its own past the first's %s",
+			widened, second.RequestID, first.Position)
 	}
-	if got := n.end(); got != before {
-		t.Fatalf("a second request appended %d records, want none", got-before)
+	if got := n.count(`SELECT COUNT(*) FROM code_repos WHERE id = ? AND expunge_request = ?
+		AND expunge_request_position = ?`, repo, second.RequestID, widened.Position.Packed()); got != 1 {
+		t.Fatalf("the repository does not hold the second request open at its record, %s", widened.Position)
 	}
 
 	b := beginFor(n, repo, 1, ids, 2, 1)
-	b.RequestID, b.Grace = asked.RequestID, 0
-	res, err = c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &b})
+	b.RequestID, b.Grace = second.RequestID, 0
+	res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &b})
 	requireExpunged(t, res, err)
 	other := beginFor(n, repo, 2, []string{b.Add[0].PackID}, 2, 0)
 	if res, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Begin: &other}); err != nil ||
@@ -127,7 +128,7 @@ func TestAnExpungeIsDecidedInItsRepositorysQueue(t *testing.T) {
 		t.Fatalf("the repository's packs are %v, want the kept pack and the rescue", got)
 	}
 
-	before = n.end()
+	before := n.end()
 	again, err := c.ProposeExpunge(ctx, code.ExpungeProposal{Request: &asked})
 	requireExpunged(t, again, err)
 	if again.Position != first.Position || again.Request != asked.RequestID || n.end() != before {

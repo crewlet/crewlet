@@ -84,7 +84,7 @@ func (e *estate) expunged(t *testing.T, p ExpungeProposal) expungeDecision {
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
-	if d.refusal == "" && !d.collapsed {
+	if d.refusal == "" {
 		e.apply(expungeRec(t, p))
 	}
 	return d
@@ -94,9 +94,8 @@ func (e *estate) expunged(t *testing.T, p ExpungeProposal) expungeDecision {
 func (e *estate) mustExpunge(t *testing.T, p ExpungeProposal) statelog.Position {
 	t.Helper()
 	at := codeAt(e.next)
-	if d := e.expunged(t, p); d.refusal != "" || d.collapsed {
-		t.Fatalf("the %s was refused %s (%s), or answered with an open request, where it is decided",
-			opOf(p), d.refusal, d.detail)
+	if d := e.expunged(t, p); d.refusal != "" {
+		t.Fatalf("the %s was refused %s (%s), where it is decided", opOf(p), d.refusal, d.detail)
 	}
 	return at
 }
@@ -515,8 +514,7 @@ func (e *estate) purgeOver(id, request string, epoch int64, retire []string, kep
 // repository whose content dates from before it — a cycle that rewrites part
 // of what it held keeps it, the cycle that rewrites the rest serves it — and a
 // repository holding no pack is served at its own record, since no cycle could
-// rewrite anything for it. A request asked while one is open is that one:
-// decided as nothing, and answered with the open one's id and position.
+// rewrite anything for it.
 //
 // Mutation: clear a request at any commit, and the first cycle serves it with
 // a pack it never rewrote still live; keep a request for a repository holding
@@ -537,11 +535,6 @@ func TestAPurgeRequestIsServedOnceNoPackDatesFromBeforeIt(t *testing.T) {
 	at := e.mustExpunge(t, ExpungeProposal{Request: &asked})
 	if id, pos := request(); id != asked.RequestID || pos != at.Packed() {
 		t.Fatalf("the repository holds request %q at %d, want %s at %d", id, pos, asked.RequestID, at.Packed())
-	}
-	second := requestOf("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"))
-	if d := e.expunged(t, ExpungeProposal{Request: &second}); !d.collapsed || d.open != asked.RequestID ||
-		d.openAt != at {
-		t.Fatalf("a second request answered %+v, want the open one %s at %s", d, asked.RequestID, at)
 	}
 
 	first := e.purgeOver("repo-a", asked.RequestID, 1, []string{idOf("repo-a", 0), idOf("repo-a", 1)},
@@ -769,6 +762,78 @@ func TestAPurgeRequestOutlivesAnExpungeThatKeepsAGrace(t *testing.T) {
 			e.mustExpunge(t, ExpungeProposal{Commit: &c})
 			if id, at := e.openRequest("repo-a"); id != "" || at != 0 {
 				t.Fatalf("the purge's cycle over what the expunge kept left request %q at %d open", id, at)
+			}
+		})
+	}
+}
+
+// A LATER REQUEST WIDENS THE OPEN ONE: a purge asked while another is open is
+// recorded, and moves the repository's open request to its own id and
+// position, since it asks about more than the earlier one did — a pack pushed
+// between the two, the push that leaked what the later person is purging,
+// which no cycle of the earlier request takes; or what a ref dropped between
+// them left, which a cycle whose scan read the refs before the later request
+// kept as reachable. So the earlier request's cycle — its scan between the
+// two, over every pack from before the first — serves neither, and a cycle
+// whose scan is past both, over what is left from before the later one,
+// serves the repository's purge.
+//
+// Mutation: apply a request asked while one is open as nothing, and the
+// repository still holds the earlier one; date a purge's packs from its
+// begin rather than its scan, and the earlier request's cycle serves the
+// later person with the dropped history kept.
+func TestALaterRequestWidensTheOpenOne(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []struct {
+		name string
+		// between lands what comes between the two requests, answering the
+		// packs it adds.
+		between func(t *testing.T, e *estate) []string
+	}{
+		{"a pack pushed between them", func(t *testing.T, e *estate) []string {
+			return []string{e.pushed(t, "repo-a", "push-leak", "leak", ZeroOID, oid("leak"))}
+		}},
+		{"a ref dropped between them", func(t *testing.T, e *estate) []string {
+			drop := pushEntry("push-drop", move("refs/heads/side", oid("side"), ZeroOID))
+			drop.Pack = nil
+			e.apply(pushOf(t, "repo-a", drop))
+			return nil
+		}},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			e := openApplyEstate(t)
+			e.apply(create(t, "repo-a", "a"))
+			before := sorted(e.pushed(t, "repo-a", "push-1", "main", ZeroOID, oid("one")),
+				e.pushed(t, "repo-a", "push-side", "side", ZeroOID, oid("side")))
+			earlier := requestOf("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"))
+			e.mustExpunge(t, ExpungeProposal{Request: &earlier})
+			scan := codeAt(e.next - 1)
+			added := arm.between(t, e)
+			later := requestOf("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"))
+			at := e.mustExpunge(t, ExpungeProposal{Request: &later})
+			if id, pos := e.openRequest("repo-a"); id != later.RequestID || pos != at.Packed() {
+				t.Fatalf("the repository holds request %q at %d, want the later one, %s at its own %d", id,
+					pos, later.RequestID, at.Packed())
+			}
+
+			first := beginOver("repo-a", 1, before, []int64{2}, nil)
+			first.RequestID, first.Grace, first.Seen = earlier.RequestID, 0, scan
+			e.mustExpunge(t, ExpungeProposal{Begin: &first})
+			c := commitOver(first)
+			e.mustExpunge(t, ExpungeProposal{Commit: &c})
+			if id, _ := e.openRequest("repo-a"); id != later.RequestID {
+				t.Fatalf("the earlier request's cycle, its scan before the later request, served the "+
+					"repository's purge (%q)", id)
+			}
+
+			rest := e.purgeOver("repo-a", later.RequestID, 2, sorted(append([]string{first.Add[0].PackID},
+				added...)...), []int64{1}, []int64{1})
+			e.mustExpunge(t, ExpungeProposal{Begin: &rest})
+			c = commitOver(rest)
+			e.mustExpunge(t, ExpungeProposal{Commit: &c})
+			if id, pos := e.openRequest("repo-a"); id != "" || pos != 0 {
+				t.Fatalf("the cycle past both requests left request %q at %d open", id, pos)
 			}
 		})
 	}

@@ -855,8 +855,9 @@
 //     commits.
 //
 // A person may ask for one: a REQUEST ([ExpungeRequest]) records a purge and
-// nothing else, the repository holds it open — a second request while one is
-// open is that one — and it is SERVED, cleared, once no pack of the
+// nothing else, the repository holds it open — a later request WIDENS it to
+// its own position, since it asks about more: a pack pushed since, and what a
+// ref dropped since left — and it is SERVED, cleared, once no pack of the
 // repository dates its CONTENT from before it, at a commit or, for a
 // repository holding no pack, at once. A pack row names the position its
 // content dates from as a purge reads it ([PackRow.Content], replicated 0067):

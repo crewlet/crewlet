@@ -878,9 +878,7 @@ func (c CodeSeam) Compact(ctx context.Context, p code.CompactionProposal) (code.
 // Expunge asks the repository's committer to decide an expunge record — a
 // person's purge request, or a maintainer's begin or commit — and raises this
 // node's floors past the record it landed in — this node's own write, which
-// its next read of the repository must see on whichever node answers it. A
-// request answered with the one already open raises them past that one's
-// record, which is the request this node's caller now holds.
+// its next read of the repository must see on whichever node answers it.
 func (c CodeSeam) Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
 	out, err := call(ctx, c.r, opCodeExpunge, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {

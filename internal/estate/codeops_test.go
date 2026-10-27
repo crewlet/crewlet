@@ -756,10 +756,9 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		}
 	}
 
-	// AND AN EXPUNGE RECORD THIS NODE PROPOSED raises them to the record — a
-	// request answered with the one already open, to that one's — where it
-	// landed, and never where it was refused with no record: the floor of the
-	// repository it is about and of no other.
+	// AND AN EXPUNGE RECORD THIS NODE PROPOSED raises them to the record
+	// where it landed, and never where it was refused with no record: the
+	// floor of the repository it is about and of no other.
 	expunged := statelog.Position{Stream: codeStream, Generation: 1, Seq: 80}
 	for _, tc := range []struct {
 		answer code.ExpungeResult

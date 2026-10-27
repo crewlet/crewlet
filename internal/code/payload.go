@@ -799,8 +799,10 @@ type RetireSweep struct {
 // need, and it is SERVED — the repository holds it no more — once no pack of
 // the repository dates its content from before it ([PackRow.Content]): at its
 // own apply, for a repository holding no pack, and at a commit's otherwise. A
-// request asked while one is open is that one: decided as nothing, and
-// answered with the open one's id and position.
+// request asked while one is open WIDENS it: recorded, it moves the
+// repository's open request to its own id and position, since it asks about
+// everything the open one did and what landed since — so the repository's
+// purge is served only once nothing from before the latest request is left.
 //
 // Every field is in the base format, under the condition [OpExpungeRequest]
 // states.

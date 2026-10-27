@@ -33,7 +33,9 @@
 --     publication of a layer, which may name no dropping pack.
 --   - expunge_request is the open request's id and expunge_request_position
 --     the packed position of the record that made it, '' and 0 for none: a
---     second request while one is open is that one.
+--     request while one is open WIDENS it to its own id and position, since
+--     it asks about more — a pack pushed since, and what a ref dropped since
+--     left.
 --   - expunged_at is the last commit's broker instant as store.EncodeTime
 --     writes it (unix microseconds), 0 for a repository never expunged, and
 --     expunge_dropped_objects and expunge_dropped_bytes what it took out of

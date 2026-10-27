@@ -54,11 +54,16 @@ import (
 // sentence of the state it is in ([RepoGone]); archived is decided, since an
 // archived repository still holds what was pushed to it.
 //
-// A REQUEST then meets one rule: a request already open on the repository is
-// its answer — no record, the open one's id and position. A cycle serving a
-// request rewrites the live packs whose content dates from before it
-// ([PackRow.Content]), so the open one covers whatever a second one asked
-// while it waits would.
+// A REQUEST then meets no rule of its own: it forms its record whatever the
+// repository holds open, and its apply WIDENS a request already open to its
+// own id and position ([Applier.applyExpungeRequest]). The open request cannot
+// stand in for it: it is served once nothing that dates from before ITS
+// position is left ([PackRow.Content]), and a later request asks about more —
+// a pack pushed between the two, such as the push that leaked what the later
+// person is purging, and whatever a ref dropped between them left, which a
+// cycle whose scan read the refs before the later request kept as reachable.
+// A request asked again under its own id is the same request, collapsed by
+// the operation ledger.
 //
 // A BEGIN:
 //
@@ -409,8 +414,8 @@ func derivedOutputs(field, rewriteID string, from int, outputs []PackRef) error 
 // COMMIT'S SESSION IS THEIR SEEN: decided from a snapshot that holds the rows
 // their builder read, or refused behind, about this node, so the runner-up
 // decides them. A begin's and a commit's applied is answered from the rows of
-// the packs the record added, never from the decision; a request answered
-// with the one already open is answered with that one, and appends nothing.
+// the packs the record added, never from the decision; a request's with its
+// own id at its own record, whatever request the repository held open.
 func (c *Committer) ProposeExpunge(ctx context.Context, p ExpungeProposal) (ExpungeResult, error) {
 	bytes, err := p.measure()
 	if err != nil {
@@ -423,18 +428,12 @@ func (c *Committer) ProposeExpunge(ctx context.Context, p ExpungeProposal) (Expu
 }
 
 // expungeDecision is one round's decision of an expunge record: its refusal
-// and sentence where it is refused; for a request answered with the one
-// already open, that one's id and position; nothing where it forms the
-// record; and the version the repository's row was read at either way.
+// and sentence where it is refused, nothing where it forms the record, and
+// the version the repository's row was read at either way.
 type expungeDecision struct {
 	refusal Refusal
 	detail  string
 	version int64
-	// collapsed is a request answered with the open one, open its id and
-	// openAt the position its record landed at.
-	collapsed bool
-	open      string
-	openAt    statelog.Position
 }
 
 // decideExpunge is one round's decision of p over the rows tx holds — see
@@ -465,10 +464,8 @@ func decideExpunge(ctx context.Context, tx *sql.Tx, p ExpungeProposal, retention
 	case p.Commit != nil:
 		return decideCommit(ctx, tx, *p.Commit, repo, d, now)
 	}
-	// A REQUEST: the one open is the answer.
-	if repo.expungeRequest != "" {
-		d.collapsed, d.open, d.openAt = true, repo.expungeRequest, unpacked(repo.requestedAt)
-	}
+	// A REQUEST forms its record, whatever request is open: its apply widens
+	// that one to itself.
 	return d, nil
 }
 
@@ -698,7 +695,7 @@ func (c *Committer) expunge(repoID string, q *queued) {
 				return statelog.Decision{}, err
 			}
 			last, decided = d, true
-			if d.refusal != "" || d.collapsed {
+			if d.refusal != "" {
 				return statelog.Decision{Version: d.version}, nil
 			}
 			decision, err := recordFor(stamp, subject, op, scope, opID, Actor{ID: c.nodeID, Kind: ActorSystem},
@@ -730,19 +727,15 @@ func (c *Committer) expungeAnswer(ctx context.Context, p ExpungeProposal, opID s
 		if !res.Position.IsZero() {
 			return c.appliedExpunge(ctx, p, opID, res.Position)
 		}
-		// NOTHING WAS APPENDED: the decide refused it, or answered a request
-		// with the one already open, and its last round says which. A
-		// publish that answered with no record and no decision broke the
-		// publisher's contract, and says so rather than answering from
-		// nothing.
-		switch {
-		case decided && last.collapsed:
-			return ExpungeResult{Outcome: statelog.OutcomeApplied, Position: last.openAt, Request: last.open}, nil
-		case decided && last.refusal != "":
-			return ExpungeResult{Refusal: last.refusal, Detail: last.detail}, nil
+		// NOTHING WAS APPENDED: the decide refused it, and its last round
+		// says why. A publish that answered with no record and no decision
+		// broke the publisher's contract, and says so rather than answering
+		// from nothing.
+		if !decided || last.refusal == "" {
+			return ExpungeResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no "+
+				"record and decided no refusal", opID)
 		}
-		return ExpungeResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no record "+
-			"and decided no refusal", opID)
+		return ExpungeResult{Refusal: last.refusal, Detail: last.detail}, nil
 	case statelog.OutcomePending:
 		out := ExpungeResult{Outcome: statelog.OutcomePending, Position: res.Position}
 		if p.Request != nil {
