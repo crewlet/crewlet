@@ -1188,6 +1188,6 @@ units:
   one good for 50 minutes and is not restarted; past that GitHub refuses its
   calls. git and `gh` read the file the engine keeps current, and a box-mode
   seat reaches its own renewed GitHub server through the tool bridge.
-- **An app created with its webhook off is switched on by a person.** GitHub
-  has no API for it; see [Running locally, with no public
+- **An app created with no webhook has one added by a person.** GitHub has no
+  API for it; see [Running locally, with no public
   address](#running-locally-with-no-public-address).

@@ -268,10 +268,10 @@ func eventsFor(hook map[string]any) []string {
 //
 // AN APP'S DELIVERY ADDRESS IS BAKED IN AT CREATION, and only a person at
 // GitHub changes it afterwards. So an address GitHub can never reach is not
-// written into a manifest at all: the app is created with its webhook
-// switched off ([BuildManifest]), which is a state GitHub's own settings page
-// shows, rather than pointed at an address that fails every delivery while
-// the app reads as healthy. That is what a local engine is: one a person
+// written into a manifest at all: the app is created with no webhook and no
+// event subscriptions ([BuildManifest]), which is a state GitHub's own
+// settings page shows, rather than pointed at an address that fails every
+// delivery while the app reads as healthy. That is what a local engine is: one a person
 // reaches at `http://localhost:8200`, whose agents act on GitHub perfectly
 // well through their apps and hear nothing back from it.
 //

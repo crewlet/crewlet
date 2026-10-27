@@ -330,7 +330,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 	// and the setup page are opened by the operator's own browser, which
 	// reaches a local engine perfectly well; only the DELIVERY address is
 	// GitHub's to reach. So an address GitHub cannot deliver to creates the
-	// app with its webhook off rather than refusing it: the agent acts on
+	// app with no webhook rather than refusing it: the agent acts on
 	// GitHub through it from the first install, and the card says that
 	// nothing comes back ([github.Deliverable]).
 	base = strings.TrimRight(base, "/")
