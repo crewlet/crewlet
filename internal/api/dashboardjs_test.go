@@ -1116,8 +1116,12 @@ const (
 	// shapes by the screen's width took it to 345.6 KiB, the one sheet (the
 	// 0.64.1 alignment and spacing pass across every component family, the
 	// stacking grid and the screen width hooks) 115.5 KiB of it. 346 KiB,
-	// still under two seconds on that link.
-	initialBudget = 346 << 10
+	// still under two seconds on that link. uilet 0.67.0's product marks took
+	// it to 346.6 KiB with the same dashboard source: each mark now carries a
+	// 16 grid drawing beside its master, and the Ask button draws the
+	// assistant's spark, whose motion and soon rules ride the one sheet. 347
+	// KiB, still under two seconds on that link.
+	initialBudget = 347 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1238,8 +1242,11 @@ const (
 	// Lag fact, the Configuration screen's revision states, the after-save
 	// strip and the ceiling and charter followers settling on a refusal
 	// rather than "applying…", and the tab's last push kept through a
-	// dropped socket. 4554 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 458<<10
+	// dropped socket. 4554 KiB, which still refuses a doubled baseline. uilet
+	// 0.67.0's product marks (a 16 grid drawing beside each master, the spark's
+	// motion and the soon keyline) and its artifact kit took it to 4557.3 KiB.
+	// 4558 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 462<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
