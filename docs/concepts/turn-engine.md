@@ -523,13 +523,13 @@ rescued it as `incomplete`, and the reviewer then read the fenced JSON
 as "what the agent produced".
 
 The loop follows a run that ended that way with another, opened by a
-**finishing corrective** naming the tool, verbatim (one tool shown; several are
+**finishing corrective** naming the tool, verbatim (the reviewer's shown; several are
 offered as "one of …"):
 
-> Your last reply ended without calling `submit_work`, so this phase has
+> Your last reply ended without calling `submit_review`, so this phase has
 > not finished. Nothing written in a reply is read or delivered — a report
 > written out as text, JSON included, is not a submission. If the work is
-> done, call `submit_work` now with that report as its arguments; if
+> done, call `submit_review` now with that report as its arguments; if
 > something is still left to do, call the tool that does it.
 
 It is bounded by `maxFinishingCorrectives` = **2** per run of rounds
@@ -565,7 +565,7 @@ fixes when it is asked again.
 **The round says so on the record.** A round that answered with prose
 and no tool call in a phase that had to end in one carries
 `declined: true` on its `round_narration` entry, on the live frame and on
-`agent_phase_completed` alike (and across a parked coding run). Whether
+`agent_phase_completed` alike. Whether
 the engine asked again needs no second flag: a later round exists exactly
 when it did, and a declined round that is the phase's last is one the
 bound or the budget left unanswered — the phase ended without its
@@ -1193,9 +1193,9 @@ sends](../reference/api-endpoints.md#what-the-projection-carries-and-what-the-wi
 the rounds' assistant turns joined with a blank line — every round's but a
 corrective's repeats: in a run of rounds that called nothing, the first
 answer is kept and the later ones, which re-wrote the same report in reply
-to a finishing corrective rather than to the task, are not, so a rescued
-executor hands its reviewer its report once rather than three times, and a
-worker's `no_result` hands its parent the same. Every one of those rounds is
+to a finishing corrective rather than to the task, are not, so a worker's
+`no_result` hands its parent its report once rather than three times, and a
+reviewer's prose reaches the record of its verdict once the same way. Every one of those rounds is
 still in `round_narration`, marked `declined`. And the join cannot
 be undone — its parts are separated by a blank line and prose contains
 blank lines, so a reader handed only the string cannot say which round

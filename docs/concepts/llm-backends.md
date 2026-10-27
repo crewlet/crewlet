@@ -1096,9 +1096,11 @@ argv: see [What a coding agent is told](code-sandbox.md#what-a-coding-agent-is-t
 own, so the engine's tool loop never sees one end in prose and cannot ask the
 model again: a run whose model writes its report as text instead of calling
 `submit_work` over the bridge comes back with no submission, and the phase is
-rescued as `incomplete` straight away. On this host the same ending is a run
-the phase follows with another, opened by a corrective naming `submit_work`,
-up to twice (see [Turn Engine](turn-engine.md#round-cap-extension-judge)).
+rescued as `incomplete` straight away. On this host a phase that finishes by
+a call — the reviewer by `submit_review`, a worker by `submit_result`, the
+onboarding pass by `mark_onboarded` — follows the same ending with another
+run, opened by a corrective naming its tool, up to twice (see
+[Turn Engine](turn-engine.md#round-cap-extension-judge)).
 What the executor's run has instead is the seat's system prompt, which tells
 it the run ends with that call. Its rounds are bounded by the CLI's own turn
 cap on both runners — Claude Code's `--max-turns`, OpenCode's agent `steps` —

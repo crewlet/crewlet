@@ -4646,9 +4646,9 @@ rules fix it, and each one names a specific mechanism:
    report, whose rounds happened in its box.
 
    **A round that answered in prose where a call was owed says what became of
-   it.** A phase that finishes only by a tool call — the executor's
-   `submit_work`, the reviewer's `submit_review`, a worker's `submit_result` —
-   can still get words and no call, and the commonest form is the model
+   it.** A phase of the engine's tool loop that finishes only by a tool call —
+   the reviewer's `submit_review`, a worker's `submit_result`, the onboarding
+   pass's `mark_onboarded` — can still get words and no call, and the commonest form is the model
    printing its own submission as a fenced JSON block. Without a word about it
    the reader saw that block, then "incomplete, no report" and "rescued" on
    the header, and nothing connecting the two. The engine flags such a round
