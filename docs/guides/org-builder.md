@@ -257,10 +257,12 @@ crewlet run
   the node starts on it, logs `offline_revision_not_published` at warn, and
   moves to the fleet's revision once it applies it. Add the model to the
   fleet's company through a running node then: a `PATCH /config` carrying
-  only the `providers.llm` block, which is built on the fleet's revision and
-  keeps the other node's change. Importing `company.yaml` with `-api` would
-  replace the whole document with the one exported before that change. See
-  [Offline commands make an
+  only step 2's `providers` block — its `llm` entry, and its `sandbox` block
+  unless the fleet's company already has one, since a company with an agent
+  seat and a model is refused without it — which is built on the fleet's
+  revision and keeps the other node's change. Importing `company.yaml` with
+  `-api` would replace the whole document with the one exported before that
+  change. See [Offline commands make an
   offer](../concepts/configuration.md#offline-commands-make-an-offer).
 
 None of this applies to a company another system
