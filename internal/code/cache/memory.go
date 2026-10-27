@@ -168,11 +168,11 @@ func (c *Cache) rereadMemory() {
 // Zero before Open has read the memory, and on a node whose lanes keep all of
 // it.
 //
-// It is what the node ADVERTISES on its presence heartbeat
-// (coord.NodeStatus.GitBackgroundBytes), so the git node a repository's
+// It is what the node ADVERTISES on its presence heartbeat, on every beat
+// beside its status (coord.GitBackgroundKey), so the git node a repository's
 // maintenance is placed on is one whose own admissions would hold the work:
 // the figure, never a second estimate of it beside the one the admissions
-// read.
+// read. A locked read of a figure in memory, which the beat takes unbounded.
 func (c *Cache) BackgroundBudget() int64 { return c.maint.budgetNow() }
 
 // nodeMemory is the node's memory as the cache last read it.

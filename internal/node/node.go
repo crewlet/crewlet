@@ -81,6 +81,11 @@ type Config struct {
 	// The beat bounds it: see [seat.Config].Status.
 	Status func(context.Context) coord.NodeStatus
 
+	// GitBackground is what this node's git cache gives its background
+	// work now, written on every beat beside the status and never in it:
+	// see [seat.Config].GitBackground. Nil on a node without the git role.
+	GitBackground func() int64
+
 	// RoleNeeded is whether the company needs a role at all right now,
 	// asked by the fleet's unmanned-role check: see [seat.Config].RoleNeeded.
 	// Nil needs every role.
@@ -279,6 +284,7 @@ func New(cfg Config) (*Node, error) {
 		Serviceable:       cfg.SeatsServiceable,
 		Profile:           cfg.Profile,
 		Status:            cfg.Status,
+		GitBackground:     cfg.GitBackground,
 		RoleNeeded:        cfg.RoleNeeded,
 		Hooks:             n,
 		TTL:               cfg.LeaseTTL,

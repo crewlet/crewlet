@@ -284,9 +284,10 @@ func (m *member) route(t testing.TB) {
 }
 
 // budgets is what each member's git node advertises it can give its
-// background work, as the engine's presence status carries it — the routers'
-// git budgets (codetest.GitBudgets): a member whose git node is not started
-// yet, or is killed or stopped, is not saying.
+// background work, as the engine's presence row carries it beside its status —
+// the routers' git budgets (codetest.GitBudgets): a member whose git node is
+// not started yet, or is stopped, is not saying, and a killed one says what
+// its last beat did, as its presence lease runs on (placement).
 func (c *cluster) budgets() codetest.GitBudgets {
 	return func(id string) *codetest.GitNode {
 		for _, m := range c.members {

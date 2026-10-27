@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -113,17 +112,20 @@ func TestACompanyWithNativeCodeServesItsOperations(t *testing.T) {
 	})
 }
 
-// A GIT NODE'S HEARTBEAT ADVERTISES ITS CACHE'S BACKGROUND BUDGET: the status
-// every beat publishes carries, across the lease's JSON and back, the very
-// figure the node's cache holds its maintenance to (Cache.BackgroundBudget),
-// read from the published runtime — and a node without the git role, which
-// holds no cache for a company that hosts code, advertises none: no key on the
-// wire, and zero read back from a status that is still one.
+// A GIT NODE'S PRESENCE ROW ADVERTISES ITS CACHE'S BACKGROUND BUDGET: from the
+// first beat of a started node, across the lease store's JSON and back and
+// beside the status rather than in it, the very figure the node's cache holds
+// its maintenance to (Cache.BackgroundBudget), read from the published runtime
+// — and a node without the git role, which holds no cache for a company that
+// hosts code, writes no such key: it serves no git, so no git node weighs it.
+// The status carries no figure of it at all, so a beat whose status read
+// overran drops nothing a git node places maintenance by.
 //
-// Mutations: leave nodeStatus's field unset — the git node advertises nothing,
-// red; fill it from the node's memory rather than its cache's budget — the two
-// differ by what the node keeps for serving, red.
-func TestTheStatusAdvertisesTheCacheBudget(t *testing.T) {
+// Mutations: leave the node's GitBackground hook unset — the git node's row
+// says nothing, red; fill it from the node's memory rather than its cache's
+// budget — the two differ by what the node keeps for serving, red; hand every
+// node the hook — the node without the git role says a budget, red.
+func TestThePresenceAdvertisesTheCacheBudget(t *testing.T) {
 	t.Parallel()
 	const memory = int64(16) << 30
 	t.Run("a git node", func(t *testing.T) {
@@ -138,9 +140,15 @@ func TestTheStatusAdvertisesTheCacheBudget(t *testing.T) {
 			t.Fatalf("the premise: a %d-byte node's cache gives its background work %d bytes, want a part of "+
 				"its memory", memory, budget)
 		}
-		if got := advertised(t, e).GitBackgroundBytes; got != budget {
-			t.Errorf("the heartbeat advertises %d bytes of background budget, want the cache's own %d", got,
-				budget)
+		row := presenceRow(t, e)
+		if got, says := coord.GitBackgroundFromMeta(row.Meta); !says || got != budget {
+			t.Errorf("the presence row advertises %d bytes of background budget (says %v), want the cache's "+
+				"own %d", got, says, budget)
+		}
+		if status, ok := row.Meta[coord.StatusKey].(map[string]any); ok {
+			if _, inside := status[coord.GitBackgroundKey]; inside {
+				t.Error("the status carries the git budget too: a beat whose status overran would drop it")
+			}
 		}
 	})
 	t.Run("a node without the git role", func(t *testing.T) {
@@ -149,11 +157,8 @@ func TestTheStatusAdvertisesTheCacheBudget(t *testing.T) {
 		if n := e.native.Load(); n == nil || n.gitCache != nil {
 			t.Fatalf("the premise: a node without the git role holds no git cache (runtime %+v)", n)
 		}
-		if _, ok := e.nodeStatus(t.Context()).Meta()["git_background_bytes"]; ok {
-			t.Error("a node without the git role published a background budget on its heartbeat")
-		}
-		if got := advertised(t, e).GitBackgroundBytes; got != 0 {
-			t.Errorf("a node without the git role advertises %d bytes of background budget, want none", got)
+		if got, says := coord.GitBackgroundFromMeta(presenceRow(t, e).Meta); says {
+			t.Errorf("a node without the git role advertises %d bytes of background budget, want no key", got)
 		}
 	})
 }
@@ -182,23 +187,19 @@ func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
 	return e
 }
 
-// advertised is e's status as a peer reads it off e's heartbeat: through the
-// JSON the lease store keeps it in, and back.
-func advertised(t *testing.T, e *Engine) coord.NodeStatus {
+// presenceRow starts e and is its presence lease as every peer reads it off
+// the coordination store: the first beat lands inside Start, before the
+// seat host's first sweep.
+func presenceRow(t *testing.T, e *Engine) coord.Lease {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{coord.StatusKey: e.nodeStatus(t.Context()).Meta()})
-	if err != nil {
-		t.Fatalf("marshal the status: %v", err)
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
 	}
-	var meta map[string]any
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		t.Fatalf("unmarshal the status: %v", err)
+	lease, err := e.backends.Coord.Get(t.Context(), coord.NodeResource(e.id))
+	if err != nil || lease == nil {
+		t.Fatalf("read the node's own presence lease: %v (%v)", lease, err)
 	}
-	status, ok := coord.StatusFromMeta(meta)
-	if !ok {
-		t.Fatal("the node's heartbeat carries no status")
-	}
-	return status
+	return *lease
 }
 
 // A NODE IN A MAINTENANCE MODE DECIDES NO PUSH, ITS OWN OR A PEER'S.

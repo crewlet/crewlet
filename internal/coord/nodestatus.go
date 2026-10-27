@@ -41,6 +41,69 @@ import (
 // one of them eventually shadows the other.
 const StatusKey = "status"
 
+// GitBackgroundKey is where a git node's presence lease carries what its git
+// cache gives its background work: its MAINTENANCE BUDGET, the figure every
+// run of a repository's maintenance on that node is admitted against — the
+// node's memory less what its serving keeps — read again at every maintenance
+// pass, so a container resized in place says its new figure within a pass and
+// a beat (internal/code/cache, Cache.BackgroundBudget). Every git node weighs
+// every other by it to place a repository's maintenance on the first node of
+// the repository's git order whose budget holds the work, the home on a fleet
+// of alike nodes (internal/estate, Router.Maintainer).
+//
+// ON THE HEARTBEAT, for the reason a node's status is: which git node can hold
+// a repository's maintenance is a question every git node asks about every
+// other, and a request/reply asking each in turn would be the fan-out whose
+// partial answers the file head refused. Its freshness is a heartbeat, and a
+// budget moves only when a container is resized.
+//
+// BESIDE THE STATUS, NEVER IN IT. A status is assembled under a share of the
+// beat, because answering reads the broker and the control plane, and a beat
+// whose hook overruns that share publishes no status at all — right for a
+// display column, which then reads as not saying, and wrong for a placement
+// input, which would go with it: a git node whose status was dropped for a
+// beat would say nothing of what it can hold, the large node of a fleet would
+// be weighed as one known to hold nothing, and every repository only it can
+// maintain would be left to a node whose own admission refuses the work. The
+// budget is a figure in memory that nothing can overrun, so the seat host
+// writes it on EVERY beat beside the status, as it writes its own held count
+// (internal/seat/placement, HeldKey): a live git node of this build always
+// says it.
+//
+// ZERO IS WRITTEN, never left out: it is a claim — a git node whose code host
+// is not built yet, or whose transfers keep all of its memory, has nothing to
+// give — and a row without the key is the other fact, a node NOT SAYING (a
+// build or a host that writes none), which [GitBackgroundFromMeta] reports as
+// such. A node without the git role writes none.
+const GitBackgroundKey = "git_background_bytes"
+
+// GitBackgroundFromMeta reads a peer's maintenance budget off its presence
+// lease's Meta ([GitBackgroundKey]), and reports whether the row says one at
+// all: false where the key is absent — a node not saying, never one with
+// nothing to give — or holds what no build writes (a negative figure, a value
+// that is not a number), which says nothing this build can act on either.
+//
+// THROUGH THE ONE NUMBER READER, never a second one for int64: every target
+// this module builds is 64-bit (internal/store/platform.go), so an int holds
+// any budget a node can have, and the float64 a JSON round trip through the
+// lease store hands back holds one exactly up to 2⁵³ bytes — eight pebibytes.
+func GitBackgroundFromMeta(meta map[string]any) (int64, bool) {
+	raw, present := meta[GitBackgroundKey]
+	if !present {
+		return 0, false
+	}
+	switch raw.(type) {
+	case int, int64, float64:
+	default:
+		return 0, false
+	}
+	budget := int64(intFromMeta(raw))
+	if budget < 0 {
+		return 0, false
+	}
+	return budget, true
+}
+
 // NodeStatus is the live half of what a node is.
 //
 // It carries no struct tags: the wire shape is [NodeStatus.Meta] and
@@ -175,31 +238,6 @@ type NodeStatus struct {
 	// nothing firing would publish "not saying" — and a node whose table
 	// never ran, built the other way, would read as healthy.
 	AlarmsEvaluated bool
-
-	// GitBackgroundBytes is the memory this node's git cache gives its
-	// background work: its MAINTENANCE BUDGET, the figure every run of a
-	// repository's maintenance on this node is admitted against — the node's
-	// memory less what its serving keeps — read again at every maintenance
-	// pass, so a container resized in place says its new figure within a pass
-	// and a beat (internal/code/cache, Cache.BackgroundBudget).
-	//
-	// ON THE HEARTBEAT, for the reason the rest of this struct is: WHICH git
-	// node can hold a repository's maintenance — the first of the
-	// repository's git order whose budget holds the work, the home on a fleet
-	// of alike nodes (internal/estate, Router.Maintainer) — is a question
-	// every git node asks about every other, and a request/reply asking each
-	// in turn would be the fan-out whose partial answers the file head
-	// refused. Its freshness is a heartbeat, and a budget moves only when a
-	// container is resized.
-	//
-	// ZERO IS A NODE WITH NOTHING TO GIVE — no `git` role, no code host built
-	// yet, or transfers that keep all of its memory — and [NodeStatus.Meta]
-	// says so by leaving the key out, which reads back as the zero it is.
-	// That is a claim the node makes, unlike a beat that carried no status
-	// at all ([StatusFromMeta]'s false), which is a node not saying: a reader
-	// placing work by this figure keeps such a node where it stands rather
-	// than read it as one with nothing to give.
-	GitBackgroundBytes int64
 }
 
 // AlarmMark is one alarm firing on a node: which, and since when.
@@ -388,14 +426,6 @@ func (s NodeStatus) Meta() map[string]any {
 		}
 		out["alarms"] = marks
 	}
-	if s.GitBackgroundBytes > 0 {
-		// OMITTED AT ZERO, which is every node but a git node whose cache
-		// is built: a node with nothing to give its background work says so
-		// by saying nothing here, and its peers read the absent key as the
-		// zero it is — never as the whole status's absence, which is a node
-		// not saying at all.
-		out["git_background_bytes"] = s.GitBackgroundBytes
-	}
 	return out
 }
 
@@ -425,12 +455,6 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		ProjectionsReady: intFromMeta(raw["projections_ready"]),
 		ProjectionsTotal: intFromMeta(raw["projections_total"]),
 		AdminPosture:     iam.AdminPosture(stringFromMeta(raw["admin"])),
-		// THROUGH THE ONE NUMBER READER, never a second one for int64:
-		// every target this module builds is 64-bit
-		// (internal/store/platform.go), so an int holds any budget a node
-		// can have, and the float64 a JSON round trip hands back holds one
-		// exactly up to 2⁵³ bytes — eight pebibytes.
-		GitBackgroundBytes: int64(intFromMeta(raw["git_background_bytes"])),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {

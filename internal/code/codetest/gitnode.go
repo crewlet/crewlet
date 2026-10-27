@@ -211,6 +211,9 @@ type GitNode struct {
 	mu   sync.Mutex
 	cur  *gitIncarnation
 	dead []*gitIncarnation
+	// killed is the incarnation a KILLED node's presence row still speaks
+	// for (BackgroundBudget): set by Kill, cleared by Stop and Restart.
+	killed *gitIncarnation
 }
 
 // gitIncarnation is one incarnation of a git node.
@@ -371,24 +374,30 @@ func (g *GitNode) Git() (estate.GitServer, bool) {
 	return g.cur.query, true
 }
 
-// BackgroundBudget is what the node's running incarnation's cache gives its
-// background work (cache.Cache.BackgroundBudget) — what an engine's git node
-// advertises on its presence status — and false while the node is killed or
-// stopped: a node whose heartbeat says nothing.
+// BackgroundBudget is what the node's presence row says its cache gives its
+// background work (cache.Cache.BackgroundBudget), as an engine's git node
+// writes it on every beat beside its status: its running incarnation's
+// figure; a KILLED node's last — a process that dies gives no presence back,
+// so the row its last beat wrote, figure and all, stands until its lease
+// lapses; and nothing for a STOPPED node, which gave its presence back before
+// it stopped, so no row speaks for it.
 func (g *GitNode) BackgroundBudget() (int64, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.cur == nil {
-		return 0, false
+	switch {
+	case g.cur != nil:
+		return g.cur.cache.BackgroundBudget(), true
+	case g.killed != nil:
+		return g.killed.cache.BackgroundBudget(), true
 	}
-	return g.cur.cache.BackgroundBudget(), true
+	return 0, false
 }
 
 // GitBudgets is a topology's git budgets as its routers weigh a repository's
 // maintainer by (estate.GitBudgets): the git node named by an id — nil for an
-// id the topology does not hold — saying what its cache gives its background
-// work, as the engine's presence status carries it, or NOT SAYING while it is
-// killed or stopped, as a node the view carries no status of.
+// id the topology does not hold — saying what its presence row would
+// (GitNode.BackgroundBudget), and NOT SAYING where no row speaks for it: an id
+// the topology holds no git node for yet, or a git node stopped.
 type GitBudgets func(id string) *GitNode
 
 // BackgroundBudget is node's advertised budget, and whether it says one.
@@ -421,6 +430,7 @@ func (g *GitNode) Kill() {
 	g.cur = nil
 	if n != nil {
 		g.dead = append(g.dead, n)
+		g.killed = n
 	}
 	g.mu.Unlock()
 	if n == nil {
@@ -447,7 +457,7 @@ func (g *GitNode) Kill() {
 func (g *GitNode) Stop(drain context.Context) {
 	g.mu.Lock()
 	n := g.cur
-	g.cur = nil
+	g.cur, g.killed = nil, nil
 	if n != nil {
 		g.dead = append(g.dead, n)
 	}
@@ -477,7 +487,7 @@ func (g *GitNode) Restart(t testing.TB) {
 	}
 	n := g.start(t)
 	g.mu.Lock()
-	g.cur = n
+	g.cur, g.killed = n, nil
 	g.mu.Unlock()
 }
 
@@ -490,7 +500,7 @@ func (g *GitNode) teardown() {
 	if g.cur != nil {
 		nodes = append(nodes, g.cur)
 	}
-	g.cur, g.dead = nil, nil
+	g.cur, g.dead, g.killed = nil, nil, nil
 	g.mu.Unlock()
 	for _, n := range nodes {
 		n.host.Stop(context.Background())

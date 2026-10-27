@@ -61,20 +61,19 @@ type GitServer interface {
 }
 
 // GitBudgets is what each git node ADVERTISES it can give its background work
-// — its maintenance budget, on its presence status
-// (coord.NodeStatus.GitBackgroundBytes) — as [Router.Maintainer] weighs it.
-// Declared here by its consumer; the engine's answer reads the watched
-// presence view its git placement is read from, so a node is weighed by the
-// listing that names it.
+// — its maintenance budget, which its presence row carries on every beat
+// beside its status and never in it (coord.GitBackgroundKey) — as
+// [Router.Maintainer] weighs it. Declared here by its consumer; the engine's
+// answer reads the watched presence view its git placement is read from.
 type GitBudgets interface {
-	// BackgroundBudget is what node's status says it can give its
-	// background work: said, and zero where it says it has nothing to give
-	// (no git role, no code host built yet, or transfers that keep all of
-	// its memory). said is false where the view carries no status of node at
-	// this listing — a beat whose status read overran its share of the
-	// heartbeat, or no lease of node at all — which is a node NOT SAYING,
-	// never one with nothing to give. An error is UNKNOWN: the view could
-	// not be read.
+	// BackgroundBudget is what node's row says it can give its background
+	// work: said, and zero where it says it has nothing to give (no code
+	// host built yet, or transfers that keep all of its memory). said is
+	// false where node's row carries no figure — a build or a host that
+	// writes none — or the view holds no lease of node at all: a node NOT
+	// SAYING, never one with nothing to give. A git node of this build
+	// always says it, a beat whose status read overran included. An error
+	// is UNKNOWN: the view could not be read.
 	BackgroundBudget(node string) (budget int64, said bool, err error)
 }
 
@@ -386,14 +385,25 @@ func (r *Router) IsHome(repoID string) (bool, error) {
 //
 // A NODE CAN HOLD IT where its ADVERTISED background budget ([GitBudgets]) is
 // at least charge — the figure its own admissions hold the work to, so the
-// node chosen is one that would run it — OR WHERE IT IS NOT SAYING. A beat
-// that carried no status is a node that did not say, never one with nothing
-// to give, and the work keeps its place in the order as a home that went
-// quiet keeps its repositories: passed over, every repository it maintains
-// would move for that beat to a runner-up that may hold no copy of it, whose
-// maintenance begins with a cold sync of the whole history, and move back at
-// the next. A node that does not hold it after all refuses the work at its own
-// admission, which costs that repository one pass.
+// node chosen is one that would run it. A git node says that figure on every
+// beat, from memory and beside its status rather than in it
+// (coord.GitBackgroundKey), so a beat whose status read overran — which
+// drops the status whole — still says it.
+//
+// NOTHING MOVES PAST THE HOME ON MISSING INFORMATION. A node whose row carries
+// no figure is NOT SAYING (a build or a host that writes none), and is no node
+// known to hold the work: where it is a RUNNER-UP it is passed over. Kept in
+// its place, a small runner-up not saying would take every repository it
+// ranks ahead of a large node for, and its maintenance there would begin with
+// a cold sync of the whole history — a runner-up holds no copy of a repository
+// in the ordinary case: up to repo_max_bytes of GETs, room made for them by
+// evicting what its cache serves — only for the node's own admission to refuse
+// the work. Where it is the HOME it keeps its repositories, as a home that went
+// quiet keeps them (Home's NO DEMOTION): the home holds the copy in the
+// ordinary case, so a quiet home that cannot hold the work costs that
+// repository its pass, refused at the home's admission over a copy already
+// synced, while one passed over would send every repository it is home to —
+// the light work every home maintains — to a runner-up's cold sync.
 //
 // ONE ORDER, THE HOME'S: every git node computes the same answer from the same
 // view, so on a fleet of alike nodes the maintainer IS the home and nothing
@@ -414,13 +424,19 @@ func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, node := range order {
+	for i, node := range order {
 		budget, said, err := r.gitBudgets.BackgroundBudget(node)
 		if err != nil {
 			return "", fmt.Errorf("estate: the maintainer of repository %s: read what %s can give its "+
 				"background work: %w", repoID, node, err)
 		}
-		if !said || budget >= charge {
+		switch {
+		case said && budget >= charge:
+			return node, nil
+		case !said && i == 0:
+			// THE HOME, NOT SAYING, keeps its repositories: nothing moves
+			// past it on missing information. A runner-up not saying is
+			// passed over.
 			return node, nil
 		}
 	}

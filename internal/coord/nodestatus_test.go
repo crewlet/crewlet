@@ -39,7 +39,7 @@ func TestAPublishedStatusRoundTrips(t *testing.T) {
 	pm := uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")
 	want := coord.NodeStatus{
 		InFlight: 3, Draining: true, Posture: "shed", StartedAt: started,
-		AdminPosture: iam.AdminServe, GitBackgroundBytes: 12 << 30,
+		AdminPosture: iam.AdminServe,
 		MCP: []coord.MCPServerStatus{
 			{Server: "github", Shared: true, Started: 1, Tools: 12},
 			{Server: "jira", Started: 2, Failed: 1, Tools: 9,
@@ -218,6 +218,57 @@ func TestAStatusSurvivesTheJSONRoundTripTheLeaseStoreDoes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+// A GIT NODE'S BUDGET IS READ ONLY WHERE ITS ROW SAYS ONE, and saying zero is
+// a claim: a git node with nothing to give its background work writes 0, and a
+// row with no figure — or one no build writes — is a node NOT SAYING, which a
+// reader placing maintenance must never take for either a zero or a figure. It
+// sits beside the status and never in it, so a beat whose status was dropped
+// still says it, and a key of that name inside a status says nothing; and it
+// arrives exact across the JSON round trip the lease store makes, at a size no
+// int32 and no float32 would carry.
+//
+// Mutations: read an absent key as zero — the quiet rows are said, red; read
+// the budget out of the status — the dropped status's row says nothing and the
+// status's key is read, red.
+func TestAGitBudgetIsReadOnlyWhereARowSaysOne(t *testing.T) {
+	t.Parallel()
+	const budget = int64(68)<<30 + 12_345
+	for name, tc := range map[string]struct {
+		meta   map[string]any
+		budget int64
+		says   bool
+	}{
+		"a figure, as written":   {map[string]any{coord.GitBackgroundKey: budget}, budget, true},
+		"zero, which is a claim": {map[string]any{coord.GitBackgroundKey: int64(0)}, 0, true},
+		"a figure beside a dropped status": {
+			map[string]any{"roles": []string{"git"}, coord.GitBackgroundKey: budget}, budget, true},
+		"no figure at all": {map[string]any{"roles": []string{"git"}}, 0, false},
+		"no meta at all":   {nil, 0, false},
+		"a figure inside the status, not beside": {
+			map[string]any{coord.StatusKey: map[string]any{coord.GitBackgroundKey: budget}}, 0, false},
+		"a negative figure":             {map[string]any{coord.GitBackgroundKey: int64(-1)}, 0, false},
+		"a figure that is not a number": {map[string]any{coord.GitBackgroundKey: "64GiB"}, 0, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			raw, err := json.Marshal(tc.meta)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var stored map[string]any
+			if err := json.Unmarshal(raw, &stored); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			for side, meta := range map[string]map[string]any{"as written": tc.meta, "as stored": stored} {
+				got, says := coord.GitBackgroundFromMeta(meta)
+				if got != tc.budget || says != tc.says {
+					t.Errorf("%s: read (%d, says %v), want (%d, says %v)", side, got, says, tc.budget, tc.says)
+				}
+			}
+		})
 	}
 }
 

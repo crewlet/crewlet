@@ -157,27 +157,29 @@ func TestTheGitPlacementIsTheLiveGitNodes(t *testing.T) {
 }
 
 // WHAT EACH GIT NODE ADVERTISES IS READ OFF THE ROUTER'S OWN WATCHED VIEW, as
-// its presence status says it: a budget the status names, across the store's
-// JSON round trip, is said; a status that names none — a node with nothing to
-// give its background work — is said as zero; a lease whose beat carried no
-// status at all is a node NOT SAYING (absent is not zero), and so is a node the
-// view names no lease of; a view that has never listed is UNKNOWN, never a
-// fleet in which nobody says anything — which is what a node with no view, and
-// so no fleet, answers.
+// its presence row says it beside its status: a budget the row names, across
+// the store's JSON round trip, is said — a beat that carried no status at all
+// included, since the figure is not in the status; a zero is said as zero, a
+// node with nothing to give its background work; a row that names no figure is
+// a node NOT SAYING (absent is not zero), whatever its status says, and so is
+// a node the view names no lease of; a view that has never listed is UNKNOWN,
+// never a fleet in which nobody says anything — which is what a node with no
+// view, and so no fleet, answers.
 //
-// Mutations: read a lease that carries no status as a node with nothing to
-// give — the quiet node said, red; read a view that has never listed as nobody
-// saying — no error, red.
-func TestTheGitBudgetsAreWhatEachGitNodesStatusSays(t *testing.T) {
+// Mutations: read a row that names no figure as a node with nothing to give —
+// the quiet node said, red; read the figure out of the status — the node whose
+// beat dropped its status says nothing, red; read a view that has never listed
+// as nobody saying — no error, red.
+func TestTheGitBudgetsAreWhatEachGitNodesPresenceSays(t *testing.T) {
 	t.Parallel()
 	const budget = int64(64)<<30 + 12_345
 	backend := coordmem.New()
 	gitRoles := []string{"data", "git", "ingress"}
 	claimMeta(t, backend, map[string]map[string]any{
-		"git-large": {"roles": gitRoles,
-			coord.StatusKey: coord.NodeStatus{InFlight: 1, GitBackgroundBytes: budget}.Meta()},
-		"git-cold":  {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
-		"git-quiet": {"roles": gitRoles},
+		"git-large": {"roles": gitRoles, coord.GitBackgroundKey: budget},
+		"git-cold": {"roles": gitRoles, coord.GitBackgroundKey: int64(0),
+			coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
+		"git-quiet": {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{InFlight: 1}.Meta()},
 	})
 	view, err := coord.NewLeaseView(backend, coord.ClassNode,
 		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
@@ -212,10 +214,12 @@ func TestTheGitBudgetsAreWhatEachGitNodesStatusSays(t *testing.T) {
 }
 
 // THE ROUTER A NODE BUILDS PLACES A REPOSITORY'S MAINTENANCE BY WHAT EACH GIT
-// NODE ADVERTISES: over three git nodes whose heartbeats say 8, 64 and 8 GiB,
-// the router [Engine.newRouter] builds — on a node holding nothing, as a seats
-// node's is — places work only the large node holds on it for every one of two
-// hundred repositories, and work every node holds on each repository's home.
+// NODE ADVERTISES: over three git nodes whose presence rows say 8, 64 and 8
+// GiB — the large one's beat carrying no status, as a beat whose status read
+// overran carries none — the router [Engine.newRouter] builds — on a node
+// holding nothing, as a seats node's is — places work only the large node
+// holds on it for every one of two hundred repositories, and work every node
+// holds on each repository's home.
 //
 // Mutation: hand newRouter's router git budgets in which nobody says anything —
 // the 40 GiB work stays with each home, red.
@@ -225,9 +229,11 @@ func TestTheRoutersMaintainerWeighsWhatEachGitNodeAdvertises(t *testing.T) {
 	backend := coordmem.New()
 	gitRoles := []string{"data", "git", "ingress"}
 	claimMeta(t, backend, map[string]map[string]any{
-		"git-a":   {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{GitBackgroundBytes: 8 * gib}.Meta()},
-		"git-b":   {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{GitBackgroundBytes: 64 * gib}.Meta()},
-		"git-c":   {"roles": gitRoles, coord.StatusKey: coord.NodeStatus{GitBackgroundBytes: 8 * gib}.Meta()},
+		"git-a": {"roles": gitRoles, coord.GitBackgroundKey: 8 * gib,
+			coord.StatusKey: coord.NodeStatus{}.Meta()},
+		"git-b": {"roles": gitRoles, coord.GitBackgroundKey: 64 * gib},
+		"git-c": {"roles": gitRoles, coord.GitBackgroundKey: 8 * gib,
+			coord.StatusKey: coord.NodeStatus{}.Meta()},
 		"agent-1": {"roles": []string{"seats"}, coord.StatusKey: coord.NodeStatus{}.Meta()},
 	})
 	view, err := coord.NewLeaseView(backend, coord.ClassNode,

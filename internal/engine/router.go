@@ -197,9 +197,9 @@ func (w wholeGit) Unanswered(string) { w.roster.Invalidate() }
 
 // gitBudgets is what each git node advertises it can give its background work
 // as this node's router weighs a repository's maintainer
-// ([estate.Router.Maintainer]): its presence status's GitBackgroundBytes, off
-// the same watched view as the git placement, so a node is weighed by the
-// listing that names it.
+// ([estate.Router.Maintainer]): the figure its presence row carries beside its
+// status ([coord.GitBackgroundKey]), off the same watched view as the git
+// placement.
 func (e *Engine) gitBudgets() estate.GitBudgets { return presenceRoster{view: e.dataView} }
 
 // localGit is this node's git half as the router and the estate server ask for
@@ -666,19 +666,16 @@ func (r presenceRoster) LiveGitNodes() ([]string, error) {
 	return gitNodesOf(leases), nil
 }
 
-// BackgroundBudget is what node's presence status says its git cache gives
-// its background work ([coord.NodeStatus.GitBackgroundBytes], which
-// [Engine.nodeStatus] fills from the node's own cache): said, and zero for a
-// node whose status names none — no git role, no code host built yet, or
-// transfers that keep all of its memory. NOT SAYING where the view carries no
-// status of node: a beat whose status read overran its share of the heartbeat
-// (coord.StatusFromMeta's false: absent is not zero), or no lease of node at
-// all — and a node with no view has no fleet, so nobody in it says anything.
-// An error is UNKNOWN: the view could not be read.
-//
-// A SCAN OF THE LISTING per question, which is the view's clone of a few
-// leases a node: the maintainer question weighs one node at a time and
-// stops at the first that holds the work, the home on a fleet of alike nodes.
+// BackgroundBudget is what node's presence row says its git cache gives its
+// background work ([coord.GitBackgroundKey], which every git node's seat host
+// writes on every beat beside its status, from [Engine.gitBackgroundBudget]):
+// said, and zero for a git node that says it has nothing to give — no code
+// host built yet, or transfers that keep all of its memory. NOT SAYING where
+// node's row carries no figure — a build or a host that writes none — or the
+// view holds no lease of node at all; and a node with no view has no fleet,
+// so nobody in it says anything. A beat whose status read overran says it
+// all the same: the figure is not in the status. An error is UNKNOWN: the view
+// could not be read.
 func (r presenceRoster) BackgroundBudget(node string) (int64, bool, error) {
 	if r.view == nil {
 		return 0, false, nil
@@ -688,14 +685,10 @@ func (r presenceRoster) BackgroundBudget(node string) (int64, bool, error) {
 		return 0, false, fmt.Errorf("engine: what %s can give its background work: %w", node, err)
 	}
 	for _, lease := range leases {
-		if id, ok := coord.NodeID(lease.Resource); !ok || id != node {
-			continue
+		if id, ok := coord.NodeID(lease.Resource); ok && id == node {
+			budget, said := coord.GitBackgroundFromMeta(lease.Meta)
+			return budget, said, nil
 		}
-		status, said := coord.StatusFromMeta(lease.Meta)
-		if !said {
-			return 0, false, nil
-		}
-		return status.GitBackgroundBytes, true, nil
 	}
 	return 0, false, nil
 }

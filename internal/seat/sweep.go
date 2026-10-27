@@ -1030,7 +1030,9 @@ func (h *Host) fleetRoleEdges(live []placement.NodeProfile) roleEdges {
 // The placement half — roles and labels — and the live half beside it under
 // its own key, both re-sent on every heartbeat. A node with no status hook
 // publishes only the placement half, which is what makes "did not say"
-// distinguishable from "said zero" on the reading side.
+// distinguishable from "said zero" on the reading side. And, on a git node,
+// what its git cache gives its background work, under a key of its own and
+// outside the status ([Config.GitBackground]).
 //
 // It writes into the profile's own map because [placement.NodeProfile.Meta]
 // returns a fresh literal per call — the lease payload is built for this
@@ -1040,7 +1042,9 @@ func (h *Host) fleetRoleEdges(live []placement.NodeProfile) roleEdges {
 // this is the path that renews presence: an unbounded read on a wedged store
 // would hold the beat until the watchdog shot the process, to publish a
 // display column. Overrunning it publishes the placement half alone, which
-// the reading side already renders as "did not say".
+// the reading side already renders as "did not say" — and what the beat
+// writes before the hook, the held count, the withdrawal and the git budget,
+// none of which can overrun.
 func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	meta := h.profile.Meta()
 	// HOW MANY SEATS THIS NODE HOLDS, which its peers sum to learn whether
@@ -1055,6 +1059,13 @@ func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	h.mu.Unlock()
 	if withdrawn {
 		meta[placement.WithdrawnKey] = true
+	}
+	// WHAT THIS GIT NODE CAN GIVE ITS BACKGROUND WORK, on every beat and
+	// before the bounded hook, zero included: a placement input every git
+	// node weighs this one by, which a slow control plane must never drop
+	// for a beat ([coord.GitBackgroundKey]).
+	if h.gitBackground != nil {
+		meta[coord.GitBackgroundKey] = h.gitBackground()
 	}
 	if h.status == nil {
 		return meta

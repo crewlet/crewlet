@@ -108,6 +108,50 @@ func TestASlowStatusHookDoesNotHoldThePresenceRenewal(t *testing.T) {
 	}
 }
 
+// A GIT NODE'S BUDGET RIDES EVERY BEAT, WHATEVER ITS STATUS DOES. It is what
+// every git node places a repository's maintenance by, so a beat whose status
+// hook overran — which publishes no status at all — still says it, and a git
+// node with nothing to give says zero rather than nothing; a node with no git
+// budget to give (no hook: not a git node) writes no key, a node not saying.
+//
+// Mutations: write the budget only once the status hook has answered — the
+// overrun beat says nothing, red; write it only where it is above zero — the
+// git node with nothing to give reads as not saying, red.
+func TestAGitNodesBudgetRidesEveryBeatWhateverItsStatusDoes(t *testing.T) {
+	t.Parallel()
+	const budget = int64(64)<<30 + 12_345
+	f := newFleet(t)
+	overrun := f.newHost("git-large", Config{
+		Seats:         seatsNamed("ceo"),
+		GitBackground: func() int64 { return budget },
+		Status: func(ctx context.Context) coord.NodeStatus {
+			<-ctx.Done()
+			return coord.NodeStatus{InFlight: 7}
+		},
+	})
+	overrun.heartbeat = 5 * time.Millisecond
+	cold := f.newHost("git-cold", Config{Seats: seatsNamed("ceo"), GitBackground: func() int64 { return 0 }})
+	plain := f.newHost("seats-only", Config{Seats: seatsNamed("ceo")})
+	for _, h := range []*Host{overrun, cold, plain} {
+		h.renewNodePresence(f.ctx)
+	}
+
+	large := presenceOf(t, f, "git-large")
+	if _, ok := coord.StatusFromMeta(large.Meta); ok {
+		t.Fatal("the premise: the overrun beat published a status anyway")
+	}
+	for node, want := range map[string]struct {
+		budget int64
+		says   bool
+	}{"git-large": {budget, true}, "git-cold": {0, true}, "seats-only": {0, false}} {
+		got, says := coord.GitBackgroundFromMeta(presenceOf(t, f, node).Meta)
+		if got != want.budget || says != want.says {
+			t.Errorf("%s's row says its git budget is %d (says %v), want %d (says %v)", node, got, says,
+				want.budget, want.says)
+		}
+	}
+}
+
 // A HOST WITH A HEARTBEAT UNDER THE DIVISOR still gives the hook a turn: a
 // budget that rounds to zero expires before the call starts, and the column
 // would never be published at all.

@@ -418,17 +418,31 @@ func (e *Engine) codeReading(out *statelog.Reading) {
 	n.gitCache.AlarmReading(out)
 }
 
+// gitBackground is what this node advertises its git cache gives its
+// background work, as the seat host writes it on every beat
+// ([coord.GitBackgroundKey]): [Engine.gitBackgroundBudget] on a node with the
+// git role, and nil on any other, whose presence row then carries no such key
+// — it serves no git, so no git node weighs it.
+func (e *Engine) gitBackground() func() int64 {
+	if !e.profile.Roles.Has(placement.RoleGit) {
+		return nil
+	}
+	return e.gitBackgroundBudget
+}
+
 // gitBackgroundBudget is what this node's git cache gives its background work
 // now — its maintenance budget ([cache.Cache.BackgroundBudget], the figure its
-// admissions hold every run to) — which [Engine.nodeStatus] advertises on
-// every heartbeat, so the git node a repository's maintenance is placed on is
-// one whose own admissions would hold it. Zero where this node holds no cache:
-// a node without the git role, a company that hosts no code, or a code host
-// not built yet. (Not the cache's DISK budget, [Engine.codeCacheBudget].)
+// admissions hold every run to) — which a git node advertises on every beat
+// beside its status ([Engine.gitBackground]), so the git node a repository's
+// maintenance is placed on is one whose own admissions would hold it. Zero
+// where this node holds no cache — a company that hosts no code, or a code
+// host not built yet — which is the node saying it has nothing to give. (Not
+// the cache's DISK budget, [Engine.codeCacheBudget].)
 //
 // Read from the PUBLISHED runtime at each beat, never captured, as
 // [Engine.codeReading] reads it: the code host is built at boot or at the first
-// apply that hosts code, after the heartbeat starts.
+// apply that hosts code, after the heartbeat starts. A load and a locked read
+// of a figure in memory, so the beat can take it unbounded.
 func (e *Engine) gitBackgroundBudget() int64 {
 	n := e.native.Load()
 	if n == nil || n.gitCache == nil {

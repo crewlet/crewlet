@@ -1683,6 +1683,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// node served the request — so behind a load balancer a refresh
 		// tells a different story each time.
 		Status: e.nodeStatus,
+		// AND, ON A GIT NODE, WHAT ITS GIT CACHE GIVES ITS BACKGROUND
+		// WORK, beside the status and never in it: what every git node
+		// places a repository's maintenance by ([estate.Router.Maintainer]),
+		// so a beat whose status read overran must still say it — and,
+		// from memory, nothing can overrun it ([Engine.gitBackground]).
+		GitBackground: e.gitBackground(),
 		// WHICH ROLES THE COMPANY NEEDS, off the current epoch: git only
 		// where it hosts code, so a fleet that declared its roles without
 		// git is never told nobody serves it until it would matter.
@@ -3096,10 +3102,6 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
 		MCP: e.mcpStatus(ctx),
-		// WHAT THIS NODE'S GIT CACHE GIVES ITS BACKGROUND WORK, from memory:
-		// what every git node weighs to place a repository's maintenance
-		// ([estate.Router.Maintainer]), and zero on a node with no cache.
-		GitBackgroundBytes: e.gitBackgroundBudget(),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

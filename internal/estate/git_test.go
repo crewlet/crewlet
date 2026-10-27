@@ -114,7 +114,7 @@ func (g *fakeGit) lefts() []time.Duration {
 // fakeBudgets is what each git node advertises it can give its background
 // work, as a case writes it: a node it names says its budget (zero for one
 // that says it has nothing to give), and every other node is NOT SAYING — a
-// beat whose status overran, or a node the view names no lease of — so a
+// row that carries no figure, or a node the view names no lease of — so a
 // router of a case that sets none places every repository's maintenance on its
 // home. err, where set, is a view that could not be read.
 type fakeBudgets struct {
@@ -342,18 +342,26 @@ func TestHomeIsTheReadsFirstGitNode(t *testing.T) {
 // (100 GiB) is the home's, whose own admission then refuses it. A node that
 // SAYS it has nothing to give — its code host not built — is passed over as
 // one too small is: with the large node saying so, the 40 GiB work is each
-// home's again. A node NOT SAYING — a beat that carried no status — keeps its
-// place: the large node not saying still maintains every repository's 40 GiB
-// work, and a home not saying still maintains its own repositories' 4 GiB
-// work, never handed for a beat to a runner-up that may hold no copy of them.
-// And a git node is the maintainer (IsMaintainer) of exactly the repositories
-// that name it, its own git half in process.
+// home's again. And a git node is the maintainer (IsMaintainer) of exactly the
+// repositories that name it, its own git half in process.
+//
+// NOTHING MOVES PAST A HOME ON MISSING INFORMATION. A node NOT SAYING — its row
+// carries no figure — is passed over where it is a runner-up and keeps the
+// repositories it is home to. So a small runner-up not saying leaves the large
+// node the maintainer of the 40 GiB work of every repository it ranks ahead of
+// the large node for and is not home to — never handed to a node that holds no
+// copy of it, only for that node's own admission to refuse it after a cold sync
+// of its whole history — while the repositories it is home to stay with it; the
+// large node not saying is passed over for every repository but its own, so the
+// 40 GiB work is each home's; and a home not saying keeps its own repositories'
+// 4 GiB work rather than hand it to their runners-up.
 //
 // Mutations: walk the nodes by budget rather than in the repository's order —
-// the large node maintains every repository's 4 GiB work, red; pass over a
-// node not saying — the quiet home's repositories move to their runners-up,
-// red; answer the order's first node whatever it holds — the 40 GiB work stays
-// with the homes, red.
+// the large node maintains every repository's 4 GiB work, red; keep a runner-up
+// not saying in its place — the small runner-up takes the large node's 40 GiB
+// work, red; pass over a home not saying — the quiet home's repositories move to
+// their runners-up, red; answer the order's first node whatever it holds — the
+// 40 GiB work stays with the homes, red.
 func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30
@@ -403,18 +411,34 @@ func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 	says(func(said map[string]int64) { said["git-c"] = 0 })
 	each("the large node saying it has nothing to give", 40*gib, home)
 
-	says(func(said map[string]int64) { delete(said, "git-c") })
-	each("the large node not saying", 40*gib, func(string) string { return "git-c" })
-
-	homed := 0
+	// THE PREMISES the quiet arms stand on: repositories the small node
+	// git-b ranks ahead of the large node for without being their home —
+	// the ones a quiet runner-up kept in its place would take — and
+	// repositories git-b and git-a are each home to.
+	ahead, homed := 0, map[string]int{}
 	for i := range 1000 {
-		if home(repoID(i)) == "git-a" {
-			homed++
+		repo := repoID(i)
+		order := rendezvous.Order(repo, holders)
+		homed[order[0]]++
+		if order[0] != "git-b" && slices.Index(order, "git-b") < slices.Index(order, "git-c") {
+			ahead++
 		}
 	}
-	if homed == 0 {
-		t.Fatal("the premise: no repository of the thousand is homed on git-a")
+	if ahead == 0 || homed["git-b"] == 0 || homed["git-a"] == 0 {
+		t.Fatalf("the premises: git-b ranks ahead of git-c for %d repositories it is no home to, and git-b "+
+			"and git-a are home to %d and %d, want some of each", ahead, homed["git-b"], homed["git-a"])
 	}
+	says(func(said map[string]int64) { delete(said, "git-b") })
+	each("a small runner-up not saying", 40*gib, func(repo string) string {
+		if home(repo) == "git-b" {
+			return "git-b"
+		}
+		return "git-c"
+	})
+
+	says(func(said map[string]int64) { delete(said, "git-c") })
+	each("the large node not saying", 40*gib, home)
+
 	says(func(said map[string]int64) { delete(said, "git-a") })
 	each("a home not saying", 4*gib, home)
 }
