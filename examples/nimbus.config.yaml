@@ -177,10 +177,14 @@ api:
   # is checked against, and it is the base of every link a person follows:
   # ${crewlet_base_url} in tool-skill prose, a page change's notification,
   # an invitation and a password link.  With no public listener below it
-  # is also where vendors and sandboxes reach the webhook, OTLP and bridge
-  # routes, so every webhook URL and pasted app manifest is built on it.
-  # The engine usually sits behind a TLS-terminating proxy and therefore
-  # cannot read any of that off the request itself.
+  # is also where vendors reach the webhook routes, so every webhook URL and
+  # pasted app manifest is built on it.  The engine usually sits behind a
+  # TLS-terminating proxy and therefore cannot read any of that off the
+  # request itself.  A sandbox box's endpoints are not built on it: its
+  # bridge and telemetry endpoints are built on CREWLET_MCP_BRIDGE_URL and
+  # CREWLET_SANDBOX_OTEL_RECEIVER_URL, which name the address a box reaches
+  # (a direct box on a node that serves the API dials its own listener on
+  # loopback).
   #
   # Behind a proxy this is the PUBLIC address (https://nimbus.example.com),
   # not http://localhost.
@@ -190,10 +194,13 @@ api:
   # — /webhooks/, /otlp/ and /mcp/ — so the dashboard, the REST API and the
   # sign-in routes can stay off the public internet.  With a port set those
   # routes are served there and nowhere else, everything else stays on
-  # api.port, and external_url here is the address every webhook, app
-  # manifest and per-run sandbox endpoint is built on (required once the
-  # port is set on an ingress node).  The walkthrough serves everything on
-  # one port, so it is left out.
+  # api.port, and external_url here is the address every webhook and app
+  # manifest is built on (required once the port is set on an ingress
+  # node).  A box's bridge and telemetry endpoints are built on
+  # CREWLET_MCP_BRIDGE_URL and CREWLET_SANDBOX_OTEL_RECEIVER_URL, which then
+  # name this same public address; a direct box on an ingress node that runs
+  # seats dials the public listener on loopback.  The walkthrough serves
+  # everything on one port, so it is left out.
   # public:
   #   port: 8443
   #   external_url: "https://hooks.nimbus.example.com"
