@@ -42,6 +42,15 @@ import (
 // Registered only beside a company source, so [Sources.Company] is never nil
 // here; what can be nil is the epoch it returns.
 func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
+	// WHO IS ASKING decides the `assistant` block's figures, so a caller this
+	// node could not CHECK is refused as the node's condition, never answered
+	// as somebody with no assistant spend: read as anonymous, a person
+	// refused a question would be shown no figure against the ceiling that
+	// refused them, for as long as identity cannot be read.
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "budgets")
+	}
 	out := map[string]any{
 		"timezone":      "",
 		"durable":       false,
@@ -116,7 +125,6 @@ func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 	// THE VIEWER'S OWN counter, where one is kept: a person, under a company
 	// that caps a person's assistant spend.
 	caps := engine.AssistantCaps(company)
-	principal, _ := iam.From(ctx)
 	counted := principal.Kind == iam.KindPerson && len(caps) > 0
 	mine := coord.Unspent(coord.PersonScope(principal.ID), windows)
 	if counted {
