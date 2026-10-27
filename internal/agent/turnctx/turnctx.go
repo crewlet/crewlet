@@ -62,11 +62,13 @@ import (
 //
 // IMMUTABLE after construction. Derive a new one rather than mutating it — a
 // tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion. The four things it POINTS AT that change
+// decision downstream a suggestion. The five things it POINTS AT that change
 // are [Turn.Written], [Turn.Calls] and [Turn.AuxSpend], each of which only
-// ever grows and authorizes nothing, and [Turn.Budget], which only ever learns
-// that a window is full — so the one thing it can decide is to refuse a call,
-// and a tool holding it can make it refuse sooner, never later.
+// ever grows and authorizes nothing; [Turn.Lookups], which holds what the turn
+// already looked up by name and authorizes nothing either, every read through
+// one being judged again where it is answered; and [Turn.Budget], which only
+// ever learns that a window is full — so the one thing it can decide is to
+// refuse a call, and a tool holding it can make it refuse sooner, never later.
 //
 // A goroutine that captures a Turn and outlives the turn is a bug, and the one
 // no linter can see. The rule that makes it checkable: a Turn is PASSED, never
@@ -274,6 +276,13 @@ type Turn struct {
 	// model says reaches it but the calls it actually made.
 	Calls *CallLog
 
+	// Lookups is what this turn has looked up by name once — a code tool's
+	// repository — so a later call reuses it rather than paying the lookup's
+	// barrier again; see [Lookups]. Shared by every Turn derived from this
+	// one, like Calls. Nil keeps nothing, so every call looks up afresh —
+	// a turn built outside the engine.
+	Lookups *Lookups
+
 	// AuxSpend is what this turn SEGMENT's auxiliary calls have cost so far
 	// — its turn-start context, every rewrite its ledgers, its judge's
 	// evidence and its tools asked for, a worker's answer condensed for it —
@@ -395,6 +404,15 @@ func (t *Turn) CallLog() *CallLog {
 		return nil
 	}
 	return t.Calls
+}
+
+// LookedUp is this turn's lookups, or nil outside a turn — see
+// [Turn.Lookups]. A nil set answers every Load as a miss.
+func (t *Turn) LookedUp() *Lookups {
+	if t == nil {
+		return nil
+	}
+	return t.Lookups
 }
 
 // WithCalls is this turn with calls as its log — a delegated worker's view of

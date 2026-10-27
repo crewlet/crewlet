@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -383,15 +384,17 @@ func (a *App) serveCodeRead(kind code.ReadKind, what string) http.Handler {
 }
 
 // codeAsker is who a REST code read asks as: the principal the guard resolved
-// for the request, under the credential it came through ([iam.ActorFor]), and
-// the human seat it holds — a person's own, or the one the identity directory
-// binds a token to — or none. Every principal a person presents reads every
-// repository (ADR-0058), so the answer a person gets is the whole listing; what
-// the asker buys here is that the reader judges every read by who asked it, so
-// a seat's read, when one asks, cannot be answered as a person's.
+// for the request, written down as every surface writes its caller down
+// ([builtin.ActorOf], over [iam.ActorFor]), then judged as the code tools
+// judge theirs ([builtin.CodeAskerOf], the one conversion) — the credential it
+// came through, and the human seat it holds, a person's own or the one the
+// identity directory binds a token to, or none. Every principal a person
+// presents reads every repository (ADR-0058), so the answer a person gets is
+// the whole listing; what the asker buys here is that the reader judges every
+// read by who asked it, so a seat's read cannot be answered as a person's, nor
+// a person's REST read and their assistant's tool call as two people.
 func codeAsker(p iam.Principal) code.Principal {
-	return code.Principal{Kind: code.PrincipalOperator,
-		OperatorID: iam.ActorFor(p).OperatorID, Seat: p.Seat}
+	return builtin.CodeAskerOf(builtin.ActorOf(p))
 }
 
 // codeReadQuery is a read's request, asked as asker, refused
@@ -465,13 +468,11 @@ func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
 	}
 }
 
-// refusalSentence is the sentence err carries past its sentinel's own Go text
-// — `code: the caller's grant does not cover this: <sentence>` read as the
-// sentence — wherever in the chain the sentinel was wrapped, since a refusal
-// answered by another data node arrives wrapped by the estate router as well.
-// A sentinel carrying no sentence of its own is answered with err's text whole.
+// refusalSentence is the sentence err carries past its sentinel's own Go text,
+// read by the one reading the code tools quote it by ([builtin.RefusalSentence]),
+// and err's text whole for a sentinel that carries no sentence of its own.
 func refusalSentence(err, sentinel error) string {
-	if _, sentence, ok := strings.Cut(err.Error(), sentinel.Error()+": "); ok && sentence != "" {
+	if sentence, ok := builtin.RefusalSentence(err, sentinel); ok {
 		return sentence
 	}
 	return err.Error()

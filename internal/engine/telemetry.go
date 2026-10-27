@@ -314,6 +314,11 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// through here too, and the runner seeds its log with what the
 			// run called before it parked.
 			Calls: turnctx.NewCallLog(),
+			// AND ITS OWN LOOKUPS, empty for every segment a resumed one
+			// included: a name the turn looked up before it parked may
+			// name something else by the time it resumes, and one lookup a
+			// segment is the whole cost (see [turnctx.Lookups]).
+			Lookups: turnctx.NewLookups(),
 			// The seat and the ORG both come off the pinned epoch, so a
 			// colleague lookup mid-turn resolves against the roster this
 			// turn started under rather than one that changed underneath

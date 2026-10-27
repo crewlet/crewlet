@@ -55,7 +55,10 @@ read as `Unknown`.
 
 First-party builtins declare their own annotations in code, registered
 with `tools.Registry.RegisterWith`, so the same classification works for
-them.
+them. The [code tools](../guides/tools-and-mcp.md#the-companys-code), for
+one, are each a proven, idempotent read: a worker may be handed any of them,
+a turn that only read code delivered nothing, and the operator catalogue
+records no call to one.
 
 ### Where annotations come from, and where they go
 

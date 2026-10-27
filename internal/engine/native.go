@@ -826,9 +826,11 @@ type halves struct {
 // nativeHalves is [halves] for e at this instant: THE ONE DERIVATION of which
 // halves a node runs, read by seat admission ([Engine.StateLogHydrated]), by
 // whether a node may keep its seats ([Engine.serviceable]), by every read seam
-// the operator's surfaces are handed ([OperatorNative], [OperatorCode]), by
-// the seats' own tracker and knowledge-base seams ([Engine.trackerHalves],
-// [Engine.pageHalves]), by the inbound parsers ([Engine.nativeParsers]), by the
+// the operator's surfaces are handed ([OperatorNative], [OperatorCode], and
+// through the second the code tools a seat and an operator read with,
+// [CodeToolDeps]), by the seats' own tracker and knowledge-base seams
+// ([Engine.trackerHalves], [Engine.pageHalves]), by the inbound parsers
+// ([Engine.nativeParsers]), by the
 // knowledge searcher ([Engine.Knowledge]) and by where the skills are read
 // ([Engine.skillSource]) — so a change to what counts as running a half (a new
 // kind of runtime, a half that needs more than its reader) is made here once

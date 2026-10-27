@@ -312,6 +312,16 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.QueryArtifactDataTool: false,
 		builtin.WriteArtifactDataTool: true,
 		builtin.SetArtifactSchemaTool: true,
+
+		// THE CODE HOST'S READS, every one a proven read: a worker may be
+		// handed any of them.
+		builtin.CodeListReposTool: false,
+		builtin.CodeGetRepoTool:   false,
+		builtin.CodeResolveTool:   false,
+		builtin.CodeReadTool:      false,
+		builtin.CodeDiffTool:      false,
+		builtin.CodeCompareTool:   false,
+		builtin.CodeLandedInTool:  false,
 	}
 
 	reg := tools.NewRegistry()
@@ -1028,6 +1038,10 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE DATASTORE BESIDE IT, which the four data tools take
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
+		// AND THE CODE HOST, whose seven read tools register only over a
+		// code host: left out, every walk over this fixture met their seven
+		// authority rows as rules no registered tool answers.
+		Code: builtin.CodeDeps{Code: newCodeHost()},
 	}
 }
 

@@ -127,6 +127,11 @@ type Deps struct {
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
 
+	// Code is the code read tools' — the company's own repositories, read on
+	// the server. The zero value omits all of them, which is a company that
+	// hosts no code. See codetools.go.
+	Code CodeDeps
+
 	// Authorize decides whether the party behind a call may make it.
 	//
 	// EVERY TOOL GOES THROUGH IT, wrapped once at registration rather
@@ -248,7 +253,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&savePage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 	}
-	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps))
+	// AND THE CODE READ TOOLS, the very list the operator catalogue takes
+	// ([CodeTools]): reads, so none of them names a delivery surface.
+	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
+		codeCandidates(deps.Code))
 
 	var names []string
 	for _, c := range candidates {
@@ -336,6 +344,9 @@ func annotationsFor(name string) tools.Annotations {
 		return a
 	}
 	if a, ok := artifactDataAnnotations(name); ok {
+		return a
+	}
+	if a, ok := codeAnnotations(name); ok {
 		return a
 	}
 	switch name {

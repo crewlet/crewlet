@@ -1,0 +1,1035 @@
+package builtin_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
+)
+
+// ---- a code host the cases read ---------------------------------------- //
+
+const siteID = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e"
+
+var (
+	mainOID    = strings.Repeat("a", 40)
+	featureOID = strings.Repeat("b", 40)
+	blobOID    = strings.Repeat("c", 40)
+)
+
+// codeAt is a position on the code log.
+func codeAt(seq uint64) statelog.Position {
+	return statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: seq}
+}
+
+// siteDetail is the one repository the code host holds: `site`, the eng
+// unit's, read by the company.
+func siteDetail() code.RepoDetail {
+	return code.RepoDetail{
+		RepoSummary: code.RepoSummary{
+			RepoRef: code.RepoRef{ID: siteID, Name: "site", Status: code.RepoStatusActive,
+				ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
+				Visibility: code.VisibilityCompany, DefaultBranch: "main", Refs: 2, LivePacks: 1,
+				LiveBytes: 4096, Position: codeAt(7)},
+			Access: "read", Head: mainOID, Pushes: 3,
+		},
+		Branches: 2,
+	}
+}
+
+// codeHost is the routed code host as the code tools see it: one repository,
+// its refs, and a git node answering by object id — recording every question
+// it is asked, at the level it was asked.
+type codeHost struct {
+	mu sync.Mutex
+
+	detail  code.RepoDetail
+	listing []code.RepoSummary // the repos listing; the one repository when nil
+	refs    map[string]string  // whole ref → oid
+	floor   statelog.Position
+	at      statelog.Position
+
+	// replaced, set, is the repository every read BY NAME after the first
+	// names: a name deleted and declared again between two reads.
+	replaced *code.RepoRef
+	readErr  error
+	gitErr   error
+	git      func(q code.GitQuery) code.GitAnswer
+
+	reads    []code.ReadQuery
+	resolves []code.RefQuery
+	gits     []code.GitQuery
+}
+
+var _ builtin.CodeReader = (*codeHost)(nil)
+
+func newCodeHost() *codeHost {
+	return &codeHost{
+		detail: siteDetail(),
+		refs: map[string]string{
+			"refs/heads/main": mainOID, "refs/heads/feature": featureOID, "refs/tags/v1": mainOID,
+		},
+		floor: codeAt(9), at: codeAt(12),
+	}
+}
+
+func (h *codeHost) named(name string) (code.RepoRef, error) {
+	if name != h.detail.Name {
+		return code.RepoRef{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, name)
+	}
+	if h.replaced != nil && len(h.reads)+len(h.resolves) > 1 {
+		return *h.replaced, nil
+	}
+	return h.detail.RepoRef, nil
+}
+
+func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reads = append(h.reads, q)
+	if h.readErr != nil {
+		return code.ReadAnswer{}, h.readErr
+	}
+	out := code.ReadAnswer{Position: h.at, Level: q.Fresh.Level}
+	switch q.Kind {
+	case code.ReadRepos:
+		out.Repos = h.listing
+		if out.Repos == nil {
+			out.Repos = []code.RepoSummary{h.detail.RepoSummary}
+		}
+		return out, nil
+	case code.ReadRepo, code.ReadRefs:
+		ref, err := h.named(q.Repo)
+		if err != nil {
+			return code.ReadAnswer{}, err
+		}
+		if q.Kind == code.ReadRepo || q.Cursor == "" {
+			d := h.detail
+			d.RepoRef = ref
+			out.Repo = &d
+		}
+		if q.Kind == code.ReadRefs {
+			prefix := q.Prefix
+			if prefix == "" {
+				prefix = "refs/heads/"
+			}
+			var names []string
+			for name := range h.refs {
+				if strings.HasPrefix(name, prefix) && name > q.Cursor {
+					names = append(names, name)
+				}
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				out.Refs = append(out.Refs, code.RefRow{Ref: name, OID: h.refs[name], Position: h.at})
+			}
+		}
+		return out, nil
+	}
+	return code.ReadAnswer{}, fmt.Errorf("%w: a code tool read kind %s", code.ErrInvalid, q.Kind)
+}
+
+func (h *codeHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.resolves = append(h.resolves, q)
+	if h.readErr != nil {
+		return code.RefAnswer{}, h.readErr
+	}
+	ref, err := h.named(q.Repo)
+	if err != nil {
+		return code.RefAnswer{}, err
+	}
+	names := []string{q.Ref}
+	if !strings.HasPrefix(q.Ref, "refs/") {
+		names = []string{"refs/heads/" + q.Ref, "refs/tags/" + q.Ref}
+	}
+	for _, name := range names {
+		if oid, ok := h.refs[name]; ok {
+			return code.RefAnswer{Repo: ref, Ref: name, OID: oid, Position: h.at}, nil
+		}
+	}
+	return code.RefAnswer{}, fmt.Errorf("%w: repository %s holds no live %s", code.ErrRefNotFound, q.Repo,
+		strings.Join(names, " or "))
+}
+
+func (h *codeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.gits = append(h.gits, q)
+	if h.gitErr != nil {
+		return code.GitAnswer{}, h.gitErr
+	}
+	if h.git != nil {
+		return h.git(q), nil
+	}
+	out := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Position: h.at}
+	switch q.Kind {
+	case code.GitBlob:
+		out.Rev = blobOID
+		out.Blob = &code.BlobAnswer{Path: q.Blob.Path, OID: blobOID, Size: 6, Lines: 1, StartLine: 1,
+			EndLine: 1, Text: "hello\n"}
+	case code.GitTree:
+		out.Rev = mainOID
+		out.Tree = &code.TreeAnswer{Tree: blobOID, Entries: []code.TreeEntry{}}
+	case code.GitDiff:
+		out.Diff = &code.DiffAnswer{Base: q.Diff.Base, Head: q.Diff.Head, Files: []code.DiffFile{}}
+	case code.GitCompare:
+		out.Compare = &code.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head, Files: []code.DiffFile{}}
+	case code.GitLandedIn:
+		out.LandedIn = &code.LandedInAnswer{Commit: q.LandedIn.Commit, Target: q.LandedIn.Target,
+			TargetOID: q.LandedIn.TargetOID, At: q.LandedIn.At, Landed: true}
+	}
+	return out, nil
+}
+
+func (h *codeHost) Floor() statelog.Position { return h.floor }
+
+// asked is what the host was asked, copied under its lock.
+func (h *codeHost) asked() (reads []code.ReadQuery, resolves []code.RefQuery, gits []code.GitQuery) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.reads), slices.Clone(h.resolves), slices.Clone(h.gits)
+}
+
+// readsOf counts the reads of kind.
+func readsOf(reads []code.ReadQuery, kind code.ReadKind) int {
+	n := 0
+	for _, q := range reads {
+		if q.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// codeRegistry is a seat's registry holding the code tools over deps.
+func codeRegistry(t *testing.T, deps builtin.CodeDeps) *tools.Registry {
+	t.Helper()
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Code: deps})); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	return reg
+}
+
+// codeTurn is agent-cto's turn, with the lookups the engine builds every turn
+// with.
+func codeTurn(t *testing.T) *turnctx.Turn {
+	t.Helper()
+	turn, _ := readerTurn(t)
+	turn.Lookups = turnctx.NewLookups()
+	return turn
+}
+
+// callCode calls one of a seat's code tools in turn, and decodes its answer.
+func callCode(t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name string,
+	args map[string]any) (tools.Result, map[string]any) {
+
+	t.Helper()
+	got := callIn(t, reg, turn, name, args)
+	var answer map[string]any
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("%s answered no JSON object: %v\n%s", name, err, got.Output)
+	}
+	return got, answer
+}
+
+// refusedCode calls one of a seat's code tools in turn, expecting it refused.
+func refusedCode(t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name string,
+	args map[string]any) tools.Result {
+
+	t.Helper()
+	entry, ok := reg.Lookup(name)
+	if !ok {
+		t.Fatalf("%s is not registered", name)
+	}
+	got, err := entry.Tool.(tools.SeatCallable).CallForTurn(everyGrant(), turn, args)
+	if err != nil || !got.Failed {
+		t.Fatalf("%s %v answered %v %q, want a refusal", name, args, err, got.Output)
+	}
+	return got
+}
+
+// operatorCode is the operator catalogue's code tools over host, asked as
+// whoever the call's context carries.
+func operatorCode(t *testing.T, host builtin.CodeReader, clone func(string) string) map[string]tools.Callable {
+	t.Helper()
+	out := map[string]tools.Callable{}
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Code:      builtin.CodeDeps{Code: host, Actor: builtin.PrincipalActor, CloneURL: clone},
+		Authorize: builtin.Decide(chartLeads),
+	}) {
+		out[tool.Name()] = tool
+	}
+	return out
+}
+
+// asBoundPerson is a person signed in through one of their machine tokens,
+// bound to the human seat they hold.
+func asBoundPerson() context.Context {
+	return iam.WithPrincipal(context.Background(), iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee3"),
+		Kind: iam.KindPerson, Login: "jane.founder", Seat: "founder", Via: "pat:jane-laptop",
+		Stage: iam.StageActive, Grants: iam.Apps,
+	})
+}
+
+// asUnboundToken is a machine token bound to nobody, as CI holds one.
+func asUnboundToken() context.Context {
+	return iam.WithPrincipal(context.Background(), iam.Principal{
+		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee4"),
+		Kind: iam.KindMachine, Login: "token:ci", Stage: iam.StageActive,
+	})
+}
+
+// ---- one list, two surfaces --------------------------------------------- //
+
+// THE CODE TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
+// built over the same deps, hold the same seven tools — every one the authority
+// table names, in the list's own order — with byte-identical descriptions and
+// schemas, because both take [builtin.CodeTools]; and a company that hosts no
+// code is given none on either.
+//
+// Mutation: OperatorTools omitting codeCandidates, or building a list of its
+// own with one schema edited → red.
+func TestTheCodeToolsAreOneList(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	operator := operatorCode(t, host, nil)
+	for _, name := range builtin.CodeToolNames() {
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Errorf("a seat's registry holds no %s", name)
+			continue
+		}
+		tool, ok := operator[name]
+		if !ok {
+			t.Errorf("the operator catalogue holds no %s", name)
+			continue
+		}
+		seatSchema, _ := json.Marshal(entry.Tool.Parameters())
+		opSchema, _ := json.Marshal(tool.Parameters())
+		if string(seatSchema) != string(opSchema) || entry.Tool.Description() != tool.Description() {
+			t.Errorf("%s is described or shaped differently on the two surfaces", name)
+		}
+	}
+	var listed []string
+	for _, tool := range builtin.CodeTools(builtin.CodeDeps{Code: host}) {
+		listed = append(listed, tool.Name())
+	}
+	if !slices.Equal(listed, builtin.CodeToolNames()) {
+		t.Errorf("CodeTools lists %v, want %v", listed, builtin.CodeToolNames())
+	}
+
+	none := codeRegistry(t, builtin.CodeDeps{})
+	for _, name := range builtin.CodeToolNames() {
+		if _, ok := none.Lookup(name); ok {
+			t.Errorf("a company hosting no code was given %s", name)
+		}
+		if _, ok := operatorCode(t, nil, nil)[name]; ok {
+			t.Errorf("an operator of a company hosting no code was offered %s", name)
+		}
+	}
+	if len(builtin.CodeTools(builtin.CodeDeps{})) != 0 {
+		t.Error("CodeTools with no code host listed tools")
+	}
+}
+
+// EVERY CODE TOOL IS A PROVEN READ, on both surfaces: the registry carries the
+// hint the delivery check reads, and the operator catalogue advertises the one
+// it audits nothing on. Mutation: one code tool off codeAnnotations (the
+// default arm's shared write) → red.
+func TestEveryCodeToolIsAProvenRead(t *testing.T) {
+	t.Parallel()
+	reg := codeRegistry(t, builtin.CodeDeps{Code: newCodeHost()})
+	for _, name := range builtin.CodeToolNames() {
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		if !mcp.ReadOnlyProven(entry.Annotations) || !mcp.ReadOnlyProven(builtin.AnnotationsFor(name)) ||
+			entry.Annotations.Idempotent != mcp.Yes {
+			t.Errorf("%s is annotated %+v, want a proven, idempotent read", name, entry.Annotations)
+		}
+		if mcp.WritesToSharedSurface(entry.Annotations) {
+			t.Errorf("%s reads as a write to a shared surface, so no worker could be given it", name)
+		}
+	}
+}
+
+// ---- who asks ------------------------------------------------------------ //
+
+// A CODE READ IS JUDGED AS ITS CALLER and nobody else: a seat's turn asks as
+// the seat by its handle, a person's assistant as the credential they came
+// through bound to their seat, a token bound to nobody as itself — the one
+// conversion the REST reads use too — and no argument names who reads: one
+// trying is refused before anything is read.
+//
+// Mutation: the asker taken from the turn's requester, or a person asked as
+// their seat with no credential → red.
+func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
+	t.Parallel()
+	seatHost := newCodeHost()
+	reg := codeRegistry(t, builtin.CodeDeps{Code: seatHost})
+	turn := codeTurn(t)
+	turn.Requester = "founder"
+	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main", "path": "README.md"})
+	callCode(t, reg, turn, builtin.CodeListReposTool, map[string]any{})
+	seat := code.Principal{Kind: code.PrincipalAgent, Seat: "agent-cto"}
+	reads, resolves, gits := seatHost.asked()
+	if len(reads) == 0 || len(resolves) == 0 || len(gits) == 0 {
+		t.Fatalf("the seat's calls asked %d reads, %d refs and %d git reads", len(reads), len(resolves), len(gits))
+	}
+	for _, q := range reads {
+		if q.Asker != seat {
+			t.Errorf("a seat's %s read asked as %+v, want %+v", q.Kind, q.Asker, seat)
+		}
+	}
+	for _, q := range resolves {
+		if q.Asker != seat {
+			t.Errorf("a seat's ref asked as %+v", q.Asker)
+		}
+	}
+	for _, q := range gits {
+		if q.Asker != seat {
+			t.Errorf("a seat's git read asked as %+v", q.Asker)
+		}
+	}
+
+	for name, c := range map[string]struct {
+		ctx  context.Context
+		want code.Principal
+	}{
+		"a bound person": {asBoundPerson(), code.Principal{Kind: code.PrincipalOperator,
+			OperatorID: "pat:jane-laptop", Seat: "founder"}},
+		"an unbound token": {asUnboundToken(), code.Principal{Kind: code.PrincipalOperator,
+			OperatorID: "token:ci"}},
+	} {
+		host := newCodeHost()
+		tools := operatorCode(t, host, nil)
+		if got, err := tools[builtin.CodeListReposTool].Call(c.ctx, map[string]any{}); err != nil || got.Failed {
+			t.Fatalf("%s's listing: %v %s", name, err, got.Output)
+		}
+		reads, _, _ := host.asked()
+		if len(reads) != 1 || reads[0].Asker != c.want {
+			t.Errorf("%s asked as %+v, want %+v", name, reads, c.want)
+		}
+		if want := builtin.CodeAskerOf(mustActor(t, c.ctx)); want != c.want {
+			t.Errorf("%s converts to %+v through CodeAskerOf, want %+v", name, want, c.want)
+		}
+	}
+
+	// NO ARGUMENT NAMES WHO READS: one that tries is refused before the code
+	// host is asked anything.
+	host := newCodeHost()
+	got := refusedCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t),
+		builtin.CodeListReposTool, map[string]any{"seat": "founder"})
+	if !errors.Is(got.Cause, builtin.ErrUndeclaredArgument) {
+		t.Fatalf("a call naming a seat to read as answered %+v", got)
+	}
+	if reads, _, _ := host.asked(); len(reads) != 0 {
+		t.Errorf("a refused call asked the code host %+v", reads)
+	}
+}
+
+// mustActor is the actor the operator surface writes ctx's principal down as.
+func mustActor(t *testing.T, ctx context.Context) builtin.Actor {
+	t.Helper()
+	a, err := builtin.PrincipalActor(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// ---- what a turn pays ----------------------------------------------------- //
+
+// A TURN PAYS ONE BARRIER PER REPOSITORY AND PER REF IT NAMES. Every row read
+// is at the seat's level (linearizable); the repository is read once a turn and
+// never again in it; a ref is resolved each time a call names one and an id
+// never is; and every read by object id carries the furthest of the node's own
+// floor and the positions its refs were read at, so the copy that answers holds
+// both. The operator surface has no turn, and reads the repository once a
+// call.
+//
+// Mutation: resolveRev resolving an oid as a ref, or repo() reading past the
+// turn's lookups → red.
+func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	turn := codeTurn(t)
+
+	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
+	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main", "path": "README.md"})
+	_, _, gits := host.asked()
+	if got := gits[len(gits)-1].Fresh; got.Level != statelog.ReadSession ||
+		!slices.Equal(got.Floors, []statelog.Position{host.at}) {
+		t.Errorf("a read by a ref's id carried %+v, want a session floor at the ref's position %v", got, host.at)
+	}
+	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID, "path": "README.md"})
+	_, resolvesBefore, gits := host.asked()
+	if got := gits[len(gits)-1].Fresh; !slices.Equal(got.Floors, []statelog.Position{host.floor}) {
+		t.Errorf("a read by an id carried %+v, want this node's own floor %v", got, host.floor)
+	}
+	callCode(t, reg, turn, builtin.CodeDiffTool, map[string]any{"repo": "site", "base": "main", "head": "feature"})
+	callCode(t, reg, turn, builtin.CodeResolveTool, map[string]any{"repo": "site", "ref": "v1"})
+	callCode(t, reg, turn, builtin.CodeLandedInTool, map[string]any{"repo": "site", "commit": featureOID,
+		"target": "main"})
+
+	reads, resolves, gits := host.asked()
+	if n := readsOf(reads, code.ReadRepo); n != 1 {
+		t.Errorf("the turn read repository site %d times, want once", n)
+	}
+	// main for the first read; none for the id; base and head; v1; main.
+	if len(resolvesBefore) != 1 || len(resolves) != 5 {
+		t.Errorf("the turn resolved %d refs (%d before the diff), want 5 (1)", len(resolves), len(resolvesBefore))
+	}
+	for _, q := range reads {
+		if q.Fresh.Level != statelog.ReadLinearizable {
+			t.Errorf("a %s read was asked at %q, want linearizable", q.Kind, q.Fresh.Level)
+		}
+	}
+	for _, q := range resolves {
+		if q.Fresh.Level != statelog.ReadLinearizable {
+			t.Errorf("a ref was resolved at %q, want linearizable", q.Fresh.Level)
+		}
+	}
+	for _, q := range gits {
+		if q.RepoID != siteID {
+			t.Errorf("a git read named repository %q, want the id the turn resolved", q.RepoID)
+		}
+		at := q.Fresh.Floor(topics.CodeLogStream)
+		if before, err := at.Before(host.floor); err != nil || before {
+			t.Errorf("a git read was floored at %v, below the node's own %v", at, host.floor)
+		}
+	}
+
+	// A WORKER IS ITS PARENT'S TURN: what the executor resolved, a worker it
+	// delegated to reads with no barrier of its own.
+	worker := turn.WithCalls(turnctx.NewCallLog())
+	callCode(t, reg, worker, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID})
+	if reads, _, _ := host.asked(); readsOf(reads, code.ReadRepo) != 1 {
+		t.Errorf("a worker read the repository its parent resolved again: %d reads", readsOf(reads, code.ReadRepo))
+	}
+
+	// THE OPERATOR SURFACE: no turn, so once a call.
+	opHost := newCodeHost()
+	tools := operatorCode(t, opHost, nil)
+	for range 2 {
+		if got, err := tools[builtin.CodeReadTool].Call(asBoundPerson(), map[string]any{"repo": "site",
+			"rev": mainOID}); err != nil || got.Failed {
+			t.Fatalf("an operator read: %v %s", err, got.Output)
+		}
+	}
+	if reads, _, _ := opHost.asked(); readsOf(reads, code.ReadRepo) != 2 {
+		t.Errorf("two operator calls read the repository %d times, want once a call", readsOf(reads, code.ReadRepo))
+	}
+}
+
+// A NAME THAT NAMES ANOTHER REPOSITORY MID-TURN IS RESOLVED AGAIN: a ref read by
+// name that answers another repository than the one the turn resolved — the
+// name deleted and declared again between the two — reads nothing and is
+// refused stale, and the turn forgets its resolution, so the same call made
+// again reads the repository the name names now.
+//
+// Mutation: sameRepo ignoring the id, or refusing without forgetting → red.
+func TestANameReplacedMidTurnIsResolvedAgain(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	reborn := host.detail.RepoRef
+	reborn.ID = "0192f6c1-6a7e-7c1b-9d4e-000000000002"
+	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	turn := codeTurn(t)
+	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
+
+	host.mu.Lock()
+	host.replaced = &reborn
+	host.mu.Unlock()
+	got := refusedCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main"})
+	if tools.RefusalOf(got) != tools.RefusalStaleVersion {
+		t.Fatalf("a ref of a replaced repository answered %+v, want refused stale", got)
+	}
+	if _, _, gits := host.asked(); len(gits) != 0 {
+		t.Fatalf("a read of a replaced repository reached a git node: %+v", gits)
+	}
+	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main"})
+	reads, _, gits := host.asked()
+	if readsOf(reads, code.ReadRepo) != 2 || len(gits) != 1 || gits[0].RepoID != reborn.ID {
+		t.Errorf("the call made again read the repository %d times and asked %+v, want it resolved again "+
+			"and read by %s", readsOf(reads, code.ReadRepo), gits, reborn.ID)
+	}
+}
+
+// ---- refusals ------------------------------------------------------------ //
+
+// A NODE THAT CANNOT JUDGE IS NEVER A REFUSAL OF THE CALLER (M3-O82): a data
+// node with no chart answers a seat's read about itself, a git node unready,
+// and a walk nobody served the fleet's condition — each told unavailable, which
+// a retry clears, and never `not_permitted`, which only the grant answers.
+//
+// Mutation: ErrNotServing or ErrGitUnready classed forbidden → red.
+func TestANodeThatCannotJudgeIsNeverARefusalOfTheCaller(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		readErr, gitErr error
+		want            tools.Refusal
+	}{
+		"a reader with no chart": {readErr: fmt.Errorf("%w: this node holds no chart",
+			code.ErrNotServing), want: tools.RefusalUnavailable},
+		"a git node with no chart": {gitErr: &code.ErrGitUnready{Reason: code.UnreadyNoChart,
+			Detail: "n1 holds no chart yet"}, want: tools.RefusalUnavailable},
+		"no git node answering": {gitErr: &estate.ErrUnserved{Git: true, Detail: "n1 syncing"},
+			want: tools.RefusalUnavailable},
+		"no data node answering": {readErr: &estate.ErrUnserved{Detail: "n1 out of service"},
+			want: tools.RefusalUnavailable},
+		"the grant": {readErr: fmt.Errorf("%w: seat \"agent-cto\" holds no access to repository \"site\"",
+			code.ErrNotPermitted), want: tools.RefusalForbidden},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			host := newCodeHost()
+			host.readErr, host.gitErr = c.readErr, c.gitErr
+			got := refusedCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t),
+				builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID})
+			if tools.RefusalOf(got) != c.want {
+				t.Fatalf("answered %+v, want refused %s", got, c.want)
+			}
+			if c.want == tools.RefusalForbidden && !strings.Contains(got.Output, "holds no access") {
+				t.Errorf("the grant's refusal lost the domain's sentence: %s", got.Output)
+			}
+		})
+	}
+}
+
+// EVERY REFUSAL IS THE DOMAIN'S, IN ITS CLASS: a repository nobody declared, a
+// ref no branch or tag holds, an object the repository lacks and a read too
+// large to answer whole are each told in the code host's own sentence — the
+// narrowing a too-large read names included — classed as what the caller must
+// change, and a call missing what it reads is refused before anything is
+// asked.
+//
+// Mutation: a domain refusal told as this node's fault, or its sentence
+// dropped → red.
+func TestEveryCodeRefusalIsTheDomainsInItsClass(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		tool            string
+		args            map[string]any
+		readErr, gitErr error
+		want            tools.Refusal
+		says            string
+		asksNothing     bool
+	}{
+		"a repository nobody declared": {tool: builtin.CodeGetRepoTool, args: map[string]any{"repo": "nope"},
+			want: tools.RefusalNotFound, says: `there is no repository "nope"`},
+		"a ref nothing holds": {tool: builtin.CodeResolveTool, args: map[string]any{"repo": "site",
+			"ref": "gone"}, want: tools.RefusalNotFound, says: "holds no live refs/heads/gone"},
+		"an object the repository lacks": {tool: builtin.CodeReadTool, args: map[string]any{"repo": "site",
+			"rev": mainOID}, gitErr: fmt.Errorf("%w: no object %s", code.ErrObjectNotFound, mainOID),
+			want: tools.RefusalNotFound, says: "no object " + mainOID},
+		"a read too large to answer whole": {tool: builtin.CodeDiffTool, args: map[string]any{"repo": "site",
+			"base": mainOID, "head": featureOID, "file": "a.txt"},
+			gitErr: fmt.Errorf("%w: line 9 of the patch is past a page; read the file's lines instead",
+				code.ErrSliceTooLarge), want: tools.RefusalInvalid, says: "read the file's lines instead"},
+		"a call naming no revision": {tool: builtin.CodeReadTool, args: map[string]any{"repo": "site"},
+			want: tools.RefusalInvalid, says: "needs `rev`", asksNothing: true},
+		"a name no repository can have": {tool: builtin.CodeGetRepoTool, args: map[string]any{"repo": "Not_A_Name"},
+			want: tools.RefusalInvalid, says: "is not a repository's name", asksNothing: true},
+		"a commit id as the branch asked about": {tool: builtin.CodeLandedInTool,
+			args: map[string]any{"repo": "site", "commit": mainOID, "target": featureOID},
+			want: tools.RefusalInvalid, says: "reads as a commit id", asksNothing: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			host := newCodeHost()
+			host.readErr, host.gitErr = c.readErr, c.gitErr
+			got := refusedCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t), c.tool, c.args)
+			if tools.RefusalOf(got) != c.want || !strings.Contains(got.Output, c.says) {
+				t.Errorf("answered %s %q, want refused %s saying %q", tools.RefusalOf(got), got.Output,
+					c.want, c.says)
+			}
+			reads, resolves, gits := host.asked()
+			if asked := len(reads) + len(resolves) + len(gits); c.asksNothing && asked != 0 {
+				t.Errorf("a call refused for its arguments asked the code host %d questions", asked)
+			}
+		})
+	}
+}
+
+// A PERSON IS HANDED THE CLONE URL, AND A SEAT IS NOT: a seat reads through the
+// tools and could not authenticate to the address, while a person's git — and
+// a token's — clones from it.
+func TestAPersonIsHandedTheCloneURLAndASeatIsNot(t *testing.T) {
+	t.Parallel()
+	clone := func(name string) string { return "https://crewlet.example.com/git/" + name + ".git" }
+	reg := codeRegistry(t, builtin.CodeDeps{Code: newCodeHost(), CloneURL: clone})
+	_, seat := callCode(t, reg, codeTurn(t), builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
+	if _, ok := seat["clone_url"]; ok {
+		t.Errorf("a seat was handed a clone URL: %v", seat["clone_url"])
+	}
+	for name, ctx := range map[string]context.Context{"a person": asBoundPerson(), "a token": asUnboundToken()} {
+		got, err := operatorCode(t, newCodeHost(), clone)[builtin.CodeGetRepoTool].Call(ctx,
+			map[string]any{"repo": "site"})
+		if err != nil || got.Failed {
+			t.Fatalf("%s's detail: %v %s", name, err, got.Output)
+		}
+		var answer map[string]any
+		if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+			t.Fatal(err)
+		}
+		if answer["clone_url"] != "https://crewlet.example.com/git/site.git" {
+			t.Errorf("%s was handed clone URL %v", name, answer["clone_url"])
+		}
+		if branches, _ := answer["branches"].([]any); len(branches) != 2 {
+			t.Errorf("%s's detail listed branches %v, want main and feature", name, answer["branches"])
+		}
+	}
+}
+
+// ---- one page, one answer ------------------------------------------------ //
+
+// longRef is the longest ref a push may create, every byte one JSON writes as
+// six: what an answer naming a resolved ref weighs at its most.
+var longRef = "refs/heads/" + strings.Repeat("<", code.MaxRefNameBytes-len("refs/heads/"))
+
+// widest is a position at its widest encoding.
+var widest = statelog.Position{Stream: topics.CodeLogStream, Generation: math.MaxUint32,
+	Seq: math.MaxUint64}
+
+// atTheBound is the fullest page fill makes — fill(a, n) the page holding n
+// units of its filler, a byte of text or an entry of a list — whose JSON a git
+// node still sends: at most code.MaxGitAnswerBytes, with one unit more past
+// it, so the page is cut where the git node cuts one. Every other field is at
+// its widest.
+func atTheBound(t *testing.T, a code.GitAnswer, fill func(a code.GitAnswer, n int) code.GitAnswer) code.GitAnswer {
+	t.Helper()
+	a.Position, a.Next = widest, fmt.Sprintf("b:%d:%d", math.MaxInt, math.MaxInt)
+	a.Coverage = &code.Coverage{From: widest, Through: widest, GapFrom: widest, GapThrough: widest}
+	a.PushedBy = map[string]code.PushedBy{mainOID: {PushID: uuid.NewString(), Position: widest,
+		Principal: code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", 40)}, Via: code.ViaGit}}
+	size := func(n int) int {
+		encoded, err := json.Marshal(fill(a, n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(encoded)
+	}
+	fits, over := 0, code.MaxGitAnswerBytes
+	for over-fits > 1 {
+		if mid := fits + (over-fits)/2; size(mid) <= code.MaxGitAnswerBytes {
+			fits = mid
+		} else {
+			over = mid
+		}
+	}
+	if size(fits) > code.MaxGitAnswerBytes || size(fits+1) <= code.MaxGitAnswerBytes {
+		t.Fatalf("the fixture's fullest page is %d bytes and one unit more %d, which is not a page cut "+
+			"at %d", size(fits), size(fits+1), code.MaxGitAnswerBytes)
+	}
+	return fill(a, fits)
+}
+
+// A GIT ANSWER FITS ONE TOOL ANSWER: a page the git node cut at its bound,
+// wrapped as each code tool wraps it — the longest repository name, every ref
+// its call names at the longest a ref may be and spelled in the characters JSON
+// writes six bytes for, the fence's label and closer and the answer's
+// provenance envelope where its text is fenced — is answered whole, and within
+// builtin.ToolAnswerBytes. What code.MaxGitAnswerBytes leaves for the envelope
+// is what this measures.
+//
+// Mutation: rendering the page indented (jsonAnswer) → the tree and stat pages
+// refused for their structure → red.
+func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
+	t.Parallel()
+	name := strings.Repeat("r", gitref.MaxRepoNameBytes)
+	repoWith := func() *codeHost {
+		h := newCodeHost()
+		h.detail.Name = name
+		h.refs = map[string]string{longRef: mainOID}
+		return h
+	}
+	files := func(n int) []code.DiffFile {
+		out := make([]code.DiffFile, n)
+		for i := range out {
+			out[i] = code.DiffFile{Path: fmt.Sprintf("f%04d", i), Status: "M", Added: 1, Deleted: 1,
+				OldOID: blobOID, NewOID: mainOID, OldMode: "100644", NewMode: "100644"}
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name string
+		tool string
+		args map[string]any
+		page func(t *testing.T, q code.GitQuery) code.GitAnswer
+	}{
+		{"a file's lines", builtin.CodeReadTool, map[string]any{"rev": longRef, "path": "README.md"},
+			func(t *testing.T, q code.GitQuery) code.GitAnswer {
+				return atTheBound(t, code.GitAnswer{Kind: code.GitBlob, RepoID: q.RepoID, Rev: blobOID},
+					func(a code.GitAnswer, n int) code.GitAnswer {
+						a.Blob = &code.BlobAnswer{Path: "README.md", OID: blobOID, Size: math.MaxInt64,
+							Lines: math.MaxInt, StartLine: math.MaxInt - 1, EndLine: math.MaxInt,
+							StartByte: math.MaxInt, Text: strings.Repeat("x", n), Continues: true}
+						return a
+					})
+			}},
+		{"a tree's entries", builtin.CodeReadTool, map[string]any{"rev": longRef, "recursive": true},
+			func(t *testing.T, q code.GitQuery) code.GitAnswer {
+				return atTheBound(t, code.GitAnswer{Kind: code.GitTree, RepoID: q.RepoID, Rev: mainOID},
+					func(a code.GitAnswer, n int) code.GitAnswer {
+						// SHORT ENTRIES, the most structure a page can carry:
+						// what indenting would grow by.
+						entries := make([]code.TreeEntry, n)
+						for i := range entries {
+							entries[i] = code.TreeEntry{Mode: "100644", Type: "blob", OID: blobOID,
+								Path: fmt.Sprintf("%06d", i), Size: 1}
+						}
+						a.Tree = &code.TreeAnswer{Tree: blobOID, Entries: entries, Total: math.MaxInt}
+						return a
+					})
+			}},
+		{"a diff's patch", builtin.CodeDiffTool, map[string]any{"base": longRef, "head": longRef, "file": "f"},
+			func(t *testing.T, q code.GitQuery) code.GitAnswer {
+				return atTheBound(t, code.GitAnswer{Kind: code.GitDiff, RepoID: q.RepoID},
+					func(a code.GitAnswer, n int) code.GitAnswer {
+						a.Diff = &code.DiffAnswer{Base: mainOID, Head: mainOID, Files: files(1),
+							Total: math.MaxInt, Added: math.MaxInt, Deleted: math.MaxInt,
+							Patch: strings.Repeat("x", n)}
+						return a
+					})
+			}},
+		{"a diff's stat", builtin.CodeDiffTool, map[string]any{"base": longRef, "head": longRef},
+			func(t *testing.T, q code.GitQuery) code.GitAnswer {
+				return atTheBound(t, code.GitAnswer{Kind: code.GitDiff, RepoID: q.RepoID},
+					func(a code.GitAnswer, n int) code.GitAnswer {
+						a.Diff = &code.DiffAnswer{Base: mainOID, Head: mainOID, Files: files(n),
+							Total: math.MaxInt, Added: math.MaxInt, Deleted: math.MaxInt}
+						return a
+					})
+			}},
+		{"a comparison", builtin.CodeCompareTool, map[string]any{"base": longRef, "head": longRef},
+			func(t *testing.T, q code.GitQuery) code.GitAnswer {
+				return atTheBound(t, code.GitAnswer{Kind: code.GitCompare, RepoID: q.RepoID},
+					func(a code.GitAnswer, n int) code.GitAnswer {
+						a.Compare = &code.CompareAnswer{Base: mainOID, Head: mainOID, MergeBase: mainOID,
+							BaseIsAncestor: true, HeadIsAncestor: true, Ahead: math.MaxInt, Behind: math.MaxInt,
+							Files: files(n), Total: math.MaxInt, Added: math.MaxInt, Deleted: math.MaxInt}
+						return a
+					})
+			}},
+		{"a landing", builtin.CodeLandedInTool, map[string]any{"commit": longRef, "target": longRef},
+			func(t *testing.T, q code.GitQuery) code.GitAnswer {
+				return atTheBound(t, code.GitAnswer{Kind: code.GitLandedIn, RepoID: q.RepoID},
+					func(a code.GitAnswer, n int) code.GitAnswer {
+						by := a.PushedBy[mainOID]
+						a.LandedIn = &code.LandedInAnswer{Commit: mainOID, Target: longRef, TargetOID: mainOID,
+							At: widest, Landed: true, LandedBy: &by, IntroducedBy: &by,
+							Move:   &code.RefMove{Ref: longRef, Old: mainOID, New: mainOID, Forced: true},
+							Probes: math.MaxInt, Detail: strings.Repeat("x", n)}
+						return a
+					})
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host := repoWith()
+			host.git = func(q code.GitQuery) code.GitAnswer { return c.page(t, q) }
+			args := map[string]any{"repo": name}
+			for k, v := range c.args {
+				args[k] = v
+			}
+			got, _ := callCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t), c.tool, args)
+			if len(got.Output) > builtin.ToolAnswerBytes {
+				t.Fatalf("the answer is %d bytes, past %d", len(got.Output), builtin.ToolAnswerBytes)
+			}
+			t.Logf("%s at its widest: %d bytes of %d (%d spare)", c.name, len(got.Output),
+				builtin.ToolAnswerBytes, builtin.ToolAnswerBytes-len(got.Output))
+		})
+	}
+}
+
+// A FENCED PAGE THAT OVERFLOWS IS REFUSED WITH ITS NARROWING, never cut: a page
+// of a file's lines the git node cut at its bound, whose every line spells a
+// fence marker — each longer once the fence escapes it — is past one tool
+// answer once fenced, and the read is refused naming a narrower line range; a
+// patch that does the same is refused naming the file's lines to read instead.
+//
+// Mutation: the tool cutting the text to fit, or answering it unfenced → red.
+func TestAFencedPageThatOverflowsIsRefusedWithItsNarrowing(t *testing.T) {
+	t.Parallel()
+	const marker = "[untrusted\n"
+	// A LINE AS ITS PAGE WEIGHS IT, in JSON: the newline is two bytes there.
+	encoded, _ := json.Marshal(marker)
+	lines := (code.MaxGitAnswerBytes - 1024) / (len(encoded) - len(`""`))
+	text := strings.Repeat(marker, lines)
+	for _, c := range []struct {
+		name, tool string
+		args       map[string]any
+		answer     func(q code.GitQuery) code.GitAnswer
+		says       string
+	}{
+		{"a file's lines", builtin.CodeReadTool, map[string]any{"rev": mainOID, "path": "a.txt"},
+			func(q code.GitQuery) code.GitAnswer {
+				return code.GitAnswer{Kind: code.GitBlob, RepoID: q.RepoID, Rev: blobOID,
+					Blob: &code.BlobAnswer{Path: "a.txt", OID: blobOID, Size: int64(len(text)), Lines: lines,
+						StartLine: 1, EndLine: lines, Text: text}}
+			}, fmt.Sprintf("read lines 1 to %d", 1+(lines-1)/2)},
+		{"a patch", builtin.CodeDiffTool, map[string]any{"base": mainOID, "head": featureOID, "file": "a.txt"},
+			func(q code.GitQuery) code.GitAnswer {
+				return code.GitAnswer{Kind: code.GitDiff, RepoID: q.RepoID, Diff: &code.DiffAnswer{
+					Base: mainOID, Head: featureOID, Files: []code.DiffFile{{Path: "a.txt", Status: "M"}},
+					Patch: text}}
+			}, "with " + builtin.CodeReadTool + " and a line range"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host := newCodeHost()
+			host.git = c.answer
+			args := map[string]any{"repo": "site"}
+			for k, v := range c.args {
+				args[k] = v
+			}
+			if page, _ := json.Marshal(c.answer(code.GitQuery{RepoID: siteID})); len(page) > code.MaxGitAnswerBytes {
+				t.Fatalf("the fixture page is %d bytes, past what a git node sends", len(page))
+			}
+			got := refusedCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t), c.tool, args)
+			if tools.RefusalOf(got) != tools.RefusalInvalid {
+				t.Fatalf("an overflowing page answered %s, %d bytes, want refused invalid",
+					tools.RefusalOf(got), len(got.Output))
+			}
+			if !strings.Contains(got.Output, c.says) {
+				t.Errorf("the refusal does not name the narrowing %q: %s", c.says, got.Output)
+			}
+		})
+	}
+}
+
+// A LISTING IS CUT WHOLE-ROW AT THE ANSWER: a page of repositories the reader
+// served that would outgrow one tool answer is answered with the rows that fit
+// — every one whole — and `next` naming the last kept, where the reader's own
+// keyset continues; so are a repository's branches.
+//
+// Mutation: answering the reader's page whole (refused for its size), or next
+// left as the reader's → red.
+func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	for i := range 100 {
+		s := siteDetail().RepoSummary
+		s.Name, s.Description = fmt.Sprintf("repo-%03d", i), strings.Repeat("<", code.MaxDescriptionBytes)
+		host.listing = append(host.listing, s)
+	}
+	for i := range 100 {
+		host.refs[fmt.Sprintf("refs/heads/%s-%03d", strings.Repeat("<", 200), i)] = mainOID
+	}
+	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	got, listing := callCode(t, reg, codeTurn(t), builtin.CodeListReposTool, map[string]any{"limit": 100})
+	repos, _ := listing["repos"].([]any)
+	if len(repos) == 0 || len(repos) == 100 || len(got.Output) > builtin.ToolAnswerBytes {
+		t.Fatalf("the listing kept %d of 100 rows in %d bytes", len(repos), len(got.Output))
+	}
+	last, _ := repos[len(repos)-1].(map[string]any)
+	if listing["next"] != last["name"] {
+		t.Errorf("the cut listing's next is %v, want the last kept row %v", listing["next"], last["name"])
+	}
+
+	got, detail := callCode(t, reg, codeTurn(t), builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
+	branches, _ := detail["branches"].([]any)
+	if len(branches) == 0 || len(branches) >= 100 || len(got.Output) > builtin.ToolAnswerBytes {
+		t.Fatalf("the detail kept %d branches in %d bytes", len(branches), len(got.Output))
+	}
+	lastBranch, _ := branches[len(branches)-1].(map[string]any)
+	if detail["branches_next"] != "refs/heads/"+lastBranch["name"].(string) {
+		t.Errorf("the cut branches' next is %v, want the last kept branch %v", detail["branches_next"],
+			lastBranch["name"])
+	}
+}
+
+// ---- the fences ---------------------------------------------------------- //
+
+// codeFenced runs one code read whose page answer builds — handed the turn's
+// boundary, so its text can try to break out of the fence — and holds the
+// answer to the fence's property (TestEveryUntrustedReadIsFenced's code rows).
+func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b provenance.Boundary,
+	q code.GitQuery) code.GitAnswer) ([]fenceSeen, map[string]any) {
+
+	t.Helper()
+	turn, b := readerTurn(t)
+	turn.Lookups = turnctx.NewLookups()
+	host := newCodeHost()
+	host.git = func(q code.GitQuery) code.GitAnswer { return answer(b, q) }
+	args["repo"] = "site"
+	got := callIn(t, codeRegistry(t, builtin.CodeDeps{Code: host}), turn, tool, args)
+	return fencesIn(t, b, got.Output)
+}
+
+// ---- the guidance and the docs ------------------------------------------ //
+
+// THE CODE GUIDANCE NAMES THE CODE TOOLS: every tool the executor's guidance
+// is gated on is one this package registers as a code tool, so the section
+// never sends a seat to a tool that does not exist — prompts cannot import this
+// package to read the list itself.
+func TestTheCodeGuidanceNamesTheCodeTools(t *testing.T) {
+	t.Parallel()
+	if len(prompts.CodeHistoryTools()) == 0 {
+		t.Fatal("the guidance names no tool, so this certifies nothing")
+	}
+	for _, name := range prompts.CodeHistoryTools() {
+		if !slices.Contains(builtin.CodeToolNames(), name) {
+			t.Errorf("the executor's code guidance is gated on %s, which is no code tool", name)
+		}
+	}
+}
+
+// THE PAGES NAME EVERY CODE TOOL THE REGISTRY HOLDS: the tools guide's table of
+// them lists exactly the seven, and the operator reference's account of what
+// `/operator/mcp` serves names each — two hand-kept copies of one list, which is
+// how a page comes to describe a catalogue the engine no longer serves.
+func TestThePagesNameEveryCodeTool(t *testing.T) {
+	t.Parallel()
+	guide := readPage(t, "docs/guides/tools-and-mcp.md")
+	start := strings.Index(guide, "### The company's code")
+	end := strings.Index(guide, "### Per-Role MCP Servers")
+	if start < 0 || end < start {
+		t.Fatal("the tools guide has no code tools section to read")
+	}
+	var rows []string
+	for _, m := range regexp.MustCompile("\\| `(code_[a-z_]+)` \\|").FindAllStringSubmatch(guide[start:end], -1) {
+		rows = append(rows, m[1])
+	}
+	if !slices.Equal(rows, builtin.CodeToolNames()) {
+		t.Errorf("the tools guide's code table lists %v, want %v in that order", rows, builtin.CodeToolNames())
+	}
+	reference := readPage(t, "docs/reference/api-endpoints.md")
+	served := reference[strings.Index(reference, "### What it serves"):]
+	served = served[:strings.Index(served, "**An argument a tool does not take is refused")]
+	for _, name := range builtin.CodeToolNames() {
+		if !strings.Contains(served, "`"+name+"`") {
+			t.Errorf("docs/reference/api-endpoints.md's account of what /operator/mcp serves does not name %s", name)
+		}
+	}
+}

@@ -25,6 +25,14 @@ const (
 	CodePrefix = "/code/"
 )
 
+// GitRepoPath is the path a person's git reaches one repository at, below the
+// listener's base: [GitPrefix], the name, then `.git`. THE ONE SPELLING, for
+// the CLI's git configuration and the clone URL a code tool answers alike, so
+// the address one hands out is the address the other's git is told to use.
+func GitRepoPath(name string) string {
+	return GitPrefix + url.PathEscape(name) + ".git"
+}
+
 // GitOp is what a git request asks of the code host. A closed set.
 type GitOp string
 

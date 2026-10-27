@@ -4982,7 +4982,11 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `write_artifact_data` and `set_artifact_schema` (see
 [Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact and datastore
 write answers its `op_id` here, and takes it back, by the tracker's own rule
-(below). A schema, a default, a trimmed field and the wording of a
+(below). Wherever the company hosts its repositories in the engine
+(`code.native`), it serves the code reads too — `code_list_repos`,
+`code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare` and
+`code_landed_in` (see [The company's code](../guides/tools-and-mcp.md#the-companys-code)) —
+read as you, so every repository, and none recorded as `operator_acted`. A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly
 the parts nobody looks at, and only one of the two is ever tested.
 

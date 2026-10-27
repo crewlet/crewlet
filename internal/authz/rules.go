@@ -102,6 +102,22 @@ const (
 	// judged by the grant's ref rule.
 	ActionCodeGit Action = "code.git"
 
+	// THE CODE READ TOOLS, a seat's and an operator's assistant's, named
+	// after the tools and decided as the REST reads above are: admitted for
+	// every principal, and judged per repository by the grant the SERVING
+	// node derives from its own chart — a listing leaves out what the asker
+	// may not read, and a read of one such repository is refused
+	// `not_permitted`. ActionCodeReadFile is the tool `code_read`, a file
+	// or a directory at a commit, and is named apart from ActionCodeRead
+	// because that name is the dotted verb of the REST reads.
+	ActionCodeListRepos Action = "code_list_repos"
+	ActionCodeGetRepo   Action = "code_get_repo"
+	ActionCodeResolve   Action = "code_resolve"
+	ActionCodeReadFile  Action = "code_read"
+	ActionCodeDiff      Action = "code_diff"
+	ActionCodeCompare   Action = "code_compare"
+	ActionCodeLandedIn  Action = "code_landed_in"
+
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
 	ActionMyWork        Action = "my_work"
@@ -620,6 +636,18 @@ var rules = map[Action]rule{
 	// read changes nothing and a push is decided per ref by its grant.
 	ActionCodeRead: {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeGit:  {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND THE CODE READ TOOLS, on the same footing: the gate admits every
+	// principal and the repository's grant decides on the node that answers
+	// the read. Not seat-only — a person's assistant reads through them too —
+	// and not human-only, since reading the code is a seat's work. Neither
+	// asks a proof: a read changes nothing.
+	ActionCodeListRepos: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeGetRepo:   {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeResolve:   {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeReadFile:  {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeDiff:      {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeCompare:   {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeLandedIn:  {class: ClassEverybody, recency: iam.RecencyAny},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/tracker's own tag rule has always said: adding a label

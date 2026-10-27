@@ -68,13 +68,22 @@ const (
 	// SourceBrandVoice is the adopted brand's voice: how the company
 	// writes, read by an agent before it writes an artifact.
 	SourceBrandVoice Source = "brand_voice"
+
+	// SourceRepoFile is a file's lines in one of the company's git
+	// repositories, read at a commit, and SourceRepoPatch one file's patch
+	// between two commits. Neither names a writer: a read by object id
+	// knows the bytes and not whose they are, and a repository routinely
+	// holds commits its importers and contributors authored outside the
+	// company, so both are read at [TrustExternal].
+	SourceRepoFile  Source = "repo_file"
+	SourceRepoPatch Source = "repo_patch"
 )
 
 // Sources are every surface.
 var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceArtifactFile, SourceArtifactRow,
-	SourceBrandVoice,
+	SourceBrandVoice, SourceRepoFile, SourceRepoPatch,
 }
 
 // Valid reports whether s is one of [Sources].

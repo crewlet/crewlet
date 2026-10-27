@@ -28,6 +28,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -1502,10 +1503,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// repoURL is the git URL of a repository on the node: the API's base, /git/,
-// the name and .git.
+// repoURL is the git URL of a repository on the node: the API's base, then
+// the one path a repository's git is served at ([auth.GitRepoPath]).
 func (g operatorGit) repoURL(name string) string {
-	return g.base + "/git/" + url.PathEscape(name) + ".git"
+	return g.base + auth.GitRepoPath(name)
 }
 
 // targetEnv is the environment of a git that talks to the NODE: the

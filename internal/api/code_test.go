@@ -545,9 +545,11 @@ func TestNotPermittedIsTheDomainsOwnWord(t *testing.T) {
 
 // A CODE READ ASKS AS THE REQUEST'S PERSON: the principal the guard resolved,
 // under the credential it came through, and the human seat it holds — the one
-// the identity directory binds a token to — or none. Never as a seat: a REST
-// caller is a person, so the reader judges what it answers by a person's
-// grant (ADR-0058).
+// the identity directory binds a token to — or none. A REST caller is a person
+// or a credential, never a seat, so the reader judges what it answers by a
+// person's grant (ADR-0058); and the conversion is the code tools' own
+// (builtin.CodeAskerOf), so a person's REST read and their assistant's code
+// tool ask as one asker.
 //
 // Mutation: the asker's seat left empty → the bound token asks unbound; the
 // credential replaced by the principal's display name → each token asks as

@@ -198,9 +198,10 @@ func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 // field at all are the rows that are deliberately absent: an app's own verbs
 // ([authz.ClassApp] — filing an item, writing a page, keeping a file —
 // decided on whether the caller uses the app and on nothing about the
-// object), the overview's ([authz.ClassEverybody]), and the seat-only ones
-// (`a2a_ask`, `run_sandbox`), which the table bars a person from before any
-// class reads anything.
+// object), the overview's and the code tools' ([authz.ClassEverybody]; a code
+// read is judged by the repository's grant on the node that answers it, see
+// codetools.go), and the seat-only ones (`a2a_ask`, `run_sandbox`), which the
+// table bars a person from before any class reads anything.
 var subjectOf = map[string]subject{
 	// AN ITEM AND ITS THREAD ARE DECIDED ON THE ITEM, because somebody
 	// without the tracker may still read the item an OPEN ASK on it names

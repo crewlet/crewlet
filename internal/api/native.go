@@ -446,6 +446,11 @@ func NativeOperatorHalves(e *engine.Engine) func() (operator.Halves, bool) {
 		}
 		halves.Artifacts = engine.ArtifactToolDeps(e)
 		halves.ArtifactData = engine.ArtifactDataToolDeps(e)
+		// THE CODE READ TOOLS, where this node's running runtime serves the
+		// code host NOW — read per call, as the other halves are, so the
+		// call after a runtime starts serving code is offered them, and on
+		// exactly the terms this node's `/code/` reads are.
+		halves.Code = engine.CodeToolDeps(e)
 		if c := e.Company(); c != nil && c.Config != nil {
 			halves.Company = c.Config.Name
 		}

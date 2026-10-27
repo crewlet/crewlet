@@ -208,6 +208,38 @@ func TestExecutorPromptSandboxSectionIsGatedOnTheOfferedTool(t *testing.T) {
 	excludes(t, p, "tools_needed")
 }
 
+// THE CODE GUIDANCE NEEDS THE CODE TOOLS: it is rendered for a seat that holds
+// every code tool its claims rest on — a company hosting code registers them
+// together — and for no other, so no prompt sends a seat to tools its surface
+// does not carry, nor bills a company that hosts no code for the sentence on
+// every turn.
+//
+// Mutation: the gate dropped (rendered unconditionally), or read as "any one
+// of them" → red.
+func TestTheCodeHistoryGuidanceNeedsACodeTool(t *testing.T) {
+	t.Parallel()
+	const heading = "## Reading the company's code"
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, heading, "code_*")
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{
+		AvailableTools: []string{"submit_work", "run_sandbox"}}).Text, heading)
+
+	held := append([]string{"submit_work"}, CodeHistoryTools()...)
+	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: held})
+	contains(t, p.Text, heading, "`code_*` tools", "by commit id", "never from a clone")
+	if _, ok := slice(p, KeyCodeHistory); !ok {
+		t.Errorf("the guidance is not its own %q section of the outline", KeyCodeHistory)
+	}
+	for _, missing := range CodeHistoryTools() {
+		var some []string
+		for _, name := range held {
+			if name != missing {
+				some = append(some, name)
+			}
+		}
+		excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: some}).Text, heading)
+	}
+}
+
 func TestExecutorPromptOmitsTheLearnedSkillsScaffold(t *testing.T) {
 	t.Parallel()
 	// Synthesized skills arrive as a prefetch block, never as a section of

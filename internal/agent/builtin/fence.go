@@ -187,10 +187,28 @@ func (r *foreignRead) envelope() (provenance.Envelope, bool) {
 func (r *foreignRead) answer(ctx context.Context, tool string, v any, narrowWith string) (tools.Result, error) {
 	rendered, err := r.render(v)
 	if err != nil {
-		return faulted(ctx, tool, err, fmt.Sprintf("%s could not label what it "+
-			"read with who wrote it, so it is not answering at all: %s.", tool, faultSaid)), nil
+		return labelFault(ctx, tool, err), nil
 	}
 	return jsonAnswer(rendered, narrowWith)
+}
+
+// page is [foreignRead.answer] for a code tool's answer, sent COMPACT
+// ([compactAnswer]): what it wraps is a page something below this package cut
+// by its own encoded bytes, and rendered indented it would arrive past the
+// bound it was cut to fit.
+func (r *foreignRead) page(ctx context.Context, tool string, v any, narrowWith string) (tools.Result, error) {
+	rendered, err := r.render(v)
+	if err != nil {
+		return labelFault(ctx, tool, err), nil
+	}
+	return compactAnswer(rendered, narrowWith)
+}
+
+// labelFault is the answer of a read whose labelling failed: the tool's own
+// fault, never the text unlabelled ([foreignRead]'s fail-closed rule).
+func labelFault(ctx context.Context, tool string, err error) tools.Result {
+	return faulted(ctx, tool, err, fmt.Sprintf("%s could not label what it "+
+		"read with who wrote it, so it is not answering at all: %s.", tool, faultSaid))
 }
 
 // render is [foreignRead.answer]'s encoding, kept apart so its refusals are

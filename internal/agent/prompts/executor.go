@@ -74,6 +74,38 @@ const executorSandboxSection = "\n## Sandbox code work" +
 	"with its report as the call's result, so act on it in the SAME turn: " +
 	"report the outcome, link the pull request, update the ticket."
 
+// KeyCodeHistory is the outline key of the guidance on answering questions
+// about the company's own code.
+const KeyCodeHistory = "code_history"
+
+// CodeHistoryTools are the code tools [codeHistorySection]'s claims rest on:
+// what a file says, what changed and whether a commit reached a branch, read
+// by the commit ids a ref resolves to. The section renders only where the
+// executor holds EVERY one of them, so a prompt never sends a seat to a tool
+// its surface does not carry; they are registered together where a company
+// hosts code, so a seat holds all of them or none. Exported for the test in
+// internal/agent/builtin that holds them to the code tools that package
+// registers, which this package cannot import.
+func CodeHistoryTools() []string {
+	return []string{"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in"}
+}
+
+// codeHistorySection is the one rule about reading the company's code that no
+// tool's description can carry: that such a question is not one for a clone
+// at all. Each code tool's description says what it answers and how to call
+// it — `code_resolve`'s that a branch is resolved once and its commit id
+// passed on — so none of that is repeated here; what is left is the choice a
+// seat makes BEFORE it picks a tool, between a server-side read by commit id,
+// which costs milliseconds, and a clone in a sandbox or the shell a coding CLI
+// holds, which costs minutes and the company's git nodes their transfer lane.
+//
+// The tools by their family's name rather than one by one, so the sentence
+// stays true as later reads join the family.
+const codeHistorySection = "\n## Reading the company's code" +
+	"\nWhat a file says, what changed, and whether a commit reached a branch " +
+	"are read on the server with the `code_*` tools, by commit id — never " +
+	"from a clone, which costs minutes for one file."
+
 // ExecutorInput is everything the executor prompt renders beyond the seat
 // itself.
 //
@@ -261,6 +293,12 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	if in.Workers != "" && slices.Contains(in.AvailableTools, "delegate") {
 		b.Heading("workers", "\n## Your workers", in.Workers)
 	}
+	// AFTER THE WORKERS AND BEFORE THE TOOL SKILLS, because it is a choice
+	// of how to answer — on the server, not in a clone — made before the
+	// how-to of any one tool. Gated on every tool its claims rest on.
+	if holdsAll(in.AvailableTools, CodeHistoryTools()) {
+		b.Heading(KeyCodeHistory, codeHistorySection)
+	}
 
 	// The tool-skills catalogue lands adjacent to the tools to discover so
 	// the executor reads "here is how to use these tools" immediately before
@@ -272,6 +310,16 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	})...)
 	b.Heading(KeyDiscoverableTools, discoverableSection(in.Discoverable)...)
 	return b.Build()
+}
+
+// holdsAll reports whether surface holds every one of names.
+func holdsAll(surface, names []string) bool {
+	for _, name := range names {
+		if !slices.Contains(surface, name) {
+			return false
+		}
+	}
+	return true
 }
 
 // KeyDiscoverableTools is the outline key of the tools a phase can reach but

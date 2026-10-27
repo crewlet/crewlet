@@ -33,7 +33,7 @@ import (
 //
 // What is left is the surface an operator's assistant actually needs: read
 // the board, file and move work, read and write the wiki, search what the
-// company knows.
+// company knows, and read the company's code.
 
 // OperatorDeps are the halves an operator surface can serve.
 type OperatorDeps struct {
@@ -45,6 +45,11 @@ type OperatorDeps struct {
 	// dependencies on this surface. Each zero value omits its tools.
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
+
+	// Code is the code read tools' — the SAME [CodeTools] list a seat's
+	// registry takes, its Actor the request's principal. The zero value
+	// omits them: a company that hosts no code.
+	Code CodeDeps
 
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
@@ -174,7 +179,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{newAnswerKnowledge(deps), answerable(deps)},
 	}
 	candidates = slices.Concat(candidates,
-		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps))
+		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps),
+		// THE CODE READ TOOLS, the list a seat's registry takes whole: a
+		// person reads every repository, so their assistant answers the
+		// same questions a seat's turn does, about all of them.
+		codeCandidates(deps.Code))
 	var out []tools.Callable
 	for _, c := range candidates {
 		if c.on {

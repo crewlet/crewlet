@@ -265,6 +265,25 @@ is never said of a push that is merely on its way. Every other condition, the
 exact line git prints and what to do about it is in [What git prints, and what
 it means](../concepts/code-host.md#what-git-prints-and-what-it-means).
 
+## What your seats read
+
+Nothing to set up: once the company hosts code, every seat holds the seven
+[code tools](tools-and-mcp.md#the-companys-code) and reads the repositories
+with them, on the server — a file's lines, a directory, what changed between
+two commits, how two commits relate, whether a fix reached a branch and which
+push put it there — with no clone and no token. A seat holds no git
+credential in this release and pushes nothing.
+
+What each seat may read is its grant, from the chart: its
+[`role.code.access`](../getting-started/configuration.md#role-fields-summary) caps it, and a
+`visibility: unit` repository is read only by the owning unit's seats and the
+leads above them ([Who may read and push](../concepts/code-host.md#who-may-read-and-push)),
+so a seat outside the unit finds the repository absent from its listing and
+every read of it refused. Your own assistant reads through the same tools on
+[`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
+as you, which reads every repository; asked by you, `code_get_repo` also hands
+out the URL to clone from, on `api.external_url`.
+
 ## Import from GitHub or GitLab
 
 Declare the repository first — the import fills one that `code.repos`

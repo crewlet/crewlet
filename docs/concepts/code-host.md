@@ -47,9 +47,10 @@ This is the product's current shape, not a configuration choice:
 - **Only people use git.** A person clones, fetches and pushes over HTTPS
   with their own API token ([Persons and their
   tokens](#persons-and-their-tokens)); a seat as a git user does not exist
-  yet, so agents do not push. The rule that will decide what each seat may
-  read and push is already the one a person's push is judged by ([Who may
-  read and push](#who-may-read-and-push)).
+  yet, so agents do not push. A seat READS the company's repositories, on
+  the server, through its code tools ([Server-side reads](#server-side-reads)),
+  under the rule a person's push is judged by too ([Who may read and
+  push](#who-may-read-and-push)).
 - **Nothing opens a change yet, and there are no reviews or checks.** A
   [change](#changes) has the rows it is kept in, but no merge request is
   opened, reviewed or gated in front of a protected branch in this release.
@@ -1252,9 +1253,9 @@ worst — judge a seat: it answers a seat's listing, read or ref `behind_config`
 even when it is the last data node left to ask, because the revision it failed
 to apply may be the one that revoked the seat's grant, so the read is answered
 by a current node or by nobody; a person's read it answers as before, asked
-last. In this release no seat pushes or reads a repository yet
-([What it does not do yet](#what-it-does-not-do-yet)), so every read is a
-person's.
+last. In this release a seat reads a repository through its code tools
+([Server-side reads](#server-side-reads)) and pushes to none
+([What it does not do yet](#what-it-does-not-do-yet)).
 
 ---
 
@@ -1270,6 +1271,19 @@ It answers each with real git over its own
 [cache](#the-cache-on-a-git-node), in the cache's read lane, from the copy it
 holds, and names in every answer the push that introduced each commit the
 answer names, with what its index of pushes holds.
+
+**Who asks them** is a seat, through its code tools, and a person through
+their own assistant, which the operator catalogue serves the same tools to:
+`code_read`, `code_diff`, `code_compare` and `code_landed_in` read by commit
+id, beside `code_list_repos`, `code_get_repo` and `code_resolve`, which read
+the rows — what a repository is, its branches, what a ref points at now — at
+linearizable ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
+A turn reads each repository it names once, and resolves each ref a call
+names, so a seat that resolves a branch once and reads by the commit it
+answers pays one barrier for the repository and one for the branch, however
+many files it reads. A file's lines and a patch reach the model
+[fenced](agent-runtime.md#text-somebody-else-wrote), at trust `external`: a
+read by commit id knows the bytes and not whose they are.
 
 **By object id, never by ref.** Every revision a read names is an object id,
 whole or abbreviated to 7 or more hex digits. What a branch or a tag points at

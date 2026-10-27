@@ -87,6 +87,28 @@ func TestGitAccessClassifiesEveryGitRoute(t *testing.T) {
 	}
 }
 
+// A REPOSITORY'S GIT PATH IS ONE THE GIT ROUTES SERVE: the address the CLI
+// configures git with and the clone URL a code tool hands a person are one
+// spelling, and both its fetch requests are classified fetches — a path the
+// classifier read as anything else would hand out an address that clones
+// nothing.
+//
+// Mutation: GitRepoPath dropping the `.git` suffix or the prefix → red.
+func TestARepositorysGitPathIsOneTheGitRoutesServe(t *testing.T) {
+	t.Parallel()
+	if got := auth.GitRepoPath("web"); got != "/git/web.git" {
+		t.Fatalf("GitRepoPath(web) = %q, want /git/web.git", got)
+	}
+	for _, r := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, auth.GitRepoPath("web")+"/info/refs?service=git-upload-pack", nil),
+		httptest.NewRequest(http.MethodPost, auth.GitRepoPath("web")+"/git-upload-pack", nil),
+	} {
+		if got := auth.GitAccess(r); got != auth.GitFetch {
+			t.Errorf("%s %s is classified %q, want a fetch", r.Method, r.URL, got)
+		}
+	}
+}
+
 // AN ADVERTISEMENT OPENS AN EXCHANGE, AND NOTHING ELSE DOES. A draining node
 // refuses a fetch's advertisement — a fetch it would have to begin — and serves
 // the upload-pack RPC that continues one already begun, here or on a peer. So

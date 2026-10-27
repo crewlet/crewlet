@@ -73,8 +73,10 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	frozen := ExecutorInput{
 		Discoverable: "- MCP server `github`",
 		// comment_on_work_item DELIBERATELY, so the escalation guidance
-		// it gates is inside the bytes held stable across rounds.
-		AvailableTools:    []string{"post_message", "refresh_memory", "comment_on_work_item"},
+		// it gates is inside the bytes held stable across rounds — and the
+		// code tools for the same reason, for the code guidance.
+		AvailableTools: append([]string{"post_message", "refresh_memory", "comment_on_work_item"},
+			CodeHistoryTools()...),
 		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:    "- prefers short replies",
 		RelevantKnowledge: "- **Runbook**: steps",

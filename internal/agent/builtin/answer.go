@@ -49,11 +49,38 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
 		return refused(tools.RefusalUnavailable, "The result could not be rendered."), nil
 	}
+	return boundedAnswer(data, narrowWith), nil
+}
+
+// compactAnswer is [jsonAnswer] for an answer that is a PAGE something below
+// this package cut by its own encoded bytes — a git node's read by object id,
+// at most code.MaxGitAnswerBytes of compact JSON — and every answer of the
+// family such pages belong to (the code tools).
+//
+// COMPACT, BECAUSE THAT IS WHAT THE PAGE WAS MEASURED IN. Indenting grows an
+// answer by its structure rather than by its content: two spaces a level and
+// a line a field, so a page of short tree entries or diff files gains about
+// half again, and a page cut to fit the tool answer at the git node arrives
+// here past it and is refused for its indentation. Compact, the page is the
+// bytes the git node counted plus what the tool wraps round it, which is the
+// bound code.MaxGitAnswerBytes leaves room for.
+func compactAnswer(v any, narrowWith string) (tools.Result, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
+		return refused(tools.RefusalUnavailable, "The result could not be rendered."), nil
+	}
+	return boundedAnswer(data, narrowWith), nil
+}
+
+// boundedAnswer is data as the tool's answer, or the refusal of an answer too
+// large to send, naming narrowWith — the one ceiling both encodings meet.
+func boundedAnswer(data []byte, narrowWith string) tools.Result {
 	if len(data) > ToolAnswerBytes {
 		return failed(fmt.Sprintf("That answer is %d KiB and the limit for one "+
 			"tool answer is %d KiB — it would spend most of this turn's "+
 			"context on a single call. %s",
-			len(data)>>10, ToolAnswerBytes>>10, narrowWith)), nil
+			len(data)>>10, ToolAnswerBytes>>10, narrowWith))
 	}
-	return tools.Result{Output: string(data)}, nil
+	return tools.Result{Output: string(data)}
 }

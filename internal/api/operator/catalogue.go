@@ -1,7 +1,8 @@
-// Package operator serves the company's own tracker and knowledge base to the
-// people who run it: ONE catalogue of tools, built for every call from what
-// this node serves at that moment, and every transport that reaches it
-// drawing from that one value through one dispatch.
+// Package operator serves the company's own tracker and knowledge base — and,
+// where it hosts code, its repositories' read tools — to the people who run
+// it: ONE catalogue of tools, built for every call from what this node serves
+// at that moment, and every transport that reaches it drawing from that one
+// value through one dispatch.
 //
 // # Why this exists
 //
@@ -154,6 +155,13 @@ type Halves struct {
 	// ArtifactData is the datastore tools' own half, served beside the
 	// artifacts tools and only where they are.
 	ArtifactData builtin.ArtifactDataDeps
+
+	// Code is the code read tools' half — the company's repositories, read
+	// on the server — or the zero value for a company that hosts none. Read
+	// with the halves, for every call, so a revision that sets code.native
+	// serves the tools from the next call and one that clears it withdraws
+	// them from the next. Its Actor is set per call.
+	Code builtin.CodeDeps
 
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
@@ -311,8 +319,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	if !up {
 		return catalogue{}, false
 	}
-	work, kb, arts := halves.Work, halves.Pages, halves.Artifacts
-	work.Actor, kb.Actor = workActor, pageActor
+	work, kb, arts, repos := halves.Work, halves.Pages, halves.Artifacts, halves.Code
+	work.Actor, kb.Actor, repos.Actor = workActor, pageActor, workActor
 	// THE CALL'S OWN OPERATION, where its transport names one: an artifact
 	// write's records derive from it, as a page write's do.
 	arts.CallerKey = keyFrom
@@ -321,7 +329,7 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Knowledge: halves.Knowledge, Artifacts: arts,
-		ArtifactData: halves.ArtifactData, Org: s.org,
+		ArtifactData: halves.ArtifactData, Code: repos, Org: s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

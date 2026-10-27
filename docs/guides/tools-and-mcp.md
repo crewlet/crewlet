@@ -313,6 +313,73 @@ own assistant, installed as the
 [`company-architect` skill](../getting-started/ai-authoring.md#the-company-architect-skill)
 is (copy the directory into your assistant's skills folder).
 
+### The company's code
+
+Seven more, registered wherever the company hosts its git repositories in the
+engine (`code.native`; see [Code Host](../concepts/code-host.md)) — on every
+node, whatever its roles, since a node holding no copy of the code log and no
+`git` role reaches both through the nodes that do. They are offered on the
+terms the node's `/code/` reads are: a node whose runtime was already running
+when `code.native` was turned on offers them once it restarts into it, and one
+that turned it off keeps them until that restart ([Turn it
+on](code.md#turn-it-on)). A company that hosts no code is given none of them,
+and the operator catalogue serves the same seven, so an operator's own
+assistant reads the company's code exactly as a seat does. Every one is a
+read: none counts as a delivery, a [worker](../concepts/turn-engine.md#workers)
+may be handed any of them, and the operator catalogue records no call to one.
+
+| Tool | Description |
+|------|-------------|
+| `code_list_repos` | The repositories the caller may read, by name, a page at a time (`limit` 1 to 100, 25 by default; `next` back as `cursor`), each with its owner, visibility, default branch and the commit it points at, the caller's access, its last push and its protection rules, filtered by `status` (`active` or `archived`). A repository the caller may not read is not listed, so a page can hold fewer rows than `limit`, or none, and still name a `next` |
+| `code_get_repo` | One repository in detail — its rules, size, live packs, branch and tag counts, the caller's access and last push — and a page of its branches with the commit each points at, 100 a page, narrowed to a namespace with `branches_prefix` (`seats/<handle>/`, `release/`). Asked by a person or a token, the answer carries the URL their git clones the repository from, on `api.external_url`; a seat is given none, because it reads through these tools |
+| `code_resolve` | A branch, a tag, a whole ref or `HEAD` (the default branch) to the commit it points at now, read at linearizable: the one code read that waits for the newest push |
+| `code_read` | A file's lines at a commit, a page at a time (`start_line`, `end_line`, `cursor`), or a directory's listing (`recursive` for every file below it); a binary file is answered by its size. A path that is not valid UTF-8 is named, and asked for, as `path_b64` |
+| `code_diff` | What changed between two commits: the per-file stat, filtered by up to 64 `paths`, or one `file`'s patch, a page at a time, with renames detected unless `renames` is false |
+| `code_compare` | How two commits relate: their merge base, whether either contains the other, how many commits each has that the other lacks, and the first page of what `head` changed since the merge base |
+| `code_landed_in` | Whether a commit reached a branch (`target`, resolved to its tip now and never a commit id), the push that landed it there and kept it there, the push that introduced the commit, and what the git node's index of pushes covers ([Which push landed a commit](../concepts/code-host.md#which-push-landed-a-commit)) |
+
+**Every revision is a commit id or a ref.** A whole or abbreviated commit id
+(7 or more hex digits) costs nothing; anything else — a branch, a tag, a
+whole ref, `HEAD` — is resolved to the commit it points at as part of the
+call, and every answer names what each ref resolved to and where. A branch
+named like an abbreviation is named by its whole ref (`refs/heads/<name>`).
+
+**What a turn pays.** What a repository is and what a ref points at are rows,
+read at linearizable as every seat tool's reads are; what a commit id names is
+the same object on every node, so a read by one is asked of the repository's
+[home git node](../concepts/code-host.md#the-home-git-node) with no level of
+its own — only a floor its copy is first brought to: this node's own pushes,
+and where the call's refs were resolved. A turn reads each repository it names
+once, at its first call naming it, and resolves a ref each time a call names
+one — so a seat that resolves a branch with `code_resolve` once and passes the
+commit id on pays one barrier for the repository and one for the branch,
+however many files it then reads. The operator surface has no turn, and reads
+the repository once a call.
+
+**Who may read** is decided per repository, by the node that answers, from its
+own chart: a person and a credential bound to no seat read every repository,
+and a seat what its tier and its relation to the repository allow, so a
+`visibility: unit` repository is absent from an outside seat's listing and
+every read of it is refused `not_permitted` in the code host's own sentence
+([Who may read and push](../concepts/code-host.md#who-may-read-and-push)). No
+argument names who reads. A node that cannot judge — one holding no chart yet,
+a git node still filling its copy — answers about itself, and the call is told
+to try again rather than that it may not read.
+
+**A repository's text is fenced.** A file's lines and a patch are text its
+committers wrote — importers and outside contributors among them — whom a read
+by commit id cannot name, so each arrives
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote) as `repo_file`
+or `repo_patch` at trust `external`, naming no writer; every other string of an
+answer — a path, a ref, a description — has the fence's escapes applied.
+
+**One page is one answer, never cut.** A git node answers a page of at most
+56 KiB of JSON and says where the next begins; a listing these tools cut
+themselves — repositories, branches — is cut whole-row and names where the next
+page begins. A page whose text spells so many fence markers that, escaped, it
+outgrows one answer is refused naming a narrower read: a line range, or a
+file's lines in place of its patch.
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).

@@ -233,7 +233,10 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Knowledge:    full.Knowledge,
 		Artifacts:    full.Artifacts,
 		ArtifactData: full.ArtifactData,
-		Org:          orgOf,
+		// THE CODE READ TOOLS, over the seam the seat's registry is built
+		// with, read as the request's principal as the surface reads them.
+		Code: builtin.CodeDeps{Code: full.Code.Code, Actor: builtin.PrincipalActor},
+		Org:  orgOf,
 		// The operator-only verbs: a parked run's answer, a seat's pause
 		// and resume, a note to a running turn and an answer from the
 		// company's knowledge. Each is a seam of its own, and each left
