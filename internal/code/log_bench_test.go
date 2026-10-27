@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 )
 
@@ -28,11 +30,26 @@ import (
 // Each push is a person's push of one commit: one command moving a branch
 // named in 40 bytes on from its tip, its pack bundle and one introduced id,
 // decided and recorded by the committer as in production, through the
-// harness's real publisher and embedded broker. The branches are created
-// before the stream is measured, and each iteration is a fresh log of a fixed
-// number of rounds, so the figure is the same at any -benchtime and no
-// iteration meets the harness's ceiling. doc.go's measured section records
-// both arms.
+// harness's real publisher and embedded broker. And beside them:
+//
+//   - push=agent: what a SEAT's push of that commit takes of the log beyond a
+//     person's (extra-bytes/push) — built by the engine, its principal naming
+//     the seat and the run behind it at each field's usual size, a turn id (a
+//     UUID), a tracker's work item (`native`, `ENG-1234`) and a model id of a
+//     provider's usual length, and its way `engine`. The committer copies a
+//     proposal's principal and way into its record's entry as the proposer
+//     stamped them (Proposal.entryWith) and decides the rest of the entry
+//     alike for both, so the principal and the way are all a seat's entry
+//     differs by: they are measured as the difference between a seat's and a
+//     person's otherwise identical entries over records formed here, each
+//     alone in its record and published through the same publisher onto the
+//     same broker, and what a seat's push takes of the log, alone or in a
+//     burst, is the batch arms' figure plus it.
+//
+// The branches are created before the stream is measured, and each iteration
+// is a fresh log of a fixed number of rounds, so the figure is the same at any
+// -benchtime and no iteration meets the harness's ceiling. doc.go's measured
+// section records the arms.
 func BenchmarkPushLogBytes(b *testing.B) {
 	code.Quiet(b)
 	const branch = "refs/heads/feature/push-log-measured-%03d"
@@ -100,4 +117,59 @@ func BenchmarkPushLogBytes(b *testing.B) {
 			b.ReportMetric(perRecord, "pushes/record")
 		})
 	}
+	b.Run("push=agent", func(b *testing.B) {
+		// rounds is the records each principal's pushes are measured over,
+		// as many as the lone push's arm takes.
+		const rounds = 16
+		var extra float64
+		for b.Loop() {
+			b.StopTimer()
+			// grew is the log's growth a push over rounds records of one push
+			// each by who, built as via names, each moving ref on from the
+			// commit the record before left — ON A LOG OF ITS OWN, so the two
+			// principals' records sit at the same positions and every number
+			// a record carries beside its entry is as wide for both.
+			grew := func(who code.Principal, via code.PushVia, ref string) float64 {
+				n := newNode(b)
+				repo := repoOn(b, n, "push-log")
+				tip := code.ZeroOID
+				push := func(r int) {
+					id, next := uuid.Must(uuid.NewV7()).String(), oidOf(fmt.Sprint(ref, "-", r))
+					if who.Kind == code.PrincipalAgent {
+						who.Run.TurnID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("turn-", r))).String()
+					}
+					n.push(repo, code.PushEntry{PushID: id, Principal: who, Via: via, Node: n.id,
+						Commands: []code.Command{set(ref, tip, next)}, Pack: suitePack(id),
+						Introduced: []string{next}, IntroducedCount: 1, ReceivedAt: harnessAt})
+					tip = next
+				}
+				// THE BRANCH EXISTS BEFORE THE LOG IS MEASURED, as in the
+				// batch arms.
+				push(0)
+				before, err := n.log.Stats(b.Context())
+				if err != nil {
+					b.Fatal(err)
+				}
+				for r := 1; r <= rounds; r++ {
+					push(r)
+				}
+				after, err := n.log.Stats(b.Context())
+				if err != nil {
+					b.Fatal(err)
+				}
+				if records := after.Messages - before.Messages; records != rounds {
+					b.Fatalf("%d pushes made %d records, want one each", rounds, records)
+				}
+				return float64(after.Bytes-before.Bytes) / rounds
+			}
+			person := grew(code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ada"},
+				code.ViaGit, fmt.Sprintf(branch, 0))
+			seat := grew(code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
+				Run: code.RunProvenance{WorkBackend: "native", WorkKey: "ENG-1234", Model: "claude-sonnet-4-5"}},
+				code.ViaEngine, fmt.Sprintf(branch, 1))
+			extra = seat - person
+			b.StartTimer()
+		}
+		b.ReportMetric(extra, "extra-bytes/push")
+	})
 }

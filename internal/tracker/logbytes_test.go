@@ -49,15 +49,18 @@ const (
 // log's by (DerivedCodeLogNumerator's reason, and code's CodeLogMaxBytes): at
 // the ratio of the two days a blocked trim fills both logs in the same time,
 // so that ratio is a figure derived from this log's published day. A push is
-// internal/code's figure for one alone in its record (BenchmarkPushLogBytes,
-// its package doc's "What a push costs, measured"), and the barriers are its
-// git clients' linearizable reads: a seat's push asks the log three times (its
+// a SEAT'S, as every one of the reference company's is — a hundred seats
+// pushing thirty times a day — alone in its record: internal/code's measured
+// figure for a person's push (BenchmarkPushLogBytes, its package doc's "What
+// a push costs, measured") and what a seat's principal and way take of the
+// log beyond it (its push=agent arm). The barriers are its git clients'
+// linearizable reads: a seat's push asks the log three times (its
 // advertisement, its receive's sync and the fetch before it), thirty people
 // fetch every three minutes of an eight-hour day, and a CI polls ten
 // repositories a minute where one runs.
 const (
 	referencePushesADay  = 3_000
-	codePushRecordBytes  = 1_344
+	codePushRecordBytes  = 1_462
 	referencePushReads   = 3 * referencePushesADay
 	referencePeopleReads = 30 * 8 * 60 / 3
 	referenceCIReads     = 10 * 60 * 24
@@ -628,10 +631,10 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"half of the records are the turns", referenceTurnsADay * whole.turn / records, 0.45, 0.55},
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
-		{"the code log takes about half of this log's day at its least", codeLeast, 0.45, 0.55},
-		{"and seven tenths at its most", codeMost, 0.65, 0.75},
-		{"two thirds is taken past the middle of that range, never past its top",
-			(share - codeLeast) / (codeMost - codeLeast), 0.5, 1},
+		{"the code log takes a little over half of this log's day at its least", codeLeast, 0.5, 0.6},
+		{"and about three quarters at its most", codeMost, 0.72, 0.8},
+		{"two thirds is the middle of that range, never past its top",
+			(share - codeLeast) / (codeMost - codeLeast), 0.45, 0.55},
 		{"half suffices under fewer barriers than the reference company's git clients " +
 			"append with no CI, and under some", halfCount / float64(leastReads), 0, 1},
 		{"git's barriers over min_age are under a thirtieth of the tenth of the derived ceiling",
@@ -754,7 +757,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		"internal/code/limits.go": {
 			fmt.Sprintf("against the tracker's measured %s MB of records and %s MB of barriers",
 				mb(records, 1), mb(barriers, 1)),
-			fmt.Sprintf("%s pushes at the MEASURED %s bytes a push alone in its record "+
+			fmt.Sprintf("%s pushes at the MEASURED %s bytes a seat's push alone in its record "+
 				"(BenchmarkPushLogBytes), %s MB, and its git clients' barriers at "+
 				"BarrierRecordBytes, %s–%s MB", spaced(referencePushesADay),
 				spaced(codePushRecordBytes), mb(pushes, 1), mb(gitLeast, 1), mb(gitMost, 1)),
@@ -764,14 +767,15 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				window*gitLeast/1e6, window*gitMost/1e6),
 		},
 		"docs/guides/replication.md": {
-			fmt.Sprintf("a company's push records (%s bytes a push, measured) and the barriers its git "+
-				"clients' reads append (%d bytes a read) take about half to seven tenths of what its "+
-				"tracker writes and its seats' reads take a day, and the ratio is taken past the "+
-				"middle of that range", spaced(codePushRecordBytes), code.BarrierRecordBytes),
+			fmt.Sprintf("a company's push records (%s bytes a seat's push, measured) and the barriers "+
+				"its git clients' reads append (%d bytes a read) take a little over half to about three "+
+				"quarters of what its tracker writes and its seats' reads take a day, and the ratio is "+
+				"taken at the middle of that range", spaced(codePushRecordBytes), code.BarrierRecordBytes),
 			fmt.Sprintf("Beside the reference company's %s pushes a day, that is **about %s barriers a "+
-				"day**: its pushes' %s MB and those barriers' %s MB are half the %s MB a day its "+
-				"tracker writes and its seats' reads take", spaced(referencePushesADay),
-				hundreds(halfCount), mb(pushes, 1), mb(halfBarriers, 1), mb(day, 1)),
+				"day**: its pushes' %s MB — every one a seat's, %s bytes alone in its record — and "+
+				"those barriers' %s MB are half the %s MB a day its tracker writes and its seats' reads "+
+				"take", spaced(referencePushesADay), hundreds(halfCount), mb(pushes, 1),
+				spaced(codePushRecordBytes), mb(halfBarriers, 1), mb(day, 1)),
 			fmt.Sprintf("with no CI at all — %s, three reads a push and thirty people fetching every "+
 				"three minutes of a working day", spaced(leastReads)),
 		},

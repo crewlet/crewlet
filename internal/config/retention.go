@@ -238,16 +238,17 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 6.5–9.0 MB a day: 3 000 pushes at 1 344 bytes,
-	//     MEASURED for a push alone in its record (internal/code's
-	//     BenchmarkPushLogBytes; 756.0 a push in a burst group commit holds
-	//     together), 4.0 MB; and the barriers of its git clients, 2.4–5.0 MB
-	//     — a push asks the log twice (its advertisement and its receive's
-	//     sync) and the fetch before it once (its ls-refs, whose sync brings
-	//     every want), so a seat's push three times, 9 000 a day, beside
-	//     thirty people fetching every three minutes of a working day (4 800)
-	//     and, where one runs, a CI polling ten repositories a minute
-	//     (14 400).
+	//   - the code log 6.8–9.3 MB a day: 3 000 pushes at 1 462 bytes,
+	//     MEASURED for a seat's push alone in its record, as every one of the
+	//     reference company's is (internal/code's BenchmarkPushLogBytes, its
+	//     push=agent arm beside a person's; about 874 a push in a burst group
+	//     commit holds together), 4.4 MB; and the barriers of its git
+	//     clients, 2.4–5.0 MB — a push asks the log twice (its advertisement
+	//     and its receive's sync) and the fetch before it once (its ls-refs,
+	//     whose sync brings every want), so a seat's push three times, 9 000
+	//     a day, beside thirty people fetching every three minutes of a
+	//     working day (4 800) and, where one runs, a CI polling ten
+	//     repositories a minute (14 400).
 	//
 	// Every figure is of SIGNED records (ADR-0031), each about forty bytes
 	// longer than the records the ratio was first set from: the frame grows
@@ -255,20 +256,21 @@ const (
 	// percent, so it moved the code log, whose day is half barriers, more
 	// than the mutation log.
 	//
-	// So the code log takes 0.53–0.74 of the mutation log's day — 0.33 on
-	// its push records alone (0.41 of the tracker's records), which is what
+	// So the code log takes 0.56–0.77 of the mutation log's day — 0.36 on
+	// its push records alone (0.44 of the tracker's records), which is what
 	// the 1.5–2 KiB a record this ratio was first set from overstated — and
-	// TWO THIRDS is taken past the middle of that range, never past its
-	// top. Past the middle because the changes, reviews and checks that
-	// later releases put on this same log come on top and a log keeps the
-	// ceiling it was created with: an operator who wants more room later
-	// pays for it with `crewlet retention set-capacity`. Not raised to the
-	// top the frame moved it to (0.51–0.68 unsigned, two thirds near its
-	// top then), because the frame grew the git barriers most, and they are
-	// the softest term in the day: a JUDGEMENT on an ESTIMATE of git traffic
-	// no deployment has reported yet, while every byte of ratio above it is
-	// taken from the other logs on every volume whose logs are scaled into
-	// their share.
+	// TWO THIRDS is the middle of that range, never past its top. Not below
+	// the middle, because the changes, reviews and checks that later
+	// releases put on this same log come on top and a log keeps the ceiling
+	// it was created with: an operator who wants more room later pays for it
+	// with `crewlet retention set-capacity`. Not raised to keep it past the
+	// middle, where it sat while this day priced the reference company's
+	// pushes as a person's (0.53–0.74: a person's principal takes less of the
+	// log than a seat's, which names the run behind its push), because the
+	// git barriers are the softest term in the day: a JUDGEMENT on an
+	// ESTIMATE of git traffic no deployment has reported yet, while every
+	// byte of ratio above it is taken from the other logs on every volume
+	// whose logs are scaled into their share.
 	//
 	// SO TWO THIRDS HOLDS UNTIL PRODUCTION COUNTS EXIST, and A HALF SUFFICES
 	// WHILE THE CODE LOG TAKES AT MOST HALF OF WHAT THE MUTATION LOG TAKES A
@@ -279,8 +281,8 @@ const (
 	// clients' barriers, the same line is a count of the barriers, its
 	// crewlet.statelog.barrier.applied (stream CREWLET_CODE_LOG), which any
 	// one data node counts whole, since every data node applies every
-	// barrier: beside the reference company's 4.0 MB of pushes, ABOUT 11 500
-	// BARRIERS A DAY, 2.0 MB, make half the mutation log's 12.1 MB day. The
+	// barrier: beside the reference company's 4.4 MB of pushes, ABOUT 9 500
+	// BARRIERS A DAY, 1.7 MB, make half the mutation log's 12.1 MB day. The
 	// reference company's own git clients append more than that with no CI
 	// at all (13 800), so a half is for a company whose people and CI fetch
 	// less.

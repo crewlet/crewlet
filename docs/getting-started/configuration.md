@@ -1013,14 +1013,15 @@ stream:
                                     #   (so 2⅔..42⅔ GiB from a volume alone):
                                     #   once seats push, a company's push
                                     #   records and its git clients' read
-                                    #   barriers take about half to seven
-                                    #   tenths of the bytes a day its tracker
-                                    #   writes and its seats' reads do, and
-                                    #   the ratio sits past the middle because
-                                    #   later releases add changes, reviews
-                                    #   and checks to this log, so a blocked
-                                    #   trim fills either one in about the
-                                    #   same time. A push record names its pack
+                                    #   barriers take a little over half to
+                                    #   about three quarters of the bytes a
+                                    #   day its tracker writes and its seats'
+                                    #   reads do, and the ratio sits at the
+                                    #   middle, no lower because later
+                                    #   releases add changes, reviews and
+                                    #   checks to this log, so a blocked trim
+                                    #   fills either one in about the same
+                                    #   time. A push record names its pack
                                     #   and never carries it — the bytes are the
                                     #   object store's — so how large the
                                     #   repositories grow does not reach this
