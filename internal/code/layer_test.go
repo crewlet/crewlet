@@ -1454,11 +1454,18 @@ func FuzzParseBitmap(f *testing.F) {
 
 // FuzzParseGraph: whatever a commit-graph file holds, ParseGraph never panics
 // and allocates no more than its size bounds, and what it accepts is what its
-// bytes say — a base id for every base its header counts, its commits inside
-// the file, its trailer. Seeded with git's own layers, resealed after a damage
-// as FuzzParseMidx's are, and one whose fanout counts a million commits.
+// bytes say, each read back from where the file's own table of contents puts
+// it (gittest.ChunkOf) — a base for every base its header counts, the BASE
+// chunk's ids in turn and no BASE chunk where it counts none; its commits,
+// its fanout's last count, inside the file; its filters' version, the BDAT
+// chunk's first four bytes, or 0 with no BDAT; and its trailer. Seeded with
+// git's own layers — the tip's names the base's in its BASE chunk — resealed
+// after a damage as FuzzParseMidx's are, and one whose fanout counts a
+// million commits.
 //
-// Mutation: read the base graphs' ids from the commit data chunk — red.
+// Mutations: read the base graphs' ids from the commit data chunk — red, on
+// the tip's seed; size a slice by the commit count before OIDL is held to it
+// — red, by the allocation bound.
 func FuzzParseGraph(f *testing.F) {
 	g := writeLayers(f)
 	for _, path := range []string{g.base.graph, g.tip.graph} {
@@ -1494,6 +1501,44 @@ func FuzzParseGraph(f *testing.F) {
 					t.Fatalf("accepted the base %q", base)
 				}
 			}
+			holdsItsBytes(t, b, info)
 		}
 	})
+}
+
+// holdsItsBytes fails t unless what ParseGraph accepted of the commit-graph
+// file b is b's own bytes where its table of contents puts them: its bases
+// the BASE chunk's ids in turn (no BASE chunk where it counts none), its
+// commits its fanout's last count, its filters' version the BDAT chunk's
+// first four bytes (0 where it carries no BDAT).
+func holdsItsBytes(t *testing.T, b []byte, info code.GraphInfo) {
+	t.Helper()
+	base, baseEnd, baseErr := gittest.ChunkOf(b, gittest.GraphHeader, "BASE")
+	switch {
+	case b[7] == 0 && !errors.Is(baseErr, gittest.ErrNoChunk):
+		t.Fatalf("accepted a graph counting no base whose table of contents names a BASE chunk (%v)", baseErr)
+	case b[7] > 0 && (baseErr != nil || baseEnd-base != 20*int64(b[7])):
+		t.Fatalf("accepted a graph counting %d bases whose BASE chunk is %d to %d (%v)", b[7], base, baseEnd,
+			baseErr)
+	}
+	for i, id := range info.Bases {
+		if want := hex.EncodeToString(b[base+20*int64(i) : base+20*int64(i+1)]); id != want {
+			t.Fatalf("accepted the base %s where its BASE chunk names %s", id, want)
+		}
+	}
+	fanout, _, fanoutErr := gittest.ChunkOf(b, gittest.GraphHeader, "OIDF")
+	if fanoutErr != nil || info.Commits != int64(binary.BigEndian.Uint32(b[fanout+255*4:])) {
+		t.Fatalf("accepted %d commits where its fanout's last count is at %d (%v)", info.Commits, fanout+255*4,
+			fanoutErr)
+	}
+	bdat, _, bdatErr := gittest.ChunkOf(b, gittest.GraphHeader, "BDAT")
+	switch {
+	case errors.Is(bdatErr, gittest.ErrNoChunk) && info.BloomVersion != 0:
+		t.Fatalf("accepted filters of version %d in a graph with no BDAT chunk", info.BloomVersion)
+	case bdatErr == nil && info.BloomVersion != int(binary.BigEndian.Uint32(b[bdat:])):
+		t.Fatalf("accepted filters of version %d where its BDAT chunk says %d", info.BloomVersion,
+			binary.BigEndian.Uint32(b[bdat:]))
+	case bdatErr != nil && !errors.Is(bdatErr, gittest.ErrNoChunk):
+		t.Fatalf("accepted a graph whose table of contents does not read: %v", bdatErr)
+	}
 }

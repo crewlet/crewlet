@@ -31,6 +31,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -128,28 +129,46 @@ const (
 func ChunkRow(header, i int) int64 { return int64(header + 12*i) }
 
 // chunk is where chunk id lies in the chunk-format file at path, read from
-// its table of contents under a header of header bytes.
+// its table of contents under a header of header bytes ([ChunkOf]).
 func chunk(t testing.TB, path string, header int, id string) (start, end int64) {
 	t.Helper()
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if start, end, err = ChunkOf(body, header, id); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	return start, end
+}
+
+// ErrNoChunk is a chunk-format file whose table of contents names no chunk of
+// the id asked ([ChunkOf]).
+var ErrNoChunk = errors.New("gittest: the table of contents names no such chunk")
+
+// ChunkOf is where chunk id lies in the chunk-format file body — its first
+// byte and the byte past its last — read from the file's own table of
+// contents under a header of header bytes ([MidxHeader], [GraphHeader]): the
+// reading [MidxChunk] and [GraphChunk] make of a file on disk, for a case that
+// holds the file's bytes — a fuzz target's input, held to what its table
+// says. It answers [ErrNoChunk] where the table names no such chunk, and an
+// error naming what is short where the bytes do not hold their header or
+// their table.
+func ChunkOf(body []byte, header int, id string) (start, end int64, err error) {
 	if len(body) < header {
-		t.Fatalf("%s is %d bytes, shorter than its %d-byte header", path, len(body), header)
+		return 0, 0, fmt.Errorf("%d bytes, shorter than the %d-byte header", len(body), header)
 	}
 	chunks := int(body[6])
 	if len(body) < header+12*(chunks+1) {
-		t.Fatalf("%s is %d bytes, shorter than its table of %d chunks", path, len(body), chunks)
+		return 0, 0, fmt.Errorf("%d bytes, shorter than a table of %d chunks", len(body), chunks)
 	}
 	for i := range chunks {
 		row := body[header+12*i:]
 		if string(row[:4]) == id {
-			return int64(binary.BigEndian.Uint64(row[4:12])), int64(binary.BigEndian.Uint64(row[16:24]))
+			return int64(binary.BigEndian.Uint64(row[4:12])), int64(binary.BigEndian.Uint64(row[16:24])), nil
 		}
 	}
-	t.Fatalf("%s has no %s chunk", path, id)
-	return 0, 0
+	return 0, 0, fmt.Errorf("%w: %s", ErrNoChunk, id)
 }
 
 // RenameChunk writes to over the id of chunk from in the table of contents of
