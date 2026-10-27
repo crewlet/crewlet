@@ -1878,7 +1878,7 @@ recorded from that activation on.
 | A clone or a fetch whose answer carried a pack | yes, `via: git` | one read, and the bytes of the answer the reader was sent |
 | A fetch's negotiation round that ended with no pack, an `ls-refs`, the advertisement | no | — |
 | A fetch the node ended before its answer did — a deadline, a stop | no | — |
-| A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in` — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
+| A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in`, and a change's [revision reads](#a-revisions-facts): its facts, where its anchored lines are, an interdiff — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
 | Its row — a listing, its detail, its push history, what a ref points at | no | — |
 
 So the count is of reads that sent the repository's contents, which is what
@@ -2076,9 +2076,12 @@ Every head a [change](#changes) has had is one of its **revisions**, and what
 a revision *is* against the branch it would merge into is three reads a git
 node answers from its cache, as it answers every
 [server-side read](#server-side-reads): asked of the repository's
-[home](#the-home-git-node) first, held to the asker's grant, one page each,
-and named by the whole commit ids the change's rows record — never an
-abbreviation, never a ref.
+[home](#the-home-git-node) first, held to the asker's grant — and, inside a
+turn somebody woke, to theirs too
+([Reads made for somebody else](#reads-made-for-somebody-else)) — recorded
+where the repository is `visibility: unit` ([Who read it](#who-read-it)), one
+page each, and named by the whole commit ids the change's rows record — never
+an abbreviation, never a ref.
 
 The **facts** of a revision are those of its head commit against its target's
 tip, a function of the two commits alone, so every git node answers them
