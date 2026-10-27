@@ -2,6 +2,7 @@ package codeindex
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/regexlit"
 )
@@ -17,8 +19,8 @@ import (
 // A SEGMENT: one immutable file of a repository's index — a run of blobs, by
 // object id, and the trigrams of each. Big-endian throughout:
 //
-//	header    "CRCX" | version u8 (1) | oid bytes u8 (20) | reserved u16 | blobs u32 | reserved u32
-//	                                                                                   (16 bytes)
+//	header    "CRCX" | version u8 (1) | oid bytes u8 (20) | reserved u16 | blobs u32 | reserved u32 |
+//	          unicode [16]                                                             (32 bytes)
 //	blobs     blobs × (oid [20] | flags u8)          ascending by oid, no oid twice
 //	postings  each trigram's blobs, in the trigram table's order: their ordinals in the blob
 //	          table, ascending — the first as a uvarint, each after it as a uvarint of its
@@ -33,6 +35,22 @@ import (
 // SKIPPED (Skip) — recorded so its next tip does not read it again, never in
 // a posting, and never a candidate. Any other bit is a file this build did
 // not write.
+//
+// unicode is the version of the Unicode tables the blobs' trigrams and
+// escapes were taken with: unicode.Version as Go spells it ("17.0.0"), its
+// unused bytes zero. THE TABLES ARE STAMPED because both are derived from
+// them — a trigram is of the blob's lowering (bytes.ToLower), an escape is
+// what the tables fold with an ASCII letter and lower apart from it — and
+// they move with the Go toolchain, each Unicode version giving letters a case
+// they lacked: a blob holding one of Unicode 16's Garay capitals was filed by
+// a build on 15.0 under the capital's own bytes, which a newer build's plan,
+// lowering the searched text first, no longer looks it up by, so even a
+// case-sensitive search of text it holds would rule it out. And a segment
+// outlives the build that wrote it: kept across restarts, carried across
+// incarnations by hard link, and never read again for a blob it holds. So a
+// segment stamped with other tables is refused as one this build did not
+// write (ErrMalformed), which drops it and builds the index again. A tip map
+// holds nothing the tables decide, and is not stamped.
 //
 // THE TABLE FOLLOWS THE POSTINGS because a merge streams its postings and
 // learns each list's offset only as it writes it: the table, and the counts
@@ -51,14 +69,29 @@ import (
 const (
 	segmentMagic      = "CRCX"
 	segmentVersion    = 1
-	segmentHeader     = 16
+	segmentHeader     = 32
 	segmentFooter     = 16
 	blobEntryBytes    = oidBytes + 1
 	trigramEntryBytes = 8
 	trailerBytes      = sha256.Size
 	// maxPostingBytes is what a five-byte offset can name.
 	maxPostingBytes = 1 << 40
+	// unicodeStampAt is where the header's naming of the Unicode tables
+	// begins; it runs to the header's end.
+	unicodeStampAt = 16
 )
+
+// unicodeStamp is the header's naming of the tables this build lowers with
+// and finds escapes by.
+var unicodeStamp = func() (s [segmentHeader - unicodeStampAt]byte) {
+	copy(s[:], unicode.Version)
+	return s
+}()
+
+// The field holds unicode.Version whole. It is a constant, so a Go whose
+// version would not fit fails to compile this package, rather than writing a
+// stamp cut short that another version could share.
+var _ [segmentHeader - unicodeStampAt - len(unicode.Version)]struct{}
 
 // A blob's flags.
 const (
@@ -219,6 +252,7 @@ func newSegmentWriter(dst io.Writer, blobs []blobEntry) (*segmentWriter, error) 
 	copy(header, segmentMagic)
 	header[4], header[5] = segmentVersion, oidBytes
 	binary.BigEndian.PutUint32(header[8:], uint32(len(blobs)))
+	copy(header[unicodeStampAt:], unicodeStamp[:])
 	out.put(header)
 	var entry [blobEntryBytes]byte
 	for _, b := range blobs {
@@ -317,6 +351,10 @@ func OpenSegment(data []byte) (*Segment, error) {
 	}
 	if binary.BigEndian.Uint16(data[6:]) != 0 || binary.BigEndian.Uint32(data[12:]) != 0 {
 		return nil, fmt.Errorf("%w: a reserved field of the header is set", ErrMalformed)
+	}
+	if stamp := data[unicodeStampAt:segmentHeader]; !bytes.Equal(stamp, unicodeStamp[:]) {
+		return nil, fmt.Errorf("%w: its trigrams and escapes were taken with the Unicode tables of %q, and "+
+			"this build's are %s's", ErrMalformed, bytes.TrimRight(stamp, "\x00"), unicode.Version)
 	}
 	count := uint64(binary.BigEndian.Uint32(data[8:]))
 	foot := data[len(data)-trailerBytes-segmentFooter:]
@@ -477,7 +515,9 @@ func (s *Segment) decode(list []byte, dst []uint32) ([]uint32, error) {
 // longer names and keeps its segments few. A nil keep keeps every blob.
 //
 // It writes the bytes a Builder given the kept blobs would, so a merged
-// segment is indistinguishable from one built whole. It streams: what it
+// segment is indistinguishable from one built whole — stamped with this
+// build's Unicode tables, as every input is: a Segment is made only by
+// OpenSegment, which refuses one stamped with others. It streams: what it
 // holds is each input's map from its ordinals to the merged ones, the merged
 // blob table, the trigram table it writes last, and one trigram's lists at a
 // time.

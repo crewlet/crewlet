@@ -6,7 +6,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"unicode"
 )
 
 // fixture is a blob of the round trip: its id and bytes, or the size of one
@@ -126,6 +128,9 @@ func TestASegmentRoundTripsAndMergesByTheKeep(t *testing.T) {
 	if !trailed(whole) {
 		t.Fatal("a segment's last 32 bytes are not the SHA-256 of every byte before them")
 	}
+	if stamp := string(bytes.TrimRight(whole[unicodeStampAt:segmentHeader], "\x00")); stamp != unicode.Version {
+		t.Errorf("a segment names the Unicode tables %q, and this build lowers with %s's", stamp, unicode.Version)
+	}
 	s := opened(t, whole)
 	if s.Len() != len(fixtures) {
 		t.Fatalf("the segment holds %d blobs, want %d", s.Len(), len(fixtures))
@@ -176,19 +181,41 @@ func TestASegmentRoundTripsAndMergesByTheKeep(t *testing.T) {
 // A SEGMENT THIS BUILD DID NOT WRITE IS REFUSED, never read past its bytes —
 // at its open where its structure says so, and where a posting list does,
 // by the read that meets it.
+//
+// One written under other Unicode tables is such a file, though every byte
+// of it is well formed: its trigrams were taken over a lowering by those
+// tables and its escape flags found by them, and a blob it holds is never
+// indexed again, so a newer build reading it would rule out a blob holding a
+// letter its tables gave a case after the segment was written.
 func TestASegmentThisBuildDidNotWriteIsRefused(t *testing.T) {
 	t.Parallel()
 	whole := built(t, nil)
 	s := opened(t, whole)
 	blobsAt := segmentHeader
 	tableAt := len(whole) - trailerBytes - segmentFooter - s.trigrams*trigramEntryBytes
+	stamped := func(version string) func([]byte) []byte {
+		return func(d []byte) []byte {
+			clear(d[unicodeStampAt:segmentHeader])
+			copy(d[unicodeStampAt:segmentHeader], version)
+			return d
+		}
+	}
+	older := stamped("15.0.0")
+	if _, err := OpenSegment(older(slices.Clone(whole))); !errors.Is(err, ErrMalformed) ||
+		!strings.Contains(err.Error(), `"15.0.0"`) || !strings.Contains(err.Error(), unicode.Version) {
+		t.Errorf("a segment lowered with Unicode 15.0.0's tables opens, or its refusal names neither "+
+			"version: %v", err)
+	}
 	for name, damage := range map[string]func([]byte) []byte{
-		"cut short":       func(d []byte) []byte { return d[:len(d)-1] },
-		"another magic":   func(d []byte) []byte { d[0] = 'X'; return d },
-		"another version": func(d []byte) []byte { d[4] = 2; return d },
-		"a reserved bit":  func(d []byte) []byte { d[7] = 1; return d },
-		"an unknown flag": func(d []byte) []byte { d[blobsAt+oidBytes] = 0x80; return d },
-		"both flags":      func(d []byte) []byte { d[blobsAt+oidBytes] = flagEscape | flagSkipped; return d },
+		"cut short":           func(d []byte) []byte { return d[:len(d)-1] },
+		"another magic":       func(d []byte) []byte { d[0] = 'X'; return d },
+		"another version":     func(d []byte) []byte { d[4] = 2; return d },
+		"a reserved bit":      func(d []byte) []byte { d[7] = 1; return d },
+		"other tables":        older,
+		"no tables named":     stamped(""),
+		"a version and bytes": stamped(unicode.Version + "\x00x"),
+		"an unknown flag":     func(d []byte) []byte { d[blobsAt+oidBytes] = 0x80; return d },
+		"both flags":          func(d []byte) []byte { d[blobsAt+oidBytes] = flagEscape | flagSkipped; return d },
 		"blobs out of order": func(d []byte) []byte {
 			first := slices.Clone(d[blobsAt : blobsAt+blobEntryBytes])
 			copy(d[blobsAt:], d[blobsAt+blobEntryBytes:blobsAt+2*blobEntryBytes])

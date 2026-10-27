@@ -42,6 +42,16 @@
 // as regexlit's Admits admits such a text. A plain clause still rules it out:
 // an exact literal is in the blob byte for byte or not at all.
 //
+// Both are taken with the Unicode tables this build carries, which move with
+// the Go toolchain: each Unicode version gives letters a case they lacked, so
+// a blob filed under a capital's own bytes by one build is looked up by its
+// lowering in the next. A segment outlives its build — kept across restarts,
+// carried across incarnations by hard link, and never read again for a blob
+// it holds — so it is STAMPED with the tables' version (unicode.Version), and
+// a build carrying other tables refuses it as a file it did not write
+// (ErrMalformed), which drops it and builds the index again. A tip map holds
+// nothing the tables decide.
+//
 // # The plan, and what it refuses
 //
 // NewPlan reads the clauses off the expression's own syntax tree

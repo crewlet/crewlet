@@ -586,6 +586,11 @@ func foldedRune(r rune) (rune, bool) {
 // outright whenever a clause compares folded, and a caller making the
 // comparison itself from [Prefilter.Terms] cannot rule it out by any Folded
 // term.
+//
+// internal/codeindex keeps this answer for every blob it indexes, in segment
+// files that outlive the build that wrote them and name only the Unicode
+// version it was taken with: a change to how the escapes are derived from
+// the tables is a change to that segment format, and moves its version.
 func HasEscape(body []byte) bool {
 	return escapes().in(body)
 }
