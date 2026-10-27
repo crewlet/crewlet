@@ -1087,17 +1087,17 @@ const (
 	// wait said in hours, and Not Found's hint said as a sentence (about
 	// 0.4 KiB, all in the entry's graph because the frame answers every
 	// write and every unknown address). 324 KiB, still under two seconds on
-	// that link. It was 323.8 KiB (331,564 bytes) when the formatter cache's
-	// own fixes took it to 324.0 KiB (331,784). 155 of the 220 bytes are its
-	// frozen shapes: every module's date and number shapes are frozen
-	// constants whose key the cache reads once, and the key's parts are
-	// levels of its maps, which halves what a kept formatter costs on every
-	// date and number a list draws. The other 65 are the fixes beside them,
-	// most of it the zone answers the cache keeps (47) and the month a budget
-	// is named by (21). All of it is in the entry's graph, because every
-	// screen formats through lib/formatters.ts. 325 KiB, still under two
-	// seconds on that link.
-	initialBudget = 325 << 10
+	// that link. It was 323.7 KiB (331,424 bytes) when the formatter cache's
+	// own fixes took it to 323.8 KiB (331,619), which 324 KiB still holds.
+	// 135 of the 195 bytes are its frozen shapes: every module's date and
+	// number shapes are frozen constants whose key the cache reads once, and
+	// the key's parts are levels of its maps, which halves what a kept
+	// formatter costs on every date and number a list draws. The other 60 are
+	// the fixes beside them: the zone answers the cache keeps add 61, the
+	// month a budget is named by takes 3 back, and Home's budget weekday and
+	// the folder order's one collator a byte each. All of it is in the
+	// entry's graph, because every screen formats through lib/formatters.ts.
+	initialBudget = 324 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
