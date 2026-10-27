@@ -61,13 +61,12 @@
 // the weakest honest precondition and the verb is decided once the row is
 // read: by the tool's own ask, or by this package for a verb that has no tool.
 //
-// A refusal is WORDED by [builtin.Refusal] from the error [builtin.DecisionError]
-// makes of the decision — the same two functions the tools' own gate uses — so
-// "you may not" reads identically on a seat's turn, in the operator's
-// assistant and here, and it is ANSWERED in the engine's envelope with the
-// rule's reason and the grants that would have admitted the caller
-// ([operator.RefuseDecision]). A route that composed its own sentence would be
-// where the three first disagreed.
+// A refusal is ANSWERED in the engine's envelope with the rule's reason and the
+// grants that would have admitted the caller ([operator.RefuseDecision]),
+// exactly as a tool's own refusal is on this surface, and with no sentence of
+// the engine's verbs: a person reads the code's own sentence (ADR-0060). A
+// route that composed its own sentence would be where the surfaces first
+// disagreed.
 //
 // # The status codes, and why each is its own
 //
@@ -678,7 +677,8 @@ func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
 	result tools.Result) {
 
 	if result.Failed {
-		operator.Fail(w, result.Cause, result.Output, key, about)
+		// In a person's words or none, never the model's (ADR-0060).
+		operator.Fail(w, result.Cause, result.PersonRefusal, key, about)
 		return
 	}
 	var receipt map[string]any
@@ -849,7 +849,7 @@ func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 			"it; this one has not yet. Read at the position above to see it."
 		httpjson.Write(w, http.StatusAccepted, body)
 	case statelog.OutcomeUnknown:
-		operator.UnknownOutcome(w, key, unvouched, "", body)
+		operator.UnknownOutcome(w, key, unvouched, body)
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}

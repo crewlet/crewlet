@@ -201,32 +201,30 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	if _, ok := auth.Caller(w, r); !ok {
 		return
 	}
+	// THE ROUTE'S OWN REFUSALS NAME THE TOOL AND SAY NOTHING ELSE: each is
+	// a request the client built wrong or a node not ready, which its code
+	// says whole, and a person reads that code's sentence (ADR-0060). What a
+	// developer needs beyond it is logged.
 	name := r.PathValue("tool")
+	about := httpjson.Detail{"tool": name}
 	cat, up := s.catalogueFor()
 	if !up {
-		httpjson.NoActiveRevision(w, httpjson.Detail{
-			"tool": name, "detail": httpjson.NativeHalvesNotUp})
+		httpjson.NoActiveRevision(w, about)
 		return
 	}
 	if _, served := cat.lookup(name); !served {
-		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeUnknownTool,
-			httpjson.Detail{"tool": name, "detail": fmt.Sprintf(
-				"this company's operator catalogue serves no tool %q", name)})
+		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeUnknownTool, about)
 		return
 	}
 	if readOnly(name) {
-		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeReadOnlyTool,
-			httpjson.Detail{"tool": name, "detail": fmt.Sprintf("%s is a read, and "+
-				"this transport only writes — ask the question over the live "+
-				"socket or its REST route", name)})
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeReadOnlyTool, about)
 		return
 	}
 	// JSON AND NOTHING ELSE, which shuts the door a cross-site form leaves
 	// open ([httpjson.DeclaresJSON]).
 	if !httpjson.DeclaresJSON(r.Header.Get("Content-Type")) {
 		httpjson.FailWithFields(w, http.StatusUnsupportedMediaType,
-			httpjson.CodeUnsupportedMediaType, httpjson.Detail{"tool": name,
-				"detail": "the body must be declared Content-Type: application/json"})
+			httpjson.CodeUnsupportedMediaType, about)
 		return
 	}
 	raw, err := httpjson.ReadBody(w, r, MaxActBody)
@@ -236,8 +234,9 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	}
 	req, err := decodeAct(raw)
 	if err != nil {
-		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"tool": name, "detail": err.Error()})
+		log.InfoContext(r.Context(), "operator_act_body_refused", "tool", name,
+			"error", err.Error())
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody, about)
 		return
 	}
 	// THE OPERATION IS REQUIRED: the dashboard mints one per gesture and
@@ -254,7 +253,10 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		args = map[string]any{}
 	}
 	if !NoOperationArg(args) {
-		RefuseOperationArg(w, name)
+		log.InfoContext(r.Context(), "operator_act_body_refused", "tool", name,
+			"error", "the arguments name "+OperationArg)
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			httpjson.Detail{"tool": name, "field": OperationArg})
 		return
 	}
 	logged := []any{"tool", name, "op_id", key}
@@ -279,8 +281,12 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	}
 	if result.Failed {
 		log.InfoContext(r.Context(), "operator_act", append(logged,
-			"refused", true)...)
-		Fail(w, result.Cause, result.Output, key, About(name, args))
+			"refused", true, "refusal", string(classOf(result.Cause)))...)
+		// THE PERSON'S WORDS, NEVER THE MODEL'S (ADR-0060): Output is the
+		// tool's sentence for a model, and the refusal is answered in
+		// the phrasing written for a person, or in its code's own
+		// sentence where nobody has written one.
+		Fail(w, result.Cause, result.PersonRefusal, key, About(name, args))
 		return
 	}
 	answer := receiptOf(name, result)

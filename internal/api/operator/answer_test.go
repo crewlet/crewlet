@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -183,19 +184,22 @@ func TestAnAnswerIsAnActNotARead(t *testing.T) {
 	}
 }
 
-// A SPENT COMPANY BUDGET IS A 409 NAMING THE WINDOW, and nothing is asked of
-// the model: the caller's next move is to wait for the window or raise its
-// ceiling, never to retry now.
+// A SPENT COMPANY BUDGET IS A 409, and nothing is asked of the model: the
+// caller's next move is to wait for the window or raise its ceiling, never to
+// retry now. The code's own sentence says so; the tool's sentence, which names
+// the window for a model, is not the answer's (ADR-0060).
 func TestASpentBudgetAnswersBudgetExhausted(t *testing.T) {
 	t.Parallel()
 	model, budget := &countedModel{}, &companyWindows{spent: true}
 	status, answer := act(t, guarded(answerSurface(t, model, budget)), "founder",
 		builtin.AnswerKnowledgeTool, "application/json", askBody(), newKey())
-	detail, _ := answer["detail"].(string)
 	if status != http.StatusConflict || answer["error"] != string(crewletmcp.RefusalBudgetExhausted) ||
-		!strings.Contains(detail, "2026-09-25") {
-		t.Fatalf("a spent budget answered %d %v, want 409 budget_exhausted naming the day",
-			status, answer)
+		answer["message"] != httpjson.CodeBudgetExhausted.Message() {
+		t.Fatalf("a spent budget answered %d %v, want 409 budget_exhausted in its "+
+			"code's own words", status, answer)
+	}
+	if detail, has := answer["detail"]; has {
+		t.Errorf("a spent budget answered the tool's sentence: %v", detail)
 	}
 	if model.asked() != 0 {
 		t.Errorf("the model was asked %d times past a spent budget", model.asked())

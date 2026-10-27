@@ -404,9 +404,9 @@ func TestAnActWhoseWriteIsUnknownSaysSo(t *testing.T) {
 	if rec.Header().Get("Retry-After") == "" {
 		t.Error("a write this node can settle by being asked again answered no Retry-After")
 	}
-	if detail, _ := answer["tool_detail"].(string); strings.Contains(detail, "`op_id`") {
-		t.Errorf("a person is told to send an op_id argument, which this transport "+
-			"refuses: %s", detail)
+	if detail, has := answer["tool_detail"]; has {
+		t.Errorf("an unknown answered the tool's own sentence, written for a "+
+			"model: %v", detail)
 	}
 }
 
@@ -634,7 +634,7 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 	answer := func(class crewletmcp.Refusal) (*httptest.ResponseRecorder, map[string]any) {
 		rec := httptest.NewRecorder()
 		operator.Fail(rec, crewletmcp.Classify(class, errors.New("the reason")),
-			"the sentence", newKey(), nil)
+			caveat.NotAnOption(), newKey(), nil)
 		var body map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("%q answered a body that is not JSON: %q", class, rec.Body)
@@ -692,9 +692,12 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 	}
 }
 
-// A TOOL'S REFUSAL REACHES THE PERSON AS ITS CLASS, with the tool's own
-// sentence as the detail, at the status the class maps to — here the one an
-// update of an item the stub tracker does not hold comes back with.
+// A TOOL'S REFUSAL REACHES THE PERSON AS ITS CLASS, at the status the class
+// maps to (here the one an update of an item the stub tracker does not hold
+// comes back with), naming the tool and the item, and in its code's own
+// sentence: nobody has worded this refusal for a person, so it carries no
+// detail, and the tool's sentence (written for a model) is never it
+// (ADR-0060).
 func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 	t.Parallel()
 	body := `{"args":{"item":"ENG-404","status":"done"}}`
@@ -704,10 +707,14 @@ func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 		t.Fatalf("an update of a missing item answered %d %v, want 404 not_found",
 			status, answer)
 	}
-	if detail, _ := answer["detail"].(string); !strings.Contains(detail, "ENG-404") ||
-		answer["tool"] != worklet.UpdateWorkItemTool {
-
-		t.Errorf("the refusal %v does not carry the tool and its own sentence", answer)
+	if answer["tool"] != worklet.UpdateWorkItemTool || answer["item"] != "ENG-404" {
+		t.Errorf("the refusal %v does not name the tool and the item", answer)
+	}
+	if detail, has := answer["detail"]; has {
+		t.Errorf("a refusal nobody worded for a person answered a detail: %v", detail)
+	}
+	if answer["message"] != httpjson.CodeNotFound.Message() {
+		t.Errorf("the refusal's sentence is %v, want its code's own", answer["message"])
 	}
 }
 
@@ -861,7 +868,7 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	rec = httptest.NewRecorder()
 	operator.Fail(rec, crewletmcp.Classify(crewletmcp.RefusalUnavailable,
 		errors.New("the tracker is sealed for maintenance")),
-		"the tracker is sealed for maintenance", key,
+		caveat.Refusal{}, key,
 		httpjson.Detail{"tool": "create_work_item"})
 	body = decode(t, rec)
 	if rec.Code != http.StatusServiceUnavailable || body["error"] != "unavailable" {

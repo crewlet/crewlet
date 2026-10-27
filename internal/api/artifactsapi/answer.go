@@ -167,7 +167,7 @@ func written(w http.ResponseWriter, key string, res statelog.Result, body httpjs
 	body["op_id"], body["outcome"] = key, string(res.Outcome)
 	switch res.Outcome {
 	case statelog.OutcomeUnknown:
-		operator.UnknownOutcome(w, key, res.Unvouched, "", body)
+		operator.UnknownOutcome(w, key, res.Unvouched, body)
 	case statelog.OutcomePending:
 		body["position"] = res.Position
 		httpjson.Write(w, http.StatusAccepted, body)

@@ -596,8 +596,25 @@ func (g *gated) admit(ctx context.Context, args map[string]any) *mcp.Result {
 var ErrUndeclaredArgument = errors.New("builtin: this call carries an " +
 	"argument its tool does not read")
 
+// UndeclaredArguments is an [ErrUndeclaredArgument] refusal as a value: the
+// tool and the arguments it does not read, so a surface answering in status
+// codes names them as a field rather than in a sentence written for a model
+// (ADR-0060).
+type UndeclaredArguments struct {
+	Tool  string
+	Names []string
+}
+
+func (e *UndeclaredArguments) Error() string {
+	return fmt.Sprintf("%s: %s takes no %s", ErrUndeclaredArgument, e.Tool,
+		strings.Join(e.Names, ", "))
+}
+
+// Is reports the sentinel the refusal is an instance of.
+func (e *UndeclaredArguments) Is(target error) bool { return target == ErrUndeclaredArgument }
+
 // undeclared is the arguments a call carries that its tool's schema does not
-// declare, quoted and sorted — nil when there are none.
+// declare, sorted — nil when there are none.
 //
 // THE SCHEMA IS THE LIST, read off the tool rather than typed beside it, so an
 // argument a tool gains is accepted the moment it can be read and one it loses
@@ -609,7 +626,7 @@ func undeclared(tool tools.Callable, args map[string]any) []string {
 	var unread []string
 	for field := range args {
 		if _, held := properties[field]; !held {
-			unread = append(unread, fmt.Sprintf("%q", field))
+			unread = append(unread, field)
 		}
 	}
 	slices.Sort(unread)
@@ -626,13 +643,17 @@ func undeclaredRefusal(tool tools.Callable, unread []string) mcp.Result {
 	if len(takes) > 0 {
 		reads = strings.Join(takes, ", ")
 	}
-	names := strings.Join(unread, ", ")
+	quoted := make([]string, len(unread))
+	for i, name := range unread {
+		quoted[i] = fmt.Sprintf("%q", name)
+	}
+	names := strings.Join(quoted, ", ")
 	return mcp.Result{
 		Failed: true,
 		// INVALID, beneath the sentinel: the request is the caller's to
 		// change, and a surface answering in status codes reads both.
 		Cause: mcp.Classify(mcp.RefusalInvalid,
-			fmt.Errorf("%w: %s takes no %s", ErrUndeclaredArgument, tool.Name(), names)),
+			&UndeclaredArguments{Tool: tool.Name(), Names: unread}),
 		Output: fmt.Sprintf("%s takes no argument %s — it reads %s, and one it "+
 			"does not read is refused rather than ignored, because ignoring it "+
 			"answers a different request from the one you sent", tool.Name(),
