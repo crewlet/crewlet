@@ -44,14 +44,28 @@ func TestAChangesStatesAreAClosedSet(t *testing.T) {
 	}
 }
 
-// EVERY CHANGE TABLE IS CLASSIFIED REPRODUCIBLE, AND ITS MIGRATION SAYS SO. The
-// rows a change is kept in — code_changes, and every code table that names a
-// change by a change_id — are rebuilt by a replay from zero and compared by the
-// identity claim, never a node's own: two data nodes that disagreed about a
-// change's number or its head would answer web!42 differently. Found from the
-// schema rather than listed, so a change table a later migration adds is held
-// to it too; and the migration that creates each states its class, as every
-// replicated migration since the code host's has.
+// EVERY CHANGE TABLE IS CLASSIFIED, AND HELD TO THE CLASS ITS MIGRATION
+// STATES. The rows a change is kept in — code_changes, and every code table
+// that names a change by a change_id — are found from the schema rather than
+// listed, so a change table a later migration adds is held here too: the
+// domain's table map gives each a class, and one sentence of the `-- Class:`
+// paragraph of the migration that last creates it names the table and that
+// class, as every replicated migration since the code host's states its
+// tables'. Each is held to its own class, never to one class for all: a table
+// whose rows each node ages out by a horizon of its own is divergent — carried
+// in a snapshot, outside the identity claim — and its migration says so.
+//
+// THE REPOSITORY'S OWN ARE REPRODUCIBLE. What the records on a repository's
+// subject write of a change — its row, its authors and its revisions — is
+// rebuilt by a replay from zero and compared by the identity claim, never a
+// node's own: two data nodes that disagreed about a change's number or its
+// head would answer web!42 differently. A replicated table that a change's
+// own subject writes joins the list with the commit that lands it.
+//
+// Mutation: leave a change table out of the domain's inventory; state another
+// class for it in its migration, even in a paragraph whose next sentence
+// states this class of another table; or name a repository table the
+// inventory does not reproduce — and this fails.
 func TestEveryChangeTableIsClassified(t *testing.T) {
 	t.Parallel()
 	namesAChange := regexp.MustCompile(`[(,]\s*change_id\s`)
@@ -63,7 +77,8 @@ func TestEveryChangeTableIsClassified(t *testing.T) {
 		}
 	}
 	slices.Sort(tables)
-	for _, table := range []string{"code_change_authors", "code_changes", "code_revisions"} {
+	repository := []string{"code_change_authors", "code_changes", "code_revisions"}
+	for _, table := range repository {
 		if !slices.Contains(tables, table) {
 			t.Fatalf("the schema's change tables are %v, and %s is not among them — the walk below is "+
 				"not looking at the tables a change is kept in", tables, table)
@@ -71,20 +86,60 @@ func TestEveryChangeTableIsClassified(t *testing.T) {
 	}
 	classes := code.Domain{}.Tables()
 	for _, table := range tables {
-		if !code.Reproducible(table) || classes[table] != statelog.Replicated {
-			t.Errorf("%s is classed %q (reproducible: %v): a change's rows are the log's, rebuilt and "+
-				"compared on every node", table, classes[table], code.Reproducible(table))
+		// THE COMMA-OK READ, because a table the map lacks reads as its zero
+		// class, which is statelog.Replicated.
+		class, classed := classes[table]
+		if !classed {
+			t.Errorf("%s names a change and the domain gives it no class: the scrub list, the identity "+
+				"claim and the local sweep are all derived from that map", table)
+			continue
 		}
-		if class := classOf(t, table); !strings.Contains(class, table) {
-			t.Errorf("the migration that creates %s states no class for it:\n\t%s", table, class)
+		if stated := classOf(t, table); !statesClass(stated, table, classWord(class)) {
+			t.Errorf("%s is classed %s, and no sentence of the `-- Class:` paragraph of the migration "+
+				"that last creates it says it is %s:\n\t%s", table, class, classWord(class), stated)
+		}
+	}
+	for _, table := range repository {
+		if class := classes[table]; !code.Reproducible(table) || class != statelog.Replicated {
+			t.Errorf("%s is classed %s (reproducible: %v): a change's rows on its repository's subject "+
+				"are the log's, rebuilt and compared on every node", table, class, code.Reproducible(table))
 		}
 	}
 }
 
-// classOf is the `-- Class:` paragraph of the replicated migration that creates
-// table, or "" when that migration has none.
+// classWord is how a migration's `-- Class:` paragraph names a class: a
+// replicated table as reproducible, the word [code.ReproducibleTables] is
+// named by, and any other by the class's own name.
+func classWord(class statelog.TableClass) string {
+	if class == statelog.Replicated {
+		return "reproducible"
+	}
+	return class.String()
+}
+
+// statesClass reports whether one sentence of a `-- Class:` paragraph names
+// table and says word — ONE SENTENCE rather than the paragraph, because a
+// paragraph that classes several tables states each table's class beside its
+// name: 0058's says its three change tables are reproducible and, in the next
+// sentence, that code_repos stays so, and a paragraph-wide match would still
+// pass with the first sentence calling them anything else.
+func statesClass(paragraph, table, word string) bool {
+	named := regexp.MustCompile(`\b` + regexp.QuoteMeta(table) + `\b`)
+	for _, sentence := range strings.Split(paragraph, ". ") {
+		if named.MatchString(sentence) && strings.Contains(strings.ToLower(sentence), word) {
+			return true
+		}
+	}
+	return false
+}
+
+// classOf is the `-- Class:` paragraph of the replicated migration that LAST
+// creates table — the shape the table has, where a later migration created it
+// again — each line without its comment marker, or "" when that migration has
+// none.
 func classOf(t *testing.T, table string) string {
 	t.Helper()
+	stated, found := "", false
 	for _, version := range store.SchemaVersions(store.EstateReplicated) {
 		body, err := store.SchemaFile(store.EstateReplicated, version)
 		if err != nil {
@@ -93,21 +148,23 @@ func classOf(t *testing.T, table string) string {
 		if !strings.Contains(string(body), "CREATE TABLE "+table+" (") {
 			continue
 		}
+		found = true
 		var paragraph []string
 		for _, line := range strings.Split(string(body), "\n") {
-			switch {
-			case strings.HasPrefix(line, "-- Class:"):
-				paragraph = append(paragraph, line)
-			case len(paragraph) > 0 && strings.HasPrefix(line, "--"):
-				paragraph = append(paragraph, line)
-			case len(paragraph) > 0:
-				return strings.Join(paragraph, " ")
+			text, comment := strings.CutPrefix(line, "--")
+			if !comment && len(paragraph) > 0 {
+				break
+			}
+			if comment && (len(paragraph) > 0 || strings.HasPrefix(text, " Class:")) {
+				paragraph = append(paragraph, strings.TrimSpace(text))
 			}
 		}
-		return strings.Join(paragraph, " ")
+		stated = strings.Join(paragraph, " ")
 	}
-	t.Fatalf("no replicated migration creates %s", table)
-	return ""
+	if !found {
+		t.Fatalf("no replicated migration creates %s", table)
+	}
+	return stated
 }
 
 // changeShape is one change a case seeds: how many revisions and authors it
