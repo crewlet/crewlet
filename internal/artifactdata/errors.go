@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // The sentinels. A write the APPLIER refuses is not one of these: it is a
@@ -62,7 +64,9 @@ type RateLimited struct {
 	RetryAfter time.Duration
 }
 
+// Error says the wait as a person plans by ("holds it again in 2m"), rounded
+// up ([statelog.SpokenWait]), never as a Duration's own "1m23.456s".
 func (e *RateLimited) Error() string {
 	return fmt.Sprintf("artifactdata: this write weighs %d and the %s's write budget on this "+
-		"node holds it again in %s; retry then", e.Cost, e.Scope, e.RetryAfter.Round(time.Millisecond))
+		"node holds it again in %s; retry then", e.Cost, e.Scope, statelog.SpokenWait(e.RetryAfter))
 }
