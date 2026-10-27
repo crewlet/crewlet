@@ -184,9 +184,22 @@ func (c *Cache) nodeMemory() gitproc.Memory {
 
 // maintStep is a set of the maintainer's declared writes (maintWrites), bit i
 // its all[i]: what a plan takes, and what the node's memory refused an
-// incarnation. A step's name — a line's and a count's `step` — is its write's
-// Step.
-type maintStep uint8
+// incarnation — where one more step sits past every write's bit, a
+// compaction's build ([stepCompact]). A write's name — a line's and a count's
+// `step` — is its write's Step, and the compaction's is "compact".
+type maintStep uint16
+
+// stepCompact is a compaction's build (Cache.AdmitCompaction) as a step of an
+// incarnation's memoryRefused set: the one step there that is no declared
+// write, at the first bit past every bit a write may take (maxMaintWrites),
+// so the set an incarnation keeps of what the node's memory refused it —
+// logged and counted once an incarnation, carried across a swap — holds a
+// refused compaction beside the maintainer's refused steps, and logs it once
+// however many polls find it again.
+const stepCompact maintStep = 1 << maxMaintWrites
+
+// stepCompactName is stepCompact's `step`, on its line and its count.
+const stepCompactName = "compact"
 
 // memoryRefusals is what the maintainer's latest walk of the entries found
 // refused for memory: how many repositories their bitmap, and the largest of

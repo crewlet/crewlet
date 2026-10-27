@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
@@ -62,6 +63,9 @@ type Node interface {
 	// Share is the node's seat git-work share, which its query server's
 	// reads take their units of.
 	Share() *code.GitShare
+	// Compactor is the node's compactor, built as the engine builds a git
+	// node's and never started: a case drives its Compact or its Poll.
+	Compactor() *compact.Compactor
 }
 
 // Fleet is a topology under test.
@@ -78,6 +82,14 @@ type Fleet interface {
 	// Collect runs one collection over the code estate, its clock a day and
 	// an hour on, so every object past its grace is judged.
 	Collect(t testing.TB) collect.CollectionReport
+	// CollectAt runs one collection over the code estate with the
+	// collector's clock at at — every table the code domain declares
+	// shielding what its rows name.
+	CollectAt(t testing.TB, at time.Time) collect.CollectionReport
+	// Retain runs ONE code-retention pass with its clock at now — what a
+	// retired pack's grace and a deletion's age are judged by — so a case
+	// moves a grace without moving the broker.
+	Retain(t testing.TB, now time.Time) code.RetentionReport
 	// Token is a token bound to the human seat person; "" is one bound to
 	// nobody.
 	Token(t testing.TB, person string) string
@@ -109,6 +121,20 @@ type Fleet interface {
 	// code.ErrRepoNotFound when no active or archived repository has the
 	// name.
 	Rows(ctx context.Context, name string, fresh statelog.Freshness) (Rows, error)
+	// State is one page of a repository's snapshot, read through the data
+	// nodes as a git node's cache reads one — a delta's retired phase among
+	// what it serves, which Rows does not carry.
+	State(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
+	// Propose is a push proposed to the repository's committer through the
+	// data nodes, as a git node's host proposes one: for a case that names
+	// the packs of a fixture it built and stored itself, a person's git
+	// paying for none of them.
+	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
+	// StopGit stops one git node as the engine's graceful stop does, its
+	// cache's directory kept, while the rest of the fleet runs on; StartGit
+	// starts it again over that directory.
+	StopGit(t testing.TB, node string)
+	StartGit(t testing.TB, node string)
 	// GitRead is a read of a repository by object id through the fleet's
 	// routing, as a seat's tool asks one: the production estate router,
 	// asking the git nodes — each serving its git lane on the broker, as the
@@ -178,11 +204,22 @@ type SoloOptions struct {
 	// Reads) — its cache's backfill's pages of pushes among them: the window
 	// a case has onto them, to fail or count them; nil reads the data node.
 	WrapReads func(Reads) Reads
+	// Homes is the git node id's answer to whether it is a repository's home
+	// in place of its own router's — a case's fixed answer, a split presence
+	// view (SplitHomes); nil asks every node's own router.
+	Homes func(id string) compact.Homes
 	// LogBytes is the code log's ceiling; 0 is soloLogBytes. A benchmark
 	// whose history outgrows what that ceiling admits beside its gate
 	// reserve — about 7 MB of records, the reserve the larger of a sixteenth
 	// and the fleet term (statelog.Reservation) — raises it.
 	LogBytes int64
+	// WrapApplier wraps the data node's applier (DataOptions.WrapApplier).
+	WrapApplier func(statelog.Applier) statelog.Applier
+	// WrapObjects wraps the object store's backend as the git node id reads
+	// and writes it, nil for none: a benchmark's window onto what one git
+	// node downloads, apart from what every other does through the same
+	// store.
+	WrapObjects func(id string, b objstore.Backend) objstore.Backend
 }
 
 // Reads is a git node's read of the code host's rows (GitOptions.Reads).
@@ -253,10 +290,11 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	// before its broker does.
 	t.Cleanup(f.teardown)
 	f.data = StartDataNode(t, DataOptions{ID: soloDataNode, Queue: f.openBroker(t), Dir: f.dir,
-		Limits: o.Limits, Faults: o.Faults, LogBytes: o.LogBytes, Operator: soloOperatorNode})
-	var estate host.Estate = &soloEstate{data: f.data}
+		Limits: o.Limits, Faults: o.Faults, LogBytes: o.LogBytes, Operator: soloOperatorNode,
+		WrapApplier: o.WrapApplier})
+	var seam host.Estate = &soloEstate{data: f.data}
 	if o.WrapEstate != nil {
-		estate = o.WrapEstate(estate)
+		seam = o.WrapEstate(seam)
 	}
 	var reads Reads = func(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 		return f.data.Served().Read(ctx, q)
@@ -264,11 +302,21 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	if o.WrapReads != nil {
 		reads = o.WrapReads(reads)
 	}
+	f.homes = make([]atomic.Pointer[estate.Router], o.GitNodes)
 	for i := range o.GitNodes {
 		id := fmt.Sprintf("solo-%c", 'a'+i)
+		var homes compact.Homes = soloHomes{f: f, i: i}
+		if o.Homes != nil {
+			homes = o.Homes(id)
+		}
+		objects := o.Objects
+		if o.WrapObjects != nil {
+			objects = o.WrapObjects(id, objects)
+		}
 		f.git = append(f.git, StartGitNode(t, GitOptions{
-			ID: id, Dir: filepath.Join(f.dir, id, "git"), Estate: estate, Reads: reads,
-			Objects: func() objstore.Backend { return o.Objects }, Limits: o.Limits, Timing: o.Timing,
+			ID: id, Dir: filepath.Join(f.dir, id, "git"), Estate: seam, Reads: reads,
+			Compactions: f.compact, Homes: homes,
+			Objects: func() objstore.Backend { return objects }, Limits: o.Limits, Timing: o.Timing,
 			Faults: o.Faults, Credentials: f.creds, Audit: f.record, Fetched: f.recordFetched,
 			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,
 			GitPath: o.GitPath, Logger: o.Logger, Roster: o.Roster, Current: o.Current, QueryPool: o.QueryPool,
@@ -329,6 +377,47 @@ func (f *SoloFleet) route(t testing.TB) {
 		t.Fatalf("codetest: the fleet's router: %v", err)
 	}
 	f.router.Store(r)
+	// EVERY GIT NODE'S OWN ROUTER, which its compactor asks whether it is a
+	// repository's home, as the engine hands each node's compactor the
+	// node's router: the node itself among the git nodes while its git half
+	// answers, so a killed node is no repository's home.
+	for i, g := range f.git {
+		own, err := estate.NewRouter(estate.RouterOptions{Self: g.o.ID, Queue: q, Placement: nodes, Git: git,
+			LocalGit: g, Session: estate.NewSession(), Timing: estate.Production(), Envelopes: soloEnvelopes})
+		if err != nil {
+			t.Fatalf("codetest: %s's router: %v", g.o.ID, err)
+		}
+		f.homes[i].Store(own)
+	}
+}
+
+// soloHomes is whether a solo fleet's i-th git node is a repository's home,
+// as its compactor asks it: that node's own router, read again at every
+// question, so a restarted fleet's is the one asked — and none while the
+// fleet is killed, which is an error rather than an answer.
+type soloHomes struct {
+	f *SoloFleet
+	i int
+}
+
+func (h soloHomes) IsHome(repoID string) (bool, error) {
+	r := h.f.homes[h.i].Load()
+	if r == nil {
+		return false, errors.New("codetest: the solo fleet routes nothing while it is killed")
+	}
+	return r.IsHome(repoID)
+}
+
+// compact is what every git node's compactor proposes a compaction to: the
+// data node's committer, in process, read again at every call — a refusal
+// about the node itself (code.ErrNotServing) answered as the router answers a
+// walk in which every node it asked refused, as Propose is.
+func (f *SoloFleet) compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+	res, err := f.data.Served().ProposeCompaction(ctx, p)
+	if errors.Is(err, code.ErrNotServing) {
+		return res, &soloUnserved{err: err}
+	}
+	return res, err
 }
 
 // GitRead is a read of a repository by object id through the fleet's routing
@@ -402,6 +491,9 @@ type SoloFleet struct {
 	// router is the running broker's router, holding nothing of its own,
 	// which [SoloFleet.GitRead] asks through (route); nil while killed.
 	router atomic.Pointer[estate.Router]
+	// homes is each git node's own router, which its compactor asks whether
+	// it is a repository's home (soloHomes); nil while killed.
+	homes []atomic.Pointer[estate.Router]
 
 	mu sync.Mutex
 	// brokers is every incarnation's embedded broker, the running one last.
@@ -517,6 +609,41 @@ func (f *SoloFleet) Rows(ctx context.Context, name string, fresh statelog.Freshn
 	return RowsOf(ctx, name, fresh, served.Resolve, served.Snapshot)
 }
 
+// State is one page of a repository's snapshot, from the data node (Fleet).
+func (f *SoloFleet) State(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
+	return f.data.Served().Snapshot(ctx, q)
+}
+
+// Propose is a push proposed to the data node's committer, a refusal about the
+// node itself answered as the router answers it (Fleet).
+func (f *SoloFleet) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
+	return (&soloEstate{data: f.data}).Propose(ctx, p)
+}
+
+// StopGit stops the git node called node gracefully (Fleet).
+func (f *SoloFleet) StopGit(t testing.TB, node string) {
+	t.Helper()
+	f.gitNamed(t, node).Stop(t.Context())
+}
+
+// StartGit starts the git node called node again over its directory (Fleet).
+func (f *SoloFleet) StartGit(t testing.TB, node string) {
+	t.Helper()
+	f.gitNamed(t, node).Restart(t)
+}
+
+// gitNamed is the fleet's git node called node.
+func (f *SoloFleet) gitNamed(t testing.TB, node string) *GitNode {
+	t.Helper()
+	for _, g := range f.git {
+		if g.o.ID == node {
+			return g
+		}
+	}
+	t.Fatalf("codetest: the solo fleet has no git node %q", node)
+	return nil
+}
+
 // RowsOf is the repository called name's whole state as its rows hold it at
 // fresh, resolved through resolve and read through state, every page —
 // through a node's code half, or its router. code.ErrRepoNotFound when no
@@ -573,6 +700,18 @@ func (f *SoloFleet) Collect(t testing.TB) collect.CollectionReport {
 	return f.data.Collect(t, f.o.Objects)
 }
 
+// CollectAt runs one collection over the code estate at at (Fleet).
+func (f *SoloFleet) CollectAt(t testing.TB, at time.Time) collect.CollectionReport {
+	t.Helper()
+	return f.data.CollectAt(t, f.o.Objects, at)
+}
+
+// Retain runs one code-retention pass at now (Fleet).
+func (f *SoloFleet) Retain(t testing.TB, now time.Time) code.RetentionReport {
+	t.Helper()
+	return f.data.Retain(t, now)
+}
+
 // Evict and Readmit go through the data node's operator writer
 // (soloOperatorNode): an evicted node's own records are dropped, its
 // readmission included, and a solo fleet has no peer to publish it.
@@ -612,6 +751,9 @@ func (f *SoloFleet) Kill(t testing.TB, _ string) {
 	}
 	f.data.Kill()
 	f.router.Store(nil)
+	for i := range f.homes {
+		f.homes[i].Store(nil)
+	}
 	if err := f.broker().Stop(context.Background()); err != nil {
 		t.Errorf("codetest: stop the killed node's broker: %v", err)
 	}

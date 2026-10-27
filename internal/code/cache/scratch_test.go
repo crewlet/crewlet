@@ -80,6 +80,16 @@ func TestAScratchIsARepositoryThePoolAccepts(t *testing.T) {
 	if _, _, _, err := sc.Pack(); err == nil || !strings.Contains(err.Error(), first) || !strings.Contains(err.Error(), second) {
 		t.Errorf("Pack of a scratch holding two packs = %v, want an error naming %s and %s", err, first, second)
 	}
+	// A COMPACTION'S SCRATCH holds a pack an output: Packs answers every one,
+	// by checksum.
+	wantPacks := []cache.ScratchPack{
+		{Path: filepath.Join(sc.Dir, "objects", "pack", "pack-"+first+".pack"), Checksum: first},
+		{Path: filepath.Join(sc.Dir, "objects", "pack", "pack-"+second+".pack"), Checksum: second},
+	}
+	slices.SortFunc(wantPacks, func(a, b cache.ScratchPack) int { return strings.Compare(a.Checksum, b.Checksum) })
+	if got, err := sc.Packs(); err != nil || !slices.Equal(got, wantPacks) {
+		t.Errorf("Packs of a scratch holding two packs = %v, %v; want %v", got, err, wantPacks)
+	}
 	packDir := filepath.Join(sc.Dir, "objects", "pack")
 	for _, ext := range []string{".pack", ".idx", ".rev"} {
 		if err := os.Remove(filepath.Join(packDir, "pack-"+second+ext)); err != nil {
@@ -91,6 +101,9 @@ func TestAScratchIsARepositoryThePoolAccepts(t *testing.T) {
 	}
 	if _, _, _, err := sc.Pack(); err == nil || !strings.Contains(err.Error(), "pack-"+first+".idx") {
 		t.Errorf("Pack of a scratch holding an .idx without its .pack = %v, want an error naming it", err)
+	}
+	if _, err := sc.Packs(); err == nil || !strings.Contains(err.Error(), "pack-"+first+".idx") {
+		t.Errorf("Packs of a scratch holding an .idx without its .pack = %v, want an error naming it", err)
 	}
 
 	if _, err := c.NewScratch(t.Context(), s, pushID); !errors.Is(err, cache.ErrInvalid) {

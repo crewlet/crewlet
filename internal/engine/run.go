@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
@@ -385,6 +386,11 @@ type Engine struct {
 	// engine New builds outside this package's tests — has the git pool read
 	// the node's own memory ([Engine.buildCodeHost]).
 	gitMemory int64
+
+	// compactorEstate is Options.compactorEstate, kept for the same reason:
+	// nil — every engine New builds outside this package's tests — hands the
+	// compactor the router's code seam as it is ([Engine.buildCodeHost]).
+	compactorEstate func(codecompact.Estate) codecompact.Estate
 
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
@@ -1063,6 +1069,15 @@ type Options struct {
 	// subject is what a node's memory leaves its git cache is not decided by
 	// the memory of whatever machine runs it.
 	gitMemory int64
+
+	// compactorEstate stands between the git node's compactor and the
+	// router's code seam it lists and proposes through
+	// ([codecompact.Options.Estate]), nil for none. UNEXPORTED for cacheDisk's
+	// reason (export_test.go): the knob exists only so a case whose subject
+	// is the compaction-behind alarm a running node raises can show the
+	// compactor a repository at the pack bound without pushing two thousand
+	// packs into it.
+	compactorEstate func(codecompact.Estate) codecompact.Estate
 }
 
 // New assembles an engine.
@@ -1289,6 +1304,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		gitHookArgv:         slices.Clone(opts.GitHook),
 		cacheDisk:           opts.cacheDisk,
 		gitMemory:           opts.gitMemory,
+		compactorEstate:     opts.compactorEstate,
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,

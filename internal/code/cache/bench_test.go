@@ -1691,7 +1691,7 @@ var memorySteps = []struct {
 // the figures the node's memory budget charges by (BitmapBytesPerObject,
 // IndexBytesPerObject, GraphBytesPerObject, FsckBytesPerObject,
 // gitproc.TransferBytesPerObject). Each is the peak ANONYMOUS memory of the one
-// git process, sampled every millisecond from /proc (peakAnon; Linux only —
+// git process, sampled every millisecond from /proc (gittest.PeakAnon; Linux only —
 // elsewhere only the times are reported), divided by the objects the packs
 // hold: the packs' own pages it maps in are not counted, since the kernel
 // takes those back under pressure rather than killing anybody.
@@ -1740,7 +1740,7 @@ func (w *syncWorld) memoryArms(b *testing.B, c *cache.Cache, s cache.Synced, rep
 				b.StopTimer()
 				holding(b, step.index, step.graph)
 				b.StartTimer()
-				n, ok := peakAnon(func() {
+				n, ok := gittest.PeakAnon(func() {
 					if step.args == nil {
 						packOut(b, w.pool, c, s.Dir, "refs/heads/main")
 						return

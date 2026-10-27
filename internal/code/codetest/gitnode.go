@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
@@ -136,8 +137,17 @@ type GitOptions struct {
 	// dead one.
 	Estate host.Estate
 	// Reads answers Node.Read, through the same seam the node's routes would
-	// read the code host by.
+	// read the code host by — the compactor's due listing among its reads.
 	Reads func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
+	// Compactions is what the node's compactor proposes a compaction to: the
+	// repository's committer, through whatever data node serves now, read
+	// again at every call — the engine hands its compactor the router's code
+	// seam, whose Compact this is.
+	Compactions func(context.Context, code.CompactionProposal) (code.CompactResult, error)
+	// Homes is whether the node is a repository's home, as its compactor
+	// asks: the node's own router in every topology, as the engine hands its
+	// compactor the router — or a fixed answer a case hands it (SplitHomes).
+	Homes compact.Homes
 	// Objects is the object store's backend for each incarnation: asked
 	// again at every start, because a backend riding a broker connection
 	// dies with a member's restart.
@@ -226,8 +236,12 @@ type gitIncarnation struct {
 	host    *host.Server
 	share   *code.GitShare
 	query   *query.Server
-	srv     *httptest.Server
-	reads   func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
+	// compactor is built as the engine builds a git node's and NEVER
+	// STARTED: every case drives Compact or Poll itself, so no case races a
+	// pass of its own.
+	compactor *compact.Compactor
+	srv       *httptest.Server
+	reads     func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
 }
 
 func (n *gitIncarnation) ID() string                 { return n.id }
@@ -239,6 +253,9 @@ func (n *gitIncarnation) Pool() *gitproc.Pool        { return n.pool }
 func (n *gitIncarnation) Metrics() *metrics.Recorder { return n.metrics }
 func (n *gitIncarnation) CacheDir() string           { return n.dir }
 func (n *gitIncarnation) Share() *code.GitShare      { return n.share }
+func (n *gitIncarnation) Compactor() *compact.Compactor {
+	return n.compactor
+}
 func (n *gitIncarnation) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return n.reads(ctx, q)
 }
@@ -250,10 +267,10 @@ func (n *gitIncarnation) GitRead(ctx context.Context, q code.GitQuery) (code.Git
 func StartGitNode(t testing.TB, o GitOptions) *GitNode {
 	t.Helper()
 	switch {
-	case o.ID == "" || o.Dir == "" || o.Estate == nil || o.Reads == nil || o.Objects == nil ||
-		o.Credentials == nil:
-		t.Fatalf("codetest: a git node needs an id, a directory, an estate, its reads, its objects "+
-			"and its credentials (%+v)", o)
+	case o.ID == "" || o.Dir == "" || o.Estate == nil || o.Reads == nil || o.Compactions == nil ||
+		o.Homes == nil || o.Objects == nil || o.Credentials == nil:
+		t.Fatalf("codetest: a git node needs an id, a directory, an estate, its reads, its compactions, "+
+			"its homes, its objects and its credentials (%+v)", o)
 	}
 	if o.Faults == nil {
 		o.Faults = &codefault.Script{}
@@ -349,6 +366,14 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	if n.query, err = query.New(query.Options{NodeID: n.id, Cache: n.cache, Git: reads, Share: n.share,
 		Roster: roster, Current: g.o.Current, Fetched: fetched}); err != nil {
 		t.Fatalf("codetest: build %s's query server: %v", n.id, err)
+	}
+	// THE COMPACTOR, as the engine builds it after the host has started: over
+	// the node's cache and store, listing through the node's reads and
+	// proposing through its compactions.
+	if n.compactor, err = compact.New(compact.Options{Cache: n.cache, Objects: objects,
+		Estate: compactions{read: g.o.Reads, compact: g.o.Compactions}, Homes: g.o.Homes, NodeID: n.id,
+		Limits: limits, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger}); err != nil {
+		t.Fatalf("codetest: build %s's compactor: %v", n.id, err)
 	}
 	mux := http.NewServeMux()
 	mux.Handle(host.PatternInfoRefs, n.host.InfoRefs())
@@ -454,6 +479,7 @@ func (g *GitNode) Kill() {
 	}
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
+	n.compactor.Stop(ended)
 	n.srv.Listener.Close()
 	n.srv.CloseClientConnections()
 	n.query.Stop(ended)
@@ -487,6 +513,7 @@ func (g *GitNode) Stop(drain context.Context) {
 	}
 	stop, cancel := context.WithTimeout(context.WithoutCancel(drain), host.StopBudget)
 	defer cancel()
+	n.compactor.Stop(stop)
 	n.query.Stop(stop)
 	n.host.Stop(stop)
 	n.srv.CloseClientConnections()
@@ -521,10 +548,27 @@ func (g *GitNode) teardown() {
 	g.cur, g.dead, g.killed = nil, nil, nil
 	g.mu.Unlock()
 	for _, n := range nodes {
+		n.compactor.Stop(context.Background())
 		n.query.Stop(context.Background())
 		n.host.Stop(context.Background())
 		n.srv.Close()
 	}
+}
+
+// compactions is a git node's code log as its compactor reaches it
+// (compact.Estate): the due listing through the node's reads, the proposal
+// through its compactions.
+type compactions struct {
+	read    func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
+	compact func(context.Context, code.CompactionProposal) (code.CompactResult, error)
+}
+
+func (c compactions) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	return c.read(ctx, q)
+}
+
+func (c compactions) Compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+	return c.compact(ctx, p)
 }
 
 // serverLog is a git node's HTTP server's error log: A HANDLER THAT PANICS

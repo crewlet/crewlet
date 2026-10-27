@@ -476,6 +476,18 @@ var cacheWriters = []writerRow{
 			"the chain HARD-LINKED from the incarnation it replaces — the same inodes, written by nothing " +
 			"here — and the whole renamed into repos/ under its number; its state goes through durable.go, " +
 			"the memo's tree moves whole through memo.go, and the chain is placed through layers.go", nil},
+	{"internal/code/cache/compaction.go", kindRuntime,
+		"Compacting.Run hands a compaction's build — internal/code/compact's pack-objects literal, which its own " +
+			"row judges — unchanged to the maintenance slot its admission reserved (gitproc.Reserved.Run): the " +
+			"build runs in its own scratch, never in an incarnation", nil},
+	{"internal/code/compact/build.go", kindGit + " pack-objects",
+		"a compaction's build: ONE `pack-objects --stdin-packs` in the compaction's own SCRATCH " +
+			"(cache.NewScratch), its inputs read through the scratch's one alternate — the incarnation — and its " +
+			"outputs written into the scratch alone, never an incarnation; the outputs enter the cache only by " +
+			"Adopt, once their rows have applied", nil},
+	{"internal/code/compact/compactor.go", kindRuntime,
+		"runInSlot hands the build's one Cmd — build.go's pack-objects literal — to the admission's reserved slot " +
+			"(cache.Compacting.Run), unchanged: a function value, so a suite can stand in a builder", nil},
 	{"internal/code/host/receive.go", kindGit + " receive-pack",
 		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
 			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +

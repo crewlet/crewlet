@@ -68,6 +68,15 @@ type Cluster interface {
 	// the code log, and every router's memory of a member that refused or
 	// went silent lapsed, as the half minute a router keeps it does.
 	Settle(ctx context.Context) error
+	// SplitHomes has every member of nodes take itself for repoID's home —
+	// its compactor's Homes answering yes — until the case ends: a presence
+	// view split between them, which no lease or epoch arbitrates
+	// (ADR-0059), so each compacts the repository as its home.
+	SplitHomes(t testing.TB, repoID string, nodes ...string)
+	// ProposeCompactionAgain asks member node's router to decide, again, the
+	// last compaction a member's compactor proposed of repoID, under its own
+	// compaction id — as a compactor whose answer came back late asks again.
+	ProposeCompactionAgain(ctx context.Context, node, repoID string) (code.CompactResult, error)
 }
 
 // RunFleet runs every case only a fleet of data nodes can make, IN ORDER ON
@@ -155,6 +164,9 @@ func fleetCases() []fleetCase {
 		{"R7_AnEvictedCommittersRepositoriesAreCommittedByTheirRunnerUp",
 			anEvictedCommittersRepositoriesAreCommittedByTheirRunnerUp},
 		{"F21_ACrashAtEveryPushStepLeavesATruthfulStateOnAFleet", aCrashAtEveryPushStepOnAFleet},
+		{"F28_TwoHomesLandOneCompaction", twoHomesLandOneCompaction},
+		{"F29_ACompactionFailsOverToTheRunnerUpCommitter", aCompactionFailsOverToTheRunnerUpCommitter},
+		{"F30_ACompactionAnsweredLateIsCollapsed", aCompactionAnsweredLateIsCollapsed},
 	}
 }
 

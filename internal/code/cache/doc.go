@@ -145,9 +145,10 @@
 // A full round that leaves [MidxRoundPacks] or more packs and no
 // multi-pack-index writes one over exactly those packs — without a bitmap, a
 // merge of the packs' own indexes — before its refs' peel reads them and
-// before it answers: one push is one pack and nothing compacts them, and the
-// request a cold cache was synced for would otherwise be served by git
-// searching every pack's index for every object. Under that count the index
+// before it answers: one push is one pack until the repository's home merges
+// them (internal/code/compact), and the request a cold cache was synced for
+// would otherwise be served by git searching every pack's index for every
+// object. Under that count the index
 // costs the cold request more than it saves it (Measured, below), so the
 // round answers without one, and the maintainer's follows once the packs
 // have stood still and the runs queued before it have ended — on four cores
@@ -197,9 +198,10 @@
 // reason: over it, the repositories used least recently go first, each a
 // directory renamed into trash/ for the janitor; under it, nothing goes,
 // however long a repository has been idle. An idle repository costs disk the
-// budget already bounds, while evicting it costs a GET a push the next time
-// anybody fetches it — nothing compacts its packs — and a cache older than the
-// rows' tombstone horizon is brought forward by a whole read that reuses every
+// budget already bounds, while evicting it costs a GET a live pack the next
+// time anybody fetches it — a pack a push until its home merges them — and a
+// cache older than the rows' tombstone horizon is brought forward by a whole
+// read that reuses every
 // pack it holds. A repository a request holds is never evicted, even over the
 // budget: it is served, and goes as soon as its last reader — or its
 // maintenance run — lets go. The budget counts everything the cache holds on
@@ -952,10 +954,10 @@
 // file no row names that no retirement accounts for — a log gone back, a row
 // gone with no record retiring it. Neither leaves a copy a reader may hold IN
 // PLACE: git opens a pack lazily, part way through a run, so no pin of a file
-// could say which a running process will touch. The round applies to its end
-// on the incarnation it holds, and then SWAPS it (swap.go): the next
-// incarnation is staged under scratch/ by HARD LINKS of every pack the live
-// rows still name (the live set, kept by every round), HEAD, config, the
+// could say which a running process will touch (ADR-0060). The round applies
+// to its end on the incarnation it holds, and then SWAPS it (swap.go): the
+// next incarnation is staged under scratch/ by HARD LINKS of every pack the
+// live rows still name (the live set, kept by every round), HEAD, config, the
 // packed-refs and each derived file the events of what leaves keep — a
 // retirement keeps the commit-graph (X04: a merge drops no commit), a pack no
 // retirement accounts for drops it, and both drop the multi-pack-index over

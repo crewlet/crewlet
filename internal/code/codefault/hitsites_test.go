@@ -22,8 +22,10 @@ const codefaultPath = "github.com/crewlet/crewlet/internal/code/codefault"
 
 // hitDirs are the directories the points are hit in: the code host's
 // pipeline and the suite's wrapping publisher that hits the committer's — a
-// push's — and the cache, whose sync hits the rest.
-var hitDirs = []string{"internal/code/host", "internal/code/codetest", "internal/code/cache"}
+// push's — the cache, whose sync hits its own, and the compactor, which hits
+// the compaction's.
+var hitDirs = []string{"internal/code/host", "internal/code/codetest", "internal/code/cache",
+	"internal/code/compact"}
 
 // hitSites counts, over the non-test Go files under each of dirs, every call
 // whose function is a selector named `fault` or `Hit` and whose second argument
@@ -94,6 +96,8 @@ var pointNames = map[string]codefault.Point{
 	"HostBeforeAdopt": codefault.HostBeforeAdopt, "HostHookClose": codefault.HostHookClose,
 	"SyncDownload": codefault.SyncDownload, "SyncRefs": codefault.SyncRefs, "SyncState": codefault.SyncState,
 	"SyncSwapBeforeRename": codefault.SyncSwapBeforeRename, "InstallAfterFetch": codefault.InstallAfterFetch,
+	"CompactAfterBuild": codefault.CompactAfterBuild, "CompactUpload": codefault.CompactUpload,
+	"CompactAfterUpload": codefault.CompactAfterUpload, "CompactAfterPropose": codefault.CompactAfterPropose,
 }
 
 // byPoint is counts keyed by identifier, read as points.
@@ -115,10 +119,12 @@ func byPoint(t *testing.T, counts map[codefault.Point]int) map[codefault.Point]i
 }
 
 // A fault point is ONE step, named once: F21 kills the node at every point
-// of PushPath(), and a cache case holds a sync — or crashes it — at each of
-// the sync's, so a point hit at two sites fires at whichever runs first and
-// a point hit at none is a fault no case can make — the swap's rename among
-// them, which a case copies the disk at as a crash would leave it.
+// of PushPath(), C6 the home at every point of CompactPath(), and a cache
+// case holds a sync — or crashes it — at each of the sync's, so a point hit at
+// two sites fires at whichever runs first and a point hit at none is a fault
+// no case can make — the swap's rename among them, which a case copies the
+// disk at as a crash would leave it. The two upload points are each hit in
+// the one closure their caller hands code.StoreBundle.
 func TestEveryPointHasOneHitSite(t *testing.T) {
 	root := sourcetree.Root(t)
 	dirs := make([]string, len(hitDirs))

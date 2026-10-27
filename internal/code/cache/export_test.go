@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -193,6 +194,20 @@ func AdoptionSyncFails(o *Options, err error) {
 		o.knobs = &knobs{}
 	}
 	o.knobs.adoptSync = func(string) error { return err }
+}
+
+// AdoptionSyncsCounted makes every adoption's directory sync count itself in
+// *n, under mu, before it syncs the directory as the cache would.
+func AdoptionSyncsCounted(o *Options, mu *sync.Mutex, n *int) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.adoptSync = func(dir string) error {
+		mu.Lock()
+		*n++
+		mu.Unlock()
+		return syncDir(dir)
+	}
 }
 
 // MaintainerPass runs one maintainer pass as work of the cache's own (a

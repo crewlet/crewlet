@@ -739,6 +739,66 @@ func Catalogue() []Instrument {
 				"stay in the store meanwhile. No repository is an attribute — which one is hot is " +
 				"a question for its rows, not a time series a repository.",
 		},
+		{
+			Name: CodeCompactRuns, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Compactions this node made as the HOME git node of their " +
+				"repositories — each a plan over a repository's live packs, and " +
+				"what became of it, by `outcome`. `applied`: its record landed and " +
+				"its outputs replaced its inputs. `pending`, `unknown`: its record " +
+				"was appended and is not yet known to have applied — the next poll " +
+				"reads the rows. `not_due`: the plan found nothing worth merging, " +
+				"and the repository is not planned again until its row moves. " +
+				"`stale`: another compaction, or a purge, moved an input first. " +
+				"`busy`: no maintenance slot or no memory room was free, or the " +
+				"repository's committer was busy. `refused`: by the committer or " +
+				"before it (`crewlet.code.compact.refusals` says why). `failed`: " +
+				"the build, an upload or the answer failed " +
+				"(`code_compaction_failed` names which). Every outcome but " +
+				"`applied` is tried again at a later poll. `applied` keeping pace " +
+				"with the pushes is a node keeping its repositories' pack counts " +
+				"bounded; `failed` rising is its disk, its git or its object store.",
+		},
+		{
+			Name: CodeCompactDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "One compaction from its plan to its answer, by `outcome` (as " +
+				"`crewlet.code.compact.runs` counts them): the sync, the plan, the " +
+				"build, every output's upload and the committer's decide. A merge " +
+				"of a few small packs takes under a second; one of several " +
+				"gigabytes, minutes of its build and of the store's pace. " +
+				"`applied` durations rising while the pushes hold steady are a " +
+				"home node short of the CPU its builds run on, or of the bandwidth " +
+				"to its object store.",
+		},
+		{
+			Name: CodeCompactRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Compactions refused before or at their decide, by `reason`. " +
+				"This node's own: `memory`, the build's charge past what the node " +
+				"can give its background work (`code_cache_compaction_refused` " +
+				"names it, and nothing is built); `store_full`, an object store " +
+				"with no room for an output (the repository is held back until " +
+				"the store shows the room — on a store that reserves nothing, " +
+				"tried again once an hour, as the collector frees room); " +
+				"`outputs`, a build that wrote more packs than one compaction may " +
+				"record, and `bundle_too_large`, an output's bundle past the bound " +
+				"even at a smaller cut — either uploads nothing and halves what " +
+				"the repository's next plan merges. The committer's: `stale`, " +
+				"`busy`, `repo_deleted`, `upload_expired`, `pack_too_large`, " +
+				"`not_applied` and `unavailable`, as for a push. " +
+				"`upload_expired` is a build and its uploads longer than the " +
+				"twelve hours a key may wait to be named, `pack_too_large` the " +
+				"builder's bug: each is logged by name.",
+		},
+		{
+			Name: CodeCompactBehind, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Repositories this node compacts that its last pass found at " +
+				"the most live packs a repository may hold, whose pushes carrying " +
+				"objects are refused `compaction_behind` until a compaction lands: " +
+				"`code_compaction_behind` fires on any. Zero on a node that is the " +
+				"home of no such repository.",
+		},
 		// ---- git ------------------------------------------------------
 		{
 			Name: CodeCacheAdoptions, Kind: KindCounter, Unit: UnitCount,
@@ -1058,9 +1118,15 @@ func Catalogue() []Instrument {
 				"its packs' own indexes, a round's index included; `graph` " +
 				"(56): its walks go by date, and a push of a commit dated " +
 				"before its parent walks every commit. Slower, never wrong. " +
-				"Rising is repositories outgrowing the node; the " +
-				"code_maintenance_refused alarm stands while any bitmap is " +
-				"refused.",
+				"`compact` (300 bytes an object of the packs merged, beside " +
+				"the clone's room and twice max_blob_bytes for the build's " +
+				"delta window): the repository's home cannot merge its small " +
+				"packs, so its pack count grows with its pushes until a git " +
+				"node with more memory is its home or this one is given more " +
+				"— and at the pack bound its pushes are refused, which " +
+				"code_compaction_behind raises. Rising is repositories " +
+				"outgrowing the node; the code_maintenance_refused alarm " +
+				"stands while any bitmap is refused.",
 		},
 		{
 			Name: CodeCacheMaintenanceRefused, Kind: KindGauge, Unit: UnitCount,

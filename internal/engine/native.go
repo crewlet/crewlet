@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
@@ -159,6 +160,14 @@ type native struct {
 	// ([Engine.codeReading]) — what a node's maintenance refused is no
 	// request's question, so no route reaches it through the host.
 	gitCache *cache.Cache
+
+	// compactor merges the packs of the repositories this node is the home
+	// git node of (internal/code/compact), built and started with codeHost
+	// and nil where it is; stopped first in the code host's one bounded
+	// stop. A CONCRETE type, never an interface this package declares,
+	// because the alarm reading's producers gate follows a call only
+	// through one ([Engine.codeReading]).
+	compactor *codecompact.Compactor
 
 	// gitCacheSize is how this node sized gitCache when it built the host —
 	// what [Engine.warnTiers] compares with each applied epoch's repository
@@ -398,6 +407,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			}
 			n.codeHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
 				parts.size
+			n.compactor = parts.compactor
 			n.withdrawCodeStatus = parts.withdrawStatus
 		}
 	}

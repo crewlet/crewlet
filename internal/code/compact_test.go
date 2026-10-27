@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -825,6 +826,113 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 		q.Cursor = "not-a-cursor"
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrBadCursor) {
 			t.Fatalf("a %s listing with a cursor it never issued: %v, want ErrBadCursor", q.Kind, err)
+		}
+	}
+}
+
+// A COMPACTION IS CHECKED UNSTORED AS IT WILL BE STORED: ValidateUnstored
+// answers what Validate answers once every output's put has filled in its key
+// and digest — a compaction both take, one writing more outputs than a
+// compaction records both refuse, an output whose sizes lay out no bundle
+// both refuse — so the git node that built one holds it to every rule its
+// committer will before a byte of it is uploaded (internal/code/compact). An
+// output already stored is refused: Validate is the check of that.
+//
+// Mutation: hold the outputs to Validate as they stand — no key, no digest —
+// rather than as they will be stored, and the compaction both take is refused
+// unstored.
+func TestAnUnstoredCompactionIsCheckedAsItWillBeStored(t *testing.T) {
+	t.Parallel()
+	cid := statelog.NewOpID(time.Now(), "")
+	stored := code.CompactionProposal{Compaction: code.Compaction{
+		RepoID: uuid.NewString(), CompactionID: cid, Node: "node-a",
+		Seen:   statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 9},
+		Retire: sorted(uuid.NewString(), uuid.NewString(), uuid.NewString()),
+		Add:    []code.PackRef{compactOutput(cid, 0, 2, harnessAt)},
+	}}
+	unstored := func(p code.CompactionProposal) code.CompactionProposal {
+		add := slices.Clone(p.Compaction.Add)
+		for i := range add {
+			add[i].Object, add[i].Hash = objstore.Key{}, ""
+		}
+		p.Compaction.Add = add
+		return p
+	}
+	if err := stored.Validate(); err != nil {
+		t.Fatalf("the stored compaction the case builds is refused: %v", err)
+	}
+	if err := unstored(stored).ValidateUnstored(); err != nil {
+		t.Errorf("an unstored compaction whose stored form validates: %v", err)
+	}
+	if err := stored.ValidateUnstored(); !errors.Is(err, code.ErrInvalidProposal) {
+		t.Errorf("ValidateUnstored of a stored output: %v, want ErrInvalidProposal", err)
+	}
+
+	badSizes := stored
+	badSizes.Compaction.Add = slices.Clone(stored.Compaction.Add)
+	badSizes.Compaction.Add[0].IndexBytes++
+	tooMany := stored
+	tooMany.Compaction.Retire, tooMany.Compaction.Add = nil, nil
+	for i := range code.MaxCompactOutputs + 1 {
+		tooMany.Compaction.Retire = append(tooMany.Compaction.Retire, uuid.NewString())
+		tooMany.Compaction.Add = append(tooMany.Compaction.Add, compactOutput(cid, i, 2, harnessAt))
+	}
+	slices.Sort(tooMany.Compaction.Retire)
+	for name, p := range map[string]code.CompactionProposal{
+		"an output laying out no bundle":        badSizes,
+		"more outputs than a compaction writes": tooMany,
+	} {
+		stored, unstored := p.Validate(), unstored(p).ValidateUnstored()
+		if stored == nil || unstored == nil || stored.Error() != unstored.Error() {
+			t.Errorf("%s: stored %v, unstored %v — want one refusal", name, stored, unstored)
+		}
+	}
+}
+
+// A PACK IS FULL AT ITS CUT, SCALED: FullAt at the production cut is Full — a
+// pack section at FullPackBytes, or a bundle at FullBundleBytes — and at a
+// smaller cut both bounds scale by that cut's share of CompactPackBytes, so an
+// output of a suite's cut, built over mebibytes (internal/code/compact's test
+// knob), is full by the rule production's outputs are, and a plan made at that
+// cut never merges it again.
+//
+// Mutation: hold FullAt to the production bounds whatever its cut, and no
+// output of a scaled cut is ever full.
+func TestAPackIsFullAtItsCutScaled(t *testing.T) {
+	t.Parallel()
+	const scaled = 4 << 20
+	// row is a pack of pack bytes in a bundle of bundle bytes, its indexes
+	// the rest.
+	row := func(pack, bundle int64) code.PackRow {
+		return code.PackRow{PackID: "p", Size: bundle, IndexBytes: bundle - pack, GitChecksum: oidOf("p"),
+			Objects: 1}
+	}
+	fullPack := code.FullPackBytes / (code.CompactPackBytes / scaled)
+	for name, tc := range map[string]struct {
+		row code.PackRow
+		cut int64
+		// full is Full's answer, and fullAt FullAt's at cut.
+		full, fullAt bool
+	}{
+		"a pack section at the bound": {row(code.FullPackBytes, code.FullPackBytes+64), code.CompactPackBytes,
+			true, true},
+		"a pack section a byte under": {row(code.FullPackBytes-1, code.FullPackBytes-1), code.CompactPackBytes,
+			false, false},
+		"a bundle at the bound": {row(code.FullPackBytes/2, code.FullBundleBytes), code.CompactPackBytes,
+			true, true},
+		"a scaled pack section at its bound": {row(fullPack, fullPack+64), scaled, false, true},
+		"a scaled pack a byte under":         {row(fullPack-1, fullPack-1), scaled, false, false},
+		"a scaled bundle at its bound":       {row(fullPack/2, fullPack), scaled, false, true},
+	} {
+		if got := tc.row.Full(); got != tc.full {
+			t.Errorf("%s: Full = %v, want %v", name, got, tc.full)
+		}
+		if got := tc.row.FullAt(code.CompactPackBytes); got != tc.row.Full() {
+			t.Errorf("%s: FullAt the production cut = %v and Full %v — want one rule", name, got,
+				tc.row.Full())
+		}
+		if got := tc.row.FullAt(tc.cut); got != tc.fullAt {
+			t.Errorf("%s: FullAt(%d) = %v, want %v", name, tc.cut, got, tc.fullAt)
 		}
 	}
 }

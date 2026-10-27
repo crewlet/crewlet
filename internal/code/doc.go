@@ -631,7 +631,7 @@
 //     ([RetiredPackReferences], ADR-0051) that keeps its object from the
 //     collector and does nothing else, for longer than the longest legal read
 //     of the largest bundle a row can name — so a reader that began on the
-//     pack before its retirement finishes it. Like a purge it is no record's
+//     pack before its retirement finishes it (ADR-0060). Like a purge it is no record's
 //     own horizon, so the code-retention duty's pass sweeps it, before it
 //     purges anything ([Store.RetireSweep]): a retire_sweep record removes,
 //     oldest first, the rows whose broker instant the duty's clock puts past
@@ -660,11 +660,13 @@
 //
 // Every push stores a pack, so a busy repository's pack count grows with its
 // pushes, and every cold sync pays a GET a pack and every request a lookup a
-// pack. A COMPACTION merges some of them into fewer: a git node builds the
-// outputs, stores each as one bundle and proposes ONE record — OpCompact on
-// the repository's subject ([Compaction]), naming the packs it retires and
-// the rows of the outputs it adds — which the repository's committer decides
-// ([Committer.ProposeCompaction]).
+// pack. A COMPACTION merges some of them into fewer: the repository's HOME git
+// node (internal/code/compact, ADR-0059) builds the outputs, stores each as one
+// bundle and proposes ONE record — OpCompact on the repository's subject
+// ([Compaction]), naming the packs it retires and the rows of the outputs it
+// adds — which the repository's committer decides
+// ([Committer.ProposeCompaction]). Merged without judging reachability and
+// retired for longer than the longest read: ADR-0060.
 //
 // IN THE PUSHES' QUEUE, DECIDED ALONE: a compaction waits in the repository's
 // one committer queue in its arrival order, held to a push's bounds there —
@@ -697,11 +699,11 @@
 // object for [RetireGrace] (the RETIRED PACKS horizon above), so a reader
 // that began on it before the compaction finishes it.
 //
-// A MERGE MAKES NO REACHABILITY JUDGEMENT: every object of the inputs is in
-// the outputs, so a push decided against the inputs never lands a ref whose
-// closure a compaction removed, and two compactions planned from different
-// snapshots never each drop what the other relied on. Removing what no ref
-// reaches is no compaction's to do.
+// A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0060): every object of the
+// inputs is in the outputs, so a push decided against the inputs never lands a
+// ref whose closure a compaction removed, and two compactions planned from
+// different snapshots never each drop what the other relied on. Removing what
+// no ref reaches is no compaction's to do.
 //
 // ITS BOUNDS, each with its reason where it is defined: at most
 // [MaxCompactInputs] (1 024) inputs and [MaxCompactOutputs] (16) outputs, so

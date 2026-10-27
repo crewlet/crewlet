@@ -44,13 +44,14 @@ import (
 // and an adopted pack counted where their incarnation is (sizeUnder's
 // soleNames).
 
-// Scratch is a repository a push's receive-pack runs in (NewScratch), or an
-// advertisement view (AdvertiseView). It pins the incarnation it leans on
-// until Remove: its alternate must outlive the push, so the budget never
-// evicts it from under one.
+// Scratch is a repository a push's receive-pack runs in, or a compaction's
+// pack-objects writes its outputs into (NewScratch), or an advertisement view
+// (AdvertiseView). It pins the incarnation it leans on until Remove: its
+// alternate must outlive the push or the build, so the budget never evicts it
+// from under one.
 type Scratch struct {
-	// Dir is the repository: absolute and clean, scratch/<push-id>.git or
-	// scratch/adv-<uuid>.git.
+	// Dir is the repository: absolute and clean, scratch/<id>.git — a push's
+	// id, or a compaction's — or scratch/adv-<uuid>.git.
 	Dir string
 	// Alternate is the incarnation it leans on, whose objects its one
 	// alternates line names: what every git process run in it names as its
@@ -66,23 +67,25 @@ type Scratch struct {
 	remove func()
 }
 
-// NewScratch makes the repository a push's receive-pack runs in: HEAD the
-// bytes of s's, the pool's config, refs/heads/ and refs/tags/ EMPTY, and one
-// alternate — s's objects — so a thin pack is completed and checked against
-// the cache without a byte of it entering the cache. It pins s's incarnation
-// until Remove. pushID names it — a canonical lowercase UUID, since it is a
-// path component — and a push id names one scratch, once. Its receive-pack
-// NEVER runs with [Cache.AdvertiseConfig]: the alternate's refs are the
-// only negative tips of its connectivity check.
-func (c *Cache) NewScratch(ctx context.Context, s Synced, pushID string) (*Scratch, error) {
+// NewScratch makes the repository a push's receive-pack runs in, or a
+// compaction's pack-objects writes its outputs into: HEAD the bytes of s's,
+// the pool's config, refs/heads/ and refs/tags/ EMPTY, and one alternate —
+// s's objects — so a thin pack is completed and checked against the cache, and
+// a compaction's inputs are read from it, without a byte of either entering
+// the cache. It pins s's incarnation until Remove. id names it — the push's
+// id, or the compaction's: a canonical lowercase UUID, since it is a path
+// component — and an id names one scratch, once. Its receive-pack NEVER runs
+// with [Cache.AdvertiseConfig]: the alternate's refs are the only negative
+// tips of its connectivity check.
+func (c *Cache) NewScratch(ctx context.Context, s Synced, id string) (*Scratch, error) {
 	if err := c.handedOut(s, "a scratch"); err != nil {
 		return nil, err
 	}
-	if !canonicalID(pushID) {
-		return nil, fmt.Errorf("%w: push id %q is not a canonical lowercase UUID (it becomes a path component)",
-			ErrInvalid, pushID)
+	if !canonicalID(id) {
+		return nil, fmt.Errorf("%w: scratch id %q is not a canonical lowercase UUID (it becomes a path component)",
+			ErrInvalid, id)
 	}
-	return c.newScratch(ctx, s, pushID+".git", false)
+	return c.newScratch(ctx, s, id+".git", false)
 }
 
 // AdvertiseView is NewScratch for a push's ADVERTISEMENT: its packed-refs is
@@ -169,17 +172,21 @@ func (s *Scratch) fill(from string) error {
 	return nil
 }
 
-// Pack is the one pack receive-pack wrote into the scratch — the .pack's path
-// and its checksum — or ok false when the push carried no objects. A pack is
-// present once its .idx is, git's own rule; an .idx without its .pack, or
-// more than one pack, is an error naming them: receive-pack keeps every push
-// as ONE pack (receive.unpackLimit=1), so either is a scratch something else
-// wrote into.
-func (s *Scratch) Pack() (path, checksum string, ok bool, err error) {
+// ScratchPack is one pack a scratch holds: its .pack's path and its checksum,
+// the name git gave it.
+type ScratchPack struct {
+	Path, Checksum string
+}
+
+// Packs is every pack the scratch holds, sorted by checksum — what a
+// compaction's pack-objects wrote, one pack an output. A pack is present once
+// its .idx is, git's own rule; an .idx without its .pack is an error naming
+// it, since the writer that left it is not one that finished.
+func (s *Scratch) Packs() ([]ScratchPack, error) {
 	packDir := filepath.Join(s.Dir, "objects", "pack")
 	list, err := os.ReadDir(packDir)
 	if err != nil {
-		return "", "", false, fmt.Errorf("cache: listing %s: %w", packDir, err)
+		return nil, fmt.Errorf("cache: listing %s: %w", packDir, err)
 	}
 	have := map[string]bool{}
 	var indexes []string
@@ -189,20 +196,38 @@ func (s *Scratch) Pack() (path, checksum string, ok bool, err error) {
 			indexes = append(indexes, m[1])
 		}
 	}
-	switch len(indexes) {
-	case 0:
+	slices.Sort(indexes)
+	out := make([]ScratchPack, 0, len(indexes))
+	for _, cs := range indexes {
+		if !have["pack-"+cs+".pack"] {
+			return nil, fmt.Errorf("cache: %s holds pack-%s.idx without its .pack", packDir, cs)
+		}
+		out = append(out, ScratchPack{Path: filepath.Join(packDir, "pack-"+cs+".pack"), Checksum: cs})
+	}
+	return out, nil
+}
+
+// Pack is the one pack receive-pack wrote into the scratch — the .pack's path
+// and its checksum — or ok false when the push carried no objects: [Scratch.Packs]
+// held to a push's one. More than one pack is an error naming them:
+// receive-pack keeps every push as ONE pack (receive.unpackLimit=1), so a push's
+// scratch holding two is one something else wrote into.
+func (s *Scratch) Pack() (path, checksum string, ok bool, err error) {
+	packs, err := s.Packs()
+	switch {
+	case err != nil:
+		return "", "", false, err
+	case len(packs) == 0:
 		return "", "", false, nil
-	case 1:
-	default:
-		slices.Sort(indexes)
+	case len(packs) > 1:
+		names := make([]string, len(packs))
+		for i, p := range packs {
+			names[i] = p.Checksum
+		}
 		return "", "", false, fmt.Errorf("cache: %s holds %d packs (pack-%s), and a push is one",
-			packDir, len(indexes), strings.Join(indexes, ", pack-"))
+			filepath.Join(s.Dir, "objects", "pack"), len(packs), strings.Join(names, ", pack-"))
 	}
-	cs := indexes[0]
-	if !have["pack-"+cs+".pack"] {
-		return "", "", false, fmt.Errorf("cache: %s holds pack-%s.idx without its .pack", packDir, cs)
-	}
-	return filepath.Join(packDir, "pack-"+cs+".pack"), cs, true, nil
+	return packs[0].Path, packs[0].Checksum, true, nil
 }
 
 // Remove moves the scratch into trash/ and gives its pin back: once, however

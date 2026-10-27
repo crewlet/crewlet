@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
@@ -544,6 +545,79 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 	}
 	if !strings.HasPrefix(detail, "1 repository(ies)") {
 		t.Errorf("the report's %s says %q, want the one repository the node holds", statelog.KindCodeMaintenanceRefused,
+			detail)
+	}
+}
+
+// atTheBound is a git node's compactor's code seam with every due listing
+// answered as naming one more repository, at the most live packs a repository
+// may hold — the reading a running node's compactor raises the alarm from,
+// shown it without two thousand packs pushed into a repository.
+type atTheBound struct{ codecompact.Estate }
+
+// boundRepo is the repository atTheBound names.
+const boundRepo = "at-the-bound"
+
+func (e atTheBound) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	if q.Kind != code.ReadCompactionDue {
+		return e.Estate.Read(ctx, q)
+	}
+	return code.ReadAnswer{Due: []code.CompactionCandidate{{
+		ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte(boundRepo)).String(), Name: boundRepo,
+		LivePacks: code.MaxPacksPerRepo,
+	}}}, nil
+}
+
+// THE COMPACTION-BEHIND ALARM FIRES ON ITS NODE, through the wiring a running
+// node has: a git node whose compactor's pass finds a repository it is home
+// for at the pack bound fills its alarm reading's compaction half, which the
+// retention loop's own reading carries into the alarm table — so
+// code_compaction_behind stands on that node, naming the repository, for as
+// long as its pushes would be refused.
+//
+// Mutation: leave the compactor's half out of the reading (codeReading), and
+// the alarm never fires.
+func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
+	t.Parallel()
+	b := gitNodeBootstrap(t, nil)
+	engine.RequireNodeGit(t, b, parsedCompany(t, gitCompany))
+	e, err := engine.New(t.Context(), engine.WithCompactorEstate(engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, gitCompany),
+		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+		GitHook:     codetest.HookCommand(t),
+	}, func(inner codecompact.Estate) codecompact.Estate { return atTheBound{inner} }))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
+
+	// THE COMPACTOR'S FIRST PASS, at the host's start, and an evaluation; and
+	// should the first pass have met a placement not yet read, the next pass
+	// a minute on. The rest is room for a loaded machine.
+	deadline := time.Now().Add(codecompact.Poll + statelog.AlarmInterval + time.Minute)
+	for {
+		kinds, _ := e.Alarms()
+		if slices.Contains(kinds, statelog.KindCodeCompactionBehind) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the node's alarms are %v with its compactor finding a repository at the pack bound, want %s",
+				kinds, statelog.KindCodeCompactionBehind)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	report, ok := e.RetentionReport(t.Context())
+	if !ok {
+		t.Fatal("a node evaluating alarms has no retention report")
+	}
+	var detail string
+	for _, a := range report.Alarms {
+		if a.Kind == statelog.KindCodeCompactionBehind {
+			detail = a.Detail
+		}
+	}
+	if !strings.Contains(detail, boundRepo) {
+		t.Errorf("the report's %s says %q, want the repository at the bound named", statelog.KindCodeCompactionBehind,
 			detail)
 	}
 }

@@ -195,6 +195,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			"2 repository(ies) on this node are served without a bitmap: the largest's needs about " +
 				"19.0 GiB, and the node can give its background work 1.0 GiB",
 		},
+		"repositories a home git node has not compacted to under the pack bound": {
+			statelog.KindCodeCompactionBehind,
+			statelog.Reading{CodeCompactionBehind: 2, CodeCompactionBehindLargest: 2_051,
+				CodeCompactionBehindRepo: "web"},
+			"2 repository(ies) this node compacts hold the most live packs a repository may — the most, " +
+				"web, holds 2051",
+		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,
 			statelog.Reading{ObjectiveBurns: burning(objectives.ArtifactReady, 90, 10)},
@@ -540,6 +547,40 @@ func TestTheCodeMaintenanceAlarmFiresPastTheNodesBudget(t *testing.T) {
 		_, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeMaintenanceRefused)
 		if fired != c.fires {
 			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+	}
+}
+
+// THE COMPACTION-BEHIND ALARM BORROWS THE PACK BOUND, never a number of its
+// own: the node's compactor counts the repositories it compacts that its
+// listing found AT the bound the push decide refuses at (code.MaxPacksPerRepo,
+// a package this framework does not import), and the rule fires at any count —
+// so a repository the compactor did not count, whatever its live packs, raises
+// nothing here. The largest a reading carries is a figure for the detail, and
+// a rule reading it against a threshold of its own — the pack count a
+// compaction aims for, say — would raise a repository a node merges routinely.
+//
+// Mutation: fire on the largest's count past a threshold of the rule's own
+// (fifty, the target), and the reading that counts nothing raises it.
+func TestTheCompactionBehindAlarmBorrowsThePackBound(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"one repository at the bound": {statelog.Reading{CodeCompactionBehind: 1,
+			CodeCompactionBehindLargest: 2_048, CodeCompactionBehindRepo: "web"}, true},
+		"a largest the compactor counted nothing at": {statelog.Reading{
+			CodeCompactionBehindLargest: 2_047, CodeCompactionBehindRepo: "web"}, false},
+		"a node that compacts nothing": {statelog.Reading{}, false},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeCompactionBehind)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+		if fired && !strings.Contains(alarm.Detail, c.reading.CodeCompactionBehindRepo) {
+			t.Errorf("%s: the detail %q names no repository, and an operator is told the node is behind "+
+				"on nothing they can find", name, alarm.Detail)
 		}
 	}
 }

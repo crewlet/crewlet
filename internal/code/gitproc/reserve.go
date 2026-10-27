@@ -16,14 +16,19 @@ import (
 // runs ([Reserved.Run]) runs in the slot it holds rather than asking the lane
 // again, until [Reserved.Release].
 //
-// IT EXISTS FOR ONE CALLER whose work before its process is the expensive
-// part: an operator's verify of a repository (internal/code/cache), which
-// reads and hashes every byte of every pack before its connectivity check.
-// Admitted only at the check, a busy node answered "run it again" after
+// IT EXISTS FOR TWO CALLERS whose work around their processes is the
+// expensive part. An operator's verify of a repository (internal/code/cache)
+// reads and hashes every byte of every pack before its connectivity check:
+// admitted only at the check, a busy node answered "run it again" after
 // reading up to the largest repository the defaults admit — twenty gibibytes —
 // and the retry read them all again for as long as a bitmap held the lane;
 // and nothing bounded how many such reads ran at once. Held from the start,
-// a refusal costs nothing, and the lane bounds them.
+// a refusal costs nothing, and the lane bounds them. A compaction's build
+// (internal/code/compact, admitted by the cache's AdmitCompaction) runs one
+// pack-objects and, where an output passes the bundle rule, ONE more at a
+// smaller cut: both in the slot it was admitted to, so the rebuild is never
+// refused a lane its own first build was holding, and the node's memory
+// charge it was admitted at covers both.
 //
 // THE MAINTENANCE LANE ALONE, because it is the one lane that never waits: a
 // reservation of a lane that queues would be a slot a waiting request queues

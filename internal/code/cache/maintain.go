@@ -149,7 +149,8 @@ import (
 // is the next run, never an interval.
 //
 // A FULL ROUND THAT LEAVES MANY PACKS INDEXES THEM BEFORE IT ANSWERS. One push
-// is one pack and nothing compacts them, so a repository reaches thousands;
+// is one pack until the repository's home merges them (internal/code/compact),
+// so a repository may reach thousands (code.MaxPacksPerRepo) between merges;
 // without a multi-pack-index every object lookup binary-searches each pack's
 // own .idx in turn, and the request a cold cache was synced for — a clone on a
 // node that just joined, the first fetch after a restart — would be served by
@@ -413,6 +414,9 @@ func (c *Cache) kickMaintainer() {
 // would each fit beside the runs in flight and refill the room as it
 // drained, and the repository first in the order — the one with the most
 // packs uncovered, often the largest — would wait for as long as they came.
+// The room STANDS until the next pass ends (maintFlight.standing), because a
+// compaction's build is a run admitted between passes (Cache.AdmitCompaction)
+// and would otherwise refill it the same way.
 //
 // The lane never waits: a run refused a slot at its first step — some other
 // process holds it — never started, records nothing and kicks nothing, and
@@ -481,6 +485,10 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 		started []*maintRun
 		held    reservation
 	)
+	// THE ROOM KEPT STANDS UNTIL THE NEXT PASS: a compaction, the one run
+	// admitted between passes, is admitted beside it (maintFlight.standing),
+	// and a pass that held nothing back leaves none standing.
+	defer func() { c.maint.setStanding(held) }()
 	for _, cand := range candidates {
 		if ctx.Err() != nil || c.life.Err() != nil {
 			break
@@ -523,15 +531,26 @@ func maintenanceRuns(slots int) int {
 
 // maintFlight is the cache's whole-repository work in flight against the
 // node's memory — the maintenance runs, each with its charge and a slot of
-// the lane, and the round's indexes and Verify's checks beside them, which
-// hold no slot of the maintainer's — and the budget all of it is held to
-// together (memory.go). Its lock is a leaf: taken under an entry's and the
-// memory's, never the other way round.
+// the lane (a compaction's build among them, Cache.AdmitCompaction), and the
+// round's indexes and Verify's checks beside them, which hold no slot of the
+// maintainer's — and the budget all of it is held to together (memory.go).
+// Its lock is a leaf: taken under an entry's and the memory's, never the other
+// way round.
 type maintFlight struct {
 	mu     sync.Mutex
 	budget int64
 	runs   []int64
 	others int64
+	// standing is the room the LATEST pass kept for the first repository it
+	// held back for memory (reservation), left standing until the next pass
+	// ends and sets its own: what a compaction, admitted between passes and
+	// not by one, is admitted beside. The pass's own runs it held back are
+	// started only by passes, so for them the pass's local reservation is the
+	// whole rule; a compaction is the one run started between passes, and
+	// admitted with no reservation it would take the room a pass promised
+	// the repository it held back, which the next pass would then hold back
+	// again — for as long as compactions kept coming.
+	standing reservation
 }
 
 // verdict is what admitting a charge decided.
@@ -589,6 +608,27 @@ func (f *maintFlight) budgetNow() int64 {
 func (f *maintFlight) admit(mem int64, most int, allowance int64, held reservation) verdict {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.admitLocked(mem, most, allowance, held)
+}
+
+// admitStanding is admit beside the room the latest pass kept standing
+// (maintFlight.standing), read under the same lock that admits: a compaction's
+// admission, which no pass makes.
+func (f *maintFlight) admitStanding(mem int64, most int, allowance int64) verdict {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.admitLocked(mem, most, allowance, f.standing)
+}
+
+// setStanding leaves held standing until the next pass sets its own.
+func (f *maintFlight) setStanding(held reservation) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.standing = held
+}
+
+// admitLocked is admit's rule; f.mu is held.
+func (f *maintFlight) admitLocked(mem int64, most int, allowance int64, held reservation) verdict {
 	runs := len(f.runs)
 	if held.on {
 		runs++

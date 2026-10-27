@@ -112,6 +112,15 @@ func cases() []suiteCase {
 		{"R4_ARestartSweepsScratch", aRestartSweepsScratch},
 		{"R6_APurgedRepositoryLeavesNothing", aPurgedRepositoryLeavesNothing},
 		{"R7_AnEvictedNodesPushesAreRefused", anEvictedNodesPushesAreRefused},
+		{"C1_ACompactionMergesPacksAndEveryCacheFollows", aCompactionMergesPacksAndEveryCacheFollows},
+		{"C2_CompactionDuringPush", aCompactionDuringAPush},
+		{"C3_CompactionDuringFetch", aCompactionDuringAFetch},
+		{"C4_ARetiredPackOutlivesItsLongestRead", aRetiredPackOutlivesItsLongestRead},
+		{"C5_CompactionBehindRefusesAPack", compactionBehindRefusesAPack},
+		{"C6_ACrashAtEveryCompactionStepLeavesATruthfulState", aCrashAtEveryCompactionStepLeavesATruthfulState},
+		{"C7_ACrashMidSwapLeavesTheOldIncarnation", aCrashMidSwapLeavesTheOldIncarnation},
+		{"C8_ARestartedNodeKeepsTheCommitGraphOfACompactedRepository",
+			aRestartedNodeKeepsTheCommitGraphOfACompactedRepository},
 	}
 }
 

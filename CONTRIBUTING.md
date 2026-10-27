@@ -710,7 +710,10 @@ process through the pool and the index-pack a push runs
 (`internal/code/gitproc`), the git cache's cold and delta syncs and a
 bundle's own file work, its index maintenance and what a request pays across
 many packs, a node's boot of its cache and what a directory sync costs a file
-(`internal/code/cache`), the code domain's applier, decide, reconcile and
+(`internal/code/cache`), a home git node's compaction of a repository's packs
+— its memory, the pushes a minute's poll keeps up with, the requests and bytes
+a fleet's git nodes pay for it, and a poll over thousands of repositories
+(`internal/code/compact`), the code domain's applier, decide, reconcile and
 snapshot reads and what one push's history costs every data node's disk
 (`internal/code`), the code host's commit chain on one and three members
 (`internal/code/codecluster`), a person's push, a warm fetch, and cold and
@@ -730,7 +733,7 @@ each, on one idle machine, and read the two outputs with
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/code/query`, `internal/usage`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
+| `BENCH_PKGS` | `internal/objstore`, its three backends, `internal/objstore/natsobj/replicated`, `internal/statelog`, `internal/store`, `internal/jsapi`, `internal/coord/kv`, `internal/code/gitproc`, `internal/code/cache`, `internal/code/compact`, `internal/code`, `internal/code/codecluster`, `internal/code/host`, `internal/code/query`, `internal/usage`, `internal/api/paced`, `cmd/crewlet` | which packages are measured |
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |

@@ -487,8 +487,13 @@ var allowedConfig = map[string]string{
 	"pack.allowpackreuse": "the cache's serve configuration: `single` — the bitmap's preferred pack sent " +
 		"verbatim and every other object packed as pack-objects packs any (a stored delta reused, a whole " +
 		"copy searched for a delta), which sends a cache's clones fewer bytes than `multi`",
-	"pack.windowmemory": "the cache's serve configuration",
-	"pack.usebitmaps":   "the cache's serve configuration",
+	// The delta window's memory, PER THREAD (pack.threads is the pool's 1): a
+	// cache's pack-objects for a clone, and a compaction's build, whose charge
+	// against the node's background budget counts it (internal/code/cache's
+	// CompactWindowBytes).
+	"pack.windowmemory": "the cache's serve configuration, and a compaction's pack-objects in its scratch " +
+		"(internal/code/compact's CompactConfig)",
+	"pack.usebitmaps": "the cache's serve configuration",
 	// Read only by a bitmap write (the maintainer's multi-pack-index), so
 	// it rides the serve configuration and changes no other process.
 	"pack.writebitmaplookuptable": "the maintainer's bitmap write: a table of its commits, so a reader loads " +
@@ -516,16 +521,24 @@ var allowedConfig = map[string]string{
 	"receive.advertisepushoptions": "the receive configuration",
 	"receive.autogc":               "the receive configuration",
 	"receive.updateserverinfo":     "the receive configuration",
-	// The .rev a stored bundle carries is written by the index-pack that
-	// checked its pack as it indexed it — receive-pack's own for a push, and
-	// for an engine write the `index-pack --strict` of its scratch, the
-	// relay's own fsck — never by pack-objects or a second process after it;
-	// pinned rather than left to git's default, which changed in 2.41.
-	"pack.writereverseindex": "the receive configuration, and an engine write's index-pack in its scratch",
+	// The .rev a stored bundle carries is written by the process that wrote
+	// or checked its pack: for content from outside — a push, an engine
+	// write — the index-pack that checked the pack as it indexed it,
+	// receive-pack's own for a push and for an engine write the
+	// `index-pack --strict` of its scratch, the relay's own fsck, never
+	// pack-objects or a second process after it; and for a COMPACTION the
+	// pack-objects that wrote the output (internal/code/compact), since every
+	// object it writes comes out of packs the code host already stored and
+	// checked, and its bundle is held to its seal on the way to the store
+	// like any other (code.StoreBundle). Pinned rather than left to git's
+	// default, which changed in 2.41.
+	"pack.writereverseindex": "the receive configuration, an engine write's index-pack in its scratch, and a " +
+		"compaction's pack-objects in its scratch (internal/code/compact's CompactConfig)",
 	// The index a stored bundle carries is version 2, which the bundle check
 	// requires; pinned so a future default cannot store one no cache accepts.
-	// Written by the same index-pack as the .rev, never by pack-objects.
-	"pack.indexversion": "the receive configuration, and an engine write's index-pack in its scratch",
+	// Written by the same process as the .rev.
+	"pack.indexversion": "the receive configuration, an engine write's index-pack in its scratch, and a " +
+		"compaction's pack-objects in its scratch (internal/code/compact's CompactConfig)",
 	// How git writes a path in what it prints, and nothing else: off, a path
 	// is quoted only where a quote, a backslash or a control byte would break
 	// its line, rather than every byte past ASCII written as an octal escape.

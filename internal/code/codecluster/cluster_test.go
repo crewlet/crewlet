@@ -123,6 +123,12 @@ type cluster struct {
 	mu          sync.Mutex
 	activations int
 	audited     []types.OperatorActed
+	// split is every repository whose home a case split the members' view
+	// of (SplitHomes): the members that each take themselves for its home.
+	split map[string][]string
+	// proposed is the last compaction any member's compactor proposed of
+	// each repository, by its id: what ProposeCompactionAgain asks again.
+	proposed map[string]code.CompactionProposal
 }
 
 // member is one member: one process, as far as the cluster is concerned.
@@ -204,6 +210,7 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 	for _, m := range c.members {
 		g := codetest.StartGitNode(t, codetest.GitOptions{
 			ID: m.id, Dir: filepath.Join(m.dir, "git"), Estate: memberEstate{m}, Reads: m.read,
+			Compactions: m.compact, Homes: memberHomes{m},
 			Objects: m.backend, Faults: c.faults, Credentials: c.creds, Audit: c.record,
 			MaxTransfers: transfers,
 		})
@@ -344,6 +351,32 @@ func (c countedGit) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, 
 // code reads ask.
 func (m *member) read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return m.router.Load().Code().Read(ctx, q)
+}
+
+// compact is a compaction proposed through the member's router, as the
+// engine's compactor proposes through its node's code seam: to the
+// repository's committer, its runner-up when the committer is silent.
+func (m *member) compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
+	m.c.mu.Lock()
+	if m.c.proposed == nil {
+		m.c.proposed = map[string]code.CompactionProposal{}
+	}
+	m.c.proposed[p.Compaction.RepoID] = p
+	m.c.mu.Unlock()
+	return m.router.Load().Code().Compact(ctx, p)
+}
+
+// memberHomes is whether the member is a repository's home, as its
+// compactor asks: its own router — the incarnation's, read again at every
+// question — unless a case split the fleet's view of the repository's home
+// (SplitHomes), in which case every member it named answers yes.
+type memberHomes struct{ m *member }
+
+func (h memberHomes) IsHome(repoID string) (bool, error) {
+	if split, ok := h.m.c.splitOf(repoID); ok {
+		return slices.Contains(split, h.m.id), nil
+	}
+	return h.m.router.Load().IsHome(repoID)
 }
 
 // backend is the member's object store, its incarnation's.
@@ -693,6 +726,45 @@ func (c *cluster) Collect(t testing.TB) collect.CollectionReport {
 	return m.data.Collect(t, m.backend())
 }
 
+func (c *cluster) CollectAt(t testing.TB, at time.Time) collect.CollectionReport {
+	t.Helper()
+	m := c.via(t)
+	return m.data.CollectAt(t, m.backend(), at)
+}
+
+func (c *cluster) Retain(t testing.TB, now time.Time) code.RetentionReport {
+	t.Helper()
+	report := c.via(t).data.Retain(t, now)
+	c.mustLevel(t)
+	return report
+}
+
+// SplitHomes has every member of nodes take itself for repoID's home until the
+// case ends (codetest.Cluster): a presence view split between them, which no
+// lease or epoch arbitrates (ADR-0059).
+func (c *cluster) SplitHomes(t testing.TB, repoID string, nodes ...string) {
+	t.Helper()
+	c.mu.Lock()
+	if c.split == nil {
+		c.split = map[string][]string{}
+	}
+	c.split[repoID] = slices.Clone(nodes)
+	c.mu.Unlock()
+	t.Cleanup(func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		delete(c.split, repoID)
+	})
+}
+
+// splitOf is the members a case split repoID's home between, if it did.
+func (c *cluster) splitOf(repoID string) ([]string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	nodes, ok := c.split[repoID]
+	return nodes, ok
+}
+
 func (c *cluster) Token(_ testing.TB, person string) string { return c.creds.Token(person) }
 
 // ClientGit is the PATH's git, held to the client floor: a fleet's persons run
@@ -730,6 +802,48 @@ func (c *cluster) Rows(ctx context.Context, name string, fresh statelog.Freshnes
 	}
 	seam := m.router.Load().Code()
 	return codetest.RowsOf(ctx, name, fresh, seam.Resolve, seam.RepoState)
+}
+
+func (c *cluster) State(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error) {
+	m, err := c.first()
+	if err != nil {
+		return code.RepoSnapshot{}, err
+	}
+	return m.router.Load().Code().RepoState(ctx, q)
+}
+
+func (c *cluster) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
+	m, err := c.first()
+	if err != nil {
+		return code.ProposeResult{}, err
+	}
+	return m.router.Load().Code().Propose(ctx, p)
+}
+
+// ProposeCompactionAgain asks member node's router to decide, again, the last
+// compaction a member's compactor proposed of repoID — under its own
+// compaction id, as a compactor whose answer came back late asks again.
+func (c *cluster) ProposeCompactionAgain(ctx context.Context, node, repoID string) (code.CompactResult, error) {
+	c.mu.Lock()
+	p, ok := c.proposed[repoID]
+	c.mu.Unlock()
+	if !ok {
+		return code.CompactResult{}, fmt.Errorf("codecluster: no compactor has proposed a compaction of %s", repoID)
+	}
+	return c.member(c.life, node).router.Load().Code().Compact(ctx, p)
+}
+
+// StopGit stops member node's git node alone, gracefully, its data node and
+// its router running on.
+func (c *cluster) StopGit(t testing.TB, node string) {
+	t.Helper()
+	c.member(t, node).git.Stop(t.Context())
+}
+
+// StartGit starts member node's git node again over its directory.
+func (c *cluster) StartGit(t testing.TB, node string) {
+	t.Helper()
+	c.member(t, node).git.Restart(t)
 }
 
 // Evict and Readmit go through a member OTHER than node — every record an

@@ -344,6 +344,7 @@ const (
 
 	// The code host's: a git node's own work, beside the logs'.
 	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
+	KindCodeCompactionBehind   Kind = "code_compaction_behind"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -665,6 +666,21 @@ type Reading struct {
 	// the largest charge passes it. All zero on a node that serves no git.
 	CodeMaintenanceRefused                        int
 	CodeMaintenanceLargest, CodeMaintenanceBudget int64
+
+	// CodeCompactionBehind is how many repositories this node's compactor —
+	// the git node that is their HOME, which merges their packs — found at
+	// the most live packs a repository may hold on its last pass, so every
+	// push carrying a pack into them is refused `compaction_behind` until a
+	// compaction lands; CodeCompactionBehindLargest is the most live packs
+	// among them and CodeCompactionBehindRepo that repository's name. Counted
+	// against code.MaxPacksPerRepo by the compactor, which already judged
+	// each repository it names (internal/code/compact): this framework imports
+	// no code-host package, and the alarm borrows the bound the push decide
+	// refuses at (ADR-0015) rather than holding a number of its own. All zero
+	// on a node that serves no git, compacts nothing, or found none.
+	CodeCompactionBehind        int
+	CodeCompactionBehindLargest int64
+	CodeCompactionBehindRepo    string
 }
 
 // Alarm is one condition currently true on this node.
@@ -1418,6 +1434,42 @@ var table = []rule{
 			"and clears it only where git.max_transfers is unset and the memory " +
 			"was lowered after the node booted, since the lanes are then sized " +
 			"to what it has. See docs/concepts/code-host.md.",
+	},
+	{
+		// THE THRESHOLD IS THE PUSH DECIDE'S (ADR-0015): the most live packs
+		// a repository may hold, past which a push carrying a pack is refused
+		// compaction_behind. This framework imports no code-host package, so
+		// the node's compactor counts the repositories it already judged
+		// against that bound and the rule fires at any — never at a number of
+		// its own. Raised by the node that COMPACTS them, the repository's
+		// home, because it is the one node that can act on it and the receiver
+		// refuses most such pushes before any committer sees them; held from
+		// the listing of every pass, whatever that pass's compaction of the
+		// repository decided, so it stands for as long as pushes are refused.
+		kind: KindCodeCompactionBehind,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d repository(ies) this node compacts hold the most live packs a "+
+					"repository may — the most, %s, holds %d — so every push carrying a pack "+
+					"into them is refused compaction_behind until a compaction of theirs lands",
+					r.CodeCompactionBehind, r.CodeCompactionBehindRepo, r.CodeCompactionBehindLargest),
+				r.CodeCompactionBehind > 0
+		},
+		remedy: "Every push carrying objects adds a pack, and the repository's " +
+			"home git node merges them on a minute's poll; pushes that carry " +
+			"nothing — deletions, refs moved onto commits the repository holds — " +
+			"still land meanwhile. Read this node's log for the repository. " +
+			"`code_cache_compaction_refused` says the build's memory charge, on " +
+			"the line beside the budget, is past what this node can give its " +
+			"background work: give it more memory, or fewer git transfers, as " +
+			"for a refused bitmap. `code_compaction_refused` names a committer's " +
+			"refusal, a repository deleted, or an object store with no room " +
+			"(`store_full`: make the room the line names, and the compaction is " +
+			"tried again once the store has it). `code_compaction_failed` names " +
+			"the build, an upload or the committer's answer that failed, each " +
+			"tried again at the next poll. With none of those and the count " +
+			"still standing, the repository takes pushes faster than one node " +
+			"merges them: `crewlet.code.compact.duration` beside the pushes' " +
+			"rate says by how much. See docs/concepts/code-host.md.",
 	},
 }
 

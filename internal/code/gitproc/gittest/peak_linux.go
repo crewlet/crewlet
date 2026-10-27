@@ -1,4 +1,4 @@
-package cache_test
+package gittest
 
 import (
 	"bufio"
@@ -11,21 +11,25 @@ import (
 	"time"
 )
 
-// peakAnonSample is how often peakAnon reads its children's memory: a
-// millisecond, against runs of a tenth of a second and more, each of whose
-// peak lasts from its last allocation to its exit — so a sample a
-// millisecond apart lands inside it.
+// peakAnonSample is how often PeakAnon reads its children's memory: a
+// millisecond, against git runs of a tenth of a second and more, each of whose
+// peak lasts from its last allocation to its exit — so a sample a millisecond
+// apart lands inside it.
 const peakAnonSample = time.Millisecond
 
-// peakAnon runs fn and answers the most ANONYMOUS memory any child process of
+// PeakAnon runs fn and answers the most ANONYMOUS memory any child process of
 // this one held while it ran — RssAnon, sampled from /proc — and true. The
-// anonymous pages are what a run cannot give back: the packs' and indexes'
-// own pages a git process maps in count toward its resident size, but the
-// kernel takes them back under pressure rather than killing anybody, so they
-// are not what a node's memory has to hold for it. Every git a cache runs is
-// a child of this process (the pool execs git itself), and a maintenance
-// step, a clone's pack-objects and an fsck are each one process.
-func peakAnon(fn func()) (int64, bool) {
+// anonymous pages are what a run cannot give back: the packs' and indexes' own
+// pages a git process maps in count toward its resident size, but the kernel
+// takes them back under pressure rather than killing anybody, so they are not
+// what a node's memory has to hold for it. Every git a pool runs is a child of
+// this process (the pool execs git itself), and a maintenance step, a clone's
+// pack-objects, an fsck and a compaction's build are each one process.
+//
+// ONE SAMPLER, for every benchmark whose figure a node's memory budget charges
+// by — the cache's index, bitmap, graph and check, and a compaction's build —
+// so the figures they set against one another are read the same way.
+func PeakAnon(fn func()) (int64, bool) {
 	var (
 		mu   sync.Mutex
 		peak int64

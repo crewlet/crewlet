@@ -3,6 +3,7 @@ package cache
 import (
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/store"
@@ -438,6 +439,38 @@ const GraphBytesPerObject = 56
 // holds some 11 GB — as much as the node's background work is ever given, so
 // it is held to the same budget, charged at its admission (Cache.AdmitVerify).
 const FsckBytesPerObject = 192
+
+// CompactBytesPerObject is the memory a compaction's build — one
+// `pack-objects --stdin-packs` over the packs it merges (internal/code/compact)
+// — holds for every object of those packs, charged at its admission
+// (Cache.AdmitCompaction) beside room for one transfer of the repository and
+// the build's delta window (CompactWindowBytes).
+//
+// 300 BYTES, PROVISIONAL until BenchmarkCompact's memory arms
+// (inputs={4,8,16,64}/history=source, the peak anonymous memory sampled every
+// millisecond, the method of the figures above) measure it, the 64-input
+// figure rounded up to the next 50 bytes: pack-objects holds an entry an
+// object (some 100–150 bytes in git's struct object_entry, and its hash
+// table) and reuses every delta its inputs carry rather than searching for
+// one, so it lies between the index's 80 — a merge of the inputs' indexes —
+// and a transfer's gitproc.TransferBytesPerObject, which walks reachability as
+// well. Charged by the inputs' objects alone, never the repository's: a
+// compaction merges the small packs, so its charge follows what it merges.
+const CompactBytesPerObject = 300
+
+// CompactWindowBytes is the delta window a compaction's build is charged
+// beside its objects: the pack.windowMemory its pack-objects runs under
+// (internal/code/compact's CompactConfig), twice the epoch's max_blob_bytes —
+// what the serve configuration already bounds a pack-objects' window to.
+//
+// A PER-THREAD bound, which the pool's pack.threads=1 makes the whole window,
+// held whatever the objects number: pack-objects keeps at least one entry
+// beside the object it deltifies, and that object's delta index, so a merge of
+// eight packs each carrying a revision of a 50 MiB blob peaks near two to three
+// blobs at once — which no per-object figure charges. BenchmarkCompact's
+// inputs=8/blobs=max_blob arm holds the build's peak under the charge, or
+// raises this to the window term it measured.
+func CompactWindowBytes(limits code.Limits) int64 { return 2 * limits.MaxBlobBytes }
 
 // VerifyHashPerMiB is what a check's hashing is given for each mebibyte of
 // the bundles it reads (CheckBudget), beside the connectivity check's own

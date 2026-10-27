@@ -168,6 +168,12 @@ var alarmMeaning = map[Kind]string{
 		"or its cgroup's limit, less what it keeps for its git lanes, the " +
 		"store, the broker and the engine. Those repositories are indexed " +
 		"without a bitmap and served more slowly: a clone walks their history.",
+	KindCodeCompactionBehind: "Repositories this node is the home git node of — the " +
+		"node that merges their packs — hold the most live packs a repository " +
+		"may, so every push carrying objects into them is refused " +
+		"`compaction_behind` until a compaction of theirs lands. Raised by that " +
+		"node alone, from the listing it polls every minute, for as long as any " +
+		"repository it compacts stays at the bound.",
 }
 
 const alarmHeader = `# Alarms

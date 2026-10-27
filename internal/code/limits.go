@@ -546,7 +546,8 @@ const (
 
 	// RetireGrace is how long a retired pack's row keeps its object from the
 	// collector (code_packs_retired, ADR-0051) before the code-retention
-	// duty's retire_sweep records remove it.
+	// duty's retire_sweep records remove it: a retired pack outlives its
+	// longest read (ADR-0060).
 	//
 	// A DAY, because a reader that began on a pack before it was retired — a
 	// cache that has not synced past the retirement, a clone that started on

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/objstore/references"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -57,6 +58,10 @@ type DataOptions struct {
 	// node's log besides its own — a second writer, as a peer would be —
 	// or "" for none (Operator then answers nil).
 	Operator string
+	// WrapApplier wraps the domain's applier, nil for none: the window a
+	// suite's meta-test has to build a node whose applier LIES, which a case
+	// must then fail on (TestTheSuiteCatchesARetirementWithNoGrace).
+	WrapApplier func(statelog.Applier) statelog.Applier
 }
 
 // DataNode is one data node's code domain, composed as the engine composes it
@@ -187,8 +192,12 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if err != nil {
 		t.Fatalf("codetest: %s: build the record verifier: %v", d.o.ID, err)
 	}
+	var applier statelog.Applier = code.NewApplier()
+	if d.o.WrapApplier != nil {
+		applier = d.o.WrapApplier(applier)
+	}
 	if p.runner, err = statelog.NewRunner(statelog.RunnerDeps{
-		Domain: code.Domain{}, Spec: spec, Applier: code.NewApplier(), Fetch: p.consumer,
+		Domain: code.Domain{}, Spec: spec, Applier: applier, Fetch: p.consumer,
 		Verifier: verifier, Log: p.log, Node: p.db, DB: p.estate,
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: d.o.ID,
@@ -375,22 +384,65 @@ func (d *DataNode) Purge(t testing.TB) {
 	t.Fatalf("codetest: sixty-four retention passes through %s left a purge unfinished", d.o.ID)
 }
 
+// Retain runs ONE code-retention pass through this node with its clock at now
+// — the instant it judges a retired pack's grace and a deletion's age by — at
+// the retention every topology runs at: a case moves a retirement's grace by
+// the pass's clock, since the broker's instant on the retirement cannot be
+// moved.
+func (d *DataNode) Retain(t testing.TB, now time.Time) code.RetentionReport {
+	t.Helper()
+	p := d.proc()
+	if p == nil {
+		t.Fatalf("codetest: a retention pass through data node %s, which is not running", d.o.ID)
+	}
+	r := &code.Retention{Store: p.lifecycle, Reader: p.reader,
+		Retention: func() time.Duration { return deletedRetention }, Now: func() time.Time { return now }}
+	report, err := r.Pass(t.Context())
+	if err != nil {
+		t.Fatalf("codetest: a retention pass through %s: %v", d.o.ID, err)
+	}
+	return report
+}
+
 // Collect runs one collection of objects over the code estate as this node
 // holds it, its clock a day and an hour on, so every object past its grace is
 // judged.
 func (d *DataNode) Collect(t testing.TB, objects objstore.Backend) collect.CollectionReport {
 	t.Helper()
+	return d.CollectAt(t, objects, time.Now().Add(25*time.Hour))
+}
+
+// codeTables is every table the code domain declares in the one list of
+// tables that name objects (internal/objstore/references), whatever its
+// standing: what a collection over the code estate is held to — a live pack's
+// row, a retired one's, a published layer's part's — as the engine's collector
+// is, every declared table shielding what it names.
+var codeTables = func() []objstore.ReferenceTable {
+	var out []objstore.ReferenceTable
+	for _, table := range references.All {
+		if table.Domain == (code.Domain{}).Name() {
+			out = append(out, table)
+		}
+	}
+	return out
+}()
+
+// CollectAt runs one collection of objects over the code estate as this node
+// holds it, with the collector's clock at at — every table the code domain
+// declares shielding what its rows name, as the engine's collector is built
+// over every declared table.
+func (d *DataNode) CollectAt(t testing.TB, objects objstore.Backend, at time.Time) collect.CollectionReport {
+	t.Helper()
 	store, err := objstore.NewStore(objects)
 	if err != nil {
 		t.Fatalf("codetest: the object store: %v", err)
 	}
-	sources, err := collect.Sources([]objstore.ReferenceTable{code.PackReferences},
-		code.ObjectEstate{Reader: d.Served().Reader})
+	sources, err := collect.Sources(codeTables, code.ObjectEstate{Reader: d.Served().Reader})
 	if err != nil {
 		t.Fatalf("codetest: the collector's sources: %v", err)
 	}
 	c, err := collect.New(collect.Options{Store: store, References: sources,
-		Now: func() time.Time { return time.Now().Add(25 * time.Hour) }})
+		Now: func() time.Time { return at }})
 	if err != nil {
 		t.Fatalf("codetest: a collector: %v", err)
 	}
@@ -492,6 +544,19 @@ func (d *DataNode) Health(ctx context.Context) (statelog.Health, error) {
 // Appends is how many records this node's COMMITTER appended — never a
 // declaration's or an eviction's, which go through the lifecycle store.
 func (d *DataNode) Appends() int { return int(d.appends.Load()) }
+
+// LogStats is the code log's stream as the broker holds it — its ends, its
+// records and its BYTES, every record's signed frame included: what a
+// benchmark reads the bytes a kind of record costs the log off, before and
+// after it appends one.
+func (d *DataNode) LogStats(ctx context.Context) (js.LogStats, error) {
+	p := d.proc()
+	if p == nil {
+		return js.LogStats{}, fmt.Errorf("codetest: the code log's stats through data node %s, which is not "+
+			"running", d.o.ID)
+	}
+	return p.log.Stats(ctx)
+}
 
 // PauseApplier halts the node's applier until resume, which moves its
 // consumer back to the checkpoint and runs it again — the engine's halt and

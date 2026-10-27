@@ -968,7 +968,10 @@ The `code-retention` duty then removes the rows past their day — by a record
 on the code log for each repository holding some, which every data node
 applies — and the collector's next pass deletes their objects. A deleted
 repository's purge takes its retired rows with the rest. The decision is
-[ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-retired-reference-keeps-its-object-for-a-grace.md).
+[ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-retired-reference-keeps-its-object-for-a-grace.md),
+and the compaction's own rules — what a merge keeps, and why a retired pack
+outlives its longest read — are
+[ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md).
 
 The first derived rows are the code host's too: `code_layer_parts`, the
 stored bytes of each repository's **published layers** — a multi-pack-index

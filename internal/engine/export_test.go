@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -110,6 +111,16 @@ func WithCacheDisk(opts Options, free, broker int64) Options {
 // git cache.
 func WithGitMemory(opts Options, memory int64) Options {
 	opts.gitMemory = memory
+	return opts
+}
+
+// WithCompactorEstate is opts with wrap standing between a git node's
+// compactor and the router's code seam it lists and proposes through
+// ([codecompact.Options.Estate]), for a case outside the package whose subject
+// is what a running node's compactor raises — a repository shown at the pack
+// bound without two thousand packs pushed into it.
+func WithCompactorEstate(opts Options, wrap func(codecompact.Estate) codecompact.Estate) Options {
+	opts.compactorEstate = wrap
 	return opts
 }
 

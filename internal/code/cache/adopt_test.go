@@ -121,6 +121,84 @@ func TestAdoptedPacksAreNotDownloaded(t *testing.T) {
 	}
 }
 
+// ONE ADOPTION, EVERY PACK IT NAMES: a compaction's scratch holds a pack an
+// output, and the git node that built them adopts them all in one call once
+// their rows have applied — each linked by the scratch's own files, each
+// counted, the directory synced ONCE for the call — so its next sync
+// downloads none of them, and the cache it leaves is the one a cache built
+// from nothing holds. A pack the scratch does not hold refuses the call
+// whole, nothing linked.
+func TestOneAdoptionLinksEveryPackItNames(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	var (
+		mu    sync.Mutex
+		syncs int
+	)
+	c := w.open(t, func(o *cache.Options) { cache.AdoptionSyncsCounted(o, &mu, &syncs) })
+	s := w.sync(t, c, repo)
+	id := uuid.Must(uuid.NewV7()).String()
+	sc, err := c.NewScratch(t.Context(), s, id)
+	if err != nil {
+		t.Fatalf("NewScratch: %v", err)
+	}
+	t.Cleanup(sc.Remove)
+	_, first := w.packInto(t, repo, sc.Dir, nil)
+	tip, second := w.packInto(t, repo, sc.Dir, nil)
+	rows := []code.PackRow{
+		w.storeBundle(t, w.bundle(first), code.DeriveOutputPackID(id, 0)),
+		w.storeBundle(t, w.bundle(second), code.DeriveOutputPackID(id, 1)),
+	}
+	w.log.write(repo, rows, map[string]string{"refs/heads/main": tip})
+	refs := []code.PackRef{rows[0].Ref(), rows[1].Ref()}
+	dir := w.dir(t, c, repo)
+	before := packFiles(t, dir)
+
+	stranger := refs[1]
+	stranger.GitChecksum = strings.Repeat("e", len(stranger.GitChecksum))
+	if err := c.Adopt(t.Context(), repo, sc, refs[0], stranger); !errors.Is(err, cache.ErrInvalid) ||
+		!strings.Contains(err.Error(), stranger.GitChecksum) {
+		t.Fatalf("an adoption naming a pack its scratch does not hold = %v, want ErrInvalid naming it", err)
+	}
+	if got := packFiles(t, dir); !slices.Equal(got, before) {
+		t.Fatalf("a refused adoption changed the pack files from %v to %v", before, got)
+	}
+
+	if err := c.Adopt(t.Context(), repo, sc, refs...); err != nil {
+		t.Fatalf("Adopt of two packs: %v", err)
+	}
+	for _, cs := range []string{first, second} {
+		sameFiles(t, dir, sc.Dir, cs)
+	}
+	if got := counter(w.rec, metrics.CodeCacheAdoptions, "outcome", "adopted"); got != 2 {
+		t.Errorf("%s{outcome=adopted} = %d, want one a pack", metrics.CodeCacheAdoptions, got)
+	}
+	mu.Lock()
+	synced := syncs
+	mu.Unlock()
+	if synced != 1 {
+		t.Errorf("one adoption of two packs synced the directory %d times, want once", synced)
+	}
+	w.tmpEmpty(t)
+
+	sc.Remove()
+	s.Release()
+	after := w.sync(t, c, repo)
+	defer after.Release()
+	opens, _, _ := w.objects.counts()
+	for _, row := range rows {
+		if opens[row.Object] != 0 {
+			t.Errorf("the next sync opened adopted pack %s's object %d times, want none", row.PackID,
+				opens[row.Object])
+		}
+	}
+	if got, want := w.image(t, c, repo), w.rebuilt(t, repo); got != want {
+		t.Errorf("the image after one adoption of two packs:\n%s\nwant a fresh cache's:\n%s", got, want)
+	}
+}
+
 // ADOPT REFUSES A PACK THAT IS NOT THE ROW'S: the files it links are the
 // scratch's and the name it gives them is the row's, so a checksum, or a
 // section's size, that the two disagree on — or a .rev the scratch does not
@@ -170,6 +248,7 @@ func TestAdoptRefusesAPackThatIsNotTheRows(t *testing.T) {
 		"another repository's push": func() error { return c.Adopt(t.Context(), other, a.sc, ref) },
 		"an advertisement view":     func() error { return c.Adopt(t.Context(), repo, view, ref) },
 		"no scratch":                func() error { return c.Adopt(t.Context(), repo, nil, ref) },
+		"no pack":                   func() error { return c.Adopt(t.Context(), repo, a.sc) },
 	} {
 		if err := try(); !errors.Is(err, cache.ErrInvalid) {
 			t.Errorf("Adopt of %s = %v, want ErrInvalid", name, err)

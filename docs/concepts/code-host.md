@@ -56,13 +56,8 @@ This is the product's current shape, not a configuration choice:
   opened, reviewed or gated in front of a protected branch in this release.
   A protection rule decides what a push may do to a ref, and nothing else
   stands in front of one.
-- **Nothing compacts a repository.** Every push adds one pack, and a
-  repository's packs are only ever removed with the repository — so one that
-  reaches the 2 048 live packs a repository may hold ([Limits](#limits))
-  refuses every push carrying objects from then on, `compaction_behind`,
-  with nothing in this build to merge its packs and make room. Nor does
-  anything publish a repository's layers: a git node installs the chain the
-  rows name ([Published layers](#published-layers)), and no row names one
+- **Nothing publishes a repository's layers.** A git node installs the chain
+  the rows name ([Published layers](#published-layers)), and no row names one
   yet, so each node serves from the index and graph it writes itself.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
@@ -405,6 +400,113 @@ would sit beside each other, the first stands and the second is refused.
 
 ---
 
+## Compaction
+
+Every push stores one pack, so a busy repository's pack count grows with its
+pushes — and a git node that reads it whole pays a GET for every pack, and
+every request a lookup in every pack its index does not cover. The
+repository's [home git node](#the-home-git-node) — the node its reads are
+asked of first — merges them, and its committer decides the merge as it
+decides a push
+([ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md)).
+
+**The roll.** Once a minute every git node lists the repositories holding
+eight live packs or more, most packs first, and for each it is home for it
+plans git's own geometric split — the one `git repack --geometric=2` makes —
+over the packs that are not FULL: the lightest are merged until every pack
+left weighs at least twice the objects of all the lighter ones together. A
+pack is full once its pack section, or its whole bundle, is at seven eighths of
+the 1 GiB a merge cuts its outputs at, and a full pack is never merged again.
+A repository holding more than 50 packs that are not full is merged two packs
+at a time even when they already stand in that progression, so it shrinks at
+every poll. One merge takes at most 1 024 packs and 8 GiB of pack bytes, the
+lightest first. A repository whose plan finds nothing worth merging is not
+planned again until its rows move, so an idle repository costs the minute's
+poll a lookup.
+
+**The build.** One `git pack-objects --stdin-packs` over the packs merged,
+run in a scratch repository whose one alternate is the node's copy — never in
+the copy — and in the node's maintenance lane: at the background indexing's
+own limit, never the slot kept for `crewlet code verify`, with its memory
+charged against the node's background budget beside the indexing's (300
+bytes an object merged, room for a clone of the repository, and twice
+`code.limits.max_blob_bytes` for its delta window). It cuts its outputs at
+1 GiB. **The outputs hold every object of the packs merged** — an object a
+pack outside the merge also holds included — because a merge judges no
+reachability: no push decided against the packs it replaces can land a ref
+whose history it dropped, and two merges planned from different moments never
+each drop what the other relied on. Each output is one bundle in the stored
+format, every one held to the bundle rule before a byte is uploaded and all
+of them uploaded at once, since an object's key is minted as its upload
+begins and a record may name only keys of the last twelve hours. The
+maintenance slot and the memory go back as soon as the build's last git
+process ends, before the uploads.
+
+**The decision.** The home proposes ONE compaction to the repository's
+[committer](#the-committer) through the estate router, as a push is proposed,
+under an id of its own — so the runner-up asked after a committer went silent
+decides the same compaction, never a second. The committer decides it ALONE,
+in one snapshot: every pack it merges still live and not full, or it is
+refused `stale` and the next poll plans again from the rows; and ONE record
+adds the outputs' rows and moves the merged packs' rows into a table of
+retired packs. Two git nodes that both take themselves for the home for a
+moment both build, and the second is refused `stale`; what it stored is named
+by no row, and the object collector deletes it.
+
+```mermaid
+sequenceDiagram
+    participant H as Home git node
+    participant S as Object store
+    participant R as Estate router
+    participant C as Committer
+    participant L as Code log
+    participant G as Every other git node
+    H->>H: plan the roll, build in a scratch
+    H->>S: store every output, at once
+    H->>R: propose one compaction
+    R->>C: the repository's committer
+    C->>L: one record: outputs added, merged packs retired
+    L-->>C: applied on every data node
+    C-->>H: applied
+    H->>H: link its outputs into its copy
+    G->>G: next sync: the copy's next directory, of links
+```
+
+**Every copy follows.** The home links the outputs it built into its copy, so
+it downloads none of them; every other git node downloads them at its next
+sync of the repository, and drops the merged packs by moving its copy into a
+next directory of hard links, keeping the commit-graph, since a merge drops no
+commit ([When packs leave a copy](#the-cache-on-a-git-node)). A request
+already reading the old directory finishes on it.
+
+**A day's grace.** A retired pack keeps its object for a day — longer than the
+longest read of the largest bundle a row can name, with an hour of clock skew
+beside it — so a clone that began on it before the merge finishes. Then the
+`code-retention` duty removes its row, and the object collector deletes the
+object at its next pass ([Deletion and purge](#deletion-and-purge)).
+
+**When it cannot keep up.** A repository at the 2 048 live packs one may hold
+refuses a push carrying objects `compaction_behind` ([Limits](#limits)), and
+its home raises the [`code_compaction_behind`](../reference/alarms.md) alarm
+for every repository it compacts at that bound, from its own poll, for as long
+as one is there — its log says why the merge has not landed:
+`code_cache_compaction_refused` for a build the node's memory cannot hold,
+`code_compaction_refused` for a refusal (`store_full` among them: an object
+store with no room, which holds the repository back until the store has the
+room, never retried as a blip), `code_compaction_failed` for a build, an
+upload or an answer that failed, each tried again at the next poll. A
+repository that takes pushes faster than one node merges them shows as
+`crewlet.code.compact.duration` against the pushes' rate
+([metrics reference](../reference/metrics.md)).
+
+**What it does not do.** It removes no object: what no ref reaches stays in
+the repository's packs for as long as it lives. And every merge drops the
+multi-pack index and its bitmap on every git node holding the repository —
+the commit-graph survives — which the background indexing writes again at its
+own pace, so a clone between the two counts its objects by walking.
+
+---
+
 ## Changes
 
 A **change** — `web!42`, the 42nd change opened on the repository `web` —
@@ -741,11 +843,9 @@ bitmaps. Reading a copy whole does not write the graph itself: the request
 it was read for would wait those seconds to spare the rare skewed push the
 same.
 
-**When packs leave a copy.** A compaction merges a repository's packs and
-retires the ones it merged — nothing in this build compacts yet ([what it
-does not do yet](#what-it-does-not-do-yet)), but a cache already follows one
-— and a whole read can find a pack no row names any more, after the code log
-went back under the node. git opens a pack only when a request first needs
+**When packs leave a copy.** A [compaction](#compaction) merges a repository's
+packs and retires the ones it merged, and a whole read can find a pack no row
+names any more, after the code log went back under the node. git opens a pack only when a request first needs
 it, part way through, so a pack never leaves a copy a request may be
 reading: the node builds the copy's **next directory** beside it — every pack
 the rows still name, the ref file and the files built over them that the
@@ -1223,9 +1323,9 @@ The two chain files that list the layers are the node's own, written from the
 rows' order, since a layer's files never name the layer beneath them.
 
 Nothing in this build publishes a layer yet: a publication is a compaction
-carrying one, and nothing compacts ([what it does not do
-yet](#what-it-does-not-do-yet)). So every copy serves from the index and
-graph its own node writes, and the rest of this section is how a git node
+carrying one, and no [compaction](#compaction) carries one yet ([what it does
+not do yet](#what-it-does-not-do-yet)). So every copy serves from the index
+and graph its own node writes, and the rest of this section is how a git node
 installs whatever chain the rows name.
 
 **Chain mode or own mode, never both.** A copy holding an installed chain
@@ -2587,7 +2687,7 @@ words, since git does not read the header.
 | The outcome is unknown | `(unknown: outcome unknown (op …); fetch, then re-run git push)` | Fetch, then push again. |
 | The push was recorded and every node dropped it | `(not_applied: the push was durable at <position> and applied nowhere; re-run git push)` | Run the push again; nothing landed ([what a refusal names](#a-push-end-to-end)). |
 | The repository is taking pushes faster than its committer commits them | `(busy: <n> pushes are queued for this repository on this node, the most it holds)`, or the same of the bytes queued for it or held across the node's repositories; `(busy: the push's asker stops waiting in <t>, and a batch started now may take 30s and its answer 1s more; run git push again)`, or `(busy: the push waited <t> behind this repository's earlier pushes on this node, …)`; or `(busy: the repository kept changing for every round the write may take; run git push again)` | Run the push again; nothing of it landed. One repository's pushes meet at one node, which commits them a batch at a time ([The committer](#the-committer)). |
-| A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once a compaction has merged the repository's packs — which nothing in this build does yet ([what it does not do yet](#what-it-does-not-do-yet)), so until a build that compacts, the repository takes no push carrying objects. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. |
+| A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home git node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
 | A push its node checked against the repository just before an expunge of the repository's unreachable objects began — which nothing in this build begins yet ([what it does not do yet](#what-it-does-not-do-yet)) | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
 | The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room — moves the files to a bucket (crewlet objects migrate -to s3), raises the bucket's byte reservation on an external broker, or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |
@@ -2658,6 +2758,16 @@ reference](../reference/metrics.md)).
 | `code_pack_missing` | `WARN` | A git request failed because a pack the rows name is gone from the object store or damaged there (`damaged`), answered 503 naming the pack. The [cache](#the-cache-on-a-git-node) logs the same line once for the sync that found it (below); the alarm is [`objects_missing`](object-store.md#alarms). |
 | `code_pack_checksum_mismatch`, `code_bad_snapshot` | `ERROR` | A git request failed because a downloaded bundle is not the one its row describes — the cache logs that line too, once for the sync (below) — or the rows cannot be read into a cache: an operator's problem, answered 500 with no `Retry-After`, since no retry ends it. |
 | `code_pack_rejected`, `code_push_invalid` | `ERROR` | The receiving git wrote a pack the engine's own checks refuse, or the engine built a proposal its own check or its committer refused: a bug, and the push fails. A proposal is checked as soon as the commits it introduces are listed, and its bundle's upload is ended there; a bundle already stored is named by no row, and the object collector removes it after its grace. A push past what one push may carry is never this: it is refused before its work, in git's words. |
+| `code_compaction_pass` | `INFO` | A git node's minute's poll of the repositories a compaction may be due in that compacted, refused or failed something: how many it `listed`, how many it is `home` for, how many were `due`, `compacted`, `refused` and `failed`, and how many are `behind` — at the most live packs a repository may hold; `DEBUG` when it did none of those. |
+| `code_compaction_pass_failed` | `WARN` | A poll's listing of the repositories a compaction may be due in failed: nothing was compacted, and the alarm reading stays as the last pass left it until the next poll, a minute on. |
+| `code_compaction_home_unknown` | `WARN` | Who serves git could not be read, so the poll compacted nothing more rather than guess which repositories this node is home for. |
+| `code_compaction_applied` | `INFO` | This node's compaction of a `repo` landed: its `compaction` id, how many `inputs` it merged into how many `outputs`, the `objects`, `bytes_in` and `bytes_out`, the record's `position` and how long it `took`, from its plan to its answer. |
+| `code_compaction_refused` | `WARN` | A compaction this node built was refused — by the repository's committer (`refusal`: `repo_deleted`, `upload_expired`, `pack_too_large`, `not_applied`) or by an object store with no room for its outputs (`store_full`: the repository is held back until the store has the room, and the line names the room to make). `pack_too_large` and `upload_expired` are a build past its own bounds or longer than twelve hours, and say so in `detail`. |
+| `code_compaction_failed` | `WARN` | A compaction this node began did not land: the `step` that failed — `sync`, `admit`, `build`, `upload`, `propose`, `adopt` — and why. `reason` `outputs`: the build wrote more packs than one compaction records; `bundle_too_large`: an output stayed past the bundle rule at a smaller cut too. Either uploaded nothing and halves what the repository's next plan merges. Tried again at the next poll. |
+| `code_compaction_rejected` | `ERROR` | An output of a compaction failed its own seal on its way to the object store — the bytes the store took are not the bundle the build laid out: a bug, or a disk returning other bytes than were written. Nothing is proposed, and the object, named by no row, is the collector's. |
+| `code_compaction_adopt_failed` | `WARN` | A compaction this node built landed and the node could not link its outputs into its own copy: its next sync downloads them instead. |
+| `code_compaction_store_unread` | `WARN` | The object store's room could not be read, so every repository held back for a full store waits for the next poll. |
+| `code_compaction_stop_unfinished` | `WARN` | The node stopped while a compaction was still running past the stop's wait: its build was killed and its uploads abandoned, and what it stored, named by no row, is the collector's. |
 | `code_compaction_invalid`, `code_publication_invalid`, `code_compaction_unanswerable` | `ERROR` | A repository's committer refused a compaction before its record because its outputs hold more objects than the packs it replaces — or a publication, a compaction carrying a published multi-pack-index layer, because the chain it leaves would hold more than 32 layers or its layer names a pack or the id of a layer below it — a bug in the build of the git node that made it (`node`), never the repository's: nothing was recorded, and what it stored, named by no row, is removed by the object collector after its grace; or a compaction's record applied and this node's rows do not hold the outputs or the layer it added (`missing`) — a bug in the build that wrote the record, answered `unknown`, so the node that built it adopts nothing. Each with the `repo` and the `compaction_id`. Report any of these lines. |
 | `code_layer_not_applied` | `WARN` | Under the component `code.apply`: a publication's record applied as nothing on this node, because the layers it replaces are not the top of the repository's published chain or its base is not the layer below them (`chain`, `base`, `replaces`) — a record no correct committer forms, which every node applies alike, so the chain stays as it was. With the `repo`, the `layer` and the record's `position`. Report it. |
 | `code_pack_adopt_failed` | `WARN` | The receiving node could not link a push's pack into its cache once its row applied; its next sync downloads it instead. |
@@ -2717,6 +2827,7 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_layer_install_failed` | `WARN` | A published layer could not be installed (`error`). The installer logs it when the object store failed to answer or this node's disk refused a write, with `retry_in` — a minute, doubling to half an hour; a full sync logs it for any layer it could not fetch, with the layer's `seq` and `outcome`, and leaves the layer to the installer (one `corrupt` is refused at once). The copy serves as it is meanwhile. |
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
 | `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph`, or `state` when its record could not be written). The repository is served without the index — slower, never wrong — and the next run waits out the interval. |
+| `code_cache_compaction_refused` | `WARN` | A compaction of a `repo` needs more memory than this node can give its background work — its `estimate`, against the `budget`, with the `memory` it was taken from and what was `reserved` — so this node does not build it; logged once for the copy however many polls ask again, and counted `crewlet.code.cache.maintenance.refusals{step=compact}`. The next poll asks again, so a node given more memory builds it; at the pack bound the repository's pushes are refused meanwhile, which `code_compaction_behind` raises. |
 | `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused. Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, each of which keeps 224 MiB of it. |
 | `code_cache_provenance_gap` | `WARN` | A sync applied pushes it could not fold into the repository's index of which push introduced each commit (`from`, `through`, `error`: a delta that served no pushes, or one beginning above where the index ends), so it left that range to the backfill, as a full sync does; until it is read, an answer naming a commit in it says the index does not hold it. One now and then is a page the sync could not read; a run of them, `error` says why. |
 | `code_cache_provenance_lost` | `WARN` | A full sync found a run the repository's index names missing from the disk or at another size, so the index was made anew at that sync's position and the backfill reads back below it as far as it is wanted — or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-git-node)) found one missing, so the next directory starts with no index until its next full sync makes one. Something outside the engine removing files in the cache, or a disk losing them. |

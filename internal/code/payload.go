@@ -625,9 +625,9 @@ type Purge struct {
 // committer ([Committer.ProposeCompaction]) and applied as ONE record that adds
 // the outputs' rows and moves the inputs' into code_packs_retired.
 //
-// A MERGE MAKES NO REACHABILITY JUDGEMENT: its outputs hold every object its
-// inputs held, so no push decided against the inputs can land a ref whose
-// closure a compaction removed, and no fence is needed beside the decide's own
+// A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0060): its outputs hold every
+// object its inputs held, so no push decided against the inputs can land a ref
+// whose closure a compaction removed, and no fence is needed beside the decide's own
 // check that every input is still live. The outputs are built over the inputs
 // with no pack excluded — an object an input shares with a pack that is not
 // an input is written again rather than left to that pack, because two

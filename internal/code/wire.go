@@ -224,17 +224,35 @@ func (r PackRow) Ref() PackRef {
 }
 
 // Full reports a pack no compaction merges again: its pack section at least
-// [FullPackBytes], or its whole bundle at least [FullBundleBytes].
+// [FullPackBytes], or its whole bundle at least [FullBundleBytes] — FullAt at
+// the cut every compaction makes, [CompactPackBytes].
 //
 // THE ONE PREDICATE, read by every party that judges it — the committer's
 // decide of a compaction, which refuses a full input stale, and the plan a
-// compaction is built from — so a plan and the decide that judges it never
-// disagree about a pack. By its bundle as well as its pack section, because
-// an output of a cut scaled down for a dense roll is full by its bundle with
-// its pack section well short of seven eighths of the nominal cut.
-func (r PackRow) Full() bool {
-	return r.Ref().PackBytes() >= FullPackBytes || r.Size >= FullBundleBytes
+// compaction is built from (internal/code/compact) — so a plan and the decide
+// that judges it never disagree about a pack. By its bundle as well as its
+// pack section, because an output of a cut scaled down for a dense roll is
+// full by its bundle with its pack section well short of seven eighths of the
+// nominal cut.
+func (r PackRow) Full() bool { return r.FullAt(CompactPackBytes) }
+
+// FullAt is [PackRow.Full] for compactions that cut their outputs at cut
+// rather than at [CompactPackBytes]: both bounds, [FullPackBytes] and
+// [FullBundleBytes], scaled by cut ÷ CompactPackBytes — exactly the two
+// constants at the production cut, which is the one cut anything but a suite
+// makes. A suite builds its compactions over megabytes rather than gibibytes
+// (internal/code/compact's test knob), and an output of its cut has to be
+// full by the same rule, scaled, or every one would be rolled again at the
+// next plan. Defined for a cut in (0, CompactPackBytes], the only cuts a
+// compaction is built at.
+func (r PackRow) FullAt(cut int64) bool {
+	return r.Ref().PackBytes() >= fullScaled(FullPackBytes, cut) || r.Size >= fullScaled(FullBundleBytes, cut)
 }
+
+// fullScaled is bound — one of the full bounds at the production cut — at a
+// cut of cut. In whole bytes, without overflow: both are at most
+// CompactPackBytes, so the product is under 2^60.
+func fullScaled(bound, cut int64) int64 { return bound * cut / CompactPackBytes }
 
 // LayerRow is one published layer as the rows hold it: its place in the chain
 // (Seq, 1.. root first and contiguous), the layer — Replaces empty, since a

@@ -552,18 +552,31 @@ type incarnation struct {
 	refused        map[string]layerRefusal
 }
 
-// livePack is one live row as the swap reads it: the checksum its files are
-// named by, and the bundle's bytes and the objects its row counts. A pack id
-// names one bundle for ever — a row is never rewritten — so two rows of one
-// checksum carry the same figures.
+// livePack is one live row as the swap and a compaction's plan read it: the
+// checksum its files are named by, the bundle's bytes and its two indexes' —
+// what tells its pack section, and whether the pack is FULL
+// (code.PackRow.Full), which a plan never merges ([Cache.Packs]) — and the
+// objects its row counts. A pack id names one bundle for ever — a row is never
+// rewritten — so two rows of one checksum carry the same figures. The row's
+// object key and hash are not kept: nothing that reads the set fetches by
+// them, and the set lives in every incarnation the node holds.
 type livePack struct {
-	checksum      string
-	size, objects int64
+	checksum                                string
+	size, indexBytes, reverseBytes, objects int64
 }
 
 // liveOf is p as the live set keeps it.
 func liveOf(p code.PackRef) livePack {
-	return livePack{checksum: p.GitChecksum, size: p.Size, objects: p.Objects}
+	return livePack{checksum: p.GitChecksum, size: p.Size, indexBytes: p.IndexBytes, reverseBytes: p.ReverseBytes,
+		objects: p.Objects}
+}
+
+// row is p, named id, as a plan reads it ([Cache.Packs]): every figure the
+// live set keeps, and nothing a snapshot's row carries beside them — its
+// object, its part, its kind, its state and its position stay zero.
+func (p livePack) row(id string) code.PackRow {
+	return code.PackRow{PackID: id, Size: p.size, IndexBytes: p.indexBytes, ReverseBytes: p.reverseBytes,
+		GitChecksum: p.checksum, Objects: p.objects}
 }
 
 // setLive records the row id names, whose files are p's, as live in inc; e.mu

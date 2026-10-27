@@ -267,7 +267,14 @@ has every figure, and what the node keeps back for the store, the broker and
 the engine. A repository whose bitmap the node's memory cannot hold is still
 served — without one, so each of its clones walks its history — and raises
 [`code_maintenance_refused`](../reference/alarms.md). A single repository of
-50 to 100 GB of history is past what a git node is sized for.
+50 to 100 GB of history is past what a git node is sized for. A repository's
+home also MERGES its packs ([Compaction](code-host.md#compaction)): the build
+is held to the same background budget — about 300 bytes an object it merges,
+a clone's room beside them and twice `code.limits.max_blob_bytes` for its
+delta window — and refused where the budget cannot hold it
+(`code_cache_compaction_refused`), while its outputs go up at once, holding up
+to sixteen 8 MiB first parts, 128 MiB, on an `s3` store, out of what the node
+keeps back for serving and the store.
 
 **And by the bytes and CPU it serves, not by its requests.** Measured on git
 2.47.3 over a tree of 10 000 files in two hundred pushes, a 31.5 MB pack: from a
@@ -306,8 +313,9 @@ delta, and one a request is reading is never evicted. Unset, the budget is
 derived from the cache's volume at every boot — half of what a shared volume
 leaves it, seven eighths of a volume of its own ([`git`](configuration.md#git))
 — so give the cache a volume of its own. The object store holds one object a
-push, and nothing compacts a repository's packs yet, so it grows by every
-push's pack.
+push until the repository's home git node merges its packs into a few
+([Compaction](code-host.md#compaction)); the packs a merge replaces keep their
+objects a day, then the collector deletes them.
 
 **What the index of pushes costs a git node.** Beside each copy a git node
 keeps the index of which push introduced each commit
@@ -401,12 +409,12 @@ The push records fit the ceiling a first boot derives from 50 GiB free or more
 ([the code log's reservation](../guides/replication.md#what-the-code-logs-reservation-costs)),
 and a push's bytes are never on the log — they are the object store's.
 
-**What this release does not scale yet**, stated as the product's shape:
-packs accumulate — nothing compacts a repository, so its cold sync, its
-objects and its pack rows grow with its pushes, the background index keeping
-its lookups fast, until it holds the 2 048 live packs one may and refuses
-every push carrying objects ([Limits](code-host.md#limits)) — and agents do
-not push: the rates in the table are what the code host is built for, where
+**What this release does not scale yet**, stated as the product's shape: a
+compaction of a repository drops its multi-pack index and that index's bitmap
+on every git node — the commit-graph is kept, since a merge drops no commit —
+and the background indexing writes them again at its own pace, so a clone
+between the two counts its objects by walking
+([Compaction](code-host.md#compaction)) — and agents do not push: the rates in the table are what the code host is built for, where
 this release's pushes are people's and their CI's.
 
 ### How a request reaches the estate

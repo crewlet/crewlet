@@ -59,7 +59,8 @@ anything nothing names. No retirement timestamp reaches the collector and it
 still takes no lock — ADR-0027's judgement is unchanged. The declaring domain
 owns the sweep and a grace that outlasts the longest read of what its table
 names. The first retired table is `code_packs_retired`, the code host's
-retired packs, swept by the code-retention duty's `retire_sweep` records; the
+retired packs, swept by the code-retention duty's `retire_sweep` records
+([ADR-0060](0060-a-compaction-merges-packs-without-judging-reachability.md)); the
 references gate refuses any further one declared until it has a reviewed
 entry naming its grace, the largest object its rows name and what sweeps them
 — a job of the engine's maintenance worker, or a duty whose records delete

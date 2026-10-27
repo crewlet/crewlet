@@ -19,7 +19,10 @@ import (
 // THE RECEIVING NODE'S OWN PACK. A push's receive-pack wrote its pack, its
 // .idx and its .rev into the push's scratch — the bundle the host stored — so
 // once the push's row has applied, the node that took the push links those
-// files into the cache rather than download them back: Adopt.
+// files into the cache rather than download them back: Adopt. A compaction's
+// outputs are adopted the same way by the git node that built them
+// (internal/code/compact), every output of one scratch in one call: what the
+// one node that built them would otherwise download back, a GET an output.
 //
 // AN ADOPTION NEVER WAITS AND IS NEVER LOST. What it must not do is write
 // beside a ROUND — a full one sweeps what its snapshot does not name and
@@ -88,38 +91,44 @@ type staging struct {
 	stem string
 }
 
-// Adopt installs a push's pack from its scratch into the repository's
-// CURRENT incarnation by hard link, so the node that took a push does not
-// download it back — unless a round that read the push's row had already
-// begun that pack's GET before the adoption handed it the staging, or a link
-// fails (see above): called by the host once the push's row has applied, and
-// before it tells the client ok — a client fetching from this node at once
-// would otherwise race the adoption and download its own push.
+// Adopt installs packs from a scratch into the repository's CURRENT
+// incarnation by hard link — a push's one pack, or every output of a
+// compaction — so the node that wrote them does not download them back —
+// unless a round that read their rows had already begun a pack's GET before
+// the adoption handed it the staging, or a link fails (see above): called by
+// the host once the push's row has applied, and before it tells the client ok
+// — a client fetching from this node at once would otherwise race the
+// adoption and download its own push — and by the compactor once its
+// compaction's record has applied.
 //
-// The row having applied is the one thing Adopt cannot check, and the
+// The rows having applied is the one thing Adopt cannot check, and the
 // caller's whole obligation: a pack linked in before its row would be an
 // object no row names, fetchable by id from this node alone until the next
 // full round swept it.
 //
-// pack is the row's: its checksum must be the scratch's one pack's, and each
-// section's size the scratch's file's (a .rev missing included) — the files
-// linked ARE the bundle the host uploaded and sealed, so the sizes are the
-// whole check; a disagreement would install bytes no row names, and is
-// refused ([ErrInvalid]), nothing linked.
+// Each of packs is its row's: its checksum must be one of the scratch's
+// packs', and each section's size that pack's file's (a .rev missing
+// included) — the files linked ARE the bundle the caller uploaded and sealed,
+// so the sizes are the whole check; a disagreement would install bytes no row
+// names, and refuses the whole call ([ErrInvalid]), nothing linked.
 //
-// It NEVER WAITS: adoptions share the directory, and one that meets a round
-// or a listing writing it hands the pack to that writer, which installs it
-// before it lets the directory go (see above). Otherwise a nil error with
-// nothing linked is a cache that already holds the pack, or no cache of the
-// repository on this node. Every adoption is counted under its outcome
+// ONE CALL, ONE ADOPTION, however many packs: one share of the directory's
+// write lock (an adoption's weight, never writeExclusive — adoptions never
+// exclude one another), one dropFor of a pack added, one sync of the
+// directory, and every pack counted under its own outcome. It NEVER WAITS:
+// adoptions share the directory, and one that meets a round or a listing
+// writing it hands every pack to that writer, which installs them before it
+// lets the directory go (see above). Otherwise a nil error with nothing
+// linked is a cache that already holds the packs, or no cache of the
+// repository on this node. Every pack is counted under its outcome
 // (crewlet.code.cache.adoptions).
 //
-// The CURRENT incarnation, not the scratch's: a rebuild between the push's
-// sync and its adoption leaves the pack's row applied either way, and the
-// current incarnation is the one the next reader is handed. Its state is not
-// written — the next round that moves its refs writes it, and a boot's first
-// round recounts the directory.
-func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, pack code.PackRef) error {
+// The CURRENT incarnation, not the scratch's: a rebuild — or a swap — between
+// the caller's sync and its adoption leaves the rows applied either way, and
+// the current incarnation is the one the next reader is handed. Its state is
+// not written — the next round that moves its refs writes it, and a boot's
+// first round recounts the directory.
+func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, packs ...code.PackRef) error {
 	switch {
 	case sc == nil || sc.c != c:
 		return fmt.Errorf("%w: an adoption names a scratch this cache made", ErrInvalid)
@@ -127,6 +136,8 @@ func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, pack code
 		return fmt.Errorf("%w: %s is an advertisement view, which no push writes into", ErrInvalid, sc.Dir)
 	case sc.e.id != repoID:
 		return fmt.Errorf("%w: %s is a scratch of %s, not of %s", ErrInvalid, sc.Dir, sc.e.id, repoID)
+	case len(packs) == 0:
+		return fmt.Errorf("%w: an adoption names the packs it installs, and this one names none", ErrInvalid)
 	}
 	if !c.enter() {
 		return ErrStopped
@@ -135,21 +146,33 @@ func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, pack code
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("cache: adopting into %s: %w", repoID, context.Cause(ctx))
 	}
-	if err := checkAdoption(sc, pack); err != nil {
+	if err := checkAdoption(sc, packs); err != nil {
 		return err
+	}
+	counted := func(outcome adoptOutcome) {
+		for range packs {
+			c.adoptCounted(repoID, outcome)
+		}
 	}
 
 	c.mu.Lock()
 	e := c.entries[repoID]
 	c.mu.Unlock()
 	if e == nil {
-		c.adoptCounted(repoID, adoptUncached)
+		counted(adoptUncached)
 		return nil
 	}
-	st, err := c.stageAdoption(sc, pack)
-	if err != nil {
-		c.adoptCounted(repoID, adoptFailed)
-		return fmt.Errorf("cache: adopting pack %s into %s: %w", pack.PackID, repoID, err)
+	stagings := make([]*staging, 0, len(packs))
+	for _, pack := range packs {
+		st, err := c.stageAdoption(sc, pack)
+		if err != nil {
+			for _, st := range stagings {
+				c.dropStaging(st)
+			}
+			counted(adoptFailed)
+			return fmt.Errorf("cache: adopting pack %s into %s: %w", pack.PackID, repoID, err)
+		}
+		stagings = append(stagings, st)
 	}
 
 	e.mu.Lock()
@@ -157,8 +180,10 @@ func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, pack code
 	switch {
 	case e.dead || e.current == nil:
 		e.mu.Unlock()
-		c.dropStaging(st)
-		c.adoptCounted(repoID, adoptUncached)
+		for _, st := range stagings {
+			c.dropStaging(st)
+		}
+		counted(adoptUncached)
 		return nil
 	case e.write.TryAcquire(1):
 		e.adopting++
@@ -166,21 +191,27 @@ func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, pack code
 		inc.pins++
 	default:
 		// A round or a listing holds the directory, or waits for it: it
-		// installs the pack before it lets go. A staging of the same pack
+		// installs the packs before it lets go. A staging of the same pack
 		// already handed is the same bytes.
-		dup := e.handed[pack.GitChecksum] != nil
-		if !dup {
+		var dups []*staging
+		for _, st := range stagings {
+			if e.handed[st.pack.GitChecksum] != nil {
+				dups = append(dups, st)
+				continue
+			}
 			if e.handed == nil {
 				e.handed = map[string]*staging{}
 			}
-			e.handed[pack.GitChecksum] = st
+			e.handed[st.pack.GitChecksum] = st
 		}
 		e.mu.Unlock()
-		if dup {
+		for _, st := range dups {
 			c.dropStaging(st)
 		}
-		c.log.Debug("code_cache_adopt_handed", "repo", repoID, "pack_id", pack.PackID)
-		c.adoptCounted(repoID, adoptHanded)
+		for _, pack := range packs {
+			c.log.Debug("code_cache_adopt_handed", "repo", repoID, "pack_id", pack.PackID)
+		}
+		counted(adoptHanded)
 		return nil
 	}
 	e.mu.Unlock()
@@ -188,16 +219,27 @@ func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, pack code
 	if c.knobs != nil && c.knobs.adopting != nil {
 		c.knobs.adopting(repoID)
 	}
-	outcome, err := c.placeStaging(e, inc, st)
+	outcomes, err := c.placeStagings(e, inc, stagings)
 	e.mu.Lock()
 	gone := c.unpin(e, inc)
 	e.mu.Unlock()
 	c.trash(gone)
-	c.adoptCounted(repoID, outcome)
+	for _, outcome := range outcomes {
+		c.adoptCounted(repoID, outcome)
+	}
 	if err != nil {
-		return fmt.Errorf("cache: adopting pack %s into %s: %w", pack.PackID, repoID, err)
+		return fmt.Errorf("cache: adopting %s into %s: %w", packIDs(packs), repoID, err)
 	}
 	return nil
+}
+
+// packIDs names packs for a line or an error: their ids, in order.
+func packIDs(packs []code.PackRef) string {
+	ids := make([]string, len(packs))
+	for i, p := range packs {
+		ids[i] = p.PackID
+	}
+	return "pack " + strings.Join(ids, ", ")
 }
 
 // adoptCounted records one adoption's outcome: counted, and — when nothing
@@ -340,36 +382,41 @@ func (c *Cache) stageAdoptedLayer(sc *Scratch, row code.LayerRow) (*stagedLayer,
 	return st, nil
 }
 
-// checkAdoption holds the scratch's one pack to the row's: its checksum, and
-// each section's size.
-func checkAdoption(sc *Scratch, pack code.PackRef) error {
-	if err := pack.Check(); err != nil {
-		return fmt.Errorf("%w: adopting pack %s: %w", ErrInvalid, pack.PackID, err)
+// checkAdoption holds each of packs to one of the scratch's packs: its
+// checksum, and each section's size. The scratch is listed once for them all.
+func checkAdoption(sc *Scratch, packs []code.PackRef) error {
+	held, err := sc.Packs()
+	if err != nil {
+		return fmt.Errorf("%w: adopting %s: %w", ErrInvalid, packIDs(packs), err)
 	}
-	_, cs, ok, err := sc.Pack()
-	switch {
-	case err != nil:
-		return fmt.Errorf("%w: adopting pack %s: %w", ErrInvalid, pack.PackID, err)
-	case !ok:
-		return fmt.Errorf("%w: adopting pack %s: %s holds no pack", ErrInvalid, pack.PackID, sc.Dir)
-	case cs != pack.GitChecksum:
-		return fmt.Errorf("%w: adopting pack %s: its row names pack-%s and %s holds pack-%s",
-			ErrInvalid, pack.PackID, pack.GitChecksum, sc.Dir, cs)
+	in := make(map[string]bool, len(held))
+	for _, p := range held {
+		in[p.Checksum] = true
 	}
-	stem := filepath.Join(sc.Dir, "objects", "pack", "pack-"+cs)
-	for _, section := range []struct {
-		ext  string
-		want int64
-	}{{".pack", pack.PackBytes()}, {".idx", pack.IndexBytes}, {".rev", pack.ReverseBytes}} {
-		info, err := os.Lstat(stem + section.ext)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			return fmt.Errorf("%w: adopting pack %s: %s has no %s", ErrInvalid, pack.PackID, sc.Dir, section.ext)
-		case err != nil:
-			return fmt.Errorf("cache: adopting pack %s: %w", pack.PackID, err)
-		case !info.Mode().IsRegular() || info.Size() != section.want:
-			return fmt.Errorf("%w: adopting pack %s: the scratch's %s is %d bytes and its row says %d",
-				ErrInvalid, pack.PackID, section.ext, info.Size(), section.want)
+	for _, pack := range packs {
+		if err := pack.Check(); err != nil {
+			return fmt.Errorf("%w: adopting pack %s: %w", ErrInvalid, pack.PackID, err)
+		}
+		if !in[pack.GitChecksum] {
+			return fmt.Errorf("%w: adopting pack %s: its row names pack-%s and %s holds no such pack",
+				ErrInvalid, pack.PackID, pack.GitChecksum, sc.Dir)
+		}
+		stem := filepath.Join(sc.Dir, "objects", "pack", "pack-"+pack.GitChecksum)
+		for _, section := range []struct {
+			ext  string
+			want int64
+		}{{".pack", pack.PackBytes()}, {".idx", pack.IndexBytes}, {".rev", pack.ReverseBytes}} {
+			info, err := os.Lstat(stem + section.ext)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				return fmt.Errorf("%w: adopting pack %s: %s has no %s", ErrInvalid, pack.PackID, sc.Dir,
+					section.ext)
+			case err != nil:
+				return fmt.Errorf("cache: adopting pack %s: %w", pack.PackID, err)
+			case !info.Mode().IsRegular() || info.Size() != section.want:
+				return fmt.Errorf("%w: adopting pack %s: the scratch's %s is %d bytes and its row says %d",
+					ErrInvalid, pack.PackID, section.ext, info.Size(), section.want)
+			}
 		}
 	}
 	return nil
@@ -449,64 +496,98 @@ func linkBundle(link func(oldname, newname string) error, stem, packDir, checksu
 	return true, nil
 }
 
-// placeStaging installs a staging into inc — the write lock held, inc pinned
-// — and drops it, whatever the outcome: the pack's files linked into
-// objects/pack (unless the incarnation holds one of them already), counted,
-// and the directory synced.
+// placeStagings installs stagings into inc — the write lock held, inc pinned
+// — and drops them, whatever the outcome: each pack's files linked into
+// objects/pack (unless the incarnation holds one of them already) and
+// counted, then the directory synced ONCE for them all; and answers each
+// staging's outcome, in order, with every failure joined.
 //
-// A DIRECTORY SYNC THAT FAILS LEAVES THE PACK INSTALLED AND COUNTED, and is
+// A DIRECTORY SYNC THAT FAILS LEAVES THE PACKS INSTALLED AND COUNTED, and is
 // returned, exactly as a round's install answers one: the names are there and
 // every reader of the directory sees them; what the failed sync costs is their
 // surviving a crash, and a boot's first round is a full one, which installs
 // whatever a crash lost. Taking the links back would cost the next sync a GET
-// to repair nothing.
-func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutcome, error) {
-	defer c.dropStaging(st)
+// a pack to repair nothing.
+func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) ([]adoptOutcome, error) {
+	defer func() {
+		for _, st := range stagings {
+			c.dropStaging(st)
+		}
+	}()
 	packDir := filepath.Join(inc.dir, "objects", "pack")
 	// THE ROW IS LIVE in the incarnation once this ends, whatever it links:
 	// its row has applied, and the pack is either linked here or held
 	// already (swap.go's live set — a compaction's retirement of it takes it
 	// out by this id, before any delta has served it).
-	held := func() {
+	held := func(st *staging) {
 		e.mu.Lock()
 		setLive(inc, st.pack.PackID, liveOf(st.pack))
 		e.mu.Unlock()
 	}
-	for _, ext := range bundleOrder {
-		_, err := os.Lstat(filepath.Join(packDir, "pack-"+st.pack.GitChecksum+ext))
+	outcomes := make([]adoptOutcome, len(stagings))
+	var (
+		errs   []error
+		toLink []int
+	)
+	for i, st := range stagings {
+		state, err := placedAlready(packDir, st.pack.GitChecksum)
 		switch {
-		case err == nil:
-			// Installed — or begun by an install a failed round left,
-			// which the next round finishes.
-			held()
-			return adoptHeld, nil
-		case !errors.Is(err, fs.ErrNotExist):
-			return adoptFailed, err
+		case err != nil:
+			outcomes[i] = adoptFailed
+			errs = append(errs, fmt.Errorf("pack %s: %w", st.pack.PackID, err))
+		case state:
+			// Installed — or begun by an install a failed round left, which
+			// the next round finishes.
+			held(st)
+			outcomes[i] = adoptHeld
+		default:
+			toLink = append(toLink, i)
 		}
 	}
-	// A pack added: what a declaration says of one, before it is linked in
-	// (dropFor's order rule). No declaration drops for an added pack today.
-	if _, err := c.dropFor(e, inc, EventPackAdded, eventDetail{}); err != nil {
-		return adoptFailed, err
+	if len(toLink) == 0 {
+		return outcomes, errors.Join(errs...)
 	}
-	linked, err := linkBundle(nil, st.stem, packDir, st.pack.GitChecksum, nil)
-	switch {
-	case err != nil:
-		return adoptFailed, err
-	case !linked:
-		held()
-		return adoptHeld, nil
+	// Packs added: what a declaration says of one, once for the call and
+	// before any is linked in (dropFor's order rule). No declaration drops
+	// for an added pack today.
+	if _, err := c.dropFor(e, inc, EventPackAdded, eventDetail{}); err != nil {
+		for _, i := range toLink {
+			outcomes[i] = adoptFailed
+		}
+		return outcomes, errors.Join(append(errs, err)...)
+	}
+	var linked []int
+	for _, i := range toLink {
+		st := stagings[i]
+		ok, err := linkBundle(nil, st.stem, packDir, st.pack.GitChecksum, nil)
+		switch {
+		case err != nil:
+			outcomes[i] = adoptFailed
+			errs = append(errs, fmt.Errorf("pack %s: %w", st.pack.PackID, err))
+		case !ok:
+			held(st)
+			outcomes[i] = adoptHeld
+		default:
+			c.vouchPack(e, inc, st.pack.GitChecksum)
+			linked = append(linked, i)
+		}
+	}
+	if len(linked) == 0 {
+		return outcomes, errors.Join(errs...)
 	}
 
-	c.vouchPack(e, inc, st.pack.GitChecksum)
 	now := c.now()
 	e.mu.Lock()
-	setLive(inc, st.pack.PackID, liveOf(st.pack))
-	inc.packs++
-	inc.objects += st.pack.Objects
-	c.setSize(inc, inc.diskBytes+st.pack.Size)
+	for _, i := range linked {
+		st := stagings[i]
+		setLive(inc, st.pack.PackID, liveOf(st.pack))
+		inc.packs++
+		inc.objects += st.pack.Objects
+		c.setSize(inc, inc.diskBytes+st.pack.Size)
+		outcomes[i] = adoptAdopted
+	}
 	inc.unmoved = false
-	// No repair (incarnation.repairWrite): a push's pack adds what no
+	// No repair (incarnation.repairWrite): an adopted pack adds what no
 	// failed request needed, and leaves whatever failed it as it was.
 	// The maintainer's debounce and ceiling, exactly as a round that adds a
 	// pack sets them; and like such a round's, no kick: the pack is due only
@@ -525,9 +606,25 @@ func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutc
 		sync = c.knobs.adoptSync
 	}
 	if err := sync(packDir); err != nil {
-		return adoptAdopted, fmt.Errorf("the pack is installed, and its directory is not yet durable: %w", err)
+		errs = append(errs, fmt.Errorf("the packs are installed, and their directory is not yet durable: %w", err))
 	}
-	return adoptAdopted, nil
+	return outcomes, errors.Join(errs...)
+}
+
+// placedAlready reports whether packDir holds any of the files of the pack
+// named checksum — installed, or begun by an install a failed round left —
+// or an error that is no file's absence.
+func placedAlready(packDir, checksum string) (bool, error) {
+	for _, ext := range bundleOrder {
+		_, err := os.Lstat(filepath.Join(packDir, "pack-"+checksum+ext))
+		switch {
+		case err == nil:
+			return true, nil
+		case !errors.Is(err, fs.ErrNotExist):
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 // claimHanded takes the staging handed to e for p, if one was and it is p's —
@@ -551,7 +648,7 @@ func (c *Cache) claimHanded(e *entry, p code.PackRow) *staging {
 
 // releaseWrite lets go of n of e's write lock — taken by a round, a listing
 // or an adoption — after installing every staging handed to e meanwhile into
-// its current incarnation (placeStaging). The registrations are taken, and
+// its current incarnation (placeStagings). The registrations are taken, and
 // the lock let go, under e.mu: an adoption that fails to try the lock under
 // the same mu registers before this last look, or finds the lock free.
 // Taken back after a release, a staging is dropped where nothing is left to
@@ -585,13 +682,17 @@ func (c *Cache) releaseWrite(e *entry, n int64) {
 			inc.pins++
 		}
 		e.mu.Unlock()
+		stagings := make([]*staging, 0, len(handed))
 		for _, st := range handed {
-			if inc == nil || !c.enter() {
+			stagings = append(stagings, st)
+		}
+		if inc == nil || !c.enter() {
+			for _, st := range stagings {
 				c.dropStaging(st)
-				continue
 			}
-			if _, err := c.placeStaging(e, inc, st); err != nil {
-				c.log.Warn("code_cache_adopt_failed", "repo", e.id, "pack_id", st.pack.PackID, "error", err)
+		} else {
+			if _, err := c.placeStagings(e, inc, stagings); err != nil {
+				c.log.Warn("code_cache_adopt_failed", "repo", e.id, "error", err)
 			}
 			c.leave()
 		}

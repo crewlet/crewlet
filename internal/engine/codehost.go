@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
@@ -344,15 +345,38 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: start the code host: %w", err)
 	}
 
-	// 9. ITS STATUS, answered for the fleet (codestatus.go) from the moment
+	// 9. THE COMPACTOR, the merge of a repository's packs on its HOME git
+	// node (ADR-0060): over the cache and the store the host uses, listing
+	// and proposing through the router's code seam — whose Compact raises
+	// this node's floors past what it landed — and asking the router itself
+	// who is home. Started here, on a lifetime of its own, after the host
+	// whose cache it builds in; stopped before the host, in the one bounded
+	// stop ([native.stopCodeHost]).
+	var compactions codecompact.Estate = seam
+	if e.compactorEstate != nil {
+		compactions = e.compactorEstate(compactions)
+	}
+	compactor, err := codecompact.New(codecompact.Options{
+		Cache: c, Objects: objects, Estate: compactions, Homes: e.router, NodeID: nodeID,
+		Limits: e.codeLimits, Metrics: e.metrics,
+	})
+	if err != nil {
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: build the compactor: %w", err)
+	}
+	compactor.Start()
+
+	// 10. ITS STATUS, answered for the fleet (codestatus.go) from the moment
 	// the host serves, and withdrawn before it stops ([native.stopCodeHost]):
 	// under the host's lifetime rather than this call's, as the host runs.
 	withdraw, err := e.serveCodeStatus(context.WithoutCancel(ctx), h)
 	if err != nil {
+		compactor.Stop(context.WithoutCancel(ctx))
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: serve the code host's status on %s: %w", topics.CodeStatus, err)
 	}
-	return codeHostParts{host: h, reads: reads, cache: c, size: size, withdrawStatus: withdraw}, nil
+	return codeHostParts{host: h, reads: reads, cache: c, size: size, compactor: compactor,
+		withdrawStatus: withdraw}, nil
 }
 
 // codeFleet is how many live nodes serve git and how many hold the estate,
@@ -377,20 +401,26 @@ func (e *Engine) codeFleet() (int, int, error) {
 // beside it over the same cache and pool, the cache they serve from — which
 // the host stops with itself, and which the engine holds only to READ, for
 // what no request asks (the alarm reading's code half, [Engine.codeReading])
-// — the budget it sized that cache to, and what withdraws the host's status
-// answerer ([Engine.serveCodeStatus]).
+// — the budget it sized that cache to, the compactor that merges the packs of
+// the repositories this node is home for, started, and what withdraws the
+// host's status answerer ([Engine.serveCodeStatus]).
 type codeHostParts struct {
 	host           *host.Server
 	reads          *query.Server
 	cache          *cache.Cache
 	size           codeCacheSize
+	compactor      *codecompact.Compactor
 	withdrawStatus queue.Unsubscribe
 }
 
 // codeReading fills the reading's code half from this node's git cache: how
 // many repositories its maintainer cannot write a bitmap of for memory, the
 // largest of those charges and the budget they are past
-// ([cache.Cache.AlarmReading]), which raise code_maintenance_refused.
+// ([cache.Cache.AlarmReading]), which raise code_maintenance_refused — and
+// from its compactor: how many repositories this node is home for sit at the
+// pack bound, every push carrying objects into them refused until a
+// compaction lands ([codecompact.Compactor.AlarmReading]), which raise
+// code_compaction_behind on the node that compacts them.
 //
 // THE CACHE JUDGED, LOGGED, COUNTED AND GAUGED EVERY REFUSAL, AND NOTHING READ
 // IT INTO A READING, so the alarm the cache's docs, the alarm reference and
@@ -413,6 +443,9 @@ func (e *Engine) codeReading(out *statelog.Reading) {
 		return
 	}
 	n.gitCache.AlarmReading(out)
+	if n.compactor != nil {
+		n.compactor.AlarmReading(out)
+	}
 }
 
 // gitBackground is what this node advertises its git cache gives its
@@ -719,10 +752,14 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // while something of this one still writes in it, and waiting for it again
 // changes nothing.
 //
-// THE STATUS ANSWERER FIRST, inside the same one stop: a node that has decided
-// to stop serving git stops answering for its host before the host and the
-// cache its answers read stop, so no peer is told of a cache that is going. Its
-// withdrawal waits only for answers already in flight, each read from memory.
+// THE COMPACTOR FIRST, inside the same one stop: it proposes through the
+// router and holds a maintenance slot of the cache the host stops with itself,
+// so it is ended — its build killed, its uploads abandoned, an unproposed
+// compaction's outputs left to the collector — before the cache is. THEN THE
+// STATUS ANSWERER: a node that has decided to stop serving git stops answering
+// for its host before the host and the cache its answers read stop, so no
+// peer is told of a cache that is going. Its withdrawal waits only for answers
+// already in flight, each read from memory.
 //
 // THEN THE GIT READS, for the same reason and one more: a peer's read is
 // answered on this node's git lane by the query server, which the host does
@@ -732,11 +769,15 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // stop refuses every read after it, cuts the reads in flight — each answered
 // unready, about this node, so its walk asks the next git node — and waits
 // for them, before the host and the cache they read stop ([query.Server.Stop]).
+// All four share the one budget, and a second caller waits for the first.
 func (n *native) stopCodeHost(ctx context.Context) {
 	if n == nil || n.codeHost == nil {
 		return
 	}
 	n.codeHostStop.stop(ctx, func(ctx context.Context) {
+		if n.compactor != nil {
+			n.compactor.Stop(ctx)
+		}
 		if n.withdrawCodeStatus != nil {
 			if err := n.withdrawCodeStatus(ctx); err != nil {
 				log.WarnContext(ctx, "code_status_answerer_not_withdrawn", "error", err)

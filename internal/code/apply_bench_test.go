@@ -745,8 +745,8 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 //     days) — the id and size of the push's pack among its columns, where it
 //     carries one;
 //   - code_packs-bytes/row is its pack's code_packs row and its index
-//     entries, which live as long as the pack does — until the repository is
-//     purged (until compaction retires it, once a compactor runs).
+//     entries, which live as long as the pack does — until a compaction
+//     retires it, or the repository is purged.
 //
 // BY THE TABLES, never by the file's growth with a pack less its growth
 // without one: that difference counts the push row's pack columns, kept 181

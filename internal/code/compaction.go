@@ -61,8 +61,8 @@ import (
 //
 // # A merge makes no reachability judgement
 //
-// Every object of the inputs is in the outputs ([Compaction]), so no push
-// decided against the inputs can land a ref whose closure a compaction
+// Every object of the inputs is in the outputs ([Compaction], ADR-0060), so no
+// push decided against the inputs can land a ref whose closure a compaction
 // removed: a compaction is decided against the inputs alone, never against the
 // refs, and the subject's compare-and-set orders it with every push.
 
@@ -84,6 +84,32 @@ import (
 func (p CompactionProposal) Validate() error {
 	_, err := p.measure()
 	return err
+}
+
+// ValidateUnstored is [CompactionProposal.Validate] of a proposal whose
+// outputs are not yet STORED — each output's sizes, object count and checksum
+// known from the files its build wrote ([LayBundle]), its object's key and
+// digest not until its put returns: every output is measured and checked as it
+// will be once stored, a key and a digest having one spelling's length each,
+// exactly as [Proposal.ValidateUnstored] measures a push's pack. So the git
+// node that built a compaction holds it to every rule its committer will
+// before a byte of it is uploaded (internal/code/compact), and a compaction
+// no committer could take — an output past the bundle rule, more outputs than
+// it may write, a record past its bytes — stores nothing. An output already
+// stored is refused: Validate is the check of that.
+func (p CompactionProposal) ValidateUnstored() error {
+	stand := largestEntry().Pack
+	add := make([]PackRef, len(p.Compaction.Add))
+	for i, out := range p.Compaction.Add {
+		if !out.Object.IsZero() || out.Hash != "" {
+			return fmt.Errorf("%w: add[%d]: already stored as %s — Validate checks a stored output",
+				ErrInvalidProposal, i, out.Object)
+		}
+		out.Object, out.Hash = stand.Object, stand.Hash
+		add[i] = out
+	}
+	p.Compaction.Add = add
+	return p.Validate()
 }
 
 // measure validates p and answers its queued byte charge: the compaction

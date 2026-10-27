@@ -2,6 +2,7 @@ package codetest_test
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,6 +95,47 @@ func TestTheSuiteCatchesAnOkOnPending(t *testing.T) {
 		err := codetest.OkOnlyFromARow(t, codetest.Solo(liar, nil))
 		if err == nil || !strings.Contains(err.Error(), "an ok answered from a decision") {
 			t.Errorf("OkOnlyFromARow over a host that reports ok on pending = %v, want the decision named", err)
+		}
+	})
+}
+
+// graceless is a data node's applier that LIES about a retirement: every
+// record it applies leaves no row in code_packs_retired, as an applier that
+// moved a compaction's inputs out of code_packs without keeping them for their
+// grace would — so nothing shields a retired pack's object from the collector
+// once its upload's own grace has passed.
+type graceless struct{ statelog.Applier }
+
+func (a graceless) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	opts statelog.ApplyOptions) (int, error) {
+	rows, err := a.Applier.Apply(ctx, tx, rec, opts)
+	if err != nil {
+		return rows, err
+	}
+	res, err := tx.ExecContext(ctx, "DELETE FROM code_packs_retired")
+	if err != nil {
+		return rows, err
+	}
+	gone, err := res.RowsAffected()
+	return rows + int(gone), err
+}
+
+// A suite whose check passes a liar certifies nothing:
+// ARetiredPackOutlivesItsLongestRead (C4) must catch a topology whose applier
+// keeps no retired row — the first collection past every input's upload grace
+// deletes the objects a reader may still be reading — and pass an honest one.
+func TestTheSuiteCatchesARetirementWithNoGrace(t *testing.T) {
+	t.Run("honest", func(t *testing.T) {
+		if err := codetest.ARetiredPackOutlivesItsLongestRead(t, codetest.Solo(codetest.SoloOptions{}, nil)); err != nil {
+			t.Errorf("ARetiredPackOutlivesItsLongestRead over an honest fleet: %v", err)
+		}
+	})
+	t.Run("liar", func(t *testing.T) {
+		liar := codetest.SoloOptions{WrapApplier: func(a statelog.Applier) statelog.Applier { return graceless{a} }}
+		err := codetest.ARetiredPackOutlivesItsLongestRead(t, codetest.Solo(liar, nil))
+		if err == nil || !strings.Contains(err.Error(), "retired objects inside their grace") {
+			t.Errorf("ARetiredPackOutlivesItsLongestRead over an applier that keeps no retired row = %v, want the "+
+				"objects deleted inside their grace named", err)
 		}
 	})
 }

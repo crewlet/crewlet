@@ -2,13 +2,18 @@ package codecluster_test
 
 import (
 	"fmt"
+	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Not t.Parallel(): two three-member clusters at once on one runner is the
@@ -33,7 +38,10 @@ func TestTheCodeHostPassesTheFleetSuiteOnS3(t *testing.T) {
 // and only the repository's committer — the first of its rendezvous order over
 // the running members — appends anything. A router that asked its own member
 // first would have each receiver commit its own pushes, and a burst to one
-// repository would contend at the broker between three committers.
+// repository would contend at the broker between three committers. And a
+// COMPACTION of a repository, keyed by the same repository id, meets the same
+// committer whichever member proposes it: asked through every member at once,
+// it is appended once, by the committer alone (ADR-0060).
 func TestEveryMemberRoutesARepositoryToOneCommitter(t *testing.T) {
 	const repos = 16
 	c := startCluster(t, "nats")
@@ -80,6 +88,81 @@ func TestEveryMemberRoutesARepositoryToOneCommitter(t *testing.T) {
 				t.Errorf("%s: %s appended %d records, and the repository's committer is %s", d.Name, m, grew,
 					committer)
 			}
+		}
+	}
+	compactionMeetsTheCommitter(t, c, p)
+}
+
+// compactionMeetsTheCommitter is TestEveryMemberRoutesARepositoryToOneCommitter's
+// compaction: a repository of two pushes' packs, merged into one bundle stored
+// as a compaction's output, proposed through every member at once under one
+// compaction id — appended once, by the repository's committer alone.
+func compactionMeetsTheCommitter(t *testing.T, c *cluster, p *codetest.Person) {
+	t.Helper()
+	const name = "route-compaction"
+	c.Declare(t, code.Declared{Name: name, Settings: codetest.Settings()})
+	members := c.DataNodes()
+	work := p.Init()
+	var head string
+	for i := range 2 {
+		head = p.Commit(work, map[string]string{"README.md": fmt.Sprintf("compaction %d\n", i)}, "compaction")
+		if res := p.Push(t.Context(), work, urlOf(t, c, members[0], name), "HEAD:refs/heads/main"); res.Err != nil {
+			t.Fatalf("the push to %s: %s", name, res)
+		}
+	}
+	rows, err := c.Rows(t.Context(), name, codetest.Linearizable)
+	if err != nil {
+		t.Fatalf("the rows of %s: %v", name, err)
+	}
+	if len(rows.Packs) != 2 {
+		t.Fatalf("%s holds %d packs after two pushes, want two", name, len(rows.Packs))
+	}
+	retire := []string{rows.Packs[0].PackID, rows.Packs[1].PackID}
+	slices.Sort(retire)
+	dir := gittest.Empty(t)
+	checksum := gittest.Pack(t, p.Git(), dir, work, head)
+	path := filepath.Join(dir, "objects", "pack", "pack-"+checksum+".pack")
+	id := statelog.NewOpID(time.Now(), "")
+	out, err := code.LayBundle(code.DeriveOutputPackID(id, 0), path, checksum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := objstore.NewStore(c.Objects())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := code.StoreBundle(t.Context(), objects, path, out, nil); err != nil {
+		t.Fatal(err)
+	}
+	proposal := code.CompactionProposal{Compaction: code.Compaction{RepoID: rows.Repo.ID, CompactionID: id,
+		Node: members[0], Seen: rows.Position, Retire: retire, Add: []code.PackRef{*out}}}
+	committer := c.Committer(rows.Repo.ID)
+	before := map[string]int{}
+	for _, m := range members {
+		before[m] = c.Appends(m)
+	}
+	results := make([]code.CompactResult, len(members))
+	errs := make([]error, len(members))
+	var wg sync.WaitGroup
+	for i, m := range members {
+		wg.Go(func() { results[i], errs[i] = c.member(t, m).router.Load().Code().Compact(t.Context(), proposal) })
+	}
+	wg.Wait()
+	for i, res := range results {
+		if errs[i] != nil || res.Outcome != statelog.OutcomeApplied {
+			t.Errorf("the compaction asked through %s: %+v, %v; want applied, every ask collapsed onto one record",
+				members[i], res, errs[i])
+		}
+	}
+	for _, m := range members {
+		grew := c.Appends(m) - before[m]
+		switch {
+		case m == committer && grew != 1:
+			t.Errorf("the committer %s appended %d records for one compaction asked through every member, want one",
+				m, grew)
+		case m != committer && grew != 0:
+			t.Errorf("%s appended %d records of a compaction, and the repository's committer is %s", m, grew,
+				committer)
 		}
 	}
 }

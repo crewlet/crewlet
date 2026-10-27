@@ -459,8 +459,8 @@ type retirement struct {
 // declaration matches, so the list can be neither short nor stale.
 var retirements = map[string]retirement{
 	// THE CODE HOST'S RETIRED PACKS: a day, over the 21 h 21 min a clone of
-	// the largest bundle a row can name may read it, removed by the
-	// code-retention duty's retire_sweep records and held to that by
+	// the largest bundle a row can name may read it (ADR-0060), removed by
+	// the code-retention duty's retire_sweep records and held to that by
 	// internal/engine.TestARetirementIsSweptByARecordTheEngineRuns.
 	code.RetiredPackReferences.Table: {grace: code.RetireGrace, largest: code.MaxPackBytes,
 		sweep: "the code-retention duty's retire_sweep records (code.Store.RetireSweep)"},
