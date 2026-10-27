@@ -647,6 +647,15 @@ and check the events listed under [The manifest the engine
 builds](#the-manifest-the-engine-builds). GitHub offers no API that switches an
 app's webhook on, so this is a person's step, once per app.
 
+**The webhook secret for such an app is the organization's.** An app created
+with no webhook was given no signing secret by GitHub, so the engine sealed
+none for it and verifies its deliveries against `integrations.github.webhook_secret`.
+Set the app's webhook secret at GitHub to that same value; a secret of the
+app's own would fail every delivery's signature check. To give each agent a
+secret of its own instead, delete the app at GitHub and create it again from
+the seat's card once the engine has its public address: the manifest then
+carries the hook, GitHub generates the secret, and the engine seals it.
+
 ### The two routes
 
 | Route | Called by | What it does |
