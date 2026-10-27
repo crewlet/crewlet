@@ -70,12 +70,10 @@ func TestEveryCodeReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 			return err
 		}},
 		{"ResolveRef", func(f statelog.Freshness) error {
-			_, err := reader.ResolveRef(ctx, code.RefQuery{Asker: asker, Repo: "app", Ref: "main", Fresh: f})
-			if errors.Is(err, code.ErrRefNotFound) {
-				// ANSWERED: the repository holds no main, which only a read
-				// that was served can say.
-				return nil
-			}
+			// ANSWERED even where the repository holds no main: the answer
+			// says so of the name, which only a read that was served can.
+			_, err := reader.ResolveRef(ctx, code.RefQuery{Asker: asker, Repo: "app", Refs: []string{"main"},
+				Fresh: f})
 			return err
 		}},
 	} {
@@ -127,8 +125,8 @@ func TestACodeReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 			return err
 		},
 		"ResolveRef": func() error {
-			_, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: asker, Repo: "app", Ref: "main",
-				Fresh: ask})
+			_, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: asker, Repo: "app",
+				Refs: []string{"main"}, Fresh: ask})
 			return err
 		},
 		"Read(introduced) at session": func() error {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,15 +47,17 @@ import (
 // level: it is asked with the caller's floor on the code log — this node's own
 // pushes to THAT repository (never its writes to any other, which no copy of
 // this one holds), and where each ref it named last MOVED, the push that set
-// it — as the git node's SYNC level, never a barrier. NEVER WHERE THE RESOLVE READ THE REF: a
-// linearizable read's checkpoint is past its own barrier, so a copy current to
-// every push of the repository still sits below it, and a floor there made the
-// git node run a sync round for nothing on every read by a ref; floored at the
-// ref's move, a current copy answers as it stands, and only one behind the
-// commits a call names syncs first. A turn pays one barrier per repository it
-// names — the repository is resolved ONCE A TURN ([CodeDeps.repo], kept on the
-// turn's lookups) — and one per ref a call names; a call that names commits by
-// id pays none beyond the repository's.
+// it — as the git node's SYNC level, never a barrier. NEVER WHERE THE RESOLVE
+// READ THE REF: a linearizable read's checkpoint is past its own barrier, so a
+// copy current to every push of the repository still sits below it, and a
+// floor there made the git node run a sync round for nothing on every read by
+// a ref; floored at the ref's move, a current copy answers as it stands, and
+// only one behind the commits a call names syncs first. A turn pays one
+// barrier per repository it names — the repository is resolved ONCE A TURN
+// ([CodeDeps.repo], kept on the turn's lookups) — and one per call that names
+// refs, however many it names, all resolved in one read ([CodeDeps.resolveRef])
+// at one checkpoint; a call that names commits by id pays none beyond the
+// repository's.
 //
 // # Text somebody else wrote is fenced
 //
@@ -328,27 +331,40 @@ func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
 	turn.LookedUp().Forget(codeRepoKey{asker: asker, name: repo.Name})
 }
 
-// resolveRef is a NAME as a ref of repo: ONE code.resolve_ref at the seat's
-// level — linearizable, the one read about a ref that pays a barrier —
-// answering the ref's row: its oid, its whole name, the position the read saw
-// it at, and where it last moved, which a read by object id is then floored
-// at ([resolvedRev.at]). THE ONE
-// code.RefQuery in this package: code_resolve's `ref` and code_landed_in's
-// `target` call it directly (a ref, never an id), and [CodeDeps.resolveRev] for
-// a revision that is not an id.
+// resolveRef is the NAMES a call gives as refs of repo, every one of them
+// resolved in ONE code.resolve_ref at the seat's level — linearizable, the one
+// read about refs that pays a barrier, so a call naming two pays one barrier
+// and one round trip rather than one each, and reads both at one checkpoint:
+// a comparison compares them as they stood at the same moment. It answers each
+// name's row in the names' order — its oid, its whole name and where it last
+// moved, which a read by object id is then floored at ([resolvedRev.at]) — and
+// the checkpoint they were read at; a name no live ref holds refuses the call
+// in the code host's own sentence, every such name named. THE ONE
+// code.RefQuery in this package: code_resolve's `ref` calls it directly, and
+// [CodeDeps.resolveRevs] for every revision of a call that is not an id.
 func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
-	repo code.RepoRef, name string) (code.RefAnswer, *tools.Result) {
+	repo code.RepoRef, names ...string) ([]code.ResolvedRef, statelog.Position, *tools.Result) {
 
-	answer, err := d.Code.ResolveRef(ctx, code.RefQuery{Repo: repo.Name, Ref: name, Fresh: seatRead,
+	answer, err := d.Code.ResolveRef(ctx, code.RefQuery{Repo: repo.Name, Refs: names, Fresh: seatRead,
 		Asker: asker})
 	if err != nil {
 		r := d.failed(ctx, turn, tool, asker, repo, err)
-		return code.RefAnswer{}, &r
+		return nil, statelog.Position{}, &r
 	}
 	if r := d.sameRepo(turn, tool, asker, repo, answer.Repo); r != nil {
-		return code.RefAnswer{}, r
+		return nil, statelog.Position{}, r
 	}
-	return answer, nil
+	if len(answer.Refs) != len(names) {
+		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered %d of the %d refs asked of %s",
+			len(answer.Refs), len(names), repo.Name), fmt.Sprintf("%s could not read repository %q: %s.", tool,
+			repo.Name, faultSaid))
+		return nil, statelog.Position{}, &r
+	}
+	if err := answer.Err(); err != nil {
+		r := codeFailure(ctx, tool, repo.Name, err)
+		return nil, statelog.Position{}, &r
+	}
+	return answer.Refs, answer.Position, nil
 }
 
 // headRev is the revision a call names its repository's default branch by.
@@ -356,14 +372,16 @@ const headRev = "HEAD"
 
 // resolvedRev is a revision argument as a read by object id names it: the
 // object id — whole, or an abbreviation the git node expands — and, where the
-// argument was a ref, the ref it resolved through.
+// argument was a ref, the ref it resolved through and the checkpoint that
+// read was at.
 type resolvedRev struct {
-	oid string
-	ref *code.RefAnswer
+	oid  string
+	ref  *code.ResolvedRef
+	read statelog.Position
 }
 
 // at is what a read of the revision is floored at: the position of the record
-// that last moved its ref ([code.RefAnswer.Moved]), where the commit it names
+// that last moved its ref ([code.ResolvedRef.Moved]), where the commit it names
 // had landed at the latest — zero for an id, whose read names no floor of its
 // own.
 func (r resolvedRev) at() statelog.Position {
@@ -385,25 +403,47 @@ func revArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 	return rev, nil
 }
 
-// resolveRev is a revision as an oid: an object id, whole or abbreviated,
-// passes with no read (the git node expands an abbreviation from the objects
-// alone, never as a ref); `HEAD` is the repository's default branch; anything
-// else is a branch, a tag or a ref, resolved by [CodeDeps.resolveRef]. So a
-// branch whose name is all hex digits is named by its whole ref.
-func (d CodeDeps) resolveRev(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
-	repo code.RepoRef, rev string) (resolvedRev, *tools.Result) {
+// resolveRevs is a call's revision arguments as oids, in their order: an
+// object id, whole or abbreviated, passes with no read (the git node expands
+// an abbreviation from the objects alone, never as a ref); `HEAD` is the
+// repository's default branch; every other is a branch, a tag or a ref, and
+// ALL OF THEM are resolved in the one read of [CodeDeps.resolveRef] — a name
+// given twice, once — so a call pays one barrier however many refs it names.
+// A branch whose name is all hex digits is named by its whole ref.
+func (d CodeDeps) resolveRevs(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
+	repo code.RepoRef, revs ...string) ([]resolvedRev, *tools.Result) {
 
-	switch {
-	case code.ValidRev(rev):
-		return resolvedRev{oid: rev}, nil
-	case rev == headRev:
-		rev = repo.DefaultBranch
+	out := make([]resolvedRev, len(revs))
+	refOf := make([]string, len(revs))
+	var names []string
+	for i, rev := range revs {
+		switch {
+		case code.ValidRev(rev):
+			out[i] = resolvedRev{oid: rev}
+			continue
+		case rev == headRev:
+			rev = repo.DefaultBranch
+		}
+		refOf[i] = rev
+		if !slices.Contains(names, rev) {
+			names = append(names, rev)
+		}
 	}
-	answer, refusal := d.resolveRef(ctx, turn, tool, asker, repo, rev)
+	if len(names) == 0 {
+		return out, nil
+	}
+	refs, read, refusal := d.resolveRef(ctx, turn, tool, asker, repo, names...)
 	if refusal != nil {
-		return resolvedRev{}, refusal
+		return nil, refusal
 	}
-	return resolvedRev{oid: answer.OID, ref: &answer}, nil
+	for i, name := range refOf {
+		if name == "" {
+			continue
+		}
+		ref := &refs[slices.Index(names, name)]
+		out[i] = resolvedRev{oid: ref.OID, ref: ref, read: read}
+	}
+	return out, nil
 }
 
 // revPairArg is a comparison's two revisions, `base` and `head`, read with
@@ -416,22 +456,6 @@ func revPairArg(tool string, args map[string]any) (base, head string, refusal *t
 		return "", "", refusal
 	}
 	return base, head, nil
-}
-
-// resolvePair is a comparison's two revisions as oids, each by
-// [CodeDeps.resolveRev].
-func (d CodeDeps) resolvePair(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
-	repo code.RepoRef, base, head string) (resolvedRev, resolvedRev, *tools.Result) {
-
-	b, refusal := d.resolveRev(ctx, turn, tool, asker, repo, base)
-	if refusal != nil {
-		return resolvedRev{}, resolvedRev{}, refusal
-	}
-	h, refusal := d.resolveRev(ctx, turn, tool, asker, repo, head)
-	if refusal != nil {
-		return resolvedRev{}, resolvedRev{}, refusal
-	}
-	return b, h, nil
 }
 
 // gitFresh is what a read by object id of repo is asked with: the furthest of
@@ -514,7 +538,7 @@ func gitAnswer(repo code.RepoRef, page code.GitAnswer, revs map[string]resolvedR
 		if out.Resolved == nil {
 			out.Resolved = map[string]codeResolved{}
 		}
-		out.Resolved[arg] = codeResolved{Ref: r.ref.Ref, OID: r.ref.OID, Position: r.ref.Position}
+		out.Resolved[arg] = codeResolved{Ref: r.ref.Ref, OID: r.ref.OID, Position: r.read}
 	}
 	return out
 }
@@ -973,13 +997,13 @@ func (t *codeResolve) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if ref == headRev {
 		ref = repo.DefaultBranch
 	}
-	answer, refusal := t.deps.resolveRef(ctx, turn, t.Name(), asker, repo, ref)
+	refs, at, refusal := t.deps.resolveRef(ctx, turn, t.Name(), asker, repo, ref)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	read := newForeignRead(turn, asker.Seat)
-	return read.page(ctx, t.Name(), codeRefAnswer{Repo: repo.Name, Ref: answer.Ref, OID: answer.OID,
-		Position: answer.Position}, "")
+	return read.page(ctx, t.Name(), codeRefAnswer{Repo: repo.Name, Ref: refs[0].Ref, OID: refs[0].OID,
+		Position: at}, "")
 }
 
 // ---- code_read ---------------------------------------------------------- //
@@ -1061,10 +1085,11 @@ func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	rev, refusal := t.deps.resolveRev(ctx, turn, t.Name(), asker, repo, revName)
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), asker, repo, revName)
 	if refusal != nil {
 		return *refusal, nil
 	}
+	rev := revs[0]
 	path, pathB64 := argString(args, "path"), argString(args, "path_b64")
 	q := code.GitQuery{RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, rev),
 		Cursor: strings.TrimSpace(argString(args, "cursor"))}
@@ -1179,10 +1204,11 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	base, head, refusal := t.deps.resolvePair(ctx, turn, t.Name(), asker, repo, baseName, headName)
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), asker, repo, baseName, headName)
 	if refusal != nil {
 		return *refusal, nil
 	}
+	base, head := revs[0], revs[1]
 	renames := true
 	if v, set := args["renames"].(bool); set {
 		renames = v
@@ -1283,10 +1309,11 @@ func (t *codeCompare) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	base, head, refusal := t.deps.resolvePair(ctx, turn, t.Name(), asker, repo, baseName, headName)
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), asker, repo, baseName, headName)
 	if refusal != nil {
 		return *refusal, nil
 	}
+	base, head := revs[0], revs[1]
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitCompare,
 		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, base, head),
 		Compare: &code.CompareQuery{Base: base.oid, Head: head.oid}})
@@ -1362,31 +1389,27 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	commit, refusal := t.deps.resolveRev(ctx, turn, t.Name(), asker, repo, commitName)
+	// THE COMMIT AND THE TARGET IN ONE READ: the target is never an id (it
+	// was refused above), so it resolves as a ref — HEAD the default branch —
+	// beside the commit where that is a ref too.
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), asker, repo, commitName, target)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	if target == headRev {
-		target = repo.DefaultBranch
-	}
-	tip, refusal := t.deps.resolveRef(ctx, turn, t.Name(), asker, repo, target)
-	if refusal != nil {
-		return *refusal, nil
-	}
-	resolved := resolvedRev{oid: tip.OID, ref: &tip}
+	commit, tip := revs[0], revs[1]
 	// THE TIP'S OWN MOVE, never where the resolve read it: the target's moves
 	// up to the one that put the tip there are every move it had when it was
 	// resolved, which is all the index must hold.
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitLandedIn,
-		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, commit, resolved),
-		LandedIn: &code.LandedInQuery{Commit: commit.oid, Target: tip.Ref, TargetOID: tip.OID,
-			At: resolved.at()}})
+		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, commit, tip),
+		LandedIn: &code.LandedInQuery{Commit: commit.oid, Target: tip.ref.Ref, TargetOID: tip.oid,
+			At: tip.at()}})
 	if refusal != nil {
 		return *refusal, nil
 	}
 	read := newForeignRead(turn, asker.Seat)
 	return read.page(ctx, t.Name(), gitAnswer(repo, page,
-		map[string]resolvedRev{"commit": commit, "target": resolved}), "")
+		map[string]resolvedRev{"commit": commit, "target": tip}), "")
 }
 
 // fit is the longest prefix of n rows whose answer fits one tool answer,

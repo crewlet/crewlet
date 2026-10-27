@@ -181,17 +181,23 @@ func (h *codeHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 	if err != nil {
 		return code.RefAnswer{}, err
 	}
-	names := []string{q.Ref}
-	if !strings.HasPrefix(q.Ref, "refs/") {
-		names = []string{"refs/heads/" + q.Ref, "refs/tags/" + q.Ref}
-	}
-	for _, name := range names {
-		if oid, ok := h.refs[name]; ok {
-			return code.RefAnswer{Repo: ref, Ref: name, OID: oid, Moved: h.movedAt(name), Position: h.at}, nil
+	out := code.RefAnswer{Repo: ref, Position: h.at}
+	for _, asked := range q.Refs {
+		names := []string{asked}
+		if !strings.HasPrefix(asked, "refs/") {
+			names = []string{"refs/heads/" + asked, "refs/tags/" + asked}
 		}
+		resolved := code.ResolvedRef{Name: asked, Missing: fmt.Sprintf("repository %s holds no live %s", q.Repo,
+			strings.Join(names, " or "))}
+		for _, name := range names {
+			if oid, ok := h.refs[name]; ok {
+				resolved = code.ResolvedRef{Name: asked, Ref: name, OID: oid, Moved: h.movedAt(name)}
+				break
+			}
+		}
+		out.Refs = append(out.Refs, resolved)
 	}
-	return code.RefAnswer{}, fmt.Errorf("%w: repository %s holds no live %s", code.ErrRefNotFound, q.Repo,
-		strings.Join(names, " or "))
+	return out, nil
 }
 
 func (h *codeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -501,19 +507,20 @@ func mustActor(t *testing.T, ctx context.Context) builtin.Actor {
 
 // ---- what a turn pays ----------------------------------------------------- //
 
-// A TURN PAYS ONE BARRIER PER REPOSITORY AND PER REF IT NAMES. Every row read
-// is at the seat's level (linearizable); the repository is read once a turn and
-// never again in it; a ref is resolved each time a call names one and an id
-// never is; and every read by object id carries the furthest of the node's own
+// A TURN PAYS ONE BARRIER PER REPOSITORY, AND ONE PER CALL THAT NAMES REFS.
+// Every row read is at the seat's level (linearizable); the repository is read
+// once a turn and never again in it; the refs a call names are resolved in ONE
+// read — a diff of two branches pays one barrier, not two — and an id never
+// is; and every read by object id carries the furthest of the node's own
 // floor and the positions its refs LAST MOVED at, so the copy that answers
 // holds both — never the checkpoint a resolve read its ref at, which its own
 // barrier takes past every push, so a copy current to them all would sync for
 // nothing to answer it. A landed-in read is judged up to its tip's own move.
 // The operator surface has no turn, and reads the repository once a call.
 //
-// Mutation: resolveRev resolving an oid as a ref, repo() reading past the
-// turn's lookups, or a read floored at where its ref was read (the resolve's
-// checkpoint) → red.
+// Mutation: resolveRevs resolving an oid as a ref or a call's refs one read
+// each, repo() reading past the turn's lookups, or a read floored at where its
+// ref was read (the resolve's checkpoint) → red.
 func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	t.Parallel()
 	host := newCodeHost()
@@ -553,9 +560,14 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	if n := readsOf(reads, code.ReadRepo); n != 1 {
 		t.Errorf("the turn read repository site %d times, want once", n)
 	}
-	// main for the first read; none for the id; base and head; v1; main.
-	if len(resolvesBefore) != 1 || len(resolves) != 5 {
-		t.Errorf("the turn resolved %d refs (%d before the diff), want 5 (1)", len(resolves), len(resolvesBefore))
+	// main for the first read; none for the id; base and head in ONE; v1;
+	// main, the landed-in commit being an id.
+	if len(resolvesBefore) != 1 || len(resolves) != 4 {
+		t.Fatalf("the turn made %d ref resolves (%d before the diff), want 4 (1)", len(resolves),
+			len(resolvesBefore))
+	}
+	if diff := resolves[1].Refs; !slices.Equal(diff, []string{"main", "feature"}) {
+		t.Errorf("the diff resolved %v in its one read, want both its sides, main and feature", diff)
 	}
 	for _, q := range reads {
 		if q.Fresh.Level != statelog.ReadLinearizable {

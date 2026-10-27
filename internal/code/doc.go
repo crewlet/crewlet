@@ -361,9 +361,11 @@
 // over the LIVE refs' partial index (replicated 0054) and never the key,
 // whose range holds every tombstone under the prefix too; the first page
 // carries the repository in detail, so what a seat asks first of a
-// repository is one read. [Reader.ResolveRef] names one ref — a whole ref, or
-// a short name as a branch and then as a tag — in one transaction with the
-// repository's grant, at the level its caller states.
+// repository is one read. [Reader.ResolveRef] names every ref a call needs —
+// each a whole ref, or a short name as a branch and then as a tag, each
+// answered on its own — in one transaction with the repository's grant, at the
+// level its caller states: a comparison's two sides cost one barrier, and are
+// read at one moment.
 //
 // A repository's PUSHES are read in LOG ORDER: code_pushes_repo_idx is keyed
 // (repo_id, position, push_id) (replicated 0056), because a record's

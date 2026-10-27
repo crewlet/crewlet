@@ -1280,10 +1280,11 @@ their own assistant, which the operator catalogue serves the same tools to:
 id, beside `code_list_repos`, `code_get_repo` and `code_resolve`, which read
 the rows — what a repository is, its branches, what a ref points at now — at
 linearizable ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
-A turn reads each repository it names once, and resolves each ref a call
-names, so a seat that resolves a branch once and reads by the commit it
-answers pays one barrier for the repository and one for the branch, however
-many files it reads. A file's lines and a patch reach the model
+A turn reads each repository it names once, and resolves the refs a call
+names in one read — a comparison's two branches cost one barrier — so a seat
+that resolves a branch once and reads by the commit it answers pays one
+barrier for the repository and one for the branch, however many files it
+reads. A file's lines and a patch reach the model
 [fenced](agent-runtime.md#text-somebody-else-wrote), at trust `external`: a
 read by commit id knows the bytes and not whose they are.
 

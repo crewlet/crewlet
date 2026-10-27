@@ -2024,16 +2024,18 @@ func cutPublishCursor(s string) (int64, string, bool) {
 	return published, id, true
 }
 
-// ResolveRef answers one ref of one repository at the level the query names,
-// to an asker that may read the repository — in ONE transaction: the name's
-// claim; the repository, a deleted or purging one answered [ErrRepoNotFound]
-// in [RepoGone]'s sentence for its state, which the code host's admission
-// says too; the asker's grant ([ErrNotPermitted]); then the ref — the whole
-// ref the query names, or a short name as a branch and then as a tag — with
-// the position of the record that last moved it ([RefAnswer.Moved]), its
-// row's own, read in the same lookup. A deleted ref is absent, and none found
-// is [ErrRefNotFound] naming every name tried. Its scope is the name's, as
-// [Reader.Resolve]'s is.
+// ResolveRef answers the refs of one repository a query names, at the level it
+// names, to an asker that may read the repository — in ONE transaction: the
+// name's claim; the repository, a deleted or purging one answered
+// [ErrRepoNotFound] in [RepoGone]'s sentence for its state, which the code
+// host's admission says too; the asker's grant ([ErrNotPermitted]); then each
+// ref — a whole ref as itself, or a short name as a branch and then as a tag —
+// with the position of the record that last moved it ([ResolvedRef.Moved]),
+// its row's own, read in the same lookup. A deleted ref is absent, and a name
+// none of its refs holds is answered so ([ResolvedRef.Missing]) beside the
+// names that resolved, never failing them: whether a call can go on without
+// it is its caller's to say. Its scope is the name's, as [Reader.Resolve]'s
+// is.
 func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) {
 	if err := pointLevel(q.Fresh); err != nil {
 		return RefAnswer{}, err
@@ -2044,9 +2046,22 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 	if why := q.Asker.invalid(); why != "" {
 		return RefAnswer{}, fmt.Errorf("%w: asker: %s", ErrInvalid, why)
 	}
-	names, nameErr := refNames(q.Ref)
-	if nameErr != nil {
-		return RefAnswer{}, nameErr
+	// EVERY NAME IS CHECKED BEFORE ANY READ: a query naming one no ref can
+	// have is the asker's mistake, refused whole.
+	switch n := len(q.Refs); {
+	case n == 0:
+		return RefAnswer{}, fmt.Errorf("%w: refs: a resolve names at least one ref", ErrInvalid)
+	case n > MaxRefsPerQuery:
+		return RefAnswer{}, fmt.Errorf("%w: refs: %d refs, past the %d one resolve reads", ErrInvalid, n,
+			MaxRefsPerQuery)
+	}
+	tried := make([][]string, len(q.Refs))
+	for i, ref := range q.Refs {
+		names, nameErr := refNames(ref)
+		if nameErr != nil {
+			return RefAnswer{}, nameErr
+		}
+		tried[i] = names
 	}
 	chart, chartErr := r.chartFor(q.Asker)
 	if chartErr != nil {
@@ -2080,19 +2095,19 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 		if g := GrantOf(q.Asker, v.ref, chart); !g.MayRead() {
 			return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
 		}
-		for _, name := range names {
-			oid, moved, found, err := liveRefIn(ctx, tx, id, name)
-			switch {
-			case err != nil:
-				return fmt.Errorf("code: read %s of %s: %w", name, q.Repo, err)
-			case !found:
-				continue
+		out = RefAnswer{Repo: v.ref, Refs: make([]ResolvedRef, len(q.Refs)), Position: cp.At}
+		for i, names := range tried {
+			resolved, err := firstLiveIn(ctx, tx, id, names)
+			if err != nil {
+				return fmt.Errorf("code: read %s of %s: %w", q.Refs[i], q.Repo, err)
 			}
-			out = RefAnswer{Repo: v.ref, Ref: name, OID: oid, Moved: moved, Position: cp.At}
-			return nil
+			resolved.Name = q.Refs[i]
+			if resolved.Ref == "" {
+				resolved.Missing = fmt.Sprintf("repository %s holds no live %s", q.Repo, strings.Join(names, " or "))
+			}
+			out.Refs[i] = resolved
 		}
-		return fmt.Errorf("%w: repository %s holds no live %s", ErrRefNotFound, q.Repo,
-			strings.Join(names, " or "))
+		return nil
 	})
 	if err != nil {
 		return RefAnswer{}, err
@@ -2100,8 +2115,24 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 	return out, nil
 }
 
-// refNames is every ref a [RefQuery]'s Ref may name, in the order they are
-// tried: a whole ref as itself; a short name as a branch, then as a tag —
+// firstLiveIn is the first of names repository id holds as a live ref, read in
+// tx — its whole name, the object it names and where it last moved — or a
+// zero ResolvedRef where it holds none of them.
+func firstLiveIn(ctx context.Context, tx *sql.Tx, id string, names []string) (ResolvedRef, error) {
+	for _, name := range names {
+		oid, moved, found, err := liveRefIn(ctx, tx, id, name)
+		switch {
+		case err != nil:
+			return ResolvedRef{}, err
+		case found:
+			return ResolvedRef{Ref: name, OID: oid, Moved: moved}, nil
+		}
+	}
+	return ResolvedRef{}, nil
+}
+
+// refNames is every ref one name of a [RefQuery] may be, in the order they
+// are tried: a whole ref as itself; a short name as a branch, then as a tag —
 // each only where git could hold it. A name that can be none is
 // [ErrInvalid], refused before any read.
 func refNames(ref string) ([]string, error) {

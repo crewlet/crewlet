@@ -14,7 +14,8 @@ var (
 	ErrRepoNotFound = errors.New("code: no such repository")
 
 	// ErrRefNotFound is a ref a repository does not hold live — never set,
-	// or deleted — under any name a [RefQuery] tried, which it names.
+	// or deleted — under any ref one name of a [RefQuery] was tried as,
+	// which it names ([RefAnswer.Err]).
 	ErrRefNotFound = errors.New("code: no such ref")
 
 	// ErrPurging is a repository being removed part by part: its name

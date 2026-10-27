@@ -3,6 +3,7 @@ package code_test
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -108,17 +109,21 @@ func TestARefsListingPagesByName(t *testing.T) {
 	}
 }
 
-// RESOLVEREF PREFERS HEADS, THEN TAGS: a short name is a branch where one is
-// live, else a tag — a branch deleted falls through to a tag of its name — a
-// whole ref is itself, and a name none of them hold is not found, naming
-// every name tried. The answer carries the repository, the checkpoint it was
-// read at, and where the ref last moved: the position of the push that set
-// it, never a later one's or the checkpoint's. A name no ref can have, no
-// level, no asker and a deleted repository are refused, the last in the
-// sentence the code host's admission says.
+// RESOLVEREF PREFERS HEADS, THEN TAGS, AND ANSWERS EVERY NAME IN ONE READ: a
+// short name is a branch where one is live, else a tag — a branch deleted
+// falls through to a tag of its name — and a whole ref is itself, every name
+// of the query answered in its order at the one checkpoint the read was at,
+// with where its ref last moved: the position of the push that set it, never
+// a later one's or the checkpoint's. A name none of them hold is answered as
+// such — naming every ref tried, refused ErrRefNotFound by its Err — beside
+// the names that resolved, never failing them. A query naming no ref, more
+// than MaxRefsPerQuery, or any name no ref can have, no level, no asker and a
+// deleted repository are refused whole, the last in the sentence the code
+// host's admission says.
 //
 // Mutation: the tags tried before the heads → v1 resolves to the tag; the
-// answer's Moved the checkpoint → v1 moved at the read.
+// answer's Moved the checkpoint → v1 moved at the read; a missing name
+// failing the query → v1 is not answered beside it.
 func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -132,10 +137,10 @@ func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 	n.push(id, entry("p2", set("refs/heads/old", oidOf("branch old"), code.ZeroOID)))
 	p3 := n.push(id, entry("p3", set("refs/heads/rel", code.ZeroOID, oidOf("branch rel"))))
 	n.push(id, entry("p4", set("refs/heads/later", code.ZeroOID, oidOf("later"))))
-	resolve := func(ref string) (code.RefAnswer, error) {
-		return n.reader.ResolveRef(t.Context(), code.RefQuery{Repo: "app", Ref: ref, Fresh: stale, Asker: asker})
+	resolve := func(refs ...string) (code.RefAnswer, error) {
+		return n.reader.ResolveRef(t.Context(), code.RefQuery{Repo: "app", Refs: refs, Fresh: stale, Asker: asker})
 	}
-	for ref, want := range map[string]struct {
+	want := map[string]struct {
 		ref, oid string
 		moved    statelog.Position
 	}{
@@ -145,29 +150,61 @@ func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 		"refs/tags/rel": {"refs/tags/rel", oidOf("rel"), p1.Position},
 		"old":           {"refs/tags/old", oidOf("tag old"), p1.Position},
 		"refs/heads/v1": {"refs/heads/v1", oidOf("branch v1"), p1.Position},
-	} {
-		got, err := resolve(ref)
-		if err != nil || got.Ref != want.ref || got.OID != want.oid || got.Repo.ID != id ||
-			got.Position != n.waiter.Committed() || got.Moved != want.moved {
-			t.Errorf("ResolveRef(%s) = %+v, %v; want %s at %s, moved at %v and read at the checkpoint %v", ref,
-				got, err, want.ref, want.oid, want.moved, n.waiter.Committed())
+	}
+	names := slices.Sorted(maps.Keys(want))
+	got, err := resolve(names...)
+	if err != nil || got.Repo.ID != id || got.Position != n.waiter.Committed() || len(got.Refs) != len(names) {
+		t.Fatalf("ResolveRef(%v) = %+v, %v; want an answer for each, read at the checkpoint %v", names, got, err,
+			n.waiter.Committed())
+	}
+	for i, name := range names {
+		w, r := want[name], got.Refs[i]
+		if r.Name != name || r.Ref != w.ref || r.OID != w.oid || r.Moved != w.moved || r.Missing != "" {
+			t.Errorf("ResolveRef's answer %d = %+v; want %s as %s at %s, moved at %v", i, r, name, w.ref, w.oid,
+				w.moved)
 		}
 	}
-	for ref, names := range map[string]string{
+	if err := got.Err(); err != nil {
+		t.Errorf("an answer resolving every name refuses %v", err)
+	}
+	for ref, tried := range map[string]string{
 		"refs/heads/old": "refs/heads/old",
 		"nope":           "refs/heads/nope or refs/tags/nope",
 		"HEAD":           "refs/tags/HEAD",
 	} {
-		_, err := resolve(ref)
-		if !errors.Is(err, code.ErrRefNotFound) || !strings.Contains(err.Error(), names) {
-			t.Errorf("ResolveRef(%s) = %v, want ErrRefNotFound naming %s", ref, err, names)
+		got, err := resolve(ref, "v1")
+		if err != nil || len(got.Refs) != 2 || got.Refs[1].OID != oidOf("branch v1") {
+			t.Errorf("ResolveRef(%s, v1) = %+v, %v; want v1 answered beside the missing name", ref, got, err)
+			continue
+		}
+		m := got.Refs[0]
+		if m.Name != ref || m.Ref != "" || m.OID != "" || !strings.Contains(m.Missing, tried) {
+			t.Errorf("ResolveRef(%s)'s answer = %+v, want it missing, naming %s", ref, m, tried)
+		}
+		if err := got.Err(); !errors.Is(err, code.ErrRefNotFound) || !strings.Contains(err.Error(), tried) {
+			t.Errorf("ResolveRef(%s, v1) refuses %v, want ErrRefNotFound naming %s", ref, err, tried)
 		}
 	}
+	both, err := resolve("nope", "gone")
+	if err != nil {
+		t.Fatalf("ResolveRef(nope, gone) = %v, want both answered missing", err)
+	}
+	if refusal := both.Err(); refusal == nil || !strings.Contains(refusal.Error(),
+		"refs/tags/nope; repository app holds no live refs/heads/gone") {
+		t.Errorf("ResolveRef(nope, gone) refuses %v; want both missing names named, in order", refusal)
+	}
+	past := make([]string, code.MaxRefsPerQuery+1)
+	for i := range past {
+		past[i] = "v1"
+	}
 	for name, q := range map[string]code.RefQuery{
-		"a ref no repository holds": {Repo: "app", Ref: "a..b", Fresh: stale, Asker: asker},
-		"a whole ref git refuses":   {Repo: "app", Ref: "refs/heads/a..b", Fresh: stale, Asker: asker},
-		"no asker":                  {Repo: "app", Ref: "v1", Fresh: stale},
-		"no repository":             {Ref: "v1", Fresh: stale, Asker: asker},
+		"a ref no repository holds":      {Repo: "app", Refs: []string{"a..b"}, Fresh: stale, Asker: asker},
+		"a whole ref git refuses":        {Repo: "app", Refs: []string{"refs/heads/a..b"}, Fresh: stale, Asker: asker},
+		"one such name among good ones":  {Repo: "app", Refs: []string{"v1", "a..b"}, Fresh: stale, Asker: asker},
+		"no ref":                         {Repo: "app", Fresh: stale, Asker: asker},
+		"more refs than a resolve reads": {Repo: "app", Refs: past, Fresh: stale, Asker: asker},
+		"no asker":                       {Repo: "app", Refs: []string{"v1"}, Fresh: stale},
+		"no repository":                  {Refs: []string{"v1"}, Fresh: stale, Asker: asker},
 	} {
 		if _, err := n.reader.ResolveRef(t.Context(), q); !errors.Is(err, code.ErrInvalid) {
 			t.Errorf("%s: ResolveRef = %v, want ErrInvalid", name, err)
@@ -177,7 +214,8 @@ func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 		"no level":                {},
 		"a session with no floor": {Level: statelog.ReadSession},
 	} {
-		_, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Repo: "app", Ref: "v1", Fresh: fresh, Asker: asker})
+		_, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Repo: "app", Refs: []string{"v1"}, Fresh: fresh,
+			Asker: asker})
 		if !errors.Is(err, code.ErrBadLevel) {
 			t.Errorf("%s: ResolveRef = %v, want ErrBadLevel", name, err)
 		}

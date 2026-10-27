@@ -35,16 +35,19 @@ func forceable() code.RepoSettings {
 }
 
 // tip is ref's commit in codetest.RepoName, resolved at the log's head, and
-// the position of the push that moved it there (code.RefAnswer.Moved): what a
+// the position of the push that moved it there (code.ResolvedRef.Moved): what a
 // seat's tool hands a landed-in read.
 func (x *fixture) tip(ref string) (string, statelog.Position) {
 	x.t.Helper()
-	a, err := x.f.Data().Served().ResolveRef(x.t.Context(), code.RefQuery{Repo: codetest.RepoName, Ref: ref,
-		Fresh: codetest.Linearizable, Asker: person})
+	a, err := x.f.Data().Served().ResolveRef(x.t.Context(), code.RefQuery{Repo: codetest.RepoName,
+		Refs: []string{ref}, Fresh: codetest.Linearizable, Asker: person})
+	if err == nil {
+		err = a.Err()
+	}
 	if err != nil {
 		x.t.Fatalf("%s of %s: %v", ref, codetest.RepoName, err)
 	}
-	return a.OID, a.Moved
+	return a.Refs[0].OID, a.Refs[0].Moved
 }
 
 // pushesMoving is every push the data node's rows hold that moved ref to oid,

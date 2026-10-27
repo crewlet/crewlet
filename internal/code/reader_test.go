@@ -1240,7 +1240,7 @@ func TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted(t *testing.T) {
 	}
 	reads["ResolveRef"] = func(repo string) error {
 		_, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: agent("vp-sales"), Repo: repo,
-			Ref: "main", Fresh: stale})
+			Refs: []string{"main"}, Fresh: stale})
 		return err
 	}
 	for name, read := range reads {
@@ -1254,9 +1254,9 @@ func TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted(t *testing.T) {
 			t.Errorf("vp-sales's %s of a repository nobody declared = %v, want ErrRepoNotFound", name, err)
 		}
 	}
-	got, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: asker, Repo: "plat-private", Ref: "main",
-		Fresh: stale})
-	if err != nil || got.OID != oidOf("secret") {
+	got, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: asker, Repo: "plat-private",
+		Refs: []string{"main"}, Fresh: stale})
+	if err != nil || len(got.Refs) != 1 || got.Refs[0].OID != oidOf("secret") {
 		t.Fatalf("the person's resolve of plat-private's main = %+v, %v", got, err)
 	}
 }
@@ -1295,8 +1295,8 @@ func TestAReaderWithNoChartRefusesAboutItself(t *testing.T) {
 			"pushes": read(code.ReadQuery{Kind: code.ReadPushes, Repo: "plat-private"}),
 			"refs":   read(code.ReadQuery{Kind: code.ReadRefs, Repo: "plat-private"}),
 			"resolve ref": func() error {
-				_, err := r.ResolveRef(t.Context(), code.RefQuery{Asker: who, Repo: "plat-private", Ref: "main",
-					Fresh: stale})
+				_, err := r.ResolveRef(t.Context(), code.RefQuery{Asker: who, Repo: "plat-private",
+					Refs: []string{"main"}, Fresh: stale})
 				return err
 			},
 		}

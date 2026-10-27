@@ -355,39 +355,82 @@ type IntroducedQuery struct {
 	Descending bool              `json:"descending,omitempty"`
 }
 
-// RefQuery resolves one ref of one repository.
+// RefQuery resolves refs of one repository — EVERY ONE IN ONE READ: one
+// transaction at one checkpoint, so a linearizable resolve of a comparison's
+// two sides pays one barrier and one round trip rather than one each, and
+// compares the two as they stood at the same moment. Each name is answered on
+// its own ([RefAnswer.Refs]).
 type RefQuery struct {
 	// Repo is the repository's NAME.
 	Repo string `json:"repo"`
-	// Ref is a whole ref (refs/heads/main), or a branch or a tag by its
+	// Refs is every ref the read resolves, one to [MaxRefsPerQuery] of
+	// them: each a whole ref (refs/heads/main), or a branch or a tag by its
 	// short name — a branch first, then a tag.
-	Ref string `json:"ref"`
+	Refs []string `json:"refs"`
 	// Fresh is REQUIRED, as on every code point read: whoever names a ref
 	// names the level it must be read at.
 	Fresh statelog.Freshness `json:"fresh"`
-	// Asker is who resolves it, REQUIRED and held to its grant on the
+	// Asker is who resolves them, REQUIRED and held to its grant on the
 	// repository by the node that answers, as a [ReadQuery]'s is.
 	Asker Principal `json:"asker"`
 }
 
-// RefAnswer is the ref a [RefQuery] resolved to.
+// MaxRefsPerQuery is the most refs one [RefQuery] resolves: what one page of
+// the refs listing answers ([MaxRefsPerPage]), the reader's one bound on the
+// refs a read serves. A name costs at most two point reads of code_refs' key
+// and answers at most two refs of [MaxRefNameBytes] and a sentence, so a full
+// query answers in about a megabyte, inside [MaxPageBytes]. A code tool's call
+// names two at most — a comparison's sides, a commit and its target.
+const MaxRefsPerQuery = MaxRefsPerPage
+
+// RefAnswer is what a [RefQuery]'s refs resolved to.
 type RefAnswer struct {
 	Repo RepoRef `json:"repo"`
-	// Ref is the whole ref it resolved to.
-	Ref string `json:"ref"`
-	OID string `json:"oid"`
-	// Moved is the position of the record that last moved the ref — the
-	// push that set it to OID, its row's own position — at or before
-	// Position. WHAT A READ OF OID IS FLOORED AT: OID's objects landed in
-	// that record or an earlier one, so every copy of the repository at or
-	// past Moved holds them, and the target's moves up to its tip are every
-	// move up to Moved. Never Position, which a linearizable read takes past
-	// its own barrier, so a copy current to every push still sits below it
-	// and a floor there would make a git node sync for nothing.
-	Moved statelog.Position `json:"moved"`
-	// Position is the checkpoint the ref was read at, read in the read's
+	// Refs answers the query's Refs, one each and in their order — a name
+	// no live ref holds answered as such beside the rest.
+	Refs []ResolvedRef `json:"refs"`
+	// Position is the checkpoint every ref was read at, read in the read's
 	// own transaction.
 	Position statelog.Position `json:"position"`
+}
+
+// ResolvedRef is one name of a [RefQuery], as the read found it.
+type ResolvedRef struct {
+	// Name is the name as the query named it.
+	Name string `json:"name"`
+	// Ref is the whole ref it resolved to and OID the object that ref names
+	// — both empty where no live ref holds the name (Missing).
+	Ref string `json:"ref,omitempty"`
+	OID string `json:"oid,omitempty"`
+	// Moved is the position of the record that last moved the ref — the
+	// push that set it to OID, its row's own position — at or before the
+	// answer's Position. WHAT A READ OF OID IS FLOORED AT: OID's objects
+	// landed in that record or an earlier one, so every copy of the
+	// repository at or past Moved holds them, and the target's moves up to
+	// its tip are every move up to Moved. Never the answer's Position, which
+	// a linearizable read takes past its own barrier, so a copy current to
+	// every push still sits below it and a floor there would make a git
+	// node sync for nothing.
+	Moved statelog.Position `json:"moved,omitzero"`
+	// Missing is, for a name no live ref holds, the sentence that says so,
+	// naming every ref tried: what [RefAnswer.Err] refuses it with.
+	Missing string `json:"missing,omitempty"`
+}
+
+// Err is the refusal of the names no live ref holds — [ErrRefNotFound] in the
+// sentence of each, in the query's order — or nil where every name resolved:
+// what a caller that needs every ref it named refuses its call with.
+func (a RefAnswer) Err() error {
+	var missing []string
+	for _, r := range a.Refs {
+		if r.Missing != "" {
+			missing = append(missing, r.Missing)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrRefNotFound, strings.Join(missing, "; "))
 }
 
 // ReadKind is what a [ReadQuery] lists.
@@ -768,7 +811,7 @@ type LandedInQuery struct {
 	Target string `json:"target"`
 	// TargetOID is the commit Target named when the asker resolved it — a
 	// whole id — and At the position of the record that moved Target there
-	// ([RefAnswer.Moved]): the git node's copy is brought to At before it
+	// ([ResolvedRef.Moved]): the git node's copy is brought to At before it
 	// judges, so the moves of Target up to that tip — every move it had when
 	// it was resolved — are in the index it searches.
 	TargetOID string            `json:"target_oid"`

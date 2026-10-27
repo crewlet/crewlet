@@ -1000,7 +1000,7 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 			return err
 		}},
 		{opCodeResolveRef.spec.name, func(r *Router, asker code.Principal) error {
-			_, err := r.Code().ResolveRef(ctx, code.RefQuery{Repo: "app", Ref: "main", Asker: asker})
+			_, err := r.Code().ResolveRef(ctx, code.RefQuery{Repo: "app", Refs: []string{"main"}, Asker: asker})
 			return err
 		}},
 	} {

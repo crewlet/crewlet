@@ -3319,7 +3319,7 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	if _, err := seam.Read(ctx, code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}, Kind: code.ReadRepos}); err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if _, err := seam.ResolveRef(ctx, code.RefQuery{Repo: "app", Ref: "main",
+	if _, err := seam.ResolveRef(ctx, code.RefQuery{Repo: "app", Refs: []string{"main"},
 		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}}); err != nil {
 		t.Fatalf("resolve ref: %v", err)
 	}

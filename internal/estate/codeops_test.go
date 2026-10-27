@@ -127,8 +127,12 @@ func (f *fakeNode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 	if f.codeErr != nil {
 		return code.RefAnswer{}, f.codeErr
 	}
-	return code.RefAnswer{Repo: code.RepoRef{ID: "repo-on-" + f.name, Name: q.Repo}, Ref: q.Ref,
-		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq + 1_000}}, nil
+	at := statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq + 1_000}
+	out := code.RefAnswer{Repo: code.RepoRef{ID: "repo-on-" + f.name, Name: q.Repo}, Position: at}
+	for _, name := range q.Refs {
+		out.Refs = append(out.Refs, code.ResolvedRef{Name: name, Ref: name, Moved: at})
+	}
+	return out, nil
 }
 
 // codeReads is every read the code host makes through the seam, by the name
@@ -160,7 +164,7 @@ func codeReads(ctx context.Context, seam CodeSeam) []struct {
 			return err
 		}},
 		{opCodeResolveRef.spec.name, func() error {
-			_, err := seam.ResolveRef(ctx, code.RefQuery{Repo: "app", Ref: "main",
+			_, err := seam.ResolveRef(ctx, code.RefQuery{Repo: "app", Refs: []string{"main"},
 				Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"}})
 			return err
 		}},
@@ -529,14 +533,17 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// the git read's attempt itself (home, asked of its one git node first),
 	// so that is the one field it adds to what the caller sent.
 	d.mu.Lock()
-	d.resolved = code.RefAnswer{Repo: ref, Ref: "refs/heads/main",
-		OID: "6666666666666666666666666666666666666666", Position: at}
+	d.resolved = code.RefAnswer{Repo: ref, Refs: []code.ResolvedRef{
+		{Name: "main", Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666", Moved: at},
+		{Name: "gone", Missing: "repository app holds no live refs/heads/gone or refs/tags/gone"},
+	}, Position: at}
 	d.git = code.GitAnswer{Kind: code.GitDiff, RepoID: ref.ID, Position: at, Next: "page-2",
 		Diff: &code.DiffAnswer{Base: "6666666666666666666666666666666666666666",
 			Head: "7777777777777777777777777777777777777777", Files: []code.DiffFile{{Path: "a.go",
 				Status: "M", Added: 3, Deleted: 1}}, Total: 1, Added: 3, Deleted: 1}}
 	d.mu.Unlock()
-	refQ := code.RefQuery{Repo: "app", Ref: "main", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+	refQ := code.RefQuery{Repo: "app", Refs: []string{"main", "gone"},
+		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}}
 	if got, err := seam.ResolveRef(ctx, refQ); err != nil || !reflect.DeepEqual(got, d.resolved) {
 		t.Errorf("resolve ref = (%+v, %v), want %+v", got, err, d.resolved)

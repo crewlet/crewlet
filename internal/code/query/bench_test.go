@@ -67,7 +67,7 @@ import (
 //     untimed, as a code tool's call follows its ref's: none is a read by an
 //     id the asking node never wrote (the copy as it stands); moved is a read
 //     by a ref as a code tool floors it, where the ref last moved
-//     (code.RefAnswer.Moved); read is the floor the tools sent before, where
+//     (code.ResolvedRef.Moved); read is the floor the tools sent before, where
 //     the resolve READ the ref, past its own barrier — a delta round of the
 //     copy on every read, which installs nothing.
 //
@@ -470,7 +470,7 @@ type readFloor struct {
 var readFloors = []readFloor{
 	{"none", func(code.RefAnswer) statelog.Freshness { return statelog.Freshness{} }},
 	{"moved", func(a code.RefAnswer) statelog.Freshness {
-		return statelog.FloorAt(statelog.ReadSession, a.Moved)
+		return statelog.FloorAt(statelog.ReadSession, a.Refs[0].Moved)
 	}},
 	{"read", func(a code.RefAnswer) statelog.Freshness {
 		return statelog.FloorAt(statelog.ReadSession, a.Position)
@@ -491,7 +491,10 @@ func (r *readRig) floored(b *testing.B, f readFloor) {
 	for b.Loop() {
 		b.StopTimer()
 		ref, err := r.f.Data().Served().ResolveRef(b.Context(), code.RefQuery{Repo: codetest.RepoName,
-			Ref: "refs/heads/main", Fresh: codetest.Linearizable, Asker: person})
+			Refs: []string{"refs/heads/main"}, Fresh: codetest.Linearizable, Asker: person})
+		if err == nil {
+			err = ref.Err()
+		}
 		if err != nil {
 			b.Fatal(err)
 		}

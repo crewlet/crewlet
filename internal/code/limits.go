@@ -91,9 +91,10 @@ const GitReadsShare = 10
 // read at that level. Held to the census's 125 a day per agent seat, a
 // five-seat company's code log alarmed past 1 300 git reads a day, which one
 // CI polling ten repositories a minute exceeds tenfold. A SEAT's reads of the
-// code log — a ref resolved (the estate's code.resolve_ref) and a read by
-// object id's one re-sync at the head, when its home's copy lacks an id it
-// names (code.git_read) — are the seats' term instead, which the census gives
+// code log — the refs a call names resolved (the estate's code.resolve_ref,
+// one a call however many it names) and a read by object id's one re-sync at
+// the head, when its home's copy lacks an id it names (code.git_read) — are
+// the seats' term instead, which the census gives
 // every log whole, so this term does not count them. At the 1 GiB floor and the
 // default seven days it is 87 154 a day — about 60 a minute fleet-wide: that
 // CI, thirty developers fetching every three minutes and 3 000 pushes a day,
