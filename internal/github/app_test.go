@@ -136,22 +136,25 @@ func TestAnOptedInSeatsAppAsksForWorkflowWrites(t *testing.T) {
 	}
 }
 
-// AN APP GITHUB CANNOT DELIVER TO IS CREATED SWITCHED OFF, not pointed at a
-// placeholder: an inactive hook is a state the operator can see, and a wrong
-// URL is one that looks healthy at GitHub and arrives nowhere. It still names
-// its own address, because GitHub refuses a manifest whose hook has no `url`.
-func TestAnAppGitHubCannotReachIsCreatedWithDeliveryOff(t *testing.T) {
+// AN APP GITHUB CANNOT DELIVER TO IS CREATED WITH NO WEBHOOK AND NO EVENTS.
+// GitHub validates the hook whether or not it is active: it refuses one with
+// no url, one at an address it cannot reach, and events with no hook. So the
+// only manifest it accepts from a local engine carries neither.
+func TestAnAppGitHubCannotReachIsCreatedWithNoWebhook(t *testing.T) {
 	t.Parallel()
-	const address = "http://localhost:8200/webhooks/github/s"
 	off := github.BuildManifest(github.ManifestOptions{
 		Seat: "s", Access: github.Access{Tier: github.TierReadOnly},
-		DeliveryURL: address, DeliveryOff: true,
+		DeliveryURL: "http://localhost:8200/webhooks/github/s", DeliveryOff: true,
 	})
-	if active, _ := off.HookAttributes["active"].(bool); active {
-		t.Error("an app GitHub cannot deliver to was created active")
+	if off.HookAttributes != nil {
+		t.Errorf("hook = %v, want none: GitHub refuses an unreachable hook, active or not", off.HookAttributes)
 	}
-	if off.HookAttributes["url"] != address {
-		t.Errorf("hook url = %v, want %q: GitHub refuses a hook without one", off.HookAttributes["url"], address)
+	if len(off.DefaultEvents) != 0 {
+		t.Errorf("events = %v, want none: GitHub refuses events with no hook", off.DefaultEvents)
+	}
+	if body, _ := json.Marshal(off); strings.Contains(string(body), "hook_attributes") ||
+		strings.Contains(string(body), "default_events") {
+		t.Errorf("the manifest sent to GitHub still names a hook or events: %s", body)
 	}
 	on := github.BuildManifest(github.ManifestOptions{
 		Seat: "s", Access: github.Access{Tier: github.TierReadOnly}, DeliveryURL: "https://e.example.com/w",
@@ -161,6 +164,9 @@ func TestAnAppGitHubCannotReachIsCreatedWithDeliveryOff(t *testing.T) {
 	}
 	if on.HookAttributes["url"] != "https://e.example.com/w" {
 		t.Errorf("hook url = %v, want the delivery address", on.HookAttributes["url"])
+	}
+	if len(on.DefaultEvents) == 0 {
+		t.Error("an app with a deliverable address subscribes to nothing")
 	}
 }
 

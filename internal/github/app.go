@@ -126,18 +126,20 @@ type ManifestOptions struct {
 	// collide on the second one. [AppName] builds one that does not.
 	Name string
 
-	// DeliveryURL is where GitHub posts this app's events. GitHub requires
-	// it in every manifest (`hook_attributes.url`), delivering or not, and
-	// refuses the manifest without it, so it is always the seat's own
+	// DeliveryURL is where GitHub posts this app's events: the seat's own
 	// delivery address on this engine.
 	DeliveryURL string
 
-	// DeliveryOff creates the app with its webhook INACTIVE: the address is
-	// recorded but GitHub sends nothing to it. It is set where GitHub cannot
-	// reach the address ([Deliverable]), because an app delivering into a
-	// void looks healthy at GitHub and receives nothing here. Switching the
-	// hook on later, once the engine has a public address, is an edit of
-	// the app's webhook rather than a new app.
+	// DeliveryOff creates the app with NO webhook and no event
+	// subscriptions. It is set where GitHub cannot reach the address
+	// ([Deliverable]). GitHub validates a manifest's hook whether or not it
+	// is active: it refuses a hook with no url, a url it cannot reach
+	// ("isn't reachable over the public Internet (localhost)"), and event
+	// subscriptions with no hook ("Hook url cannot be blank"). So the only
+	// manifest GitHub accepts from an engine it cannot reach is one with
+	// neither. The agent still acts on GitHub through the app, since pushes,
+	// pull requests and reviews are all outbound; a webhook is added on the
+	// app at GitHub once the engine has a public address.
 	DeliveryOff bool
 
 	// RedirectURL is where GitHub returns the browser with the one-time
@@ -222,15 +224,14 @@ func runePrefix(s string, n int) string {
 // BuildManifest describes the app one seat needs.
 func BuildManifest(opts ManifestOptions) Manifest {
 	// BORN POINTING AT THE ENGINE, so an app never spends its first
-	// minutes delivering nowhere. The address is always the seat's own,
-	// because GitHub refuses a manifest whose hook has no `url` ("\"url\"
-	// wasn't supplied"), even an inactive one. Where GitHub cannot reach
-	// it the hook is created INACTIVE at that address rather than pointed
-	// at a placeholder: an inactive hook is a state the operator can see,
-	// and a wrong URL is not.
-	hook := map[string]any{"active": !opts.DeliveryOff}
-	if url := strings.TrimSpace(opts.DeliveryURL); url != "" {
-		hook["url"] = url
+	// minutes delivering nowhere. Where GitHub cannot reach the engine the
+	// app is created with no hook and no events at all ([ManifestOptions]
+	// DeliveryOff says why), never pointed at a placeholder: an app with
+	// no webhook is a state GitHub's settings page shows, and a wrong URL
+	// is one that looks healthy and arrives nowhere.
+	var hook map[string]any
+	if url := strings.TrimSpace(opts.DeliveryURL); url != "" && !opts.DeliveryOff {
+		hook = map[string]any{"url": url, "active": true}
 	}
 	home := strings.TrimSpace(opts.Homepage)
 	if home == "" {
@@ -246,9 +247,19 @@ func BuildManifest(opts ManifestOptions) Manifest {
 		SetupURL:       strings.TrimSpace(opts.SetupURL),
 		SetupOnUpdate:  true,
 		HookAttributes: hook,
-		DefaultEvents:  ManifestEvents,
+		DefaultEvents:  eventsFor(hook),
 		DefaultPerms:   opts.Access.Permissions(),
 	}
+}
+
+// eventsFor is the events an app subscribes to: none without a hook, since
+// GitHub refuses a manifest that subscribes to events with nowhere to send
+// them.
+func eventsFor(hook map[string]any) []string {
+	if hook == nil {
+		return nil
+	}
+	return ManifestEvents
 }
 
 // Deliverable reports whether GitHub can deliver a webhook to base, this
