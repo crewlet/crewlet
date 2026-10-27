@@ -444,7 +444,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		System: buildSystem(req),
 		Brief:  brief,
 		Resume: session,
-		Env:    withTelemetry(m, req),
+		Env:    withTelemetry(m, req, box),
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -791,7 +791,12 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 // declares what a box gets, and a deployment that points its coding agents at
 // its own collector directly has said so deliberately — silently overriding
 // it would be the engine choosing where somebody else's telemetry goes.
-func withTelemetry(m *Manager, req LaunchRequest) map[string]string {
+//
+// THE ENDPOINT IS THE RECEIVER'S AS BOX DIALS IT ([EngineAddress]): the
+// receiver's base is written in the engine host's network, and a loopback
+// one reaches nothing from inside a container. An operator's own value is
+// left as written, in the box's network already.
+func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
 	if m.telemetry == nil {
 		return req.Spec.Env
 	}
@@ -799,6 +804,9 @@ func withTelemetry(m *Manager, req LaunchRequest) map[string]string {
 		req.Turn.TurnID, req.Turn.AgentHandle, otelTokenTTL(req.Spec))
 	if len(added) == 0 {
 		return req.Spec.Env
+	}
+	if endpoint, ok := added[otelBoxEndpointVar]; ok {
+		added[otelBoxEndpointVar] = EngineAddress(box, endpoint)
 	}
 	env := make(map[string]string, len(req.Spec.Env)+len(added))
 	for k, v := range added {
@@ -837,6 +845,6 @@ func otelTokenTTL(spec Spec) time.Duration {
 // end up inside a box that a test cannot look into, and getting the order
 // wrong sends somebody else's spans to the engine — silently, because they do
 // arrive somewhere.
-func RunEnvFor(m *Manager, req LaunchRequest) map[string]string {
-	return withTelemetry(m, req)
+func RunEnvFor(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
+	return withTelemetry(m, req, box)
 }

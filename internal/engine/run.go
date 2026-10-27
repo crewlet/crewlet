@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -84,6 +85,18 @@ type Engine struct {
 
 	backends *Backends
 	node     *node.Node
+
+	// githubIssuer holds the installation tokens this process has issued
+	// its agents' own GitHub Apps, one per installation and scope, in
+	// memory only. ONE for every reader of a seat's token (its tool
+	// servers, its coding runs, the poll that keeps a long run's token
+	// current and the inbound participant lookup), so an installation
+	// costs one mint an hour however many ask. See githubtoken.go.
+	githubIssuer github.Issuer
+	// tokenWaits is what this node's polls have said of the running jobs
+	// whose seat's app issues no token, so each wait is said once per job
+	// rather than on every pass. See githubtoken.go.
+	tokenWaits tokenWaits
 
 	// authEvents is this node's authentication audit trail, and
 	// stopAuthTrail ends its loop. See authevents.go.

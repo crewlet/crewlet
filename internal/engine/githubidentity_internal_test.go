@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -187,5 +190,77 @@ roles:
 	}
 	if party, ok := reg.ByExternalID(github.Backend, "rev-account"); !ok || party.Handle != "reviewer" {
 		t.Fatalf("the token seat resolved to %v (found=%v)", party.Handle, ok)
+	}
+}
+
+// A SEAT WHOSE GITHUB CREDENTIAL IS ITS OWN APP'S TOKEN IS NEVER LOOKED UP.
+//
+// The documented tool credential of a seat with its own app is
+// `Bearer ${GITHUB_APP_TOKEN_<HANDLE>}`. Read as a personal credential, the
+// wiring spent a GET /user on it: before the app existed the variable was
+// unissued and the request carried the bare scheme (401 Bad credentials, on
+// every wiring), and once it existed GitHub refuses GET /user for every
+// installation token. The identity is the app's slug, so no request is made,
+// the seat with an app is registered under it, and the seat without one is
+// named as waiting for it.
+func TestASeatActingAsItsOwnAppIsNeverLookedUpWithGetUser(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  llm:
+    primary: {model: claude-sonnet-5}
+  sandbox: {fake: true}
+roles:
+  - name: SRE Lead
+    handle: sre-lead
+    llm: primary
+    mcp_env:
+      github:
+        Authorization: "Bearer ${GITHUB_APP_TOKEN_SRE_LEAD}"
+    integrations:
+      github:
+        app_id: 41
+        app_slug: acme-sre-lead
+        installation_id: 7
+        private_key: pem
+  - name: Backend Engineer
+    handle: backend-engineer
+    llm: primary
+    mcp_env:
+      github:
+        Authorization: "Bearer ${GITHUB_APP_TOKEN_BACKEND_ENGINEER}"
+    integrations:
+      github:
+        tier: full_access
+`
+	var lookups atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lookups.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	c := companyWith(t, doc)
+	env := config.NewResolver(nil)
+	ids := &githubIdentities{}
+	ids.resolve(t.Context(), server.URL, server.URL, github.SeatCredentials(c.Org, env.Value))
+	if n := lookups.Load(); n != 0 {
+		t.Fatalf("%d requests were made to look up seats whose credential is their own app's", n)
+	}
+
+	reg := notify.NewRegistry(c.Org, nil)
+	if got := ids.register(reg, c, env); got != 1 {
+		t.Fatalf("registered %d seats, want the one whose app exists", got)
+	}
+	if party, ok := reg.ByExternalID(github.Backend, "acme-sre-lead[bot]"); !ok || party.Handle != "sre-lead" {
+		t.Errorf("the app's account resolved to %v (found=%v)", party.Handle, ok)
+	}
+	if got := githubAppsPending(c); len(got) != 1 || got[0] != "backend-engineer" {
+		t.Errorf("seats waiting for their app = %v, want backend-engineer", got)
+	}
+	if got := ids.unresolved(c, env); len(got) != 0 {
+		t.Errorf("seats reported unresolved = %v, want none: each acts as its own app", got)
 	}
 }

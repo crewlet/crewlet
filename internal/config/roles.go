@@ -407,6 +407,14 @@ type RoleGitHub struct {
 	// operator chose when they installed the app.
 	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty" desc:"Repositories this seat works in, as owner/name. Empty means all the installation covers."`
 
+	// Workflows opts a full_access seat in to GitHub's `workflows: write`,
+	// without which GitHub refuses any push whose commits change a file
+	// under `.github/workflows`. OFF unless written, and refused on every
+	// other tier: the same grant lets the seat's branches run a workflow it
+	// rewrote, with the secrets the repository hands its runs, so it is a
+	// decision a company takes for one seat rather than one a tier implies.
+	Workflows bool `yaml:"workflows,omitempty" json:"workflows,omitempty" desc:"full_access only: also grant workflows: write, so the seat can push changes to .github/workflows. Off by default."`
+
 	// AppID and AppSlug are the app GitHub created from the manifest. The
 	// SLUG is what the bot's login is derived from, so it is what an
 	// @mention of this agent resolves through.
@@ -441,7 +449,7 @@ type RoleGitHub struct {
 
 // IsZero lets an unset block drop out of a round trip.
 func (g *RoleGitHub) IsZero() bool {
-	return g == nil || (g.Tier == "" && len(g.Repos) == 0 && g.AppID == 0 &&
+	return g == nil || (g.Tier == "" && len(g.Repos) == 0 && !g.Workflows && g.AppID == 0 &&
 		g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "" &&
 		g.WebhookSecret == "")
 }
@@ -455,10 +463,11 @@ func (g *RoleGitHub) Held() bool {
 
 // validate checks a seat's GitHub App.
 //
-// THE TIER IS THE ONLY THING A PERSON WRITES, so it is the only thing that
-// can be wrong in a way worth refusing. Everything else is written by the
-// engine after GitHub has answered, and refusing a half-built record would
-// refuse the document between the two clicks that build it.
+// THE TIER, THE REPOSITORIES AND THE WORKFLOWS OPT-IN ARE WHAT A PERSON
+// WRITES, so they are the only things that can be wrong in a way worth
+// refusing. Everything else is written by the engine after GitHub has
+// answered, and refusing a half-built record would refuse the document
+// between the two clicks that build it.
 func (g *RoleGitHub) validate(path Path) error {
 	var p problems
 	if tier := normalTier(g.Tier); tier != "" && !slices.Contains(CodeAccessTiers, tier) {
@@ -467,6 +476,13 @@ func (g *RoleGitHub) validate(path Path) error {
 				"run the seat read-only, which is safe and is not what the "+
 				"document says",
 			g.Tier, strings.Join(CodeAccessTiers, ", "))
+	}
+	if g.Workflows && g.TierOrDefault() != TierFullAccess {
+		p.add(at(path, "workflows"), ErrConflict,
+			"workflow writes are for a full_access seat only, and this seat is %s: "+
+				"a seat that cannot push code has nothing to push a workflow with. "+
+				"Set tier to full_access, or remove workflows",
+			g.TierOrDefault())
 	}
 	for i, repo := range g.Repos {
 		if name := strings.TrimSpace(repo); name == "" || !strings.Contains(name, "/") {
@@ -743,7 +759,8 @@ func (r *Role) Seat() *org.Role {
 	if g := r.Integrations.GitHub; g != nil {
 		seat.GitHub = &org.GitHubApp{
 			Tier: g.Tier, Repos: append([]string(nil), g.Repos...),
-			AppID: g.AppID, AppSlug: g.AppSlug,
+			Workflows: g.Workflows,
+			AppID:     g.AppID, AppSlug: g.AppSlug,
 			InstallationID: g.InstallationID,
 			PrivateKey:     g.PrivateKey,
 			WebhookSecret:  g.WebhookSecret,

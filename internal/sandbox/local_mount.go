@@ -87,12 +87,9 @@ func containerUserArgs(ctx context.Context, cli containerCLI) []string {
 // Anything else — a daemon that is down, an answer this build does not
 // recognise — is not an answer, and the caller's default covers it.
 func runtimeIsRootless(ctx context.Context, cli containerCLI) bool {
-	var format string
-	switch filepath.Base(cli.path) {
-	case "podman":
+	format := "{{.SecurityOptions}}"
+	if cli.podman() {
 		format = "{{.Host.Security.Rootless}}"
-	default:
-		format = "{{.SecurityOptions}}"
 	}
 	result, err := runHost(ctx, cli.command(containerProbeTimeout,
 		"info", "--format", format))

@@ -3989,7 +3989,7 @@ where the panel stands, what it is told about the page, and how a turn is
 drawn.
 
 **It is a panel of the frame, never of a screen.** The **Ask** button ends
-the page bar (above the panel it opens), carries the assistant's Orbit mark
+the page bar (above the panel it opens), carries the assistant's spark mark
 and the `Mod+.` hint, and stays inline at a phone's width as an icon button.
 An open artifact, which draws its own head, places the same button at the end
 of its bar.

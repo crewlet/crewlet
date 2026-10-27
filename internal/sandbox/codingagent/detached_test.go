@@ -612,3 +612,43 @@ func lastBackground(t *testing.T, b *sandbox.FakeSandbox) string {
 	}
 	return cmds[len(cmds)-1]
 }
+
+// containerLike is a box whose network is not the engine host's, as a
+// container box's is: it names the host by alias.
+type containerLike struct {
+	*sandbox.FakeSandbox
+}
+
+func (containerLike) EngineHost() string { return "host.docker.internal" }
+
+// THE CLI DIALS ITS SERVERS FROM INSIDE THE BOX, so the config it is handed
+// names the engine host as the box reaches it. Every run gets its config
+// through Start, a seat's executor run and the assistant's deep work alike,
+// so the translation is here and only here: a
+// bridge at `127.0.0.1` was written into a container's config as it stood,
+// and every call the CLI made reached the container's own loopback.
+func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := containerLike{sandbox.NewFakeSandbox("box-1").CapReads(boxReadCap)}
+	if err := runner.Install(t.Context(), b); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	servers := map[string]sandbox.MCPServer{
+		"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP, URL: "http://127.0.0.1:8000/mcp/tok"},
+	}
+	if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "b", MCPServers: servers}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	body, err := b.ReadFile(t.Context(), paths(b).MCPConfig())
+	if err != nil {
+		t.Fatalf("reading the MCP config: %v", err)
+	}
+	if !strings.Contains(string(body), "http://host.docker.internal:8000/mcp/tok") ||
+		strings.Contains(string(body), "127.0.0.1") {
+		t.Fatalf("the box's MCP config does not name the engine host by its alias:\n%s", body)
+	}
+	if servers["crewlet"].URL != "http://127.0.0.1:8000/mcp/tok" {
+		t.Fatalf("the caller's servers were rewritten: %q", servers["crewlet"].URL)
+	}
+}

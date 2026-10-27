@@ -103,18 +103,93 @@ func TestExcessAndShortfallReadTheInstallationRatherThanTheManifest(t *testing.T
 		t.Errorf("Excess = %v, want administration and secrets", excess)
 	}
 	// A review seat on that installation cannot write what it was set up
-	// to write, and GitHub would only say so at the call site.
-	short := github.Shortfall(github.TierReview, held)
+	// to write, and GitHub would only say so by refusing its every token.
+	short := github.Shortfall(github.Access{Tier: github.TierReview}, held)
 	if !slices.Contains(short, "pull_requests") || !slices.Contains(short, "issues") {
 		t.Errorf("Shortfall = %v, want the writes review needs", short)
 	}
 	if slices.Contains(short, "contents") {
 		t.Error("review wants contents=read and the installation has it")
 	}
-	if got := github.Shortfall(github.TierReadOnly, map[string]string{
+	if got := github.Shortfall(github.Access{Tier: github.TierReadOnly}, map[string]string{
 		"metadata": "read", "contents": "read", "issues": "read",
 		"pull_requests": "read", "checks": "read", "actions": "read", "deployments": "read",
 	}); len(got) != 0 {
 		t.Errorf("a fully granted read-only installation reports a shortfall: %v", got)
+	}
+}
+
+// WORKFLOW WRITES ARE AN OPT-IN OF FULL ACCESS AND OF NOTHING ELSE.
+//
+// GitHub refuses a push touching `.github/workflows` without them, and the
+// same grant lets a branch run a workflow it rewrote with the repository's
+// secrets, so no tier carries them by default and a seat that cannot write
+// code cannot be handed them by a document a validator never saw.
+func TestWorkflowWritesAreAFullAccessOptInOnly(t *testing.T) {
+	t.Parallel()
+	for _, tier := range github.Tiers {
+		if got := tier.Permissions()[github.PermissionWorkflows]; got != "" {
+			t.Errorf("%s carries workflows=%q with nobody opting in", tier, got)
+		}
+		if got := (github.Access{Tier: tier}).Permissions()[github.PermissionWorkflows]; got != "" {
+			t.Errorf("%s without the opt-in carries workflows=%q", tier, got)
+		}
+		opted := github.Access{Tier: tier, Workflows: true}
+		got := opted.Permissions()[github.PermissionWorkflows]
+		switch tier {
+		case github.TierFullAccess:
+			if got != "write" || !opted.WritesWorkflows() {
+				t.Errorf("an opted-in full_access seat carries workflows=%q", got)
+			}
+		default:
+			if got != "" || opted.WritesWorkflows() {
+				t.Errorf("an opted-in %s seat carries workflows=%q", tier, got)
+			}
+		}
+		// THE TIER'S OWN LIST IS UNCHANGED by the opt-in, so opting in
+		// adds one grant and widens nothing else.
+		for name, level := range tier.Permissions() {
+			if opted.Permissions()[name] != level {
+				t.Errorf("%s: the opt-in moved %s from %q to %q", tier, name, level, opted.Permissions()[name])
+			}
+		}
+	}
+	if slices.Contains(github.Denied, github.PermissionWorkflows) {
+		t.Error("workflows is a grant a seat may opt in to, and it is on the denied list")
+	}
+}
+
+// ACTIONS ARE READ ON EVERY TIER AND WRITTEN ON NONE.
+//
+// Read is how an agent learns why its pull request is red. Write re-runs and
+// dispatches workflows, a deploy among them, which is a person's act.
+func TestEveryTierReadsActionsAndNoneWritesThem(t *testing.T) {
+	t.Parallel()
+	for _, tier := range github.Tiers {
+		access := github.Access{Tier: tier, Workflows: true}
+		if got := access.Permissions()["actions"]; got != "read" {
+			t.Errorf("%s holds actions=%q, want read", tier, got)
+		}
+	}
+}
+
+// AN OPTED-IN SEAT WHOSE INSTALLATION LACKS WORKFLOWS IS SHORT OF IT, which
+// is how an app created before the opt-in is told apart from one that is
+// complete.
+func TestAnOptInTheInstallationDoesNotHoldIsAShortfall(t *testing.T) {
+	t.Parallel()
+	held := github.TierFullAccess.Permissions()
+	access := github.Access{Tier: github.TierFullAccess, Workflows: true}
+	if got := github.Shortfall(access, held); !slices.Equal(got, []string{github.PermissionWorkflows}) {
+		t.Errorf("Shortfall = %v, want workflows alone", got)
+	}
+	held[github.PermissionWorkflows] = "write"
+	if got := github.Shortfall(access, held); len(got) != 0 {
+		t.Errorf("an installation holding the opt-in reports a shortfall: %v", got)
+	}
+	// A READ GRANT IS NOT THE WRITE the opt-in asks for.
+	held[github.PermissionWorkflows] = "read"
+	if got := github.Shortfall(access, held); !slices.Equal(got, []string{github.PermissionWorkflows}) {
+		t.Errorf("Shortfall over workflows=read = %v, want workflows", got)
 	}
 }

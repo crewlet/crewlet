@@ -28,7 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -413,11 +413,11 @@ type runEnv struct {
 func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	settings *org.RoleSandbox, defaults []sandbox.SetupStep) runEnv {
 
-	resolver := e.resolver()
-	setup := slices.Clone(defaults)
-	if settings != nil {
-		setup = append(setup, seatSetupSteps(settings.Setup)...)
-	}
+	// THE SEAT'S OWN RESOLUTION, so its GitHub App token is answered here
+	// and nowhere else, issued good for [github.RunTokenLife]: a run's
+	// environment is fixed when its box starts. See githubtoken.go.
+	resolver, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
+	setup := boxSetup(defaults, settings)
 
 	// THE LAYERS, each value with what declared it.
 	type layered struct {
@@ -445,12 +445,12 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 		}
 	}
 
-	var minted map[string]integration.Kind
+	var mint *seatMint
 	if c != nil {
-		minted = e.mintedFor(c, seat.Handle())
+		mint = &seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token}
 	}
-	gap := refGap{env: resolver, minted: minted}
-	facts := refGap{env: resolver, minted: minted}
+	gap := refGap{env: resolver, mint: mint}
+	facts := refGap{env: resolver, mint: mint}
 	out := runEnv{env: make(map[string]string, len(merged))}
 	for _, key := range slices.Sorted(maps.Keys(merged)) {
 		l := merged[key]
@@ -504,6 +504,19 @@ func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	states := e.mintingStates(ctx, held)
 	out.gap, out.facts = out.gap.judged(states), out.facts.judged(states)
 	return out
+}
+
+// boxSetup is the setup steps one seat's box is provisioned with: the
+// provider-wide ones, then the seat's own. ONE COMPOSITION for the launch and
+// for the poll that keeps a running box's issued credentials current
+// ([Engine.refreshRunTokens]), so the files one provisions are the files the
+// other keeps.
+func boxSetup(defaults []sandbox.SetupStep, settings *org.RoleSandbox) []sandbox.SetupStep {
+	setup := slices.Clone(defaults)
+	if settings != nil {
+		setup = append(setup, seatSetupSteps(settings.Setup)...)
+	}
+	return setup
 }
 
 // stepOptionalKeys is where a setup step's optional keys are declared, for a
@@ -1695,11 +1708,12 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 // agent would spend a round finding that out — the reason [sandbox.RenderMCP]
 // skips a server it cannot render. It used to be offered with a warning that
 // it "will not authenticate". What was withheld comes back beside the
-// servers, for the caller to judge and say ([Engine.boxServers]); minted is
-// what the seat's provisioning passes mint ([Engine.mintedFor]).
+// servers, for the caller to judge and say ([Engine.boxServers]); env is the
+// seat's own resolution ([Engine.seatResolver]) and mint what is minted or
+// issued for the seat ([seatMint]).
 func sandboxMCP(
 	env *config.Resolver, c *Company, seat *org.Role, settings *org.RoleSandbox,
-	minted map[string]integration.Kind,
+	mint *seatMint,
 ) (map[string]sandbox.MCPServer, []*credentialMissing) {
 	if len(settings.MCP.Servers) == 0 {
 		return nil, nil
@@ -1726,7 +1740,7 @@ func sandboxMCP(
 			scoped = append(scoped, name)
 			continue
 		}
-		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, minted)
+		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)
 		if missing != nil {
 			withheld = append(withheld, missing)
 			continue
@@ -1755,11 +1769,17 @@ func sandboxMCP(
 //
 // WHAT STARTS IT DIFFERS from a seat's own child, and the sentence says so:
 // nothing restarts a box's servers, so a server withheld from this run is
-// offered to the first coding run launched once the seal reaches this node.
+// offered to the first coding run launched once what it waits for arrives
+// ([credentialMissing.arrival]): the seal reaching this node, or the agent's
+// GitHub App being installed.
 func (e *Engine) boxServers(
 	ctx context.Context, c *Company, seat *org.Role, settings *org.RoleSandbox,
 ) map[string]sandbox.MCPServer {
-	servers, withheld := sandboxMCP(e.resolver(), c, seat, settings, e.mintedFor(c, seat.Handle()))
+	// THE SAME TOKEN LIFE AS THE RUN'S OWN ENVIRONMENT: a server rendered
+	// into the box is started there once, with whatever it is handed now.
+	env, token := e.seatResolver(ctx, c, seat, github.RunTokenLife)
+	servers, withheld := sandboxMCP(env, c, seat, settings,
+		&seatMint{kinds: e.mintedFor(c, seat.Handle()), token: token})
 	states := e.mintingStates(ctx, withheld)
 	for _, missing := range withheld {
 		missing = missing.judged(states)
@@ -1767,8 +1787,8 @@ func (e *Engine) boxServers(
 		if missing.waiting() {
 			log.InfoContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
 				"detail", "the coding agent is not given this server for this run: "+
-					missing.reason()+"; a coding run launched once the seal reaches "+
-					"this node is given it")...)
+					missing.reason()+"; a coding run launched once "+missing.arrival()+
+					" is given it")...)
 			continue
 		}
 		log.WarnContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
@@ -2108,33 +2128,24 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		var roster sandbox.NodeRoster
+		opts := e.sandboxWaiterOptions(rt, sandbox.DrivesRemote, interval)
+		// The duty is claimed per tick: the waiter polls every run in the
+		// company whose box every node reaches, not just this node's
+		// seats', so N nodes running it unclaimed means N reconnects per box
+		// per tick and N racing reapers.
+		opts.ClaimDuty = sandbox.DutyFunc(duty)
+		// The lease each claim takes, which bounds every poll the claim
+		// authorises: a poll outlives the pass that started it, and must not
+		// outlive the duty, past which a peer may poll the same box.
+		opts.DutyTTL = waiterDutyTTL(interval)
+		// WHO IS STILL IN THE FLEET, so a node that left it for good has its
+		// local runs ended rather than waited on for ever — see
+		// [sandbox.Waiter]. The presence leases a node holds to say it is
+		// alive; none without a coordination store, which is one node.
 		if e.backends.Coord != nil {
-			roster = nodeRoster{coord: e.backends.Coord}
+			opts.Roster = nodeRoster{coord: e.backends.Coord}
 		}
-		waiter, err := sandbox.NewWaiter(sandbox.WaiterOptions{
-			Queue: e.backends.Queue, Pending: rt.pending,
-			// THE COORDINATOR'S CURRENT MANAGER, asked on every tick: an
-			// apply swaps it, and the poll outlives every revision.
-			Manager:  rt.coordinator.Manager,
-			Drives:   sandbox.DrivesRemote,
-			Node:     e.id,
-			Interval: interval,
-			// The duty is claimed per tick: the waiter polls every run in
-			// the company whose box every node reaches, not just this
-			// node's seats', so N nodes running it unclaimed means N
-			// reconnects per box per tick and N racing reapers.
-			ClaimDuty: sandbox.DutyFunc(duty),
-			// The lease each claim takes, which bounds every poll the claim
-			// authorises: a poll outlives the pass that started it, and must
-			// not outlive the duty, past which a peer may poll the same box.
-			DutyTTL: waiterDutyTTL(interval),
-			// WHO IS STILL IN THE FLEET, so a node that left it for good has
-			// its local runs ended rather than waited on for ever — see
-			// [sandbox.Waiter]. The presence leases a node holds to say it is
-			// alive; none without a coordination store, which is one node.
-			Roster: roster,
-		})
+		waiter, err := sandbox.NewWaiter(opts)
 		if err != nil {
 			return err
 		}
@@ -2146,13 +2157,7 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 		// THIS NODE'S OWN BOXES, polled here whoever holds the duty: no
 		// other node can reach them, so no other node polls them beside it,
 		// and it claims nothing.
-		host, err := sandbox.NewWaiter(sandbox.WaiterOptions{
-			Queue: e.backends.Queue, Pending: rt.pending,
-			Manager:  rt.coordinator.Manager,
-			Drives:   sandbox.DrivesLocal,
-			Node:     e.id,
-			Interval: interval,
-		})
+		host, err := sandbox.NewWaiter(e.sandboxWaiterOptions(rt, sandbox.DrivesLocal, interval))
 		if err != nil {
 			return err
 		}
@@ -2161,6 +2166,32 @@ func (e *Engine) startSandboxWaiter(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// sandboxWaiterOptions is what both of this node's completion polls are
+// built from, whichever runs they drive: the fleet's adds its duty and the
+// roster to it, and this node's own adds nothing.
+//
+// ONE CONSTRUCTOR, because each box is polled by exactly ONE waiter — an e2b
+// box by the fleet's, a direct or container box by its launching node's own
+// ([sandbox.Drives]) — so whatever the poll does to a running box has to ride
+// both, or the boxes of the other kind silently go without it. The refresh is
+// the case in point: a long run's GitHub App token, kept current in the files
+// the run was provisioned with (githubtoken.go), is renewed by the poll that
+// reaches the box and by nothing else.
+func (e *Engine) sandboxWaiterOptions(
+	rt *sandboxRuntime, drives sandbox.Drives, interval time.Duration,
+) sandbox.WaiterOptions {
+	return sandbox.WaiterOptions{
+		Queue: e.backends.Queue, Pending: rt.pending,
+		// THE COORDINATOR'S CURRENT MANAGER, asked on every tick: an apply
+		// swaps it, and the poll outlives every revision.
+		Manager:  rt.coordinator.Manager,
+		Drives:   drives,
+		Node:     e.id,
+		Interval: interval,
+		Refresh:  e.refreshRunTokens,
+	}
 }
 
 // stopSandbox halts the poll loops and the coordinator's own retries. The rows

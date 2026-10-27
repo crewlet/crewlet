@@ -614,7 +614,9 @@ describe("the decisions", () => {
         acts: [],
       },
     });
-    expect(await screen.findByRole("heading", { name: /^Good \w+, Bob$/ })).toBeTruthy();
+    // The salute follows the wall clock ("Hello" from midnight until five), so
+    // only the name is asserted.
+    expect(await screen.findByRole("heading", { name: /^(?:Good \w+|Hello), Bob$/ })).toBeTruthy();
     const reads = () =>
       sessions.mock.calls.filter(([url]) => String(url).endsWith("/auth/session"));
     expect(reads()).toHaveLength(1);
@@ -623,7 +625,7 @@ describe("the decisions", () => {
     name = undefined;
     mount();
     await waitFor(() => expect(reads()).toHaveLength(1));
-    expect(await screen.findByRole("heading", { name: /^Good \w+$/ })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: /^(?:Good \w+|Hello)$/ })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: /Jane/ })).toBeNull();
   });
 

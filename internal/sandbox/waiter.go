@@ -197,7 +197,29 @@ type WaiterOptions struct {
 	// Now is the clock, injectable so a test can expire a pause without
 	// waiting half an hour.
 	Now func() time.Time
+
+	// Refresh is handed every running box this poll reaches, after its
+	// keepalive, to bring up to date what the box holds that expires while
+	// the job runs ([RefreshFunc]). Nil refreshes nothing.
+	Refresh RefreshFunc
 }
+
+// RefreshFunc brings one running box's expiring credentials up to date: the
+// files a run was provisioned with that carry a credential issued for a
+// limited time, rewritten when the credential behind them is renewed.
+//
+// ON THE POLL, because nothing else reaches a running box and the poll
+// already does, every interval, for as long as the job runs: a coding job is
+// never stopped on a clock, so a credential issued at launch can outlive its
+// own expiry by hours, and the job's git push is then refused halfway through
+// the work. The box's environment cannot be changed under a running process,
+// so what is kept current is a FILE, which a credential helper reads at the
+// moment of use.
+//
+// It decides nothing about the run and reports nothing to it: a refresh that
+// fails is the implementation's to log, and the job carries on with what it
+// holds. manager is the manager this poll reached the box through.
+type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box Sandbox)
 
 // Waiter is the completion poll and pause reaper for detached sandbox jobs.
 //
@@ -244,6 +266,7 @@ type Waiter struct {
 	claimDuty DutyFunc
 	dutyTTL   time.Duration
 	now       func() time.Time
+	refresh   RefreshFunc
 
 	// pollBound is [pollBound], held on the value so a test can watch a box
 	// at its bound without waiting a minute for it.
@@ -325,6 +348,7 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		claimDuty: opts.ClaimDuty,
 		dutyTTL:   opts.DutyTTL,
 		now:       opts.Now,
+		refresh:   opts.Refresh,
 		pollBound: pollBound,
 		slots:     make(chan struct{}, MaxConcurrentPolls),
 		failures:  map[string]connectStreak{},
@@ -925,6 +949,9 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 	// detected by tracking the job, not by a clock.
 	if err = box.SetTimeout(ctx, manager.BoxTimeout().Seconds()); err != nil {
 		log.DebugContext(ctx, "sandbox_keepalive_failed", "turn_id", run.TurnID, "error", err.Error())
+	}
+	if w.refresh != nil {
+		w.refresh(ctx, manager, run, box)
 	}
 
 	runner, err := manager.RunnerFor(run.CodingAgent)

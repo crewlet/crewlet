@@ -295,7 +295,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	endpoint := d.e.bridge.Open(ctx, &mcpbridge.Session{
 		RunID: r.ID, Launch: uuid.NewString(), Handle: "assistant",
 		Role: "Dashboard Assistant deep work", Surface: r.Surface, Caller: assistantRunAs{},
-		TTL: r.Timeout + deepGrace, Loopback: placement.OnEngineHost() && d.e.bridge.LoopbackBase(),
+		TTL: r.Timeout + deepGrace, Loopback: deepHeldToLoopback(placement, d.e.bridge),
 	})
 	if endpoint == "" {
 		return assistant.DeepOutcome{}, fmt.Errorf("the tool bridge opened no session for "+
@@ -536,4 +536,21 @@ func (d *assistantDeep) discard(ctx context.Context, m *sandbox.Manager, placeme
 		log.Warn("assistant_deep_box_undiscarded", "sandbox_id", id, "error", err.Error(),
 			"detail", "its own deadline reaps it")
 	}
+}
+
+// deepHeldToLoopback reports whether a deep-work run's bridge session admits
+// calls from this host's loopback alone ([mcpbridge.Session.Loopback]).
+//
+// EVERY BOX ON THE ENGINE HOST IS HELD, a container's as much as a direct
+// one's, whenever the bridge's base is loopback. A container box is handed
+// the runtime's name for the engine host in place of that base
+// ([sandbox.EngineAddress]), and the hold is what keeps that from widening
+// anything: its calls are admitted only where they arrive on loopback, as a
+// direct box's are, so a token it leaks is worth nothing from any other
+// address, and nothing off this host reaches a session the hold covers. The
+// cost is said in docs/guides/assistant.md: a runtime that delivers the
+// box's calls from its bridge network instead (Docker Engine on Linux) is
+// refused, and deep work there runs `direct` or remote.
+func deepHeldToLoopback(placement sandbox.Placement, bridge *mcpbridge.Bridge) bool {
+	return placement.OnEngineHost() && bridge.LoopbackBase()
 }

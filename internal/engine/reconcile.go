@@ -941,6 +941,7 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		reportDanglingRefs(ctx, r.log, target, cfg)
 		reportCompanyAdvisories(ctx, r.log, target, cfg)
 		r.engine.reportBridgeGaps(ctx, r.log, target, cfg)
+		reportContainerReach(ctx, r.log, target, r.engine.boot, cfg)
 	}
 	return status, revision, applied, err
 }

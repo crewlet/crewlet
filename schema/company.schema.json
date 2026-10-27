@@ -2544,6 +2544,15 @@
             "null"
           ],
           "x-crewlet-secret": true
+        },
+        "workflows": {
+          "description": "full_access only: also grant workflows: write, so the seat can push changes to .github/workflows. Off by default.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         }
       },
       "type": [

@@ -1117,6 +1117,9 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 		"--init",
 	}
 	argv = append(argv, containerUserArgs(ctx, l.cli)...)
+	// The engine host by name, for the addresses the engine hands the box
+	// in its own network ([EngineAddress]).
+	argv = append(argv, l.cli.hostAliasArgs()...)
 	if l.opts.Network != "" {
 		argv = append(argv, "--network", l.opts.Network)
 	}

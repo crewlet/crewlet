@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1177,5 +1178,66 @@ func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
 	}
 	if payload.WorkKey != rigWorkKey {
 		t.Errorf("WorkKey = %q, want the run's unit of work %q", payload.WorkKey, rigWorkKey)
+	}
+}
+
+// A RUNNING BOX'S EXPIRING CREDENTIALS ARE REFRESHED ON EVERY POLL THAT
+// REACHES IT, and a box its run has moved on from is never handed over.
+//
+// The poll is the only thing that reaches a running box for as long as its
+// job runs, so it is what keeps a credential issued at launch, which expires
+// within the hour, current in the box for a job that runs for hours. A box the
+// run no longer runs is not the run's to refresh.
+//
+// ON BOTH WAITERS, since each box is polled by one of them alone ([Drives]):
+// a box on the engine host by its launching node's own, and one every node
+// reaches by the fleet's. A refresh only one of them made would leave every
+// box of the other kind with the credential it launched with.
+func TestEveryPollHandsTheRunningBoxToTheRefresh(t *testing.T) {
+	t.Parallel()
+	for _, cell := range []Placement{Direct, E2B} {
+		t.Run(string(cell), func(t *testing.T) {
+			t.Parallel()
+			rig := newWaiterRigIn(t, cell)
+			var (
+				mu     sync.Mutex
+				handed []string
+			)
+			rig.waiter.refresh = func(_ context.Context, manager *Manager, run PendingRun, box Sandbox) {
+				mu.Lock()
+				defer mu.Unlock()
+				if manager != rig.manager {
+					t.Error("the refresh was handed a manager other than the one that reached the box")
+				}
+				handed = append(handed, run.TurnID+"@"+box.ID())
+			}
+			run := rig.launch("t1")
+			for range 3 {
+				rig.tick()
+			}
+			mu.Lock()
+			got := slices.Clone(handed)
+			mu.Unlock()
+			if len(got) != 3 || got[0] != "t1@"+run.SandboxID {
+				t.Fatalf("%s waiter: refreshes = %v, want the running box on each of three polls",
+					rig.waiter.drives, got)
+			}
+
+			moved := newWaiterRigIn(t, cell)
+			calls := 0
+			moved.waiter.refresh = func(context.Context, *Manager, PendingRun, Sandbox) { calls++ }
+			listed := moved.launch("t2")
+			moved.runner.Finish(Result{Text: "done", Success: true})
+			if _, ok, err := moved.pending.ClaimForResume(t.Context(), "t2", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
+				t.Fatalf("claim = %v, %v", ok, err)
+			}
+			if err := moved.provider.Box(listed.SandboxID).Pause(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			moved.waiter.pollOne(t.Context(), moved.manager, listed)
+			if calls != 0 {
+				t.Error("a box its run has moved on from was handed to the refresh")
+			}
+		})
 	}
 }

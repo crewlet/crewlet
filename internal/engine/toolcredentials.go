@@ -236,7 +236,48 @@ func (e *Engine) mintedFor(c *Company, handle string) map[string]integration.Kin
 			}
 		}
 	}
+	// AND THE TOKEN THE ENGINE ISSUES THE SEAT AT USE, which no pass seals
+	// and which waits on the same thing a seal does: an integration's step,
+	// here a person creating and installing the agent's app. Declared beside
+	// the plans so a value naming it is held back and told as waiting on
+	// that integration, never reported as a secret the operator forgot.
+	// See githubtoken.go.
+	if name := githubIssued(c, handle); name != "" {
+		if out == nil {
+			out = map[string]integration.Kind{}
+		}
+		out[name] = integration.KindGitHub
+	}
 	return out
+}
+
+// seatMint is what one seat's values may be waiting for: the variables an
+// integration mints or issues for the seat, by integration
+// ([Engine.mintedFor]), and the seat's own issued token as this read asked
+// for it ([seatToken]), which says why one it could not issue went without.
+//
+// NIL IS A VALUE NOTHING MINTS, which is a shared server's: it acts as no
+// seat, so nothing is minted or issued for it.
+type seatMint struct {
+	kinds map[string]integration.Kind
+	token *seatToken
+}
+
+// kind is the integration that mints or issues name for the seat, if any.
+func (m *seatMint) kind(name string) (integration.Kind, bool) {
+	if m == nil {
+		return "", false
+	}
+	kind, ok := m.kinds[name]
+	return kind, ok
+}
+
+// unissued is why the engine could not issue name this time, or "".
+func (m *seatMint) unissued(name string) string {
+	if m == nil {
+		return ""
+	}
+	return m.token.unissued(name)
 }
 
 // credentialMissing is why a server was not started — a seat's child, a
@@ -278,6 +319,11 @@ type credentialMissing struct {
 	// and by the integration that mints each.
 	minting map[string]integration.Kind
 
+	// unissued are the variables the engine went to issue this seat at use
+	// and could not, each with why ([seatToken.unissued]): a failure, but a
+	// passing one, retried at the next attempt. Never a token.
+	unissued map[string]string
+
 	// stopped is, for each integration that mints one of those and cannot
 	// until a person acts, what its last pass recorded about it
 	// ([mintStopped]) — the rest of the sentence after "will not mint".
@@ -298,9 +344,9 @@ type serverValues struct {
 // block, a seat's mcp_env for it, over them key by key — with every reference
 // resolved, or why it may not start. See the file comment.
 //
-// seat is the seat's handle and minted what its provisioning passes mint
-// ([Engine.mintedFor]), both empty for a shared server; instance is what the
-// start is called.
+// seat is the seat's handle and mint what is minted or issued for it
+// ([seatMint]), both empty for a shared server; env is the seat's own
+// resolution ([Engine.seatResolver]); instance is what the start is called.
 //
 // MERGED BEFORE ANYTHING IS RESOLVED, so a seat's key replaces the server's
 // whole: a seat's value that resolves to nothing never hands the key back to
@@ -315,7 +361,7 @@ type serverValues struct {
 // same way at every pass too.
 func resolveServer(
 	server *config.MCPServer, seat, instance string, block map[string]string,
-	env *config.Resolver, minted map[string]integration.Kind,
+	env *config.Resolver, mint *seatMint,
 ) (serverValues, *credentialMissing) {
 	own := server.Env
 	if server.Kind() == config.TransportHTTP {
@@ -335,7 +381,7 @@ func resolveServer(
 	}
 
 	out := serverValues{url: env.Value(server.URL)}
-	gap := refGap{env: env, minted: minted}
+	gap := refGap{env: env, mint: mint}
 	gap.pin(env.Missing(server.URL))
 	where := "mcp_servers." + server.Name + ".optional_keys"
 	for _, id := range slices.Sorted(maps.Keys(merged)) {
@@ -370,8 +416,8 @@ func resolveServer(
 // whether a key may be left out, and which remedy names it, is decided by one
 // rule wherever a value is read.
 type refGap struct {
-	env    *config.Resolver
-	minted map[string]integration.Kind
+	env  *config.Resolver
+	mint *seatMint
 
 	// names are the variables the gap holds, in the order met.
 	names []string
@@ -401,7 +447,7 @@ type refGap struct {
 func (g *refGap) hold(key string, missing []string, optional bool, where string, issued bool) bool {
 	holds := false
 	for _, name := range missing {
-		if _, minted := g.minted[name]; optional && !minted {
+		if _, minted := g.mint.kind(name); optional && !minted {
 			continue
 		}
 		holds = true
@@ -442,7 +488,7 @@ func (g *refGap) pin(missing []string) {
 // remedy names, or nil where every value resolved or was left out. reader is
 // what goes without a value the sentence offers to declare optional.
 func (g *refGap) missing(seat, reader string) *credentialMissing {
-	m := credentialGap(seat, g.names, g.env, g.minted)
+	m := credentialGap(seat, g.names, g.env, g.mint)
 	if m == nil {
 		return nil
 	}
@@ -466,11 +512,12 @@ func (g *refGap) missing(seat, reader string) *credentialMissing {
 	return m
 }
 
-// credentialGap sorts variables that resolved to nothing into the three
-// stories — minted for this seat, set to nothing, set nowhere — each named
-// once, in the order given. Nil when there are none.
+// credentialGap sorts variables that resolved to nothing into the stories
+// (issued for this seat and refused this time, minted or issued for this seat
+// and not yet there, set to nothing, set nowhere), each named once, in the
+// order given. Nil when there are none.
 func credentialGap(
-	seat string, names []string, env *config.Resolver, minted map[string]integration.Kind,
+	seat string, names []string, env *config.Resolver, mint *seatMint,
 ) *credentialMissing {
 	var m *credentialMissing
 	seen := map[string]bool{}
@@ -482,7 +529,18 @@ func credentialGap(
 		if m == nil {
 			m = &credentialMissing{seat: seat}
 		}
-		if kind, ok := minted[name]; ok {
+		// TRIED AND REFUSED IS NOT WAITING. A token the engine went to
+		// issue and GitHub would not give is a failure with GitHub's
+		// reason, retried, never "waiting for the integration", which
+		// would read as a step somebody has yet to take.
+		if why := mint.unissued(name); why != "" {
+			if m.unissued == nil {
+				m.unissued = map[string]string{}
+			}
+			m.unissued[name] = why
+			continue
+		}
+		if kind, ok := mint.kind(name); ok {
 			if m.minting == nil {
 				m.minting = map[string]integration.Kind{}
 			}
@@ -505,7 +563,19 @@ func credentialGap(
 // failure: everything it lacks, a pass will mint, and nothing that pass has
 // recorded says a person must act first.
 func (m *credentialMissing) waiting() bool {
-	return len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0
+	return len(m.unset) == 0 && len(m.empty) == 0 && len(m.stopped) == 0 && len(m.unissued) == 0
+}
+
+// arrival is what a value that is only waiting arrives with: the seal, for
+// a credential a pass seals into the store, or the agent's app being
+// installed, for one the engine issues at use ([issuedAtUse]).
+func (m *credentialMissing) arrival() string {
+	for _, kind := range m.mintingKinds() {
+		if !issuedAtUse(kind) {
+			return "the seal reaches this node"
+		}
+	}
+	return "the agent's GitHub App is installed"
 }
 
 // mintingKinds are the integrations that mint what m waits for, in name order.
@@ -646,6 +716,10 @@ func (m *credentialMissing) reason() string {
 			"POST /config/reload",
 			varRefs(m.empty), plural(m.empty, "is set to an empty value", "are set to empty values")))
 	}
+	for _, name := range slices.Sorted(maps.Keys(m.unissued)) {
+		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; it is asked for "+
+			"again at the next attempt", name, m.unissued[name]))
+	}
 	if remedy := m.optionalRemedy(); remedy != "" {
 		parts = append(parts, remedy)
 	}
@@ -658,12 +732,16 @@ func (m *credentialMissing) reason() string {
 			}
 		}
 		slices.Sort(names)
+		verb := "mint"
+		if issuedAtUse(kind) {
+			verb = "issue"
+		}
 		if why, stopped := m.stopped[kind]; stopped {
-			parts = append(parts, fmt.Sprintf("the %s integration will not mint %s %s",
-				kind, varRefs(names), why))
+			parts = append(parts, fmt.Sprintf("the %s integration will not %s %s %s",
+				kind, verb, varRefs(names), why))
 			continue
 		}
-		waits = append(waits, fmt.Sprintf("the %s integration to mint %s", kind, varRefs(names)))
+		waits = append(waits, fmt.Sprintf("the %s integration to %s %s", kind, verb, varRefs(names)))
 	}
 	if len(waits) > 0 {
 		parts = append(parts, "waiting for "+strings.Join(waits, " and "))
@@ -700,7 +778,7 @@ func (m *credentialMissing) optionalRemedy() string {
 func (m *credentialMissing) Error() string {
 	when := ""
 	if m.waiting() {
-		when = "; it starts once the seal reaches this node"
+		when = "; it starts once " + m.arrival()
 	}
 	return "not started: " + m.reason() + when
 }
@@ -720,6 +798,9 @@ func (m *credentialMissing) logAttrs() []any {
 	}
 	if len(m.empty) > 0 {
 		attrs = append(attrs, "empty", m.empty)
+	}
+	if len(m.unissued) > 0 {
+		attrs = append(attrs, "unissued", slices.Sorted(maps.Keys(m.unissued)))
 	}
 	if len(m.minting) > 0 {
 		attrs = append(attrs, "awaiting", m.mintedVariables())

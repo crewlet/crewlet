@@ -140,6 +140,43 @@ func (c containerCLI) command(timeout time.Duration, args ...string) hostCommand
 	}
 }
 
+// podman reports whether the runtime is Podman rather than Docker: the two
+// answer a few questions differently, and the binary's name is how this
+// backend tells them apart ([ResolveContainerRuntime] picks one of the two).
+func (c containerCLI) podman() bool { return filepath.Base(c.path) == "podman" }
+
+// hostAlias is the name the engine host answers to inside a container this
+// runtime starts: each runtime's own documented name, so an image or a run
+// that already uses it keeps working ([EngineAddress]).
+func (c containerCLI) hostAlias() string {
+	if c.podman() {
+		return podmanHostAlias
+	}
+	return dockerHostAlias
+}
+
+// hostAliasArgs are the `run` arguments that make [containerCLI.hostAlias]
+// resolve, or nothing where the runtime defines it on its own.
+//
+// DOCKER DEFINES IT ONLY ON DOCKER DESKTOP. Docker Engine on Linux leaves
+// host.docker.internal unresolved unless the container is started with it,
+// and `host-gateway` is the daemon's own spelling of the host's address on
+// the container's network (Docker 20.10 and later); on Docker Desktop it
+// names the same address Desktop's own entry does. Podman writes
+// host.containers.internal into every container's hosts file itself, with the
+// address its network mode needs, so nothing is added there.
+func (c containerCLI) hostAliasArgs() []string {
+	if c.podman() {
+		return nil
+	}
+	return []string{"--add-host", dockerHostAlias + ":host-gateway"}
+}
+
+const (
+	dockerHostAlias = "host.docker.internal"
+	podmanHostAlias = "host.containers.internal"
+)
+
 // ---------------------------------------------------------------------
 // direct
 // ---------------------------------------------------------------------
@@ -593,6 +630,10 @@ var _ Sandbox = (*containerBox)(nil)
 
 func (b *containerBox) ID() string   { return b.layout.id }
 func (b *containerBox) Home() string { return DefaultHome }
+
+// EngineHost is the name the engine host answers to inside this container:
+// its loopback is the container's own ([EngineAddress]).
+func (b *containerBox) EngineHost() string { return b.cli.hostAlias() }
 
 func (b *containerBox) workdir() string { return DefaultHome + "/" + WorkspaceSubdir }
 

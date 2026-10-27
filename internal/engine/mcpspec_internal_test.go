@@ -223,8 +223,9 @@ func TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan(t *testing.T) {
 	t.Parallel()
 	mintsNoSeatCredential := map[integration.Kind]string{
 		// An agent's GitHub App is created by a person's own gesture,
-		// which seals its key and writes the pointer to it together, so
-		// nothing is ever on its way.
+		// which seals its key and writes the pointer to it together, and
+		// the token it acts with is issued at use, never sealed by a pass
+		// (githubtoken.go), so no plan is waited on.
 		integration.KindGitHub: "no pass mints a seat's GitHub credential",
 		// Both read an agent's Atlassian account, which the Atlassian
 		// pass mints.
@@ -387,7 +388,7 @@ func TestACodingAgentIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.
 	env := config.NewResolver(config.MapSource{"CEO_TRACKER_TOKEN": "tracker-ceo"})
 	gate := &org.RoleSandbox{MCP: org.RoleSandboxMCP{Servers: []string{"atlassian", "tracker"}}}
 
-	got, withheld := sandboxMCP(env, company, seat, gate, (&Engine{}).mintedFor(company, "ceo"))
+	got, withheld := sandboxMCP(env, company, seat, gate, &seatMint{kinds: (&Engine{}).mintedFor(company, "ceo")})
 	if _, offered := got["atlassian"]; offered {
 		t.Error("the box was offered the atlassian server with the seat's credentials missing")
 	}

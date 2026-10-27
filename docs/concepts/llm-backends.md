@@ -1147,7 +1147,11 @@ that binds no listener for the route (`api.port: 0`), the variable for a cell
 it is missing for. Each such cell is also said once when a company is applied
 (`executor_bridge_unreachable`). With `api.public.port` set the bridge is
 served on that public listener and nowhere else, so a direct box dials it
-there and the variable names it.
+there and the variable names it. A loopback `CREWLET_MCP_BRIDGE_URL` serves a
+`container` box on the engine host too: the box is handed the runtime's name
+for the engine host in its place
+([Local sandboxes](code-sandbox.md#local-sandboxes)), which on Linux needs the
+API to listen beyond loopback.
 
 > **In a fleet, that URL is the fleet's, the same on every node.** A session
 > is a live tool surface — the seat's MCP children, its skill guard, its

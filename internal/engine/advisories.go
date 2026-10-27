@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"runtime"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
@@ -117,9 +118,15 @@ func bridgeGaps(cfg *config.Company, offline bool, bridge *mcpbridge.Bridge) []b
 		case bridge.Reaches(box.Cell == config.PlacementDirect) != "":
 			continue
 		default:
-			fix = "a box in this cell is not on this node's host, so it cannot dial the " +
-				"node's loopback: set " + mcpbridge.BaseURLVar + " to the fleet's address " +
-				"that box reaches"
+			// NOT "the box is not on this host": a `container` box is, in a
+			// network of its own, and a `direct` box on a node serving no API
+			// shares the loopback but has no listener there to dial. Either
+			// way the fleet's address is the box's only one.
+			fix = "this node hands a box in this cell no listener of its own (the box is " +
+				"not on this host's loopback, or this node serves no API there), so it " +
+				"dials the fleet's address alone: set " + mcpbridge.BaseURLVar + " to the " +
+				"fleet's address that box reaches (a loopback one reaches a container box " +
+				"on this host under its runtime's name for the host)"
 		}
 		at[box.Cell] = len(gaps)
 		gaps = append(gaps, bridgeGap{cell: box.Cell, seat: box.Seat.Handle, seats: 1, fix: fix})
@@ -159,5 +166,24 @@ func (e *Engine) reportBridgeGaps(ctx context.Context, logger *slog.Logger,
 			slog.Int("seats", gap.seats),
 			slog.String("detail", "every executor run this node launches in the "+
 				string(gap.cell)+" cell is refused: "+gap.fix))
+	}
+}
+
+// reportContainerReach logs [ContainerReachWarnings] for the applied revision
+// against this node's own Tier A and host, as config_advisory lines at WARN.
+//
+// AT APPLY, for [reportCompanyAdvisories]' reason, and because only this
+// node knows both halves: the bind is its Tier A and the cell is the company
+// it now runs. `config` names the tier the remedy is written in.
+func reportContainerReach(ctx context.Context, logger *slog.Logger,
+	target coord.Activation, boot *config.Bootstrap, cfg *config.Company,
+) {
+	for _, w := range ContainerReachWarnings(boot, cfg, runtime.GOOS) {
+		logger.LogAttrs(ctx, slog.LevelWarn, "config_advisory",
+			slog.String("config", "bootstrap"),
+			slog.String("revision", target.RevisionID),
+			slog.Int64("epoch", target.Epoch),
+			slog.String("path", w.Path),
+			slog.String("detail", w.Message))
 	}
 }
