@@ -68,7 +68,7 @@ const (
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
 	// changesNumberKey is code_changes_number_idx, (repo_id, number)
-	// (replicated migrations 0058 and 0063): a repository's changes in number
+	// (replicated migrations 0058 and 0066): a repository's changes in number
 	// order, which is the only way to a repository's revisions, authors and
 	// bodies — they carry no repo_id of their own.
 	changesNumberKey = "code_changes_number_idx"

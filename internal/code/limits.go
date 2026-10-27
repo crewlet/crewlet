@@ -364,7 +364,7 @@ const (
 	// change carries: as long as a task's body in the engine's own tracker,
 	// the text a change most often carries over from the work it is for.
 	// The one value of a change that outgrows a page, so it is a row of its
-	// own (code_change_bodies, replicated 0063) rather than a column of the
+	// own (code_change_bodies, replicated 0066) rather than a column of the
 	// row every head move reads and rewrites, weighed by its change's
 	// body_bytes, and a purge part counts it toward PurgePartBytes.
 	MaxChangeBodyBytes = 32 << 10
