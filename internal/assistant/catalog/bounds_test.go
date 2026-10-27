@@ -1,12 +1,14 @@
 package catalog_test
 
 import (
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 )
 
@@ -18,6 +20,9 @@ type bound struct {
 	// why names the cap a route holds itself to, or what bounds a set the
 	// company configures, where kind is boundCapped or boundConfig.
 	why string
+	// record is the argument that names the one record a boundRecord read
+	// is of, which its path must carry as a segment of its own.
+	record string
 	// asks is what the read must send besides, where the route's own default
 	// answer is past what one step reads and the read bounds it: a seat's
 	// read asks for the seat without its call history.
@@ -47,22 +52,24 @@ const (
 // event log, a seat's transcripts, a growing list) was cut at the step's
 // bound and gave the model nothing, and this is where that is decided once.
 var readBounds = map[string]bound{
-	"search_work":                {kind: boundPage},
-	"list_tasks":                 {kind: boundPage},
-	"get_task":                   {kind: boundRecord},
-	"get_task_thread":            {kind: boundPage},
-	"get_task_cost":              {kind: boundPage},
-	"get_my_work/assigned":       {kind: boundCapped, why: "my-work answers seven lists of at most 20 each"},
-	"get_my_work/priorities":     {kind: boundCapped, why: "my-work answers seven lists of at most 20 each"},
-	"get_my_work/asked":          {kind: boundCapped, why: "my-work answers seven lists of at most 20 each"},
-	"get_my_work/inbox":          {kind: boundPage},
-	"list_projects":              {kind: boundPage},
-	"list_projects/one":          {kind: boundRecord},
-	"get_workload":               {kind: boundConfig, why: "one row per seat"},
-	"list_decisions":             {kind: boundCapped, why: "decisions answers at most 50, newest first, with its total"},
-	"list_agents":                {kind: boundConfig, why: "one row per agent seat"},
-	"get_agent/activity":         {kind: boundWindow},
-	"get_agent/detail":           {kind: boundRecord, asks: map[string]string{"history": "false"}},
+	"search_work": {kind: boundCapped,
+		why: "a ranked search answers its best matches, at most 25, never a page of a list"},
+	"list_tasks":             {kind: boundPage},
+	"get_task":               {kind: boundRecord, record: "item"},
+	"get_task_thread":        {kind: boundPage},
+	"get_task_cost":          {kind: boundPage},
+	"get_my_work/assigned":   {kind: boundCapped, why: "my-work answers seven lists of at most 20 each"},
+	"get_my_work/priorities": {kind: boundCapped, why: "my-work answers seven lists of at most 20 each"},
+	"get_my_work/asked":      {kind: boundCapped, why: "my-work answers seven lists of at most 20 each"},
+	"get_my_work/inbox":      {kind: boundPage},
+	"list_projects":          {kind: boundPage},
+	"list_projects/one":      {kind: boundRecord, record: "key"},
+	"get_workload":           {kind: boundConfig, why: "one row per seat"},
+	"list_decisions":         {kind: boundCapped, why: "decisions answers at most 50, newest first, with its total"},
+	"list_agents":            {kind: boundConfig, why: "one row per agent seat"},
+	"get_agent/activity":     {kind: boundWindow},
+	"get_agent/detail": {kind: boundRecord, record: "handle",
+		asks: map[string]string{"history": "false"}},
 	"get_org_chart/chart":        {kind: boundConfig, why: "the company's units and seats"},
 	"get_org_chart/seats":        {kind: boundConfig, why: "one row per human seat"},
 	"list_turns":                 {kind: boundPage},
@@ -76,17 +83,41 @@ var readBounds = map[string]bound{
 	"list_budgets/company":       {kind: boundConfig, why: "one row per seat and the company's windows"},
 	"search_knowledge":           {kind: boundCapped, why: "the knowledge search answers its top hits, never the corpus"},
 	"list_spaces":                {kind: boundConfig, why: "one row per space"},
-	"get_page":                   {kind: boundRecord},
+	"get_page":                   {kind: boundRecord, record: "page"},
 	"get_company_feed":           {kind: boundPage},
 	"list_artifacts":             {kind: boundPage},
-	"get_artifact":               {kind: boundRecord},
+	"get_artifact":               {kind: boundRecord, record: "artifact"},
 	"list_integrations":          {kind: boundConfig, why: "one row per integration the engine offers"},
 	"get_fleet_health/backups":   {kind: boundCapped, why: "the backup history is one boundPage of 100"},
 	"get_fleet_health/mcp_servers": {kind: boundConfig,
 		why: "one row per MCP server the company configures"},
 	"get_fleet_health/nodes": {kind: boundConfig, why: "one row per node of the fleet"},
-	"list_config_changes":    {kind: boundPage},
-	"get_company_principles": {kind: boundRecord},
+	"list_config_changes": {kind: boundCapped,
+		why: "config_audit answers the newest revisions, at most 50, as a bare list with no cursor"},
+	"get_company_principles": {kind: boundConfig, why: "the company's one principles document"},
+}
+
+// segments are a request path's segments, each unescaped.
+func segments(path string) []string {
+	var out []string
+	for _, seg := range strings.Split(path, "/") {
+		if s, err := url.PathUnescape(seg); err == nil && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// pages reports whether a card reads the answer's own word that rows or items
+// lie past its page ([cards.Table.More], [cards.Items.More]).
+func pages(spec cards.Spec) bool {
+	switch {
+	case spec.Table != nil:
+		return spec.Table.More != ""
+	case spec.Entity != nil && spec.Entity.Items != nil:
+		return spec.Entity.Items.More != ""
+	}
+	return false
 }
 
 // variantArgs are the arguments that select one card variant of a read, with
@@ -149,7 +180,8 @@ func TestEveryDefaultReadIsBounded(t *testing.T) {
 					"to a size that does not grow with the company's work", name)
 				continue
 			}
-			req, err := tool.Request(variantArgs(t, tool, v))
+			args := variantArgs(t, tool, v)
+			req, err := tool.Request(args)
 			if err != nil {
 				t.Errorf("%s: %v", name, err)
 				continue
@@ -160,13 +192,25 @@ func TestEveryDefaultReadIsBounded(t *testing.T) {
 				if q.Get("limit") == "" && q.Get("max-keys") == "" {
 					t.Errorf("%s is a page and asks %s?%s with no limit", name, req.Path, q.Encode())
 				}
+				// A PAGE SAYS IT IS ONE: the card reads the answer's own word
+				// that rows lie past it, or the person and the model take
+				// the first page for the whole.
+				if !pages(tool.Cards[v]) {
+					t.Errorf("%s is a page and its card names no More, so a full page "+
+						"reads as the whole", name)
+				}
 			case boundWindow:
 				if q.Get("days") == "" && q.Get("since") == "" {
 					t.Errorf("%s is a window and asks %s?%s with no days", name, req.Path, q.Encode())
 				}
 			case boundRecord:
-				if strings.Count(req.Path, "/") < 2 {
-					t.Errorf("%s is one record and asks %s, which names none", name, req.Path)
+				// THE PATH NAMES THE RECORD THE CALL ASKED FOR, as a segment
+				// of its own: a read that ignored its argument and asked a
+				// list route would pass a count of slashes.
+				want := args.String(b.record)
+				if b.record == "" || want == "" || !slices.Contains(segments(req.Path), want) {
+					t.Errorf("%s is one record, asked by %s=%q, and asks %s, which names "+
+						"it in no segment", name, b.record, want, req.Path)
 				}
 			case boundCapped, boundConfig:
 				if b.why == "" {

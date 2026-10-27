@@ -415,6 +415,12 @@ export interface AssistantEntityCard {
   items?: AssistantEntityItem[];
   /** How many items the record holds where `items` is only the first of them. */
   items_total?: number;
+  /**
+   * The answer says items lie past the page it read (a thread's older
+   * comments), so `items` is a page and never the whole list: the record's
+   * screen shows the rest.
+   */
+  items_more?: boolean;
   /** What one item and several are called ("policy", "policies"), where the card has a list. */
   items_noun?: AssistantNoun;
   open?: AssistantLink;

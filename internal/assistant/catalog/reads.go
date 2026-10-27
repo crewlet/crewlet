@@ -201,7 +201,7 @@ func readTools() []Tool {
 			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, ID: "key",
 				Key: "key", Title: "title", Prose: true,
 				Items: &cards.Items{Path: "comments", Kind: wire.ResourceTask, ID: "id",
-					Label: "body", Fact: "author", Prose: true,
+					Label: "body", Fact: "author", Prose: true, More: "next_cursor",
 					Noun: wire.Noun{One: "comment", Many: "comments"}},
 				Open: &cards.Open{Screen: "item", Params: map[string]string{"id": "item"},
 					LabelFrom: "key"}}}),
@@ -223,7 +223,7 @@ func readTools() []Tool {
 					query(a).str("item", "id").num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Turns on the task", Rows: "turns",
-				Brief: []string{"seat", "outcome", "tokens"},
+				More: "next_cursor", Brief: []string{"seat", "outcome", "tokens"},
 				Columns: []cards.Column{col("seat", "Seat", "seat", tText),
 					col("outcome", "Outcome", "outcome", tLabel),
 					col("tokens", "Tokens", "tokens", tTokens),
@@ -769,7 +769,7 @@ func readTools() []Tool {
 				return get("GET /feed", nil, query(a).num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Recent activity", Rows: "rows",
-				Brief: []string{"kind", "title", "page", "at"},
+				More: "next_cursor", Brief: []string{"kind", "title", "page", "at"},
 				Columns: []cards.Column{col("kind", "Kind", "kind", tLabel),
 					col("at", "When", "at", tDatetime), col("task", "Task", "work.key", tText),
 					prose("title", "Task title", "work.title"), seat("by", "By", "work.actor"),

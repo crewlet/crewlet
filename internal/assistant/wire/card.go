@@ -114,6 +114,10 @@ type EntityCard struct {
 	// ItemsTotal is how many items the record holds where Items is only the
 	// first of them; absent where Items is the whole list.
 	ItemsTotal int `json:"items_total,omitempty"`
+	// ItemsMore is a record whose answer says items lie past the page it
+	// read (a thread's older comments), so Items is a page and never the
+	// whole list: the record's screen shows the rest (ADR-0061).
+	ItemsMore bool `json:"items_more,omitempty"`
 	// ItemsNoun is what one item and several are called ("policy",
 	// "policies"), so the drawer can say how many a folded card holds. Absent
 	// on a card with no list, and on one stored before it was carried.

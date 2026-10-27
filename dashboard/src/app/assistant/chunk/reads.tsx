@@ -202,6 +202,8 @@ function EntityBody({ entity, on }: { entity: AssistantEntityCard; on: CardHandl
       {entity.text ? <ReplyProse text={entity.text} /> : null}
       {entity.items_total && entity.items_total > items.length ? (
         <p>{`Showing the first ${fmtExact(items.length)} of ${fmtExact(entity.items_total)}.`}</p>
+      ) : entity.items_more && items.length > 0 ? (
+        <p>{`Showing the first ${fmtExact(items.length)}. Its page shows the rest.`}</p>
       ) : null}
       {items.length > 0 ? (
         <EntityList

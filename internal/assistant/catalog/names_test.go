@@ -275,6 +275,27 @@ func TestAPageWithMoreIsNeverTheWhole(t *testing.T) {
 				res.Model, res.Cards, tc.more)
 		}
 	}
+	// A RECORD'S LIST IS A PAGE TOO: a thread whose answer has older
+	// comments past it says so on the card and to the model.
+	thread, _ := catalog.Lookup("get_task_thread")
+	for _, tc := range []struct {
+		next string
+		more bool
+	}{{`"b2xkZXI"`, true}, {`null`, false}} {
+		answer := []byte(`{"key":"GP-11","title":"Crash","comments":[{"id":"c1","body":"Seen",` +
+			`"author":"qa"},{"id":"c2","body":"Fixed","author":"dev"}],"next_cursor":` + tc.next + `}`)
+		res, err := catalog.Shape(thread, map[string]any{"item": "GP-11"}, exec.Response{
+			Status: http.StatusOK, Body: answer}, provenance.NewBoundary(), wednesday, cards.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		saysFloor := strings.Contains(res.Model, "at least 2")
+		marked := len(res.Cards) == 1 && res.Cards[0].Entity.ItemsMore
+		if saysFloor != tc.more || marked != tc.more {
+			t.Errorf("thread next %s: the model reads %s and the cards are %+v, want more=%v",
+				tc.next, res.Model, res.Cards, tc.more)
+		}
+	}
 }
 
 // THE MODEL READS EVERY INSTANT ON THE COMPANY'S CLOCK, and a midnight there as

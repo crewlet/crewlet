@@ -141,6 +141,10 @@ type Items struct {
 	Plain bool
 	// Prose marks an item list a person or an agent wrote.
 	Prose bool
+	// More, where named, is the path to the answer's own word that items lie
+	// past this page (a thread's `next_cursor`), as [Table.More] is a
+	// table's: the record's list is then a page, never the whole.
+	More string
 	// Noun is what one item and several are called ("policy", "policies"),
 	// which the drawer counts a folded card's list with.
 	Noun wire.Noun
@@ -527,6 +531,10 @@ func buildEntity(e *Entity, doc any) (Built, error) {
 	if len(card.Items) < total {
 		card.ItemsTotal = total
 	}
+	if e.Items != nil && e.Items.More != "" {
+		built.More = morePast(lookup(doc, e.Items.More))
+	}
+	card.ItemsMore = built.More && total > 0
 	return built, out.Validate()
 }
 

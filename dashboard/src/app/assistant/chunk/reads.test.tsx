@@ -267,3 +267,24 @@ test("a page of a list says so on its chip and in its peek, never in a notice be
   );
   expect(document.querySelector(".crewlet-callout")).toBeNull();
 });
+
+test("a record whose list is a page says so in its peek", () => {
+  const thread = event({
+    type: "entity",
+    entity: {
+      kind: "task",
+      id: "GOP-11",
+      key: "GOP-11",
+      title: "Android 12 crash when lesson audio starts",
+      items: [
+        { id: "c1", label: "Seen on a Pixel 6", fact: "qa" },
+        { id: "c2", label: "Fixed in 4.2", fact: "dev" },
+      ],
+      items_more: true,
+      open: { label: "GOP-11", screen: "item", href: "#/worklet/GOP-11" },
+    },
+  });
+  draw("GOP-11 has two recent comments.", [thread]);
+  fireEvent.click(screen.getByRole("button", { name: /GOP-11/ }));
+  expect(screen.getByText("Showing the first 2. Its page shows the rest.")).toBeTruthy();
+});

@@ -98,6 +98,7 @@ type entityDigest struct {
 	Items        []itemDigest      `json:"items,omitempty"`
 	ItemsShown   int               `json:"items_shown,omitempty"`
 	ItemsTotal   int               `json:"items_total,omitempty"`
+	MoreExist    bool              `json:"more_exist,omitempty"`
 	ItemsPartial string            `json:"note,omitempty"`
 }
 
@@ -126,12 +127,16 @@ func entitySummary(e *wire.EntityCard, zone *time.Location, budget int) ([]byte,
 			Depth: it.Depth})
 	}
 	d.ItemsTotal = len(items)
+	d.MoreExist = e.ItemsMore
 	set := func(n int) {
 		d.Items, d.ItemsShown = items[:n], n
 		d.ItemsPartial = ""
-		if n < len(items) {
+		switch {
+		case n < len(items):
 			d.ItemsPartial = fmt.Sprintf("Only %d of %d entries are listed here; the "+
 				"person sees them all on the card.", n, len(items))
+		case e.ItemsMore:
+			d.ItemsPartial = fmt.Sprintf(MoreNote, len(items))
 		}
 	}
 	set(len(items))
