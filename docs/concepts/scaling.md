@@ -364,19 +364,29 @@ the janitor's at 10 000 copies, measured — and is due again only once a
 sixteenth more has been kept.
 
 **What every data node holds for the code host.** Every data node holds the
-whole estate, and the code host's rows with it. A person's push of one commit
-leaves a push row of about 623 bytes, kept 181 days, and its pack's row of
-about 530, kept as long as the repository is; a forced update or a deletion
-leaves a row more, naming the object it left, kept 14 days, and longer while
-the repository's pushes fill their records with such updates
-([ref drops](code-host.md#retention-and-history)); the code log, which keeps only
-the trim's window of records, takes 1 344 bytes for a push in a record of its
-own and about 760 for each of a burst group commit holds together. So:
+whole estate, and the code host's rows with it. A seat's push of one commit
+leaves a push row of about 680 bytes, naming the seat and the turn, work item
+and model behind it (a person's push, naming the token it came through,
+leaves one of about 623), kept 181 days, and its pack's row of about 530,
+kept as long as the repository is; a forced update or a deletion leaves a row
+more, naming the object it left, kept 14 days, and longer while the
+repository's pushes fill their records with such updates
+([ref drops](code-host.md#retention-and-history)). A seat that has pushed
+holds one row more however much it pushes — its pushes on its newest company
+day, a row of about 30 bytes and its key's entry — where an index of the push
+rows for that one-day question would have kept an entry of some 40 bytes for
+every seat's push for its 181 days, about 1.8 GB at 250 000 pushes a day. The
+code log, which keeps only the trim's window of records, takes 1 344 bytes
+for a push in a record of its own and about 760 for each of a burst group
+commit holds together. The table prices every push as a seat's: the reference
+company's 3 000 pushes a day are all its seats', a hundred seats pushing
+thirty times a day while its people fetch, and a larger company's are its
+thousands of seats'. So:
 
 | Pushes a day | Push rows at the 181-day horizon | Pack rows added a year | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 338 MB | about 581 MB | about 28 MB |
-| 250 000 — a company of thousands of seats | about 45 million, 28.2 GB | about 48.4 GB | 1.3 to 2.4 GB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 581 MB | about 28 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 48.4 GB | 1.3 to 2.4 GB |
 
 These rows come on top of what the tracker, the knowledge base and the rest of
 the estate hold: [the storage forecast](../guides/retention.md#the-storage-forecast)

@@ -219,16 +219,23 @@
 //     lives as long as the pack does — until the repository is purged, since
 //     nothing in this release compacts a repository's packs.
 //
-// So every data node, holding the whole estate, holds 622.6 bytes for each
-// push of the last 181 days and 530.4 for each push ANY repository not yet
-// purged has ever taken — the estate's whole growth a push of one commit,
-// 1 153 — and a deployment of 3 000 pushes a day carries about 338 MB of
-// push rows at the horizon and grows by about 581 MB of pack rows a year for
-// as long as its repositories live. A forced update or a deletion
-// leaves one row more, its ref drop, a commit id and a ref without the
-// history row's commands, kept [PruneGrace] — two weeks of such commands,
-// against the history's half year of every push — and longer while the
-// repository's records are full of them (the REF DROPS horizon below).
+// So every data node, holding the whole estate, holds 679.9 bytes for each
+// seat's push of the last 181 days (622.6 for a person's) and 530.4 for each
+// push ANY repository not yet purged has ever taken — the estate's whole
+// growth a seat's push of one commit, 1 210 — and the reference company's
+// 3 000 pushes a day, every one a seat's, carry about 369 MB of push rows at
+// the horizon and grow by about 581 MB of pack rows a year for as long as its
+// repositories live. A seat that has pushed holds one row more however much
+// it pushes, its pushes on its newest company day (code_seat_days, the
+// counter the decide's daily quota reads): a row of about thirty bytes and
+// its key's entry, where an index of the push rows serving that one-day
+// question would have kept an entry of some forty bytes for every seat's
+// push for its 181 days, about 1.8 GB at 250 000 pushes a day. A forced
+// update or a deletion leaves one row more, its ref drop, a commit id and a
+// ref without the history row's commands, kept [PruneGrace] — two weeks of
+// such commands, against the history's half year of every push — and longer
+// while the repository's records are full of them (the REF DROPS horizon
+// below).
 //
 // THE PUSH ON THE LOG (BenchmarkPushLogBytes, the same figure every count;
 // restated from one count of one iteration once an entry named its way): the
