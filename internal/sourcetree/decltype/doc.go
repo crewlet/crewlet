@@ -66,16 +66,17 @@
 //
 // A [Type] is KNOWN, UNREAD or neither, and a [Selection] says which declared
 // type holds a member, that nothing read holds it while a type the walk does
-// not read may (Beyond), that a type read whole holds none (Absent: the
-// compiler would refuse the selector, so something was misread), or that the
-// walk cannot say (Undetermined) — which includes a member found DEEPER than
-// a part it could not read, since that part may hold the same name and shadow
-// it. What an answer MEANS is the gate's to say: an absence gate that took
-// "cannot tell" for "not there" would certify nothing about exactly the
-// values it skipped, and whether a value an unread package produced can be
-// what a gate looks for is a fact about that gate's subject, not about
-// typing — the stream-identity gate reports one, and the pacing gate, which
-// reads net/http, passes one.
+// not read may (Beyond), that the receiver is itself a value only a package
+// the walk does not read can type (FromUnread), that a type read whole holds
+// none (Absent: the compiler would refuse the selector, so something was
+// misread), or that the walk cannot say (Undetermined) — which includes a
+// member found DEEPER than a part it could not read, since that part may hold
+// the same name and shadow it. What an answer MEANS is the gate's to say: an
+// absence gate that took "cannot tell" for "not there" would certify nothing
+// about exactly the values it skipped, and whether a value an unread package
+// produced can be what a gate looks for is a fact about that gate's subject,
+// not about typing — the stream-identity gate reports one, and the pacing
+// gate, which reads net/http, passes one.
 //
 // # Coverage boundary
 //
