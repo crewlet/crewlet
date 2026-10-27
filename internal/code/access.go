@@ -247,6 +247,40 @@ func GrantOf(p Principal, repo RepoRef, r Roster) Grant {
 // AccessOf is GrantOf(p, repo, r).Access.
 func AccessOf(p Principal, repo RepoRef, r Roster) Access { return GrantOf(p, repo, r).Access }
 
+// JudgeRead is whether asker may read repo — and, where the read is made for
+// the seat its turn is acting for ([ReadQuery.CeilingSeat]; "" for none),
+// whether that seat could read it itself — answering the asker's grant, which
+// names the asker's access, and the refusal: [ErrNotPermitted] wrapping the
+// asker's [Grant.ReadRefusal] where its own grant reads nothing of the
+// repository, else [ErrAboveCeiling] wrapping the ceiling seat's where that
+// seat's reads nothing of it, else nil.
+//
+// THE ONE JUDGMENT OF A READ, every reader's — the data node's listing,
+// detail, history, refs and resolve, and the git node's read by object id —
+// so the two principals are judged by one chart and one row in one place, and
+// no reader can judge the asker and forget whom it reads for. The asker
+// first: an asker that reads nothing is told so about ITSELF, which is the
+// remedy it can act on, and a read it may make is bounded after.
+//
+// THE CEILING IS A SEAT'S GRANT, judged as the seat itself would be judged
+// asking ([GrantOf] for an agent principal): its tier, its relation to the
+// repository on the chart, the repository's visibility. A HUMAN seat as the
+// ceiling stands nowhere — a person is never asked as a seat — so the caller
+// never sends one: a person maintains every repository and bounds nothing.
+func JudgeRead(asker Principal, ceilingSeat string, repo RepoRef, r Roster) (Grant, error) {
+	g := GrantOf(asker, repo, r)
+	if !g.MayRead() {
+		return g, fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
+	}
+	if ceilingSeat == "" {
+		return g, nil
+	}
+	if c := GrantOf(Principal{Kind: PrincipalAgent, Seat: ceilingSeat}, repo, r); !c.MayRead() {
+		return g, fmt.Errorf("%w: %s", ErrAboveCeiling, c.ReadRefusal())
+	}
+	return g, nil
+}
+
 // relation is what the chart relates seat s to repo by — the FIRST row that
 // holds, top to bottom:
 //

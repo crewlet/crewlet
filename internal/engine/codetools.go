@@ -8,8 +8,10 @@ import (
 // THE CODE READ TOOLS' ENGINE WIRING: the same deps for a seat's registry and
 // for the operator catalogue, over the code host through this node's estate
 // router — its own copy of the code log where it serves, a data node's
-// otherwise, and a repository's home git node for its content — and the
-// address a person's git clones from.
+// otherwise, and a repository's home git node for its content — the address a
+// person's git clones from, and whoever a turn is acting for with the chart
+// that decides them (the requester ceiling, the artifacts tools' own:
+// [turnRequesters] and [ChartAuthorityOf]).
 
 // CodeToolDeps are the code read tools' dependencies on this node, or the zero
 // value (which serves none of them) where this node's RUNNING runtime serves
@@ -37,7 +39,13 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	if !ok {
 		return builtin.CodeDeps{}
 	}
-	return builtin.CodeDeps{Code: seam, CloneURL: e.cloneURL}
+	// THE CEILING'S HALVES BESIDE THE CODE HOST, read per call like the
+	// chart every seat's authority decision reads: a seat's tools are cloned
+	// into its lease and an apply does not rebuild the clone, so a value
+	// holding this epoch's chart would judge a requester by an organisation
+	// a later activation replaced.
+	return builtin.CodeDeps{Code: seam, CloneURL: e.cloneURL, Requesters: turnRequesters{engine: e},
+		Chart: ChartAuthorityOf(e)}
 }
 
 // CodeReaderDeps are `code_repo_readers`' dependencies on this node — who read

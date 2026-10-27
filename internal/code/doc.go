@@ -338,6 +338,19 @@
 // nothing, and the walk asks the next data node. A person's read asks no
 // chart and is answered there.
 //
+// A SEAT'S READ MADE FOR ANOTHER SEAT is held to both. Inside a turn a
+// colleague seat woke, the reading seat is that colleague's deputy, and a
+// deputy that read for its requester whatever it could read itself would hand
+// a `visibility: unit` repository to any seat that can message one of the
+// unit's. So such a read names the requester too ([ReadQuery.CeilingSeat],
+// and a resolve's and a read by object id's), and every reader judges the two
+// by ONE function ([JudgeRead]) from one chart and one row: a listing leaves
+// out what either may not read, and a read the asker may make and its ceiling
+// may not is [ErrAboveCeiling] — never [ErrNotPermitted], since the same seat
+// reads the repository in a turn nobody woke. A person or a stranger as the
+// requester never reaches here: a person maintains every repository, and a
+// stranger reads none, both settled where the turn runs.
+//
 // # Every read of the rows seeks a named index
 //
 // Every statement this package spells that reads a code table — a SELECT, and

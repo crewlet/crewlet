@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -37,6 +38,29 @@ import (
 // answers holds the read to that caller's grant: a listing leaves out what the
 // caller may not read, and a read of such a repository is refused
 // `not_permitted` in the domain's own sentence. No argument names who reads.
+//
+// # Every read is decided again for whoever woke the turn
+//
+// Inside a turn somebody woke, a seat reading code is that somebody's deputy,
+// and a deputy that read out whatever it may read itself would hand a
+// `visibility: unit` repository to anybody who can message one of the unit's
+// seats. So every call is decided twice, as the artifacts tools decide theirs
+// (the REQUESTER CEILING, [ceilingOf]): by the tool's own authority row asked
+// again for the requester ([authz.DecideWithin]) — a stranger the company
+// does not know reads nothing, and neither does a person who may not act in
+// it now — and, for a requester that is a colleague SEAT, by that seat's own
+// grant on the repository, which rides on every read the call makes
+// ([code.ReadQuery.CeilingSeat]) for the node that answers it to judge beside
+// the asker's, from the same chart and the same row: a listing leaves out
+// what the colleague may not read, and a read of such a repository is refused
+// in the code host's own sentence ([code.ErrAboveCeiling]). Judged THERE,
+// never here against the repository the turn resolved once: the asker's
+// grant is judged afresh at every read, and a ceiling judged on the turn's
+// memo would keep reading for a colleague a later activation shut out. A
+// person passes — every person maintains every repository (ADR-0055) — and a
+// call outside any turn, a person's own assistant, reads for nobody but its
+// caller. The requester's authority is a ceiling and never a source: what is
+// read is the seat's own read, judged by its own grant.
 //
 // # Rows at the seat's level, objects by id
 //
@@ -141,13 +165,27 @@ type CodeDeps struct {
 	// token's answer carries it: a seat reads through these tools, and a URL
 	// it could not authenticate to would only send it round.
 	CloneURL func(repo string) string
+
+	// Requesters composes who a seat's turn is acting for, and Chart is the
+	// chart the authority table decides them by: every call in a turn
+	// somebody woke is decided again for them ([CodeDeps.caller]). REQUIRED
+	// beside Code — the tools are wired together or not at all, as the
+	// artifacts tools are, so a surface that left the ceiling out serves no
+	// code read rather than every one to whoever asks a seat for it.
+	Requesters Requesters
+	Chart      authz.Chart
 }
+
+// serves reports whether every half the tools read through is wired: the code
+// host, and the requester ceiling's composition and chart.
+func (d CodeDeps) serves() bool { return d.Code != nil && d.Requesters != nil && d.Chart != nil }
 
 // CodeTools are the code tools a seat and an operator share: ONE list, so a
 // schema, a default and a refusal's words are written once, and nil where
-// deps reach no code host. Every one reads; none delivers anywhere.
+// deps are not wholly wired ([CodeDeps.serves]) — a company that hosts no
+// code. Every one reads; none delivers anywhere.
 func CodeTools(deps CodeDeps) []tools.Callable {
-	if deps.Code == nil {
+	if !deps.serves() {
 		return nil
 	}
 	return []tools.Callable{
@@ -229,6 +267,103 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (c
 	return p, nil
 }
 
+// codeCaller is who one call of a code tool reads as: the asker its grant is
+// judged by, and — inside a turn a colleague seat woke — that seat, whose own
+// grant bounds the asker's on every read the call makes
+// ([code.ReadQuery.CeilingSeat]), "" for a call made for nobody else.
+type codeCaller struct {
+	asker   code.Principal
+	ceiling string
+}
+
+// caller is who this call reads as, or the refusal it is answered with: the
+// asker ([CodeDeps.asker]) and, inside a seat's turn somebody woke, whoever
+// that is ([ceilingOf]), decided AGAIN by the tool's own authority row
+// ([authz.DecideWithin], the artifacts tools' one function): a stranger
+// reads nothing, a requester who may not act in the company reads nothing,
+// and a requester the node could not compose or decide is answered as a node
+// that could not tell, never as a turn nobody woke. A colleague seat the row
+// admits rides on every read as the call's ceiling, for the node that answers
+// to judge its grant on the repository ([code.JudgeRead]); a person the row
+// admits bounds nothing, since a person maintains every repository.
+//
+// FIRST, before any argument is read, as the artifacts tools compose theirs:
+// whom a call reads for decides whether it reads at all, and the composition
+// reads the running chart and, for a person, the identity directory — never a
+// barrier on a log. A person's or a token's call is no deputy, and composes
+// nothing.
+func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (codeCaller, *tools.Result) {
+	asker, refusal := d.asker(ctx, turn, tool)
+	if refusal != nil {
+		return codeCaller{}, refusal
+	}
+	c := codeCaller{asker: asker}
+	if asker.Kind != code.PrincipalAgent {
+		return c, nil
+	}
+	ceiling, err := ceilingOf(ctx, turn, asker.Seat, d.Requesters)
+	if err != nil {
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
+			fmt.Sprintf("%s could not establish who this turn's work is for, which every code read is "+
+				"decided for as well as for you. Nothing was read. Try again shortly.", tool))
+		return codeCaller{}, &r
+	}
+	if ceiling.Kind == authz.CeilingNone {
+		return c, nil
+	}
+	action := authz.Action(tool)
+	dec := authz.DecideWithin(ctx, turnctx.Principal(turn), ceiling, action, authz.Object{}, d.Chart,
+		time.Now().UTC())
+	switch {
+	case dec.Unknown():
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, dec.Err),
+			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may "+
+				"read the company's code. Nothing was read. Try again shortly.", tool))
+		return codeCaller{}, &r
+	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
+		r := authorityRefusal(tool, DecisionError(action, dec))
+		r.Output = ceilingRefused(tool, ceiling.Kind)
+		return codeCaller{}, &r
+	case !dec.Allowed:
+		r := authorityRefusal(tool, DecisionError(action, dec))
+		return codeCaller{}, &r
+	}
+	if ceiling.Kind == authz.CeilingRequester && ceiling.Principal.Kind == iam.KindSeat {
+		c.ceiling = ceiling.Principal.Seat
+	}
+	return c, nil
+}
+
+// ceilingRefused is what a call refused for whoever its turn is acting for is
+// answered with, by who that is: a stranger, or a requester who may not act
+// in the company.
+func ceilingRefused(tool string, kind authz.CeilingKind) string {
+	if kind == authz.CeilingStranger {
+		return fmt.Sprintf("%s didn't run: this turn was woken by somebody the company does not know, and "+
+			"a repository is read for somebody only where they could read it themselves, so you may "+
+			"read none for them. A person or a seat of the company has to ask for it.", tool)
+	}
+	return fmt.Sprintf("%s didn't run: whoever this turn is working for may not act in the company now, "+
+		"so they could not read its code themselves, and you may read none of it for them.", tool)
+}
+
+// ceilingCause is the cause of a read the code host refused for the seat a
+// call reads for ([code.ErrAboveCeiling]): the authority table's own ceiling
+// refusal over the domain's error, so a surface reading the decision finds the
+// one reason every requester-ceiling refusal carries, and one reading the
+// domain finds its sentinel.
+func ceilingCause(tool string, err error) error {
+	refused := &DecisionRefused{Action: authz.Action(tool), Decision: authz.Decision{Reason: authz.ReasonCeiling}}
+	return fmt.Errorf("%w: %w", refused, err)
+}
+
+// read is q asked of the code host as c: THE ONE ReadQuery a call sends, so
+// none can name its asker and forget whom it reads for.
+func (d CodeDeps) read(ctx context.Context, c codeCaller, q code.ReadQuery) (code.ReadAnswer, error) {
+	q.Asker, q.CeilingSeat = c.asker, c.ceiling
+	return d.Code.Read(ctx, q)
+}
+
 // codeRepoKey is a repository a turn resolved, as the turn's lookups key it:
 // who asked, and the name they asked by.
 type codeRepoKey struct {
@@ -260,10 +395,10 @@ func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 // above all, which a read by object id names the repository by. The operator
 // surface has no turn, and resolves once a call. See [CodeDeps.repoRead],
 // whose read a call can make its own.
-func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
+func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	name string) (code.RepoRef, *tools.Result) {
 
-	ref, _, refusal := d.repoRead(ctx, turn, tool, asker, name, nil)
+	ref, _, refusal := d.repoRead(ctx, turn, tool, c, name, nil)
 	return ref, refusal
 }
 
@@ -280,13 +415,14 @@ func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, ask
 // turn's first request about a repository happens in one place; every tool
 // reads all its arguments first ([repoArg], [revArg]), so a malformed call is
 // refused before it costs a read. The memo decides nothing about access: the
-// node answering every later read judges the grant again. And it holds only
-// while it is true: a later read that answers the name with another id
-// ([CodeDeps.sameRepo]), or the id gone ([CodeDeps.failed]), forgets it.
-func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
+// node answering every later read judges the grant again, the asker's and the
+// ceiling's. And it holds only while it is true: a later read that answers
+// the name with another id ([CodeDeps.sameRepo]), or the id gone
+// ([CodeDeps.failed]), forgets it.
+func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	name string, first *code.ReadQuery) (code.RepoRef, *code.ReadAnswer, *tools.Result) {
 
-	key := codeRepoKey{asker: asker, name: name}
+	key := codeRepoKey{asker: c.asker, name: name}
 	if held, ok := turn.LookedUp().Load(key); ok {
 		if ref, ok := held.(code.RepoRef); ok {
 			return ref, nil, nil
@@ -296,8 +432,8 @@ func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string,
 	if first != nil {
 		q = *first
 	}
-	q.Asker, q.Repo, q.Fresh = asker, name, seatRead
-	answer, err := d.Code.Read(ctx, q)
+	q.Repo, q.Fresh = name, seatRead
+	answer, err := d.read(ctx, c, q)
 	if err != nil {
 		r := codeFailure(ctx, tool, name, err)
 		return code.RepoRef{}, nil, &r
@@ -366,17 +502,18 @@ func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
 // the checkpoint they were read at; a name no live ref holds refuses the call
 // in the code host's own sentence, every such name named. THE ONE
 // code.RefQuery in this package: code_resolve's `ref` calls it directly, and
-// [CodeDeps.resolveRevs] for every revision of a call that is not an id.
-func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
+// [CodeDeps.resolveRevs] for every revision of a call that is not an id — and
+// so the one a call's caller and ceiling are stamped on for a resolve.
+func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo code.RepoRef, names ...string) ([]code.ResolvedRef, statelog.Position, *tools.Result) {
 
 	answer, err := d.Code.ResolveRef(ctx, code.RefQuery{Repo: repo.Name, Refs: names, Fresh: seatRead,
-		Asker: asker})
+		Asker: c.asker, CeilingSeat: c.ceiling})
 	if err != nil {
-		r := d.failed(ctx, turn, tool, asker, repo, err)
+		r := d.failed(ctx, turn, tool, c.asker, repo, err)
 		return nil, statelog.Position{}, &r
 	}
-	if r := d.sameRepo(turn, tool, asker, repo, answer.Repo); r != nil {
+	if r := d.sameRepo(turn, tool, c.asker, repo, answer.Repo); r != nil {
 		return nil, statelog.Position{}, r
 	}
 	if len(answer.Refs) != len(names) {
@@ -435,7 +572,7 @@ func revArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 // ALL OF THEM are resolved in the one read of [CodeDeps.resolveRef] — a name
 // given twice, once — so a call pays one barrier however many refs it names.
 // A branch whose name is all hex digits is named by its whole ref.
-func (d CodeDeps) resolveRevs(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
+func (d CodeDeps) resolveRevs(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo code.RepoRef, revs ...string) ([]resolvedRev, *tools.Result) {
 
 	out := make([]resolvedRev, len(revs))
@@ -457,7 +594,7 @@ func (d CodeDeps) resolveRevs(ctx context.Context, turn *turnctx.Turn, tool stri
 	if len(names) == 0 {
 		return out, nil
 	}
-	refs, read, refusal := d.resolveRef(ctx, turn, tool, asker, repo, names...)
+	refs, read, refusal := d.resolveRef(ctx, turn, tool, c, repo, names...)
 	if refusal != nil {
 		return nil, refusal
 	}
@@ -514,20 +651,23 @@ func furthestOnLog(a, b statelog.Position) statelog.Position {
 	return a
 }
 
-// gitRead asks q of repo's home git node, refused here first where the query is
-// one no git node would take — so a malformed argument costs no round trip and
-// is told in the domain's own words. A git node that answers the repository
-// gone ends the turn's resolution of its name ([CodeDeps.failed]).
-func (d CodeDeps) gitRead(ctx context.Context, turn *turnctx.Turn, tool string, repo code.RepoRef,
+// gitRead asks q of repo's home git node as c — THE ONE GitQuery a call sends,
+// stamped here with its caller and its ceiling, so no tool can name its asker
+// and forget whom it reads for — refused here first where the query is one no
+// git node would take, so a malformed argument costs no round trip and is
+// told in the domain's own words. A git node that answers the repository gone
+// ends the turn's resolution of its name ([CodeDeps.failed]).
+func (d CodeDeps) gitRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo code.RepoRef,
 	q code.GitQuery) (code.GitAnswer, *tools.Result) {
 
+	q.Asker, q.CeilingSeat = c.asker, c.ceiling
 	if err := q.Validate(); err != nil {
 		r := codeFailure(ctx, tool, repo.Name, err)
 		return code.GitAnswer{}, &r
 	}
 	answer, err := d.Code.GitRead(ctx, q)
 	if err != nil {
-		r := d.failed(ctx, turn, tool, q.Asker, repo, err)
+		r := d.failed(ctx, turn, tool, c.asker, repo, err)
 		return code.GitAnswer{}, &r
 	}
 	return answer, nil
@@ -578,13 +718,29 @@ func gitAnswer(repo code.RepoRef, page code.GitAnswer, revs map[string]resolvedR
 // no chart answers a seat's read about itself (code.ErrNotServing), a git node
 // unready (code.ErrGitUnready), and the router asks another — so what reaches
 // here from them is the fleet having no node that could answer now, which a
-// retry clears. Only code.ErrNotPermitted is a decision about who asked.
+// retry clears. Only code.ErrNotPermitted is a decision about who asked, and
+// code.ErrAboveCeiling about whom the asker reads for.
 func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result {
 	var (
 		unready  *code.ErrGitUnready
 		unserved *estate.ErrUnserved
 	)
 	switch {
+	case errors.Is(err, code.ErrAboveCeiling):
+		// THE CEILING'S OWN SENTENCE: the code host names the seat this
+		// turn is working for, why it reads nothing of the repository and who
+		// does. That the asker could read it is no reason to: read for that
+		// seat, it would be the visibility set aside for whoever can message
+		// a seat that reads it — the refusal is the requester ceiling's, in
+		// the artifacts tools' terms.
+		said, ok := RefusalSentence(err, code.ErrAboveCeiling)
+		if !ok {
+			said = fmt.Sprintf("the seat this turn is working for may not read repository %q", repo)
+		}
+		return refusedBy(tools.RefusalForbidden, ceilingCause(tool, err), fmt.Sprintf("%s didn't run: the "+
+			"seat this turn is working for could not read this itself — %s — so you may not read it for them. "+
+			"That is a decision about whom you are reading for, not about the repository or the node, so the "+
+			"same call is refused again in this turn: tell them who does read it.", tool, said))
 	case errors.Is(err, code.ErrNotPermitted):
 		// THE GRANT'S OWN SENTENCE names the visibility that shut the asker
 		// out and who does read the repository; nothing here suggests a way
@@ -713,8 +869,8 @@ func (t *codeListRepos) Description() string {
 	return "List the company's repositories you can read, by name: each one's owner, visibility, " +
 		"default branch and the commit it points at, your access, its last push and its protection " +
 		"rules, a page at a time — pass `next` back as `cursor` until no `next` comes back. A " +
-		"repository you may not read is not listed, so a page can hold fewer than `limit`, or none, " +
-		"and still name a `next`."
+		"repository you may not read — or, in a turn a colleague woke, one they may not — is not " +
+		"listed, so a page can hold fewer than `limit`, or none, and still name a `next`."
 }
 
 func (t *codeListRepos) Parameters() map[string]any {
@@ -777,11 +933,11 @@ type codeRepoList struct {
 func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.deps.asker(ctx, turn, t.Name())
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
 	if refusal != nil {
 		return *refusal, nil
 	}
-	q := code.ReadQuery{Kind: code.ReadRepos, Asker: asker, Cursor: strings.TrimSpace(argString(args, "cursor")),
+	q := code.ReadQuery{Kind: code.ReadRepos, Cursor: strings.TrimSpace(argString(args, "cursor")),
 		Fresh: seatRead}
 	switch status := code.RepoStatus(strings.TrimSpace(argString(args, "status"))); status {
 	case "":
@@ -795,7 +951,7 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if q.Limit < 1 || q.Limit > maxCodeRepoList {
 		return failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), maxCodeRepoList)), nil
 	}
-	answer, err := t.deps.Code.Read(ctx, q)
+	answer, err := t.deps.read(ctx, c, q)
 	if err != nil {
 		return codeFailure(ctx, t.Name(), "", err), nil
 	}
@@ -814,7 +970,7 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		return codeRepoList{Repos: rows[:k], Next: next, Position: answer.Position}
 	}
-	read := newForeignRead(turn, asker.Seat)
+	read := newForeignRead(turn, c.asker.Seat)
 	k, rendered, err := read.fit(len(rows), page)
 	switch {
 	case err != nil:
@@ -902,7 +1058,7 @@ const branchRoot = "refs/heads/"
 func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.deps.asker(ctx, turn, t.Name())
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -927,28 +1083,28 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if q.Cursor == "" {
 		first = &q
 	}
-	repo, resolved, refusal := t.deps.repoRead(ctx, turn, t.Name(), asker, name, first)
+	repo, resolved, refusal := t.deps.repoRead(ctx, turn, t.Name(), c, name, first)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	answer := resolved
 	if answer == nil {
-		q.Asker, q.Repo, q.Fresh = asker, repo.Name, seatRead
-		read, err := t.deps.Code.Read(ctx, q)
+		q.Repo, q.Fresh = repo.Name, seatRead
+		read, err := t.deps.read(ctx, c, q)
 		if err != nil {
-			return t.deps.failed(ctx, turn, t.Name(), asker, repo, err), nil
+			return t.deps.failed(ctx, turn, t.Name(), c.asker, repo, err), nil
 		}
 		answer = &read
 	}
 	out := codeRepoAnswer{Repo: repo.Name, Position: answer.Position}
 	if d := answer.Repo; d != nil {
-		if r := t.deps.sameRepo(turn, t.Name(), asker, repo, d.RepoRef); r != nil {
+		if r := t.deps.sameRepo(turn, t.Name(), c.asker, repo, d.RepoRef); r != nil {
 			return *r, nil
 		}
 		out.Detail = &codeRepoDetail{codeRepoRow: repoRowOf(d.RepoSummary), ManagedBy: d.ManagedBy,
 			Refs: d.Refs, Branches: d.Branches, Tags: d.Tags, LivePacks: d.LivePacks,
 			LiveBytes: d.LiveBytes, CreatedAt: d.CreatedAt, DeletedAt: d.DeletedAt}
-		if asker.Kind == code.PrincipalOperator && t.deps.CloneURL != nil {
+		if c.asker.Kind == code.PrincipalOperator && t.deps.CloneURL != nil {
 			out.CloneURL = t.deps.CloneURL(repo.Name)
 		}
 	}
@@ -967,7 +1123,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		return paged
 	}
-	read := newForeignRead(turn, asker.Seat)
+	read := newForeignRead(turn, c.asker.Seat)
 	k, rendered, err := read.fit(len(branches), page)
 	switch {
 	case err != nil:
@@ -1032,7 +1188,7 @@ type codeRefAnswer struct {
 func (t *codeResolve) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.deps.asker(ctx, turn, t.Name())
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1044,18 +1200,18 @@ func (t *codeResolve) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if ref == "" {
 		return failed(t.Name() + " needs a `ref`: a branch, a tag, a whole ref, or " + headRev + "."), nil
 	}
-	repo, refusal := t.deps.repo(ctx, turn, t.Name(), asker, name)
+	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	if ref == headRev {
 		ref = repo.DefaultBranch
 	}
-	refs, at, refusal := t.deps.resolveRef(ctx, turn, t.Name(), asker, repo, ref)
+	refs, at, refusal := t.deps.resolveRef(ctx, turn, t.Name(), c, repo, ref)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	read := newForeignRead(turn, asker.Seat)
+	read := newForeignRead(turn, c.asker.Seat)
 	return read.page(ctx, t.Name(), codeRefAnswer{Repo: repo.Name, Ref: refs[0].Ref, OID: refs[0].OID,
 		Position: at}, "")
 }
@@ -1117,7 +1273,7 @@ func (t *codeRead) Call(ctx context.Context, args map[string]any) (tools.Result,
 func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.deps.asker(ctx, turn, t.Name())
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1135,17 +1291,17 @@ func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(t.Name() + ": `start_line` and `end_line` choose a file's lines, and a " +
 			"`recursive` listing has none — ask for one or the other."), nil
 	}
-	repo, refusal := t.deps.repo(ctx, turn, t.Name(), asker, name)
+	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), asker, repo, revName)
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), c, repo, revName)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	rev := revs[0]
 	path, pathB64 := argString(args, "path"), argString(args, "path_b64")
-	q := code.GitQuery{RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, rev),
+	q := code.GitQuery{RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, rev),
 		Cursor: strings.TrimSpace(argString(args, "cursor"))}
 	if recursive {
 		q.Kind, q.Tree = code.GitTree, &code.TreeQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
@@ -1154,11 +1310,11 @@ func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		q.Kind, q.Blob = code.GitBlob, &code.BlobQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
 			StartLine: start, EndLine: end}
 	}
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, q)
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, q)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	read := newForeignRead(turn, asker.Seat)
+	read := newForeignRead(turn, c.asker.Seat)
 	narrow := "List a directory below it with `path`, or its entries alone without `recursive`."
 	if b := page.Blob; b != nil {
 		// A FILE'S LINES ARE SOMEBODY'S WORDS that nobody this read can name
@@ -1238,7 +1394,7 @@ func (t *codeDiff) Call(ctx context.Context, args map[string]any) (tools.Result,
 func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.deps.asker(ctx, turn, t.Name())
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1254,11 +1410,11 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !ok {
 		return failed(t.Name() + ": `paths` is a list of paths."), nil
 	}
-	repo, refusal := t.deps.repo(ctx, turn, t.Name(), asker, name)
+	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), asker, repo, baseName, headName)
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), c, repo, baseName, headName)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1269,13 +1425,13 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	diff := &code.DiffQuery{Base: base.oid, Head: head.oid, Paths: paths, File: argString(args, "file"),
 		FileB64: argString(args, "file_b64"), Renames: renames}
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitDiff,
-		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, base, head),
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitDiff,
+		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, base, head),
 		Cursor: strings.TrimSpace(argString(args, "cursor")), Diff: diff})
 	if refusal != nil {
 		return *refusal, nil
 	}
-	read := newForeignRead(turn, asker.Seat)
+	read := newForeignRead(turn, c.asker.Seat)
 	narrow := "Name the files you care about with `paths`, or read one file's patch with `file`."
 	if d := page.Diff; d != nil && d.Patch != "" {
 		// A PATCH IS SOMEBODY'S WORDS, both sides of it, that nobody this
@@ -1347,7 +1503,7 @@ func (t *codeCompare) Call(ctx context.Context, args map[string]any) (tools.Resu
 func (t *codeCompare) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.deps.asker(ctx, turn, t.Name())
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1359,22 +1515,22 @@ func (t *codeCompare) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	repo, refusal := t.deps.repo(ctx, turn, t.Name(), asker, name)
+	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), asker, repo, baseName, headName)
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), c, repo, baseName, headName)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	base, head := revs[0], revs[1]
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitCompare,
-		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, base, head),
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitCompare,
+		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, base, head),
 		Compare: &code.CompareQuery{Base: base.oid, Head: head.oid}})
 	if refusal != nil {
 		return *refusal, nil
 	}
-	read := newForeignRead(turn, asker.Seat)
+	read := newForeignRead(turn, c.asker.Seat)
 	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"base": base, "head": head}),
 		fmt.Sprintf("Read the change with %s from the merge base to `head`, narrowed with `paths`.",
 			CodeDiffTool))
@@ -1418,7 +1574,7 @@ func (t *codeLandedIn) Call(ctx context.Context, args map[string]any) (tools.Res
 func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.deps.asker(ctx, turn, t.Name())
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1439,14 +1595,14 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"id; a branch whose name is all hex digits is named by its whole ref (refs/heads/<name>).",
 			t.Name(), clip(target))), nil
 	}
-	repo, refusal := t.deps.repo(ctx, turn, t.Name(), asker, name)
+	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	// THE COMMIT AND THE TARGET IN ONE READ: the target is never an id (it
 	// was refused above), so it resolves as a ref — HEAD the default branch —
 	// beside the commit where that is a ref too.
-	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), asker, repo, commitName, target)
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), c, repo, commitName, target)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1454,14 +1610,14 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE TIP'S OWN MOVE, never where the resolve read it: the target's moves
 	// up to the one that put the tip there are every move it had when it was
 	// resolved, which is all the index must hold.
-	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitLandedIn,
-		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(repo, commit, tip),
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitLandedIn,
+		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, commit, tip),
 		LandedIn: &code.LandedInQuery{Commit: commit.oid, Target: tip.ref.Ref, TargetOID: tip.oid,
 			At: tip.at()}})
 	if refusal != nil {
 		return *refusal, nil
 	}
-	read := newForeignRead(turn, asker.Seat)
+	read := newForeignRead(turn, c.asker.Seat)
 	return read.page(ctx, t.Name(), gitAnswer(repo, page,
 		map[string]resolvedRev{"commit": commit, "target": tip}), "")
 }

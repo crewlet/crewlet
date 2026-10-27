@@ -332,6 +332,69 @@ func TestAPersonsGrantAsksNoRoster(t *testing.T) {
 	}
 }
 
+// A READ MADE FOR ANOTHER SEAT IS HELD TO BOTH GRANTS — the requester ceiling
+// on a repository's grant, judged as one: the asker's own first, refused about
+// ITSELF (ErrNotPermitted) where it reads nothing, which is the remedy it can
+// act on; then the seat it reads for, ErrAboveCeiling where that seat reads
+// nothing of the repository, naming why — never ErrNotPermitted, which would
+// be false of an asker that reads it. A read made for nobody is the asker's
+// alone, and what a judged read carries is always the ASKER's grant. The
+// ceiling is a seat's grant judged as the seat would be judged asking itself,
+// so a seat the chart lacks bounds the read to nothing, and so does a human
+// seat — a person is never asked as a seat, which is why no caller sends one:
+// the closed end of a value that should not arrive.
+//
+// Mutations: JudgeRead ignoring its ceiling → dev reads plat-private for
+// vp-sales; the ceiling judged first → vp-sales's read for root-bot is told
+// about root-bot rather than itself; the ceiling's grant carried as the
+// answer → dev's read for cto reads at cto's level.
+func TestAReadForAnotherSeatIsHeldToBothGrants(t *testing.T) {
+	t.Parallel()
+	r := testChart()
+	shared := ownedBy("platform", code.OwnerUnit, "Platform")
+	private := unitOnly(shared)
+	for _, tc := range []struct {
+		name          string
+		asker         string
+		ceiling       string
+		repo          code.RepoRef
+		want          error
+		says          string
+		carriedAccess code.Access
+	}{
+		{"for nobody", "dev", "", private, nil, "", code.AccessWrite},
+		{"for a lead who reads it", "dev", "cto", private, nil, "", code.AccessWrite},
+		{"for a colleague of the unit", "dev", "reader", private, nil, "", code.AccessWrite},
+		{"for a seat it shuts out", "dev", "vp-sales", private, code.ErrAboveCeiling,
+			`seat "vp-sales" holds no access to repository "platform-private": it is visibility: unit`,
+			code.AccessWrite},
+		{"for that seat on a company repository", "dev", "vp-sales", shared, nil, "", code.AccessWrite},
+		{"an asker it shuts out, for a seat that reads it", "vp-sales", "dev", private, code.ErrNotPermitted,
+			`seat "vp-sales" holds no access`, code.AccessNone},
+		{"an asker it shuts out, for a seat it shuts out too", "vp-sales", "root-bot", private,
+			code.ErrNotPermitted, `seat "vp-sales" holds no access`, code.AccessNone},
+		{"for a seat the chart lacks", "dev", "ghost", private, code.ErrAboveCeiling, "no seat of the chart",
+			code.AccessWrite},
+		{"for a human seat", "dev", "founder", shared, code.ErrAboveCeiling, "human seat", code.AccessWrite},
+	} {
+		g, err := code.JudgeRead(agent(tc.asker), tc.ceiling, tc.repo, r)
+		switch {
+		case tc.want == nil && err != nil:
+			t.Errorf("%s: %s's read of %s = %v, want it judged readable", tc.name, tc.asker, tc.repo.Name, err)
+		case tc.want != nil && (!errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.says)):
+			t.Errorf("%s: %s's read of %s = %v, want %v saying %q", tc.name, tc.asker, tc.repo.Name, err,
+				tc.want, tc.says)
+		}
+		if tc.want == code.ErrAboveCeiling && errors.Is(err, code.ErrNotPermitted) {
+			t.Errorf("%s: the refusal %v is also ErrNotPermitted, which is false of %s", tc.name, err, tc.asker)
+		}
+		if g.Principal != agent(tc.asker) || g.Access != tc.carriedAccess {
+			t.Errorf("%s: the judged read carries %+v at %s, want %s's own grant at %s", tc.name, g.Principal,
+				g.Access, tc.asker, tc.carriedAccess)
+		}
+	}
+}
+
 type askedRoster struct{ n int }
 
 func (a *askedRoster) Seat(string) (code.RosterSeat, bool) { a.n++; return code.RosterSeat{}, false }

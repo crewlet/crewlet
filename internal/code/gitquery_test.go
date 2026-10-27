@@ -90,6 +90,23 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			q.Cursor = strings.Repeat("9", 65)
 			return q
 		}(), "cursor", code.ErrBadCursor},
+		// ONLY A SEAT READS FOR ANOTHER SEAT, named by its handle: a person's
+		// read and a token's are their own, which no ceiling bounds.
+		{"a seat's read for another seat", func() code.GitQuery {
+			q := tree(func(*code.TreeQuery) {})
+			q.Asker, q.CeilingSeat = code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, "lead"
+			return q
+		}(), "", nil},
+		{"a token's read for a seat", func() code.GitQuery {
+			q := tree(func(*code.TreeQuery) {})
+			q.CeilingSeat = "lead"
+			return q
+		}(), "ceiling_seat", code.ErrInvalid},
+		{"a seat's read for no handle", func() code.GitQuery {
+			q := tree(func(*code.TreeQuery) {})
+			q.Asker, q.CeilingSeat = code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, "Not A Handle"
+			return q
+		}(), "ceiling_seat", code.ErrInvalid},
 		// THE ASKER'S FLOOR IS ON THE CODE LOG: a copy is brought along it
 		// alone, and a floor on another log beside one there would be dropped.
 		{"a floor on the code log", func() code.GitQuery {

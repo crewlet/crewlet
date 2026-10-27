@@ -638,6 +638,58 @@ func TestAUnitRepositoryRefusesASeatOutsideIt(t *testing.T) {
 	}
 }
 
+// A READ MADE FOR A SEAT IS HELD TO THAT SEAT'S GRANT, on the git node that
+// answers it, from the chart and the row it judges the asker by
+// (code.JudgeRead, the data node's judgment too): eng-dev reads a
+// `visibility: unit` repository of its own unit, and read for sales-rep — the
+// colleague whose ask woke its turn, who reads none of it — it is refused
+// ErrAboveCeiling naming the visibility, never ErrNotPermitted, which would be
+// false of eng-dev; and nothing of the repository is read for it, the page
+// eng-dev's own read memoized just before included. Read for eng-lead, who
+// reads it, the same read is answered from that memo; and sales-rep reading
+// for eng-dev is refused about itself.
+//
+// Mutation: the grant step judging the asker alone → eng-dev is served the
+// page for sales-rep, from the memo.
+func TestAReadMadeForASeatIsHeldToThatSeatsGrant(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	rec := &recording{}
+	x := newFixture(t, codetest.SoloOptions{}, settings)
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	x.settle(0, repo)
+	s := x.server(0, query.Options{Git: rec.on(x, 0), Roster: company})
+	own := treeQ(repo, code.TreeQuery{Rev: head})
+	own.Asker = seat("eng-dev")
+	mustRead(t, s, own)
+	before := len(rec.ran())
+
+	forLead := own
+	forLead.CeilingSeat = "eng-lead"
+	if a := mustRead(t, s, forLead); !a.Memo {
+		t.Errorf("eng-dev's read for eng-lead, who reads the repository, was not answered from the memo its " +
+			"own read filled")
+	}
+	forOutsider := own
+	forOutsider.CeilingSeat = "sales-rep"
+	_, err := s.Read(t.Context(), forOutsider)
+	if !errors.Is(err, code.ErrAboveCeiling) || errors.Is(err, code.ErrNotPermitted) ||
+		!strings.Contains(err.Error(), `seat "sales-rep"`) || !strings.Contains(err.Error(), "visibility: unit") {
+		t.Errorf("eng-dev's read for sales-rep = %v, want ErrAboveCeiling naming sales-rep and the visibility", err)
+	}
+	outsiderFor := own
+	outsiderFor.Asker, outsiderFor.CeilingSeat = seat("sales-rep"), "eng-dev"
+	if _, err := s.Read(t.Context(), outsiderFor); !errors.Is(err, code.ErrNotPermitted) ||
+		!strings.Contains(err.Error(), `seat "sales-rep"`) {
+		t.Errorf("sales-rep's read for eng-dev = %v, want ErrNotPermitted about sales-rep itself", err)
+	}
+	if ran := rec.ran()[before:]; len(ran) != 0 {
+		t.Errorf("a memo hit and two refused reads ran git %v, want none", ran)
+	}
+}
+
 // A REFUSAL IS JUDGED AT THE LOG'S HEAD. A git node whose copy of a
 // repository predates the activation that made it `visibility: company` would
 // refuse a seat outside the owning unit from the row it holds; it syncs once at

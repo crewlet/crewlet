@@ -176,7 +176,9 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // code.ErrNotServing — it ran nothing — so the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
-// repositories it lists, and whether it reads one: code.GrantOf), so a node
+// repositories it lists, and whether it reads one: code.JudgeRead) — and the
+// grant of the seat it reads for, which rides only beside a seat's asker
+// (code.ReadQuery.CeilingSeat), so the same declaration covers it — so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
 // person's or a token's consults no chart, and an `introduced` page and the
 // `compaction_due`, `publication_due` and `expunge_due` listings name no asker

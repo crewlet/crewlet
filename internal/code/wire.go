@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -420,6 +421,9 @@ type RefQuery struct {
 	// Asker is who resolves them, REQUIRED and held to its grant on the
 	// repository by the node that answers, as a [ReadQuery]'s is.
 	Asker Principal `json:"asker"`
+	// CeilingSeat is the seat the asking seat's turn is acting for, whose
+	// grant bounds the resolve as [ReadQuery.CeilingSeat] bounds a read.
+	CeilingSeat string `json:"ceiling_seat,omitempty"`
 }
 
 // MaxRefsPerQuery is the most refs one [RefQuery] resolves: what one page of
@@ -544,6 +548,38 @@ type ReadQuery struct {
 	// listings `compaction_due`, `publication_due` and `expunge_due`, which no
 	// principal makes: an asker there would be judged by nothing.
 	Asker Principal `json:"asker"`
+	// CeilingSeat is the handle of the seat the asking seat's turn is acting
+	// FOR — the colleague whose ask woke it — and "" for a read made for its
+	// asker alone: the REQUESTER CEILING (authz.DecideWithin's) applied to a
+	// repository's grant. The node that answers judges that seat's grant
+	// beside the asker's, from the same chart and the same row ([JudgeRead]),
+	// and serves only what BOTH may read: a listing leaves out what either
+	// may not, and a read the asker's own grant covers and the ceiling's
+	// does not is [ErrAboveCeiling]. Judged where the read is answered, as
+	// the asker's grant is (ADR-0058), and never where the turn runs: a
+	// ceiling judged against the repository a turn resolved once would keep
+	// admitting a seat a later activation shut out of it for the rest of
+	// the turn, while the asker's own grant was judged afresh at every read.
+	//
+	// ONLY A SEAT, AND ONLY BESIDE A SEAT: a person's or a token's read is
+	// its own, which no ceiling bounds, and a seat is the one requester
+	// whose grant reads the chart — a person maintains every repository
+	// (ADR-0055) and a stranger reads none, both settled where the turn runs
+	// before any read is asked. Refused on `introduced`, `compaction_due`
+	// and `publication_due`, which no principal makes.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row — and one a build that predates it would decode
+	// and ignore (the estate reads arguments leniently), serving the read to
+	// the asker's grant alone: a ceiling dropped, never a read refused. AS A
+	// STATED CONDITION: no build that carries the code domain has run
+	// without this field — none of the domain is on main, so no image and
+	// no release serves a code read — and while that is so, every node that
+	// answers a read made for a seat judges that seat. Were a build without
+	// it ever to run first, a read made for a seat would move to operations
+	// of its own, which such a build refuses as operations it does not know,
+	// rather than ride a field it ignores.
+	CeilingSeat string `json:"ceiling_seat,omitempty"`
 	// Repo is the repository's NAME, for repo, pushes and refs.
 	Repo string `json:"repo,omitempty"`
 	// Status filters a repos listing; empty is active and archived.
@@ -833,6 +869,10 @@ type GitQuery struct {
 	// repository, a person or a token by ADR-0055's rules, which read no
 	// chart. Never trusted for anything but the grant.
 	Asker Principal `json:"asker"`
+	// CeilingSeat is the seat the asking seat's turn is acting for, whose
+	// grant the git node judges beside the asker's, from the same chart and
+	// the row its copy holds, as [ReadQuery.CeilingSeat] says.
+	CeilingSeat string `json:"ceiling_seat,omitempty"`
 	// Fresh is the asker's floor on the code log, where it holds one: the
 	// answering node's copy is brought to at least it before anything is
 	// read. With no floor the copy is read as it stands — an object id
@@ -1050,6 +1090,9 @@ func (q GitQuery) Validate() error {
 	if why := q.Asker.invalid(); why != "" {
 		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
 	}
+	if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
+		return fmt.Errorf("%w: %s", ErrInvalid, why)
+	}
 	if len(q.Cursor) > maxGitCursorBytes {
 		return fmt.Errorf("%w: cursor: %d bytes is no cursor a git read issues", ErrBadCursor, len(q.Cursor))
 	}
@@ -1081,6 +1124,23 @@ func (q GitQuery) Validate() error {
 		return q.LandedIn.validate()
 	}
 	return q.Compare.validate()
+}
+
+// ceilingInvalid is why a read may not carry seat as its ceiling beside asker
+// ([ReadQuery.CeilingSeat]), or "" where it may: none at all, or a seat's
+// handle beside a seat's asker. Every query a principal reads by — a read, a
+// resolve, a read by object id — states its ceiling by this one rule.
+func ceilingInvalid(asker Principal, seat string) string {
+	switch {
+	case seat == "":
+		return ""
+	case asker.Kind != PrincipalAgent:
+		return "ceiling_seat: only a seat's read is made for another seat — a person's or a token's " +
+			"read is its own, which no ceiling bounds"
+	case !org.ValidHandle(seat):
+		return fmt.Sprintf("ceiling_seat: %q is not a seat's handle", seat)
+	}
+	return ""
 }
 
 // validRev is ValidRev as a refusal naming field.

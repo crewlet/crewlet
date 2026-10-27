@@ -1294,7 +1294,7 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	case ReadRepo:
 		query = fresh.Resolved(resolver(q.Repo), false)
 		serve = func(tx *sql.Tx, cp statelog.Position) error {
-			return r.repo(ctx, tx, q.Repo, q.Asker, chart, cp, &out)
+			return r.repo(ctx, tx, q, chart, cp, &out)
 		}
 	case ReadPushes:
 		query = fresh.Resolved(resolver(q.Repo), true)
@@ -1375,6 +1375,9 @@ func (q ReadQuery) validate() error {
 	if why := q.Asker.invalid(); why != "" {
 		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
 	}
+	if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
+		return fmt.Errorf("%w: %s", ErrInvalid, why)
+	}
 	switch {
 	case q.Introduced != nil:
 		return fmt.Errorf("%w: introduced: only an introduced read names a range of pushes", ErrInvalid)
@@ -1425,6 +1428,8 @@ func (q ReadQuery) validateIntroduced() error {
 	switch {
 	case q.Asker != (Principal{}):
 		return refused("asker", "an introduced read is the engine's own, which no principal makes")
+	case q.CeilingSeat != "":
+		return refused("ceiling_seat", "an introduced read is the engine's own, which no seat makes for another")
 	case in == nil:
 		return refused("introduced", "an introduced read names its repository and its range")
 	case in.RepoID == "":
@@ -1469,8 +1474,8 @@ func (q ReadQuery) validateCompactionDue() error {
 		field string
 		set   bool
 	}{
-		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
-		{"introduced", q.Introduced != nil}, {"limit", q.Limit != 0},
+		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"limit", q.Limit != 0},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1499,8 +1504,9 @@ func (q ReadQuery) validatePublicationDue() error {
 		field string
 		set   bool
 	}{
-		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
-		{"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0},
+		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0},
+		{"limit", q.Limit != 0},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1574,15 +1580,16 @@ func limitOr(limit, fallback int) int {
 }
 
 // repos serves a listing of repositories, by name, of those the asker may
-// read, each carrying the asker's access to it.
+// read — and, where it reads for a seat its turn is acting for, that seat may
+// read too ([JudgeRead]) — each carrying the asker's access to it.
 //
 // THE PAGE IS WHAT WAS SCANNED, NOT WHAT WAS KEPT: a repository the asker may
-// not read is left out, and the cursor is still the last row the statement
-// scanned — so a page can be shorter than its limit, or empty with a Next,
-// and a caller pages until no Next comes back. Cut at the kept rows instead,
-// a page of repositories the asker may not read would end the listing early,
-// or a filter run until the page filled would scan without bound for a seat
-// that reads little.
+// not read, or its ceiling may not, is left out, and the cursor is still the
+// last row the statement scanned — so a page can be shorter than its limit,
+// or empty with a Next, and a caller pages until no Next comes back. Cut at
+// the kept rows instead, a page of repositories the asker may not read would
+// end the listing early, or a filter run until the page filled would scan
+// without bound for a seat that reads little.
 func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
 	out *ReadAnswer) error {
 	statuses := q.Status
@@ -1623,8 +1630,8 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		scanned, lastScanned = scanned+1, v.ref.Name
 		v.ref.Status, v.ref.ManagedBy, v.ref.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
 		v.ref.Visibility = Visibility(visibility)
-		g := GrantOf(q.Asker, v.ref, chart)
-		if !g.MayRead() {
+		g, refused := JudgeRead(q.Asker, q.CeilingSeat, v.ref, chart)
+		if refused != nil {
 			continue
 		}
 		if deleted.Valid {
@@ -1696,14 +1703,18 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 	return rows.Err()
 }
 
-// repo serves one repository in detail, to an asker that may read it.
+// repo serves q's repository in detail, to an asker that may read it — and,
+// where it reads for the seat its turn is acting for, that seat may read it
+// too ([JudgeRead]).
 //
-// A REPOSITORY THE ASKER MAY NOT READ IS [ErrNotPermitted], judged after its
-// row is read, and one that does not exist is still [ErrRepoNotFound]: that a
-// `visibility: unit` repository exists is no secret — its name is in the
-// company's document — and what it holds is.
-func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, asker Principal, chart Roster,
+// A REPOSITORY THE ASKER MAY NOT READ IS [ErrNotPermitted], and one its
+// ceiling may not [ErrAboveCeiling], each judged after its row is read, and
+// one that does not exist is still [ErrRepoNotFound]: that a `visibility:
+// unit` repository exists is no secret — its name is in the company's
+// document — and what it holds is.
+func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
 	cp statelog.Position, out *ReadAnswer) error {
+	name := q.Repo
 	id, found, err := claimIn(ctx, tx, name)
 	if err != nil {
 		return err
@@ -1718,9 +1729,9 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, asker Princi
 	if !found {
 		return fmt.Errorf("%w: %s", ErrRepoNotFound, name)
 	}
-	g := GrantOf(asker, v.ref, chart)
-	if !g.MayRead() {
-		return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
+	g, err := JudgeRead(q.Asker, q.CeilingSeat, v.ref, chart)
+	if err != nil {
+		return err
 	}
 	head, _, _, err := liveRefIn(ctx, tx, id, branchPrefix+v.ref.DefaultBranch)
 	if err != nil {
@@ -1745,7 +1756,8 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, asker Princi
 // which is the broker's and steps back across a stream leader's change, so it
 // only approximates the order (replicated 0056). The history is the
 // repository's contents, so an asker that may not read the repository is
-// answered [ErrNotPermitted], as [Reader.repo] answers it.
+// answered [ErrNotPermitted], and one whose ceiling may not [ErrAboveCeiling],
+// as [Reader.repo] answers them.
 func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	id, found, err := claimIn(ctx, tx, q.Repo)
 	if err != nil {
@@ -1754,7 +1766,7 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if !found {
 		return fmt.Errorf("%w: %s", ErrRepoNotFound, q.Repo)
 	}
-	if err = mayReadIn(ctx, tx, id, q.Asker, chart); err != nil {
+	if err = mayReadIn(ctx, tx, id, q.Asker, q.CeilingSeat, chart); err != nil {
 		return err
 	}
 	limit := limitOr(q.Limit, defaultPushLimit)
@@ -1789,9 +1801,10 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 
 // refsListing serves one page of a repository's LIVE refs under a prefix, by
 // name, keyset after the last ref served, to an asker that may read the
-// repository — and on the first page the repository in detail too, read as
-// kind repo reads it in the same transaction, so what a seat asks first of a
-// repository — what it is, and its branches — is one read and one barrier.
+// repository, and whose ceiling may ([JudgeRead]) — and on the first page the
+// repository in detail too, read as kind repo reads it in the same
+// transaction, so what a seat asks first of a repository — what it is, and
+// its branches — is one read and one barrier.
 //
 // OVER THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0054, its
 // predicate repeated verbatim), never code_refs' key: a range of the key
@@ -1811,7 +1824,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	after := prefix
 	var id string
 	if q.Cursor == "" {
-		if err := r.repo(ctx, tx, q.Repo, q.Asker, chart, cp, out); err != nil {
+		if err := r.repo(ctx, tx, q, chart, cp, out); err != nil {
 			return err
 		}
 		id = out.Repo.ID
@@ -1826,7 +1839,7 @@ func (r *Reader) refsListing(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		} else if !found {
 			return fmt.Errorf("%w: %s", ErrRepoNotFound, q.Repo)
 		}
-		if err = mayReadIn(ctx, tx, id, q.Asker, chart); err != nil {
+		if err = mayReadIn(ctx, tx, id, q.Asker, q.CeilingSeat, chart); err != nil {
 			return err
 		}
 		after = q.Cursor
@@ -2146,14 +2159,14 @@ func cutPublishCursor(s string) (int64, string, bool) {
 // names, to an asker that may read the repository — in ONE transaction: the
 // name's claim; the repository, a deleted or purging one answered
 // [ErrRepoNotFound] in [RepoGone]'s sentence for its state, which the code
-// host's admission says too; the asker's grant ([ErrNotPermitted]); then each
-// ref — a whole ref as itself, or a short name as a branch and then as a tag —
-// with the position of the record that last moved it ([ResolvedRef.Moved]),
-// its row's own, read in the same lookup. A deleted ref is absent, and a name
-// none of its refs holds is answered so ([ResolvedRef.Missing]) beside the
-// names that resolved, never failing them: whether a call can go on without
-// it is its caller's to say. Its scope is the name's, as [Reader.Resolve]'s
-// is.
+// host's admission says too; the asker's grant ([ErrNotPermitted]) and its
+// ceiling's ([ErrAboveCeiling], [JudgeRead]); then each ref — a whole ref as
+// itself, or a short name as a branch and then as a tag — with the position
+// of the record that last moved it ([ResolvedRef.Moved]), its row's own, read
+// in the same lookup. A deleted ref is absent, and a name none of its refs
+// holds is answered so ([ResolvedRef.Missing]) beside the names that
+// resolved, never failing them: whether a call can go on without it is its
+// caller's to say. Its scope is the name's, as [Reader.Resolve]'s is.
 func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) {
 	if err := pointLevel(q.Fresh); err != nil {
 		return RefAnswer{}, err
@@ -2163,6 +2176,9 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 	}
 	if why := q.Asker.invalid(); why != "" {
 		return RefAnswer{}, fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+	}
+	if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
+		return RefAnswer{}, fmt.Errorf("%w: %s", ErrInvalid, why)
 	}
 	// EVERY NAME IS CHECKED BEFORE ANY READ: a query naming one no ref can
 	// have is the asker's mistake, refused whole.
@@ -2210,8 +2226,8 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 			return fmt.Errorf("%w: %s", ErrRepoNotFound, RepoGone{ID: id, Name: v.ref.Name,
 				Status: v.ref.Status, DeletedAt: v.ref.DeletedAt}.Detail())
 		}
-		if g := GrantOf(q.Asker, v.ref, chart); !g.MayRead() {
-			return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
+		if _, err := JudgeRead(q.Asker, q.CeilingSeat, v.ref, chart); err != nil {
+			return err
 		}
 		out = RefAnswer{Repo: v.ref, Refs: make([]ResolvedRef, len(q.Refs)), Position: cp.At}
 		for i, names := range tried {
@@ -2291,10 +2307,12 @@ func liveRefIn(ctx context.Context, tx *sql.Tx, id, ref string) (string, statelo
 	return oid, unpacked(moved), true, nil
 }
 
-// mayReadIn refuses an asker that may not read repository id, judged from
-// what a grant reads of its row in tx — its name, its owner and its
-// visibility — by one primary-key read.
-func mayReadIn(ctx context.Context, tx *sql.Tx, id string, asker Principal, chart Roster) error {
+// mayReadIn refuses an asker that may not read repository id — or the seat it
+// reads for, ceilingSeat, that may not ([JudgeRead]) — judged from what a
+// grant reads of its row in tx — its name, its owner and its visibility — by
+// one primary-key read.
+func mayReadIn(ctx context.Context, tx *sql.Tx, id string, asker Principal, ceilingSeat string,
+	chart Roster) error {
 	var (
 		ref                = RepoRef{ID: id}
 		owners, visibility string
@@ -2307,10 +2325,8 @@ func mayReadIn(ctx context.Context, tx *sql.Tx, id string, asker Principal, char
 		return fmt.Errorf("code: read repository %s's grant: %w", id, err)
 	}
 	ref.Owner.Kind, ref.Visibility = OwnerKind(owners), Visibility(visibility)
-	if g := GrantOf(asker, ref, chart); !g.MayRead() {
-		return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
-	}
-	return nil
+	_, err = JudgeRead(asker, ceilingSeat, ref, chart)
+	return err
 }
 
 // pushCursor is "<packed position>/<push_id>": a push's place in log order,

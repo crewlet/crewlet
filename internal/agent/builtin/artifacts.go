@@ -167,14 +167,6 @@ type ArtifactBox interface {
 // ErrNoBox reports a turn with no coding run's box a publish may read.
 var ErrNoBox = errors.New("builtin: this turn holds no coding run's box to publish from")
 
-// ArtifactRequesters composes the principal a seat's turn is acting for.
-type ArtifactRequesters interface {
-	// Requester is the seat handle's principal as the authority table
-	// decides it: the person bound to a human seat, or the agent seat
-	// itself. An error is UNKNOWN, never "nobody".
-	Requester(ctx context.Context, handle string) (iam.Principal, error)
-}
-
 // ArtifactDeps are what the artifacts tools act through. The zero value
 // serves none of them, which is what a node built without the artifacts
 // domain has.
@@ -187,8 +179,9 @@ type ArtifactDeps struct {
 	// valued, read per call ([authz.Chart]).
 	Chart authz.Chart
 
-	// Requesters composes who a turn is acting for (the requester ceiling).
-	Requesters ArtifactRequesters
+	// Requesters composes who a turn is acting for (the requester ceiling,
+	// [ceilingOf]).
+	Requesters Requesters
 
 	// Limits are the Tier A quotas this node stamps into every write.
 	Limits func() artifacts.Limits
@@ -447,27 +440,16 @@ func (d ArtifactDeps) caller(ctx context.Context, turn *turnctx.Turn, tool strin
 	return c, nil
 }
 
-// ceilingFor is who a seat's turn is acting for: nobody beyond the agent for a
-// turn nobody woke and for any caller who is not a seat (a person acting
-// through their own credential is no deputy), the requester a known principal
-// woke it as, or a stranger.
+// ceilingFor is who a seat's turn is acting for ([ceilingOf]), and nobody
+// beyond the caller for any caller who is not a seat: a person acting through
+// their own credential is no deputy.
 func (d ArtifactDeps) ceilingFor(ctx context.Context, turn *turnctx.Turn,
 	p iam.Principal) (authz.Ceiling, error) {
 
-	if p.Kind != iam.KindSeat || turn == nil {
+	if p.Kind != iam.KindSeat {
 		return authz.Ceiling{Kind: authz.CeilingNone}, nil
 	}
-	if handle := strings.TrimSpace(turn.Requester); handle != "" && handle != p.Seat {
-		requester, err := d.Requesters.Requester(ctx, handle)
-		if err != nil {
-			return authz.Ceiling{}, fmt.Errorf("builtin: compose requester %s: %w", handle, err)
-		}
-		return authz.Ceiling{Kind: authz.CeilingRequester, Principal: requester}, nil
-	}
-	if len(turn.Senders) > 0 {
-		return authz.Ceiling{Kind: authz.CeilingStranger}, nil
-	}
-	return authz.Ceiling{Kind: authz.CeilingNone}, nil
+	return ceilingOf(ctx, turn, p.Seat, d.Requesters)
 }
 
 // operation settles the operation key a write's records derive from, the

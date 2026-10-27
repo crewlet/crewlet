@@ -102,6 +102,19 @@ var (
 	// node judging the same grant from the same chart refuses it too.
 	ErrNotPermitted = errors.New("code: the caller's grant does not cover this")
 
+	// ErrAboveCeiling is a read the asking seat's own grant covers and the
+	// grant of the seat it is made FOR does not ([ReadQuery.CeilingSeat]:
+	// the colleague whose ask woke the turn it is made in), wrapped with that
+	// seat's [Grant.ReadRefusal] — a refusal of the asker ACTING FOR THAT
+	// SEAT, which every node judging the two grants from the same chart makes
+	// alike, and never of the repository or the node.
+	//
+	// NOT [ErrNotPermitted], which is a fact about the asker's own grant: the
+	// same seat reads the repository in a turn nobody woke, so telling it
+	// that it may not read would be telling it something false about itself
+	// — and its remedy, asking for more access, would change nothing.
+	ErrAboveCeiling = errors.New("code: the seat this read is made for may not read the repository")
+
 	// ErrBadBundle is a pack bundle whose bytes are not the pack, index and
 	// reverse index its row describes — a section's header, a count, or the
 	// pack checksum the three must share disagrees. Returned by

@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -115,37 +114,6 @@ func turnFor(t *testing.T, handle string) *turnctx.Turn {
 	o := &org.Organization{Name: "Acme", Roles: []*org.Role{{Name: "Analyst", DeclaredHandle: handle}}}
 	o.Normalize()
 	return &turnctx.Turn{RunID: "run-1", Seat: o.Roles[0], Org: o}
-}
-
-// WHO A TURN IS ACTING FOR is the seat the chart holds: an agent seat as the
-// seat principal, never admin, and a seat the chart does not hold is unknown
-// rather than a guess.
-func TestARequesterIsComposedFromTheRunningChart(t *testing.T) {
-	t.Parallel()
-	o := &org.Organization{Name: "Acme", Roles: []*org.Role{
-		{Name: "Analyst", DeclaredHandle: "analyst"},
-		{Name: "Jane", DeclaredHandle: "jane", Kind: org.KindHuman},
-	}}
-	o.Normalize()
-	e := &Engine{}
-	e.epoch.current.Store(&Company{Org: o})
-	r := artifactRequesters{engine: e}
-
-	p, err := r.Requester(t.Context(), "analyst")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Kind != iam.KindSeat || p.Seat != "analyst" || p.Can(iam.GrantAdmin) {
-		t.Errorf("an agent requester composed as %+v", p)
-	}
-	if _, err := r.Requester(t.Context(), "nobody"); err == nil {
-		t.Error("a seat the chart does not hold composed a principal")
-	}
-	// A PERSON'S SEAT needs the identity directory, and a node that reaches
-	// none cannot say who holds it.
-	if _, err := r.Requester(t.Context(), "jane"); err == nil {
-		t.Error("a person's seat composed with no identity directory")
-	}
 }
 
 // THE LINK IS THE DASHBOARD'S ADDRESS on api.external_url, and nothing where

@@ -112,6 +112,7 @@ var sentinels = []sentinel{
 	// deciding node's own; a read whose answer fell due is answered unready
 	// by the git node it fell due on) — for the reason the list is complete
 	// at all.
+	{"code.ErrAboveCeiling", code.ErrAboveCeiling},
 	{"code.ErrAnswerDue", code.ErrAnswerDue},
 	{"code.ErrBadBundle", code.ErrBadBundle},
 	{"code.ErrBadCursor", code.ErrBadCursor},

@@ -1039,9 +1039,10 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
 		// AND THE CODE HOST, whose seven read tools register only over a
-		// code host: left out, every walk over this fixture met their seven
-		// authority rows as rules no registered tool answers.
-		Code: builtin.CodeDeps{Code: newCodeHost()},
+		// code host and the requester ceiling's halves beside it: left out,
+		// every walk over this fixture met their seven authority rows as
+		// rules no registered tool answers.
+		Code: codeDeps(newCodeHost()),
 	}
 }
 

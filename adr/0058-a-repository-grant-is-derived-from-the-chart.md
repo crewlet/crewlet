@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`
+- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -30,6 +30,15 @@ is a seat) and a git node answers it unready, so a current node answers instead,
 person's read consults no chart and is answered there as before. The window in which a stale chart can still
 judge is the control plane's confirmation of the lag: about a minute after an activation at worst.
 
+A seat's read made inside a turn somebody woke is decided AGAIN for whoever woke it — the requester ceiling
+(`authz.DecideWithin`) on a repository's grant. The tool's own row is asked for the requester first, so a turn a
+stranger woke, or a person who may not act in the company now, reads nothing, and a person, who maintains
+everywhere, bounds nothing; a colleague SEAT rides on every read the turn makes (`code.ReadQuery.CeilingSeat`
+and its siblings on the resolve and the read by object id) and is judged by the node that answers, from the same
+chart and row, through one function (`code.JudgeRead`): served only what both seats may read, and refused
+`ErrAboveCeiling`, never `ErrNotPermitted`, where the colleague may not. Never judged where the turn runs: a
+ceiling judged once a turn would keep reading for a colleague an activation had shut out.
+
 ## Why the obvious alternative is wrong
 
 Access lists per repository duplicate the chart and drift from it; GitHub's tier as the only vocabulary made the
@@ -41,4 +50,6 @@ and a Tier A token is the deployment's own credential.
 
 The decide's enforcement of the push rows for seats (M3 P5), a box's own grant on top of the seat's (M3 P6),
 read-side directory access lists (not planned: sensitive code goes in its own repository with
-`visibility: unit`), the review and merge levels' use (M4, M5).
+`visibility: unit`), the review and merge levels' use (M4, M5). Nor the requester ceiling of a seat's code
+WRITES (M3 P5's write tools, each held at the relation its write needs): the ceiling above bounds what a seat
+reads for somebody, and nothing it writes.

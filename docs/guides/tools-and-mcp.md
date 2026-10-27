@@ -330,7 +330,7 @@ may be handed any of them, and the operator catalogue records no call to one.
 
 | Tool | Description |
 |------|-------------|
-| `code_list_repos` | The repositories the caller may read, by name, a page at a time (`limit` 1 to 100, 25 by default; `next` back as `cursor`), each with its owner, visibility, default branch and the commit it points at, the caller's access, its last push and its protection rules, filtered by `status` (`active` or `archived`). A repository the caller may not read is not listed, so a page can hold fewer rows than `limit`, or none, and still name a `next` |
+| `code_list_repos` | The repositories the caller may read, by name, a page at a time (`limit` 1 to 100, 25 by default; `next` back as `cursor`), each with its owner, visibility, default branch and the commit it points at, the caller's access, its last push and its protection rules, filtered by `status` (`active` or `archived`). A repository the caller may not read — or, in a turn a colleague seat woke, the colleague may not — is not listed, so a page can hold fewer rows than `limit`, or none, and still name a `next` |
 | `code_get_repo` | One repository in detail — its rules, size, live packs, branch and tag counts, the caller's access and last push — and a page of its branches with the commit each points at, 100 a page, narrowed to a namespace with `branches_prefix` (`seats/<handle>/`, `release/`). Asked by a person or a token, the answer carries the URL their git clones the repository from, on `api.external_url`; a seat is given none, because it reads through these tools |
 | `code_resolve` | A branch, a tag, a whole ref or `HEAD` (the default branch) to the commit it points at now, so the calls after it can name that commit by its id: a call naming a commit by id resolves no ref, and reads the same commit however the branch moves meanwhile |
 | `code_read` | A file's lines at a commit, a page at a time (`start_line`, `end_line`, `cursor`), or a directory's listing (`recursive` for every file below it); a binary file is answered by its size. A path that is not valid UTF-8 is named, and asked for, as `path_b64` |
@@ -371,6 +371,15 @@ every read of it is refused `not_permitted` in the code host's own sentence
 argument names who reads. A node that cannot judge — one holding no chart yet,
 a git node still filling its copy — answers about itself, and the call is told
 to try again rather than that it may not read.
+
+**And again for whoever woke the turn.** Inside a turn somebody woke, each call
+is decided for them too, as the artifacts tools decide theirs: a turn a person
+woke reads what the seat may, a turn a colleague seat woke only what both
+seats may — every other repository absent from its listing, and a read of one
+refused naming the colleague — and a turn a stranger woke, or a person who may
+not act in the company now, reads nothing
+([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)).
+An operator's own assistant calls the tools in no turn, for its caller alone.
 
 **A repository's text is fenced.** A file's lines and a patch are text its
 committers wrote — importers and outside contributors among them — whom a read

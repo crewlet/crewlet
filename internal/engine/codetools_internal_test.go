@@ -16,14 +16,18 @@ import (
 //
 // Mutation: CodeToolDeps ignoring OperatorCode's answer (deps over the bare
 // router) → the company hosting none holds the tools, red; equip dropping
-// deps.Code → the company hosting code holds none, red.
+// deps.Code, or CodeToolDeps leaving out who a turn is acting for or the chart
+// that decides them (the requester ceiling) → the company hosting code holds
+// none, red.
 func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
 		t.Parallel()
 		e := newSandboxNode(t, parseCompany(t, codeHostCompany))
-		if deps := CodeToolDeps(e); deps.Code == nil || deps.CloneURL == nil {
-			t.Fatalf("a node serving the code host offers no code tools: %+v", deps)
+		if deps := CodeToolDeps(e); deps.Code == nil || deps.CloneURL == nil || deps.Requesters == nil ||
+			deps.Chart == nil {
+			t.Fatalf("a node serving the code host offers no code tools, or none decided again for whoever "+
+				"woke a turn: %+v", deps)
 		}
 		for _, name := range builtin.CodeToolNames() {
 			if _, ok := e.Company().Tools.Lookup(name); !ok {

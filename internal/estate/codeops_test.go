@@ -383,11 +383,12 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 // listings, and a seat's resolve of a ref reach a data node from a node that
 // holds no data —
 // and a read by object id the git node — with their arguments as they were
-// sent, their answers come back as they were given — a snapshot's layers,
-// packs, refs, pushes, retirements and cursor, a repository's detail and its
-// limits, the refs and the introducing pushes, the due listings, a resolved
-// ref, a page of a diff — and a refusal keeps the identity the host and the
-// cache branch on.
+// sent (a seat's reads naming the colleague they are made for, whose grant
+// the answering node judges too), their answers come back as they were
+// given — a snapshot's layers, packs, refs, pushes, retirements and cursor, a
+// repository's detail and its limits, the refs and the introducing pushes,
+// the due listings, a resolved ref, a page of a diff — and a refusal keeps
+// the identity the host and the cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -567,8 +568,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("read asked %+v, want %+v", got, readQ)
 	}
 	for _, q := range []code.ReadQuery{
-		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadRefs, Repo: "app",
-			Prefix: "refs/heads/seats/dev/", Cursor: "refs/heads/seats/dev/a", Limit: 7,
+		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead", Kind: code.ReadRefs,
+			Repo: "app", Prefix: "refs/heads/seats/dev/", Cursor: "refs/heads/seats/dev/a", Limit: 7,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
 		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, After: at,
 			Through: statelog.Position{Stream: codeStream, Generation: 2, Seq: 90}}, Cursor: "1000041/push-1",
@@ -607,7 +608,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.mu.Unlock()
 	refQ := code.RefQuery{Repo: "app", Refs: []string{"main", "gone"},
 		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
-		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}}
+		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead"}
 	if got, err := seam.ResolveRef(ctx, refQ); err != nil || !reflect.DeepEqual(got, d.resolved) {
 		t.Errorf("resolve ref = (%+v, %v), want %+v", got, err, d.resolved)
 	}
@@ -615,7 +616,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("resolve ref asked %+v, want %+v", got, refQ)
 	}
 	gitQ := code.GitQuery{Kind: code.GitDiff, RepoID: ref.ID, Asker: code.Principal{Kind: code.PrincipalAgent,
-		Seat: "dev"}, Fresh: statelog.FloorAt(statelog.ReadSession, at), Cursor: "page-1",
+		Seat: "dev"}, CeilingSeat: "lead", Fresh: statelog.FloorAt(statelog.ReadSession, at), Cursor: "page-1",
 		Diff: &code.DiffQuery{Base: "6666666666", Head: "7777777777777777777777777777777777777777",
 			FileB64: "YS5nbw==", Renames: true}}
 	if got, err := seam.GitRead(ctx, gitQ); err != nil || !reflect.DeepEqual(got, d.git) {

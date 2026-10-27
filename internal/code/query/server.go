@@ -192,8 +192,11 @@ func New(o Options) (*Server, error) {
 //     (everyFillMeets).
 //  5. A deleted or purging repository answers code.ErrRepoNotFound with the
 //     domain's own sentence for it; the asker's grant is judged from the
-//     repository's row and this node's chart (code.GrantOf), and a read below
-//     read is code.ErrNotPermitted.
+//     repository's row and this node's chart, and a read below read is
+//     code.ErrNotPermitted — and where the read is made for the seat its
+//     asker's turn is acting for (code.GitQuery.CeilingSeat), that seat's
+//     grant from the same row and chart, one it could not make itself
+//     code.ErrAboveCeiling (code.JudgeRead, the data node's judgment too).
 //  6. A PAGE ALREADY CUT is answered from the copy's memo (memo.go): for a
 //     read naming whole ids, as soon as its grant is judged and before any
 //     git runs; for one naming an abbreviation, once step 7 has expanded it.
@@ -586,17 +589,16 @@ func everyFillMeets(err error) bool {
 }
 
 // grant answers a repository the read may not be served from (step 5): one
-// deleted or purging, and one the asker's grant does not let it read.
+// deleted or purging, one the asker's grant does not let it read, and one the
+// grant of the seat it reads for does not (code.JudgeRead).
 func (r *read) grant() error {
 	repo := r.synced.Repo
 	if repo.Status == code.RepoStatusDeleted || repo.Status == code.RepoStatusPurging {
 		gone := code.RepoGone{ID: repo.ID, Name: repo.Name, Status: repo.Status, DeletedAt: repo.DeletedAt}
 		return fmt.Errorf("%w: %s", code.ErrRepoNotFound, gone.Detail())
 	}
-	if g := code.GrantOf(r.q.Asker, repo, r.roster); !g.MayRead() {
-		return fmt.Errorf("%w: %s", code.ErrNotPermitted, g.ReadRefusal())
-	}
-	return nil
+	_, err := code.JudgeRead(r.q.Asker, r.q.CeilingSeat, repo, r.roster)
+	return err
 }
 
 // objects is steps 5 and 7 — and their ONE second look at the log's head: NO

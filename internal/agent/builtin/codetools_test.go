@@ -18,8 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -266,6 +268,27 @@ func readsOf(reads []code.ReadQuery, kind code.ReadKind) int {
 	return n
 }
 
+// codeRequesters is who a turn reading code may be acting for, composed as the
+// engine composes them: the founder, a person of the company; agent-ceo, a
+// colleague seat; and "departed", a person whose seat's holder was removed,
+// who acts as nobody now. Any other handle is a requester this node cannot
+// compose.
+func codeRequesters() requesters {
+	return requesters{
+		"founder":   founderPrincipal(iam.Apps...),
+		"agent-ceo": {Kind: iam.KindSeat, Seat: "agent-ceo", Stage: iam.StageActive, Grants: iam.Apps},
+		"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
+			Stage: iam.StageRetired, Grants: iam.Apps},
+	}
+}
+
+// codeDeps is the code tools wired over host as every surface wires them: the
+// code host, beside who a turn is acting for and the chart that decides them
+// (the requester ceiling), without either of which no code tool is offered.
+func codeDeps(host builtin.CodeReader) builtin.CodeDeps {
+	return builtin.CodeDeps{Code: host, Requesters: codeRequesters(), Chart: chartLeads}
+}
+
 // codeRegistry is a seat's registry holding the code tools over deps.
 func codeRegistry(t *testing.T, deps builtin.CodeDeps) *tools.Registry {
 	t.Helper()
@@ -319,8 +342,10 @@ func refusedCode(t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name str
 func operatorCode(t *testing.T, host builtin.CodeReader, clone func(string) string) map[string]tools.Callable {
 	t.Helper()
 	out := map[string]tools.Callable{}
+	deps := codeDeps(host)
+	deps.Actor, deps.CloneURL = builtin.PrincipalActor, clone
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Code:      builtin.CodeDeps{Code: host, Actor: builtin.PrincipalActor, CloneURL: clone},
+		Code:      deps,
 		Authorize: builtin.Decide(chartLeads),
 	}) {
 		out[tool.Name()] = tool
@@ -352,14 +377,16 @@ func asUnboundToken() context.Context {
 // built over the same deps, hold the same seven tools — every one the authority
 // table names, in the list's own order — with byte-identical descriptions and
 // schemas, because both take [builtin.CodeTools]; and a company that hosts no
-// code is given none on either.
+// code is given none on either — nor is a surface that wired the code host and
+// left out who a turn is acting for, or the chart that decides them, which
+// would read for whoever messaged a seat whatever the seat itself may.
 //
 // Mutation: OperatorTools omitting codeCandidates, or building a list of its
-// own with one schema edited → red.
+// own with one schema edited; CodeTools serving over the code host alone → red.
 func TestTheCodeToolsAreOneList(t *testing.T) {
 	t.Parallel()
 	host := newCodeHost()
-	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	reg := codeRegistry(t, codeDeps(host))
 	operator := operatorCode(t, host, nil)
 	for _, name := range builtin.CodeToolNames() {
 		entry, ok := reg.Lookup(name)
@@ -379,7 +406,7 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 		}
 	}
 	var listed []string
-	for _, tool := range builtin.CodeTools(builtin.CodeDeps{Code: host}) {
+	for _, tool := range builtin.CodeTools(codeDeps(host)) {
 		listed = append(listed, tool.Name())
 	}
 	if !slices.Equal(listed, builtin.CodeToolNames()) {
@@ -398,6 +425,17 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 	if len(builtin.CodeTools(builtin.CodeDeps{})) != 0 {
 		t.Error("CodeTools with no code host listed tools")
 	}
+	for name, deps := range map[string]builtin.CodeDeps{
+		"no requesters": {Code: host, Chart: chartLeads},
+		"no chart":      {Code: host, Requesters: codeRequesters()},
+	} {
+		if served := builtin.CodeTools(deps); len(served) != 0 {
+			t.Errorf("CodeTools over a code host with %s listed %d tools", name, len(served))
+		}
+		if _, ok := codeRegistry(t, deps).Lookup(builtin.CodeReadTool); ok {
+			t.Errorf("a seat's registry over a code host with %s holds %s", name, builtin.CodeReadTool)
+		}
+	}
 }
 
 // EVERY CODE TOOL IS A PROVEN READ, on both surfaces: the registry carries the
@@ -406,7 +444,7 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 // default arm's shared write) → red.
 func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 	t.Parallel()
-	reg := codeRegistry(t, builtin.CodeDeps{Code: newCodeHost()})
+	reg := codeRegistry(t, codeDeps(newCodeHost()))
 	for _, name := range builtin.CodeToolNames() {
 		entry, ok := reg.Lookup(name)
 		if !ok {
@@ -435,7 +473,7 @@ func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 	t.Parallel()
 	seatHost := newCodeHost()
-	reg := codeRegistry(t, builtin.CodeDeps{Code: seatHost})
+	reg := codeRegistry(t, codeDeps(seatHost))
 	turn := codeTurn(t)
 	turn.Requester = "founder"
 	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main", "path": "README.md"})
@@ -487,7 +525,7 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 	// NO ARGUMENT NAMES WHO READS: one that tries is refused before the code
 	// host is asked anything.
 	host := newCodeHost()
-	got := refusedCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t),
+	got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t),
 		builtin.CodeListReposTool, map[string]any{"seat": "founder"})
 	if !errors.Is(got.Cause, builtin.ErrUndeclaredArgument) {
 		t.Fatalf("a call naming a seat to read as answered %+v", got)
@@ -505,6 +543,218 @@ func mustActor(t *testing.T, ctx context.Context) builtin.Actor {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// ---- whom a turn reads for ------------------------------------------------ //
+
+// everyCodeQuestion makes, in turn, a call asking each kind of question a code
+// tool asks the code host: the listing, a repository's first page of branches
+// (which reads its detail), a file at a branch (a ref resolved, then a read by
+// object id) and a diff of two branches.
+func everyCodeQuestion(t *testing.T, reg *tools.Registry, turn *turnctx.Turn) {
+	t.Helper()
+	callCode(t, reg, turn, builtin.CodeListReposTool, map[string]any{})
+	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
+	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main", "path": "README.md"})
+	callCode(t, reg, turn, builtin.CodeDiffTool, map[string]any{"repo": "site", "base": "main", "head": "feature"})
+}
+
+// readsFor holds every question host was asked to name ceiling as the seat it
+// is made for — "" for none — and to have asked each kind at least once.
+func readsFor(t *testing.T, host *codeHost, ceiling string) {
+	t.Helper()
+	reads, resolves, gits := host.asked()
+	if len(reads) == 0 || len(resolves) == 0 || len(gits) == 0 {
+		t.Fatalf("the calls asked %d reads, %d resolves and %d git reads, want each kind", len(reads),
+			len(resolves), len(gits))
+	}
+	for _, q := range reads {
+		if q.CeilingSeat != ceiling {
+			t.Errorf("a %s read was made for %q, want %q", q.Kind, q.CeilingSeat, ceiling)
+		}
+	}
+	for _, q := range resolves {
+		if q.CeilingSeat != ceiling {
+			t.Errorf("a resolve of %v was made for %q, want %q", q.Refs, q.CeilingSeat, ceiling)
+		}
+	}
+	for _, q := range gits {
+		if q.CeilingSeat != ceiling {
+			t.Errorf("a %s read by object id was made for %q, want %q", q.Kind, q.CeilingSeat, ceiling)
+		}
+	}
+}
+
+// A CODE READ IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN — the requester
+// ceiling the artifacts tools apply, here on a repository's grant. A turn
+// nobody woke, one the seat woke itself and one a person woke read for nobody
+// but the seat, since a person maintains every repository and so bounds
+// nothing; a turn a colleague seat woke names that seat on every question it
+// asks — the listing, a repository, the refs it resolves, every read by object
+// id — for the node that answers to judge the colleague's grant beside the
+// seat's own. A turn a stranger woke, or a person who may not act in the
+// company now, reads nothing: refused with the ceiling's reason before the
+// code host is asked anything, whoever else spoke in the turn. A requester
+// this node cannot compose is told as a node that could not tell, and never
+// read as a turn nobody woke. The operator surface has no turn: a person's
+// assistant reads as its caller, for nobody else.
+//
+// Mutations: CodeDeps.caller skipping the ceiling → the stranger's and the
+// departed person's turns read; the colleague left off any one kind of
+// question (CodeDeps.read, resolveRef, gitRead) → red; a person's seat sent
+// as the ceiling → red; a requester this node cannot compose read as nobody →
+// red; the turn's senders read before its requester → the person's and the
+// colleague's turns refused as a stranger's.
+func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name      string
+		requester string
+		senders   bool
+		ceiling   string
+	}{
+		{"a turn nobody woke", "", false, ""},
+		{"a turn the seat woke itself", "agent-cto", false, ""},
+		{"a turn a person woke", "founder", true, ""},
+		{"a turn a colleague seat woke", "agent-ceo", true, "agent-ceo"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host := newCodeHost()
+			turn := codeTurn(t)
+			turn.Requester = c.requester
+			if c.senders {
+				turn.Senders = []types.CanonicalIdentity{{}}
+			}
+			everyCodeQuestion(t, codeRegistry(t, codeDeps(host)), turn)
+			readsFor(t, host, c.ceiling)
+		})
+	}
+
+	for _, c := range []struct {
+		name      string
+		requester string
+		senders   bool
+		want      tools.Refusal
+		says      string
+		ceiling   bool
+	}{
+		{"a turn a stranger woke", "", true, tools.RefusalForbidden,
+			"woken by somebody the company does not know", true},
+		{"a turn a departed person woke", "departed", true, tools.RefusalForbidden,
+			"may not act in the company now", true},
+		{"a turn whose requester this node cannot compose", "agent-gone", false, tools.RefusalUnavailable,
+			"could not establish who this turn's work is for", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host := newCodeHost()
+			reg := codeRegistry(t, codeDeps(host))
+			turn := codeTurn(t)
+			turn.Requester = c.requester
+			if c.senders {
+				turn.Senders = []types.CanonicalIdentity{{}}
+			}
+			for _, call := range []struct {
+				tool string
+				args map[string]any
+			}{
+				{builtin.CodeListReposTool, map[string]any{}},
+				{builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID}},
+			} {
+				got := refusedCode(t, reg, turn, call.tool, call.args)
+				if tools.RefusalOf(got) != c.want || !strings.Contains(got.Output, c.says) {
+					t.Errorf("%s answered %s %q, want refused %s saying %q", call.tool, tools.RefusalOf(got),
+						got.Output, c.want, c.says)
+				}
+				var refused *builtin.DecisionRefused
+				if ceiling := errors.As(got.Cause, &refused) && refused.Decision.Reason == authz.ReasonCeiling; ceiling != c.ceiling {
+					t.Errorf("%s's refusal carries the ceiling's reason: %v, want %v (%v)", call.tool, ceiling,
+						c.ceiling, got.Cause)
+				}
+				if !c.ceiling && !errors.Is(got.Cause, builtin.ErrUndecidable) {
+					t.Errorf("%s's refusal %v is not a decision this node could not take", call.tool, got.Cause)
+				}
+			}
+			if reads, resolves, gits := host.asked(); len(reads)+len(resolves)+len(gits) != 0 {
+				t.Errorf("the refused calls asked the code host %d reads, %d resolves and %d git reads, want "+
+					"nothing", len(reads), len(resolves), len(gits))
+			}
+		})
+	}
+
+	t.Run("the operator surface", func(t *testing.T) {
+		t.Parallel()
+		host := newCodeHost()
+		op := operatorCode(t, host, nil)
+		for _, call := range []struct {
+			tool string
+			args map[string]any
+		}{
+			{builtin.CodeListReposTool, map[string]any{}},
+			{builtin.CodeGetRepoTool, map[string]any{"repo": "site"}},
+			{builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main"}},
+		} {
+			if got, err := op[call.tool].Call(asBoundPerson(), call.args); err != nil || got.Failed {
+				t.Fatalf("a person's %s: %v %s", call.tool, err, got.Output)
+			}
+		}
+		readsFor(t, host, "")
+	})
+}
+
+// A READ REFUSED FOR WHOM THE TURN READS IS THE CEILING'S REFUSAL: a node that
+// answers a read made for a colleague ErrAboveCeiling — the colleague's own
+// grant reads nothing of the repository — is told as the requester ceiling
+// refuses, forbidden, carrying the authority table's ceiling reason over the
+// code host's own sentence, which names the colleague and the visibility that
+// shuts it out; whether the read was of the repository's rows or one by object
+// id. Never as the seat's own not_permitted: the same seat reads the
+// repository in a turn nobody woke, and asking for more access would change
+// nothing.
+//
+// Mutation: the ErrAboveCeiling arm dropped from codeFailure → the refusal is
+// a fault of this node, red; answered as ErrNotPermitted → it carries no
+// ceiling, red.
+func TestAReadRefusedForWhomTheTurnReadsIsTheCeilings(t *testing.T) {
+	t.Parallel()
+	above := fmt.Errorf("estate: data-a answered: %w: seat \"agent-ceo\" holds no access to repository "+
+		"\"site\": it is visibility: unit, read by the seats of unit \"eng\" and the leads above it and by "+
+		"persons", code.ErrAboveCeiling)
+	for name, c := range map[string]struct {
+		readErr, gitErr error
+		tool            string
+		args            map[string]any
+	}{
+		"the repository's rows": {readErr: above, tool: builtin.CodeGetRepoTool,
+			args: map[string]any{"repo": "site"}},
+		"a read by object id": {gitErr: above, tool: builtin.CodeReadTool,
+			args: map[string]any{"repo": "site", "rev": mainOID}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			host := newCodeHost()
+			host.readErr, host.gitErr = c.readErr, c.gitErr
+			turn := codeTurn(t)
+			turn.Requester = "agent-ceo"
+			got := refusedCode(t, codeRegistry(t, codeDeps(host)), turn, c.tool, c.args)
+			if tools.RefusalOf(got) != tools.RefusalForbidden {
+				t.Fatalf("answered %s %q, want refused forbidden", tools.RefusalOf(got), got.Output)
+			}
+			var refused *builtin.DecisionRefused
+			if !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonCeiling ||
+				!errors.Is(got.Cause, code.ErrAboveCeiling) || errors.Is(got.Cause, code.ErrNotPermitted) {
+				t.Errorf("the refusal's cause is %v, want the ceiling's reason over ErrAboveCeiling, and never "+
+					"ErrNotPermitted", got.Cause)
+			}
+			for _, says := range []string{"the seat this turn is working for could not read this itself",
+				`seat "agent-ceo" holds no access to repository "site"`, "visibility: unit"} {
+				if !strings.Contains(got.Output, says) {
+					t.Errorf("the refusal %q does not say %q", got.Output, says)
+				}
+			}
+		})
+	}
 }
 
 // ---- what a turn pays ----------------------------------------------------- //
@@ -526,7 +776,7 @@ func mustActor(t *testing.T, ctx context.Context) builtin.Actor {
 func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	t.Parallel()
 	host := newCodeHost()
-	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	reg := codeRegistry(t, codeDeps(host))
 	turn := codeTurn(t)
 	floorOf := func(q code.GitQuery) []statelog.Position { return q.Fresh.Floors }
 	main, feature := host.movedAt("refs/heads/main"), host.movedAt("refs/heads/feature")
@@ -633,7 +883,7 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 	t.Parallel()
 	host := newCodeHost()
-	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	reg := codeRegistry(t, codeDeps(host))
 	turn := codeTurn(t)
 	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
 	if reads, _, _ := host.asked(); len(reads) != 1 || reads[0].Kind != code.ReadRefs || reads[0].Cursor != "" {
@@ -649,7 +899,7 @@ func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 
 	// A LATER PAGE FIRST: the repository is resolved by a read of its own.
 	later := newCodeHost()
-	callCode(t, codeRegistry(t, builtin.CodeDeps{Code: later}), codeTurn(t), builtin.CodeGetRepoTool,
+	callCode(t, codeRegistry(t, codeDeps(later)), codeTurn(t), builtin.CodeGetRepoTool,
 		map[string]any{"repo": "site", "branches_cursor": "refs/heads/feature"})
 	if reads, _, _ := later.asked(); len(reads) != 2 || reads[0].Kind != code.ReadRepo ||
 		reads[1].Kind != code.ReadRefs || reads[1].Cursor != "refs/heads/feature" {
@@ -700,7 +950,7 @@ func TestANameReplacedMidTurnIsResolvedAgain(t *testing.T) {
 			host := newCodeHost()
 			reborn := host.detail.RepoRef
 			reborn.ID = "0192f6c1-6a7e-7c1b-9d4e-000000000002"
-			reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+			reg := codeRegistry(t, codeDeps(host))
 			turn := codeTurn(t)
 			callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
 
@@ -756,7 +1006,7 @@ func TestANodeThatCannotJudgeIsNeverARefusalOfTheCaller(t *testing.T) {
 			t.Parallel()
 			host := newCodeHost()
 			host.readErr, host.gitErr = c.readErr, c.gitErr
-			got := refusedCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t),
+			got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t),
 				builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID})
 			if tools.RefusalOf(got) != c.want {
 				t.Fatalf("answered %+v, want refused %s", got, c.want)
@@ -810,7 +1060,7 @@ func TestEveryCodeRefusalIsTheDomainsInItsClass(t *testing.T) {
 			t.Parallel()
 			host := newCodeHost()
 			host.readErr, host.gitErr = c.readErr, c.gitErr
-			got := refusedCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t), c.tool, c.args)
+			got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), c.tool, c.args)
 			if tools.RefusalOf(got) != c.want || !strings.Contains(got.Output, c.says) {
 				t.Errorf("answered %s %q, want refused %s saying %q", tools.RefusalOf(got), got.Output,
 					c.want, c.says)
@@ -829,7 +1079,9 @@ func TestEveryCodeRefusalIsTheDomainsInItsClass(t *testing.T) {
 func TestAPersonIsHandedTheCloneURLAndASeatIsNot(t *testing.T) {
 	t.Parallel()
 	clone := func(name string) string { return "https://crewlet.example.com/git/" + name + ".git" }
-	reg := codeRegistry(t, builtin.CodeDeps{Code: newCodeHost(), CloneURL: clone})
+	deps := codeDeps(newCodeHost())
+	deps.CloneURL = clone
+	reg := codeRegistry(t, deps)
 	_, seat := callCode(t, reg, codeTurn(t), builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
 	if _, ok := seat["clone_url"]; ok {
 		t.Errorf("a seat was handed a clone URL: %v", seat["clone_url"])
@@ -1004,7 +1256,7 @@ func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
 			for k, v := range c.args {
 				args[k] = v
 			}
-			got, _ := callCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t), c.tool, args)
+			got, _ := callCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), c.tool, args)
 			if len(got.Output) > builtin.ToolAnswerBytes {
 				t.Fatalf("the answer is %d bytes, past %d", len(got.Output), builtin.ToolAnswerBytes)
 			}
@@ -1058,7 +1310,7 @@ func TestAFencedPageThatOverflowsIsRefusedWithItsNarrowing(t *testing.T) {
 			if page, _ := json.Marshal(c.answer(code.GitQuery{RepoID: siteID})); len(page) > code.MaxGitAnswerBytes {
 				t.Fatalf("the fixture page is %d bytes, past what a git node sends", len(page))
 			}
-			got := refusedCode(t, codeRegistry(t, builtin.CodeDeps{Code: host}), codeTurn(t), c.tool, args)
+			got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t), c.tool, args)
 			if tools.RefusalOf(got) != tools.RefusalInvalid {
 				t.Fatalf("an overflowing page answered %s, %d bytes, want refused invalid",
 					tools.RefusalOf(got), len(got.Output))
@@ -1088,7 +1340,7 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 	for i := range 100 {
 		host.refs[fmt.Sprintf("refs/heads/%s-%03d", strings.Repeat("<", 200), i)] = mainOID
 	}
-	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+	reg := codeRegistry(t, codeDeps(host))
 	got, listing := callCode(t, reg, codeTurn(t), builtin.CodeListReposTool, map[string]any{"limit": 100})
 	repos, _ := listing["repos"].([]any)
 	if len(repos) == 0 || len(repos) == 100 || len(got.Output) > builtin.ToolAnswerBytes {
@@ -1125,7 +1377,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 	host := newCodeHost()
 	host.git = func(q code.GitQuery) code.GitAnswer { return answer(b, q) }
 	args["repo"] = "site"
-	got := callIn(t, codeRegistry(t, builtin.CodeDeps{Code: host}), turn, tool, args)
+	got := callIn(t, codeRegistry(t, codeDeps(host)), turn, tool, args)
 	return fencesIn(t, b, got.Output)
 }
 
@@ -1134,11 +1386,13 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // codeCatalogueBudget is the most bytes the seven code tools' definitions may
 // add to a tool catalogue as a CLI's prompt renders it.
 //
-// 10 300: measured at 9 570 (~2 393 tokens), so ~8% headroom — a sentence can
+// 10 300: measured at 9 627 (~2 407 tokens), so ~7% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
 // part adds raises this deliberately, with its measured cost). 10 654 → 9 570
 // when the revision grammar, written into each of the six revision arguments,
-// was stated once in code_resolve's description.
+// was stated once in code_resolve's description; 9 570 → 9 627 when
+// code_list_repos said that a turn a colleague woke lists only what the
+// colleague may read too, so a seat reading a short page for them knows why.
 const codeCatalogueBudget = 10_300
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
@@ -1163,7 +1417,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 	other := llm.ToolDef{Name: "lookup_colleague", Description: "Who to ask.",
 		Parameters: map[string]any{"type": "object"}}
 	with := []llm.ToolDef{other}
-	for _, tool := range builtin.CodeTools(builtin.CodeDeps{Code: newCodeHost()}) {
+	for _, tool := range builtin.CodeTools(codeDeps(newCodeHost())) {
 		with = append(with, llm.ToolDef{Name: tool.Name(), Description: tool.Description(),
 			Parameters: tool.Parameters()})
 	}

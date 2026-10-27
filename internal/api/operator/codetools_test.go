@@ -2,6 +2,7 @@ package operator_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -40,6 +42,15 @@ func (h *listingHost) GitRead(context.Context, code.GitQuery) (code.GitAnswer, e
 
 func (h *listingHost) FloorOf(string) statelog.Position { return statelog.Position{} }
 
+// noRequesters composes nobody: the operator surface's calls are made in no
+// turn, so no code read there is ever made for anybody but its caller — and
+// the code tools are wired with the requester ceiling's halves or not at all.
+type noRequesters struct{}
+
+func (noRequesters) Requester(_ context.Context, handle string) (iam.Principal, error) {
+	return iam.Principal{}, fmt.Errorf("the operator surface composes no requester, and was asked for %q", handle)
+}
+
 func (h *listingHost) askers() []code.Principal {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -64,7 +75,7 @@ func TestTheCodeToolsAreServedPerCallAndAuditedAsReads(t *testing.T) {
 		Halves: func() (operator.Halves, bool) {
 			halves := operator.Halves{Work: builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter}}
 			if hosting.Load() {
-				halves.Code = builtin.CodeDeps{Code: host}
+				halves.Code = builtin.CodeDeps{Code: host, Requesters: noRequesters{}, Chart: authz.NoChart{}}
 			}
 			return halves, true
 		},

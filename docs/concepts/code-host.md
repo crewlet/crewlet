@@ -1326,6 +1326,39 @@ last. In this release a seat reads a repository through its code tools
 ([Server-side reads](#server-side-reads)) and pushes to none
 ([What it does not do yet](#what-it-does-not-do-yet)).
 
+### Reads made for somebody else
+
+A turn somebody woke — a person's message, a colleague seat's message or ask —
+is that somebody's errand, and a seat that read out for them whatever it may
+read itself would hand a `visibility: unit` repository to anybody who can
+message one of the unit's seats. So inside such a turn every code read the
+seat makes is decided again for whoever woke it: the **requester ceiling**
+the [artifacts tools](artifacts.md) apply, here on a repository's grant.
+
+| The turn was woken by | What the seat reads |
+|---|---|
+| nobody — a schedule, a watch, the seat's own work | what its own grant allows |
+| a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
+| a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
+| a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
+| somebody the company does not know — a chat sender no seat or person maps to | nothing |
+
+The colleague's grant is judged where the seat's own is: by the node that
+answers each read, from its own chart and the repository's row, and never
+from a chart the turn read once, so an activation that takes the colleague out
+of the owning unit stops the very next read made for it. A seat that may not
+read the repository itself is told so about itself first, whoever it reads
+for — that is the refusal whose remedy it can act on. A refusal made for the
+colleague is not one a retry clears, and nothing the seat could be given
+changes it: it is about what the colleague may read.
+
+A turn whose requester the node cannot establish — the identity directory
+out of reach — reads nothing and is told to try again, never read as a turn
+nobody woke. A person's own assistant, which reads through the same tools,
+calls them in no turn and reads for nobody but its caller. The ceiling bounds
+and never grants: what the seat reads is still its own read, judged by its
+own grant.
+
 ---
 
 ## Server-side reads
@@ -1385,8 +1418,11 @@ bytes.
 by the rules of [Who may read and push](#who-may-read-and-push): a person reads
 every repository, and a seat what its tier and its relation allow, so a
 `visibility: unit` repository is refused to a seat outside the unit,
-`not_permitted`, naming the visibility. A deleted or purging repository is
-answered not found, with what became of it.
+`not_permitted`, naming the visibility. A read a seat makes for the colleague
+whose ask woke its turn is held to the colleague's grant as well, from the same
+chart and row, and refused where the colleague could not read it
+([Reads made for somebody else](#reads-made-for-somebody-else)). A deleted or
+purging repository is answered not found, with what became of it.
 
 **A git node that cannot answer says so about itself**, and another git node
 may answer the same read — nothing about the repository's content is concluded

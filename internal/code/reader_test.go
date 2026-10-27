@@ -1395,6 +1395,153 @@ func TestAReadOfAUnitRepositoryByAnOutsiderIsNotPermitted(t *testing.T) {
 	}
 }
 
+// A SEAT'S READ MADE FOR A COLLEAGUE IS HELD TO THE COLLEAGUE'S GRANT TOO, on
+// the node that answers it, from the one chart and the one row it judges the
+// asker by: inside a turn vp-sales woke, dev — who writes plat-private — lists
+// only what vp-sales reads as well, each repository at DEV's access, and its
+// detail, its history, its refs (a first page and a later one) and any ref
+// resolved are refused ErrAboveCeiling, naming the visibility that shuts
+// vp-sales out — never ErrNotPermitted, which is false of dev. Read for cto,
+// who reads it, dev is served as it is for nobody; and an asker that reads
+// nothing is told so about itself, whoever it reads for.
+//
+// Mutations: any of the six reads judging the asker alone (the listing, the
+// detail, the history, the first refs page, a later refs page, the resolve)
+// → dev reads plat-private for vp-sales; the ceiling judged before the
+// asker → vp-sales's read for root-bot is refused about root-bot.
+func TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant(t *testing.T) {
+	t.Parallel()
+	n, private := unitRepos(t)
+	n.push(private, entry("p2", set("refs/heads/topic", code.ZeroOID, oidOf("topic"))))
+
+	listing := func(who code.Principal, ceiling string) map[string]string {
+		t.Helper()
+		got := map[string]string{}
+		q := code.ReadQuery{Asker: who, CeilingSeat: ceiling, Kind: code.ReadRepos, Limit: 1}
+		for range 10 {
+			answer, err := n.reader.Read(t.Context(), q)
+			if err != nil {
+				t.Fatalf("Read(repos) as %+v for %q: %v", who, ceiling, err)
+			}
+			for _, r := range answer.Repos {
+				got[r.Name] = r.Access
+			}
+			if answer.Next == "" {
+				return got
+			}
+			q.Cursor = answer.Next
+		}
+		t.Fatalf("the listing as %+v for %q did not end in ten pages", who, ceiling)
+		return nil
+	}
+	for _, c := range []struct {
+		who, ceiling, want string
+	}{
+		{"dev", "", "map[plat-private:write platform:write]"},
+		{"dev", "vp-sales", "map[platform:write]"},
+		{"dev", "cto", "map[plat-private:write platform:write]"},
+		{"vp-sales", "dev", "map[platform:read]"},
+	} {
+		if got := listing(agent(c.who), c.ceiling); fmt.Sprint(got) != c.want {
+			t.Errorf("%s, reading for %q, lists %v; want %s", c.who, c.ceiling, got, c.want)
+		}
+	}
+
+	// A LATER PAGE OF REFS is judged on its own read of the row, never on the
+	// first page's: its cursor, from dev's own listing, is no admission.
+	first, firstErr := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent("dev"), Kind: code.ReadRefs,
+		Repo: "plat-private", Limit: 1})
+	if firstErr != nil || first.Next == "" {
+		t.Fatalf("dev's first one-ref page of plat-private = %+v, %v; want a cursor past it", first, firstErr)
+	}
+	reads := func(who code.Principal, ceiling string) map[string]func() error {
+		read := func(q code.ReadQuery) func() error {
+			return func() error {
+				q.Asker, q.CeilingSeat, q.Repo = who, ceiling, "plat-private"
+				_, err := n.reader.Read(t.Context(), q)
+				return err
+			}
+		}
+		return map[string]func() error{
+			"detail":            read(code.ReadQuery{Kind: code.ReadRepo}),
+			"history":           read(code.ReadQuery{Kind: code.ReadPushes}),
+			"refs":              read(code.ReadQuery{Kind: code.ReadRefs}),
+			"a later refs page": read(code.ReadQuery{Kind: code.ReadRefs, Limit: 1, Cursor: first.Next}),
+			"resolve": func() error {
+				_, err := n.reader.ResolveRef(t.Context(), code.RefQuery{Asker: who, CeilingSeat: ceiling,
+					Repo: "plat-private", Refs: []string{"main"}, Fresh: stale})
+				return err
+			},
+		}
+	}
+	for name, read := range reads(agent("dev"), "vp-sales") {
+		err := read()
+		if !errors.Is(err, code.ErrAboveCeiling) || errors.Is(err, code.ErrNotPermitted) ||
+			!strings.Contains(err.Error(), `seat "vp-sales"`) || !strings.Contains(err.Error(), "visibility: unit") {
+			t.Errorf("dev's %s of plat-private for vp-sales = %v, want ErrAboveCeiling naming vp-sales and "+
+				"the visibility", name, err)
+		}
+	}
+	for name, read := range reads(agent("dev"), "cto") {
+		if err := read(); err != nil {
+			t.Errorf("dev's %s of plat-private for cto, who reads it = %v, want it served", name, err)
+		}
+	}
+	for name, read := range reads(agent("vp-sales"), "root-bot") {
+		err := read()
+		if !errors.Is(err, code.ErrNotPermitted) || !strings.Contains(err.Error(), `seat "vp-sales"`) {
+			t.Errorf("vp-sales's %s of plat-private for root-bot = %v, want ErrNotPermitted about vp-sales "+
+				"itself", name, err)
+		}
+	}
+	detail, detailErr := n.reader.Read(t.Context(), code.ReadQuery{Asker: agent("dev"), CeilingSeat: "cto",
+		Kind: code.ReadRepo, Repo: "plat-private"})
+	if detailErr != nil || detail.Repo == nil || detail.Repo.Access != "write" {
+		t.Errorf("dev's detail of plat-private for cto = %+v, %v; want it at dev's own access, write",
+			detail.Repo, detailErr)
+	}
+}
+
+// ONLY A SEAT'S READ IS MADE FOR ANOTHER SEAT, and only for a seat named by
+// its handle: a person's read and a token's are their own, which no ceiling
+// bounds, so a query naming one beside them is refused naming the field rather
+// than served as the person alone — a caller that sent it meant something no
+// reader does — and the engine's own reads, which name no principal, name no
+// seat they read for either.
+//
+// Mutation: ceilingInvalid accepting a ceiling beside an operator → the
+// person's listing is served.
+func TestOnlyASeatsReadIsMadeForAnotherSeat(t *testing.T) {
+	t.Parallel()
+	n, _ := unitRepos(t)
+	unbound := code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"}
+	for name, q := range map[string]code.ReadQuery{
+		"a person's listing":               {Asker: asker, CeilingSeat: "dev", Kind: code.ReadRepos},
+		"a token's detail":                 {Asker: unbound, CeilingSeat: "dev", Kind: code.ReadRepo, Repo: "platform"},
+		"a seat for no handle":             {Asker: agent("dev"), CeilingSeat: "Not A Handle", Kind: code.ReadRepos},
+		"a duty listing for a seat":        {CeilingSeat: "dev", Kind: code.ReadCompactionDue, MinPacks: 1},
+		"a publication listing for a seat": {CeilingSeat: "dev", Kind: code.ReadPublicationDue},
+		"an introduced page for a seat": {CeilingSeat: "dev", Kind: code.ReadIntroduced,
+			Introduced: &code.IntroducedQuery{RepoID: "id"}},
+	} {
+		q.Fresh = stale
+		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), "ceiling_seat:") {
+			t.Errorf("%s: Read = %v, want ErrInvalid naming ceiling_seat", name, err)
+		}
+	}
+	for name, q := range map[string]code.RefQuery{
+		"a person's resolve":   {Asker: asker, CeilingSeat: "dev"},
+		"a seat for no handle": {Asker: agent("dev"), CeilingSeat: "Not A Handle"},
+	} {
+		q.Repo, q.Refs, q.Fresh = "platform", []string{"main"}, stale
+		if _, err := n.reader.ResolveRef(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), "ceiling_seat:") {
+			t.Errorf("%s: ResolveRef = %v, want ErrInvalid naming ceiling_seat", name, err)
+		}
+	}
+}
+
 // A READER WITH NO CHART REFUSES ABOUT ITSELF (M3-O82). Between the start of a
 // node's code reader and the install of its first epoch — every boot, and a
 // first apply that reconciles code.repos before it installs the epoch — the

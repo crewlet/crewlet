@@ -146,8 +146,13 @@
 // person maintains and a token bound to nobody reads every repository, with no
 // chart consulted; a seat reads where its tier and its relation let it, so a
 // `visibility: unit` repository refuses a seat outside the owning unit
-// code.ErrNotPermitted (TestAUnitRepositoryRefusesASeatOutsideIt). A deleted or
-// purging repository is code.ErrRepoNotFound with the domain's sentence for it.
+// code.ErrNotPermitted (TestAUnitRepositoryRefusesASeatOutsideIt). A read a seat
+// makes for the colleague whose ask woke its turn (code.GitQuery.CeilingSeat)
+// is judged for that colleague too, from the same chart and the same row, by
+// the data node's one judgment (code.JudgeRead): one the colleague could not
+// make itself is code.ErrAboveCeiling, even where the reading seat could
+// (TestAReadMadeForASeatIsHeldToThatSeatsGrant). A deleted or purging
+// repository is code.ErrRepoNotFound with the domain's sentence for it.
 //
 // # Who read it
 //
