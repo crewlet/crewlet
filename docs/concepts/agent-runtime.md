@@ -579,9 +579,9 @@ flowchart TD
    scheduler; the code host, whose clones, fetches and server-side reads of a
    `visibility: unit` repository record who read it
    ([Code Host § Who read it](code-host.md#who-read-it)) — its requests
-   finished in step 7, so what stops here is its cache, and a peer's read
-   asked of this node from now on is answered unready and asked of the next
-   git node; the auxiliary-spend
+   finished in step 7, so what stops here is its server-side reads, a peer's
+   read in flight cut and every later one refused, each answered unready and
+   asked of the next git node, and then its cache; the auxiliary-spend
    ledger's last records — what the seats' auxiliary model spent since its last
    15-second flush — published on a budget of five seconds once every producer
    of them has stopped, and before a node without `data` flushes its

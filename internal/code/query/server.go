@@ -14,9 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
+
+var log = logging.Get("code.query")
 
 // Cache is what the reads need of the node's git cache. *cache.Cache
 // satisfies it.
@@ -83,9 +86,19 @@ type Options struct {
 
 // Server answers reads of repositories by object id over the node's cache.
 // It holds no goroutine of its own: each read runs on its caller's, and ends
-// with its caller's context.
+// with its caller's context or with the server's stop ([Server.Stop]).
 type Server struct {
 	o Options
+	// life is the SERVER'S lifetime — the one stored context, for the reason
+	// the code host's is: the stop ends it, and every read's context is cut
+	// by it (errStopped), so a stop reaches every read in flight. inflight
+	// counts the reads begun and not yet returned, which the stop waits for,
+	// and stopped, under lifeMu, refuses the reads after it.
+	life     context.Context
+	end      context.CancelFunc
+	lifeMu   sync.Mutex
+	stopped  bool
+	inflight sync.WaitGroup
 	// syncWait bounds a read's wait on its sync (statelog.ReadBudget),
 	// gitBudget the run time a read's own git is given, shared by every
 	// process of its kind (gitproc.ReadDeadline), pageBytes an answer's
@@ -162,7 +175,10 @@ func New(o Options) (*Server, error) {
 	if missing != "" {
 		return nil, fmt.Errorf("%w: query.Options.%s is required", code.ErrInvalid, missing)
 	}
-	return &Server{o: o, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
+	// THE SERVER'S OWN LIFETIME, ended by its stop alone: no caller's
+	// context is the server's, since every read runs on its own.
+	life, end := context.WithCancel(context.Background())
+	return &Server{o: o, life: life, end: end, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
 		pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes}, nil
 }
 
@@ -256,7 +272,95 @@ func New(o Options) (*Server, error) {
 // estate.GitReadAttempt) comes out of the asker's attempt, and so, under
 // load, out of the read's own git: the read is then answered unready rather
 // than late or too large.
+//
+// A STOPPED SERVER ANSWERS EVERY READ UNREADY, node_failed, having started
+// nothing, and its stop CUTS every read in flight, which is answered the same
+// ([Server.Stop]): about this node, so the walk asks the next git node and lets
+// it fill a copy.
 func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	rctx, end, ok := s.begin(ctx)
+	if !ok {
+		return code.GitAnswer{}, s.stopping()
+	}
+	defer end()
+	a, err := s.serve(rctx, q)
+	if err != nil && errors.Is(context.Cause(rctx), errStopped) {
+		// CUT BY THE STOP, whatever the wait or the process it cut answered:
+		// what a read ended this way says is about the node, never the
+		// repository or the asker.
+		return code.GitAnswer{}, s.stopping()
+	}
+	return a, err
+}
+
+// errStopped is the cause a read's context ends with when its server stops
+// ([Server.Stop]): never a read's answer, which is [Server.stopping] instead.
+var errStopped = errors.New("query: this node's git reads are stopping")
+
+// begin admits one read to a running server, answering the context it runs
+// under — the caller's, cut by the server's stop — and what ends it; or false
+// once the stop has begun, where the read starts nothing.
+func (s *Server) begin(parent context.Context) (context.Context, func(), bool) {
+	s.lifeMu.Lock()
+	if s.stopped {
+		s.lifeMu.Unlock()
+		return nil, nil, false
+	}
+	s.inflight.Add(1)
+	s.lifeMu.Unlock()
+	ctx, cancel := context.WithCancelCause(parent)
+	//nolint:contextcheck // The server's lifetime cuts the read's work too: Stop must reach every read in flight.
+	cut := context.AfterFunc(s.life, func() { cancel(errStopped) })
+	return ctx, func() {
+		cut()
+		cancel(nil)
+		s.inflight.Done()
+	}, true
+}
+
+// stopping is what a read the stop refused or cut is answered: unready about
+// this node, node_failed, which lets the walk have the next node fill a copy
+// (code.UnreadyReason.PassesFill).
+func (s *Server) stopping() error {
+	return &code.ErrGitUnready{Reason: code.UnreadyNodeFailed, Detail: fmt.Sprintf("%s is stopping its git reads; "+
+		"another git node answers, and fills a copy where none holds one", s.o.NodeID)}
+}
+
+// Stop ends the server: every read from now on is refused unready, about this
+// node, and every read in flight is CUT — its waits and its git processes end
+// — and answered the same, and Stop waits for each to return, or for ctx. So
+// once Stop has returned no read this server answered is still being
+// answered, nor recorded (Options.Fetched): every record of a read is made
+// before the code host's stop ends, which the engine's teardown orders before
+// the usage day's last flush. Called by whoever stops the code host, BEFORE
+// its cache, which a read in flight still reads. Idempotent: a second Stop
+// waits for the same reads.
+//
+// CUT RATHER THAN WAITED OUT, as the host's own requests are at its stop: a
+// read runs up to its asker's whole attempt (estate.GitReadAttempt), longer
+// than the stop's budget, and a read cut is answered while its asker still
+// listens, which takes it to the runner-up at once.
+func (s *Server) Stop(ctx context.Context) {
+	s.lifeMu.Lock()
+	s.stopped = true
+	s.lifeMu.Unlock()
+	s.end()
+	waited := make(chan struct{})
+	go func() {
+		s.inflight.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-ctx.Done():
+		log.WarnContext(ctx, "code_git_reads_stop_unfinished", "node", s.o.NodeID, "error", context.Cause(ctx),
+			"detail", "git reads were still answering when the stop's wait ended; one that answers after it "+
+				"is recorded after the code host's stop, behind what the node's teardown flushes of its reads")
+	}
+}
+
+// serve is Read's work, under the context the server's stop cuts.
+func (s *Server) serve(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	if err := q.Validate(); err != nil {
 		return code.GitAnswer{}, err
 	}

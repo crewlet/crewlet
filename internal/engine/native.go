@@ -149,8 +149,9 @@ type native struct {
 	// (internal/code/query), built beside codeHost over the same cache and
 	// pool and nil where it is: what the estate's router and server ask of
 	// this node as a repository's home git node, through [Engine.localGit],
-	// per request. It holds no goroutine, so the code host's stop is its
-	// stop: its reads end with their contexts and the cache's.
+	// per request. It holds no goroutine, and the code host's stop stops it
+	// first, cutting its reads in flight before the cache they read
+	// ([native.stopCodeHost]).
 	gitReads *query.Server
 
 	// gitCache is the cache codeHost serves from, built and stopped with it

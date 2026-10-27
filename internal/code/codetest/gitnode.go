@@ -456,6 +456,7 @@ func (g *GitNode) Kill() {
 	cancel()
 	n.srv.Listener.Close()
 	n.srv.CloseClientConnections()
+	n.query.Stop(ended)
 	n.host.Stop(ended)
 }
 
@@ -465,11 +466,11 @@ func (g *GitNode) Kill() {
 // listener, which the engine shuts down before its teardown and whose drain
 // finishes the git requests it let through (api.App.DrainGit), with no bound
 // of its own, since what bounds a shutdown is whatever supervises the process.
-// THEN THE HOST, the teardown's first step (the engine's stopCodeHost) and
-// bounded as it is, by host.StopBudget: a request still running past the
-// drain is cancelled and waited for, its relay and its cache stopped. Unlike
-// Kill, it waits for what it ends, so it is never the stop of a node a crash
-// holds.
+// THEN THE GIT READS AND THE HOST, as the teardown's stopCodeHost stops them
+// and bounded as it is, by host.StopBudget: a read in flight is cut and waited
+// for (query.Server.Stop), and a request still running past the drain is
+// cancelled and waited for, its relay and its cache stopped. Unlike Kill, it
+// waits for what it ends, so it is never the stop of a node a crash holds.
 func (g *GitNode) Stop(drain context.Context) {
 	g.mu.Lock()
 	n := g.cur
@@ -486,6 +487,7 @@ func (g *GitNode) Stop(drain context.Context) {
 	}
 	stop, cancel := context.WithTimeout(context.WithoutCancel(drain), host.StopBudget)
 	defer cancel()
+	n.query.Stop(stop)
 	n.host.Stop(stop)
 	n.srv.CloseClientConnections()
 }
@@ -519,6 +521,7 @@ func (g *GitNode) teardown() {
 	g.cur, g.dead, g.killed = nil, nil, nil
 	g.mu.Unlock()
 	for _, n := range nodes {
+		n.query.Stop(context.Background())
 		n.host.Stop(context.Background())
 		n.srv.Close()
 	}

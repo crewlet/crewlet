@@ -6,7 +6,20 @@
 // code.MaxGitAnswerBytes of JSON with a cursor where the next begins. It runs
 // on git nodes, holds no goroutine of its own, and writes nothing itself — the
 // memo its reads fill is the cache's write: a read's processes run on its
-// caller's goroutine and end with its context.
+// caller's goroutine and end with its context, or with the server's stop.
+//
+// # The stop
+//
+// Whoever stops the code host stops these reads first (Server.Stop), before
+// the cache they read: every read after it is answered unready about the node
+// (node_failed), starting nothing, and every read in flight is CUT — its waits
+// and its git end — answered the same while its asker still listens, and
+// waited for. So once the stop returns no read of this node is being answered
+// or recorded (Options.Fetched): every record of a read this node answered is
+// made before its code host's stop ends, which the engine's teardown orders
+// before the usage day's last flush. Cut rather than waited out, as the code
+// host's own requests are at its stop: a read may run its asker's whole
+// attempt, longer than the stop's budget.
 //
 // # Which push, from the copy's index
 //
@@ -96,8 +109,9 @@
 // seat's read on a node holding no chart yet (no_chart) or confirmed behind
 // the company's configuration (behind_config), where the grant is not judged
 // at all — "this node cannot judge" is never "not permitted"; a failure of the
-// node's own, a sync its disk or its stopping cache failed, or a short check
-// of what the read names that ran its whole bound (node_failed); and a read of
+// node's own, a sync its disk or its stopping cache failed, a short check of
+// what the read names that ran its whole bound, or a read the stop refused or
+// cut (node_failed); and a read of
 // a repository this node holds no copy of, which it was not asked to fill
 // (not_held). WHICH OF THEM IT IS DECIDES WHO FILLS: a walk lets one node at a
 // time fill a copy it does not hold (code.GitQuery.Home), and moves that on to

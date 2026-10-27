@@ -726,6 +726,15 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // to stop serving git stops answering for its host before the host and the
 // cache its answers read stop, so no peer is told of a cache that is going. Its
 // withdrawal waits only for answers already in flight, each read from memory.
+//
+// THEN THE GIT READS, for the same reason and one more: a peer's read is
+// answered on this node's git lane by the query server, which the host does
+// not count among its requests, so a read in flight outlived the host's stop
+// and was answered, and recorded as a read of a unit's repository, after it —
+// behind the usage day's last flush the teardown orders after this stop. Its
+// stop refuses every read after it, cuts the reads in flight — each answered
+// unready, about this node, so its walk asks the next git node — and waits
+// for them, before the host and the cache they read stop ([query.Server.Stop]).
 func (n *native) stopCodeHost(ctx context.Context) {
 	if n == nil || n.codeHost == nil {
 		return
@@ -735,6 +744,9 @@ func (n *native) stopCodeHost(ctx context.Context) {
 			if err := n.withdrawCodeStatus(ctx); err != nil {
 				log.WarnContext(ctx, "code_status_answerer_not_withdrawn", "error", err)
 			}
+		}
+		if n.gitReads != nil {
+			n.gitReads.Stop(ctx)
 		}
 		n.codeHost.Stop(ctx)
 	})
