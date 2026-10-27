@@ -42,7 +42,10 @@ import (
 //     small push into a large history rather than letting it be slow.
 //
 // These are BOUNDS on a client that trickles. A client that stops moving is
-// ended by [TransferStall] long before either transfer deadline.
+// ended by [TransferStall] long before either transfer deadline; a remote
+// whose connection stops answering is ended by TCP's keepalive probes within
+// the same minute, and one that answers and says nothing is given its whole
+// [RemoteDeadline].
 
 // ReadDeadline bounds one local read: one read attempt, the bound the router
 // gives a read anywhere in the engine (estate.Production().ReadAttempt). This
@@ -178,9 +181,18 @@ func ReceivePackDeadline(maxPushBytes, liveObjects int64, hook time.Duration) ti
 // ([HistoryWalk]), since git's connectivity check after a fetch walks by date
 // whatever the repository holds, as receive-pack's does
 // ([ReceivePackDeadline]), and a push's counting walks from its tips to what
-// the remote holds. A remote that stops moving is ended long before it, by
-// libcurl's own stall (the package doc's "One outbound dial": nothing moved
-// for [TransferStall]).
+// the remote holds.
+//
+// IT IS ALL A REMOTE THAT ANSWERS IS GIVEN. One whose connection dies is ended
+// long before it, by TCP's keepalive probes, a minute ([TransferStall]) after
+// the last thing the connection heard (the package doc's "One outbound dial";
+// a push whose peer vanishes with bytes still in flight, by TCP's
+// retransmissions, in about fifteen minutes on Linux's defaults). One that
+// stays connected is waited on to this deadline whatever it sends — a
+// keepalive every five seconds, or nothing at all — because a git server
+// counting or checking a large repository may be silent for minutes and no
+// client tells it from one that has wedged; a run ended for its quiet would be
+// ended on every attempt.
 func RemoteDeadline(bytes, objects int64) time.Duration {
 	return transferDeadline(bytes) + HistoryWalk(objects)
 }

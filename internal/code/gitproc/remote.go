@@ -40,34 +40,64 @@ var remoteCommands = map[string]bool{"fetch": true, "ls-remote": true, "push": t
 // doc's "One outbound dial" gives it — so no call site may set one
 // (checkConfig), as none may set a base key.
 const (
-	keyHTTPSAllow      = "protocol.https.allow"
-	keyFollowRedirects = "http.followRedirects"
-	keyBundleURI       = "transfer.bundleURI"
-	keyRecurse         = "fetch.recurseSubmodules"
-	keyLowSpeedLimit   = "http.lowSpeedLimit"
-	keyLowSpeedTime    = "http.lowSpeedTime"
-	keyResolve         = "http.curloptResolve"
-	keyProxy           = "http.proxy"
-	keyCAInfo          = "http.sslCAInfo"
-	keyCAPath          = "http.sslCAPath"
-	keyExtraHeader     = "http.extraHeader"
+	keyHTTPSAllow        = "protocol.https.allow"
+	keyFollowRedirects   = "http.followRedirects"
+	keyBundleURI         = "transfer.bundleURI"
+	keyRecurse           = "fetch.recurseSubmodules"
+	keyKeepAliveIdle     = "http.keepAliveIdle"
+	keyKeepAliveInterval = "http.keepAliveInterval"
+	keyKeepAliveCount    = "http.keepAliveCount"
+	keyResolve           = "http.curloptResolve"
+	keyProxy             = "http.proxy"
+	keyCAInfo            = "http.sslCAInfo"
+	keyCAPath            = "http.sslCAPath"
+	keyExtraHeader       = "http.extraHeader"
 )
 
 // remoteKeys is every key a remote run's configuration may carry.
 var remoteKeys = []string{
-	keyHTTPSAllow, keyFollowRedirects, keyBundleURI, keyRecurse, keyLowSpeedLimit, keyLowSpeedTime,
-	keyResolve, keyProxy, keyCAInfo, keyCAPath, keyExtraHeader,
+	keyHTTPSAllow, keyFollowRedirects, keyBundleURI, keyRecurse, keyKeepAliveIdle, keyKeepAliveInterval,
+	keyKeepAliveCount, keyResolve, keyProxy, keyCAInfo, keyCAPath, keyExtraHeader,
 }
 
-// remoteLowSpeed is the speed, in bytes a second, under which libcurl counts a
-// remote run's network leg as stopped (http.lowSpeedLimit): ONE, the least
-// speed that is any speed at all, so what ends the leg is that nothing moved
-// for [TransferStall] — objstore.Stall's judgement of every other transfer —
-// and never that it moved slowly, which [RemoteDeadline]'s pace bounds. A
-// remote that is still working sends git's keepalives (five bytes every five
-// seconds while it counts, compresses or checks) and so never reads as
-// stopped.
-const remoteLowSpeed = 1
+// remoteKeepAliveProbes is how many of TCP's keepalive probes a remote run's
+// connection may leave unanswered before the kernel ends it
+// (http.keepAliveCount): THREE, ten seconds apart once the connection has been
+// quiet for half of [TransferStall] (http.keepAliveIdle and
+// http.keepAliveInterval, which [Remote.config] derives from the pool's
+// stall). So a connection whose peer stopped answering — a host gone, a path
+// dropped, a NAT that forgot it — is ended a minute after the last thing it
+// heard, the bound every other transfer of the engine's is held to, while a
+// probe or its answer lost on the way ends nothing: three in a row would have
+// to be. A push whose peer vanishes with bytes still in flight sends no probe
+// — TCP retransmits those instead, and gives up after about fifteen minutes on
+// Linux's defaults (tcp_retries2), since neither git nor libcurl sets
+// TCP_USER_TIMEOUT.
+//
+// THE PEER'S LIVENESS, NEVER ITS SPEED. A git server working on a large
+// repository — counting and compressing what a fetch wants, indexing and
+// checking what a push sent — may send nothing but a keepalive for minutes, or
+// nothing at all where no progress was asked for and it keeps no keepalive,
+// and no client tells that from a server that has wedged: so a remote that
+// stays connected is waited on until [RemoteDeadline], whatever it sends.
+//
+// NOT LIBCURL'S LOW-SPEED CHECK (http.lowSpeedLimit, http.lowSpeedTime), which
+// bounded this leg until it was measured. What that check reads is a SPEED:
+// the bytes moved, both ways, over libcurl's last five seconds of
+// once-a-second samples, in whole bytes a second rounded down
+// (lib/progress.c), so at its least limit, a byte a second, a window reads as
+// moving only with as many bytes as the seconds it spans — and git's keepalive
+// is five bytes every five seconds (uploadpack.keepAlive, receive.keepAlive):
+// the threshold itself, which side of it a window lands on turning on
+// sub-millisecond timing on both machines. MEASURED with git 2.56.0 and
+// libcurl 8.14.1 over TLS on loopback: with the check's time scaled to ten
+// seconds, a remote sending git's keepalive every five seconds was ended in
+// one fetch of twelve, paced as upload-pack paces it (each five seconds after
+// the last) in one of two, and one every 5.003 s in both; at the minute,
+// keepalives ten to thirty seconds apart were ended at 62-84 s in three
+// fetches of five, and silence at 62 s. No limit or time mends it: the least
+// speed the check can ask for is what git's own keepalive moves.
+const remoteKeepAliveProbes = 3
 
 // remoteMarker is what a run's lines read where one of its remote's secrets
 // stood, in internal/redact's marker form, so a second redaction pass
@@ -598,15 +628,22 @@ func (r Remote) String() string {
 func (r Remote) GoString() string { return "gitproc.Remote(" + r.String() + ")" }
 
 // config is the configuration r's run is given after the base, in this order
-// (the package doc's "One outbound dial" gives each its reason).
-func (r *Remote) config() []KV {
+// (the package doc's "One outbound dial" gives each its reason). Its TCP
+// keepalive is derived from stall, the pool's [TransferStall], in the whole
+// seconds git reads: quiet for half of it before the first probe, and the
+// rest shared among [remoteKeepAliveProbes] probes.
+func (r *Remote) config(stall time.Duration) []KV {
+	seconds := int(stall / time.Second)
+	idle := max(1, seconds/2)
+	interval := max(1, (seconds-idle)/remoteKeepAliveProbes)
 	kv := []KV{
 		{keyHTTPSAllow, "always"},
 		{keyFollowRedirects, "false"},
 		{keyBundleURI, "false"},
 		{keyRecurse, "false"},
-		{keyLowSpeedLimit, strconv.Itoa(remoteLowSpeed)},
-		{keyLowSpeedTime, strconv.Itoa(int(TransferStall / time.Second))},
+		{keyKeepAliveIdle, strconv.Itoa(idle)},
+		{keyKeepAliveInterval, strconv.Itoa(interval)},
+		{keyKeepAliveCount, strconv.Itoa(remoteKeepAliveProbes)},
 	}
 	switch {
 	case r.proxy != "":
@@ -746,9 +783,9 @@ func checkRemote(c Cmd) error {
 			"transfer, so it waits in the transfer lane", ErrInvalid, c.Args[0], c.Class)
 	case c.Stall != 0:
 		return fmt.Errorf("%w: git %s dials a remote and carries a Stall of %v: its network leg is libcurl's, past "+
-			"the pool's pipes, and ends when nothing moved for TransferStall (http.lowSpeedTime), while the "+
-			"pool's watchdog sees only what git writes on its pipes — nothing, from a fetch or a push without "+
-			"--progress, until it ends — so it would end a transfer that is moving", ErrInvalid, c.Args[0], c.Stall)
+			"the pool's pipes, and ends when its peer stops answering TCP's keepalive probes or at its Deadline, "+
+			"while the pool's watchdog sees only what git writes on its pipes — nothing, from a fetch or a push "+
+			"without --progress, until it ends — so it would end a transfer that is moving", ErrInvalid, c.Args[0], c.Stall)
 	}
 	at := -1
 	for i := 1; i < len(c.Args); i++ {

@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
@@ -157,14 +159,17 @@ var baseConfig = []gitproc.KV{
 }
 
 // remoteBase is what every remote run is handed after the base, in order,
-// before where its host is reached and what it trusts.
+// before where its host is reached and what it trusts: its TCP keepalive
+// among it, quiet for half of TransferStall before the first probe and three
+// probes over the rest — and no speed bound.
 var remoteBase = []gitproc.KV{
 	{Key: "protocol.https.allow", Value: "always"},
 	{Key: "http.followRedirects", Value: "false"},
 	{Key: "transfer.bundleURI", Value: "false"},
 	{Key: "fetch.recurseSubmodules", Value: "false"},
-	{Key: "http.lowSpeedLimit", Value: "1"},
-	{Key: "http.lowSpeedTime", Value: "60"},
+	{Key: "http.keepAliveIdle", Value: "30"},
+	{Key: "http.keepAliveInterval", Value: "10"},
+	{Key: "http.keepAliveCount", Value: "3"},
 }
 
 // A REMOTE RESOLVING TO AN ADDRESS OFF THE PUBLIC INTERNET IS REFUSED WHOLE,
@@ -415,13 +420,15 @@ func TestARemoteBehindAProxyIsDialedThroughIt(t *testing.T) {
 }
 
 // A REMOTE RUN IS CONFIGURED BY THE POOL, AFTER THE BASE AND BEFORE THE CALL
-// SITE: https alone; no redirect, bundle URI or submodule followed; libcurl's
-// stall bound; the host pinned to every address the rule judged, in the order
-// answered, and never with the '+' that would let the entry lapse into a
-// lookup; the process's certificate authorities; and the header — every one
-// in the process's environment and none in its arguments, which are exactly
-// the call's. A call site that names one of those keys itself, in any case, is
-// refused ErrConfig and pointed at Cmd.Remote, as a base key is.
+// SITE: https alone; no redirect, bundle URI or submodule followed; TCP's
+// keepalive watching the peer, and nothing bounding the leg's speed; the host
+// pinned to every address the rule judged, in the order answered, and never
+// with the '+' that would let the entry lapse into a lookup; the process's
+// certificate authorities; and the header — every one in the process's
+// environment and none in its arguments, which are exactly the call's. A call
+// site that names one of those keys itself, in any case, is refused ErrConfig
+// and pointed at Cmd.Remote, as a base key is, and one that names libcurl's
+// speed bound is refused as every key off the allowlist is.
 //
 // Mutation: write the remote's keys after the call site's, and the order is
 // red; drop the pin, and so is the configuration.
@@ -462,8 +469,8 @@ func TestARemoteRunIsConfiguredByThePool(t *testing.T) {
 	p := fakePool(t, "exit 0", gitproc.Options{})
 	for _, key := range []string{
 		"protocol.https.allow", "http.followRedirects", "transfer.bundleURI", "fetch.recurseSubmodules",
-		"http.lowSpeedLimit", "http.lowSpeedTime", "http.curloptResolve", "http.proxy", "http.sslCAInfo",
-		"http.sslCAPath", "http.extraHeader", "HTTP.ExtraHeader", "HTTP.CURLOPTRESOLVE",
+		"http.keepAliveIdle", "http.keepAliveInterval", "http.keepAliveCount", "http.curloptResolve", "http.proxy",
+		"http.sslCAInfo", "http.sslCAPath", "http.extraHeader", "HTTP.ExtraHeader", "HTTP.CURLOPTRESOLVE",
 	} {
 		_, err := p.Run(t.Context(), gitproc.Cmd{
 			Args: []string{"ls-remote", r.URL()}, Remote: &r, Config: []gitproc.KV{{Key: key, Value: "x"}},
@@ -471,6 +478,15 @@ func TestARemoteRunIsConfiguredByThePool(t *testing.T) {
 		})
 		if !errors.Is(err, gitproc.ErrConfig) || !strings.Contains(err.Error(), "Cmd.Remote") {
 			t.Errorf("a call site setting %s: %v, want ErrConfig pointing at Cmd.Remote", key, err)
+		}
+	}
+	for _, key := range []string{"http.lowSpeedLimit", "http.lowSpeedTime"} {
+		_, err := p.Run(t.Context(), gitproc.Cmd{
+			Args: []string{"ls-remote", r.URL()}, Remote: &r, Config: []gitproc.KV{{Key: key, Value: "1"}},
+			Class: gitproc.ClassTransfer, Share: suiteShare, Deadline: gitproc.RemoteDeadline(0, 0),
+		})
+		if !errors.Is(err, gitproc.ErrConfig) {
+			t.Errorf("a call site bounding a remote's speed with %s: %v, want ErrConfig", key, err)
 		}
 	}
 }
@@ -623,11 +639,12 @@ func TestARemoteRunsLinesNameNoneOfItsSecrets(t *testing.T) {
 // A REMOTE RUN IS HELD TO ITS REMOTE before any process starts: a fetch, an
 // ls-remote and a push carry the Cmd.Remote ResolveRemote built — the zero
 // Remote is none — and nothing else carries one; it waits in the transfer
-// lane and carries no Stall, since libcurl watches its leg where the pool's
-// watchdog cannot; and git's remote, the first argument that is no option
-// (or the first after "--"), is the Remote's URL exactly, with no other
-// argument naming a URL or a remote helper — an option whose value stands
-// apart would be read as the remote, so each is written --name=value.
+// lane and carries no Stall, since the pool's watchdog cannot see its leg
+// move, and TCP's keepalive watches its peer; and git's remote, the first
+// argument that is no option (or the first after "--"), is the Remote's URL
+// exactly, with no other argument naming a URL or a remote helper — an option
+// whose value stands apart would be read as the remote, so each is written
+// --name=value.
 //
 // The git here is a stand-in that only counts its runs: a refusal this case
 // failed to see would otherwise be a real git dialing the public address its
@@ -831,5 +848,100 @@ func redirectOn(t *testing.T, git string) {
 	}
 	if n := second.Load(); n != 0 {
 		t.Errorf("the host the remote redirected to was asked %d times: a run dials its remote's host alone", n)
+	}
+}
+
+// A QUIET REMOTE IS WAITED ON. A remote run's connection is ended when its
+// peer stops answering — TCP's keepalive probes left unanswered a stall after
+// the last thing it heard — and never for what it sends: a git server counting
+// and compressing what a large fetch wants, or indexing and checking what a
+// push sent, may send nothing but a keepalive every five seconds, or nothing
+// at all, for minutes, and a run ended for that would be ended on every
+// attempt. A remote that answers a fetch's request and then sends NOTHING —
+// no progress, no keepalive, the quietest a working server is — for two and a
+// half times the stall, scaled to six seconds so the probes go out every
+// second after three seconds of quiet (and are answered), is waited on, and
+// the pack it then sends is fetched whole, on every git a git node may run.
+//
+// Mutation: hand libcurl back its low-speed check (http.lowSpeedLimit 1,
+// http.lowSpeedTime the stall), and the run is ended — curl 28, "Operation
+// too slow" — a few seconds past the stall, while the remote still holds it.
+func TestAQuietRemoteIsWaitedOn(t *testing.T) {
+	t.Parallel()
+	onNodeGits(t, quietRemoteOn)
+}
+
+// quietStall is the stall TestAQuietRemoteIsWaitedOn scales its pool to: six
+// seconds, whose half and the third of the rest — the keepalive's quiet before
+// its first probe, and its interval — are whole seconds, as git reads them.
+const quietStall = 6 * time.Second
+
+// quietRemoteOn is TestAQuietRemoteIsWaitedOn on the git at git.
+func quietRemoteOn(t *testing.T, git string) {
+	c := gittest.NewClient(t)
+	wt := c.Init(t)
+	tip := c.Commit(t, wt, map[string]string{"a": "a\n"}, "first")
+	served := gittest.Empty(t)
+	checksum := gittest.Pack(t, c, served, wt, tip)
+	pack, err := os.ReadFile(filepath.Join(served, "objects", "pack", "pack-"+checksum+".pack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := 5 * quietStall / 2
+	r, _ := tlsRemote(t, "/r.git", quietServer(tip, pack, hold))
+	p := poolOn(t, git, gitproc.Options{})
+	gitproc.SetRemoteStall(p, quietStall)
+
+	into := gittest.Empty(t)
+	began := time.Now()
+	res, err := fetchFrom(t, p, r, into)
+	took := time.Since(began)
+	if err != nil {
+		t.Fatalf("a fetch from a remote quiet for %v was ended after %v: %v\n%s", hold, took, err, res.Stderr)
+	}
+	if took < hold {
+		t.Fatalf("the fetch returned after %v, inside the remote's %v of quiet: it never waited", took, hold)
+	}
+	if got := strings.TrimSpace(c.Run(t, "", "--git-dir="+into, "rev-parse", "refs/heads/main")); got != tip {
+		t.Errorf("the fetch moved main to %s, want %s", got, tip)
+	}
+	c.Run(t, "", "--git-dir="+into, "fsck", "--strict", "--no-dangling")
+}
+
+// quietServer is a git server — smart HTTP at protocol version 0, its one
+// ref, main, naming tip and its objects pack — that works quietly before it
+// answers: a fetch's request is answered NAK at once, then nothing at all for
+// hold, then the pack over side band 1, as upload-pack answers once
+// pack-objects has counted and compressed with no progress asked for and no
+// keepalive configured.
+func quietServer(tip string, pack []byte, hold time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/r.git/info/refs":
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			_, _ = io.WriteString(w, pkt("# service=git-upload-pack\n")+"0000"+
+				pkt(tip+" refs/heads/main\x00side-band-64k ofs-delta no-progress\n")+"0000")
+		case req.Method == http.MethodPost && req.URL.Path == "/r.git/git-upload-pack":
+			_, _ = io.Copy(io.Discard, req.Body)
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
+			_, _ = io.WriteString(w, pkt("NAK\n"))
+			w.(http.Flusher).Flush()
+			select {
+			case <-req.Context().Done():
+				return
+			case <-time.After(hold):
+			}
+			// Side band 1, in packets of at most side-band-64k's 65 520
+			// bytes: the length, the band, the data.
+			for rest := pack; len(rest) > 0; {
+				n := min(len(rest), 65520-5)
+				_, _ = fmt.Fprintf(w, "%04x\x01", n+5)
+				_, _ = w.Write(rest[:n])
+				rest = rest[n:]
+			}
+			_, _ = io.WriteString(w, "0000")
+		default:
+			http.NotFound(w, req)
+		}
 	}
 }

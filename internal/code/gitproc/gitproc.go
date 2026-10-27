@@ -167,10 +167,19 @@
 //     [RemoteDeadline]. Its network leg is git-remote-https's, past the
 //     pool's pipes, where no stall watchdog of the pool's sees it move — a
 //     fetch or a push writes nothing on them without --progress until it
-//     ends — so it is held to libcurl's own, under a byte a second for
-//     [TransferStall] ending it (http.lowSpeedLimit, http.lowSpeedTime), and
-//     a Cmd.Stall beside a remote is refused rather than left to end a
-//     transfer that is moving.
+//     ends — so a Cmd.Stall beside a remote is refused rather than left to end
+//     a transfer that is moving, and the leg is held to TCP's word on its
+//     PEER instead: keepalive probes (http.keepAliveIdle,
+//     http.keepAliveInterval, http.keepAliveCount) end a connection whose
+//     peer stopped answering a minute ([TransferStall]) after the last thing
+//     it heard, and a peer that answers is waited on to RemoteDeadline
+//     whatever it sends, since no client tells a server working quietly from
+//     one that has wedged. NEVER libcurl's low-speed check
+//     (http.lowSpeedLimit): its least limit, a byte a second averaged over
+//     five seconds, is exactly what git's own keepalive moves — five bytes
+//     every five seconds — so a remote working quietly through a minute of
+//     counting or checking was ended though it answered (measured, at
+//     remoteKeepAliveProbes).
 //   - THE PROCESS'S PROXY AND AUTHORITIES, which the built environment would
 //     otherwise drop exactly as a hand-built HTTP transport drops a proxy
 //     (internal/httpx). The proxy the process names for the URL
@@ -581,10 +590,12 @@ type Pool struct {
 	memory      Memory
 	fixedMemory bool
 
-	// slotWait, killGrace and captureMax are SlotWait, KillGrace and
-	// CaptureMax; fields so the suite can scale them (export_test.go).
-	slotWait, killGrace time.Duration
-	captureMax          int
+	// slotWait, killGrace, remoteStall and captureMax are SlotWait,
+	// KillGrace, TransferStall (what a remote run's TCP keepalive is derived
+	// from: Remote.config) and CaptureMax; fields so the suite can scale them
+	// (export_test.go).
+	slotWait, killGrace, remoteStall time.Duration
+	captureMax                       int
 
 	// gaugeMu orders every change a gauge reports — the processes running
 	// in each class and the read lane's cores lent — so a later Set never
@@ -793,13 +804,14 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		// the shape just resolved — the cores over the slots, at most one
 		// (occupancyRate) — and recording each class's standing into the
 		// pool's recorder.
-		transfer:   newShareLane(transferSlots, newShareBook(time.Now, occupancyRate(cpuSlots, transferSlots), o.Metrics)),
-		slotWait:   SlotWait,
-		killGrace:  KillGrace,
-		captureMax: CaptureMax,
-		running:    make(map[Class]int64, len(Classes)),
-		log:        logger,
-		metrics:    o.Metrics,
+		transfer:    newShareLane(transferSlots, newShareBook(time.Now, occupancyRate(cpuSlots, transferSlots), o.Metrics)),
+		slotWait:    SlotWait,
+		killGrace:   KillGrace,
+		remoteStall: TransferStall,
+		captureMax:  CaptureMax,
+		running:     make(map[Class]int64, len(Classes)),
+		log:         logger,
+		metrics:     o.Metrics,
 	}
 	for _, c := range Classes {
 		p.running[c] = 0

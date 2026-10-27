@@ -36,6 +36,12 @@ func SetTimings(p *Pool, slotWait, killGrace time.Duration) {
 	p.slotWait, p.killGrace = slotWait, killGrace
 }
 
+// SetRemoteStall scales the stall p derives a remote run's TCP keepalive from
+// (TransferStall: quiet for half of it before the first probe, the rest
+// shared among the probes), in whole seconds, for a case that waits longer
+// than a stall (call before any Run).
+func SetRemoteStall(p *Pool, stall time.Duration) { p.remoteStall = stall }
+
 // ResolveMemory is what New sizes the lanes by under o, the node's own
 // memory read by read.
 func ResolveMemory(o Options, read func() (Memory, error)) (Memory, error) {

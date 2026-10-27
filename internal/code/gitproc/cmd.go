@@ -729,7 +729,7 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 	}
 	var remote []KV
 	if c.Remote != nil {
-		remote = c.Remote.config()
+		remote = c.Remote.config(p.remoteStall)
 	}
 
 	env := make([]string, 0, len(p.baseEnv)+3+2*(len(baseKeys)+len(remote)+len(c.Config))+len(c.Env)+len(identityVars))
