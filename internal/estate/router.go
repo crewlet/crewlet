@@ -284,8 +284,8 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 			if len(raw) == 0 {
 				return out, nil
 			}
-			if err := json.Unmarshal(raw, &out); err != nil {
-				return out, err
+			if decodeErr := json.Unmarshal(raw, &out); decodeErr != nil {
+				return out, decodeErr
 			}
 			// A PEER'S CAVEATS, rebuilt at this one boundary: no caveat
 			// decodes from JSON anywhere else (internal/caveat's peer.go).

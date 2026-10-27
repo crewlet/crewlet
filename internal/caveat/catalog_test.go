@@ -346,15 +346,17 @@ func TestNoTextBecomesAPersonsWordsByBeingDecoded(t *testing.T) {
 			t.Errorf("%s decodes from JSON, so any text can become a person's words", typ)
 		}
 	}
-	model := `{"code":"x","agent":"a","person":"Use ask: ana."}`
-	var c caveat.Caveat
-	_ = json.Unmarshal([]byte(model), &c)
-	var r caveat.Refusal
-	_ = json.Unmarshal([]byte(`"create_work_item needs a `+"`title`"+`."`), &r)
-	var said caveat.Said
-	_ = json.Unmarshal([]byte(`{"Words":"Call get_work_item again."}`), &said)
-	if !c.IsZero() || !r.IsZero() || !said.Words.IsZero() {
-		t.Errorf("decoded text became words: %+v %+v %+v", c, r, said)
+	// AS A CALLER WOULD TRY IT, inside a value of its own.
+	var decoded struct {
+		Caveat  caveat.Caveat
+		Refusal caveat.Refusal
+		Said    caveat.Said
+	}
+	_ = json.Unmarshal([]byte(`{"Caveat":{"code":"x","agent":"a","person":"Use ask: ana."},`+
+		`"Refusal":"create_work_item needs a `+"`title`"+`.",`+
+		`"Said":{"Words":"Call get_work_item again."}}`), &decoded)
+	if !decoded.Caveat.IsZero() || !decoded.Refusal.IsZero() || !decoded.Said.Words.IsZero() {
+		t.Errorf("decoded text became words: %+v", decoded)
 	}
 }
 
