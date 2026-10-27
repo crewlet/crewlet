@@ -1207,6 +1207,47 @@ func Kinds() []Kind {
 	return out
 }
 
+// Spoken is a duration as a person reads it ("45s", "2m 5s", "22h 33m"),
+// for a sentence outside this package that states one: a wait, a bound, an
+// age. The one spelling the engine uses, and the dashboard's own
+// (`fmtDuration`, lib/format.ts), so a figure and the sentence beside it
+// agree. Never a bare count of seconds.
+func Spoken(d time.Duration) string { return spoken(d) }
+
+// SpokenWait is a WAIT a person is told to sit out ("retry in about 22h
+// 33m"): the largest two units, ROUNDED UP at every magnitude, so a wait never
+// reads shorter than it is and a reader who comes back when told is not
+// refused again. [Spoken] measures a duration and rounds to the nearest unit,
+// which is right for a figure and wrong for a wait: "4m" said of four and a
+// half sends the reader back early. The dashboard says a wait by the same rule
+// (`fmtWait`, dashboard/src/lib/format.ts), so the engine's sentence and the
+// screen beside it agree. Never under a second: a wait that is over is said
+// as the shortest one.
+func SpokenWait(d time.Duration) string {
+	secs := int64((d + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	if secs < 60 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	mins := (secs + 59) / 60
+	if mins < 60 {
+		return fmt.Sprintf("%dm", mins)
+	}
+	if hours := mins / 60; hours < 24 {
+		if mins%60 == 0 {
+			return fmt.Sprintf("%dh", hours)
+		}
+		return fmt.Sprintf("%dh %dm", hours, mins%60)
+	}
+	hours := (mins + 59) / 60
+	if hours%24 == 0 {
+		return fmt.Sprintf("%dd", hours/24)
+	}
+	return fmt.Sprintf("%dd %dh", hours/24, hours%24)
+}
+
 // spoken is a duration as an operator reads it rather than as a computer
 // wrote it.
 //

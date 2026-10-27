@@ -44,7 +44,7 @@ import {
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import type { AssistantFileRef, AssistantTurnMode } from "~/contract/assistant.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtDateTime, fmtWait } from "~/lib/format.ts";
 import {
   ActionReceipt,
   CardBlock,
@@ -209,7 +209,7 @@ function Turn({
         >
           {turn.refusal.hint ??
             (turn.refusal.retryAfterSeconds !== null
-              ? `You can ask again in ${turn.refusal.retryAfterSeconds} seconds, and your question is back in the box below.`
+              ? `You can ask again ${fmtWait(turn.refusal.retryAfterSeconds)}, and your question is back in the box below.`
               : "Nothing changed.")}
         </Callout>
       ) : turn.steps.length > 0 ? (

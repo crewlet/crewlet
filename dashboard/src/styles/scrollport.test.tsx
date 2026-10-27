@@ -255,6 +255,9 @@ function grouped() {
             onOpen={() => {}}
             onOverflow={() => {}}
             overflowHref={() => "#/worklet"}
+            sort=""
+            defaultSort="-updated"
+            onSort={() => {}}
           />
         </Router>
       </ViewerProvider>

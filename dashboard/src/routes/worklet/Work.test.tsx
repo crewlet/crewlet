@@ -864,14 +864,15 @@ test("a view's own arrangement is what the display controls show", async () => {
     work_projects: oneProject,
   });
   mountWork();
-  // GROUP BY AND SORT ARE IN THE BAR, so the arrangement is readable without
-  // opening anything.
+  // GROUP BY IS IN THE BAR, so the arrangement is readable without opening
+  // anything; a list's order is drawn on its column heads, and its Sort is in
+  // Display with the orders no column carries.
   await waitFor(() =>
     expect(screen.getByRole("combobox", { name: "Group by" }).textContent).toContain("Assignee"),
   );
-  expect(screen.getByRole("combobox", { name: "Sort" }).textContent).toContain("Due soonest");
   await openDisplay();
   expect(screen.getByRole("combobox", { name: "Then by" }).textContent).toContain("Priority");
+  expect(screen.getByRole("combobox", { name: "Sort" }).textContent).toContain("Due soonest");
 });
 
 // AND TURNING ONE OFF IS A VALUE ON THE ADDRESS. `group_by=` is DELETED by the
@@ -905,8 +906,10 @@ test("turning off an arrangement nobody set leaves the address clean", async () 
     work_projects: oneProject,
   });
   mountWork();
-  // THE DEFAULT NAMES WHICH ORDER IT IS — across the company, the most
-  // recently touched — rather than "Default", which names none.
+  // THE DEFAULT NAMES WHICH ORDER IT IS (across the company, the most
+  // recently touched) rather than "Default", which names none. A list's Sort
+  // is in Display.
+  await openDisplay();
   const sort = await screen.findByRole("combobox", { name: "Sort" });
   fireEvent.click(sort);
   const option = await screen.findByRole("option", { name: "Recently updated (default)" });
@@ -1255,6 +1258,37 @@ test("the trash opened by its address asks for removed work in every state", asy
   expect(asked(query).status_group).toBeUndefined();
 });
 
+// THE TRASH'S HEADS DRAW THE ORDER ITS ROWS ARE IN: the engine orders a
+// removed listing by removal, newest first, when nothing names an order, and
+// the trash names none. Read from the company's default instead, Updated read
+// "descending" over rows in removal order, and two presses on it silently
+// handed the rows back to removal order.
+test("the trash draws its removal order on the Removed head", async () => {
+  location.hash = "#/worklet?removed=true&shape=table";
+  const query = serving({
+    work_views: strip("table"),
+    work_items: {
+      items: [row("1", { removed: true } as Partial<WorkSummary>)],
+      groups: [],
+      complete: true,
+    },
+    work_activity: { records: [], complete: true },
+  });
+  mountWork();
+  await waitFor(() => expect(asked(query).removed).toBe("true"));
+  // NO ORDER IS SENT: the engine's own removal order applies.
+  expect(asked(query).sort).toBeUndefined();
+  const head = (name: string) =>
+    screen.getAllByRole("columnheader").find((h) => h.textContent?.startsWith(name));
+  await waitFor(() => expect(head("Removed")?.getAttribute("aria-sort")).toBe("descending"));
+  expect(head("Updated")?.getAttribute("aria-sort")).toBeNull();
+  // AND THE PICKER NAMES THE SAME DEFAULT.
+  await openDisplay();
+  expect(screen.getByRole("combobox", { name: "Sort" }).textContent).toContain(
+    "Recently removed (default)",
+  );
+});
+
 // AND THE ORDINARY TABLE IS AN ORDINARY BOARD QUESTION. Same tab strip, same
 // screen, and none of the trash's parameters — so a reader on Table is not
 // quietly looking at deleted work.
@@ -1455,7 +1489,8 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   expect(bar.querySelector(".work-bar-run")?.firstElementChild).toBe(filters);
   expect(within(bar).getByRole("combobox", { name: "Which work" }).textContent).toContain("Open");
   expect(within(bar).getByRole("combobox", { name: "Group by" })).toBeTruthy();
-  expect(within(bar).getByRole("combobox", { name: "Sort" })).toBeTruthy();
+  // A LIST SORTS AT ITS COLUMN HEADS, so the bar draws no Sort for it.
+  expect(within(bar).queryByRole("combobox", { name: "Sort" })).toBeNull();
   // AND NO PICKER PER FIELD. A control per field is what the Filter menu
   // replaces, and one left behind would be a second way to set the same key.
   expect(within(bar).queryByLabelText("Status")).toBeNull();
@@ -1535,7 +1570,7 @@ test("an unfiltered list draws no chips, and a filtered one says the whole narro
   serving({ work_items: { items: [], groups: [], complete: true } });
   const bare = mountWork();
   await waitFor(() => expect(bare.container.querySelector(".work-bar")).toBeTruthy());
-  expect(bare.container.querySelector(".work-chip-field")).toBeNull();
+  expect(bare.container.querySelector(".crewlet-filter-pill__field")).toBeNull();
   cleanup();
 
   location.hash = "#/worklet?assignee=ada&blocked=true";

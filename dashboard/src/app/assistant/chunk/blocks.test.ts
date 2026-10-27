@@ -124,6 +124,35 @@ describe("the run chip says the turn's state in words", () => {
     expect(runChipOf(done, at)).toEqual({ state: "done", title: "Done in 5s", meta: "2 steps" });
   });
 
+  // A LIVE CHIP COUNTS WHOLE SECONDS ([fmtElapsed]): a tenth of a second
+  // churned on every tick and read as a glitch; a finished run is measured
+  // ([fmtDuration]) in minutes past one, never as a count of seconds.
+  test("a live chip ticks in whole seconds, and a long run is said in minutes", () => {
+    const working = {
+      ...base,
+      phase: "thinking" as const,
+      steps: [
+        {
+          step_id: "s1",
+          index: 1,
+          tool: "get_task",
+          label: "Read ENG-1",
+          state: "done" as const,
+          started_at: "2026-10-24T09:41:00Z",
+        },
+      ],
+    };
+    // 450ms in: "0s", never "0.5s" ticking through tenths.
+    expect(runChipOf(working, at - 2550).meta).toBe("0s");
+    expect(runChipOf(working, at + 1450).meta).toBe("4s");
+    const long = {
+      ...base,
+      phase: "completed" as const,
+      done: { state: "completed" as const, duration_ms: 845_000, steps: 3 },
+    };
+    expect(runChipOf(long, at).title).toBe("Done in 14m 5s");
+  });
+
   test("done, with no step count when it took no step", () => {
     const done = {
       ...base,

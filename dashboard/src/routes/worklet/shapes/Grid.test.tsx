@@ -151,6 +151,9 @@ function mount(
         onOverflow={() => {}}
         overflowHref={() => "#/worklet"}
         removals={removals}
+        sort=""
+        defaultSort="rank"
+        onSort={() => {}}
       />
     </Router>,
   );
@@ -300,6 +303,101 @@ test("a plain click on a row peeks and a modified click follows the link", () =>
     anchor.dispatchEvent(meta);
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(meta.defaultPrevented).toBe(false);
+    cleanup();
+  }
+});
+
+// THE HEADS ORDER THE ROWS, from the order in force: the view's default is
+// drawn on its own head, a press writes the reader's choice, and a step back to
+// the default is no key at all. A column the engine cannot order by is not a
+// button.
+test("the heads sort from the order in force, and only where the engine can order", () => {
+  for (const shape of ["list", "table"] as const) {
+    const onSort = vi.fn();
+    const props = { sort: "", defaultSort: "-updated", onSort };
+    const draw = (sort: string) => (
+      <Router>
+        <WorkGrid
+          shape={shape}
+          rows={[row({})]}
+          groups={[]}
+          axis=""
+          chrome={chrome}
+          now={NOW}
+          workspace
+          hrefOf={(r) => `#/worklet/${r.key}`}
+          onOpen={() => {}}
+          onOverflow={() => {}}
+          overflowHref={() => "#/worklet"}
+          {...props}
+          sort={sort}
+        />
+      </Router>
+    );
+    const { rerender } = render(draw(""));
+    const head = (name: string) =>
+      screen.getAllByRole("columnheader").find((h) => h.textContent?.startsWith(name));
+    expect(head("Updated")?.getAttribute("aria-sort")).toBe("descending");
+    // THE DEFAULT'S OWN HEAD TURNS ASCENDING rather than "back to the default".
+    screen.getByRole("button", { name: "Updated" }).click();
+    expect(onSort).toHaveBeenLastCalledWith("updated");
+    screen.getByRole("button", { name: "Title" }).click();
+    expect(onSort).toHaveBeenLastCalledWith("title");
+    rerender(draw("-title"));
+    expect(head("Title")?.getAttribute("aria-sort")).toBe("descending");
+    screen.getByRole("button", { name: "Title" }).click();
+    expect(onSort).toHaveBeenLastCalledWith("");
+    // NO ORDER OVER A KEY OR A STATUS WORD: those heads are not buttons.
+    expect(screen.queryByRole("button", { name: "Key" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
+    cleanup();
+  }
+});
+
+// EACH COLUMN HAS ONE EDGE, shared by its head and its values: marks are
+// centred in their own track, times and dates end on the right, words start
+// on the left. The owner saw Updated ragged, Due off its head and the marks
+// scattered between them.
+test("every column's head and values share one edge, in both sets", () => {
+  const edge = (el: Element) =>
+    ["right", "center"].find((a) => el.className.includes(`--${a}`)) ?? "left";
+  const expected: Record<"list" | "table", Record<string, string>> = {
+    list: {
+      Priority: "center",
+      Key: "left",
+      Status: "left",
+      Title: "left",
+      Due: "right",
+      Type: "center",
+      Assignee: "center",
+      Updated: "right",
+    },
+    table: {
+      Key: "left",
+      Type: "center",
+      Title: "left",
+      Status: "left",
+      Due: "right",
+      Updated: "right",
+    },
+  };
+  for (const shape of ["list", "table"] as const) {
+    const { container } = mount(shape, [row({ due: "2031-04-20" })]);
+    const heads = screen.getAllByRole("columnheader");
+    let checked = 0;
+    const cells = [
+      ...container.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell"),
+    ];
+    heads.forEach((head, i) => {
+      const name = head.getAttribute("title") || head.textContent?.trim() || "";
+      const want = expected[shape][name];
+      if (want === undefined) return;
+      checked += 1;
+      expect(`${shape} ${name} head ${edge(head)}`).toBe(`${shape} ${name} head ${want}`);
+      expect(`${shape} ${name} cell ${edge(cells[i]!)}`).toBe(`${shape} ${name} cell ${want}`);
+    });
+    // EVERY NAMED COLUMN WAS FOUND, so a renamed head cannot pass by omission.
+    expect(checked).toBe(Object.keys(expected[shape]).length);
     cleanup();
   }
 });

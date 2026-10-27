@@ -1231,6 +1231,7 @@ export function SurfaceDeliveries({ surface, name }: { surface: string; name: st
             columns={[
               {
                 key: "at",
+                align: "right",
                 header: "Arrived",
                 shrink: true,
                 sortValue: (e) => tsKey(e.timestamp),
@@ -1621,6 +1622,7 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
   const columns: DataGridColumn<SetupRun>[] = [
     {
       key: "ran",
+      align: "right",
       header: "Ran",
       shrink: true,
       sortValue: (run) => tsKey(run.started_at),

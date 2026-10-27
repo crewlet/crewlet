@@ -205,6 +205,7 @@ export function DomainScreen({ name }: { name: string }) {
                     },
                     {
                       key: "position",
+                      align: "right",
                       header: "Position",
                       shrink: true,
                       sortValue: (p) => p.seq,
@@ -224,6 +225,7 @@ export function DomainScreen({ name }: { name: string }) {
                     },
                     {
                       key: "generation",
+                      align: "right",
                       header: "Generation",
                       shrink: true,
                       sortValue: (p) => p.generation,
@@ -240,6 +242,7 @@ export function DomainScreen({ name }: { name: string }) {
                     },
                     {
                       key: "behind",
+                      align: "right",
                       header: "Behind",
                       shrink: true,
                       sortValue: (p) => p.lag ?? 0,

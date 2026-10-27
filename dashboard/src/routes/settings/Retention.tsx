@@ -454,6 +454,7 @@ export function RetentionPanels({
             },
             {
               key: "reported",
+              align: "right",
               header: "Reported",
               shrink: true,
               drop: 1,
@@ -567,6 +568,7 @@ export function SnapshotsCard({
             },
             {
               key: "at",
+              align: "right",
               header: "Taken",
               sortValue: (s) => s.at ?? "",
               cell: (s) =>

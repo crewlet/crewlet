@@ -836,12 +836,14 @@ function Sessions({
           columns={[
             {
               key: "started",
+              align: "right",
               header: "Signed in",
               sortValue: (s) => s.created_at ?? "",
               cell: (s) => <TableDateCell value={s.created_at} now={now} />,
             },
             {
               key: "ends",
+              align: "right",
               header: "Ends",
               shrink: true,
               sortValue: (s) => s.expires_at ?? "",
@@ -959,6 +961,7 @@ function Tokens({
             },
             {
               key: "created",
+              align: "right",
               header: "Created",
               shrink: true,
               sortValue: (c) => c.created_at ?? "",

@@ -222,13 +222,13 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
     {
       key: "priority",
       // A GLYPH HEAD AND THEREFORE NOT SORTABLE. The mark is the whole column
-      // — twenty pixels of it — so there is no word for a sort button to be
+      // (twenty pixels of it), so there is no word for a sort button to be
       // named by, and a blank clickable head is an affordance nobody can see.
-      // The order is one press away in Display's own "Order by", which writes
-      // the same `sort=priority` the table's head would.
+      // The order is one press away in Display's Sort, which writes the same
+      // `sort=priority` the table's head would.
       header: "",
       label: "Priority",
-      shrink: true,
+      icon: true,
       // A WRITER'S PICKER, drawn as the same mark — see `shapes/cells.tsx`.
       cell: (row) => <PriorityCell row={row} />,
     },
@@ -284,6 +284,8 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
     sorted("due", {
       header: "Due",
       shrink: true,
+      // A DATE, so the column's head and its values share the right edge.
+      align: "right",
       sortValue: (row) => row.due ?? "",
       cell: (row) =>
         row.due ? (
@@ -299,14 +301,15 @@ function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
       key: "type",
       header: "",
       label: "Type",
-      shrink: true,
+      // ONE MARK PER ROW: a fixed, centred track, named by its label.
+      icon: true,
       cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
     },
     {
       key: "assignee",
       header: "",
       label: "Assignee",
-      shrink: true,
+      icon: true,
       // THE AVATAR ALONE, which is what the compact row draws: a name beside
       // it is a second column's worth of width on a row whose point is that
       // the title has the space. The table prints the name, because there the
@@ -357,7 +360,8 @@ function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
       key: "type",
       header: "",
       label: "Type",
-      shrink: true,
+      // ONE MARK PER ROW: a fixed, centred track, named by its label.
+      icon: true,
       cell: (row) => <TypeIcon type={row.type} types={chrome.types} />,
     },
     sorted("title", {
@@ -417,6 +421,8 @@ function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
     sorted("due", {
       header: "Due",
       shrink: true,
+      // A DATE, so the column's head and its values share the right edge.
+      align: "right",
       sortValue: (row) => row.due ?? "",
       // THE LIST'S OWN MARK, not a second rendering of a due date: the
       // overdue tint is `DueMark`'s and two spellings of it is two rules
@@ -466,6 +472,7 @@ function startColumn(now: number): DataGridColumn<WorkSummary> {
   return sorted("start", {
     header: "Start",
     shrink: true,
+    align: "right",
     optional: true,
     sortValue: (row) => row.start ?? "",
     cell: (row) =>
@@ -512,6 +519,8 @@ function updatedColumn(now: number): DataGridColumn<WorkSummary> {
   return sorted("updated", {
     header: "Updated",
     shrink: true,
+    // A TIME: right-aligned, so "53s ago" and "12h ago" end on one edge.
+    align: "right",
     // THE FIRST TO GIVE WAY ON A PHONE as it is at 1280 ([LIST_GIVES_WAY]):
     // what the task's page answers one click away, and on the compact row it
     // wrapped onto a third line of its own.
@@ -642,9 +651,23 @@ export function WorkGrid({
   foot,
   seats,
   more,
+  sort,
+  defaultSort,
+  onSort,
 }: {
   /** Which column set, and which `cols=` key. */
   shape: GridShape;
+  /**
+   * THE READER'S ORDER, as the screen resolved it: the address's `sort=`, with
+   * an explicit "default order" spelled as the container's own. The screen
+   * resolves it because a saved view's order sits behind the address, which
+   * the grid cannot see.
+   */
+  sort: string;
+  /** The order with nothing chosen: the running view's own, else the container's. */
+  defaultSort: string;
+  /** A head pressed; `''` is the default, which the screen writes as no key. */
+  onSort: (sort: string) => void;
   rows: WorkSummary[];
   groups: WorkGroup[];
   axis: string;
@@ -770,6 +793,9 @@ export function WorkGrid({
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.
       serverSorted
+      sort={sort}
+      defaultSort={defaultSort}
+      onSortChange={onSort}
       // AND THE COLUMN SET IS THE SHAPE'S, which is the one key the two shapes
       // may not share — see the header.
       colsName={shape}
@@ -854,6 +880,7 @@ function trashColumns(
     sorted("removed", {
       header: "Removed",
       shrink: true,
+      align: "right",
       // THE ENGINE'S OWN SORT KEY, which is what makes this head honest: the
       // trash already arrives newest-removal-first by default, and clicking
       // this asks for the other end of it over the whole set rather than

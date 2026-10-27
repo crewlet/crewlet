@@ -76,7 +76,7 @@ import { narrowCard } from "~/protocol/assistantWire.ts";
 import { exportFile } from "~/protocol/assistant.ts";
 import { statusLabel } from "~/lib/work.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
-import { fmtCount, fmtDateTime, fmtDuration, fmtExact, fmtTime } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, fmtExact, fmtTime } from "~/lib/format.ts";
 import { youNeedWords } from "~/lib/access.ts";
 import { crumbsFor } from "../../crumbs.ts";
 import { href as hrefOf } from "../../router.tsx";
@@ -212,11 +212,6 @@ const ACCESS_CODES: ReadonlySet<string> = new Set([
   "assistant_not_permitted",
 ]);
 
-/** A number of seconds, as the run chip says it. */
-function seconds(ms: number): string {
-  return ms < 10_000 ? `${(ms / 1000).toFixed(ms < 1000 ? 1 : 0)}s` : `${Math.round(ms / 1000)}s`;
-}
-
 const steps = (n: number) => `${n} ${n === 1 ? "step" : "steps"}`;
 
 /** A run's step count as the chip's meta: none for a turn that took no step. */
@@ -232,7 +227,7 @@ export function runChipOf(
   const state = RUN_STATE[turn.phase];
   // THE ASSISTANT SWITCHED TO DEEP WORK: the chip says so while the run works.
   if (BUSY.has(turn.phase) && deepRunsOf(turn).some((run) => DEEP_ACTIVE.has(run.deep.state))) {
-    return { state: RUN_STATE.working, title: "Deep work", meta: seconds(elapsed) };
+    return { state: RUN_STATE.working, title: "Deep work", meta: fmtElapsed(elapsed) };
   }
   switch (turn.phase) {
     case "sending":
@@ -240,11 +235,11 @@ export function runChipOf(
       // A LATER ROUND IS WORK: once a step has run, the model thinking
       // again is the turn still working, not a turn that has not started.
       if (turn.steps.length > 0) {
-        return { state: RUN_STATE.working, title: "Working", meta: seconds(elapsed) };
+        return { state: RUN_STATE.working, title: "Working", meta: fmtElapsed(elapsed) };
       }
       return { state, title: "Thinking" };
     case "working":
-      return { state, title: "Working", meta: seconds(elapsed) };
+      return { state, title: "Working", meta: fmtElapsed(elapsed) };
     case "applying":
       return { state, title: "Applying", meta: stepMeta(taken) };
     case "awaiting_approval":
@@ -254,7 +249,7 @@ export function runChipOf(
       // since it was asked is not how long it ran, so it says Done alone.
       return {
         state,
-        title: turn.done ? `Done in ${seconds(turn.done.duration_ms)}` : "Done",
+        title: turn.done ? `Done in ${fmtDuration(turn.done.duration_ms)}` : "Done",
         meta: stepMeta(taken),
       };
     case "stopped":
@@ -262,7 +257,7 @@ export function runChipOf(
       const done = turn.steps.filter((s) => s.state === "done").length;
       return {
         state,
-        title: `Stopped after ${seconds(elapsed)}`,
+        title: `Stopped after ${fmtDuration(elapsed)}`,
         meta: taken > 0 ? `${done} of ${steps(taken)}` : undefined,
       };
     }
@@ -323,7 +318,7 @@ export const STEP_DURATION_FLOOR_MS = 100;
 
 /** A step's time as its line says it, or nothing for one under the floor or not yet ended. */
 export function stepDuration(ms: number | undefined): string | undefined {
-  return ms === undefined || ms < STEP_DURATION_FLOOR_MS ? undefined : seconds(ms);
+  return ms === undefined || ms < STEP_DURATION_FLOOR_MS ? undefined : fmtDuration(ms);
 }
 
 /** The deep run states in which the run is still at work. */

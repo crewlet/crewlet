@@ -362,7 +362,7 @@ describe("signing in with a password", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const alert = await refusal();
-    expect(alert).toContain("Try again in 16 seconds.");
+    expect(alert).toContain("Try again in 16s.");
     // THE WAIT IS COUNTED DOWN ON THE BUTTON, where the person is looking.
     expect(
       (screen.getByRole("button", { name: "Try again in 16s" }) as HTMLButtonElement).disabled,

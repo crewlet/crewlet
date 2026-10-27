@@ -10,6 +10,14 @@
  * first, the grid's COLUMNS, and the board LANES somebody put away — plus the
  * way back to a saved view's own shape.
  *
+ * # A grid's Sort is here
+ *
+ * A list and a table are ordered at their column heads, so the bar draws no
+ * Sort for them. The orders no column carries (the manual order a drag
+ * changes, the newest, the most tokens) and the way back to the default stay
+ * here, in the same picker the bar draws for a board, so nothing the picker
+ * offered became unreachable when it left the bar.
+ *
  * # Columns are offered on both grid shapes
  *
  * The list and the table are ONE grid drawn in two column sets, so both have
@@ -30,6 +38,7 @@ import { Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { secondAxisOptions, type Shape } from "~/lib/work.ts";
 import { ChooserList, ColumnChooser } from "@crewlethq/ui";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
+import { OrderSelect } from "./WorkBar.tsx";
 import { CARD_FACTS, type CardFact } from "~/components/work.tsx";
 
 export interface DisplayMenuProps {
@@ -42,6 +51,8 @@ export interface DisplayMenuProps {
   /** The company's list rather than one project's, which decides whether the
    *  grid has a Project column to offer. */
   workspace: boolean;
+  /** A trash listing, whose default order is the removal order. */
+  trash?: boolean;
   /**
    * The running SAVED view's own shape, or nothing where no saved view runs.
    * A builtin's shape is not "this view's own" to go back to: offered over a
@@ -55,6 +66,13 @@ export interface DisplayMenuProps {
   groupBy: string;
   /** The effective second axis. `""` out of its callback means OFF. */
   groupBy2: string;
+  /**
+   * THE EFFECTIVE ORDER, never the URL key, offered as Sort on a list or a
+   * table, whose column heads order the rows. `""` out of its callback is the
+   * shape's default.
+   */
+  sort: string;
+  onSort: (sort: string) => void;
   /**
    * The ACTIVE SET's chosen columns, as `cols.<shape>=` holds them.
    *
@@ -107,9 +125,12 @@ function DisplayPanel({
   arrange,
   shape,
   workspace,
+  trash = false,
   viewShape,
   groupBy,
   groupBy2,
+  sort,
+  onSort,
   cols,
   hidden,
   onShape,
@@ -126,11 +147,23 @@ function DisplayPanel({
   const columns = isGridShape(shape) ? columnChoices(shape, workspace) : [];
   const board = shape === "board";
   const lanes = board ? hidden : [];
-  const empty = !arrange && !(nested && groupBy !== "") && columns.length === 0 && !board;
+  const empty = !arrange && !nested && !board;
 
   return (
     <div className="work-menu work-display">
       {arrange && <div className="work-display-arrange">{arrange}</div>}
+      {nested && (
+        <label className="work-display-row">
+          <span>Sort</span>
+          <OrderSelect
+            shape={shape}
+            workspace={workspace}
+            trash={trash}
+            sort={sort}
+            onSort={onSort}
+          />
+        </label>
+      )}
       {nested && groupBy !== "" && (
         <label className="work-display-row">
           <span>Then by</span>

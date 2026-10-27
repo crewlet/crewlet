@@ -55,7 +55,14 @@ test("a refusal whose detail opens with an address keeps the address as written"
 
 test("a throttled attempt says how long, from its Retry-After", () => {
   const err = new RestError(429, { error: "throttled", message: "Too many failed attempts." }, 1);
-  expect(refusalText(err)).toBe("Too many failed attempts. Try again in 1 second.");
+  expect(refusalText(err)).toBe("Too many failed attempts. Try again in 1s.");
+  // A LONG WAIT IS A TIME TO PLAN BY, never a count of seconds to divide.
+  const long = new RestError(
+    429,
+    { error: "throttled", message: "Too many failed attempts." },
+    81155,
+  );
+  expect(refusalText(long)).toBe("Too many failed attempts. Try again in 22h 33m.");
 });
 
 // NOBODY ANSWERED, so nothing here may say anything was refused.

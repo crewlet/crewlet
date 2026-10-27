@@ -21,12 +21,20 @@
  * # The second row is HOW the answer is cut — and it is the only other row
  *
  * The chips (what narrows it) ending in "+ Filter", and at the far end the
- * three choices a reader makes constantly: which work is shown, the grouping
- * and the order. Group by and Sort were inside Display; lifted into the bar
- * they say what is on without anything being opened, which is the one thing a
- * menu button cannot. The lanes out of a board's view are named at the same
- * end (see `shapes/Board.tsx`), so the board's lanes start directly under this
- * row, as the approved board draws them.
+ * choices a reader makes constantly: which work is shown, the grouping and,
+ * on a board or a timeline, the order. Group by and Sort were inside Display;
+ * lifted into the bar they say what is on without anything being opened,
+ * which is the one thing a menu button cannot.
+ *
+ * A LIST AND A TABLE ARE ORDERED AT THEIR COLUMN HEADS, so the bar draws no
+ * Sort for them: the head that orders the rows shows the order where the
+ * values are, and a press on it writes the same `sort=` the picker did. The
+ * orders no column carries (the manual order, the newest, the most tokens)
+ * stay one press away in Display's Sort.
+ *
+ * The lanes out of a board's view are named at the same end (see
+ * `shapes/Board.tsx`), so the board's lanes start directly under this row, as
+ * the approved board draws them.
  *
  * NOTHING ELSE SITS BETWEEN THE BAR AND THE WORK. There was an introduction
  * above the tabs and a hint line above the lanes; each cost the board a row on
@@ -49,7 +57,18 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { href } from "~/app/router.tsx";
-import { SORTS, groupAxisOptions, type Scope, type Shape } from "~/lib/work.ts";
+import {
+  MANUAL_ORDER,
+  RECENT_ORDER,
+  SORTS,
+  TIMELINE_ORDER,
+  TRASH_ORDER,
+  defaultOrderOf,
+  groupAxisOptions,
+  type Scope,
+  type Shape,
+} from "~/lib/work.ts";
+import { isGridShape } from "../shapes/Grid.tsx";
 import type { WorkView } from "~/protocol/index.ts";
 
 /** The five shapes, in the order the approved board draws them. */
@@ -207,7 +226,45 @@ export function SubstringBox({
 }
 
 /**
- * Group by and Sort, in the bar.
+ * The order picker: the shape's default, named, then every order the engine
+ * takes. ONE CONTROL in two places, the bar's end on a board or a timeline and
+ * Display's Sort on a list or a table, so the two can never offer different
+ * orders or name the default differently.
+ */
+export function OrderSelect({
+  shape,
+  workspace,
+  trash = false,
+  sort,
+  onSort,
+}: {
+  shape: Shape;
+  workspace: boolean;
+  /** A trash listing, whose default is the removal order. */
+  trash?: boolean;
+  /** The effective order, never the URL key. */
+  sort: string;
+  onSort: (sort: string) => void;
+}) {
+  return (
+    <Select
+      size="sm"
+      width="auto"
+      value={sort}
+      onChange={(value) => onSort(String(value))}
+      ariaLabel="Sort"
+      active={sort !== ""}
+      // THE DEFAULT SAYS WHAT IT IS, because it is a different order per
+      // container and shape (the engine's manual order inside a project, the
+      // most recently touched across the company, the start date on a
+      // timeline), and "Default" alone names none of them.
+      options={[{ value: "", label: defaultOrderLabel(shape, workspace, trash) }, ...SORTS]}
+    />
+  );
+}
+
+/**
+ * Group by and, where no column head orders the rows, Sort, in the bar.
  *
  * THE EFFECTIVE ARRANGEMENT, never the URL key — a saved view carries its own
  * `group_by` and `sort` and the address overrides them — so the pickers show
@@ -217,6 +274,7 @@ export function SubstringBox({
 export function ArrangeControls({
   shape,
   workspace,
+  trash = false,
   groupBy,
   sort,
   onGroupBy,
@@ -225,6 +283,8 @@ export function ArrangeControls({
 }: {
   shape: Shape;
   workspace: boolean;
+  /** A trash listing, whose default order is the removal order. */
+  trash?: boolean;
   groupBy: string;
   sort: string;
   /** Whether the order on screen is the manual one a drag changes. */
@@ -251,25 +311,22 @@ export function ArrangeControls({
           options={groupAxisOptions(shape, workspace)}
         />
       </label>
-      <label
-        className={cx("work-arrange-row")}
-        title={shape === "board" && !manual ? MANUAL_ORDER_HINT : undefined}
-      >
-        <span className="t-caption">Sort</span>
-        <Select
-          size="sm"
-          width="auto"
-          value={sort}
-          onChange={(value) => onSort(String(value))}
-          ariaLabel="Sort"
-          active={sort !== ""}
-          // THE DEFAULT SAYS WHAT IT IS, because it is a different order per
-          // container and shape — the engine's manual order inside a project,
-          // the most recently touched across the company, the start date on a
-          // timeline — and "Default" alone names none of them.
-          options={[{ value: "", label: defaultOrderLabel(shape, workspace) }, ...SORTS]}
-        />
-      </label>
+      {/* A LIST AND A TABLE SORT AT THEIR HEADS: see the module doc. */}
+      {!isGridShape(shape) && (
+        <label
+          className={cx("work-arrange-row")}
+          title={shape === "board" && !manual ? MANUAL_ORDER_HINT : undefined}
+        >
+          <span className="t-caption">Sort</span>
+          <OrderSelect
+            shape={shape}
+            workspace={workspace}
+            trash={trash}
+            sort={sort}
+            onSort={onSort}
+          />
+        </label>
+      )}
     </span>
   );
 }
@@ -325,8 +382,15 @@ export const SCOPE_OPTIONS: { value: Scope; label: string; description: string }
  */
 export const MANUAL_ORDER_HINT = "Choose this to drag cards.";
 
-/** What the order is when nobody chose one, in the words the options use. */
-export function defaultOrderLabel(shape: Shape, workspace: boolean): string {
-  if (shape === "timeline") return "Start date (default)";
-  return workspace ? "Recently updated (default)" : "Manual (default)";
+/** Each default order, in the words the options use. */
+const DEFAULT_ORDER_WORDS: Readonly<Record<string, string>> = {
+  [TIMELINE_ORDER]: "Start date (default)",
+  [TRASH_ORDER]: "Recently removed (default)",
+  [RECENT_ORDER]: "Recently updated (default)",
+  [MANUAL_ORDER]: "Manual (default)",
+};
+
+/** What the order is when nobody chose one ([defaultOrderOf]), in the words the options use. */
+export function defaultOrderLabel(shape: Shape, workspace: boolean, trash = false): string {
+  return DEFAULT_ORDER_WORDS[defaultOrderOf(shape, workspace, trash)] ?? "Default";
 }

@@ -303,6 +303,7 @@ export function Turns({
             columns={[
               {
                 key: "started",
+                align: "right",
                 header: "Started",
                 shrink: true,
                 sortValue: (t) => tsKey(t.started_at),
@@ -328,6 +329,7 @@ export function Turns({
               },
               {
                 key: "iterations",
+                align: "right",
                 // SELF-ITERATE ROUNDS, and the word says so: a phase's TOOL
                 // rounds are on its own card, under their own word.
                 header: <span title="Self-iterate rounds">Iterations</span>,
@@ -343,6 +345,7 @@ export function Turns({
               },
               {
                 key: "tokens",
+                align: "right",
                 header: "Tokens",
                 shrink: true,
                 sortValue: (t) => (t.complete ? t.total_tokens : null),

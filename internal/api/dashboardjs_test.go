@@ -1265,8 +1265,15 @@ const (
 	// baseline. Telling a change nobody could confirm in the dashboard's
 	// own words, rather than the operation key's retry rule for a client
 	// (ADR-0060), took it to 4577.4 KiB. 4578 KiB, which still refuses a
+	// doubled baseline. Sortable column heads with a default order, aligned
+	// columns, the filter pill in place of a tag of three spans, waits said
+	// as times and a link-only row opened by Enter, on uilet 0.70.0
+	// (FilterPill, the grid's align and icon columns, the value trigger),
+	// took it to 4581.4 KiB. 4582 KiB, which still refuses a doubled
+	// baseline. uilet 0.71.0's toast that stays up for as long as its words
+	// take to read took it to 4582.1 KiB. 4583 KiB, which still refuses a
 	// doubled baseline.
-	treeBudget = 4<<20 + 482<<10
+	treeBudget = 4<<20 + 487<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

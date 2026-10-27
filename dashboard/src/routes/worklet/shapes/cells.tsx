@@ -185,6 +185,10 @@ function CellPicker({
     <span className="cell-edit">
       <Menu
         label={label}
+        // THE TRIGGER IS THE VALUE: it starts on its column's line and reads
+        // in the surrounding size and ink, like a reader's plain value, in a
+        // grid cell and a properties rail alike (the kit's `valueTrigger`).
+        valueTrigger
         // THE TRIGGER IS NAMED BY ITS FIELD AND ITS ROW, not by the value alone:
         // a hundred buttons each announced "To do" are a hundred identical
         // controls to a screen reader listing the page's buttons.
