@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/jsonform`
-- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`, `internal/tools/argval.TestEachReadIsItsHelpers`, `internal/tools.TestEachLossyValueIsAMisreadAtItsPath`, `internal/tools.TestEachLosslessValueIsNoFinding`, `internal/tools.TestOutsideAndUnknownAreNamedAndLeftToTheTool`, `internal/tools.TestAMisreadIsRefusedBeforeTheToolRuns`, `internal/tools.TestTheToolsAnswerCarriesEveryFinding`, `internal/agent/builtin.TestEveryBuiltinSchemaIsOneTheCheckKeeps`, `internal/agent/builtin.TestNoArgumentIsReadAsTextAgainstItsType`, `internal/agent/structured.TestEveryFaultOfASubmissionIsNamedAtOnce`, `internal/worklet.TestEveryFaultOfADecisionIsNamedAtOnce`, `internal/assistant/catalog.TestEveryAssistantToolNamesEveryFaultAtOnce`, `internal/assistant/wire.TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`, `internal/tools.TestEveryToolIsCalledThroughInvoke`, `internal/api/operator.TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns`, `internal/agent/builtin.TestASetIsNeverReadAsNoList`, `internal/agent/builtin.TestIncludeIsNeverReadAsNoList`, `internal/agent/builtin.TestNoArgumentIsReadByARuleOfItsOwn`, `internal/tools.TestANoteNeverTouchesTheToolsOutput`, `internal/api/operator.TestAnArgumentsNoteRidesBesideTheReceipt`, `internal/api/workapi.TestANoteRidesBesideAWorkReceipt`, `internal/tools/argval.TestAWholeNumberIsReadWithinItsRange`, `internal/tools.TestAClosedSetIsReadByOneRule`, `internal/tools.TestEveryCounterRecordsTheCataloguesLabels`, `internal/tools.TestAFindingIsANamedValue`
+- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`, `internal/tools/argval.TestEachReadIsItsHelpers`, `internal/tools.TestEachLossyValueIsAMisreadAtItsPath`, `internal/tools.TestEachLosslessValueIsNoFinding`, `internal/tools.TestOutsideAndUnknownAreNamedAndLeftToTheTool`, `internal/tools.TestAMisreadIsRefusedBeforeTheToolRuns`, `internal/tools.TestTheToolsAnswerCarriesEveryFinding`, `internal/agent/builtin.TestEveryBuiltinSchemaIsOneTheCheckKeeps`, `internal/agent/builtin.TestNoArgumentIsReadAsTextAgainstItsType`, `internal/agent/structured.TestEveryFaultOfASubmissionIsNamedAtOnce`, `internal/worklet.TestEveryFaultOfADecisionIsNamedAtOnce`, `internal/assistant/catalog.TestEveryAssistantToolNamesEveryFaultAtOnce`, `internal/assistant/wire.TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`, `internal/tools.TestEveryToolIsCalledThroughInvoke`, `internal/api/operator.TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns`, `internal/agent/builtin.TestASetIsNeverReadAsNoList`, `internal/agent/builtin.TestIncludeIsNeverReadAsNoList`, `internal/agent/builtin.TestNoArgumentIsReadByARuleOfItsOwn`, `internal/tools.TestANoteNeverTouchesTheToolsOutput`, `internal/api/operator.TestAnArgumentsNoteRidesBesideTheReceipt`, `internal/api/workapi.TestANoteRidesBesideAWorkReceipt`, `internal/tools/argval.TestAWholeNumberIsReadWithinItsRange`, `internal/tools.TestAClosedSetIsReadByOneRule`, `internal/tools.TestEveryCounterRecordsTheCataloguesLabels`, `internal/tools.TestAFindingIsANamedValue`, `internal/agent/builtin.TestWhatTheCheckAdmitsIsWhatTheToolReads`, `internal/agent/builtin.TestADeclaredNumberIsReadByItsTypesReader`
 - **Measured:** GP-38 (brand kit): 14 refusals, rounds 11 to 24 and beyond, more than eight minutes of one turn, 12 distinct structural faults learned one per attempt. The brief (#407): 4 of 4 briefs ended `brief_invalid` at 7 steps. Replayed after this change: the GP-38 version gets all 14 of its findings in one refusal and its fixed version lands on the next attempt; a kit written from the format reference lands on the first.
 - **Cost-when-tried:** the brief fix (#407) repaired one tool: its caps went into its schema and its validator started naming every fault. Two days later the brand kit failed the same way through a different tool, because nothing had changed for any other tool.
 - **Tag-status:** unreleased
@@ -88,6 +88,8 @@ through `operator.Server.run`, skipped it.
   - an object or a list where a string belongs (read as `""`);
   - a fraction where a whole number belongs (2.5 was truncated to 2);
   - trailing text after an integer (`"5 days"` was read as 5);
+  - a number spelt outside decimal notation (`"0x10"`, `"1_000"`), which
+    one reader read as 16 or 1000 and another as 0 or 1;
   - a non-finite number;
   - anything the read replaced with its default;
   - a value of the wrong kind where a list or an object belongs.
@@ -111,12 +113,23 @@ through `operator.Server.run`, skipped it.
   They are not findings at all:
   - a number or a boolean where a string belongs;
   - one string, or a comma-separated one, where a list of strings belongs;
-  - a numeric string where a number belongs.
+  - a number written as a decimal string where a number belongs (`"90"`,
+    `"5.0"`, `"1e3"`), read as exactly the number it spells.
 
-**One reading of an argument, shared.** The tools' helpers (`argString`,
-`argStrings`, `argInt`, `argIntValue`, `argFloat`, `argFloatValue`,
-`argBool`) moved unchanged into `internal/tools/argval`. The helpers and the
-check both call it, so the surface and the tool read one value one way. The
+**One reader per declared type, shared.** For each type a schema declares
+(string, list of strings, integer, number, boolean, a closed set) there is
+exactly one function in `internal/tools/argval`, which both decides whether a
+value is one and returns the value read (`String`, `Strings`, `Whole`,
+`Number`, `Bool`, `Choice`). The check calls it to decide and the tool's
+helper (`argString`, `argStrings`, `argInt`, `argIntValue`, `argFloat`,
+`argFloatValue`, `argBool`) calls the same function to read, so a value the
+check admits is read as exactly what it spells. Two readers for one type is
+the root cause this closes: a set written as `"GP-12"` passed the check as a
+list and the tool read no list, and `"1e3"` passed as an integer and the tool
+read it as 1. A property test holds the check and every helper to the exact
+value over a corpus of awkward spellings, and a walk of the builtins refuses a
+number parsed by any other function or a key read as a type its schema does
+not declare. The
 inventory the rule was set from covered the 51 builtins registered for a
 seat:
 

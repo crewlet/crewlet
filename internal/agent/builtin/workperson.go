@@ -1004,7 +1004,7 @@ func (t *workInbox) Parameters() map[string]any {
 				"description": "The `next_cursor` of the previous page.",
 			},
 			"limit": map[string]any{
-				"type": "number",
+				"type": "integer",
 				"description": fmt.Sprintf("How many notices, at most %d.",
 					worklet.MaxInboxRows),
 			},
@@ -1032,7 +1032,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		Unread:      argBool(args, "unread"),
 		Snoozed:     worklet.SnoozeExclude,
 		Cursor:      strings.TrimSpace(argString(args, "cursor")),
-		Limit:       int(argFloat(args, "limit")),
+		Limit:       argInt(args, "limit", 0),
 		Level:       seatReadLevel,
 	}
 	if raw := strings.TrimSpace(argString(args, "snoozed")); raw != "" {

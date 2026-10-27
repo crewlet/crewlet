@@ -3,19 +3,22 @@
 // tools' helpers and the surface's check of a call against its schema both
 // call, so the two cannot read one value two ways (ADR-0059).
 //
-// THE RULES ARE THE TOOLS' OWN, moved here unchanged: a string field takes a
-// number or a boolean rendered as the model wrote it, a list of strings takes
-// one string or a comma-separated one, the lenient integer reads the leading
-// digits of "5 days", the whole and finite reads refuse a fraction and a
-// non-finite number, and a boolean is only true or false. None is looser or
-// tighter than the helper it came from; a table test holds each to the cases
-// its helper's callers were written against.
+// ONE READER PER DECLARED TYPE, which decides acceptance and returns the
+// value both: a string field takes a number or a boolean rendered as the
+// model wrote it, a list of strings takes one string or a comma-separated
+// one, an integer and a number take a value or a decimal text that spells
+// one exactly ([Whole], [Number]), a boolean is only true or false, and a
+// closed set takes its member trimmed and without regard to case ([Choice]).
+// A property test holds the check and every tool reader to the same value
+// over a corpus of awkward inputs.
 package argval
 
 import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -110,58 +113,22 @@ func clean(in []string) []string {
 	return out
 }
 
-// IntPrefix is the lenient integer read: a number truncated toward zero, an
-// integer literal exact past 2^53, or a string's leading integer ("5 days" is
-// 5). ok is false for anything else, which the read takes as its fallback.
-func IntPrefix(v any) (int, bool) {
-	switch v := v.(type) {
-	case float64:
-		if !Finite(v) || !inIntRange(math.Trunc(v)) {
-			return 0, false
-		}
-		return int(v), true
-	case json.Number:
-		// INT64 FIRST, because that is the whole reason the decoders on
-		// this path read through json.Number: an id past 2^53 is exact
-		// here and rounded the moment it becomes a float.
-		if i, err := v.Int64(); err == nil {
-			return int(i), true
-		}
-		if f, err := v.Float64(); err == nil {
-			return IntPrefix(f)
-		}
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case string:
-		var n int
-		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
-			return n, true
-		}
-	}
-	return 0, false
-}
-
-// Whole is the strict integer read, for a value whose zero is a setting
-// rather than an absence (zero minutes, a precision of 0): a finite whole
-// number inside the int range, or a string that spells one and nothing else
-// ("90", "5.0", "5e2"). A fraction is refused rather than truncated to one
-// nobody typed, "2 days" is not 2, and a number past the int range (1e300)
-// is refused rather than overflowed into some other number.
+// Whole is THE integer read, the one rule for an argument declared an
+// integer: the check at the surface calls it to decide whether the value is
+// one, and the tool calls it to read the value, so the two cannot disagree on
+// what a value is (ADR-0059). It reads a finite whole number inside the int
+// range, or a text that spells one exactly in decimal ("90", " +5 ", "5.0",
+// "1e3"). An integer literal is read exactly, past 2^53 included. A fraction
+// is refused rather than truncated to one nobody typed, "2 days" is not 2,
+// a spelling outside decimal notation ("0x10", "1_000", "Inf") is refused,
+// and a number past the int range (1e300) is refused rather than overflowed
+// into some other number.
 func Whole(v any) (int, bool) {
 	switch v := v.(type) {
 	case json.Number:
-		// BACK THROUGH THIS FUNCTION rather than repeating the
-		// whole-number and finiteness discipline below. An integer past
-		// 2^53 is none of the things this reads (minutes, story points,
-		// decimal places), so the float is the honest intermediate here,
-		// unlike in [IntPrefix].
-		f, err := v.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return Whole(f)
+		return wholeText(v.String())
+	case string:
+		return wholeText(v)
 	case float64:
 		// FINITE FIRST, because the fraction test does not cover it: an
 		// infinity IS its own truncation, and `int(+Inf)` is not defined
@@ -174,19 +141,53 @@ func Whole(v any) (int, bool) {
 		return v, true
 	case int64:
 		return int(v), true
-	case string:
-		text := strings.TrimSpace(v)
-		if n, err := strconv.Atoi(text); err == nil {
-			return n, true
-		}
-		// A WHOLE-VALUED DECIMAL ("5.0") loses nothing read as 5.
-		f, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return 0, false
-		}
-		return Whole(f)
 	}
 	return 0, false
+}
+
+// wholeText is the integer a decimal text spells exactly, or none. The value
+// is computed exactly rather than through a float, so "9007199254740993.0"
+// is that integer and not the float beside it.
+func wholeText(s string) (int, bool) {
+	text := strings.TrimSpace(s)
+	if n, err := strconv.Atoi(text); err == nil {
+		return n, true
+	}
+	r, ok := decimal(text)
+	if !ok || !r.IsInt() || !r.Num().IsInt64() {
+		return 0, false
+	}
+	return int(r.Num().Int64()), true
+}
+
+// decimalText is the one spelling a number is read from as text: decimal
+// notation, a sign, a fraction and an exponent allowed. It is what a model
+// means by a number written as a string, and it leaves out what a Go parser
+// would also admit and no model means (hex, underscores, "Inf", "NaN").
+var decimalText = regexp.MustCompile(`^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?([0-9]+))?$`)
+
+// maxDecimalText and maxDecimalExponent bound the exact read of a decimal
+// text: long enough for any int64 or float64 spelled out in full, and small
+// enough that a text like "1e999999999" cannot make the read build an
+// enormous number.
+const (
+	maxDecimalText     = 64
+	maxDecimalExponent = 400
+)
+
+// decimal is the exact value of a decimal text, or none.
+func decimal(text string) (*big.Rat, bool) {
+	if len(text) > maxDecimalText {
+		return nil, false
+	}
+	m := decimalText.FindStringSubmatch(text)
+	if m == nil {
+		return nil, false
+	}
+	if exp, err := strconv.Atoi(m[1]); m[1] != "" && (err != nil || exp > maxDecimalExponent) {
+		return nil, false
+	}
+	return new(big.Rat).SetString(text)
 }
 
 // inIntRange reports a whole float64 converts to an int without overflow:
@@ -196,50 +197,44 @@ func inIntRange(v float64) bool {
 	return v >= math.MinInt64 && v < -math.MinInt64
 }
 
-// Float is the lenient number read: a number, or a string that parses as one.
-// ok is false for anything else, which the read takes as zero (its callers'
-// default). It admits what [strconv.ParseFloat] admits, the non-finite
-// spellings included; [Number] is the read that refuses them.
-func Float(v any) (float64, bool) {
-	switch v := v.(type) {
-	case float64:
-		return v, true
-	case json.Number:
-		if f, err := v.Float64(); err == nil {
-			return f, true
-		}
-	case int:
-		return float64(v), true
-	case string:
-		if n, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
-			return n, true
-		}
-	}
-	return 0, false
-}
-
-// Number is the strict number read: a finite number, or a string that parses
-// as one. "NaN" and "Inf" parse, and are refused: neither is a size a total
-// can be summed from, and JSON cannot encode either.
+// Number is THE number read, the one rule for an argument declared a number,
+// which the check and the tool both call: a finite number, or a text that
+// spells one in decimal, read as the float64 nearest it. "NaN" and "Inf" are
+// refused: neither is a size a total can be summed from, and JSON cannot
+// encode either.
 func Number(v any) (float64, bool) {
 	switch v := v.(type) {
 	case json.Number:
-		f, err := v.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return Number(f)
+		return numberText(v.String())
+	case string:
+		return numberText(v)
 	case float64:
-		return v, Finite(v)
+		return finite(v)
 	case int:
 		return float64(v), true
 	case int64:
 		return float64(v), true
-	case string:
-		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return n, err == nil && Finite(n)
 	}
 	return 0, false
+}
+
+// numberText is the float64 nearest the number a decimal text spells, or
+// none for a text that spells no finite number.
+func numberText(s string) (float64, bool) {
+	r, ok := decimal(strings.TrimSpace(s))
+	if !ok {
+		return 0, false
+	}
+	f, _ := r.Float64()
+	return finite(f)
+}
+
+// finite is a number read as itself when it is finite, and as none otherwise.
+func finite(f float64) (float64, bool) {
+	if !Finite(f) {
+		return 0, false
+	}
+	return f, true
 }
 
 // Finite is what a size has to be: a real number, which NaN and the

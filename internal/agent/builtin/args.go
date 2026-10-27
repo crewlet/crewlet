@@ -34,13 +34,14 @@ func argString(args map[string]any, key string) string {
 	return s
 }
 
-// argInt reads an integer argument, or the fallback.
+// argInt reads an integer argument, or the fallback when it is absent.
 //
-// JSON has one number type, so an int arrives as a number through every
-// decoder in this path; the int cases are for the callers that hand a map
-// straight in.
+// THE CHECK'S OWN READER ([argval.Whole]), so a value the check at the surface
+// admits is the value read here, and one it refuses never reaches the tool.
+// The fallback is for an absent argument; a present one the reader cannot
+// read was refused before the tool ran (ADR-0059).
 func argInt(args map[string]any, key string, fallback int) int {
-	if n, ok := argval.IntPrefix(args[key]); ok {
+	if n, ok := argval.Whole(args[key]); ok {
 		return n
 	}
 	return fallback
@@ -71,8 +72,10 @@ func argBool(args map[string]any, key string) bool {
 // whose zero IS its default — a target that starts at zero, a current nobody
 // has moved. A field where zero were a distinct setting would take a pointer,
 // which is the rule the config models follow for the same reason.
+//
+// THE CHECK'S OWN READER ([argval.Number]), as for [argInt].
 func argFloat(args map[string]any, key string) float64 {
-	f, _ := argval.Float(args[key])
+	f, _ := argval.Number(args[key])
 	return f
 }
 

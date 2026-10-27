@@ -10,13 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
-// EACH READ IS ITS HELPER'S, case for case: what the builtin tools accepted
-// before the rule moved here is what they accept now, and what the surface's
-// check of a call reads a value as. A change to a rule is a change to every
-// tool and to the check at once, so it is made here, in this table.
+// EACH READ IS THE ONE RULE FOR ITS TYPE, case for case: what the surface's
+// check of a call admits and what every tool reads it as. A change to a rule
+// is a change to every tool and to the check at once, so it is made here, in
+// this table.
 //
-// Mutation: make Whole truncate a fraction, or Bool read "true", and a row
-// below fails.
+// Mutation: make Whole truncate a fraction, read "1e3" as 1, or Bool read
+// "true", and a row below fails.
 func TestEachReadIsItsHelpers(t *testing.T) {
 	t.Parallel()
 	type read struct {
@@ -63,43 +63,44 @@ func TestEachReadIsItsHelpers(t *testing.T) {
 	}
 	type numCase struct {
 		in     any
-		prefix read
 		whole  read
-		float  read
 		number read
 	}
 	for name, c := range map[string]numCase{
-		"a whole number":      {3.0, read{3, true}, read{3, true}, read{3.0, true}, read{3.0, true}},
-		"a fraction":          {2.5, read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
-		"an exact big":        {big, read{9007199254740993, true}, read{nil, true}, read{nil, true}, read{nil, true}},
-		"digits":              {" 42 ", read{42, true}, read{42, true}, read{42.0, true}, read{42.0, true}},
-		"a prefix":            {"5 days", read{5, true}, read{0, false}, read{0.0, false}, read{0.0, false}},
-		"a decimal text":      {"2.5", read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
-		"NaN text":            {"NaN", read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
-		"infinity":            {math.Inf(1), read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
-		"a boolean":           {true, read{0, false}, read{0, false}, read{0.0, false}, read{0.0, false}},
-		"an int":              {7, read{7, true}, read{7, true}, read{7.0, true}, read{7.0, true}},
-		"an int64":            {int64(7), read{7, true}, read{7, true}, read{0.0, false}, read{7.0, true}},
-		"a negative text":     {"-3", read{-3, true}, read{-3, true}, read{-3.0, true}, read{-3.0, true}},
-		"a signed text":       {"+5", read{5, true}, read{5, true}, read{5.0, true}, read{5.0, true}},
-		"a hex text":          {"0x10", read{0, true}, read{0, false}, read{0.0, false}, read{0.0, false}},
-		"an empty text":       {"", read{0, false}, read{0, false}, read{0.0, false}, read{0.0, false}},
-		"an exponent text":    {"1e3", read{1, true}, read{1000, true}, read{1000.0, true}, read{1000.0, true}},
-		"a negative fraction": {-2.5, read{-2, true}, read{0, false}, read{-2.5, true}, read{-2.5, true}},
-		"a decimal literal":   {json.Number("2.5"), read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
-		"NaN":                 {math.NaN(), read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
+		"a whole number":      {3.0, read{3, true}, read{3.0, true}},
+		"a fraction":          {2.5, read{0, false}, read{2.5, true}},
+		"an exact big":        {big, read{9007199254740993, true}, read{nil, true}},
+		"an exact big text":   {"9007199254740993.0", read{9007199254740993, true}, read{nil, true}},
+		"digits":              {" 42 ", read{42, true}, read{42.0, true}},
+		"a prefix":            {"5 days", read{0, false}, read{0.0, false}},
+		"a decimal text":      {"2.5", read{0, false}, read{2.5, true}},
+		"NaN text":            {"NaN", read{0, false}, read{0.0, false}},
+		"Inf text":            {"Inf", read{0, false}, read{0.0, false}},
+		"infinity":            {math.Inf(1), read{0, false}, read{0.0, false}},
+		"a boolean":           {true, read{0, false}, read{0.0, false}},
+		"an int":              {7, read{7, true}, read{7.0, true}},
+		"an int64":            {int64(7), read{7, true}, read{7.0, true}},
+		"a negative text":     {"-3", read{-3, true}, read{-3.0, true}},
+		"a signed text":       {"+5", read{5, true}, read{5.0, true}},
+		"a hex text":          {"0x10", read{0, false}, read{0.0, false}},
+		"a hex float text":    {"0x1p4", read{0, false}, read{0.0, false}},
+		"an underscored text": {"1_000", read{0, false}, read{0.0, false}},
+		"an empty text":       {"", read{0, false}, read{0.0, false}},
+		"an exponent text":    {"1e3", read{1000, true}, read{1000.0, true}},
+		"a whole decimal":     {"5.0", read{5, true}, read{5.0, true}},
+		"a vast exponent":     {"1e999999999", read{0, false}, read{0.0, false}},
+		"a negative fraction": {-2.5, read{0, false}, read{-2.5, true}},
+		"a decimal literal":   {json.Number("2.5"), read{0, false}, read{2.5, true}},
+		"a hex literal":       {json.Number("0x10"), read{0, false}, read{0.0, false}},
+		"NaN":                 {math.NaN(), read{0, false}, read{0.0, false}},
 	} {
 		check := func(fn string, got any, ok bool, want read) {
 			if ok != want.ok || (want.v != nil && got != want.v) {
 				t.Errorf("%s(%s) = %v, %v; want %v, %v", fn, name, got, ok, want.v, want.ok)
 			}
 		}
-		n, ok := argval.IntPrefix(c.in)
-		check("IntPrefix", n, ok, c.prefix)
 		w, ok := argval.Whole(c.in)
 		check("Whole", w, ok, c.whole)
-		f, ok := argval.Float(c.in)
-		check("Float", f, ok, c.float)
 		x, ok := argval.Number(c.in)
 		check("Number", x, ok, c.number)
 	}
@@ -171,9 +172,6 @@ func TestAWholeNumberIsReadWithinItsRange(t *testing.T) {
 		if n, ok := argval.Whole(in); ok != want.ok || (ok && n != want.n) {
 			t.Errorf("Whole(%v) = %d, %v; want %d, %v", in, n, ok, want.n, want.ok)
 		}
-	}
-	if _, ok := argval.IntPrefix(1e300); ok {
-		t.Error("IntPrefix read 1e300 as an int")
 	}
 }
 

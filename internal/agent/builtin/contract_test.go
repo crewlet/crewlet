@@ -248,3 +248,152 @@ func TestNoArgumentIsReadByARuleOfItsOwn(t *testing.T) {
 		})
 	}
 }
+
+// numberReads are the parses a value can be read as a number by. In this
+// package each is the integer or number reader's alone (argval.Whole and
+// argval.Number, behind argInt, argIntValue, argFloat and argFloatValue).
+var numberReads = []string{"strconv.Atoi", "strconv.ParseInt", "strconv.ParseUint",
+	"strconv.ParseFloat", "fmt.Sscan", "fmt.Sscanf", "fmt.Sscanln", "big.ParseFloat"}
+
+// A DECLARED NUMBER IS READ BY ITS TYPE'S READER ALONE (ADR-0059, #423
+// re-verify): the check admitted "1e3" as an integer by argval.Whole while
+// argInt read it by fmt.Sscanf's prefix as 1. So no file here parses a
+// number by any other function, and every key read with argInt is declared an
+// integer wherever a builtin's schema declares it, and every key read with
+// argFloat a number, so the check holds the value to the rule it is read by.
+//
+// Mutation: read `limit` with strconv.Atoi, or declare get_inbox's `limit` a
+// number again while argInt reads it, and this names it.
+func TestADeclaredNumberIsReadByItsTypesReader(t *testing.T) {
+	t.Parallel()
+	declared := map[string]map[string]bool{}
+	var walk func(schema map[string]any)
+	walk = func(schema map[string]any) {
+		props, _ := schema["properties"].(map[string]any)
+		for key, raw := range props {
+			sub, _ := raw.(map[string]any)
+			if declared[key] == nil {
+				declared[key] = map[string]bool{}
+			}
+			switch typ := sub["type"].(type) {
+			case string:
+				declared[key][typ] = true
+			case []any:
+				for _, each := range typ {
+					s, _ := each.(string)
+					declared[key][s] = true
+				}
+			}
+			walk(sub)
+		}
+		if items, ok := schema["items"].(map[string]any); ok {
+			walk(items)
+		}
+	}
+	for _, schema := range everySchema(t) {
+		walk(schema)
+	}
+	readAs := map[string]string{"argInt": "integer", "argFloat": "number"}
+
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, f, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A KEY IS HELD TO ITS OWN FILE'S DECLARATION where the file has one,
+		// since one key ("since") is an integer to one tool and a timestamp
+		// to another, and to every builtin's otherwise.
+		local := declaredIn(file)
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			fn := types.ExprString(call.Fun)
+			if slices.Contains(numberReads, fn) {
+				t.Errorf("%s: %s parses a number by a rule of its own; read an argument through argval",
+					fset.Position(call.Pos()), fn)
+			}
+			want, reader := readAs[fn]
+			if !reader || len(call.Args) < 2 {
+				return true
+			}
+			lit, ok := call.Args[1].(*ast.BasicLit)
+			if !ok {
+				return true
+			}
+			key, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			types := declared[key]
+			if here, ok := local[key]; ok {
+				types = here
+			}
+			for typ := range types {
+				if typ != want {
+					t.Errorf("%s: %s reads %q as an %s, and a builtin declares it a %s",
+						fset.Position(call.Pos()), fn, key, want, typ)
+				}
+			}
+			return true
+		})
+	}
+}
+
+// declaredIn is the type each property a file's schema literals declare, by
+// key: every `"key": map[string]any{"type": "..."}` in the file.
+func declaredIn(file *ast.File) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		key, ok := stringLit(kv.Key)
+		if !ok {
+			return true
+		}
+		prop, ok := kv.Value.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		for _, elt := range prop.Elts {
+			field, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if name, _ := stringLit(field.Key); name != "type" {
+				continue
+			}
+			typ, ok := stringLit(field.Value)
+			if !ok {
+				continue
+			}
+			if out[key] == nil {
+				out[key] = map[string]bool{}
+			}
+			out[key][typ] = true
+		}
+		return true
+	})
+	return out
+}
+
+// stringLit is a string literal's value, or none.
+func stringLit(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	return s, err == nil
+}

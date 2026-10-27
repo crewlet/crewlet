@@ -423,6 +423,7 @@ A third-party MCP server holds its own schema and is not checked here.
   - an object or a list where a string belongs;
   - a fraction where a whole number belongs;
   - `"5 days"` where a number belongs;
+  - a number spelt outside decimal notation (`"0x10"`, `"1_000"`);
   - a word where a number belongs;
   - anything but a list or a string where a list belongs.
 
