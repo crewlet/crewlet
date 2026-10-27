@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -118,8 +120,11 @@ func steered(p *pub) []types.AgentTurnSteered {
 	defer p.mu.Unlock()
 	var out []types.AgentTurnSteered
 	for _, ev := range p.events {
-		if got, ok := events.DataAs[types.AgentTurnSteered](ev); ok {
-			out = append(out, got)
+		// THE PAYLOAD BY POINTER, as events.New stores it: asked for by
+		// value, every record is a miss, and a case that wants none sees
+		// none whatever was published.
+		if got, ok := events.DataAs[*types.AgentTurnSteered](ev); ok {
+			out = append(out, *got)
 		}
 	}
 	return out
@@ -415,5 +420,126 @@ func TestAResumedTurnCarriesItsNotesInTheOrderRead(t *testing.T) {
 	}
 	if want := []string{"use-sqlite", "use-postgres"}; !slices.Equal(got, want) {
 		t.Errorf("the turn carries %v, want the read notes in the order read, %v", got, want)
+	}
+}
+
+// A NOTE'S INBOX ID IS ITS JOB'S. OpenCode's message ids are unique across a
+// box's whole database, which a relaunch in the same box shares, and it answers
+// a second admission under an id it holds with the first — so the id a note is
+// admitted under is derived from the run's job and the note: the same for every
+// poll of one job, which admits it once, and another for the next job, which
+// would otherwise be refused the note its predecessor's session already holds.
+//
+// Mutation: derive the id from the note alone, and the relaunch's poll answers
+// the first job's id.
+func TestANotesInboxIDIsItsJobs(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	first := workingRun(t, store, runs, "run-1")
+	fileSealed(t, runs, "run-1", steer.Note{ID: "req-1", Text: "use staging", By: "founder",
+		ByKind: iam.ActorHuman})
+	waitFor := func(inbox *runInbox) []mcpbridge.SteerNote {
+		t.Helper()
+		viewHolds(t, inbox, 1)
+		notes, _ := inbox.Wait(t.Context(), 0)
+		if len(notes) != 1 || notes[0].ID != "req-1" || notes[0].Seq != 1 {
+			t.Fatalf("the poll answered %+v, want the one note", notes)
+		}
+		return notes
+	}
+	firstNotes := waitFor(boundInbox(t, runs, store, "run-1", first))
+	if again := waitFor(boundInbox(t, runs, store, "run-1", first)); again[0].Inbox != firstNotes[0].Inbox {
+		t.Errorf("two polls of one job answered ids %q and %q, want one", firstNotes[0].Inbox, again[0].Inbox)
+	}
+	if want := codingagent.OpenCodeInboxID(first, "req-1"); firstNotes[0].Inbox != want {
+		t.Errorf("the note's inbox id is %q, want %q, the job's", firstNotes[0].Inbox, want)
+	}
+	relaunched, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE", CodingAgent: "opencode",
+	}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	second := waitFor(boundInbox(t, runs, store, "run-1", relaunched.LaunchID))
+	if second[0].Inbox == firstNotes[0].Inbox ||
+		second[0].Inbox != codingagent.OpenCodeInboxID(relaunched.LaunchID, "req-1") {
+		t.Errorf("the relaunch's poll answered id %q, want its own job's, not %q", second[0].Inbox,
+			firstNotes[0].Inbox)
+	}
+}
+
+// droppingWatch is a run store whose first watch of a run's notes stops
+// hearing after its first view — the close the coordination contract says
+// means "watch again" (a broker that went away, a watch the store gave up on).
+type droppingWatch struct {
+	sandbox.PendingStore
+	once    sync.Once
+	dropped chan struct{}
+}
+
+func (w *droppingWatch) WatchNotes(ctx context.Context, turnID string) (<-chan sandbox.NotesView, error) {
+	first := false
+	w.once.Do(func() { first = true })
+	if !first {
+		return w.PendingStore.WatchNotes(ctx, turnID)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	views, err := w.PendingStore.WatchNotes(ctx, turnID)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	out := make(chan sandbox.NotesView, 1)
+	go func() {
+		defer close(w.dropped)
+		defer close(out)
+		defer cancel()
+		select {
+		case view, ok := <-views:
+			if ok {
+				out <- view
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return out, nil
+}
+
+// A RUN'S VIEW OF ITS NOTES WATCHES AGAIN WHEN ITS WATCH STOPS HEARING. A hook
+// after a batch and every poll of the notes route are answered from the inbox's
+// view of the record, never a store read; a view that stopped at the first
+// broker hiccup would answer "nothing waiting" for the rest of the run, and
+// every note would wait for the run's finish or its review. So a watch that
+// closes is opened again, and a note filed after the close reaches both.
+//
+// Mutation: stop following once the first watch closes, and the note never
+// reaches the view.
+func TestARunsViewOfItsNotesWatchesAgainWhenItsWatchCloses(t *testing.T) {
+	t.Parallel()
+	store := &droppingWatch{PendingStore: sandbox.NewCoordStore(coordmem.NewFleet()),
+		dropped: make(chan struct{})}
+	runs, _ := steersOver(t, steerRing, store)
+	launch := workingRun(t, store, runs, "run-1")
+	inbox := boundInbox(t, runs, store, "run-1", launch)
+	select {
+	case <-store.dropped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first watch was never dropped, so this asserts nothing")
+	}
+	fileSealed(t, runs, "run-1", steer.Note{ID: "req-1", Text: "use staging", By: "founder",
+		ByKind: iam.ActorHuman})
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if notes, _ := inbox.Wait(t.Context(), 0); len(notes) == 1 && notes[0].ID == "req-1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a note filed after the watch closed never reached the run's poll")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if answer := inbox.Take(t.Context(), mcpbridge.SteerEventToolBatch); !strings.Contains(answer, "use staging") {
+		t.Errorf("the hook after a batch was answered %q, want the note filed after the watch closed", answer)
 	}
 }

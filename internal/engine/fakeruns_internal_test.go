@@ -114,8 +114,11 @@ func rigRunsOn(t *testing.T, e *Engine, pending sandbox.PendingStore, play fakeP
 	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: server.URL,
 	})
+	// BOTH OF THE BRIDGE'S ROUTES, as the engine's own listener mounts them
+	// (internal/api, mountBridge): a run's tools, and its notes route.
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
+	mux.Handle(mcpbridge.SteerPattern, bridge.SteerHandler())
 	server.Config.Handler = mux
 	e.bridge = bridge
 

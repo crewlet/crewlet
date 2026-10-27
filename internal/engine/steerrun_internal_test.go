@@ -1,8 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
 // A person's note to a turn whose coding run is out, through the real turn: the
@@ -765,4 +770,127 @@ func TestANoteTheBoxHeldAtTheLaunchIsReadBeforeOneFiledDuringIt(t *testing.T) {
 	if want := []string{"use-postgres", "use-sqlite"}; !slices.Equal(order, want) {
 		t.Errorf("the record holds the notes in the order %v, want them as they were sent, %v", order, want)
 	}
+}
+
+// polledNote is what a run's notes plugin saw of its turn's notes over the
+// bridge's real route, and what the record held once its confirmation landed.
+type polledNote struct {
+	mu    sync.Mutex
+	notes []mcpbridge.SteerNote
+	read  *sandbox.NoteRead
+	err   error
+}
+
+// AN OPENCODE RUN'S NOTE IS READ AT ITS NEXT STEP BY ITS JOB, over the bridge's
+// own notes route. The run's plugin polls the route its launch handed it, the
+// run inbox answers the note under an id derived from the run's job — the id
+// the plugin admits it to the session under, so a second admission is the
+// first — and the plugin's confirmation through the route's read records the
+// note read by that job at boundary `step`, and publishes it delivered once,
+// naming the job.
+//
+// Mutation: record the read at another boundary, publish nothing for it, or
+// derive the id from anything but the job, and this goes red.
+func TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob(t *testing.T) {
+	t.Parallel()
+	model := &reviewWatch{}
+	e, _ := indicatingWith(t, notify.StatusAlways, model)
+	steerable(t, e)
+	script := modelPlayer(t, model.run)
+	client := httpxtest.Pool(t)
+	seen := &polledNote{}
+	rig := rigRuns(t, e, func(ctx context.Context, req sandbox.RunRequest) sandbox.Result {
+		seen.mu.Lock()
+		defer seen.mu.Unlock()
+		seen.err = pollAndConfirm(ctx, client, req.Steer.URL, seen)
+		if row, found, err := e.sandbox.Load().pending.Get(ctx, "run-1"); err == nil && found {
+			for _, n := range row.Steer.Notes {
+				if n.ID == "req-1" {
+					seen.read = n.Read
+				}
+			}
+		}
+		return script(ctx, req)
+	})
+	parkOnARun(t, e, rig, "run-1")
+	c := &steerCase{e: e, rig: rig, q: e.backends.Queue.(*memory.Queue), model: model}
+	c.file(t, "run-1", "req-1", "use the staging database")
+	launch := rig.row(t, "run-1").LaunchID
+	if err := rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	seen.mu.Lock()
+	defer seen.mu.Unlock()
+	if seen.err != nil {
+		t.Fatalf("the plugin's poll and read: %v", seen.err)
+	}
+	if len(seen.notes) != 1 || seen.notes[0].ID != "req-1" ||
+		seen.notes[0].Inbox != codingagent.OpenCodeInboxID(launch, "req-1") ||
+		!strings.Contains(seen.notes[0].Message, "use the staging database") {
+		t.Fatalf("the poll answered %+v, want the note under the id job %s admits it as", seen.notes, launch)
+	}
+	if seen.read == nil || seen.read.Boundary != string(types.SteerBoundaryStep) || seen.read.Launch != launch ||
+		seen.read.Phase != string(types.PhaseExecute) {
+		t.Errorf("the record holds the note read %+v, want read at boundary step by job %s", seen.read, launch)
+	}
+	var delivered []types.AgentTurnSteered
+	for _, rec := range c.awaitSteered(t, 1) {
+		if rec.Outcome == types.SteerDelivered {
+			delivered = append(delivered, rec)
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	if all := c.steered(); len(all) != 1 {
+		t.Errorf("%d records of the note were published, want one", len(all))
+	}
+	if len(delivered) != 1 || delivered[0].Boundary != types.SteerBoundaryStep || delivered[0].LaunchID != launch {
+		t.Errorf("the note was recorded %+v, want delivered once at a step of job %s", delivered, launch)
+	}
+}
+
+// pollAndConfirm is a run's notes plugin, once: a poll of the route its launch
+// handed it, and a read of every note the poll answered.
+func pollAndConfirm(ctx context.Context, client *http.Client, route string, seen *polledNote) error {
+	if route == "" {
+		return errors.New("the run was handed no notes route")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, route+"/notes?after=0", nil)
+	if err != nil {
+		return err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Notes []mcpbridge.SteerNote `json:"notes"`
+	}
+	err = json.NewDecoder(res.Body).Decode(&body)
+	_ = res.Body.Close()
+	if err != nil {
+		return fmt.Errorf("the poll's answer (%d): %w", res.StatusCode, err)
+	}
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("the poll answered %d", res.StatusCode)
+	}
+	seen.notes = body.Notes
+	ids := make([]string, 0, len(body.Notes))
+	for _, n := range body.Notes {
+		ids = append(ids, n.ID)
+	}
+	raw, _ := json.Marshal(map[string]any{"ids": ids})
+	confirm, err := http.NewRequestWithContext(ctx, http.MethodPost, route+"/read", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	confirm.Header.Set("Content-Type", "application/json")
+	answered, err := client.Do(confirm)
+	if err != nil {
+		return err
+	}
+	_ = answered.Body.Close()
+	if answered.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("the read answered %d", answered.StatusCode)
+	}
+	return nil
 }
