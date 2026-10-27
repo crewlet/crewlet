@@ -10,8 +10,16 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { changedRuns } from "~/lib/wordDiff.ts";
 import { sheetRules } from "~/test/sheets.ts";
 import { DiffView, WINDOW_BLOCK_ROWS, WINDOW_FROM_ROWS, type DiffHunk } from "./DiffView.tsx";
+
+// THE UNDERLINE'S READING, WATCHED: a pass-through, so every case below draws
+// the real runs, and a long diff's cases can count which pairs were read.
+vi.mock("~/lib/wordDiff.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/lib/wordDiff.ts")>();
+  return { ...real, changedRuns: vi.fn(real.changedRuns) };
+});
 
 afterEach(cleanup);
 
@@ -360,6 +368,13 @@ const longDiff = (n: number): DiffHunk[] => [
   { skipped: 0, lines: Array.from({ length: n }, (_, i) => added(i + 1, `line ${i + 1}`)) },
 ];
 
+/** `n` lines each edited in place: a hunk each, its old line removed and its new one added. */
+const editedLines = (n: number): DiffHunk[] =>
+  Array.from({ length: n }, (_, i) => ({
+    skipped: 0,
+    lines: [removed(i + 1, `line ${i + 1} was`), added(i + 1, `line ${i + 1} is`)],
+  }));
+
 describe("a long diff", () => {
   test("mounts only the blocks near the view, and keeps the others' height", () => {
     const restore = installObserver();
@@ -424,6 +439,57 @@ describe("a long diff", () => {
       expect(first!.childElementCount).toBe(0);
       expect(first!.style.height).not.toBe("0px");
       expect(first!.style.height).toBe(second!.style.height);
+    } finally {
+      restore();
+    }
+  });
+
+  // THE WINDOW BOUNDS THE READING, not only the mounting: a pair's words are
+  // read once one of its lines is drawn, so a diff of any length reads, before
+  // its first paint, the pairs it draws and no others.
+  test("reads only the pairs of the blocks it holds, and each of them once", () => {
+    const restore = installObserver();
+    try {
+      const read = vi.mocked(changedRuns);
+      read.mockClear();
+      // Unified, an edited line is two rows: 30 blocks of 50 pairs each.
+      const { container } = render(<DiffView hunks={editedLines(15 * WINDOW_BLOCK_ROWS)} />);
+      const pairsABlock = WINDOW_BLOCK_ROWS / 2;
+      expect(container.querySelectorAll(".diff-view__block")).toHaveLength(30);
+      expect(read).toHaveBeenCalledTimes(pairsABlock);
+      expect(runs(container).slice(0, 2)).toEqual([
+        ["remove", "was"],
+        ["add", "is"],
+      ]);
+
+      const observer = Observer.made[0]!;
+      observer.say([
+        { block: 0, near: false, height: 2400 },
+        { block: 7, near: true },
+        { block: 8, near: true },
+      ]);
+      expect(read).toHaveBeenCalledTimes(3 * pairsABlock);
+      // A BLOCK TAKEN IN AGAIN reads nothing twice, and underlines as it did.
+      observer.say([{ block: 0, near: true }]);
+      expect(read).toHaveBeenCalledTimes(3 * pairsABlock);
+      expect(runs(container)).toHaveLength(2 * 3 * pairsABlock);
+    } finally {
+      restore();
+    }
+  });
+
+  test("reads a split row's pair once for both of its sides", () => {
+    const restore = installObserver();
+    try {
+      const read = vi.mocked(changedRuns);
+      read.mockClear();
+      // Split, an edited line is one row: the first block is 100 pairs.
+      const { container } = render(
+        <DiffView hunks={editedLines(15 * WINDOW_BLOCK_ROWS)} layout="split" />,
+      );
+      expect(container.querySelectorAll(".diff-view__pair")).toHaveLength(WINDOW_BLOCK_ROWS);
+      expect(runs(container)).toHaveLength(2 * WINDOW_BLOCK_ROWS);
+      expect(read).toHaveBeenCalledTimes(WINDOW_BLOCK_ROWS);
     } finally {
       restore();
     }

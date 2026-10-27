@@ -58,6 +58,13 @@
  * until they have been drawn once), so the scroll bar stays honest. Below it
  * every row is mounted, which keeps find-in-page and a screen reader's reading
  * of the whole diff.
+ *
+ * THE WINDOW BOUNDS THE READING TOO, not only the mounting: which line an
+ * edited one is paired with is settled from the diff's shape alone, and the
+ * words of a pair are read — both lines tokenized, for the underline — only
+ * once one of its lines is drawn ([Pair]). Once its hunks exist, a diff of
+ * any length costs, before its first paint, a walk over its lines and the
+ * underlines of the rows it draws, never the tokens of every line it holds.
  */
 
 import {
@@ -76,7 +83,7 @@ import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { plural } from "~/lib/format.ts";
 import { scrollerOf } from "~/lib/scroller.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
-import { changedRuns, type Run } from "~/lib/wordDiff.ts";
+import { changedRuns, type ChangedRuns, type Run } from "~/lib/wordDiff.ts";
 // THE DIFF'S OWN SHEET: every screen that draws a diff is a lazy chunk, so the
 // rules arrive with the first of them rather than in the first paint.
 import "~/styles/diff.css";
@@ -189,84 +196,150 @@ export const WINDOW_BLOCK_ROWS = 100;
  */
 const ROW_ESTIMATE_PX = 21;
 
-/** One side of a split row: a line and its underline. */
-interface Side {
-  line: DiffLine;
-  run: Run | null;
-}
-
-/** One row of the diff, as it is drawn. */
+/** One row of the diff, as it is drawn: what is underlined in it is its lines' [Pair]s'. */
 type Row =
   | { kind: "skip"; count: number }
-  | { kind: "line"; line: DiffLine; run: Run | null }
-  | { kind: "pair"; left: Side | null; right: Side | null };
+  | { kind: "line"; line: DiffLine }
+  | { kind: "pair"; left: DiffLine | null; right: DiffLine | null };
 
 /**
- * The underline of every line of one CHANGE — a run of lines none of which is
- * unchanged — by its index in the run.
+ * A removed line and the added line it is one line edited into: the two
+ * halves of one underline.
  *
- * Which removed line an added one replaced: in a text, the kth removed with
- * the kth added, the pairing a reader makes down the two columns of a split
- * diff; in a keyed diff, the removed and the added line of ONE path, since a
- * change can hold one setting removed and another one edited, and pairing
- * those by position would underline one setting against another.
+ * READ WHEN FIRST DRAWN, never when the diff is: tokenizing both lines is all
+ * the underline costs, and it is a cost in proportion to the text — every
+ * token an object, over a pattern that classifies each character — so it is
+ * paid for the pairs the window holds rather than for every pair of a diff
+ * that may run to thousands. Once paid it is kept, so the other half of the
+ * pair, drawn beside it in a split diff or rows later in a unified one, and a
+ * block the window lets go and takes in again, read nothing a second time.
  */
-function changeRuns(change: readonly DiffLine[], keyed: boolean): (Run | null)[] {
-  const runs: (Run | null)[] = change.map(() => null);
-  const pair = (r: number, a: number) => {
-    const found = changedRuns(change[r]!.text, change[a]!.text);
-    runs[r] = found.before;
-    runs[a] = found.after;
-  };
-  const removed = change.flatMap((line, i) => (line.kind === "remove" ? [i] : []));
-  const added = change.flatMap((line, i) => (line.kind === "add" ? [i] : []));
-  if (keyed) {
-    for (const r of removed) {
-      const a = added.find((i) => change[i]!.path === change[r]!.path);
-      if (a !== undefined) pair(r, a);
-    }
-  } else {
-    for (let k = 0; k < Math.min(removed.length, added.length); k++) pair(removed[k]!, added[k]!);
+class Pair {
+  private runs: ChangedRuns | undefined;
+
+  constructor(
+    private readonly removed: string,
+    private readonly added: string,
+  ) {}
+
+  /** What the half of the pair a line of `kind` is underlines. */
+  runOf(kind: "remove" | "add"): Run | null {
+    this.runs ??= changedRuns(this.removed, this.added);
+    return kind === "remove" ? this.runs.before : this.runs.after;
   }
-  return runs;
 }
 
-/** The rows a diff draws, in the layout it is drawn in. */
-function rowsOf(hunks: readonly DiffHunk[], split: boolean, keyed: boolean): Row[] {
+/** Every line of a diff that is one line edited, to the [Pair] it is half of. */
+type Pairs = ReadonlyMap<DiffLine, Pair>;
+
+/**
+ * Which removed line each added one replaced, in every CHANGE of a diff — a
+ * run of lines none of which is unchanged — decided from the lines' kinds and
+ * paths alone: not a word of them is read here ([Pair]).
+ *
+ * In a text, the kth removed with the kth added, the pairing a reader makes
+ * down the two columns of a split diff. In a keyed diff, the removed and the
+ * added line of ONE path, since a change can hold one setting removed and
+ * another one edited, and pairing those by position would underline one
+ * setting against another; one to one and in order, so a path's lines meet
+ * once each, and a line with no path names no setting and pairs with none.
+ *
+ * Linear in the diff's lines, keyed or not: a path finds its partner through
+ * a map rather than a search of the change, which a change holding a release's
+ * every file would make a walk over the files for each of them.
+ */
+function pairsOf(hunks: readonly DiffHunk[], keyed: boolean): Pairs {
+  const pairs = new Map<DiffLine, Pair>();
+  const join = (removed: DiffLine, added: DiffLine) => {
+    const pair = new Pair(removed.text, added.text);
+    pairs.set(removed, pair);
+    pairs.set(added, pair);
+  };
+  for (const hunk of hunks) {
+    const lines = hunk.lines;
+    for (let i = 0; i < lines.length;) {
+      if (lines[i]!.kind === "same") {
+        i++;
+        continue;
+      }
+      const removed: DiffLine[] = [];
+      const added: DiffLine[] = [];
+      for (; i < lines.length && lines[i]!.kind !== "same"; i++) {
+        const line = lines[i]!;
+        (line.kind === "remove" ? removed : added).push(line);
+      }
+      if (keyed) {
+        pairByPath(removed, added, join);
+        continue;
+      }
+      for (let k = 0; k < Math.min(removed.length, added.length); k++) {
+        join(removed[k]!, added[k]!);
+      }
+    }
+  }
+  return pairs;
+}
+
+/** One change of a keyed diff, paired by path (see [pairsOf]). */
+function pairByPath(
+  removed: readonly DiffLine[],
+  added: readonly DiffLine[],
+  join: (removed: DiffLine, added: DiffLine) => void,
+) {
+  // Each path's added lines, the last first, so the first is the one popped.
+  const waiting = new Map<string, DiffLine[]>();
+  for (let k = added.length - 1; k >= 0; k--) {
+    const line = added[k]!;
+    if (line.path === undefined) continue;
+    const queue = waiting.get(line.path);
+    if (queue) queue.push(line);
+    else waiting.set(line.path, [line]);
+  }
+  for (const line of removed) {
+    const partner = line.path === undefined ? undefined : waiting.get(line.path)?.pop();
+    if (partner) join(line, partner);
+  }
+}
+
+/**
+ * The rows a diff draws, in the layout it is drawn in. Split, a change's
+ * removed lines run down the left and its added lines down the right, side
+ * by side from its first line, which is where the layout pairs them; what is
+ * underlined is the [Pair]s' business, and the same in either layout.
+ */
+function rowsOf(hunks: readonly DiffHunk[], split: boolean): Row[] {
   const rows: Row[] = [];
   for (const hunk of hunks) {
     if (hunk.skipped > 0) rows.push({ kind: "skip", count: hunk.skipped });
     const lines = hunk.lines;
+    if (!split) {
+      for (const line of lines) rows.push({ kind: "line", line });
+      continue;
+    }
     for (let i = 0; i < lines.length;) {
       const line = lines[i]!;
       if (line.kind === "same") {
-        rows.push(
-          split
-            ? { kind: "pair", left: { line, run: null }, right: { line, run: null } }
-            : { kind: "line", line, run: null },
-        );
+        rows.push({ kind: "pair", left: line, right: line });
         i++;
         continue;
       }
-      let end = i;
-      while (end < lines.length && lines[end]!.kind !== "same") end++;
-      const change = lines.slice(i, end);
-      const runs = changeRuns(change, keyed);
-      if (split) {
-        const side = (k: number | undefined): Side | null =>
-          k === undefined ? null : { line: change[k]!, run: runs[k] ?? null };
-        const removed = change.flatMap((l, k) => (l.kind === "remove" ? [k] : []));
-        const added = change.flatMap((l, k) => (l.kind === "add" ? [k] : []));
-        for (let k = 0; k < Math.max(removed.length, added.length); k++) {
-          rows.push({ kind: "pair", left: side(removed[k]), right: side(added[k]) });
-        }
-      } else {
-        change.forEach((l, k) => rows.push({ kind: "line", line: l, run: runs[k] ?? null }));
+      const removed: DiffLine[] = [];
+      const added: DiffLine[] = [];
+      for (; i < lines.length && lines[i]!.kind !== "same"; i++) {
+        const changed = lines[i]!;
+        (changed.kind === "remove" ? removed : added).push(changed);
       }
-      i = end;
+      for (let k = 0; k < Math.max(removed.length, added.length); k++) {
+        rows.push({ kind: "pair", left: removed[k] ?? null, right: added[k] ?? null });
+      }
     }
   }
   return rows;
+}
+
+/** What a line underlines as it is drawn: its half of its [Pair]'s run, or nothing. */
+function underlineOf(pairs: Pairs, line: DiffLine): Run | null {
+  return line.kind === "same" ? null : (pairs.get(line)?.runOf(line.kind) ?? null);
 }
 
 /** What a diff holds, which decides its tracks and its head. */
@@ -484,28 +557,28 @@ function Line({
   );
 }
 
-function RowView({ row, tracks }: { row: Row; tracks: Tracks }) {
+function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pairs }) {
   switch (row.kind) {
     case "skip":
       return <div className="diff-view__skip">{plural(row.count, "unchanged line")}</div>;
     case "line":
-      return <Line line={row.line} run={row.run} tracks={tracks} />;
+      return <Line line={row.line} run={underlineOf(pairs, row.line)} tracks={tracks} />;
     case "pair": {
-      const same = row.left?.line.kind === "same";
+      const same = row.left?.kind === "same";
       return (
         <div className="diff-view__pair">
           {/* A SIDE THE CHANGE DID NOT REACH is an empty cell on the diff's
               own ground: a removal has no newer line beside it. */}
           {row.left ? (
-            <Line line={row.left.line} run={row.left.run} tracks={tracks} side="left" />
+            <Line line={row.left} run={underlineOf(pairs, row.left)} tracks={tracks} side="left" />
           ) : (
             <div aria-hidden="true" />
           )}
           {row.right ? (
             // AN UNCHANGED LINE IS READ ONCE: its newer copy is the same words.
             <Line
-              line={row.right.line}
-              run={row.right.run}
+              line={row.right}
+              run={underlineOf(pairs, row.right)}
               tracks={tracks}
               side="right"
               hidden={same}
@@ -534,7 +607,10 @@ export function DiffView(props: DiffViewProps) {
   // and a width read before the root exists would stay zero for good.
   const narrow = useNarrowerThan(root, PHONE_BREAKPOINT, changed);
   const split = layout === "split" && !shape.keyed && !narrow;
-  const rows = useMemo(() => rowsOf(hunks, split, shape.keyed), [hunks, split, shape.keyed]);
+  // ONE DIFF, ONE SET OF PAIRS, whichever layout draws it: a diff that turns
+  // unified as its column narrows keeps every underline it has already read.
+  const pairs = useMemo(() => pairsOf(hunks, shape.keyed), [hunks, shape.keyed]);
+  const rows = useMemo(() => rowsOf(hunks, split), [hunks, split]);
   const blocks = useMemo(() => blocksOf(rows), [rows]);
   const shown = useWindow(body, blocks, rows.length > WINDOW_FROM_ROWS);
 
@@ -577,7 +653,7 @@ export function DiffView(props: DiffViewProps) {
           shown.holds(at) ? (
             <div key={at} className="diff-view__block" data-block={at}>
               {block.map((row, i) => (
-                <RowView key={i} row={row} tracks={tracks} />
+                <RowView key={i} row={row} tracks={tracks} pairs={pairs} />
               ))}
             </div>
           ) : (

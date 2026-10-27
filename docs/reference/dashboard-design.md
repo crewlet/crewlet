@@ -232,6 +232,10 @@ unified. Past 1,000 rows it is windowed: only the blocks of 100 rows within a
 view of the screen hold their rows, measured against the diff's own scroller,
 and the rest keep the height they last had; under it every row is mounted,
 which keeps find-in-page and a screen reader's reading of the whole diff.
+The window bounds the reading as well as the mounting: which line pairs
+with which is settled from the change's shape, and a pair's words are
+tokenized for its underline only once one of its lines is drawn, so the
+first paint of a long diff never reads every line it holds.
 Its rules are a sheet of its own, `diff.css`, which arrives with the first
 screen that draws a diff rather than in the first paint: every one of those
 screens is a lazy chunk.
