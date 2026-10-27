@@ -463,7 +463,11 @@ type loopRun struct {
 	meter    toolloop.BudgetMeter
 	tools    []catalog.Tool
 	steps    int
-	timeout  time.Duration
+	// rounds is the loop's whole round budget where the segment sets its
+	// own (a brief: its reads, then its answer and retry), and steps and
+	// the answer's round where it is zero.
+	rounds  int
+	timeout time.Duration
 	// fresh is a first segment, whose conversation may be titled after it.
 	fresh bool
 	// terminate are the tools whose success ends the loop: a brief's
@@ -478,6 +482,15 @@ type loopRun struct {
 	// decision was made from, empty when the decision carried none: kept
 	// apart, so a deep-work task records the decision alone.
 	decision, screen string
+}
+
+// maxRounds is the segment's round budget: its own where it sets one, else a
+// round for each step and one for the answer.
+func (r loopRun) maxRounds() int {
+	if r.rounds > 0 {
+		return r.rounds
+	}
+	return r.steps + 1
 }
 
 // run drives one segment to its end, on its own goroutine.
@@ -516,7 +529,7 @@ func (t *turn) run(r loopRun) {
 	res, err := toolloop.Run(ctx, toolloop.Config{
 		Provider: r.provider, ProviderKey: r.key, Surface: surface, Messages: r.messages,
 		Host: t.svc.sessions, ServerTitle: "Dashboard Assistant",
-		MaxRounds: r.steps + 1, AllowSuspend: true, Budget: r.meter,
+		MaxRounds: r.maxRounds(), AllowSuspend: true, Budget: r.meter,
 		TerminateAfter: r.terminate,
 		Fence:          t.fence, OnProgress: t.onProgress, Progress: progress,
 		// STREAMED, so a round's prose reaches the drawer while it is
@@ -610,10 +623,15 @@ func (t *turn) conclude(ctx context.Context, res *toolloop.Result, err error) as
 	t.svc.metrics.Add(metrics.AssistantTurns, 1, attrs)
 	t.svc.metrics.Observe(metrics.AssistantTurnDuration, duration, attrs)
 	t.publishAudit(ctx, state, end.ErrorCode, duration)
-	t.svc.log.InfoContext(ctx, "assistant_turn_ended", "turn", t.id,
-		"conversation", t.conversation, "state", string(state), "error_code", end.ErrorCode,
-		"steps", end.Steps, "duration_ms", duration.Milliseconds(),
-		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens)
+	ended := []any{"turn", t.id, "conversation", t.conversation, "state", string(state),
+		"error_code", end.ErrorCode, "steps", end.Steps, "duration_ms", duration.Milliseconds(),
+		"input_tokens", end.InputTokens, "output_tokens", end.OutputTokens}
+	if end.ErrorCode == string(wire.ErrorBriefInvalid) && err != nil {
+		// A BRIEF THAT COULD NOT BE WRITTEN SAYS WHY where the turn's end is
+		// read: the last refusal's reason, or the brief's own cap.
+		ended = append(ended, "reason", redact.Secrets(err.Error()))
+	}
+	t.svc.log.InfoContext(ctx, "assistant_turn_ended", ended...)
 	return end
 }
 

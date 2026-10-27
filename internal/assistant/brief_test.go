@@ -1,7 +1,13 @@
 package assistant_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/assistant"
@@ -157,5 +163,213 @@ func TestABriefRowAboutAnUnreadRecordIsDropped(t *testing.T) {
 	}
 	if sent := f.Dispatcher.Sent(); len(sent) != 0 {
 		t.Errorf("an uncited record was read: %+v", sent)
+	}
+}
+
+// overLong is an answer_brief call with two faults the model could not see
+// one at a time: a summary of 366 characters (the live case) and a row's
+// text of 130.
+func overLong(id string) evals.Round {
+	return evals.Call(id, catalog.AnswerBriefTool, map[string]any{
+		"summary": strings.Repeat("ENG-7 waits. ", 29)[:366],
+		"needs": []any{map[string]any{"ref_kind": "task", "ref_id": "ENG-7",
+			"text": strings.Repeat("r", 130), "tone": "warning", "action": "open"}},
+		"follow_ups": []any{},
+	})
+}
+
+// reads is n rounds each reading ENG-7, called r1 to rn.
+func reads(n int) []evals.Round {
+	out := make([]evals.Round, 0, n)
+	for i := 1; i <= n; i++ {
+		out = append(out, evals.Call(fmt.Sprintf("r%d", i), "get_task",
+			map[string]any{"item": "ENG-7"}))
+	}
+	return out
+}
+
+// logLines is a logger whose JSON lines a suite reads back.
+type logLines struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logLines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+// named is every logged line with message msg, decoded.
+func (l *logLines) named(t *testing.T, msg string) []map[string]any {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(l.buf.String()), "\n") {
+		var rec map[string]any
+		if line == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("a log line is not JSON: %q", line)
+		}
+		if rec["msg"] == msg {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// captured replaces the rig's logger with one the suite reads.
+func captured(f *assistanttest.Rig) *logLines {
+	l := &logLines{}
+	f.Svc.SetLogger(slog.New(slog.NewJSONHandler(l, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	return l
+}
+
+// A REFUSED BRIEF NAMES EVERY FAULT AT ONCE, so its one retry fixes them all
+// and lands: the live failure was a refusal naming the summary alone, a
+// retry that fixed it, and a second refusal for the row it had not named.
+// The engine's own log says why the brief was refused, and never its words.
+//
+// Mutation: stop at the first fault, or drop the refusal's log line, and
+// this fails.
+func TestABriefRefusalNamesEveryFaultAndItsRetryLands(t *testing.T) {
+	t.Parallel()
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
+		Handler: task, Rounds: []evals.Round{readTask(), overLong("a1"),
+			briefOf("a2", wire.BriefWarning)}})
+	logs := captured(f)
+	accepted, err := f.Brief("retry", "Brief me on this task", itemPage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, 0)
+	if done := evals.Last(frames, wire.EventDone); done == nil || done.Done.State != wire.TurnCompleted {
+		t.Fatalf("done = %+v, want completed on the retry", done)
+	}
+	if card := evals.Last(frames, wire.EventCard); card == nil || card.Card.Card.Brief == nil {
+		t.Fatal("the retry drew no brief card")
+	}
+	refusal, ok := f.Model.Answer("a1")
+	if !ok || !refusal.Failed {
+		t.Fatalf("the first answer was answered %+v, want refused", refusal)
+	}
+	for _, want := range []string{"summary is 366 characters and the most it takes is 200",
+		"needs[0].text is 130 characters and the most it takes is 120", "last attempt"} {
+		if !strings.Contains(refusal.Output, want) {
+			t.Errorf("the refusal does not say %q: %s", want, refusal.Output)
+		}
+	}
+	lines := logs.named(t, "assistant_brief_refused")
+	if len(lines) != 1 {
+		t.Fatalf("logged %d refusals, want 1", len(lines))
+	}
+	line := lines[0]
+	if line["turn"] != accepted.TurnID.String() || line["attempt"] != float64(1) ||
+		line["final"] != false {
+		t.Errorf("refusal logged as %v, want turn %s, attempt 1, not final", line, accepted.TurnID)
+	}
+	if reason, _ := line["reason"].(string); !strings.Contains(reason, "summary is 366") ||
+		strings.Contains(reason, "ENG-7 waits") {
+		t.Errorf("reason = %q, want the fault and none of the brief's words", reason)
+	}
+}
+
+// THE LAST ROUND THAT MAY READ LEAVES ROOM FOR THE ANSWER AND ITS RETRY: a
+// brief that reads in every round it may is told so in that round's answer,
+// and an answer refused in the round after it is written again, and drawn.
+//
+// Mutation: let reads run in every round of the turn, or drop the rounds kept
+// for the answer, and the retry is cut off as a step limit.
+func TestABriefsLastReadRoundLeavesRoomForItsRetry(t *testing.T) {
+	t.Parallel()
+	script := append(reads(assistant.BriefReadRounds), overLong("a1"),
+		briefOf("a2", wire.BriefWarning))
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
+		Handler: task, Rounds: script})
+	accepted, err := f.Brief("last-read", "Brief me on this task", itemPage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, 0)
+	if done := evals.Last(frames, wire.EventDone); done == nil || done.Done.State != wire.TurnCompleted {
+		t.Fatalf("done = %+v, want completed on the retry", done)
+	}
+	last := fmt.Sprintf("r%d", assistant.BriefReadRounds)
+	before := fmt.Sprintf("r%d", assistant.BriefReadRounds-1)
+	if res, _ := f.Model.Answer(last); !strings.Contains(res.Output, "last round of reads") {
+		t.Errorf("the last read round was answered %q, want it to say the reads are spent", res.Output)
+	}
+	if res, _ := f.Model.Answer(before); strings.Contains(res.Output, "last round of reads") {
+		t.Errorf("an earlier read round was told the reads are spent: %q", res.Output)
+	}
+	if res, ok := f.Model.Answer("a2"); !ok || res.Failed {
+		t.Errorf("the retry was answered %+v, want it accepted", res)
+	}
+}
+
+// A READ IN THE ROUNDS KEPT FOR THE ANSWER IS NOT SENT: the model is told to
+// answer, and the answer that follows is drawn.
+//
+// Mutation: drop the read gate and the read runs in the answer's round.
+func TestABriefReadInTheAnswersRoundsIsNotSent(t *testing.T) {
+	t.Parallel()
+	extra := evals.Call("late", "get_task", map[string]any{"item": "ENG-8"})
+	script := append(reads(assistant.BriefReadRounds), extra, briefOf("a1", wire.BriefWarning))
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
+		Handler: task, Rounds: script})
+	accepted, err := f.Brief("late-read", "Brief me on this task", itemPage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, 0)
+	if done := evals.Last(frames, wire.EventDone); done == nil || done.Done.State != wire.TurnCompleted {
+		t.Fatalf("done = %+v, want completed", done)
+	}
+	if res, _ := f.Model.Answer("late"); !res.Failed || !strings.Contains(res.Output, "Call answer_brief now") {
+		t.Errorf("a read in the answer's rounds was answered %+v, want it refused unsent", res)
+	}
+	for _, s := range f.Dispatcher.Sent() {
+		if s.Request.Path == "/worklet/ENG-8" {
+			t.Errorf("a read in the answer's rounds was sent: %+v", s.Request)
+		}
+	}
+}
+
+// AN ANSWER REFUSED IN THE TURN'S LAST ROUND IS FINAL: no round is left for
+// a retry, so the turn ends brief_invalid with the reason, in the refusal's
+// log line and the turn's end, rather than as a step limit.
+//
+// Mutation: keep offering a retry in the last round and the turn ends
+// step_limit with no reason logged.
+func TestABriefRefusedInTheTurnsLastRoundIsFinal(t *testing.T) {
+	t.Parallel()
+	extra := evals.Call("late", "get_task", map[string]any{"item": "ENG-7"})
+	script := append(reads(assistant.BriefReadRounds), extra, overLong("a1"),
+		briefOf("a2", wire.BriefWarning))
+	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
+		Handler: task, Rounds: script})
+	logs := captured(f)
+	accepted, err := f.Brief("last-round", "Brief me on this task", itemPage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, 0)
+	if failure := evals.Last(frames, wire.EventError); failure == nil ||
+		failure.Error.Code != wire.ErrorBriefInvalid {
+		t.Fatalf("error = %+v, want brief_invalid", failure)
+	}
+	refused := logs.named(t, "assistant_brief_refused")
+	if len(refused) != 1 || refused[0]["final"] != true {
+		t.Errorf("refusals logged %v, want one, final", refused)
+	}
+	ended := logs.named(t, "assistant_turn_ended")
+	if len(ended) != 1 || ended[0]["error_code"] != string(wire.ErrorBriefInvalid) {
+		t.Fatalf("turn ends logged %v, want one brief_invalid", ended)
+	}
+	if reason, _ := ended[0]["reason"].(string); !strings.Contains(reason, "summary is 366") {
+		t.Errorf("the turn's end gives reason %q, want the last refusal's", reason)
 	}
 }

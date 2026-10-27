@@ -147,6 +147,9 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	}
 	switch tool.Kind {
 	case catalog.KindRead:
+		if s.t.briefing() {
+			return s.briefRead(ctx, tool, call.Arguments)
+		}
 		return s.read(ctx, tool, call.Arguments)
 	case catalog.KindWrite, catalog.KindPageAction:
 		return s.propose(ctx, tool, call.Arguments)

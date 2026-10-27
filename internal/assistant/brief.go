@@ -28,8 +28,12 @@ import (
 //     brief card is the whole answer. Its prose is never drawn.
 //   - It answers in a fixed shape. The model calls answer_brief once; the
 //     engine holds the call to its schema and bounds, and a call it cannot
-//     accept is answered with the reason and may be written again ONCE.
-//     A second refusal ends the turn [wire.ErrorBriefInvalid].
+//     accept is answered with EVERY reason and may be written again ONCE.
+//     A second refusal ends the turn [wire.ErrorBriefInvalid]. The retry
+//     always has a round to land in: reads stop [BriefAnswerAttempts]
+//     rounds before the turn's last ([BriefReadRounds]), so an answer
+//     written after the last read is never refused in the turn's last
+//     round.
 //   - The engine owns everything but the words. A row survives only when
 //     the record it cites appears in what this turn's own reads answered AND
 //     the record's own read, sent again as the person, answers it: a row
@@ -45,10 +49,15 @@ var errBriefInvalid = errors.New("assistant: the model wrote no brief the engine
 
 // The bounds of a brief turn.
 const (
-	// BriefMaxSteps is the most steps a brief takes: a page's brief reads
-	// what the page shows, what waits on the person and the agents (three
-	// to five reads), then answers, with room for its one retry.
-	BriefMaxSteps = 8
+	// BriefReadRounds is the most model requests whose reads a brief runs:
+	// a page's brief reads what the page shows, what waits on the person
+	// and the agents (three to five reads, often side by side), with room
+	// to spare. The turn's round budget is these and [BriefAnswerAttempts]
+	// more, so the answer and its one retry each have a round however the
+	// reads were spent; a read asked for in those last rounds is refused,
+	// and the answer to a read in the last read round says the reads are
+	// spent.
+	BriefReadRounds = 7
 	// BriefAnswerAttempts is how many answer_brief calls a turn may make:
 	// the first, and one more after the engine said what was wrong with it.
 	BriefAnswerAttempts = 2
@@ -72,6 +81,9 @@ type briefState struct {
 	reads []string
 	// answers counts the answer_brief calls made.
 	answers int
+	// readRounds is how many of the turn's rounds may read
+	// ([BriefReadRounds], or fewer where the company allows fewer steps).
+	readRounds int
 }
 
 // briefing reports whether t is a brief turn.
@@ -139,6 +151,41 @@ func briefTools(offered []catalog.Tool) []catalog.Tool {
 	return append(out, catalog.BriefTool())
 }
 
+// The words a brief's model reads when its reads are spent.
+const (
+	// briefReadsSpent answers a read asked for in a round kept for the
+	// answer.
+	briefReadsSpent = "Not sent: this brief has made every read it may, and the rounds left " +
+		"are for the answer. Call answer_brief now with what you have read."
+	// briefLastReads follows the answer to a read in the last round that
+	// may read.
+	briefLastReads = "\n\nThat was the last round of reads this brief may make: call " +
+		"answer_brief next with what you have read."
+)
+
+// briefRead carries out a read in a brief turn, held to the brief's read
+// rounds: a read in a round kept for the answer is refused unsent, and a
+// read in the last round that may read is answered with a note that the
+// reads are spent. A call whose round the loop did not stamp is read as
+// any read is.
+func (s *surface) briefRead(ctx context.Context, tool catalog.Tool,
+	args map[string]any) (toolloop.ToolResult, error) {
+
+	s.t.mu.Lock()
+	limit := s.t.brief.readRounds
+	s.t.mu.Unlock()
+	round, stamped := toolloop.CallRound(ctx)
+	if stamped && limit > 0 && round > limit {
+		s.recordRefusal(ctx, tool, args, "Not run", "the brief's reads are spent")
+		return failed(mcp.RefusalNotRunning, briefReadsSpent), nil
+	}
+	res, err := s.read(ctx, tool, args)
+	if err == nil && stamped && round == limit {
+		res.Output += briefLastReads
+	}
+	return res, err
+}
+
 // answerBrief carries out an answer_brief call: the draft checked, every row
 // resolved for the person, and the card shown. A draft the engine refuses is
 // answered with its reason for the model to write again, once.
@@ -147,18 +194,33 @@ func (s *surface) answerBrief(ctx context.Context, tool catalog.Tool,
 
 	s.t.mu.Lock()
 	s.t.brief.answers++
-	attempt := s.t.brief.answers
+	attempt, reads := s.t.brief.answers, s.t.brief.readRounds
 	s.t.mu.Unlock()
 	draft, err := catalog.ParseBrief(args)
 	if err != nil {
-		s.recordRefusal(ctx, tool, args, "Not accepted", err.Error())
+		reason := s.recordRefusal(ctx, tool, args, "Not accepted", err.Error())
 		s.t.svc.metrics.Add(metrics.AssistantBriefs, 1, metrics.Attrs{"outcome": "refused"})
-		if attempt >= BriefAnswerAttempts {
+		// FINAL ON THE LAST ATTEMPT, or in the turn's last round, where no
+		// round is left for a retry: the turn ends brief_invalid with this
+		// reason rather than as a step limit nobody reached for.
+		round, stamped := toolloop.CallRound(ctx)
+		final := attempt >= BriefAnswerAttempts ||
+			(stamped && reads > 0 && round >= reads+BriefAnswerAttempts)
+		// WHY, IN THE ENGINE'S OWN LOG: the reason names fields, counts and
+		// caps, never the brief's lines, which are the person's records in
+		// the model's words.
+		s.t.svc.log.WarnContext(ctx, "assistant_brief_refused", "turn", s.t.id,
+			"attempt", attempt, "attempts", BriefAnswerAttempts, "final", final,
+			"reason", reason)
+		if final {
+			// THE TURN ENDS HERE, so the call is never answered: a CLI
+			// reports its relay closed under it ("Connection closed"),
+			// which is the turn's end and not a fault of the relay.
 			return toolloop.ToolResult{}, fmt.Errorf("%w: %w", errBriefInvalid, err)
 		}
 		return failed(mcp.Classify(mcp.RefusalInvalid, err), "The brief was not accepted: "+
-			redact.Secrets(err.Error())+". Call answer_brief again with that fixed; this is "+
-			"the last attempt."), nil
+			reason+". Call answer_brief again with every one of these fixed; this is the "+
+			"last attempt."), nil
 	}
 	step := s.t.stepStart(tool, args, nil, "")
 	card, err := s.resolveBrief(ctx, draft)

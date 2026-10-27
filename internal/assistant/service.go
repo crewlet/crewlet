@@ -519,7 +519,14 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if briefing {
 		run.messages = buildBriefMessages(in)
 		run.meter = &briefMeter{inner: meter}
-		run.steps = min(run.steps, BriefMaxSteps)
+		// THE ANSWER'S ROUNDS ARE KEPT: reads run in the first rounds, and
+		// the answer and its one retry each have one of their own after
+		// them ([BriefReadRounds]).
+		reads := min(run.steps, BriefReadRounds)
+		t.mu.Lock()
+		t.brief.readRounds = reads
+		t.mu.Unlock()
+		run.rounds = reads + BriefAnswerAttempts
 		run.terminate = []string{catalog.AnswerBriefTool}
 	}
 	admitted, started = false, true

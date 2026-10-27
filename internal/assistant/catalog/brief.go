@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -57,7 +58,12 @@ var brief = sync.OnceValues(func() (Tool, error) {
 	tones := []string{string(wire.BriefWarning), string(wire.BriefNeutral),
 		string(wire.BriefDanger)}
 	actions := []string{BriefActionOpen, BriefActionAsk, BriefActionNone}
-	line := func(description string, runes int) *schema { return text(description, runes*4) }
+	// EVERY LINE STATES ITS CAP, in the schema's maxLength and in its words,
+	// in the characters the engine counts ([briefLine]), so a model meets it
+	// as it writes rather than learning it from a refusal.
+	line := func(description string, max int) *schema {
+		return chars(fmt.Sprintf("%s One line, at most %d characters.", description, max), max)
+	}
 	need := object([]string{"ref_kind", "ref_id", "text", "tone", "action"}, map[string]*schema{
 		"ref_kind": oneOf("The kind of the record this row is about.", kinds...),
 		"ref_id": text("The record's key, handle or id exactly as a read in this turn "+
@@ -86,17 +92,21 @@ var brief = sync.OnceValues(func() (Tool, error) {
 	t := Tool{
 		Name: AnswerBriefTool, Kind: KindBrief, Tier: TierRead,
 		Phrase: "write the brief",
-		Description: "Answer with the brief, once you have read what it needs. Call it exactly " +
-			"once; it is your whole answer, and you write nothing else.",
+		Description: fmt.Sprintf("Answer with the brief, once you have read what it needs. "+
+			"Call it exactly once; it is your whole answer, and you write nothing else. Every "+
+			"line is one line within its cap: the summary at most %d characters, a row's text "+
+			"and detail and the recommendation at most %d, a question at most %d.",
+			wire.BriefSummaryMaxRunes, wire.BriefTextMaxRunes, wire.BriefQuestionMaxRunes),
 		schema: object([]string{"summary", "needs", "follow_ups"}, map[string]*schema{
 			"summary": line("What is going on, in one sentence with numbers and names.",
 				wire.BriefSummaryMaxRunes),
-			"needs": {kind: "array", description: "What waits on the person, most pressing " +
-				"first, at most three; empty when nothing does.", maxItems: wire.BriefMaxNeeds,
-				items: need},
+			"needs": {kind: "array", description: fmt.Sprintf("What waits on the person, "+
+				"most pressing first, at most %d; empty when nothing does.", wire.BriefMaxNeeds),
+				maxItems: wire.BriefMaxNeeds, items: need},
 			"recommended": step,
-			"follow_ups": {kind: "array", description: "Questions the person may ask next, " +
-				"each answerable from what they can read.", maxItems: wire.BriefMaxFollowUps,
+			"follow_ups": {kind: "array", description: fmt.Sprintf("Questions the person "+
+				"may ask next, at most %d, each answerable from what they can read.",
+				wire.BriefMaxFollowUps), maxItems: wire.BriefMaxFollowUps,
 				items: line("A question.", wire.BriefQuestionMaxRunes)},
 		}),
 		Label: func(map[string]any) string { return "Writing the brief" },
@@ -149,17 +159,28 @@ type BriefDraftStep struct {
 
 // ParseBrief checks an [AnswerBriefTool] call and reads it into a draft: the
 // schema, then what a schema cannot say (an open names its record, an ask its
-// question, every line a plain line within its bound). An error names the
-// field, for the model to write it again.
+// question, every line a plain line within its bound). An error names EVERY
+// field at fault, not the first: the model writes a refused brief again once,
+// and a refusal that named one fault of several would spend that attempt on
+// the next.
 func ParseBrief(args map[string]any) (BriefDraft, error) {
-	if err := BriefTool().Check(args); err != nil {
-		return BriefDraft{}, err
+	if args == nil {
+		args = map[string]any{}
+	}
+	if found := BriefTool().schema.problems(AnswerBriefTool, args); len(found) > 0 {
+		return BriefDraft{}, refusedFor(found)
+	}
+	var found []error
+	note := func(errs ...error) {
+		for _, err := range errs {
+			if err != nil {
+				found = append(found, err)
+			}
+		}
 	}
 	a := Args(args)
 	d := BriefDraft{Summary: strings.TrimSpace(a.String("summary"))}
-	if err := briefLine("summary", d.Summary, wire.BriefSummaryMaxRunes, true); err != nil {
-		return BriefDraft{}, err
-	}
+	note(briefLine("summary", d.Summary, wire.BriefSummaryMaxRunes, true))
 	for i, raw := range list(args["needs"]) {
 		n := Args(asObject(raw))
 		path := fmt.Sprintf("needs[%d]", i)
@@ -170,14 +191,10 @@ func ParseBrief(args map[string]any) (BriefDraft, error) {
 			Tone: wire.BriefTone(n.String("tone")), Action: n.String("action"),
 			Question: strings.TrimSpace(n.String("question")),
 		}
-		if err := errorsOf(
-			refID(path, need.Ref.ID),
+		note(refID(path, need.Ref.ID),
 			briefLine(path+".text", need.Text, wire.BriefTextMaxRunes, true),
 			briefLine(path+".detail", need.Detail, wire.BriefTextMaxRunes, false),
-			briefAction(path, need.Action, need.Question),
-		); err != nil {
-			return BriefDraft{}, err
-		}
+			briefAction(path, need.Action, need.Question))
 		d.Needs = append(d.Needs, need)
 	}
 	if raw, ok := args["recommended"]; ok {
@@ -188,32 +205,34 @@ func ParseBrief(args map[string]any) (BriefDraft, error) {
 			ref := wire.ResourceRef{Kind: wire.ResourceKind(r.String("ref_kind")),
 				ID: strings.TrimSpace(r.String("ref_id"))}
 			if ref.Kind == "" {
-				return BriefDraft{}, fmt.Errorf("%w: recommended opens a record and names no "+
-					"ref_kind", ErrInvalidArguments)
+				note(errors.New("recommended opens a record and names no ref_kind"))
 			}
-			if err := refID("recommended", ref.ID); err != nil {
-				return BriefDraft{}, err
-			}
+			note(refID("recommended", ref.ID))
 			step.Ref = &ref
 		}
-		if err := errorsOf(
-			briefLine("recommended.text", step.Text, wire.BriefTextMaxRunes, true),
-			briefAction("recommended", step.Action, step.Question),
-		); err != nil {
-			return BriefDraft{}, err
-		}
+		note(briefLine("recommended.text", step.Text, wire.BriefTextMaxRunes, true),
+			briefAction("recommended", step.Action, step.Question))
 		d.Recommended = step
 	}
 	for i, raw := range list(args["follow_ups"]) {
 		q, _ := raw.(string)
 		q = strings.TrimSpace(q)
-		if err := briefLine(fmt.Sprintf("follow_ups[%d]", i), q, wire.BriefQuestionMaxRunes,
-			true); err != nil {
-			return BriefDraft{}, err
-		}
+		note(briefLine(fmt.Sprintf("follow_ups[%d]", i), q, wire.BriefQuestionMaxRunes, true))
 		d.FollowUps = append(d.FollowUps, q)
 	}
+	if len(found) > 0 {
+		return BriefDraft{}, refusedFor(found)
+	}
 	return d, nil
+}
+
+// refusedFor is one refusal naming every fault found, in the order found.
+func refusedFor(found []error) error {
+	reasons := make([]string, 0, len(found))
+	for _, err := range found {
+		reasons = append(reasons, err.Error())
+	}
+	return fmt.Errorf("%w: %s", ErrInvalidArguments, strings.Join(reasons, "; "))
 }
 
 // briefLine holds one of a brief's lines to one plain line of at most max
@@ -221,12 +240,12 @@ func ParseBrief(args map[string]any) (BriefDraft, error) {
 func briefLine(path, s string, max int, required bool) error {
 	switch {
 	case required && s == "":
-		return fmt.Errorf("%w: %s is empty", ErrInvalidArguments, path)
+		return fmt.Errorf("%s is empty", path)
 	case utf8.RuneCountInString(s) > max:
-		return fmt.Errorf("%w: %s is %d characters and the most it takes is %d",
-			ErrInvalidArguments, path, utf8.RuneCountInString(s), max)
+		return fmt.Errorf("%s is %d characters and the most it takes is %d", path,
+			utf8.RuneCountInString(s), max)
 	case strings.ContainsAny(s, "\r\n"):
-		return fmt.Errorf("%w: %s is more than one line", ErrInvalidArguments, path)
+		return fmt.Errorf("%s is more than one line", path)
 	}
 	return nil
 }
@@ -236,10 +255,10 @@ func briefLine(path, s string, max int, required bool) error {
 func briefAction(path, action, question string) error {
 	switch {
 	case action == BriefActionAsk && question == "":
-		return fmt.Errorf("%w: %s asks and names no question", ErrInvalidArguments, path)
+		return fmt.Errorf("%s asks and names no question", path)
 	case action != BriefActionAsk && question != "":
-		return fmt.Errorf("%w: %s names a question and its action is %s, not ask",
-			ErrInvalidArguments, path, action)
+		return fmt.Errorf("%s names a question and its action is %s, not ask", path,
+			action)
 	}
 	return briefLine(path+".question", question, wire.BriefQuestionMaxRunes, false)
 }
@@ -248,18 +267,7 @@ func briefAction(path, action, question string) error {
 // break. A seat may be cited by its name, which has spaces in it.
 func refID(path, id string) error {
 	if id == "" || strings.ContainsAny(id, "\r\n\t") {
-		return fmt.Errorf("%w: %s names no record id, or one over more than one line",
-			ErrInvalidArguments, path)
-	}
-	return nil
-}
-
-// errorsOf is the first error of several checks.
-func errorsOf(errs ...error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
+		return fmt.Errorf("%s names no record id, or one over more than one line", path)
 	}
 	return nil
 }
