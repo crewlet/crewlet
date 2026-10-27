@@ -105,25 +105,36 @@ var codeLogNegligible = map[code.OpKind]string{
 	code.OpTrimmed: "the trim's sweep of the anchors under its floor, one record per " +
 		"statelog.AnchorsPerTrimmedRecord, and the log keeps an anchor a repository and a " +
 		"name, never one a push or a read",
+	code.OpExpungeRequest: "a person's purge of a repository's unreachable objects: a command " +
+		"a person runs, and one asked while another is open is that one",
 }
 
 // codeLogUnwritten is every op of the code domain that no node of this build
-// appends, with the package whose code would append it and how: the day leaves
-// the op out while that package does not exist, and
+// appends, with the package — or the file in one — whose code would append it
+// and how: the day leaves the op out while that writer does not exist, and
 // TestTheCodeLogsDayPricesEveryRecordItTakes fails the day it does.
 var codeLogUnwritten = map[code.OpKind]struct{ writer, how string }{
 	code.OpCompact: {"internal/code/compact", "a compaction is proposed by a " +
 		"repository's compactor alone, through the estate's code.compact"},
 	code.OpRetireSweep: {"internal/code/compact", "a sweep removes the pack rows a " +
 		"compaction retired, and nothing is retired while nothing compacts"},
+	// THE EXPUNGER'S OWN FILE, not its package: the compactor's package
+	// arrives first, and an expunge's records are appended only by the
+	// expunger beside it, whose begin can list a thousand packs — what the
+	// day must price once they exist, which its writer is the one to
+	// measure.
+	code.OpExpungeBegin: {"internal/code/compact/expunge.go", "an expunge is begun by a " +
+		"repository's maintainer alone, through the estate's code.expunge"},
+	code.OpExpungeCommit: {"internal/code/compact/expunge.go", "an expunge is committed by " +
+		"the maintainer that began it, through the estate's code.expunge"},
 }
 
 // codeLogKinds is every kind of object the code log's records are on, and how
 // its day counts the records on it.
 var codeLogKinds = map[code.ObjectKind]string{
 	code.KindRepo: "a push is on its repository (codeLogDay); so are its settings, deletion, " +
-		"restore and purge (codeLogNegligible) and a compaction and its sweep " +
-		"(codeLogUnwritten)",
+		"restore, purge and a person's purge of its unreachable objects (codeLogNegligible), and " +
+		"a compaction, its sweep and an expunge's begin and commit (codeLogUnwritten)",
 	code.KindBarrier:    "a git client's read (codeLogDay)",
 	code.KindName:       "a repository's create, on the name it claims (codeLogNegligible)",
 	code.KindEviction:   "an operator's eviction or readmission (codeLogNegligible)",
