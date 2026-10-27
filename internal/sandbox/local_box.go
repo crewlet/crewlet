@@ -887,9 +887,15 @@ func ResolveContainerRuntime(preference string) (string, error) {
 				return found, nil
 			}
 		}
+		// NO RUNTIME FIELD IN THE REMEDY. Each value it takes is looked up
+		// on this same PATH, so naming docker or podman outright cannot find
+		// what this loop did not: it only trades this refusal for the one
+		// above. The directory is a remedy of its own because an engine
+		// started by a service manager can run with a narrower PATH than the
+		// login shell its operator checks with.
 		return "", localErrorf("run_in %q is set but neither "+
-			"docker nor podman is on the engine host's PATH. Install one, set "+
-			"providers.sandbox.local.runtime explicitly, or use run_in %q", Container, Direct)
+			"docker nor podman is on the engine host's PATH. Install one, put the "+
+			"directory that holds it on that PATH, or use run_in %q", Container, Direct)
 	default:
 		return "", localErrorf("providers.sandbox.local.runtime %q is not one of "+
 			`"auto", "docker" or "podman"`, preference)

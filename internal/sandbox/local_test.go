@@ -90,6 +90,14 @@ func TestContainerModeRefusesToStartWithoutARuntimeOnThePath(t *testing.T) {
 		if runtime == "" || runtime == "auto" {
 			want = []string{"neither docker nor podman is on the engine host's PATH",
 				fmt.Sprintf("use run_in %q", Direct)}
+			// AND NOT THE RUNTIME FIELD. Every value it takes is looked up on
+			// this same PATH, and this case refuses each one named outright,
+			// so offering it sends the operator to a change that cannot build
+			// the cell, and to a second refusal after it.
+			if strings.Contains(refusal.Error(), "providers.sandbox.local.runtime") {
+				t.Errorf("runtime %q: the refusal offers providers.sandbox.local.runtime, "+
+					"though no value of it builds this cell on this PATH: %v", runtime, refusal)
+			}
 		}
 		for _, phrase := range want {
 			if !strings.Contains(refusal.Error(), phrase) {
