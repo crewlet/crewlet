@@ -1589,8 +1589,8 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		BodyAt:      now,
 	}
 	if task.Title == "" {
-		return failed("create_work_item needs a `title` — one line saying what " +
-			"the work is."), nil
+		return toPerson(failed("create_work_item needs a `title`: one line "+
+			"saying what the work is."), caveat.TitleMissing()), nil
 	}
 	if raw, held := args["fields"]; held {
 		fields, refusal := fieldMap(raw)
@@ -3445,11 +3445,11 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// A CHOICE THAT ANSWERS NOTHING: no `answers` was named and no
 		// open question on the item is addressed to this caller, so there
 		// is no decision for the option to be one of.
-		return failed(fmt.Sprintf("comment_on_work_item: `choice` %q answers "+
-			"a decision, and no open question on %s is addressed to you. Name "+
-			"the question with `answers` (its comment id), or answer in "+
-			"`body` without a choice.", clip(comment.Choice),
-			before.Named())), nil
+		return toPerson(failed(fmt.Sprintf("comment_on_work_item: `choice` %q "+
+			"answers a decision, and no open question on %s is addressed to "+
+			"you. Name the question with `answers` (its comment id), or answer "+
+			"in `body` without a choice.", clip(comment.Choice),
+			before.Named())), caveat.NoQuestionForChoice()), nil
 	}
 
 	// A COMMENT RIDES THE TASK'S OWN WRITE, because a comment is a

@@ -2,17 +2,18 @@ package caveat_test
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/caveat/caveattest"
 )
 
 // samples is every constructor in the catalog, called with the kind of facts
@@ -34,24 +35,23 @@ var samples = map[string]caveat.Caveat{
 		"the page has no <meta name=\"viewport\">, so it renders at desktop width on a phone"),
 }
 
-// What a person's words may never carry, each with why: every one of them is
-// a model's vocabulary, which a person sees no control for.
-var modelVocabulary = []struct {
-	pattern *regexp.Regexp
-	what    string
-}{
-	// `default_assignee`, `if_match`, `comment_id`, and every builtin
-	// tool's name: an argument or a tool is spelled in snake case, and
-	// nothing a person reads on a screen is.
-	{regexp.MustCompile(`\b[a-z0-9]+(?:_[a-z0-9]+)+\b`), "a snake_case argument or tool name"},
-	// `ask: ana`, `labels: [...]`: an argument as a model writes it.
-	{regexp.MustCompile(`\b[a-z]+:\s`), "an argument written as `name: value`"},
-	// The mark a tool's sentence puts around a value it names.
-	{regexp.MustCompile("`"), "a backticked argument"},
-	// A row's internal id, which no screen shows.
-	{regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`), "an internal id"},
-	// Process vocabulary a model is told about and a person never is.
-	{regexp.MustCompile(`(?i)\b(operation|node|writer|tool|argument|call)\b`), "engine-internal vocabulary"},
+// refusalSamples is every constructor in the refusal catalog, called with the
+// kind of facts it is called with in production. The coverage walk below
+// fails for a constructor this table does not call.
+var refusalSamples = map[string]caveat.Refusal{
+	"TitleMissing":         caveat.TitleMissing(),
+	"TitleTooLong":         caveat.TitleTooLong(),
+	"DescriptionTooLong":   caveat.DescriptionTooLong(),
+	"CommentTooLong":       caveat.CommentTooLong(),
+	"NotAQuestion":         caveat.NotAQuestion(),
+	"QuestionRemoved":      caveat.QuestionRemoved(),
+	"AskedSomebodyElse":    caveat.AskedSomebodyElse("backend-engineer"),
+	"NoQuestionForChoice":  caveat.NoQuestionForChoice(),
+	"QuestionHasNoOptions": caveat.QuestionHasNoOptions(),
+	"NotAnOption":          caveat.NotAnOption(),
+	"ArtifactBreaksPolicy": caveat.ArtifactBreaksPolicy(),
+	"ArtifactQuotaReached": caveat.ArtifactQuotaReached(),
+	"ArtifactTrashed":      caveat.ArtifactTrashed(),
 }
 
 // EVERY CAVEAT A PERSON CAN BE SHOWN IS WORDED FOR A PERSON.
@@ -64,11 +64,6 @@ var modelVocabulary = []struct {
 // "Use ask: backend-engineer", an argument only a model can pass.
 func TestEveryCaveatAPersonCanBeShownIsWordedForAPerson(t *testing.T) {
 	t.Parallel()
-	tools := slices.Concat(builtin.WorkTools(), builtin.PageTools(),
-		builtin.ArtifactTools(), builtin.ArtifactDataTools())
-	if len(tools) == 0 {
-		t.Fatal("no builtin tool names to hold the person phrasings against")
-	}
 	for name, c := range samples {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -91,28 +86,102 @@ func TestEveryCaveatAPersonCanBeShownIsWordedForAPerson(t *testing.T) {
 				// words are the linter's, held by its own suite.
 				return
 			}
-			person := c.Person()
-			if !strings.HasSuffix(person, ".") {
-				t.Errorf("%s's person phrasing is not a sentence: %q", name, person)
-			}
-			for _, tool := range tools {
-				if strings.Contains(person, tool) {
-					t.Errorf("%s tells a person to use the tool %s: %q", name, tool, person)
-				}
-			}
-			for _, banned := range modelVocabulary {
-				if found := banned.pattern.FindString(person); found != "" {
-					t.Errorf("%s tells a person %q, %s: %q", name, found, banned.what, person)
-				}
+			for _, problem := range caveattest.Problems(c.Person()) {
+				t.Errorf("%s's person phrasing is not worded for a person: %s: %q",
+					name, problem, c.Person())
 			}
 		})
 	}
 }
 
-// THE WALK ABOVE COVERS THE WHOLE CATALOG: every exported constructor this
-// package declares is in [samples], and every code has a constructor there.
-// Read from the source, so a constructor added without a sample fails here
-// rather than shipping an unread person phrasing.
+// EVERY REFUSAL A PERSON CAN BE SHOWN IS WORDED FOR A PERSON (ADR-0060).
+//
+// A refusal's person phrasing is constructed only here, so this walk over the
+// catalog is a walk over every refusal sentence the act route can answer as
+// `detail`: each must name no tool, argument or internal id, and end as a
+// sentence. The class it holds: a decision answered in the dashboard Inbox
+// was refused with "change the argument this names (`answers`, or `choice`)".
+func TestEveryRefusalAPersonCanBeShownIsWordedForAPerson(t *testing.T) {
+	t.Parallel()
+	for name, r := range refusalSamples {
+		if r.IsZero() {
+			t.Errorf("%s makes no phrasing at all", name)
+			continue
+		}
+		for _, problem := range caveattest.Problems(r.Person()) {
+			t.Errorf("%s is not worded for a person: %s: %q", name, problem, r.Person())
+		}
+	}
+}
+
+// THE CHECK THE WALKS SHARE FAILS ON A MODEL'S REFUSAL: the sentence a tool
+// answered a person's decision with before ADR-0060, verbatim, is refused for
+// every mark of a model's vocabulary it carries. A check that passed it would
+// pass every walk above while proving nothing.
+func TestTheCheckRefusesAModelsRefusal(t *testing.T) {
+	t.Parallel()
+	model := "comment_on_work_item was refused: the choice \"ship\" is not an " +
+		"option of the decision in 0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b on task " +
+		"ENG-7. Nothing was posted, change the argument this names (`answers`, " +
+		"or `choice`) and comment again."
+	problems := caveattest.Problems(model)
+	for _, want := range []string{"comment_on_work_item", "`", "internal id",
+		"engine-internal vocabulary"} {
+		if !slices.ContainsFunc(problems, func(p string) bool {
+			return strings.Contains(p, want)
+		}) {
+			t.Errorf("the check missed %q in a model's refusal; it said %q", want, problems)
+		}
+	}
+	if got := caveattest.Problems(caveat.NotAnOption().Person()); len(got) != 0 {
+		t.Errorf("the person's phrasing of the same refusal was refused: %q", got)
+	}
+}
+
+// A REFUSAL'S WORDS RIDE ITS ERROR: [caveat.Saying] keeps the error's message
+// and every identity it answers, and [caveat.RefusalOf] reads the words back,
+// through any wrapping a caller adds.
+func TestARefusalsWordsRideItsError(t *testing.T) {
+	t.Parallel()
+	base := errors.New("worklet: the choice is not an option")
+	err := fmt.Errorf("thread: %w", caveat.Saying(base, caveat.NotAnOption()))
+	if !errors.Is(err, base) {
+		t.Error("the phrasing hid the error it was put beside")
+	}
+	if err.Error() != "thread: "+base.Error() {
+		t.Errorf("the phrasing changed the message: %q", err.Error())
+	}
+	if got := caveat.RefusalOf(err); got != caveat.NotAnOption() {
+		t.Errorf("read back %q, want the phrasing it was given", got.Person())
+	}
+	if !caveat.RefusalOf(base).IsZero() {
+		t.Error("an error carrying no phrasing read as one")
+	}
+	if caveat.Saying(nil, caveat.NotAnOption()) != nil {
+		t.Error("a nil error became one")
+	}
+	//nolint:errorlint // Identity is the claim: a zero phrasing hands back err itself.
+	if caveat.Saying(base, caveat.Refusal{}) != base {
+		t.Error("a zero phrasing wrapped the error")
+	}
+	raw, err := json.Marshal(caveat.Said{Words: caveat.QuestionRemoved()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back caveat.Said
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Words != caveat.QuestionRemoved() {
+		t.Errorf("a phrasing crossed as %q", back.Words.Person())
+	}
+}
+
+// THE WALKS ABOVE COVER THE WHOLE CATALOG: every exported constructor this
+// package declares, of a caveat or of a refusal, is in [samples] or
+// [refusalSamples], and every caveat code has a constructor there. Read from
+// the source, so a constructor added without a sample fails here rather than
+// shipping an unread person phrasing.
 func TestTheWalkCoversEveryConstructorAndCode(t *testing.T) {
 	t.Parallel()
 	entries, err := os.ReadDir(".")
@@ -139,7 +208,13 @@ func TestTheWalkCoversEveryConstructorAndCode(t *testing.T) {
 			if len(results) != 1 {
 				continue
 			}
-			if id, ok := results[0].Type.(*ast.Ident); ok && id.Name == "Caveat" {
+			// A READER OF ONE, not a constructor: [caveat.RefusalOf] takes
+			// the error a phrasing rides and writes no words of its own.
+			if readsAnError(fn) {
+				continue
+			}
+			if id, ok := results[0].Type.(*ast.Ident); ok &&
+				(id.Name == "Caveat" || id.Name == "Refusal") {
 				constructors = append(constructors, fn.Name.Name)
 			}
 		}
@@ -148,7 +223,9 @@ func TestTheWalkCoversEveryConstructorAndCode(t *testing.T) {
 		t.Fatal("found no constructors: the walk is reading the wrong source")
 	}
 	for _, name := range constructors {
-		if _, sampled := samples[name]; !sampled {
+		_, sampled := samples[name]
+		_, refusal := refusalSamples[name]
+		if !sampled && !refusal {
 			t.Errorf("the constructor %s has no sample, so its person phrasing "+
 				"is never read: add it to samples", name)
 		}
@@ -162,6 +239,16 @@ func TestTheWalkCoversEveryConstructorAndCode(t *testing.T) {
 			t.Errorf("no constructor in samples makes a caveat of code %q", code)
 		}
 	}
+}
+
+// readsAnError reports whether fn takes an error, which no constructor does.
+func readsAnError(fn *ast.FuncDecl) bool {
+	for _, param := range fn.Type.Params.List {
+		if id, ok := param.Type.(*ast.Ident); ok && id.Name == "error" {
+			return true
+		}
+	}
+	return false
 }
 
 // WHETHER A PERSON MUST ACT IS THE CODE'S, and every code states one: the

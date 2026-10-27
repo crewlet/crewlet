@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -245,6 +246,12 @@ var typedKinds = []typedKind{
 	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
+
+	// A REFUSAL'S WORDS FOR A PERSON, which a writer puts beside its
+	// error (ADR-0060): carried so a write refused on a data node answers
+	// a person on this one with them. A peer that does not send it is
+	// answered with the refusal code's own sentence, never a model's.
+	{"caveat.Said", reflect.TypeFor[*caveat.Said]()},
 }
 
 // wireError is an error as it crosses: what it says, and what it is.

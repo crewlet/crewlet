@@ -603,9 +603,10 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		for _, f := range policy.Findings {
 			lines = append(lines, "- "+f.String())
 		}
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the version: "+
-			"it breaks the artifact policy, so nothing was published. Fix every finding "+
-			"and publish again:\n%s", tool, strings.Join(lines, "\n")))
+		return toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused "+
+			"the version: it breaks the artifact policy, so nothing was published. Fix "+
+			"every finding and publish again:\n%s", tool, strings.Join(lines, "\n"))),
+			caveat.ArtifactBreaksPolicy())
 	case errors.As(err, &edit):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused edit %d on "+
 			"%q (%s), so nothing was published. An `old_str` must be quoted exactly from "+
@@ -621,10 +622,11 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.As(err, &quota):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: the "+
-			"company's artifact quota is reached (%d in use of %d, `%s`). Nothing was "+
-			"published. Say so: an operator raises the quota, or somebody removes "+
-			"artifacts the company no longer needs.", tool, quota.Usage, quota.Limit, quota.Key))
+		return toPerson(refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused "+
+			"that: the company's artifact quota is reached (%d in use of %d, `%s`). "+
+			"Nothing was published. Say so: an operator raises the quota, or somebody "+
+			"removes artifacts the company no longer needs.", tool, quota.Usage,
+			quota.Limit, quota.Key)), caveat.ArtifactQuotaReached())
 	case errors.As(err, &pending):
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
@@ -642,8 +644,9 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the artifact is "+
-			"in the trash, and only a person restores it. Nothing was changed.", tool))
+		return toPerson(refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the "+
+			"artifact is in the trash, and only a person restores it. Nothing was "+
+			"changed.", tool)), caveat.ArtifactTrashed())
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s", tool, said))
 	case errors.Is(err, artifactsdomain.ErrConflict):

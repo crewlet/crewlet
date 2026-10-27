@@ -63,6 +63,19 @@ type Result struct {
 	// must answer the person's phrasing and never the model's, and could
 	// only otherwise read the model's out of Output.
 	Caveats []caveat.Caveat
+
+	// PersonRefusal is a call that was REFUSED, in a person's words
+	// ([caveat.Refusal]). Zero on a success, and on a refusal nobody has
+	// worded for a person yet.
+	//
+	// NEVER RENDERED, for Cause's reason: Output is the model's sentence
+	// about the same refusal, and stays the whole of what a model reads. It
+	// exists for the caller that answers a PERSON (the act route,
+	// ADR-0060), which answers this phrasing as the refusal's `detail` and
+	// never Output; where it is zero, that caller answers the refusal
+	// code's own sentence and no detail, so a refusal nobody worded for a
+	// person tells them less, and never a model's words.
+	PersonRefusal caveat.Refusal
 }
 
 // Callable is the least a phase surface needs to offer something to a model
