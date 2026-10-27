@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -444,7 +445,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"list_artifacts before creating it a different way: if it landed, it is there."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
-	out := t.deps.publishedAnswer(c, published, report, "created")
+	out := t.deps.publishedAnswer(c, published, "created")
 	if folderPath != "" {
 		out["folder"] = folderPath
 	}
@@ -452,7 +453,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["shared_with"] = []map[string]any{{"to": shareTarget(shares[0].Audience),
 			"role": string(shares[0].Role)}}
 	}
-	return jsonResult(out)
+	return caveated(out, findingCaveats(report))
 }
 
 // folder is the folder a create files into, by id, with its path ("" for the
@@ -503,7 +504,7 @@ func (t *createArtifact) requesterShare(c artifactCaller) []artifacts.Share {
 
 // publishedAnswer is a version that landed, as create and publish answer it.
 func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Published,
-	report artifactupload.Report, outcome string) map[string]any {
+	outcome string) map[string]any {
 
 	out := map[string]any{
 		"outcome": outcome, "artifact": p.Artifact.String(), "version": p.Number,
@@ -512,10 +513,25 @@ func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Publis
 	if url := d.link(p.Artifact); url != "" {
 		out["url"] = url
 	}
-	if len(report.Warnings) > 0 {
-		out["warnings"] = report.Warnings
-	}
 	return withArtifactOperation(out, c)
+}
+
+// findingCaveats is the linter's warnings about a published version, as the
+// caveats its answer carries ([caveated]): each one about a file the caller
+// wrote, in the same words for a model and a person who wrote it.
+func findingCaveats(report artifactupload.Report) []caveat.Caveat {
+	if len(report.Warnings) == 0 {
+		return nil
+	}
+	out := make([]caveat.Caveat, len(report.Warnings))
+	for i, f := range report.Warnings {
+		where := f.Path
+		if f.Line > 0 {
+			where = fmt.Sprintf("%s:%d", f.Path, f.Line)
+		}
+		out[i] = caveat.FileFinding(where, f.Message)
+	}
+	return out
 }
 
 // withArtifactOperation puts the call's `op_id` on its answer on the operator
@@ -587,9 +603,10 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		for _, f := range policy.Findings {
 			lines = append(lines, "- "+f.String())
 		}
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the version: "+
-			"it breaks the artifact policy, so nothing was published. Fix every finding "+
-			"and publish again:\n%s", tool, strings.Join(lines, "\n")))
+		return toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused "+
+			"the version: it breaks the artifact policy, so nothing was published. Fix "+
+			"every finding and publish again:\n%s", tool, strings.Join(lines, "\n"))),
+			caveat.ArtifactBreaksPolicy())
 	case errors.As(err, &edit):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused edit %d on "+
 			"%q (%s), so nothing was published. An `old_str` must be quoted exactly from "+
@@ -605,10 +622,11 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.As(err, &quota):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: the "+
-			"company's artifact quota is reached (%d in use of %d, `%s`). Nothing was "+
-			"published. Say so: an operator raises the quota, or somebody removes "+
-			"artifacts the company no longer needs.", tool, quota.Usage, quota.Limit, quota.Key))
+		return toPerson(refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused "+
+			"that: the company's artifact quota is reached (%d in use of %d, `%s`). "+
+			"Nothing was published. Say so: an operator raises the quota, or somebody "+
+			"removes artifacts the company no longer needs.", tool, quota.Usage,
+			quota.Limit, quota.Key)), caveat.ArtifactQuotaReached())
 	case errors.As(err, &pending):
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
@@ -626,8 +644,9 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the artifact is "+
-			"in the trash, and only a person restores it. Nothing was changed.", tool))
+		return toPerson(refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the "+
+			"artifact is in the trash, and only a person restores it. Nothing was "+
+			"changed.", tool)), caveat.ArtifactTrashed())
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s", tool, said))
 	case errors.Is(err, artifactsdomain.ErrConflict):
@@ -831,9 +850,9 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"get_artifact: if its head moved past your base, the publish landed."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
-	out := t.deps.publishedAnswer(c, published, report, "published")
+	out := t.deps.publishedAnswer(c, published, "published")
 	out["base_version"] = base
-	return jsonResult(out)
+	return caveated(out, findingCaveats(report))
 }
 
 // baseEntry is the entry page of the version a publish is based on, which a

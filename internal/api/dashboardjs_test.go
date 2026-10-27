@@ -1258,8 +1258,15 @@ const (
 	// a doubled baseline. A brief of the page or its open record in the
 	// drawer, drawn by uilet 0.69.0's BriefCard, with the record each screen
 	// has open reported to the assistant, took it to 4574.6 KiB. 4575 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 479<<10
+	// which still refuses a doubled baseline. Reading a landed write's
+	// caveats in a person's words off the act answer, each with whether the
+	// person must act, so the toast stays only when they must (ADR-0060),
+	// took it to 4576.5 KiB. 4577 KiB, which still refuses a doubled
+	// baseline. Telling a change nobody could confirm in the dashboard's
+	// own words, rather than the operation key's retry rule for a client
+	// (ADR-0060), took it to 4577.4 KiB. 4578 KiB, which still refuses a
+	// doubled baseline.
+	treeBudget = 4<<20 + 482<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -157,9 +157,10 @@ func outcomeOf(tool string, request exec.Request, resp exec.Response, err error)
 		// THE MODEL READS THE ROUTE'S WHOLE REFUSAL, fenced as the API's
 		// answer beside the resumed result, so it can say what to change;
 		// the card carries the person's sentence ([cards.PersonRefusal]).
-		if json.Valid(resp.Body) && len(bytes.TrimSpace(resp.Body)) > 0 {
-			out.answer = json.RawMessage(resp.Body)
-		}
+		// The route answers a person's words, so the tool's own sentence
+		// is heard beside it in process ([exec.Response.ModelDetail]) and
+		// handed to the model alone ([forTheModel]).
+		out.answer = forTheModel(resp)
 		return out
 	}
 	out := outcome{state: wire.ProposalApplied, outcome: "applied"}
@@ -254,4 +255,43 @@ func receiptSummary(tool, key string) string {
 		return "Created " + key
 	}
 	return "Applied to " + key
+}
+
+// ToolDetailKey is the key the tool's own sentence about a refusal is handed to
+// the assistant's model under, beside the route's answer: its half of the
+// refusal, which the route answers a person without (ADR-0060).
+const ToolDetailKey = "tool_detail"
+
+// forTheModel is a refused write's answer as the assistant's model reads it:
+// the route's whole answer, with the tool's own sentence beside it under
+// [ToolDetailKey] where the route told one in process. Nil for an answer that
+// carries nothing to read.
+//
+// NEVER SENT ANYWHERE BUT THE MODEL: the card and the person read the
+// refusal's code and the engine's sentence for it ([refusalOf]), and the
+// route's own answer to a browser never held this sentence at all.
+func forTheModel(resp exec.Response) json.RawMessage {
+	whole := len(bytes.TrimSpace(resp.Body)) > 0 && json.Valid(resp.Body)
+	if resp.ModelDetail == "" {
+		if !whole {
+			return nil
+		}
+		return json.RawMessage(resp.Body)
+	}
+	var body map[string]any
+	if whole && json.Unmarshal(resp.Body, &body) != nil {
+		// VALID AND NOT AN OBJECT, which no refusal envelope is: kept
+		// whole beside the sentence rather than dropped.
+		body = map[string]any{"answer": json.RawMessage(resp.Body)}
+	}
+	if body == nil {
+		body = map[string]any{}
+	}
+	body[ToolDetailKey] = resp.ModelDetail
+	raw, err := json.Marshal(body)
+	if err != nil {
+		// Unreachable: every value was decoded from JSON or is a string.
+		return nil
+	}
+	return raw
 }

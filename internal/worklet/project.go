@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -143,18 +144,19 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	// spelling means does not depend on the project, and the edit the
 	// decide applies carries the canonical day. A COPY of the edit, so
 	// the caller's own value is not rewritten under it.
-	var warnings []string
+	var caveats []caveat.Caveat
 	if edit.TargetDate != nil {
 		target := strings.TrimSpace(*edit.TargetDate)
 		if target != "" {
-			day, warning, err := coerceDay("the target date", target, w.zone())
+			day, truncated, err := coerceDay("the target date", target, w.zone())
 			if err != nil {
 				return WriteResult{}, err
 			}
-			target = day
-			if warning != "" {
-				warnings = append(warnings, warning)
+			if truncated {
+				caveats = append(caveats, caveat.TargetDateTruncated(target, day,
+					zoneName(w.zone())))
 			}
+			target = day
 		}
 		edit.TargetDate = &target
 	}
@@ -199,7 +201,7 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 	if err != nil {
 		return result, err
 	}
-	result.Warnings = append(result.Warnings, warnings...)
+	result.Caveats = append(result.Caveats, caveats...)
 	return result, nil
 }
 

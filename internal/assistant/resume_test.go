@@ -2,8 +2,10 @@ package assistant_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -111,6 +113,53 @@ func TestAnApprovalResumesTheParkedTurn(t *testing.T) {
 	if !strings.Contains(tool.Content, "approved the change") ||
 		!strings.Contains(tool.Content, "Created ENG-7.") || tool.Failed {
 		t.Errorf("the model read the approval as %+v", tool)
+	}
+}
+
+// A REFUSAL'S TOOL SENTENCE REACHES THE MODEL AND NOTHING THE BROWSER READS
+// (ADR-0060). The approval path hands the resumed model the route's answer
+// with the tool's own sentence beside it (`tool_detail`), because it is the
+// one reader that can act on it; the stream the drawer follows, its snapshot
+// and the stored transcript the drawer reloads carry the person's refusal and
+// never that sentence. Mutation: emit the decision's text as a step or a
+// message and the stream half goes red.
+func TestARefusalsToolSentenceNeverReachesTheBrowsersStream(t *testing.T) {
+	t.Parallel()
+	f, accepted, p := parkedRig(t)
+	said := "create_work_item needs a `title`: one line saying what the work is."
+	ctx := iam.WithPrincipal(context.Background(), f.Person)
+	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
+		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
+		Read: f.Grant("approve"), State: wire.ProposalFailed,
+		Failure: &wire.Failure{Refusal: wire.Refusal{Code: "invalid",
+			Message: "A work item needs a title. Add one, then try again."}},
+		Answer: []byte(`{"error":"invalid","message":"That change was refused, and ` +
+			`nothing was written.","tool_detail":` + strconv.Quote(said) + `}`),
+		Card: cardAt(p, wire.ProposalFailed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := f.Follow(accepted.TurnID, resumed.AfterSeq)
+	if done := evals.Last(frames, wire.EventDone); done == nil {
+		t.Fatal("the resumed turn never ended")
+	}
+	var tool llm.Message
+	for _, m := range f.Model.Seen() {
+		if m.Role == llm.RoleTool {
+			tool = m
+		}
+	}
+	if !strings.Contains(tool.Content, "needs a `title`") {
+		t.Errorf("the model read the refusal as %q, without the tool's sentence", tool.Content)
+	}
+	streamed, _ := json.Marshal(f.Follow(accepted.TurnID, 0))
+	stored, _ := f.Store.Transcript(t.Context(), f.Person.ID, f.Conversation)
+	kept, _ := json.Marshal(stored)
+	for what, body := range map[string][]byte{"the stream": streamed, "the transcript": kept} {
+		if strings.Contains(string(body), "needs a `title`") ||
+			strings.Contains(string(body), "tool_detail") {
+			t.Errorf("%s the browser reads carries the tool's sentence", what)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package artifactsapi_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,8 +10,10 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -72,7 +75,7 @@ func TestALinkNeedsAReadOfTheArtifact(t *testing.T) {
 
 // A LINK NEEDS A WRITE OF THE WORK ITEM, decided as `update_work_item` decides
 // it: a caller who may read the artifact and does not use Worklet is
-// refused naming the verb, and nothing is read or written.
+// refused naming the verb as `action`, and nothing is read or written.
 //
 // Mutation: drop mayUpdateWorkItem from the handler and the link lands.
 func TestALinkNeedsAWriteOfTheWorkItem(t *testing.T) {
@@ -82,7 +85,10 @@ func TestALinkNeedsAWriteOfTheWorkItem(t *testing.T) {
 	if w.Code != http.StatusForbidden || errorOf(t, w) != "unauthorized" {
 		t.Fatalf("a link by a viewer without Worklet: %d %s", w.Code, w.Body)
 	}
-	if !strings.Contains(w.Body.String(), "update_work_item") {
+	var refusal map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &refusal); err != nil ||
+		refusal[operator.KeyAction] != string(authz.ActionWorkUpdate) {
+
 		t.Errorf("the refusal does not name the verb it refused: %s", w.Body)
 	}
 	if calls, asked := g.writes.all(), g.work.reads(); len(calls) != 0 || len(asked) != 0 {

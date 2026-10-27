@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -229,8 +230,29 @@ func (e *TextCapError) Error() string {
 		"page and link it here", e.Field, e.Size, e.Limit)
 }
 
-// Unwrap marks the refusal as one about CONTENT; see [ErrInvalid].
-func (e *TextCapError) Unwrap() error { return ErrInvalid }
+// Unwrap marks the refusal as one about CONTENT ([ErrInvalid]), and carries it
+// in a person's words for the field it is about (ADR-0060).
+func (e *TextCapError) Unwrap() []error {
+	out := []error{ErrInvalid}
+	if words := e.person(); !words.IsZero() {
+		out = append(out, &caveat.Said{Words: words})
+	}
+	return out
+}
+
+// person is the refusal in a person's words, or none for a field nobody has
+// worded one for.
+func (e *TextCapError) person() caveat.Refusal {
+	switch e.Field {
+	case TextTitle:
+		return caveat.TitleTooLong()
+	case TextBody:
+		return caveat.DescriptionTooLong()
+	case TextComment:
+		return caveat.CommentTooLong()
+	}
+	return caveat.Refusal{}
+}
 
 // Spend is a task's running totals, for ever.
 //
