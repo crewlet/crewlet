@@ -54,8 +54,9 @@ import (
 // page's staged entry as soon as the stat has counted past the page
 // (cache.MemoBatch.Extend), so a stat's run holds one page's counts at a time
 // however many files it counts. Reading a file page by page costs one stream
-// of it. A comparison, whose answer is one page, is memoized whole; a
-// landed-in read never, since its answer moves with the target.
+// of it. A comparison, whose answer is one page, is memoized whole; an
+// interdiff's pages as a diff's are; and a landed-in read, a revision's facts
+// and a re-anchoring never (memoizable says why).
 //
 // # A page fits whatever it is stamped with
 //
@@ -135,13 +136,33 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 		parts = append(parts, paths...)
 	case code.GitCompare:
 		parts = append(parts, whole[q.Compare.Base], whole[q.Compare.Head])
+	case code.GitInterdiff:
+		// THE FILTER AS THE READ APPLIES IT (interdiffFilter): none where
+		// the bases match or either revision touches all — two queries whose
+		// lists differ then read one page — and otherwise the union of the
+		// touched paths, sorted and once each.
+		file, _ := code.GitPath("interdiff.file", q.Interdiff.File, q.Interdiff.FileB64, true)
+		f := r.interdiffFilter()
+		parts = append(parts, whole[q.Interdiff.FromHead], whole[q.Interdiff.ToHead], file,
+			strconv.FormatBool(f.filters()), strconv.Itoa(len(f.paths)))
+		parts = append(parts, f.paths...)
 	}
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)
 }
 
 // memoizable reports whether q's kind is answered from the memo at all: every
-// kind but a landed-in read, whose answer moves with its target.
-func memoizable(q code.GitQuery) bool { return q.Kind != code.GitLandedIn }
+// kind but a landed-in read, whose answer moves with its target; a revision's
+// facts, asked once a revision and a target by whoever records them, and
+// whose patch-id a node too loaded to finish it omits — an answer no page
+// should keep; and a re-anchoring, a check and one diff of a few blobs, keyed
+// by a list of anchors each caller makes anew.
+func memoizable(q code.GitQuery) bool {
+	switch q.Kind {
+	case code.GitLandedIn, code.GitRevisionFacts, code.GitReanchor:
+		return false
+	}
+	return true
+}
 
 // recallWhole is the memo's answer to a read naming whole ids alone, asked
 // before any git runs — and on a miss, the answer of the read cutting the same
@@ -374,7 +395,7 @@ func appendPage(buf []byte, p memoPage) []byte {
 		w.int(b.StartByte)
 		w.str(b.Text)
 		w.flag(b.Continues)
-	case code.GitDiff:
+	case code.GitDiff, code.GitInterdiff:
 		d := a.Diff
 		w.str(d.Base)
 		w.str(d.Head)
@@ -428,16 +449,17 @@ func appendFile(w *pageWriter, f code.DiffFile, with bool) {
 // were counted into the entry already — and its totals, and nothing after a
 // comparison.
 func appendTail(buf []byte, kind code.GitReadKind, t memoTail) []byte {
-	if kind == code.GitDiff && !t.counted {
+	diff := kind == code.GitDiff || kind == code.GitInterdiff
+	if diff && !t.counted {
 		buf = appendCounts(buf, t.files)
 	}
 	w := pageWriter(buf)
-	switch kind {
-	case code.GitTree:
+	switch {
+	case kind == code.GitTree:
 		w.int(t.total)
-	case code.GitBlob:
+	case kind == code.GitBlob:
 		w.int(t.lines)
-	case code.GitDiff:
+	case diff:
 		w.int(t.total)
 		w.int(t.added)
 		w.int(t.deleted)
@@ -564,7 +586,7 @@ func decodePage(body []byte) (memoPage, error) {
 		a.Blob = &code.BlobAnswer{Path: r.str(), PathB64: r.str(), OID: r.str(), Size: r.size(), Binary: r.flag(),
 			StartLine: r.int(), EndLine: r.int(), StartByte: r.int(), Text: r.str(), Continues: r.flag()}
 		a.Blob.Lines = r.int()
-	case code.GitDiff:
+	case code.GitDiff, code.GitInterdiff:
 		d := &code.DiffAnswer{Base: r.str(), Head: r.str(), Patch: r.str(), Files: []code.DiffFile{}}
 		if n := r.count(); r.err == nil {
 			d.Files = make([]code.DiffFile, n)

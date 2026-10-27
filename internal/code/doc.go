@@ -464,6 +464,22 @@
 // asked of first is the estate router's: the repository's HOME, the first of
 // its rendezvous order over the live git nodes (ADR-0059).
 //
+// # A change's revisions are read by the ids their rows record
+//
+// Three of those reads are of a change's revisions: a revision's FACTS against
+// its target ([GitRevisionFacts]) — its merge base, the files it touches and
+// the patch-id of its diff — where lines anchored in one revision are in
+// another ([GitReanchor]), and what the change changed between two
+// ([GitInterdiff]). Each names its commits by the whole ids the rows record,
+// never an abbreviation: an interdiff compares two revisions' bases as ids,
+// which an abbreviation would make two spellings of one commit. A
+// revision's touched list is bounded by [MaxTouchedPaths] and by
+// [MaxTouchedBytes] of JSON, so the facts that carry it are one page; past
+// either the revision touches all. And [Reanchor] is the one rule that places
+// lines anchored in a blob, by the zero-context hunks of its diff ([Hunk]):
+// what the read answers a reader, and what a commit built from a finding's
+// suggestion splices by, so the two never place a line apart.
+//
 // # A change's class is lexed, and a directive is code
 //
 // A change's CLASS names what a review of it need not read — whitespace, or

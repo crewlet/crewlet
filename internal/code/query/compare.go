@@ -50,7 +50,7 @@ func (r *read) compareRead(ctx context.Context, objs found, m *memoRun) (code.Gi
 				code.ErrInvalid, side.field, side.rev, side.o.peeledKind)
 		}
 	}
-	mb, err := r.mergeBase(ctx, base.peeled, head.peeled)
+	mb, err := r.mergeBase(ctx, base.peeled, head.peeled, r.walkTooLong(base.peeled, head.peeled))
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
@@ -75,7 +75,7 @@ func (r *read) compareRead(ctx context.Context, objs found, m *memoRun) (code.Gi
 	if mb != "" && mb != head.peeled {
 		// What head changed since the merge base, its first page; with no
 		// common ancestor, or head one, nothing.
-		st, err := r.stat(ctx, mb, head.peeled, nil, false, 0, left,
+		st, err := r.stat(ctx, mb, head.peeled, pathFilter{}, false, 0, left,
 			"diff the merge base and head naming paths, or compare commits closer together", nil)
 		if err != nil {
 			return code.GitAnswer{}, err
@@ -89,8 +89,9 @@ func (r *read) compareRead(ctx context.Context, objs found, m *memoRun) (code.Gi
 }
 
 // mergeBase is base's and head's best common ancestor, "" where they have
-// none.
-func (r *read) mergeBase(ctx context.Context, base, head string) (string, error) {
+// none; tooLong is what a walk that runs out the read's budget of git is
+// answered, naming the narrowing its kind's asker can make.
+func (r *read) mergeBase(ctx context.Context, base, head string, tooLong error) (string, error) {
 	deadline, err := r.budget()
 	if err != nil {
 		return "", err
@@ -99,7 +100,7 @@ func (r *read) mergeBase(ctx context.Context, base, head string) (string, error)
 		Dir: r.synced.Dir, Args: []string{"merge-base", base, head}, Config: r.s.o.Cache.ServeConfig(),
 		Class: gitproc.ClassRead, Deadline: deadline, Answers: []int{1},
 	})
-	if err := r.failed(ctx, "merge base", res, err, r.walkTooLong(base, head)); err != nil {
+	if err := r.failed(ctx, "merge base", res, err, tooLong); err != nil {
 		return "", err
 	}
 	if res.Exit == 1 {

@@ -21,3 +21,12 @@ func Waiting(s *Server) int64 { return s.waiting.Load() }
 // production's MaxLandedProbes — so a case reaches the bound with a handful
 // of forced moves.
 func SetLandedProbes(s *Server, n int) { s.probes = n }
+
+// SetTouchedBounds scales the touched list s's revision facts hold — its
+// paths and its JSON, production's code.MaxTouchedPaths and
+// code.MaxTouchedBytes — so a case passes either with a handful of files.
+func SetTouchedBounds(s *Server, paths, bytes int) { s.touchedPaths, s.touchedBytes = paths, bytes }
+
+// SetPatchIDBytes scales the diff s's revision facts take a patch-id of —
+// production's MaxPatchIDDiffBytes — so a case passes it with a small change.
+func SetPatchIDBytes(s *Server, n int64) { s.patchBytes = n }

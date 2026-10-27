@@ -3,6 +3,7 @@ package query_test
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -77,6 +78,60 @@ func TestEveryAnswerFitsAPage(t *testing.T) {
 	if a := mustRead(t, s, landedQ(repo, base, "refs/heads/main", tip, at, true)); encoded(t, a) > limit {
 		t.Errorf("the landed-in answer encodes to %d bytes, past %d", encoded(t, a), limit)
 	}
+
+	// A REVISION'S FACTS: past the bound they touch all, and at it their list
+	// is the most paths of two hundred bytes code.MaxTouchedBytes holds —
+	// one page all the same.
+	if f := mustRead(t, s, factsQ(repo, head, base)); !f.RevisionFacts.TouchesAll || encoded(t, f) > limit {
+		t.Errorf("the facts of a change to %d files touch all %t in %d bytes, want all, within %d", files+1,
+			f.RevisionFacts.TouchesAll, encoded(t, f), limit)
+	}
+	most := 0
+	for most < files && code.TouchedCost(names(name, most+1)) <= code.MaxTouchedBytes {
+		most++
+	}
+	edit := func(n int, content string) string {
+		for _, p := range names(name, n) {
+			tree[p] = content
+		}
+		return x.commit(tree, fmt.Sprintf("%d files", n))
+	}
+	atBound := edit(most, "v3\n")
+	f := mustRead(t, s, factsQ(repo, atBound, head))
+	if f.RevisionFacts.TouchesAll || len(f.RevisionFacts.Touched) != most || encoded(t, f) > limit {
+		t.Errorf("the facts of a change to the %d files a list holds list %d (touch all %t) in %d bytes, want "+
+			"every one, within %d", most, len(f.RevisionFacts.Touched), f.RevisionFacts.TouchesAll, encoded(t, f),
+			limit)
+	}
+	pastBound := edit(most+1, "v4\n")
+	if f := mustRead(t, s, factsQ(repo, pastBound, atBound)); !f.RevisionFacts.TouchesAll {
+		t.Errorf("the facts of a change to %d files list %d, want them to touch all", most+1,
+			len(f.RevisionFacts.Touched))
+	}
+
+	// AN INTERDIFF kept to that list, a page at a time; and a re-anchoring of
+	// the most anchors, their ids at their longest with every byte escaped and
+	// their lines at their widest.
+	pages(t, s, interdiffQ(repo, code.InterdiffQuery{FromBase: base, FromHead: head, ToBase: head,
+		ToHead: atBound, ToTouched: f.RevisionFacts.Touched}), limit)
+	var anchors []code.LineAnchor
+	blob := strings.TrimSpace(x.git("rev-parse", atBound+":huge.txt"))
+	for i := range code.MaxReanchors {
+		anchors = append(anchors, code.LineAnchor{ID: fmt.Sprintf("%02d%s", i, strings.Repeat("<", 62)),
+			Path: "huge.txt", Side: code.SideNew, BlobOID: blob, Start: math.MaxInt - 1, End: math.MaxInt - 1})
+	}
+	if a := mustRead(t, s, reanchorQ(repo, code.ReanchorQuery{Head: atBound, Anchors: anchors})); encoded(t, a) > limit {
+		t.Errorf("the re-anchoring of %d anchors encodes to %d bytes, past %d", len(anchors), encoded(t, a), limit)
+	}
+}
+
+// names is the first n of the fixture's wide paths, by name.
+func names(name func(int) string, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = name(i)
+	}
+	return out
 }
 
 // A PAGE IS CUT AGAINST THE WHOLE ANSWER. Every field an answer carries is in

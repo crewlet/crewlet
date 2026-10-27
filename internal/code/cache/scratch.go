@@ -226,7 +226,9 @@ func (s *Scratch) discard() {
 
 // Spool is a file a request's body that outgrew memory is written to: a
 // fetch's negotiation past the host's in-memory share, which a partial clone's
-// checkout reaches by naming every blob it lacks in one request.
+// checkout reaches by naming every blob it lacks in one request. And the file
+// a revision's facts write a change's patch into, for `git patch-id` to read
+// back as the next process of the read lane (internal/code/query).
 //
 // IT HAS NO NAME. It is created under scratch/ — on the cache's volume, never
 // a TMPDIR that may be memory — and unlinked at once, so it is the OPEN FILE
@@ -235,9 +237,11 @@ func (s *Scratch) discard() {
 // included, so no spool outlives its request and none is left for a boot to
 // find; and the janitor, which measures scratch/ by walking its names, never
 // counts one against the cache's budget. That is deliberate: a spool draws on
-// the host's own allowance (internal/code/host), and counted here, one
-// reader's large request would make the budget evict warm repositories that
-// every other reader then downloads again. The caller closes it.
+// its caller's own bound — a fetch's on the host's allowance
+// (internal/code/host), a patch on the bound its patch-id is taken under
+// (query.MaxPatchIDDiffBytes) — and counted here, one reader's large request
+// would make the budget evict warm repositories that every other reader then
+// downloads again. The caller closes it.
 func (c *Cache) Spool() (*os.File, error) {
 	if c.isStopped() {
 		return nil, ErrStopped

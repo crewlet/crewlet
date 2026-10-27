@@ -37,8 +37,10 @@ import (
 // fed on its standard input — the one place a path reaches git, where no
 // option can hide (`--output=x` is a path there like any other): each id
 // itself and peeled (`<id>^{}`, what a tag names), and the tree or file the
-// read's path names (`<id>:<path>`, or `<id>^{tree}` for a root). Records end
-// in NUL both ways (-Z), so a path holding a newline is one record.
+// read's path names (`<id>:<path>`, or `<id>^{tree}` for a root) — for a
+// re-anchoring, the object at each anchor's path in the commit its side names,
+// which may be none. Records end in NUL both ways (-Z), so a path holding a
+// newline is one record.
 
 // object is one object as a check found it.
 type object struct {
@@ -61,9 +63,16 @@ type found struct {
 	// absent (an empty id) where the path names nothing.
 	path   string
 	target object
+	// placed is, for a re-anchoring, the object at each anchor's path in the
+	// commit its side names, in the query's order — absent where the path
+	// names nothing there, which places the anchor nowhere (gone) rather than
+	// refusing the read.
+	placed []object
 }
 
-// revsOf is every revision q names, once each, in the order it names them.
+// revsOf is every revision q names, once each, in the order it names them: a
+// re-anchoring's commits, then the blob of each anchor. An interdiff's bases
+// are not among them: it compares them as ids and reads neither.
 func revsOf(q code.GitQuery) []string {
 	var revs []string
 	switch q.Kind {
@@ -77,8 +86,38 @@ func revsOf(q code.GitQuery) []string {
 		revs = []string{q.Compare.Base, q.Compare.Head}
 	case code.GitLandedIn:
 		revs = []string{q.LandedIn.Commit, q.LandedIn.TargetOID}
+	case code.GitRevisionFacts:
+		revs = []string{q.RevisionFacts.Head, q.RevisionFacts.Target}
+	case code.GitInterdiff:
+		revs = []string{q.Interdiff.FromHead, q.Interdiff.ToHead}
+	case code.GitReanchor:
+		revs = []string{q.Reanchor.Head}
+		if q.Reanchor.Base != "" {
+			revs = append(revs, q.Reanchor.Base)
+		}
+		for _, a := range q.Reanchor.Anchors {
+			if !slices.Contains(revs, a.BlobOID) {
+				revs = append(revs, a.BlobOID)
+			}
+		}
 	}
 	return slices.Compact(revs)
+}
+
+// placedAt is, for a re-anchoring, each anchor's line of the batch: the
+// object at its path in the commit its side names (validated already, by
+// code.GitQuery.Validate).
+func placedAt(q *code.ReanchorQuery, whole map[string]string) []string {
+	lines := make([]string, len(q.Anchors))
+	for i, a := range q.Anchors {
+		at := whole[q.Head]
+		if a.Side == code.SideOld {
+			at = whole[q.Base]
+		}
+		p, _ := code.GitPath("path", a.Path, a.PathB64, false)
+		lines[i] = at + ":" + p
+	}
+	return lines
 }
 
 // pathOf is the path a tree or a file read names, decoded (validated
@@ -138,6 +177,10 @@ func (r *read) find(ctx context.Context) (objs found, absent string, err error) 
 			in = append(in, ids[0]+":"+objs.path)
 		}
 	}
+	placedLine := len(in)
+	if r.q.Kind == code.GitReanchor {
+		in = append(in, placedAt(r.q.Reanchor, whole)...)
+	}
 	got, err := r.check(ctx, in)
 	if err != nil {
 		return found{}, "", err
@@ -156,6 +199,9 @@ func (r *read) find(ctx context.Context) (objs found, absent string, err error) 
 	}
 	if pathLine >= 0 {
 		objs.target = got[pathLine]
+	}
+	if r.q.Kind == code.GitReanchor {
+		objs.placed = got[placedLine:]
 	}
 	return objs, "", nil
 }

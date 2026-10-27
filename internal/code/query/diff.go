@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -62,32 +64,63 @@ import (
 func (r *read) diffRead(ctx context.Context, objs found, at cursor, m *memoRun) (code.GitAnswer, error) {
 	q := r.q.Diff
 	base, head := objs.revs[q.Base], objs.revs[q.Head]
+	if err := diffable("diff.base", q.Base, base, "diff.head", q.Head, head); err != nil {
+		return code.GitAnswer{}, err
+	}
+	file, _ := code.GitPath("diff.file", q.File, q.FileB64, true)
+	return r.diffPages(ctx, diffAsk{kind: code.GitDiff, base: base.peeled, head: head.peeled, file: file,
+		renames: q.Renames, filter: underFilter(q.Paths), narrowing: "name paths, or diff commits closer together"},
+		at, m)
+}
+
+// diffable refuses a diff of two objects that are not each a commit or a
+// tree, naming the field of the first that is not.
+func diffable(baseField, baseRev string, base object, headField, headRev string, head object) error {
 	for _, side := range []struct {
 		field, rev string
 		o          object
-	}{{"diff.base", q.Base, base}, {"diff.head", q.Head, head}} {
+	}{{baseField, baseRev, base}, {headField, headRev, head}} {
 		if side.o.peeledKind != "commit" && side.o.peeledKind != "tree" {
-			return code.GitAnswer{}, fmt.Errorf("%w: %s: %s names a %s; a diff compares commits or trees",
-				code.ErrInvalid, side.field, side.rev, side.o.peeledKind)
+			return fmt.Errorf("%w: %s: %s names a %s; a diff compares commits or trees", code.ErrInvalid,
+				side.field, side.rev, side.o.peeledKind)
 		}
 	}
-	if file, _ := code.GitPath("diff.file", q.File, q.FileB64, true); file != "" {
-		return r.patchRead(ctx, base.peeled, head.peeled, file, q.Renames, at, m)
+	return nil
+}
+
+// diffAsk is the diff a read's pages are cut from: the kind that asks it — a
+// diff, or an interdiff, which is one — the two commits or trees, whole, the
+// one file a patch names or none, whether renames are detected, the files a
+// stat admits (filter), and what an asker whose stat its filter admits every
+// file of ran the read's budget out is told to narrow.
+type diffAsk struct {
+	kind       code.GitReadKind
+	base, head string
+	file       string
+	renames    bool
+	filter     pathFilter
+	narrowing  string
+}
+
+// diffPages answers d: a page of its stat, or of its one file's patch — and,
+// where m takes them, every page of either after it.
+func (r *read) diffPages(ctx context.Context, d diffAsk, at cursor, m *memoRun) (code.GitAnswer, error) {
+	if d.file != "" {
+		return r.patchRead(ctx, d, at, m)
 	}
 	page := func(files []code.DiffFile, next cursor) code.GitAnswer {
-		return code.GitAnswer{Kind: code.GitDiff, Next: formatCursor(next),
-			Diff: &code.DiffAnswer{Base: base.peeled, Head: head.peeled, Files: files}}
+		return code.GitAnswer{Kind: d.kind, Next: formatCursor(next),
+			Diff: &code.DiffAnswer{Base: d.base, Head: d.head, Files: files}}
 	}
-	envelope := code.GitAnswer{Kind: code.GitDiff, Next: widestCursor('f', 1),
-		Diff: &code.DiffAnswer{Base: base.peeled, Head: head.peeled, Files: []code.DiffFile{}, Total: widest,
+	envelope := code.GitAnswer{Kind: d.kind, Next: widestCursor('f', 1),
+		Diff: &code.DiffAnswer{Base: d.base, Head: d.head, Files: []code.DiffFile{}, Total: widest,
 			Added: widest, Deleted: widest}}
 	room := r.room(envelope)
 	var sp *statPages
 	if m != nil {
 		sp = &statPages{m: m, room: room, at: at, page: page}
 	}
-	st, err := r.stat(ctx, base.peeled, head.peeled, q.Paths, q.Renames, at.a, room,
-		"name paths, or diff commits closer together", sp)
+	st, err := r.stat(ctx, d.base, d.head, d.filter, d.renames, at.a, room, d.narrowing, sp)
 	if err != nil {
 		return code.GitAnswer{}, err
 	}
@@ -99,7 +132,7 @@ func (r *read) diffRead(ctx context.Context, objs found, at cursor, m *memoRun) 
 	a.Diff.Total, a.Diff.Added, a.Diff.Deleted = st.total, st.added, st.deleted
 	if sp != nil {
 		sp.counts.done()
-		m.place(code.GitDiff, same(memoTail{total: st.total, added: st.added, deleted: st.deleted, counted: true}))
+		m.place(d.kind, same(memoTail{total: st.total, added: st.added, deleted: st.deleted, counted: true}))
 	}
 	return a, nil
 }
@@ -273,16 +306,17 @@ func widestFile(f code.DiffFile) code.DiffFile {
 	return f
 }
 
-// stat is the page of base..head's stat that starts at the start-th file paths
-// admits, whose files may take left bytes, and the totals over every file
-// paths admits — and, where sp is set, every page after it, each staged as it
-// is cut. narrowing is what a stat naming no paths, whose one diff-tree the
-// deadline ended, tells its asker to do instead — naming paths among it,
-// since a stat that names them counts the files they admit and no other.
-func (r *read) stat(ctx context.Context, base, head string, paths []string, renames bool, start, left int,
+// stat is the page of base..head's stat that starts at the start-th file the
+// filter admits, whose files may take left bytes, and the totals over every
+// file it admits — and, where sp is set, every page after it, each staged as
+// it is cut. narrowing is what a stat its filter admits every file of, whose
+// one diff-tree the deadline ended, tells its asker to do instead — naming
+// paths among it, where it can, since a stat that names them counts the files
+// they admit and no other.
+func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, renames bool, start, left int,
 	narrowing string, sp *statPages) (statPage, error) {
 
-	p := &statParser{filter: paths, start: start, left: left, keep: len(paths) > 0, pages: sp}
+	p := &statParser{filter: filter, start: start, left: left, keep: filter.filters(), pages: sp}
 	recs := newRecords(0, gitproc.MaxLine+code.MaxGitPathBytes, p.record)
 	tail := []string{base, head}
 	if renames {
@@ -375,7 +409,7 @@ func (r *read) count(ctx context.Context, p *statParser, base, head string) erro
 // statParser reads diff-tree's raw records, then the numstat records of the
 // files they admit — diff-tree's own after them, or diff-pairs'.
 type statParser struct {
-	filter      []string
+	filter      pathFilter
 	start, left int
 	// keep is whether the admitted records are kept for diff-pairs (pairs):
 	// a filtered stat's, whose numstat is of them alone.
@@ -552,15 +586,60 @@ func (e rawEntry) file() code.DiffFile {
 	return f
 }
 
-// admits reports whether the filter admits a file at any of paths: one equal
-// to an entry of it, or under one as a directory.
-func admits(filter, paths []string) bool {
-	if len(filter) == 0 {
+// pathFilter is the files a stat or a patch admits, JUDGED HERE over git's
+// raw records and never handed to git, as a pathspec or as anything else:
+// every file (the zero filter); a diff read's paths, each admitting the file
+// it names and every file under it as a directory (underFilter); or an
+// interdiff's touched paths, each admitting the one file it names whole
+// (exactFilter) — so `a*` admits the file `a*` and never `ab`, as a pathspec
+// would without its `:(literal)` magic — looked up in a set, since a list of
+// a thousand paths matched against every record of a wide diff would cost the
+// read a thousand comparisons a record.
+type pathFilter struct {
+	under []string
+	// exact is an interdiff's set, and set whether there is one: an empty
+	// set admits no file, where the zero filter admits every one. paths is
+	// the set's paths sorted, as a memo key names them.
+	exact map[string]bool
+	set   bool
+	paths []string
+}
+
+// underFilter is a diff read's filter: each path a file, or a directory
+// above files; none admits every file.
+func underFilter(paths []string) pathFilter { return pathFilter{under: paths} }
+
+// exactFilter admits the files paths name, each whole, and no other — none
+// where paths is empty.
+func exactFilter(paths []string) pathFilter {
+	f := pathFilter{exact: make(map[string]bool, len(paths)), set: true}
+	for _, p := range paths {
+		f.exact[p] = true
+	}
+	f.paths = slices.Sorted(maps.Keys(f.exact))
+	return f
+}
+
+// filters reports whether the filter admits fewer than every file.
+func (f pathFilter) filters() bool { return f.set || len(f.under) > 0 }
+
+// admits reports whether the filter admits a file at any of paths — a
+// rename's two among them.
+func (f pathFilter) admits(paths []string) bool {
+	switch {
+	case f.set:
+		for _, p := range paths {
+			if f.exact[p] {
+				return true
+			}
+		}
+		return false
+	case len(f.under) == 0:
 		return true
 	}
-	for _, f := range filter {
+	for _, u := range f.under {
 		for _, p := range paths {
-			if p == f || strings.HasPrefix(p, f+"/") {
+			if p == u || strings.HasPrefix(p, u+"/") {
 				return true
 			}
 		}
@@ -573,7 +652,7 @@ func admits(filter, paths []string) bool {
 // room — costed with its counts and binary flag at their widest, which the
 // numstat half has not given yet.
 func (p *statParser) took() {
-	if !admits(p.filter, p.entry.paths) {
+	if !p.filter.admits(p.entry.paths) {
 		return
 	}
 	m := p.matched
@@ -651,15 +730,22 @@ func (p *statParser) end(counted bool) error {
 	return nil
 }
 
-// patchRead answers one file's patch: base..head's change to file, a page from
-// the byte at.
-func (r *read) patchRead(ctx context.Context, base, head, file string, renames bool, at cursor,
-	m *memoRun) (code.GitAnswer, error) {
-
-	a := code.GitAnswer{Kind: code.GitDiff, Diff: &code.DiffAnswer{Base: base, Head: head, Files: []code.DiffFile{}}}
-	e, ok, err := r.findFile(ctx, base, head, file, renames)
-	if err != nil {
-		return code.GitAnswer{}, err
+// patchRead answers one file's patch: d's change to its file, a page from the
+// byte at.
+func (r *read) patchRead(ctx context.Context, d diffAsk, at cursor, m *memoRun) (code.GitAnswer, error) {
+	base, head, file := d.base, d.head, d.file
+	a := code.GitAnswer{Kind: d.kind, Diff: &code.DiffAnswer{Base: base, Head: head, Files: []code.DiffFile{}}}
+	var (
+		e   rawEntry
+		ok  bool
+		err error
+	)
+	// A FILE THE FILTER DOES NOT ADMIT is one the read does not change — an
+	// interdiff's file that neither revision touches — and no git is asked.
+	if d.filter.admits([]string{file}) {
+		if e, ok, err = r.findFile(ctx, base, head, file, d.renames); err != nil {
+			return code.GitAnswer{}, err
+		}
 	}
 	if !ok {
 		// A FILE THE DIFF DOES NOT CHANGE has no patch, as git prints none
@@ -669,17 +755,17 @@ func (r *read) patchRead(ctx context.Context, base, head, file string, renames b
 			return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, "a byte of a patch")
 		}
 		m.put(at, a, r.room(a))
-		m.place(code.GitDiff, same(memoTail{}))
+		m.place(d.kind, same(memoTail{}))
 		return a, nil
 	}
 	f := e.file()
 	// page is a page of the patch as the memo keeps it: the file's counts are
 	// its tail's, read once the whole patch is.
 	page := func(pg *patchPage) code.GitAnswer {
-		return code.GitAnswer{Kind: code.GitDiff, Next: formatCursor(pg.next), Diff: &code.DiffAnswer{Base: base,
+		return code.GitAnswer{Kind: d.kind, Next: formatCursor(pg.next), Diff: &code.DiffAnswer{Base: base,
 			Head: head, Files: []code.DiffFile{e.file()}, Patch: string(pg.text)}}
 	}
-	envelope := code.GitAnswer{Kind: code.GitDiff, Next: widestCursor('p', 1),
+	envelope := code.GitAnswer{Kind: d.kind, Next: widestCursor('p', 1),
 		Diff: &code.DiffAnswer{Base: base, Head: head, Files: []code.DiffFile{widestFile(f)}, Total: widest,
 			Added: widest, Deleted: widest, Patch: "x"}}
 	room := r.room(envelope) + 1
@@ -704,7 +790,7 @@ func (r *read) patchRead(ctx context.Context, base, head, file string, renames b
 		f.Added, f.Deleted = pg.added, pg.deleted
 	}
 	a.Diff.Files, a.Diff.Total, a.Diff.Added, a.Diff.Deleted = []code.DiffFile{f}, 1, f.Added, f.Deleted
-	m.place(code.GitDiff, same(memoTail{total: 1, added: f.Added, deleted: f.Deleted,
+	m.place(d.kind, same(memoTail{total: 1, added: f.Added, deleted: f.Deleted,
 		files: []fileCounts{{added: f.Added, deleted: f.Deleted, binary: f.Binary}}}))
 	return a, nil
 }

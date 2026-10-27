@@ -1590,8 +1590,11 @@ A git node also answers questions about a repository's content without a
 clone: a tree's listing, a file's lines, a diff — its per-file stat, or one
 file's patch — how two commits compare (their merge base, which contains
 which, the commits each has that the other lacks, and what one changed since
-the merge base), and whether a commit landed in a branch and which push landed
-it (`landed_in`, [Which push landed a commit](#which-push-landed-a-commit)).
+the merge base), whether a commit landed in a branch and which push landed
+it (`landed_in`, [Which push landed a commit](#which-push-landed-a-commit)),
+and what a change's revisions are: a revision's facts against its target,
+where lines anchored in one revision are in another, and what the change
+changed between two ([A revision's facts](#a-revisions-facts)).
 It answers each with real git over its own
 [cache](#the-cache-on-a-git-node), in the cache's read lane, from the copy it
 holds, and names in every answer the push that introduced each commit the
@@ -1625,7 +1628,7 @@ standard input, where it resolves to the id of the tree or file it names, and
 every git process the read runs is handed ids and fixed options alone: no path
 is ever an argument, so none can be read as an option. A diff's stat is
 filtered by the paths a read names after git has answered, never by a
-pathspec.
+pathspec, and so is an interdiff by the paths its revisions touch.
 
 **One page at a time, never cut.** Every answer is at most 56 KiB of JSON and
 says where the next page starts: a listing's entries, a stat's files, a file's
@@ -2064,6 +2067,93 @@ written the copy's commit-graph, 6.7 ms at the 99th percentile, so the 1 025
 checks of a search at its bound fit the read's ten seconds of git where 2 049
 would not; walking by date, without the graph, one check over the same history
 took 26 ms.
+
+---
+
+## A revision's facts
+
+Every head a [change](#changes) has had is one of its **revisions**, and what
+a revision *is* against the branch it would merge into is three reads a git
+node answers from its cache, as it answers every
+[server-side read](#server-side-reads): asked of the repository's
+[home](#the-home-git-node) first, held to the asker's grant, one page each,
+and named by the whole commit ids the change's rows record — never an
+abbreviation, never a ref.
+
+The **facts** of a revision are those of its head commit against its target's
+tip, a function of the two commits alone, so every git node answers them
+alike:
+
+| Fact | What it is |
+|---|---|
+| `merge_base` | Where the head's history meets the target's: the **base** the change is measured from, as a merge of it would be. A history that shares no commit with its target's has none, and its change is measured from the empty tree — every file of its head. |
+| `head_in_target` | The target holds the head already: the change is merged, by whatever moved the target there, and has nothing left to measure — no path and no id. |
+| `touched` | Every file the change touches: each path the diff from the base to the head changes, in git's order, a moved file as its two paths. Past 1 000 paths, past 48 KiB of the list as JSON, or at a path that is not UTF-8 (which JSON cannot carry exactly), the facts say `touches_all` and give no list — read as every path by everything that reads one, where a list cut at its bound would leave the files past the cut out. |
+| `patch_id` | `git patch-id --verbatim` of the change's cumulative diff from its base, three lines of context around every change: the same for two revisions whose changes are the same lines among the same neighbours, wherever the base put them — a rebase onto a target that moved nothing near them keeps it — and another for any changed byte. Empty for a revision that changes nothing. |
+| `patch_id_omitted` | No id was taken: the diff is past 256 MiB, or it and its id ran out what was left of the read's ten seconds of git. An omitted id, like an empty one, equals nothing. |
+
+**Whitespace is a change.** The id is `--verbatim`, never `--stable`, which
+strips every space and tab before it hashes: Python's and YAML's indentation,
+a Makefile's tab and a string literal's spaces mean something, so a change to
+them alone is not the change somebody looked at. And the diff names a binary
+file by its blobs' whole ids (`--full-index`), since the id hashes them as the
+diff's `index` line writes them, which git otherwise abbreviates to however
+many digits the repository at hand needs — two copies of one repository
+holding different counts of objects would identify one change apart.
+
+**The base and the paths are what the read cannot do without; the id it can.**
+The four steps run one after another in the node's read lane — the merge
+base, the walk of the touched paths, the diff written into a spool (a file
+with no name on the cache's volume, gone when the read ends), and `git
+patch-id` reading it back — never two at once, which would hold two of the
+lane's slots for one read. A merge base or a walk that runs out the read's
+budget of git makes the read too large to answer, as any read's git does. A
+diff past 256 MiB, or a diff or an id that ran out what the budget left, is
+answered with the id omitted instead: the safe side, since an omitted id
+equals nothing, and the base and the paths that everything else reads —
+an interdiff among them — are there.
+
+**Measured**, over changes rewriting every fourth line of files of 256 KiB,
+three reads each on two cores: a revision's facts took 18 ms for a 1 MiB
+patch, 170 ms for 16 MiB, 621 ms for 64 MiB and 2.3 s for 249 MiB — some
+114 MB of patch a second, so a diff at the bound is identified in under a
+quarter of the read's ten seconds, and a node four times as loaded still
+takes its id.
+
+### Where lines are in another revision
+
+A finding or a comment is written against lines of one blob. Placed in
+another revision, up to 64 such ranges at a time, each is found by the diff
+between the blob it was read in and the file at its path now — on the new
+side of the change's diff, the revision's head; on the old side, its base —
+read as git's zero-context hunks, never by searching for the lines' text,
+which repeats in any file of size:
+
+- **Moved** where hunks changed lines above it, by the lines they added less
+  the lines they removed — and where it was, in a file that is still its blob.
+- **Outdated** where a hunk changed one of its lines, or inserted lines between
+  two of them, or the file is binary on either side, so nothing says where its
+  lines went; it is answered with where the range would be had only the lines
+  above it moved.
+- **Gone** where the revision holds no file at its path — deleted, or a
+  directory or a submodule now.
+
+One `git diff-pairs` diffs every distinct pair of blobs the read names, each
+handed as a numbered pair rather than by its path, so no path reaches git and
+every hunk names the pair it is of.
+
+### What changed between two revisions
+
+The **interdiff** of two revisions is the diff of their heads kept to the
+files either revision's change touches, as their facts list them: a rebase
+between the two brought in what the target changed meanwhile, and the files
+neither revision touches differ between the heads without being anything the
+change did. It is read as a diff is — its stat a page at a time, or one file's
+patch — and a file is kept by its whole name, so the touched path `a*` keeps
+the file `a*` and never `ab`. The paths are judged by the node over git's own
+records, never handed to git as a pathspec ([A path is data](#server-side-reads)).
+Where either revision touches all, or the two share their base — whose heads
+then differ only in files one of them touches — it is the heads' whole diff.
 
 ---
 

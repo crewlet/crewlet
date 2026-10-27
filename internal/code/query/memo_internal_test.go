@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -17,13 +18,49 @@ import (
 )
 
 // stamped is every field of code.GitAnswer that Read stamps on an answer —
-// a page from the memo and one cut alike — and that no page holds; landedIn
-// is the one kind's part no page holds, since a landed-in read is never
-// memoized.
+// a page from the memo and one cut alike — and that no page holds; partOf is
+// the field each kind answers in, an interdiff in a diff's; and unkept is
+// every part no page holds, since its kind is never memoized (memoizable).
 var (
-	stamped  = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage"}
-	landedIn = "LandedIn"
+	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage"}
+	partOf  = map[code.GitReadKind]string{code.GitTree: "Tree", code.GitBlob: "Blob", code.GitDiff: "Diff",
+		code.GitCompare: "Compare", code.GitLandedIn: "LandedIn", code.GitRevisionFacts: "RevisionFacts",
+		code.GitReanchor: "Reanchor", code.GitInterdiff: "Diff"}
+	unkept = []string{"LandedIn", "RevisionFacts", "Reanchor"}
 )
+
+// memoized is every kind memoizable answers from the memo.
+func memoized() []code.GitReadKind {
+	var out []code.GitReadKind
+	for _, k := range code.GitReadKinds() {
+		if memoizable(code.GitQuery{Kind: k}) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// EVERY KIND'S PART IS KEPT EXACTLY WHEN ITS KIND IS MEMOIZED: the field list
+// the two cases below read a page's shape by is held to memoizable, both
+// ways, so a kind made memoizable has its part encoded and fingerprinted, and
+// one made not leaves the shape it no longer has.
+func TestThePartsAPageHoldsAreTheMemoizedKinds(t *testing.T) {
+	t.Parallel()
+	kept := map[string]bool{}
+	for _, k := range memoized() {
+		kept[partOf[k]] = true
+	}
+	for _, k := range code.GitReadKinds() {
+		part, ok := partOf[k]
+		switch {
+		case !ok:
+			t.Errorf("kind %s answers in no part partOf names", k)
+		case kept[part] == slices.Contains(unkept, part):
+			t.Errorf("part %s of kind %s is kept %t, and unkept lists it %t: one of the two is wrong", part, k,
+				kept[part], slices.Contains(unkept, part))
+		}
+	}
+}
 
 // filled is v with every field set, recursively, to a value of its own: a
 // string its path, a number counted up, a flag set, a slice of two, a pointer
@@ -65,7 +102,7 @@ func tailOf(a code.GitAnswer) memoTail {
 		return memoTail{total: a.Tree.Total}
 	case code.GitBlob:
 		return memoTail{lines: a.Blob.Lines}
-	case code.GitDiff:
+	case code.GitDiff, code.GitInterdiff:
 		t := memoTail{total: a.Diff.Total, added: a.Diff.Added, deleted: a.Diff.Deleted}
 		for _, f := range a.Diff.Files {
 			t.files = append(t.files, fileCounts{added: f.Added, deleted: f.Deleted, binary: f.Binary})
@@ -85,7 +122,7 @@ func tailOf(a code.GitAnswer) memoTail {
 // page reads back without it.
 func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []code.GitReadKind{code.GitTree, code.GitBlob, code.GitDiff, code.GitCompare} {
+	for _, kind := range memoized() {
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
 			a := code.GitAnswer{Kind: kind}
@@ -95,9 +132,9 @@ func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 				f := v.Type().Field(i)
 				switch {
 				case f.Name == "Kind":
-				case slices.Contains(stamped, f.Name), f.Name == landedIn:
+				case slices.Contains(stamped, f.Name), slices.Contains(unkept, f.Name):
 				case f.Type.Kind() == reflect.Pointer && f.Type.Elem().Kind() == reflect.Struct:
-					if strings.EqualFold(f.Name, string(kind)) {
+					if f.Name == partOf[kind] {
 						filled(v.Field(i), f.Name, &n)
 					}
 				default:
@@ -115,7 +152,7 @@ func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 			}
 			// A stat writes a page's counts as it counts them, and its tail the
 			// totals alone: the same bytes.
-			if kind == code.GitDiff {
+			if partOf[kind] == "Diff" {
 				tail := tailOf(a)
 				counted := appendTail(appendCounts(appendPage(nil, p), tail.files), kind,
 					memoTail{total: tail.total, added: tail.added, deleted: tail.deleted, counted: true})
@@ -150,7 +187,7 @@ func shapeOf() string {
 		fmt.Fprintf(&b, "%s{", ty)
 		for i := range ty.NumField() {
 			f := ty.Field(i)
-			if ty == reflect.TypeFor[code.GitAnswer]() && (slices.Contains(stamped, f.Name) || f.Name == landedIn) {
+			if ty == reflect.TypeFor[code.GitAnswer]() && (slices.Contains(stamped, f.Name) || slices.Contains(unkept, f.Name)) {
 				continue
 			}
 			fmt.Fprintf(&b, "%s %s;", f.Name, f.Type)
@@ -158,7 +195,7 @@ func shapeOf() string {
 		b.WriteString("}")
 		for i := range ty.NumField() {
 			f := ty.Field(i)
-			if ty == reflect.TypeFor[code.GitAnswer]() && (slices.Contains(stamped, f.Name) || f.Name == landedIn) {
+			if ty == reflect.TypeFor[code.GitAnswer]() && (slices.Contains(stamped, f.Name) || slices.Contains(unkept, f.Name)) {
 				continue
 			}
 			walk(f.Type)
@@ -205,6 +242,7 @@ func (f fakeCache) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) {
 	return f.body, f.body != nil
 }
 func (fakeCache) Memo(cache.Synced) *cache.MemoBatch { return nil }
+func (fakeCache) Spool() (*os.File, error)           { return nil, os.ErrInvalid }
 
 // A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A page carries its
 // budget — the most the fields Read stamps may encode to and the page still

@@ -3,6 +3,7 @@ package code_test
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -133,6 +134,121 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			case tc.want == nil:
 			case !errors.Is(err, tc.want):
 				t.Fatalf("Validate = %v, want %v", err, tc.want)
+			case !strings.Contains(err.Error(), tc.field+":"):
+				t.Errorf("Validate = %v, want it to name %s", err, tc.field)
+			}
+		})
+	}
+}
+
+// A READ OF A CHANGE'S REVISIONS NAMES THEM AS THEIR ROWS DO. A revision's
+// facts, a re-anchoring and an interdiff name every commit by the whole id
+// its rows recorded — never an abbreviation, which would make an interdiff's
+// two bases unequal ids of one commit — a re-anchoring places a bounded list
+// of ranges, each named once, and an interdiff's touched lists are the ones
+// facts give: within their bounds, beside no word that they touch all, and
+// clean paths. Each refusal names its field.
+func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
+	t.Parallel()
+	const a, b = "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
+	asker := code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ci"}
+	repo := "01920000-0000-7000-8000-000000000001"
+	facts := func(m func(q *code.RevisionFactsQuery)) code.GitQuery {
+		q := code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repo, Asker: asker,
+			RevisionFacts: &code.RevisionFactsQuery{Head: a, Target: b}}
+		m(q.RevisionFacts)
+		return q
+	}
+	anchor := code.LineAnchor{ID: "f-1", Path: "src/a.go", Side: code.SideNew, BlobOID: b, Start: 3, End: 4}
+	reanchor := func(m func(q *code.ReanchorQuery)) code.GitQuery {
+		q := code.GitQuery{Kind: code.GitReanchor, RepoID: repo, Asker: asker,
+			Reanchor: &code.ReanchorQuery{Head: a, Anchors: []code.LineAnchor{anchor}}}
+		m(q.Reanchor)
+		return q
+	}
+	interdiff := func(m func(q *code.InterdiffQuery)) code.GitQuery {
+		q := code.GitQuery{Kind: code.GitInterdiff, RepoID: repo, Asker: asker,
+			Interdiff: &code.InterdiffQuery{FromBase: a, FromHead: b, ToBase: b, ToHead: a,
+				FromTouched: []string{"a*"}, ToTouched: []string{"src/a.go"}}}
+		m(q.Interdiff)
+		return q
+	}
+	many := func(n int) []code.LineAnchor {
+		out := make([]code.LineAnchor, n)
+		for i := range out {
+			out[i] = anchor
+			out[i].ID = strings.Repeat("x", i+1)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name  string
+		q     code.GitQuery
+		field string // "" is a valid query
+	}{
+		{"facts", facts(func(*code.RevisionFactsQuery) {}), ""},
+		{"facts of an abbreviation", facts(func(q *code.RevisionFactsQuery) { q.Head = a[:7] }),
+			"revision_facts.head"},
+		{"facts against the zero id", facts(func(q *code.RevisionFactsQuery) { q.Target = code.ZeroOID }),
+			"revision_facts.target"},
+		{"an anchor", reanchor(func(*code.ReanchorQuery) {}), ""},
+		{"an anchor on the old side", reanchor(func(q *code.ReanchorQuery) {
+			q.Base, q.Anchors[0].Side = b, code.SideOld
+		}), ""},
+		{"the most anchors", reanchor(func(q *code.ReanchorQuery) { q.Anchors = many(code.MaxReanchors) }), ""},
+		{"no anchor", reanchor(func(q *code.ReanchorQuery) { q.Anchors = nil }), "reanchor.anchors"},
+		{"an anchor too many", reanchor(func(q *code.ReanchorQuery) { q.Anchors = many(code.MaxReanchors + 1) }),
+			"reanchor.anchors"},
+		{"an old side with no base", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].Side = code.SideOld }),
+			"reanchor.anchors[0].side"},
+		{"no side", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].Side = "" }), "reanchor.anchors[0].side"},
+		{"one id twice", reanchor(func(q *code.ReanchorQuery) {
+			q.Anchors = []code.LineAnchor{anchor, anchor}
+		}), "reanchor.anchors[1].id"},
+		{"no id", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].ID = "" }), "reanchor.anchors[0].id"},
+		{"a backwards range", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].Start = 5 }),
+			"reanchor.anchors[0]"},
+		{"line zero", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].Start = 0 }), "reanchor.anchors[0]"},
+		{"an unclean path", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].Path = "src/../a.go" }),
+			"reanchor.anchors[0].path"},
+		{"an abbreviated blob", reanchor(func(q *code.ReanchorQuery) { q.Anchors[0].BlobOID = b[:9] }),
+			"reanchor.anchors[0].blob_oid"},
+		{"an abbreviated base", reanchor(func(q *code.ReanchorQuery) { q.Base = b[:8] }), "reanchor.base"},
+		{"an interdiff", interdiff(func(*code.InterdiffQuery) {}), ""},
+		{"an interdiff of no merge base", interdiff(func(q *code.InterdiffQuery) { q.FromBase = "" }), ""},
+		{"an interdiff touching all", interdiff(func(q *code.InterdiffQuery) {
+			q.ToTouched, q.ToTouchesAll = nil, true
+		}), ""},
+		{"a list beside touching all", interdiff(func(q *code.InterdiffQuery) { q.ToTouchesAll = true }),
+			"interdiff.to_touched"},
+		{"a list past its paths", interdiff(func(q *code.InterdiffQuery) {
+			q.FromTouched = make([]string, code.MaxTouchedPaths+1)
+			for i := range q.FromTouched {
+				q.FromTouched[i] = "p"
+			}
+		}), "interdiff.from_touched"},
+		// Nine paths of a thousand `<` are some nine kilobytes as bytes and
+		// past the bound as JSON, which writes each `<` in six.
+		{"a list past its bytes", interdiff(func(q *code.InterdiffQuery) {
+			for i := range 9 {
+				q.FromTouched = append(q.FromTouched, fmt.Sprintf("%d%s", i, strings.Repeat("<", 999)))
+			}
+		}), "interdiff.from_touched"},
+		{"an unclean touched path", interdiff(func(q *code.InterdiffQuery) { q.ToTouched = []string{"./a"} }),
+			"interdiff.to_touched[0]"},
+		{"an abbreviated head", interdiff(func(q *code.InterdiffQuery) { q.ToHead = a[:12] }), "interdiff.to_head"},
+		{"a file", interdiff(func(q *code.InterdiffQuery) { q.File = "a*" }), ""},
+		{"a file from the work tree", interdiff(func(q *code.InterdiffQuery) { q.File = "./a" }), "interdiff.file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.q.Validate()
+			switch {
+			case tc.field == "" && err != nil:
+				t.Fatalf("Validate = %v, want a valid query", err)
+			case tc.field == "":
+			case !errors.Is(err, code.ErrInvalid):
+				t.Fatalf("Validate = %v, want ErrInvalid", err)
 			case !strings.Contains(err.Error(), tc.field+":"):
 				t.Errorf("Validate = %v, want it to name %s", err, tc.field)
 			}

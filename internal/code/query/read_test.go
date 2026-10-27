@@ -40,7 +40,10 @@ import (
 // diff-tree's, diff-pairs' and rev-list's `--output` out — the writers gate
 // argues their run-time arguments in its allowance — so an argument a read
 // adds is red here. A landed-in read's ancestry checks are held too: whole
-// ids, both sides.
+// ids, both sides. And a change's revisions: their facts walk and diff the
+// paths by ids alone, anchors on them are found by the batch and diffed by
+// pairs numbered rather than named, and an interdiff kept to them filters
+// git's records as a filtered stat does, its touched paths no pathspec.
 func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -73,6 +76,25 @@ func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 	tip, at := x.tip("refs/heads/main")
 	mustRead(t, s, landedQ(repo, base[:7], "refs/heads/main", tip, at, true))
 
+	// A CHANGE'S REVISIONS: its facts, which walk and diff these paths; its
+	// anchors on them, placed by a batch and by one diff-pairs fed numbers;
+	// and an interdiff kept to them, whose filter is judged here.
+	facts := mustRead(t, s, factsQ(repo, head, base)).RevisionFacts
+	if len(facts.Touched) != len(paths)+1 || facts.PatchID == "" {
+		t.Fatalf("the facts of the head = %+v, want every path touched and an id", facts)
+	}
+	var anchors []code.LineAnchor
+	for i, p := range paths {
+		blob := strings.TrimSpace(x.git("rev-parse", base+":"+p))
+		anchors = append(anchors, code.LineAnchor{ID: fmt.Sprintf("a%d", i), Path: p, Side: code.SideNew,
+			BlobOID: blob, Start: 1, End: 1})
+	}
+	mustRead(t, s, reanchorQ(repo, code.ReanchorQuery{Head: head, Anchors: anchors}))
+	mustRead(t, s, interdiffQ(repo, code.InterdiffQuery{FromBase: head, FromHead: base, ToBase: base, ToHead: head,
+		ToTouched: []string{"--output=x/f", "-r", "a:b"}}))
+	mustRead(t, s, interdiffQ(repo, code.InterdiffQuery{FromBase: head, FromHead: base, ToBase: base, ToHead: head,
+		ToTouched: []string{"-r"}, File: "-r"}))
+
 	ran := rec.ran()
 	if len(ran) < 20 {
 		t.Fatalf("the reads ran %d processes; the case reads nothing", len(ran))
@@ -89,7 +111,7 @@ func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 		}
 	}
 	pairs := strings.Join(rec.fed("diff-pairs"), "")
-	for _, p := range []string{"--output=x/f", "-r", "-M"} {
+	for _, p := range []string{"--output=x/f", "-r", "-M", "a:b"} {
 		if !strings.Contains(pairs, "\x00"+p+"\x00") {
 			t.Errorf("diff-pairs was fed no raw record of %q", p)
 		}
@@ -111,9 +133,14 @@ var templates = [][]string{
 	{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff", "--no-textconv", "-M", "<oid>", "<oid>"},
 	{"diff-pairs", "-z", "--numstat", "--no-ext-diff", "--no-textconv"},
 	{"diff-pairs", "-z", "-p", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv", "-U3"},
+	{"diff-pairs", "-z", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-textconv"},
 	{"merge-base", "<oid>", "<oid>"},
 	{"merge-base", "--is-ancestor", "<oid>", "<oid>"},
 	{"rev-list", "--left-right", "--count", "<range>"},
+	{"diff-tree", "-r", "--name-only", "-z", "--no-renames", "<oid>", "<oid>"},
+	{"diff-tree", "-r", "-p", "--full-index", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "-U3",
+		"<oid>", "<oid>"},
+	{"patch-id", "--verbatim"},
 }
 
 // fitsTemplate reports whether args is one of templates.

@@ -182,6 +182,38 @@ func compareQ(repo, base, head string) code.GitQuery {
 		Compare: &code.CompareQuery{Base: base, Head: head}}
 }
 
+// factsQ, reanchorQ and interdiffQ are a person's reads of a change's
+// revisions, asked as the other reads here are.
+func factsQ(repo, head, target string) code.GitQuery {
+	return code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repo, Asker: person, Home: true,
+		RevisionFacts: &code.RevisionFactsQuery{Head: head, Target: target}}
+}
+
+func reanchorQ(repo string, r code.ReanchorQuery) code.GitQuery {
+	return code.GitQuery{Kind: code.GitReanchor, RepoID: repo, Asker: person, Home: true, Reanchor: &r}
+}
+
+func interdiffQ(repo string, i code.InterdiffQuery) code.GitQuery {
+	return code.GitQuery{Kind: code.GitInterdiff, RepoID: repo, Asker: person, Home: true, Interdiff: &i}
+}
+
+// branch is the person's work tree on a new branch from at, the branch
+// checked out — what a change's source branch is begun as.
+func (x *fixture) branch(name, at string) {
+	x.t.Helper()
+	x.git("checkout", "-q", "-b", name, at)
+}
+
+// facts is the first git node's facts of head against target.
+func (x *fixture) facts(s *query.Server, repo, head, target string) *code.RevisionFactsAnswer {
+	x.t.Helper()
+	a := mustRead(x.t, s, factsQ(repo, head, target))
+	if a.RevisionFacts == nil {
+		x.t.Fatalf("the facts of %s against %s answered no facts: %+v", head, target, a)
+	}
+	return a.RevisionFacts
+}
+
 // mustRead is s's answer to q, failing the case on an error.
 func mustRead(t *testing.T, s *query.Server, q code.GitQuery) code.GitAnswer {
 	t.Helper()

@@ -1,12 +1,16 @@
 // Package query is THE SERVER-SIDE READS OF A REPOSITORY BY OBJECT ID: a
 // tree's listing, a file's lines, a diff's stat or one file's patch, how two
 // commits compare, and whether a commit landed in a branch and which push
-// landed it — real git over a PINNED incarnation of the node's own cache
-// (internal/code/cache), in the READ lane, every answer one page of at most
-// code.MaxGitAnswerBytes of JSON with a cursor where the next begins. It runs
-// on git nodes, holds no goroutine of its own, and writes nothing itself — the
-// memo its reads fill is the cache's write: a read's processes run on its
-// caller's goroutine and end with its context, or with the server's stop.
+// landed it — and of a change's revisions, by the ids their rows record: a
+// revision's facts against its target (facts.go), where lines anchored in one
+// revision are in another (anchor.go), and what a change changed between two
+// revisions (interdiff.go) — real git over a PINNED incarnation of the node's
+// own cache (internal/code/cache), in the READ lane, every answer one page of
+// at most code.MaxGitAnswerBytes of JSON with a cursor where the next begins.
+// It runs on git nodes, holds no goroutine of its own, and writes nothing
+// itself — the memo its reads fill is the cache's write, as is the spool a
+// revision's facts write a patch into: a read's processes run on its caller's
+// goroutine and end with its context, or with the server's stop.
 //
 // # The stop
 //
@@ -76,14 +80,16 @@
 // tree or file it names, so every later process is handed that id, and `git
 // diff-pairs -z`'s, which reads back the raw records diff-tree wrote, paths
 // and all, to count or patch the files a diff read asks for (diff.go). A path
-// is never a pathspec (a diff's paths are filtered here, over git's whole raw
-// answer), and no option can hide in one: `--output=x` is a file's name there
-// like any other. TestAPathReachesGitOnlyOnStandardInput holds every argument
-// list a read runs to its template. diff-tree, diff-pairs and rev-list each
-// take `--output`, which creates the file it names in the repository they run
-// in: the writers gate (cache.TestNothingButSyncWritesACache) argues each of
-// this package's run-time arguments — whole ids, and `-M` — in its allowance,
-// and the template test is what keeps an `--output` out.
+// is never a pathspec — a diff's paths are filtered here, over git's whole raw
+// answer, and so are an interdiff's touched paths, each a file's whole name —
+// and no option can hide in one: `--output=x` is a file's name there like any
+// other. A re-anchoring's diff-pairs is handed no path at all, its pairs
+// numbered (anchor.go). TestAPathReachesGitOnlyOnStandardInput holds every
+// argument list a read runs to its template. diff-tree, diff-pairs and
+// rev-list each take `--output`, which creates the file it names in the
+// repository they run in: the writers gate (cache.TestNothingButSyncWritesACache)
+// argues each of this package's run-time arguments — whole ids, and `-M` — in
+// its allowance, and the template test is what keeps an `--output` out.
 //
 // # The share: half the read lane, around a read's long git only
 //
@@ -128,15 +134,16 @@
 // # Time: one budget of git, and an answer while the asker listens
 //
 // A read's own git — every process of its kind, a comparison's two walks and
-// its stat, a patch's lookup and its diff or a landed-in search's ancestry
-// checks as a listing's one — is given ONE budget of run time,
-// gitproc.ReadDeadline, each process what the ones before it left, a lookup
-// that ends its own run once it has read what it needs included: run out, the
-// read is too large to answer anywhere — save a landed-in search, which by
-// then knows the oldest move that kept its commit and answers how far it
-// reached, as its bound of checks ends it (landed.go). Its wait for each
-// process's read-lane slot is charged nothing, since it is the node's
-// contention and not the read's size. The short checks before it
+// its stat, a patch's lookup and its diff, a landed-in search's ancestry
+// checks or a revision's facts' four as a listing's one — is given ONE budget
+// of run time, gitproc.ReadDeadline, each process what the ones before it
+// left, a lookup that ends its own run once it has read what it needs
+// included: run out, the read is too large to answer anywhere — save a
+// landed-in search, which by then knows the oldest move that kept its commit
+// and answers how far it reached, as its bound of checks ends it (landed.go),
+// and a revision's patch-id, which is omitted rather than refused (facts.go).
+// Its wait for each process's read-lane slot is charged nothing, since it is
+// the node's contention and not the read's size. The short checks before it
 // (objects.go) run to their own bound, outside it.
 //
 // And the caller's context ENDS WHEN THE ANSWER IS DUE (code.AnswerBy, the
@@ -203,8 +210,10 @@
 //
 // # The memo
 //
-// Every page a read's git cuts is kept in the pinned copy's memo (the cache's,
-// cache.MemoBatch), keyed by everything it is a function of, and a read that
+// Every page a read's git cuts — but a landed-in read's, a revision's facts'
+// and a re-anchoring's (memoizable says why) — is kept in the pinned copy's
+// memo (the cache's, cache.MemoBatch), keyed by everything it is a function
+// of, and a read that
 // asks for a page already cut is answered from it with no git run (memo.go):
 // asked as soon as the grant is judged for a read naming whole ids, before any
 // git runs, since an entry is in a copy's memo only where a read of that copy
@@ -278,4 +287,12 @@
 // process each, the figure MaxLandedProbes is derived from. One check walking
 // by date over the same history, with no commit-graph — the commit against
 // the branch's tip — takes 26 ms.
+//
+// BenchmarkRevisionFacts over a change rewriting every fourth line of files of
+// 256 KiB, three reads an arm (-benchtime 3x, one count, git 2.56.0 on two
+// E-cores of the same Core Ultra 7 265U): a revision's facts — the merge base,
+// the walk of its paths, its patch spooled and its patch-id — take 18 ms for a
+// 1 MiB patch, 170 ms for 16 MiB, 621 ms for 64 MiB and 2.30 s (2.38 at the
+// slowest) for 249 MiB, at MaxPatchIDDiffBytes: some 114 MB of patch a second,
+// so the bound's facts fit a quarter of the read's one budget of git.
 package query

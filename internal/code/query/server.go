@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,10 @@ type Cache interface {
 	// Memo is a batch of the pages a run cuts, to memoize in the pinned copy
 	// once its git has answered whole (step 8) — nil where it keeps none.
 	Memo(s cache.Synced) *cache.MemoBatch
+	// Spool is a file with no name on the cache's volume, gone when it is
+	// closed: where a revision's facts write the change's patch for `git
+	// patch-id` to read back (facts.go). The caller closes it.
+	Spool() (*os.File, error)
 }
 
 // Pool runs git. *gitproc.Pool satisfies it.
@@ -105,13 +110,18 @@ type Server struct {
 	// syncWait bounds a read's wait on its sync (statelog.ReadBudget),
 	// gitBudget the run time a read's own git is given, shared by every
 	// process of its kind (gitproc.ReadDeadline), pageBytes an answer's
-	// JSON (code.MaxGitAnswerBytes) and probes a landed-in search's
-	// ancestry checks (MaxLandedProbes) — fields so this package's tests
-	// can scale them (export_test.go).
-	syncWait  time.Duration
-	gitBudget time.Duration
-	pageBytes int
-	probes    int
+	// JSON (code.MaxGitAnswerBytes), probes a landed-in search's ancestry
+	// checks (MaxLandedProbes), touchedPaths and touchedBytes a revision's
+	// touched list (code.MaxTouchedPaths, code.MaxTouchedBytes) and
+	// patchBytes the diff its patch-id is taken of (MaxPatchIDDiffBytes) —
+	// fields so this package's tests can scale them (export_test.go).
+	syncWait     time.Duration
+	gitBudget    time.Duration
+	pageBytes    int
+	probes       int
+	touchedPaths int
+	touchedBytes int
+	patchBytes   int64
 	// flights is every page a read of this node is cutting that its copy's
 	// memo held none of, by repository and the page's memo key: a read that
 	// misses the same page waits for that read's run and asks the memo again,
@@ -182,11 +192,13 @@ func New(o Options) (*Server, error) {
 	// context is the server's, since every read runs on its own.
 	life, end := context.WithCancel(context.Background())
 	return &Server{o: o, life: life, end: end, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
-		pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes}, nil
+		pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes, touchedPaths: code.MaxTouchedPaths,
+		touchedBytes: code.MaxTouchedBytes, patchBytes: MaxPatchIDDiffBytes}, nil
 }
 
-// Read answers q: a page of the tree, file, diff or comparison it names, or
-// whether a commit landed in a target and the push that landed it.
+// Read answers q: a page of the tree, file, diff, comparison or interdiff it
+// names; whether a commit landed in a target and the push that landed it; a
+// revision's facts; or where anchored lines are in a revision.
 //
 //  1. q is validated (code.GitQuery.Validate), and its cursor read as one its
 //     kind issues.
@@ -216,9 +228,11 @@ func New(o Options) (*Server, error) {
 //     asker's turn is acting for (code.GitQuery.CeilingSeat), that seat's
 //     grant from the same row and chart, one it could not make itself
 //     code.ErrAboveCeiling (code.JudgeRead, the data node's judgment too).
-//  6. A PAGE ALREADY CUT is answered from the copy's memo (memo.go): for a
-//     read naming whole ids, as soon as its grant is judged and before any
-//     git runs; for one naming an abbreviation, once step 7 has expanded it.
+//  6. A PAGE ALREADY CUT is answered from the copy's memo (memo.go) — of
+//     every kind but a landed-in read, a revision's facts and a
+//     re-anchoring (memoizable): for a read naming whole ids, as soon as its
+//     grant is judged and before any git runs; for one naming an
+//     abbreviation, once step 7 has expanded it.
 //     A hit holds no unit of the share and goes on through steps 9 and 10
 //     as a page cut does. A miss of a page ANOTHER READ OF THIS NODE IS
 //     CUTTING waits for that read's run and asks the memo again (await): N
@@ -227,7 +241,8 @@ func New(o Options) (*Server, error) {
 //     of each; one whose memo still misses runs its own.
 //  7. Every abbreviated id is expanded from the objects alone, and every id
 //     and path checked present with one batch (objects.go); an id the copy
-//     lacks is code.ErrObjectNotFound. No refusal of steps 5 and 7 is
+//     lacks is code.ErrObjectNotFound, while an anchor's path its revision
+//     lacks is an answer — the anchor is gone. No refusal of steps 5 and 7 is
 //     concluded from a copy not read at the log's head: it is synced there
 //     once, and judged again. Each of those short processes runs to its own
 //     bound, gitproc.ReadDeadline: one that runs all of it, a few ids' check
@@ -242,9 +257,10 @@ func New(o Options) (*Server, error) {
 //     naming the narrowing): another node would take as long. That git cuts
 //     every page from the one asked to its answer's end, each memoized once
 //     git has answered whole (memo.go).
-//  9. Every commit the answer names — its revision, a diff's or a
-//     comparison's commits, a landed-in read's commit and tip — is named with
-//     the push that introduced it (code.GitAnswer.PushedBy), from the copy's
+//  9. Every commit the answer names — its revision, a diff's, a
+//     comparison's or an interdiff's commits, a landed-in read's commit and
+//     tip, a revision's head and target, a re-anchoring's commits — is named
+//     with the push that introduced it (code.GitAnswer.PushedBy), from the copy's
 //     index of pushes, and the answer carries what that index holds
 //     (code.Coverage) — measured into every page's envelope, so a page cut
 //     against it fits with them. A copy whose index cannot be read yet is
@@ -563,6 +579,8 @@ type read struct {
 	// of the asker's attempt instead.
 	metered bool
 	gitLeft time.Duration
+	// filter is an interdiff's files, made once (read.interdiffFilter).
+	filter *pathFilter
 }
 
 // judgeable refuses a seat's read on a node that cannot judge a seat (step 2).
@@ -758,6 +776,12 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (code.GitAnswe
 		return r.diffRead(ctx, objs, at, m)
 	case code.GitLandedIn:
 		return r.landedRead(ctx, objs)
+	case code.GitRevisionFacts:
+		return r.factsRead(ctx, objs)
+	case code.GitReanchor:
+		return r.reanchorRead(ctx, objs)
+	case code.GitInterdiff:
+		return r.interdiffRead(ctx, objs, at, m)
 	}
 	return r.compareRead(ctx, objs, m)
 }
@@ -862,9 +886,15 @@ func cursorOf(q code.GitQuery) (cursor, error) {
 			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
 		}
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'f': 1})
+	case code.GitInterdiff:
+		if q.Interdiff.File != "" || q.Interdiff.FileB64 != "" {
+			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
+		}
+		return parseCursor(q.Cursor, q.Kind, map[byte]int{'f': 1})
 	}
 	// A comparison answers its first page of files and no more — a diff of
-	// its merge base and head reads the rest — and a landed-in read one
-	// answer of a few ids.
+	// its merge base and head reads the rest — a landed-in read one answer
+	// of a few ids, a revision's facts one of its ids and a bounded list, and
+	// a re-anchoring one of its bounded anchors.
 	return parseCursor(q.Cursor, q.Kind, map[byte]int{})
 }

@@ -2,6 +2,7 @@ package code
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"path"
 	"slices"
@@ -826,6 +827,52 @@ const MinAbbrevDigits = 7
 // node issues is a kind's letter and up to two decimal numbers.
 const maxGitCursorBytes = 64
 
+// MaxTouchedPaths is the most paths a revision's facts list as the files its
+// change touches ([RevisionFactsAnswer.Touched]). Past it the facts say the
+// revision TOUCHES ALL, with no list: the safe side for everything that reads
+// one — an interdiff then shows every file its two heads differ in, and
+// anything matched against the paths matches — where a list cut at its bound
+// would leave the files past the cut out of all of it.
+//
+// A THOUSAND: far more than a change a reviewer reads file by file touches,
+// so only the changes nobody reviews that way — a formatter's run, a vendored
+// tree, a move of a whole directory — touch all; and few enough that matching
+// rules against the list on every revision stays cheap. The list's bytes are
+// bounded beside it ([MaxTouchedBytes]), whichever is reached first.
+const MaxTouchedPaths = 1000
+
+// MaxTouchedBytes is the most the touched list may take AS JSON — its
+// brackets, every path quoted and escaped as encoding/json writes it, the
+// commas between — in a revision's facts and in whatever carries them on:
+// past it, as past [MaxTouchedPaths], the revision touches all.
+//
+// 48 KiB, SO A FACTS ANSWER IS ALWAYS ONE PAGE: an answer is at most
+// [MaxGitAnswerBytes], 56 KiB, and the facts' ids, flags and the stamps every
+// answer carries — its position, and the push that introduced each commit it
+// names — take the rest with room to spare. Measured as JSON rather than as
+// the paths' own bytes because a path of `<` costs six bytes there: a bound on
+// raw bytes would let such a list run past the page it must fit. A list at
+// the bound is about a twentieth of a record's bytes (MaxRecordBytes), so a
+// record that carries the facts on carries it beside everything else.
+const MaxTouchedBytes = 48 << 10
+
+// MaxReanchors is the most anchors one re-anchoring read places
+// ([ReanchorQuery]). Each is two lines of the read's one check of what it
+// names and at most one pair of its one diff process, and its answer at most
+// a few hundred bytes, so sixty-four keep the read's short check far inside
+// its bound and its answer far inside a page: the findings one review raises
+// at most, placed by one read.
+const MaxReanchors = 64
+
+// maxAnchorIDBytes bounds an anchor's id: an opaque name the caller gives
+// each anchor and reads its answer back by — a finding's, a UUID's 36
+// characters. 64 bytes leave room for another naming and keep a
+// re-anchoring's answer inside a page whatever its ids hold: MaxReanchors of
+// them, every byte one JSON writes in six, are 24 KiB of ids, and the whole
+// list, every anchor's numbers at their widest, under 30 KiB — about half a
+// page.
+const maxAnchorIDBytes = 64
+
 // GitReadKind is what a [GitQuery] asks. A closed set ([GitReadKinds]).
 type GitReadKind string
 
@@ -848,11 +895,27 @@ const (
 	// that put it there and kept it there: the one question about history a
 	// seat asks the server rather than a clone.
 	GitLandedIn GitReadKind = "landed_in"
+	// GitRevisionFacts is what a change's revision is against its target's
+	// tip: their merge base, the change's patch-id and the files it touches,
+	// and whether its head is in the target already — what the repository's
+	// home git node records on the change for each revision.
+	GitRevisionFacts GitReadKind = "revision_facts"
+	// GitReanchor is where lines anchored in one revision's files — a
+	// finding's, a comment's — are in another revision's: moved by the
+	// lines changed above them, outdated where their own lines changed, gone
+	// with their file.
+	GitReanchor GitReadKind = "reanchor"
+	// GitInterdiff is what a change changed between two of its revisions:
+	// the diff of their heads kept to the files either revision's change
+	// touches, its stat or one file's patch, answered as a diff is (Kind
+	// interdiff, its Diff part).
+	GitInterdiff GitReadKind = "interdiff"
 )
 
 // GitReadKinds is the closed set.
 func GitReadKinds() []GitReadKind {
-	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn}
+	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
+		GitInterdiff}
 }
 
 // Valid reports a kind this build answers.
@@ -903,11 +966,14 @@ type GitQuery struct {
 	// fill, which is this build's answer without the rule.
 	Home bool `json:"home,omitempty"`
 
-	Tree     *TreeQuery     `json:"tree,omitempty"`
-	Blob     *BlobQuery     `json:"blob,omitempty"`
-	Diff     *DiffQuery     `json:"diff,omitempty"`
-	Compare  *CompareQuery  `json:"compare,omitempty"`
-	LandedIn *LandedInQuery `json:"landed_in,omitempty"`
+	Tree          *TreeQuery          `json:"tree,omitempty"`
+	Blob          *BlobQuery          `json:"blob,omitempty"`
+	Diff          *DiffQuery          `json:"diff,omitempty"`
+	Compare       *CompareQuery       `json:"compare,omitempty"`
+	LandedIn      *LandedInQuery      `json:"landed_in,omitempty"`
+	RevisionFacts *RevisionFactsQuery `json:"revision_facts,omitempty"`
+	Reanchor      *ReanchorQuery      `json:"reanchor,omitempty"`
+	Interdiff     *InterdiffQuery     `json:"interdiff,omitempty"`
 }
 
 // TreeQuery lists one tree.
@@ -986,6 +1052,103 @@ type LandedInQuery struct {
 	// it was resolved — are in the index it searches.
 	TargetOID string            `json:"target_oid"`
 	At        statelog.Position `json:"at"`
+}
+
+// THE READS OF A CHANGE'S REVISIONS name every revision by the WHOLE ids its
+// rows recorded — a change's revision heads, its target's tip, a revision's
+// base — never an abbreviation: their asker read them from rows, and an
+// interdiff compares two bases as ids without reading either.
+
+// RevisionFactsQuery asks what a change's revision is against its target:
+// the facts of the commit Head against the commit Target.
+type RevisionFactsQuery struct {
+	// Head is the revision's head commit, and Target the tip of the change's
+	// target branch as the asker read it — both whole ids. The facts are a
+	// function of the two commits alone, recorded against them.
+	Head   string `json:"head"`
+	Target string `json:"target"`
+}
+
+// ReanchorQuery asks where ranges of lines, each read in a blob a revision
+// held, are in another revision of the same change: each anchor is placed in
+// the file at its path in Head where it is on the new side of the change's
+// diff, and in Base where it is on the old side.
+type ReanchorQuery struct {
+	// Base and Head are the revision the anchors are placed in: its base
+	// (the merge base its facts record) and its head commit, whole. Base is
+	// required only of a read placing an anchor on the old side.
+	Base string `json:"base,omitempty"`
+	Head string `json:"head"`
+	// Anchors are the ranges to place, 1 to MaxReanchors of them, each id
+	// once.
+	Anchors []LineAnchor `json:"anchors"`
+}
+
+// Side is which side of a change's diff a line is on. A closed set
+// ([Sides]).
+type Side string
+
+const (
+	// SideOld is the base's file: the lines the change deletes, and those
+	// it keeps as they were.
+	SideOld Side = "old"
+	// SideNew is the head's file: the lines the change adds, and those it
+	// keeps.
+	SideNew Side = "new"
+)
+
+// Sides is the closed set.
+func Sides() []Side { return []Side{SideOld, SideNew} }
+
+// Valid reports a side this build knows.
+func (s Side) Valid() bool { return slices.Contains(Sides(), s) }
+
+// LineAnchor is a range of lines read in one blob: what a finding or a
+// comment was written against.
+type LineAnchor struct {
+	// ID names the anchor in the answer: the caller's own, at most 64 bytes
+	// of UTF-8.
+	ID string `json:"id"`
+	// Path is the file's path in the revision the anchor is placed in
+	// (PathB64 its exact bytes, as [GitPath] reads them), and Side which of
+	// that revision's two commits holds it.
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	Side    Side   `json:"side"`
+	// BlobOID is the blob the lines were read in, whole, and Start and End
+	// the range, 1-based and inclusive.
+	BlobOID string `json:"blob_oid"`
+	Start   int    `json:"start"`
+	End     int    `json:"end"`
+}
+
+// InterdiffQuery asks what a change changed between two of its revisions:
+// the diff of their heads, kept to the files either revision's change touches
+// — so the files a rebase between them brought in from the target, which
+// neither revision touches, stay out of it — unless either revision touches
+// all, when it is the heads' whole diff.
+type InterdiffQuery struct {
+	// FromBase and FromHead are the earlier revision's base and head as its
+	// facts record them, and ToBase and ToHead the later one's — whole ids, a
+	// base empty where its facts name no merge base. The bases are compared,
+	// never read: two revisions measured from one base differ only in files
+	// one of them touches, so their heads' diff needs no keeping to them.
+	FromBase string `json:"from_base,omitempty"`
+	FromHead string `json:"from_head"`
+	ToBase   string `json:"to_base,omitempty"`
+	ToHead   string `json:"to_head"`
+	// FromTouched and ToTouched are each revision's touched paths as its
+	// facts list them, and FromTouchesAll and ToTouchesAll whether its facts
+	// say it touches all, beside which it gives no list.
+	FromTouched    []string `json:"from_touched,omitempty"`
+	FromTouchesAll bool     `json:"from_touches_all,omitempty"`
+	ToTouched      []string `json:"to_touched,omitempty"`
+	ToTouchesAll   bool     `json:"to_touches_all,omitempty"`
+	// File asks for one file's patch instead of the stat: its path at
+	// ToHead, or at FromHead for a file ToHead deleted (FileB64 its exact
+	// bytes), as [DiffQuery.File] is.
+	File    string `json:"file,omitempty"`
+	FileB64 string `json:"file_b64,omitempty"`
 }
 
 // ValidRev reports whether rev names an object as a read by oid takes it: a
@@ -1106,7 +1269,9 @@ func (q GitQuery) Validate() error {
 		kind    GitReadKind
 		present bool
 	}{{GitTree, q.Tree != nil}, {GitBlob, q.Blob != nil}, {GitDiff, q.Diff != nil},
-		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil}} {
+		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil},
+		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
+		{GitInterdiff, q.Interdiff != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -1123,6 +1288,12 @@ func (q GitQuery) Validate() error {
 		return q.Diff.validate()
 	case GitLandedIn:
 		return q.LandedIn.validate()
+	case GitRevisionFacts:
+		return q.RevisionFacts.validate()
+	case GitReanchor:
+		return q.Reanchor.validate()
+	case GitInterdiff:
+		return q.Interdiff.validate()
 	}
 	return q.Compare.validate()
 }
@@ -1142,6 +1313,20 @@ func ceilingInvalid(asker Principal, seat string) string {
 		return fmt.Sprintf("ceiling_seat: %q is not a seat's handle", seat)
 	}
 	return ""
+}
+
+// wholeID is a whole object id as a read of a change's revisions takes it —
+// never an abbreviation, never the zero id — or a refusal naming field; one
+// empty passes where empty says.
+func wholeID(field, id string, empty bool) error {
+	switch {
+	case id == "" && empty:
+		return nil
+	case !gitref.ValidOID(id) || id == ZeroOID:
+		return fmt.Errorf("%w: %s: %q is not a whole object id: a change's revisions are read by the 40-digit "+
+			"ids their rows record", ErrInvalid, field, id)
+	}
+	return nil
 }
 
 // validRev is ValidRev as a refusal naming field.
@@ -1233,15 +1418,128 @@ func (q LandedInQuery) validate() error {
 	return nil
 }
 
+func (q RevisionFactsQuery) validate() error {
+	if err := wholeID("revision_facts.head", q.Head, false); err != nil {
+		return err
+	}
+	return wholeID("revision_facts.target", q.Target, false)
+}
+
+func (q ReanchorQuery) validate() error {
+	if err := wholeID("reanchor.base", q.Base, true); err != nil {
+		return err
+	}
+	if err := wholeID("reanchor.head", q.Head, false); err != nil {
+		return err
+	}
+	if n := len(q.Anchors); n == 0 || n > MaxReanchors {
+		return fmt.Errorf("%w: reanchor.anchors: %d anchors; a read places 1 to %d", ErrInvalid, n, MaxReanchors)
+	}
+	ids := make(map[string]bool, len(q.Anchors))
+	for i, a := range q.Anchors {
+		field := fmt.Sprintf("reanchor.anchors[%d]", i)
+		switch {
+		case a.ID == "" || len(a.ID) > maxAnchorIDBytes || !utf8.ValidString(a.ID):
+			return fmt.Errorf("%w: %s.id: an anchor is named by 1 to %d bytes of UTF-8, which its answer carries "+
+				"back", ErrInvalid, field, maxAnchorIDBytes)
+		case ids[a.ID]:
+			return fmt.Errorf("%w: %s.id: %q names two anchors, whose answers would read as one", ErrInvalid,
+				field, a.ID)
+		case !a.Side.Valid():
+			return fmt.Errorf("%w: %s.side: %q is not one of %v", ErrInvalid, field, a.Side, Sides())
+		case a.Side == SideOld && q.Base == "":
+			return fmt.Errorf("%w: %s.side: an anchor on the old side is placed in the revision's base, which "+
+				"reanchor.base names", ErrInvalid, field)
+		case a.Start < 1 || a.End < a.Start:
+			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, and end is at or after "+
+				"start", ErrInvalid, field, a.Start, a.End)
+		}
+		ids[a.ID] = true
+		if _, err := GitPath(field+".path", a.Path, a.PathB64, false); err != nil {
+			return err
+		}
+		if err := wholeID(field+".blob_oid", a.BlobOID, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (q InterdiffQuery) validate() error {
+	for _, id := range []struct {
+		field, id string
+		empty     bool
+	}{{"interdiff.from_base", q.FromBase, true}, {"interdiff.from_head", q.FromHead, false},
+		{"interdiff.to_base", q.ToBase, true}, {"interdiff.to_head", q.ToHead, false}} {
+		if err := wholeID(id.field, id.id, id.empty); err != nil {
+			return err
+		}
+	}
+	for _, side := range []struct {
+		field   string
+		touched []string
+		all     bool
+	}{{"interdiff.from_touched", q.FromTouched, q.FromTouchesAll},
+		{"interdiff.to_touched", q.ToTouched, q.ToTouchesAll}} {
+		if err := validTouched(side.field, side.touched, side.all); err != nil {
+			return err
+		}
+	}
+	if q.File == "" && q.FileB64 == "" {
+		return nil
+	}
+	_, err := GitPath("interdiff.file", q.File, q.FileB64, false)
+	return err
+}
+
+// validTouched refuses a revision's touched paths as an interdiff's asker
+// gives them back: a list beside the word that it touches all, a list past
+// either bound its facts hold one to, or a path no tree entry is named by.
+func validTouched(field string, touched []string, all bool) error {
+	switch cost := TouchedCost(touched); {
+	case all && len(touched) > 0:
+		return fmt.Errorf("%w: %s: a revision that touches all lists no paths", ErrInvalid, field)
+	case len(touched) > MaxTouchedPaths:
+		return fmt.Errorf("%w: %s: %d paths, past the %d a revision's facts list", ErrInvalid, field,
+			len(touched), MaxTouchedPaths)
+	case cost > MaxTouchedBytes:
+		return fmt.Errorf("%w: %s: the list is %d bytes of JSON, past the %d a revision's facts list",
+			ErrInvalid, field, cost, MaxTouchedBytes)
+	}
+	for i, p := range touched {
+		if why := validGitPath(p, false); why != "" {
+			return fmt.Errorf("%w: %s[%d]: %s", ErrInvalid, field, i, why)
+		}
+	}
+	return nil
+}
+
+// TouchedCost is what a touched list takes as JSON, as [MaxTouchedBytes]
+// bounds it: the list's own encoding — an empty list its two brackets.
+func TouchedCost(touched []string) int {
+	if touched == nil {
+		touched = []string{}
+	}
+	out, err := json.Marshal(touched)
+	if err != nil {
+		// A list of strings always encodes; reaching here is a broken
+		// encoder, against which no list could be measured.
+		panic(fmt.Sprintf("code: encoding a touched list: %v", err))
+	}
+	return len(out)
+}
+
 // GitAnswer answers a [GitQuery]: exactly the field of its Kind is set — a
-// file read whose path names a directory answers Kind tree. Its JSON is at
-// most MaxGitAnswerBytes.
+// file read whose path names a directory answers Kind tree, and an interdiff
+// (Kind interdiff) sets Diff, being one. Its JSON is at most
+// MaxGitAnswerBytes.
 type GitAnswer struct {
 	Kind   GitReadKind `json:"kind"`
 	RepoID string      `json:"repo_id"`
 	// Rev is the object a tree or a file read was asked of, as its whole id
-	// — a tag's is the commit or tree it names. A diff and a comparison name
-	// both of theirs in their own answer.
+	// — a tag's is the commit or tree it names. A diff, a comparison, an
+	// interdiff and a revision's facts name their commits in their own
+	// answer, and a re-anchoring names none.
 	Rev string `json:"rev,omitempty"`
 	// Position is the answering node's copy's: every row up to it is in what
 	// it read, so an asker holding a later floor knows the answer may
@@ -1265,11 +1563,69 @@ type GitAnswer struct {
 	// one: an absent PushedBy means nothing beyond it.
 	Coverage *Coverage `json:"coverage,omitempty"`
 
-	Tree     *TreeAnswer     `json:"tree,omitempty"`
-	Blob     *BlobAnswer     `json:"blob,omitempty"`
-	Diff     *DiffAnswer     `json:"diff,omitempty"`
-	Compare  *CompareAnswer  `json:"compare,omitempty"`
-	LandedIn *LandedInAnswer `json:"landed_in,omitempty"`
+	Tree          *TreeAnswer          `json:"tree,omitempty"`
+	Blob          *BlobAnswer          `json:"blob,omitempty"`
+	Diff          *DiffAnswer          `json:"diff,omitempty"`
+	Compare       *CompareAnswer       `json:"compare,omitempty"`
+	LandedIn      *LandedInAnswer      `json:"landed_in,omitempty"`
+	RevisionFacts *RevisionFactsAnswer `json:"revision_facts,omitempty"`
+	Reanchor      *ReanchorAnswer      `json:"reanchor,omitempty"`
+}
+
+// RevisionFactsAnswer is what a revision's head is against its target's tip:
+// the change it makes, as a function of the two commits alone.
+type RevisionFactsAnswer struct {
+	// Head and Target are the query's commits, whole.
+	Head   string `json:"head"`
+	Target string `json:"target"`
+	// MergeBase is their best common ancestor — the BASE the change is
+	// measured from, on the target's side — or empty for histories that
+	// share none, whose change is measured from the empty tree: every file of
+	// Head.
+	MergeBase string `json:"merge_base,omitempty"`
+	// PatchID is `git patch-id --verbatim` of the cumulative diff from the
+	// base to Head: the same for two revisions whose changes are the same
+	// lines with the same lines around them, wherever the base put them — a
+	// rebase that moved nothing near them keeps it — and another for any
+	// changed byte, whitespace included. Empty for a revision that changes
+	// nothing, and where PatchIDOmitted: an empty id equals nothing.
+	PatchID string `json:"patch_id,omitempty"`
+	// PatchIDOmitted is a change whose diff the git node did not identify:
+	// one past the bound on a diff it identifies, or one whose diff ran out
+	// what was left of the read's budget of git.
+	PatchIDOmitted bool `json:"patch_id_omitted,omitempty"`
+	// Touched is every file the change touches — every path the diff from
+	// the base to Head changes, in git's order — unless TouchesAll: the
+	// change touches more than a list holds ([MaxTouchedPaths],
+	// [MaxTouchedBytes]) or a path JSON cannot carry exactly (bytes that are
+	// not UTF-8), and Touched is empty, to be read as every path.
+	Touched    []string `json:"touched"`
+	TouchesAll bool     `json:"touches_all,omitempty"`
+	// HeadInTarget is Head reachable from Target: the change is in its
+	// target already, merged by whatever moved the target there. Its change
+	// is then nothing: no id, no path.
+	HeadInTarget bool `json:"head_in_target,omitempty"`
+}
+
+// ReanchorAnswer places every anchor of the query, in its order.
+type ReanchorAnswer struct {
+	Anchors []Reanchored `json:"anchors"`
+}
+
+// Reanchored is one anchor placed. Gone: its revision holds no file at its
+// path (deleted, or a directory or a submodule now), so it has no lines
+// there. Otherwise Start and End are where its lines are now — moved by the
+// lines the change added or removed above them — and Outdated says they are
+// not the lines it was written against: one of them was changed or deleted,
+// or lines were inserted between two of them, or the file is binary on
+// either side; Start and End are then where the range would begin and end had
+// only the changes above it moved it.
+type Reanchored struct {
+	ID       string `json:"id"`
+	Start    int    `json:"start,omitempty"`
+	End      int    `json:"end,omitempty"`
+	Outdated bool   `json:"outdated,omitempty"`
+	Gone     bool   `json:"gone,omitempty"`
 }
 
 // Coverage is what a git node's index of which push introduced each commit

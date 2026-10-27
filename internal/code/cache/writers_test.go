@@ -490,16 +490,24 @@ var cacheWriters = []writerRow{
 		"the hook relay's private socket directory under TMPDIR, made at Start and removed at Stop: no " +
 			"path of the cache's", nil},
 	{"internal/code/query/diff.go", kindGit + " diff-tree",
-		"a seat's read of a diff — its stat's raw records, with their counts where the stat names no paths, " +
-			"and the raw record of the one file a patch names — whose only arguments not spelled as literals " +
-			"are the two whole object ids a read resolved and `-M`; a path never reaches the command line (the " +
-			"stat is filtered after git answers, and the records it admits reach diff-pairs on its standard " +
-			"input), and query.TestAPathReachesGitOnlyOnStandardInput holds every argument list to its " +
-			"template, so no --output can be added unseen", nil},
+		"a seat's read of a diff or an interdiff — its stat's raw records, with their counts where the stat " +
+			"admits every file, and the raw record of the one file a patch names — whose only arguments not " +
+			"spelled as literals are the two whole object ids a read resolved and `-M`; a path never reaches " +
+			"the command line (the stat is filtered after git answers, an interdiff's by its touched paths, and " +
+			"the records it admits reach diff-pairs on its standard input), and " +
+			"query.TestAPathReachesGitOnlyOnStandardInput holds every argument list to its template, so no " +
+			"--output can be added unseen", nil},
 	{"internal/code/query/compare.go", kindGit + " rev-list",
 		"a seat's comparison of two commits: `--left-right --count <base>...<head>` over two whole commit " +
 			"ids a read resolved; query.TestAPathReachesGitOnlyOnStandardInput holds the argument list to its " +
 			"template", nil},
+	{"internal/code/query/facts.go", kindGit + " diff-tree",
+		"a revision's facts: the paths a change touches (`-r --name-only -z --no-renames`) and its patch for " +
+			"patch-id (`-r -p --full-index …`, written to the reader through its Stdout, into a spool the cache " +
+			"made with no name), whose only arguments not spelled as literals are the base and head the read " +
+			"resolved to whole ids — the empty tree's id, a constant, for a history sharing none with its " +
+			"target's; query.TestAPathReachesGitOnlyOnStandardInput holds both argument lists to their " +
+			"templates, so no --output can be added unseen", nil},
 }
 
 type writerKey struct{ file, kind string }
@@ -553,6 +561,8 @@ var gitReaders = map[string]gitReader{
 	"diff-pairs": {writes: "--output", why: "diffs the pairs of blobs diff-tree's raw records on its standard " +
 		"input name, by id; --output, a diff option, creates the file it names in the directory git runs in " +
 		"(2.56.0: `diff-pairs -z --numstat --output=f` exits 0 and leaves f behind)"},
+	"patch-id": {why: "hashes the patch on its standard input and prints its id: it opens no object and no ref, " +
+		"and its options (--stable, --unstable, --verbatim) choose how it hashes, none what it writes"},
 }
 
 const uploadPackReads = "serves a fetch: its pack goes to the client, and the one file it writes in the " +
