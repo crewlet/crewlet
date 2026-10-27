@@ -799,19 +799,25 @@ type layerFiles struct {
 
 // readLayer reads a layer's three files, sizes[i] bytes each — the
 // commit-graph layer absent exactly when graph is nil — and holds each to its
-// size and the three to each other as every layer's are: the bitmap belongs to
-// the multi-pack-index and its tables fit the objects that index holds, every
-// pack is named once, and the commit-graph layer's changed-path filters are
-// version 2, the one this code host writes (commitGraph.changedPathsVersion =
-// 2) — a layer of version 1 filters, or of none, would have every node's log
-// and blame read the slow way, or a path the version 1 hash gets wrong
-// misread. fields name the three sections' sizes as the caller states them.
-// Each file's trailer is hashed as p says, stopped with ctx.
+// size and the three to each other and to the chain below them as every
+// layer's are: the bitmap belongs to the multi-pack-index and its tables fit
+// the objects that index holds, every pack is named once, the commit-graph
+// layer's changed-path filters are version 2, the one this code host writes
+// (commitGraph.changedPathsVersion = 2) — a layer of version 1 filters, or of
+// none, would have every node's log and blame read the slow way, or a path the
+// version 1 hash gets wrong misread — and the commit-graph layer is written
+// over exactly baseGraphs, the GraphIDs of the layers below it that carry
+// one, root first: a commit-graph layer names its bases in its BASE chunk, as
+// a multi-pack-index layer does not, and git reads a chain only over the bases
+// each layer names. So the side that writes a layer ([LayLayer]) and every
+// side that installs it ([CheckLayer]) refuse a layer over another chain by
+// one comparison. fields name the three sections' sizes as the caller states
+// them. Each file's trailer is hashed as p says, stopped with ctx.
 //
 // A refusal of the bytes is [ErrBadLayer], naming the field; a read, a hold
 // or a ctx that failed is answered as it came.
 func readLayer(ctx context.Context, midx, bitmap, graph io.ReaderAt, sizes [3]int64, fields [3]string,
-	p Pieces) (layerFiles, error) {
+	baseGraphs []string, p Pieces) (layerFiles, error) {
 
 	bad := func(field string, err error) error {
 		if !isFormat(err) {
@@ -861,6 +867,10 @@ func readLayer(ctx context.Context, midx, bitmap, graph io.ReaderAt, sizes [3]in
 	if f.graph.BloomVersion != 2 {
 		return layerFiles{}, bad("graph.filters", formatf("the commit-graph layer's changed-path filters are "+
 			"version %d (0: none), not 2", f.graph.BloomVersion))
+	}
+	if !slices.Equal(f.graph.Bases, baseGraphs) {
+		return layerFiles{}, bad("graph.bases", formatf("the commit-graph layer is written over the layers %v, and "+
+			"the chain below it is %v", f.graph.Bases, baseGraphs))
 	}
 	return f, nil
 }
@@ -923,7 +933,7 @@ func CheckLayer(ctx context.Context, row LayerRef, midx, bitmap, graph io.Reader
 		graph = nil
 	}
 	f, err := readLayer(ctx, midx, bitmap, graph, row.Sections(),
-		[3]string{"midx_bytes", "bitmap_bytes", "graph_bytes"}, p)
+		[3]string{"midx_bytes", "bitmap_bytes", "graph_bytes"}, baseGraphs, p)
 	if err != nil {
 		return err
 	}
@@ -944,9 +954,6 @@ func CheckLayer(ctx context.Context, row LayerRef, midx, bitmap, graph io.Reader
 	case f.graph.Commits != row.Commits:
 		return bad("commits", "the commit-graph layer holds %d commits, and the row says %d", f.graph.Commits,
 			row.Commits)
-	case !slices.Equal(f.graph.Bases, baseGraphs):
-		return bad("graph.bases", "the commit-graph layer is written over the layers %v, and the chain below it is "+
-			"%v", f.graph.Bases, baseGraphs)
 	}
 	return nil
 }
@@ -972,15 +979,23 @@ func packsDiffer(file, row []string) string {
 // the sections' sizes, Objects, Commits, the packs the multi-pack-index names
 // (as checksums, sorted), LayerID and GraphID. So the publisher states nothing
 // git did not write, and states it by the reading every git node holds the
-// files to ([CheckLayer]): the files are held to each other as there, so a
-// build whose files no node would install is refused here, before a byte is
-// stored. BaseID, Replaces, Parts, Git and TookMs are the publisher's own,
-// unset. Each file's trailer is hashed as p says, stopped with ctx, as
-// [CheckLayer]'s are.
+// files to ([CheckLayer]): the files are held to each other and to the chain
+// below them as there — baseGraphs the GraphIDs of the layers the build was
+// written over that carry one, root first, which its commit-graph layer must
+// name exactly — so a build whose files no node would install, a commit-graph
+// layer over another base among them, is refused here, before a byte is
+// stored: every row field CheckLayer compares with the files is one this
+// states from them. What it cannot hold is the row's own check
+// ([LayerRef.Check]: its parts, its base, its git), which the decide holds.
+// BaseID, Replaces, Parts, Git and TookMs are the publisher's own, unset; the
+// packs it answers are for the publisher to hold to its plan. Each file's
+// trailer is hashed as p says, stopped with ctx, as [CheckLayer]'s are.
 //
 // A refusal of the bytes is [ErrBadLayer]; a file that cannot be opened or
 // read, a hold that failed and a ctx that ended are answered as they came.
-func LayLayer(ctx context.Context, midxPath, bitmapPath, graphPath string, p Pieces) (LayerRef, error) {
+func LayLayer(ctx context.Context, midxPath, bitmapPath, graphPath string, baseGraphs []string,
+	p Pieces) (LayerRef, error) {
+
 	var readers [3]io.ReaderAt
 	var sizes [3]int64
 	for i, path := range [3]string{midxPath, bitmapPath, graphPath} {
@@ -1006,7 +1021,8 @@ func LayLayer(ctx context.Context, midxPath, bitmapPath, graphPath string, p Pie
 		}
 		readers[i], sizes[i] = f, info.Size()
 	}
-	files, err := readLayer(ctx, readers[0], readers[1], readers[2], sizes, [3]string{"midx", "bitmap", "graph"}, p)
+	files, err := readLayer(ctx, readers[0], readers[1], readers[2], sizes, [3]string{"midx", "bitmap", "graph"},
+		baseGraphs, p)
 	if err != nil {
 		return LayerRef{}, err
 	}

@@ -341,7 +341,7 @@ func readsWhatGitWrote(t *testing.T, g layerFixture) {
 			t.Errorf("%s: ParseGraph = %+v; git wrote %d commits over the bases %v with version 2 filters, "+
 				"listed in its chain as %s", c.name, gr, c.w.commits, c.bases, c.w.graphID)
 		}
-		got, err := code.LayLayer(t.Context(), c.w.midx, c.w.bitmap, c.w.graph, code.Pieces{})
+		got, err := code.LayLayer(t.Context(), c.w.midx, c.w.bitmap, c.w.graph, c.bases, code.Pieces{})
 		want := code.LayerRef{LayerID: c.w.id, GraphID: c.w.graphID, Packs: []string{g.packs[0]},
 			MidxBytes: size(t, c.w.midx), BitmapBytes: size(t, c.w.bitmap), GraphBytes: size(t, c.w.graph),
 			Objects: g.objects[0], Commits: c.w.commits}
@@ -354,7 +354,7 @@ func readsWhatGitWrote(t *testing.T, g layerFixture) {
 	}
 	// A build whose packs held no commit the base's graph layers lack wrote
 	// no graph layer: the row carries none.
-	got, err := code.LayLayer(t.Context(), g.tip.midx, g.tip.bitmap, "", code.Pieces{})
+	got, err := code.LayLayer(t.Context(), g.tip.midx, g.tip.bitmap, "", g.chain[:1], code.Pieces{})
 	if err != nil || got.GraphID != "" || got.GraphBytes != 0 || got.Commits != 0 || got.LayerID != g.tip.id {
 		t.Errorf("LayLayer with no graph layer = %+v, %v; want the tip's layer and no graph", got, err)
 	}
@@ -407,9 +407,9 @@ func (l layerBytes) check(ctx context.Context, row code.LayerRef, bases []string
 // rowFor is the row a publisher names the layer w by: LayLayer's fields over
 // w's files, base, git's release and a build time, and parts cut as
 // StoreLayer cuts them (withParts).
-func rowFor(t testing.TB, w wroteLayer, base string) code.LayerRef {
+func rowFor(t testing.TB, w wroteLayer, base string, bases []string) code.LayerRef {
 	t.Helper()
-	row, err := code.LayLayer(t.Context(), w.midx, w.bitmap, w.graph, code.Pieces{})
+	row, err := code.LayLayer(t.Context(), w.midx, w.bitmap, w.graph, bases, code.Pieces{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,15 +449,20 @@ func trailerHex(b []byte) string { return hex.EncodeToString(b[len(b)-sha1.Size:
 // A CHECK REFUSES EVERY WAY A LAYER'S FILES ARE NOT ITS ROW'S, each refusal
 // ErrBadLayer naming the field it differs in, and passes the layer git wrote:
 // the tip of the chain, whose commit-graph layer names the base's — so the
-// base a commit-graph layer is written over is checked too.
+// base a commit-graph layer is written over is checked too. LayLayer, the
+// publisher's reading, refuses the builds whose files no node would install
+// the same way before a byte of them is stored, a commit-graph layer written
+// over a wrong base, or over one the chain lacks, among them.
 //
-// Mutation: CheckLayer skips the PNAM comparison, and the row naming a pack
-// the multi-pack-index does not is red.
+// Mutations: CheckLayer skips the PNAM comparison, and the row naming a pack
+// the multi-pack-index does not is red; LayLayer holds the commit-graph layer
+// to no base, and its wrong-base builds are red.
 func TestACheckRefusesEveryMismatch(t *testing.T) {
 	t.Parallel()
 	g := writeLayers(t)
 	tip, base := filesOf(t, g.tip), filesOf(t, g.base)
-	row, bases := rowFor(t, g.tip, g.base.id), []string{g.base.graphID}
+	bases := []string{g.base.graphID}
+	row := rowFor(t, g.tip, g.base.id, bases)
 	if err := tip.check(t.Context(), row, bases); err != nil {
 		t.Fatalf("the layer git wrote, with the row its own files state: %v", err)
 	}
@@ -545,7 +550,10 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 	if err := (layerBytes{tip[0], tip[1], nil}).check(t.Context(), noGraph, nil); err != nil {
 		t.Errorf("a layer of no commit-graph layer, checked with none: %v", err)
 	}
-	// LayLayer refuses a build whose files no node would install.
+	// LayLayer refuses a build whose files no node would install — a
+	// commit-graph layer over another base among them, since its files alone
+	// are git's and sound: the base it was written over is the build's own
+	// mistake, which every node's check would refuse once it was stored.
 	dir := t.TempDir()
 	otherBitmap, v1Graph := filepath.Join(dir, "bitmap"), filepath.Join(dir, "graph")
 	for path, body := range map[string][]byte{otherBitmap: base[1], v1Graph: v1} {
@@ -553,11 +561,16 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, c := range []struct{ name, field, bitmap, graph string }{
-		{"another midx's bitmap", "bitmap.midx", otherBitmap, g.tip.graph},
-		{"v1 filters", "graph.filters", g.tip.bitmap, v1Graph},
+	for _, c := range []struct {
+		name, field, bitmap, graph string
+		bases                      []string
+	}{
+		{"another midx's bitmap", "bitmap.midx", otherBitmap, g.tip.graph, bases},
+		{"v1 filters", "graph.filters", g.tip.bitmap, v1Graph, bases},
+		{"a graph written over a wrong base", "graph.bases", g.tip.bitmap, g.tip.graph, []string{other}},
+		{"a graph written over a base the chain lacks", "graph.bases", g.tip.bitmap, g.tip.graph, nil},
 	} {
-		if _, err := code.LayLayer(t.Context(), g.tip.midx, c.bitmap, c.graph, code.Pieces{}); !errors.Is(err,
+		if _, err := code.LayLayer(t.Context(), g.tip.midx, c.bitmap, c.graph, c.bases, code.Pieces{}); !errors.Is(err,
 			code.ErrBadLayer) || !strings.Contains(err.Error(), ": "+c.field+": ") {
 			t.Errorf("LayLayer over %s = %v, want ErrBadLayer naming %s", c.name, err, c.field)
 		}
@@ -573,7 +586,7 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 func TestAFailedReadIsNotABadLayer(t *testing.T) {
 	t.Parallel()
 	g := writeLayers(t)
-	tip, row := filesOf(t, g.tip), rowFor(t, g.tip, g.base.id)
+	tip, row := filesOf(t, g.tip), rowFor(t, g.tip, g.base.id, []string{g.base.graphID})
 	failed := errors.New("the disk failed the read")
 	for i := range 3 {
 		readers := [3]io.ReaderAt{bytes.NewReader(tip[0]), bytes.NewReader(tip[1]), bytes.NewReader(tip[2])}
@@ -610,7 +623,7 @@ func TestALayersCheckIsHashedAPieceASlotAndStopsWithItsCaller(t *testing.T) {
 	t.Parallel()
 	g := writeLayers(t)
 	tip, bases := filesOf(t, g.tip), []string{g.base.graphID}
-	row := rowFor(t, g.tip, g.base.id)
+	row := rowFor(t, g.tip, g.base.id, bases)
 	const piece = 64
 	through := func(lane *oneSlot) ([3]*slotted, [3]io.ReaderAt, code.Pieces) {
 		var files [3]*slotted
@@ -675,7 +688,7 @@ func TestALayersCheckIsHashedAPieceASlotAndStopsWithItsCaller(t *testing.T) {
 			t.Errorf("%s: %d bytes were read in a slot", c.name, files[0].held)
 		}
 	}
-	if _, err := code.LayLayer(ended, g.tip.midx, g.tip.bitmap, g.tip.graph, code.Pieces{}); !errors.Is(err,
+	if _, err := code.LayLayer(ended, g.tip.midx, g.tip.bitmap, g.tip.graph, bases, code.Pieces{}); !errors.Is(err,
 		context.Canceled) || errors.Is(err, code.ErrBadLayer) {
 		t.Errorf("LayLayer with its context ended: %v, want context.Canceled and not ErrBadLayer", err)
 	}
@@ -931,7 +944,7 @@ func TestALayerIsStoredInPartsAndLaidBackWhereItCameFrom(t *testing.T) {
 	paths := [3]string{g.tip.midx, g.tip.bitmap, g.tip.graph}
 	files := filesOf(t, g.tip)
 	whole := slices.Concat(files[0], files[1], files[2])
-	ref, err := code.LayLayer(t.Context(), paths[0], paths[1], paths[2], code.Pieces{})
+	ref, err := code.LayLayer(t.Context(), paths[0], paths[1], paths[2], []string{g.base.graphID}, code.Pieces{})
 	if err != nil {
 		t.Fatal(err)
 	}

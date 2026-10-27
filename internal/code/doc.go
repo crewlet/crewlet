@@ -751,8 +751,10 @@
 // section, the multi-pack-index's trailer the row's id and its packs the
 // row's, the bitmap that multi-pack-index's, the commit-graph layer's bases
 // the GraphIDs of the rows below it and its filters version 2 — and
-// [LayLayer] the publisher's, which holds the files to each other the same
-// way, so a build no node would install is refused before a byte is stored. A
+// [LayLayer] the publisher's, which holds the files to each other and to the
+// base the build was written over by the same comparisons, so a build whose
+// files no node would install — a commit-graph layer over another base among
+// them — is refused before a byte is stored. A
 // refusal is [ErrBadLayer], definite and never retried, apart from a read
 // that failed. No reader holds a file: each reads a header, a table of
 // contents and the chunks a count is read from, every one held to the file's
