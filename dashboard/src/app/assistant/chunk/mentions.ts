@@ -17,9 +17,9 @@
  * THE MATCHING RULE, decided once, here:
  *
  *  1. A KEY is matched exactly, case and all, at token boundaries: no letter,
- *     digit, underscore or hyphen on either side, so GOP-11 is never found in
- *     GOP-110 or GOP-11-b. A record carries a key where it has one (a task's,
- *     a project's: `AssistantEntityCard.key`).
+ *     digit, underscore, hyphen or slash on either side, so GOP-11 is never
+ *     found in GOP-110, GOP-11-b or worklet/GOP-11. A record carries a key
+ *     where it has one (a task's, a project's: `AssistantEntityCard.key`).
  *  2. A NAME is matched only for the kinds whose title is a name people
  *     write (an agent, a team, a project, a page, a space, an artifact, a
  *     schedule), exactly, as a whole phrase at the same boundaries, and only
@@ -27,13 +27,27 @@
  *     (a task is matched by its key), and never a table's, a record of no
  *     kind or a read too large to show: those are listed under the answer,
  *     a list as one chip named by what it read and how many rows.
- *  3. In each run of text, the earliest mention wins; where two start at one
+ *     - A ONE-WORD NAME IN SENTENCE CASE IS NEVER A SENTENCE'S FIRST WORD:
+ *       "Design is late" and "Notes from the call" start a sentence with a
+ *       capital the way every sentence does, and are not the team or the
+ *       page. A name no ordinary word is spelled like (all capitals, a
+ *       capital inside it, a digit: "QA", "GoPhrase", "iOS"), a name of two
+ *       words or more, and a key are matched there.
+ *     - A NAME TWO READS SHARE NAMES NEITHER: two seats both called "QA"
+ *       cannot be told apart by the word, so neither is a chip and both are
+ *       listed under the answer. A record with a key is still matched by it.
+ *  3. NOTHING IN A BARE ADDRESS: a run of text from a scheme's `://` or a
+ *     `www.` to the next space is an address the model wrote, and a key in it
+ *     (https://x.test/GOP-11) is part of the address, never a mention.
+ *  4. In each run of text, the earliest mention wins; where two start at one
  *     place, the longer. Only a record's FIRST mention, in reading order, is
  *     its chip; the rest stay text.
- *  4. Only the prose is read: the Markdown renderer hands over each run of
+ *  5. Only the prose is read: the Markdown renderer hands over each run of
  *     the words a reader reads (`RenderOptions.prose`), never a code span,
  *     a code block or a link's label, so a key in `code` is the model
- *     quoting it, not naming it.
+ *     quoting it, not naming it. It says which run opens a block, so a
+ *     sentence's first word is known across a paragraph, a heading, a list
+ *     item and a table cell.
  */
 
 import type { ReactNode } from "react";
@@ -172,49 +186,97 @@ function escape(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** A word character on either side ends a match: a letter, a digit, an underscore or a hyphen. */
-const BEFORE = "(?<![\\p{L}\\p{N}_-])";
-const AFTER = "(?![\\p{L}\\p{N}_-])";
+/**
+ * A word character on either side ends a match: a letter, a digit, an
+ * underscore, a hyphen or a slash (rule 1).
+ */
+const BEFORE = "(?<![\\p{L}\\p{N}_/-])";
+const AFTER = "(?![\\p{L}\\p{N}_/-])";
+
+/** A bare address: a scheme's `://` or a `www.` host, to the next space (rule 3). */
+const ADDRESS = /(?:[a-z][a-z0-9+.-]*:\/\/|(?<![\p{L}\p{N}_.-])www\.)\S+/giu;
+
+/** Where each bare address in `text` lies, as [start, end). */
+function addresses(text: string): Array<readonly [number, number]> {
+  return [...text.matchAll(ADDRESS)].map((m) => [m.index, m.index + m[0].length] as const);
+}
+
+/** Text that ends a sentence: its stop, and any closing quote or bracket after it. */
+const ENDS_SENTENCE = /[.!?]["'\u201d\u2019)\]]*\s*$/u;
+/** What may open a sentence before its first word: a quote, a bracket, space. */
+const OPENING = /[\s"'\u201c\u2018([]+$/u;
+
+/** One word as a sentence starts an ordinary one: a capital, then small letters. */
+const SENTENCE_CASE = /^\p{Lu}\p{Ll}+$/u;
 
 interface Pattern {
   read: Read;
   by: "key" | "name";
+  /**
+   * A name of one word spelled as an ordinary word is at a sentence's start
+   * ("Design"), which is never matched as a sentence's first word (rule 2).
+   */
+  ordinary: boolean;
   re: RegExp;
 }
 
 function patternsOf(reads: readonly Read[]): Pattern[] {
+  // A NAME TWO READS SHARE NAMES NEITHER (rule 2).
+  const sharing = new Map<string, number>();
+  for (const read of reads) {
+    if (read.name) sharing.set(read.name, (sharing.get(read.name) ?? 0) + 1);
+  }
+  const re = (text: string) => new RegExp(`${BEFORE}${escape(text)}${AFTER}`, "gu");
   return reads.flatMap((read) => [
-    ...(read.key
-      ? [{ read, by: "key" as const, re: new RegExp(`${BEFORE}${escape(read.key)}${AFTER}`, "u") }]
-      : []),
-    ...(read.name
-      ? [
-          {
-            read,
-            by: "name" as const,
-            re: new RegExp(`${BEFORE}${escape(read.name)}${AFTER}`, "u"),
-          },
-        ]
+    ...(read.key ? [{ read, by: "key" as const, ordinary: false, re: re(read.key) }] : []),
+    ...(read.name && sharing.get(read.name) === 1
+      ? [{ read, by: "name" as const, ordinary: SENTENCE_CASE.test(read.name), re: re(read.name) }]
       : []),
   ]);
 }
 
-/** The first mention in `text` of a read still waiting for one (rule 3), or null. */
+/** Where a run sits: whether it opens its block, and the run before it. */
+interface RunContext {
+  opens: boolean;
+  previous: string;
+  addresses: ReadonlyArray<readonly [number, number]>;
+}
+
+/** Whether the word at `at` in `text` is its sentence's first (rule 2). */
+function startsSentence(text: string, at: number, run: RunContext): boolean {
+  const before = text.slice(0, at).replace(OPENING, "");
+  if (before !== "") return ENDS_SENTENCE.test(before);
+  return run.opens || run.previous.trim() === "" || ENDS_SENTENCE.test(run.previous);
+}
+
+/** Whether a match of `p` at `at` is a mention by rules 2 and 3. */
+function mentions(p: Pattern, text: string, at: number, end: number, run: RunContext): boolean {
+  if (run.addresses.some(([from, to]) => at < to && end > from)) return false;
+  return !(p.ordinary && startsSentence(text, at, run));
+}
+
+/** The first mention in `text` from `from` of a read still waiting for one (rule 4), or null. */
 function firstIn(
   text: string,
+  from: number,
   patterns: readonly Pattern[],
   named: ReadonlySet<string>,
+  run: RunContext,
 ): { at: number; mention: Mention } | null {
   let best: { at: number; mention: Mention } | null = null;
   for (const p of patterns) {
     if (named.has(p.read.id)) continue;
-    const m = p.re.exec(text);
-    if (!m) continue;
-    const better =
-      best === null ||
-      m.index < best.at ||
-      (m.index === best.at && m[0].length > best.mention.text.length);
-    if (better) best = { at: m.index, mention: { read: p.read, text: m[0], by: p.by } };
+    p.re.lastIndex = from;
+    for (let m = p.re.exec(text); m !== null; m = p.re.exec(text)) {
+      if (best !== null && m.index > best.at) break;
+      if (!mentions(p, text, m.index, m.index + m[0].length, run)) continue;
+      const better =
+        best === null ||
+        m.index < best.at ||
+        (m.index === best.at && m[0].length > best.mention.text.length);
+      if (better) best = { at: m.index, mention: { read: p.read, text: m[0], by: p.by } };
+      break;
+    }
   }
   return best;
 }
@@ -223,24 +285,33 @@ function firstIn(
  * The answer's prose runs, each with the first mention of each read drawn by
  * `chip`, for `RenderOptions.prose`; and which reads were named, filled in as
  * the renderer hands the runs over in reading order. One per render: it
- * remembers what it has named.
+ * remembers what it has named and the run before.
  */
 export function mentionsOf(
   reads: readonly Read[],
   chip: (mention: Mention, key: string) => ReactNode,
-): { prose: (text: string, key: string) => ReactNode; named: ReadonlySet<string> } {
+): {
+  prose: (text: string, key: string, opens?: boolean) => ReactNode;
+  named: ReadonlySet<string>;
+} {
   const named = new Set<string>();
   const patterns = patternsOf(reads);
-  const prose = (text: string, key: string): ReactNode => {
-    const found = patterns.length > 0 ? firstIn(text, patterns, named) : null;
-    if (found === null) return text;
-    named.add(found.mention.read.id);
-    const end = found.at + found.mention.text.length;
-    return [
-      text.slice(0, found.at),
-      chip(found.mention, `${key}:${found.mention.read.id}`),
-      prose(text.slice(end), `${key}+`),
-    ];
+  let previous = "";
+  const prose = (text: string, key: string, opens = false): ReactNode => {
+    const run: RunContext = { opens, previous, addresses: addresses(text) };
+    previous = text;
+    if (patterns.length === 0) return text;
+    const out: ReactNode[] = [];
+    let from = 0;
+    for (let found = firstIn(text, from, patterns, named, run); found !== null;) {
+      named.add(found.mention.read.id);
+      out.push(text.slice(from, found.at), chip(found.mention, `${key}:${found.mention.read.id}`));
+      from = found.at + found.mention.text.length;
+      found = firstIn(text, from, patterns, named, run);
+    }
+    if (out.length === 0) return text;
+    out.push(text.slice(from));
+    return out;
   };
   return { prose, named };
 }

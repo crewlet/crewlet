@@ -339,12 +339,15 @@ export interface RenderOptions {
    * What each run of the PROSE a reader reads becomes, in reading order: the
    * words between the code spans, the links (their labels included) and the
    * images, never inside them, and never a code block's. Its `key` is unique
-   * within the render. The Dashboard Assistant makes the first mention of each
-   * record a turn read its chip here (`app/assistant/chunk/mentions.ts`), so a
-   * key quoted in code or written into a link's label stays as written. A
-   * caller gives this or `highlight`; given both, this is the one applied.
+   * within the render, and `opens` is true for the first run of a block's
+   * text (a paragraph, a heading, a table cell, a list item's line), so its
+   * first word starts a sentence. The Dashboard Assistant makes the first
+   * mention of each record a turn read its chip here
+   * (`app/assistant/chunk/mentions.ts`), so a key quoted in code or written
+   * into a link's label stays as written. A caller gives this or `highlight`;
+   * given both, this is the one applied.
    */
-  prose?: (text: string, key: string) => ReactNode;
+  prose?: (text: string, key: string, opens?: boolean) => ReactNode;
   /**
    * Where an image's source is shown from, in place of the source itself: a
    * doc's pictures are files of its version, fetched with the reader's own
@@ -584,6 +587,24 @@ function soften(text: string): string {
 
 // --- block rendering -------------------------------------------------------
 
+/**
+ * `options` for one block's text: its first prose run is told it opens the
+ * block (`RenderOptions.prose`), every later one that it does not.
+ */
+function opening(options: RenderOptions): RenderOptions {
+  const { prose } = options;
+  if (prose === undefined) return options;
+  let first = true;
+  return {
+    ...options,
+    prose: (text, key) => {
+      const opens = first;
+      first = false;
+      return prose(text, key, opens);
+    },
+  };
+}
+
 function renderBlock(
   block: MarkdownBlock,
   key: string,
@@ -600,7 +621,7 @@ function renderBlock(
         return createElement(
           "p",
           { key, className: "md-heading" },
-          renderInline(block.text, key, options),
+          renderInline(block.text, key, opening(options)),
         );
       }
       // CLAMPED TO h2–h6. A page's own title is the h1 on the screen around
@@ -609,10 +630,10 @@ function renderBlock(
       return createElement(
         `h${Math.min(6, block.level + 1)}`,
         anchor ? { key, id: anchor } : { key },
-        renderInline(block.text, key, options),
+        renderInline(block.text, key, opening(options)),
       );
     case "paragraph":
-      return createElement("p", { key }, renderInline(block.text, key, options));
+      return createElement("p", { key }, renderInline(block.text, key, opening(options)));
     case "code":
       // `md-code`, in the same family as `md-table`, `md-tasks` and
       // `md-task-body`. It was `code plain`, two generic names (a table
@@ -721,7 +742,7 @@ function renderBlock(
                 createElement(
                   "th",
                   { key: i, style: { textAlign: block.align[i] ?? "left" } },
-                  renderInline(cell, `${key}-h${i}`, options),
+                  renderInline(cell, `${key}-h${i}`, opening(options)),
                 ),
               ),
             ),
@@ -737,7 +758,7 @@ function renderBlock(
                   createElement(
                     "td",
                     { key: c, style: { textAlign: block.align[c] ?? "left" } },
-                    renderInline(cell, `${key}-${r}-${c}`, options),
+                    renderInline(cell, `${key}-${r}-${c}`, opening(options)),
                   ),
                 ),
               ),

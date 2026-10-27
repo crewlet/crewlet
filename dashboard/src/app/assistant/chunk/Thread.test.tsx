@@ -10,8 +10,15 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { AssistantCardEvent } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
 import type { CardHandlers } from "./blocks.tsx";
+import { readsOf } from "./mentions.ts";
 import { Thread } from "./Thread.tsx";
 import { EMPTY, type TurnView } from "./turn.ts";
+
+// THE READS AN ANSWER WORKS OUT, counted: the real ones, through a spy.
+vi.mock("./mentions.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./mentions.ts")>();
+  return { ...real, readsOf: vi.fn(real.readsOf) };
+});
 
 afterEach(cleanup);
 
@@ -246,4 +253,33 @@ test("a sent question shows the images it carried as chips under its bubble", as
   expect(bubble.querySelector("button")).toBeNull();
   await waitFor(() => expect(bubble.querySelector("img")?.getAttribute("src")).toBe("blob:sent/1"));
   vi.unstubAllGlobals();
+});
+
+test("an answer works out its reads once while the turn's cards are the same", () => {
+  const answered: TurnView = {
+    ...turn,
+    phase: "working",
+    replies: [{ id: "m", text: "FAIR-1 is next." }],
+    cards: [card],
+  };
+  const view = { ...EMPTY, id: "c1", turns: [answered] };
+  const at = (now: string) => (
+    <Router>
+      <Thread
+        view={view}
+        now={Date.parse(now)}
+        on={on}
+        opened={new Set()}
+        onRetry={() => {}}
+        retryDisabledReason={undefined}
+        onReconnect={() => {}}
+      />
+    </Router>
+  );
+  const { rerender } = render(at("2026-10-24T09:41:02Z"));
+  const once = vi.mocked(readsOf).mock.calls.length;
+  // THE CLOCK TICKS, the turn does not change: nothing is worked out again.
+  rerender(at("2026-10-24T09:41:03Z"));
+  rerender(at("2026-10-24T09:41:04Z"));
+  expect(vi.mocked(readsOf).mock.calls.length).toBe(once);
 });

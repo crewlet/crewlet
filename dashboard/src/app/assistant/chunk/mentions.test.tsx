@@ -136,3 +136,59 @@ test("a key the turn never read stays words", () => {
   const { reads } = readsOf([task("GOP-11", "Android 12 crash")]);
   expect(mark("GOP-12 is unrelated.", reads).named.size).toBe(0);
 });
+
+const unit = (key: string, name: string) =>
+  event({ type: "entity", entity: { kind: "unit", id: key, title: name } });
+const page = (id: string, title: string) =>
+  event({ type: "entity", entity: { kind: "page", id, title } });
+
+test("a key in a path or a bare address is part of it, never a mention", () => {
+  const { reads } = readsOf([task("GOP-11", "Android 12 crash")]);
+  expect(mark("It is at https://x.test/GOP-11 now.", reads).named.size).toBe(0);
+  expect(mark("Filed under worklet/GOP-11 and GOP-11/b.", reads).named.size).toBe(0);
+  expect(mark("See www.x.test/GOP-11 for it.", reads).named.size).toBe(0);
+  expect(mark("See https://x.test/a, then GOP-11.", reads).text).toBe(
+    "See https://x.test/a, then [task:GOP-11|GOP-11].",
+  );
+});
+
+test("a one-word name in sentence case is never a sentence's first word, wherever it starts", () => {
+  const { reads } = readsOf([unit("design", "Design"), page("p1", "Notes")]);
+  expect(mark("Design is late.", reads).named.size).toBe(0);
+  expect(mark("Notes from the call are short.", reads).named.size).toBe(0);
+  expect(mark("It shipped. Design is late.", reads).named.size).toBe(0);
+  expect(mark("**It shipped.** Design is late.", reads).named.size).toBe(0);
+  expect(mark("- It shipped\n- Design is late", reads).named.size).toBe(0);
+  expect(mark("# Design\n\nIt is late.", reads).named.size).toBe(0);
+  expect(mark('"Design is late," she said.', reads).named.size).toBe(0);
+  // Anywhere else in a sentence it is the name.
+  expect(mark("Ask Design, then read Notes.", reads).text).toBe(
+    "Ask [unit:design|Design], then read [page:p1|Notes].",
+  );
+  expect(mark("**Design** owns it, it said.", reads).named.size).toBe(0);
+  expect(mark("It is **Design** that owns it.", reads).named.size).toBe(1);
+});
+
+test("a name no ordinary word is spelled like, or of two words, starts a sentence too", () => {
+  const { reads } = readsOf([
+    unit("brand", "Brand Studio"),
+    seat("qa", "QA"),
+    seat("gp", "GoPhrase"),
+  ]);
+  expect(mark("Brand Studio owns it.", reads).text).toBe("[unit:brand|Brand Studio] owns it.");
+  expect(mark("QA holds it.", reads).text).toBe("[seat:qa|QA] holds it.");
+  expect(mark("GoPhrase ships it.", reads).text).toBe("[seat:gp|GoPhrase] ships it.");
+});
+
+test("a name two reads share names neither, and a key still names its record", () => {
+  const { reads } = readsOf([seat("qa", "QA"), seat("qa-2", "QA")]);
+  expect(reads.length).toBe(2);
+  expect(mark("Ask QA about it.", reads).named.size).toBe(0);
+  const keyed = readsOf([
+    task("GOP-11", "Crash"),
+    event({ type: "entity", entity: { kind: "project", id: "a", key: "APP", title: "Mobile" } }),
+    event({ type: "entity", entity: { kind: "project", id: "b", key: "WEB", title: "Mobile" } }),
+  ]).reads;
+  const out = mark("It is in the Mobile project, under APP.", keyed);
+  expect(out.text).toBe("It is in the Mobile project, under [project:a|APP].");
+});

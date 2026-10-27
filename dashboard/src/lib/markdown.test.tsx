@@ -915,4 +915,22 @@ describe("prose", () => {
     const inert = seen("[label](https://example.com) c", { links: "inert" });
     expect(inert.runs).toEqual([" c"]);
   });
+
+  // EACH BLOCK'S FIRST RUN OPENS IT, so a caller knows a sentence's first word
+  // in a paragraph, a heading, a list item and a table cell, and every later
+  // run of the block does not. Mutation: pass every run `opens` and the runs
+  // after the emphasis open too.
+  it("says which run opens its block", () => {
+    const opened: string[] = [];
+    renderMarkdown(
+      "# Head\n\none **two** three\n\n- four\n- five\n\n| a | b |\n| - | - |\n| c | d |",
+      {
+        prose: (text, _key, opens) => {
+          if (opens) opened.push(text);
+          return text;
+        },
+      },
+    ).forEach((node) => render(<div>{node}</div>));
+    expect(opened).toEqual(["Head", "one ", "four", "five", "a", "b", "c", "d"]);
+  });
 });
