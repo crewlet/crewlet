@@ -94,7 +94,7 @@ func pathOf(q code.GitQuery) string {
 	return p
 }
 
-// find is step 5: what every revision and the path name, or the first
+// find is step 7: what every revision and the path name, or the first
 // revision the copy lacks (absent).
 func (r *read) find(ctx context.Context) (objs found, absent string, err error) {
 	revs := revsOf(r.q)

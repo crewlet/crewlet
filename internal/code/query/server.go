@@ -38,7 +38,7 @@ type Cache interface {
 	// (step 6).
 	MemoGet(s cache.Synced, k cache.MemoKey) ([]byte, bool)
 	// Memo is a batch of the pages a run cuts, to memoize in the pinned copy
-	// once its git has answered whole (step 7) — nil where it keeps none.
+	// once its git has answered whole (step 8) — nil where it keeps none.
 	Memo(s cache.Synced) *cache.MemoBatch
 }
 
@@ -373,7 +373,7 @@ func (r *read) held() error {
 // at the level it names, session where it names none — and otherwise the copy
 // as it stands. An object id names one object at every position, so no level
 // buys an answer the copy cannot give; what a floor buys is a copy holding the
-// asker's own pushes, which step 5's second look covers for every other id.
+// asker's own pushes, which step 7's second look covers for every other id.
 //
 // A LANDED-IN READ is brought to the position its tip was resolved at, at
 // least: the moves of the target up to that tip are what its index must hold
@@ -471,7 +471,7 @@ func everyFillMeets(err error) bool {
 		errors.As(err, &corrupt) || errors.Is(err, cache.ErrBadSnapshot) || errors.Is(err, cache.ErrRebuildRefused)
 }
 
-// grant answers a repository the read may not be served from (step 4): one
+// grant answers a repository the read may not be served from (step 5): one
 // deleted or purging, and one the asker's grant does not let it read.
 func (r *read) grant() error {
 	repo := r.synced.Repo
@@ -485,7 +485,7 @@ func (r *read) grant() error {
 	return nil
 }
 
-// objects is steps 4 and 5 — and their ONE second look at the log's head: NO
+// objects is steps 5 and 7 — and their ONE second look at the log's head: NO
 // REFUSAL IS CONCLUDED FROM A COPY THAT MAY BE BEHIND THE LOG, as the code
 // host never refuses a person's git on a stale read. An id the copy lacks may
 // be a push the asker knows of and this node has not synced; a repository the
