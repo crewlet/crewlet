@@ -1550,6 +1550,20 @@ func DrawnOID(name string) string {
 // holds to its share (MemoShare).
 func MemoBytes(c *Cache) int64 { return c.memoBytes.Load() }
 
+// MemoStaged is what every read's run has staged for the memo and not yet
+// placed or given back: counted against its share with MemoBytes.
+func MemoStaged(c *Cache) int64 { return c.memoStaged.Load() }
+
+// EvictToBudget runs the janitor's eviction step alone, synchronously — no
+// trim of the memo before it — and answers how many repositories it evicted.
+func EvictToBudget(c *Cache) int {
+	if !c.enter() {
+		return 0
+	}
+	defer c.leave()
+	return c.evictToBudget(context.Background())
+}
+
 // MemoState is what repoID's current incarnation records of its memo and what
 // this process's index of it holds.
 type MemoState struct {
@@ -1591,3 +1605,7 @@ func MemoTree(dir string) string { return filepath.Join(dir, memoRel) }
 // MemoEntryBytes is the volume an entry whose body and tail are n bytes takes,
 // as the memo counts it.
 func MemoEntryBytes(n int) int64 { return memoBytesOf(int64(memoHeader + n)) }
+
+// MemoStagedBytes is what a page of a body of n bytes holds staged, before its
+// tail: its file's length, as the memo's share counts it.
+func MemoStagedBytes(n int) int64 { return int64(memoHeader + n) }

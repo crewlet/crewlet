@@ -74,8 +74,14 @@ import (
 //
 // The memo holds at most a MemoShare-th of the cache's budget, node-wide,
 // counted as a running total (Cache.memoBytes) and each entry at the volume it
-// takes (memoBytesOf). The janitor holds it there BEFORE it evicts any
-// repository (janitorPass): first every memo of a copy this process has not
+// takes (memoBytesOf) — and with it every page a read's run has staged for it
+// and not yet placed (Cache.memoStaged), which is the memo's as much: a page
+// in flight takes its room from the memo's own answers, never from a
+// repository (Cache.overBudget, the eviction's measure, leaves out whatever
+// the memo holds past its share), and one that would take the staged pages
+// past the share is not staged at all (MemoBatch.Put). The janitor holds it
+// there BEFORE it evicts any repository (janitorPass), woken by the placement
+// that takes it past its share: first every memo of a copy this process has not
 // read or written since it opened — nobody asked of it since the boot — WHOLE,
 // one rename each, the least recently used repository first; then entries, the
 // least recently used first. Each incarnation's memo INDEX — every entry this
@@ -469,6 +475,12 @@ func (c *Cache) Memo(s Synced) *MemoBatch {
 // is refused, and a write that fails leaves the answer unmemoized, logged once
 // a batch (code_cache_memo_unwritten): a memo that cannot be written is a
 // slower read, never a failed one.
+//
+// A STAGED PAGE IS THE MEMO'S, counted against its share beside the pages it
+// keeps (memoExcess): one that would take what every run has staged past the
+// share is not staged at all — the memo could never keep it, and staged it
+// would hold room the repositories' budget is for (overBudget) — and the run
+// answers it unmemoized, as it does a page whose write failed.
 func (b *MemoBatch) Put(k MemoKey, body []byte) {
 	if b == nil || b.done {
 		return
@@ -479,6 +491,10 @@ func (b *MemoBatch) Put(k MemoKey, body []byte) {
 		b.fail(fmt.Errorf("an answer of %d bytes, past the %d one holds", len(body), code.MaxGitAnswerBytes))
 		return
 	}
+	n := int64(memoHeader + len(body))
+	if !b.c.stageMemo(n) {
+		return
+	}
 	// THE HEADER'S ROOM FIRST: it names the body's length and digest, which
 	// the run's tail completes (Place).
 	b.buf = slices.Grow(b.buf[:0], memoHeader+len(body))[:memoHeader+len(body)]
@@ -486,6 +502,7 @@ func (b *MemoBatch) Put(k MemoKey, body []byte) {
 	copy(b.buf[memoHeader:], body)
 	f, err := os.CreateTemp(filepath.Join(b.c.dir, tmpDir), "memo-*")
 	if err != nil {
+		b.c.memoStaged.Add(-n)
 		b.fail(err)
 		return
 	}
@@ -495,15 +512,29 @@ func (b *MemoBatch) Put(k MemoKey, body []byte) {
 	}
 	if err != nil {
 		_ = os.Remove(f.Name()) // what it held is no answer
+		b.c.memoStaged.Add(-n)
 		b.fail(err)
 		return
 	}
 	sum := sha256.New()
 	sum.Write(body)
-	n := int64(len(b.buf))
 	b.staged = append(b.staged, memoStaged{key: k, put: put, path: f.Name(), length: len(body), sum: sum, size: n})
 	b.bytes += n
 	b.c.tmpBytes.Add(n)
+}
+
+// stageMemo takes room for n bytes of staged pages out of the memo's share,
+// and reports whether there was room: none where every run's staged pages
+// would then hold more than the share. A RESERVATION, added before it is
+// judged and given back when refused, so two runs staging at once never both
+// take the last of the room; one may then be refused room the other gives
+// back a moment later, which costs it one page unmemoized.
+func (c *Cache) stageMemo(n int64) bool {
+	if c.memoStaged.Add(n) > c.memoShare() {
+		c.memoStaged.Add(-n)
+		return false
+	}
+	return true
 }
 
 // fail logs a write the batch could not make, once a batch.
@@ -540,7 +571,9 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 			continue
 		}
 		if err := b.complete(&b.staged[i], t); err != nil {
-			b.fail(err)
+			if !errors.Is(err, errMemoShare) {
+				b.fail(err)
+			}
 			b.unstage(&b.staged[i])
 		}
 	}
@@ -600,6 +633,7 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 		st.path = ""
 		b.bytes -= st.size
 		c.tmpBytes.Add(-st.size)
+		c.memoStaged.Add(-st.size)
 		out = append(out, placed{key: st.key, bytes: memoBytesOf(st.size), prior: prior})
 	}
 	e.mu.Lock()
@@ -629,11 +663,27 @@ func (b *MemoBatch) Place(tail func(i int) []byte) {
 		idx.entries[p.key] = memoEntry{bytes: p.bytes, used: now}
 	}
 	c.setDerived(inc, DerivedMemo, derivedState{Bytes: max(total, 0), Step: StepMemo}, true)
+	// PAST ITS SHARE, the memo's trim is due at once rather than at the
+	// janitor's tick: no eviction is for the excess (overBudget), so nothing
+	// else would wake the janitor for it.
+	if c.memoExcess() > 0 {
+		c.kick()
+	}
 }
 
+// errMemoShare is a tail the memo's share has no room for (stageMemo): its
+// page is given back unmemoized, and logged as no failed write.
+var errMemoShare = errors.New("cache: no room in the memo's share")
+
 // complete ends st's staged file with tail and writes its header: the key, the
-// body's length and the SHA-256 of all of it.
+// body's length and the SHA-256 of all of it. The tail takes its room out of
+// the memo's share as its page did (stageMemo); errMemoShare where there is
+// none.
 func (b *MemoBatch) complete(st *memoStaged, tail []byte) error {
+	n := int64(len(tail))
+	if !b.c.stageMemo(n) {
+		return errMemoShare
+	}
 	st.sum.Write(tail)
 	length := st.length + len(tail)
 	var head [memoHeader]byte
@@ -653,13 +703,14 @@ func (b *MemoBatch) complete(st *memoStaged, tail []byte) error {
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	if err == nil {
-		n := int64(len(tail))
-		st.size += n
-		b.bytes += n
-		b.c.tmpBytes.Add(n)
+	if err != nil {
+		b.c.memoStaged.Add(-n)
+		return err
 	}
-	return err
+	st.size += n
+	b.bytes += n
+	b.c.tmpBytes.Add(n)
+	return nil
 }
 
 // Discard gives every staged answer back, memoizing none: the run that cut
@@ -673,13 +724,14 @@ func (b *MemoBatch) Discard() {
 }
 
 // giveBack removes every staged file still in tmp/ and takes its bytes out of
-// the total.
+// the total and the memo's share.
 func (b *MemoBatch) giveBack() {
 	for i := range b.staged {
 		b.unstage(&b.staged[i])
 	}
 	b.staged = nil
 	b.c.tmpBytes.Add(-b.bytes)
+	b.c.memoStaged.Add(-b.bytes)
 	b.bytes = 0
 }
 
@@ -841,28 +893,30 @@ func (c *Cache) listMemo(e *entry, inc *incarnation, idx *memoIndex) {
 	c.setDerived(inc, DerivedMemo, derivedState{Bytes: total, Step: StepMemo}, true)
 }
 
-// trimMemo holds the memo to its share of the budget (MemoShare), and reports
-// whether it moved anything into trash/ for the janitor to empty: first every
-// memo of a copy this process has not touched since it opened, WHOLE, the
-// least recently used repository first — one rename each, and nothing of
-// theirs was read since the boot — then the entries of the rest, the least
-// recently used first. Before any repository is evicted (janitorPass).
+// trimMemo holds the memo to its share of the budget (MemoShare) — the pages
+// it keeps and those runs have staged for it together (memoExcess), so a page
+// in flight takes its room from the memo's oldest answers rather than from a
+// repository — and reports whether it moved anything into trash/ for the
+// janitor to empty: first every memo of a copy this process has not touched
+// since it opened, WHOLE, the least recently used repository first — one
+// rename each, and nothing of theirs was read since the boot — then the
+// entries of the rest, the least recently used first. Before any repository
+// is evicted (janitorPass).
 func (c *Cache) trimMemo(ctx context.Context) bool {
-	share := c.maxBytes / MemoShare
-	if c.memoBytes.Load() <= share {
+	if c.memoExcess() == 0 {
 		return false
 	}
-	moved := c.trimColdMemos(ctx, share)
-	if c.memoBytes.Load() > share {
-		c.trimMemoEntries(ctx, share)
+	moved := c.trimColdMemos(ctx)
+	if c.memoExcess() > 0 {
+		c.trimMemoEntries(ctx)
 	}
 	return moved
 }
 
 // trimColdMemos moves into trash/ whole, the least recently used repository
 // first, the memo of every copy this process has not touched, while the memo
-// holds more than share. It reports whether it moved any.
-func (c *Cache) trimColdMemos(ctx context.Context, share int64) bool {
+// holds more than its share. It reports whether it moved any.
+func (c *Cache) trimColdMemos(ctx context.Context) bool {
 	type cold struct {
 		e        *entry
 		inc      *incarnation
@@ -884,7 +938,7 @@ func (c *Cache) trimColdMemos(ctx context.Context, share int64) bool {
 	})
 	moved := false
 	for _, cl := range colds {
-		if c.memoBytes.Load() <= share || ctx.Err() != nil || c.life.Err() != nil {
+		if c.memoExcess() == 0 || ctx.Err() != nil || c.life.Err() != nil {
 			break
 		}
 		moved = c.trimColdMemo(cl.e, cl.inc) || moved
@@ -918,12 +972,12 @@ func (c *Cache) trimColdMemo(e *entry, inc *incarnation) bool {
 }
 
 // trimMemoEntries removes the least recently used entries of every memo this
-// process has touched until the memo holds no more than share. TWO PASSES, so
-// a trim of a memo of millions of entries holds no copy of their keys: the
-// first reads each entry's last use and volume, and finds the last use at and
-// before which enough entries lie (cut); the second takes, a copy at a time,
-// the entries at or before it.
-func (c *Cache) trimMemoEntries(ctx context.Context, share int64) {
+// process has touched until the memo holds no more than its share. TWO
+// PASSES, so a trim of a memo of millions of entries holds no copy of their
+// keys: the first reads each entry's last use and volume, and finds the last
+// use at and before which enough entries lie (cut); the second takes, a copy
+// at a time, the entries at or before it.
+func (c *Cache) trimMemoEntries(ctx context.Context) {
 	type use struct{ used, bytes int64 }
 	var uses []use
 	var held []*entry
@@ -942,7 +996,7 @@ func (c *Cache) trimMemoEntries(ctx context.Context, share int64) {
 		e.mu.Unlock()
 	}
 	slices.SortFunc(uses, func(a, b use) int { return cmp.Compare(a.used, b.used) })
-	excess := c.memoBytes.Load() - share
+	excess := c.memoExcess()
 	var cut int64
 	var covered int64
 	for _, u := range uses {
@@ -961,7 +1015,7 @@ func (c *Cache) trimMemoEntries(ctx context.Context, share int64) {
 	}
 	removed, bytes := 0, int64(0)
 	for _, e := range held {
-		if c.memoBytes.Load() <= share || ctx.Err() != nil || c.life.Err() != nil {
+		if c.memoExcess() == 0 || ctx.Err() != nil || c.life.Err() != nil {
 			break
 		}
 		e.mu.Lock()
@@ -977,7 +1031,7 @@ func (c *Cache) trimMemoEntries(ctx context.Context, share int64) {
 		e.mu.Unlock()
 		slices.SortFunc(victims, func(a, b victim) int { return cmp.Compare(a.used, b.used) })
 		for _, v := range victims {
-			if c.memoBytes.Load() <= share {
+			if c.memoExcess() == 0 {
 				break
 			}
 			if n, ok := c.trimEntry(e, inc, v.k, v.used); ok {

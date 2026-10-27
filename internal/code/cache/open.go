@@ -84,7 +84,11 @@ type Cache struct {
 	// RUNNING TOTAL moved where an incarnation's memo record moves
 	// (setDerived, discard), which the janitor holds to the memo's share of
 	// the budget (MemoShare, memo.go) with no walk of the node's copies.
-	memoBytes atomic.Int64
+	// memoStaged is what every read's run has staged for the memo in tmp/
+	// and not yet placed or given back (MemoBatch), of tmpBytes: the memo's
+	// too, so the share is held to both together (memoExcess) and a
+	// repository is never evicted for a page in flight.
+	memoBytes, memoStaged atomic.Int64
 	// scratchBytes is what scratch/ held when the janitor last measured it:
 	// a push's scratch is written by its client's receive-pack, so only the
 	// disk knows.

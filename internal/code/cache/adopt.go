@@ -370,7 +370,7 @@ func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutc
 		e.uncoveredSince = now
 	}
 	e.mu.Unlock()
-	if c.total() > c.maxBytes {
+	if c.overBudget() > 0 {
 		c.kick()
 	}
 	c.setGauges()

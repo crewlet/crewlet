@@ -1582,8 +1582,8 @@ func sameRepo(a, b code.RepoRef) bool {
 //     them no index covers starts its ceiling (uncoveredSince): pushes that
 //     never stop for a debounce still have their packs indexed within
 //     MidxMaxWait.
-//   - The cache over its budget kicks the janitor at once, rather than at its
-//     tick: a burst of cold syncs would otherwise overshoot the budget by
+//   - An eviction due (overBudget) kicks the janitor at once, rather than at
+//     its tick: a burst of cold syncs would otherwise overshoot the budget by
 //     everything that arrived in a minute.
 //   - A FULL round kicks the maintainer: it may have made the incarnation one
 //     the maintainer works on (converged in this process) or written the
@@ -1611,7 +1611,7 @@ func (c *Cache) account(e *entry, inc *incarnation, snap snapshot, res applied, 
 		// Served whatever its size: a request is waiting for it.
 		c.log.Warn("code_cache_over_budget", "repo", e.id, "bytes", bytes, "budget", c.maxBytes)
 	}
-	if res.trashed || c.total() > c.maxBytes {
+	if res.trashed || c.overBudget() > 0 {
 		c.kick()
 	}
 	if snap.full {

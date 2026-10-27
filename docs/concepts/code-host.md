@@ -1422,9 +1422,12 @@ every page after it is a hit.
 
 **At most a sixteenth of the budget.** The memo holds at most a sixteenth of
 the cache's [budget](#the-cache-on-a-git-node), each answer counted at the
-whole disk blocks it takes, and is trimmed to that before any repository is
-evicted — an answer costs one git process to compute again, a repository a
-download of every pack it holds: first the memos of copies nobody has read
+whole disk blocks it takes and the pages a read is still cutting counted with
+those it keeps, and is trimmed to that before any repository is evicted — an
+answer costs one git process to compute again, a repository a download of
+every pack it holds. No repository is ever evicted for what the memo holds past
+its sixteenth, and a page that would take the pages being cut past it is not
+kept at all. The trim takes first the memos of copies nobody has read
 since the node started, each whole, the least recently used repository first,
 then single answers, the least recently used first. Every read checks the
 answer against its own header — the key it answers and the SHA-256 of what it

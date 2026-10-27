@@ -25,7 +25,8 @@ import (
 // A CACHE IS EVICTED TO ITS BUDGET AND FOR NO OTHER REASON. Over the budget,
 // the repositories used least recently go first, each a directory renamed
 // into trash/; under it, nothing goes, however long a repository has been
-// idle. An idle repository costs disk the budget already bounds, while
+// idle — and what the memo holds past its share is never a repository's to
+// make room for (overBudget): the memo's own trim gives it back. An idle repository costs disk the budget already bounds, while
 // evicting it costs ONE GET A PUSH the next time anybody fetches it — nothing
 // compacts a repository's packs — so a weekend's idle eviction was every
 // repository nobody fetched re-downloaded whole on Monday, on every git node.
@@ -91,12 +92,14 @@ func (c *Cache) janitor(ctx context.Context) {
 
 // janitorPass is one pass, in order: trash/ emptied; scratch/ measured; every
 // memo this process has touched and not yet counted listed (memo.go); the memo
-// trimmed to its share of the budget (MemoShare) BEFORE any repository goes —
-// an answer evicted costs one git process to compute again, a repository a
-// cold sync of every pack it holds; the cache evicted to its budget, least
-// recently used first — and trash/ emptied again when anything was moved
-// there, so an eviction gives its disk back within the pass; the states whose
-// memo moved written again; then the gauges.
+// trimmed to its share of the budget (MemoShare), the pages runs have staged
+// for it counted with those it keeps, BEFORE any repository goes — an answer
+// evicted costs one git process to compute again, a repository a cold sync of
+// every pack it holds; the cache evicted to its budget for what the
+// repositories hold past their room (overBudget), least recently used first —
+// and trash/ emptied again when anything was moved there, so an eviction gives
+// its disk back within the pass; the states whose memo moved written again;
+// then the gauges.
 func (c *Cache) janitorPass(ctx context.Context) {
 	c.emptyTrash(ctx)
 	c.measureScratch(ctx)
@@ -157,19 +160,41 @@ func (c *Cache) measureScratch(ctx context.Context) {
 }
 
 // total is what the cache holds against its budget: every incarnation's
-// files, current and retiring, the downloads and staged adoptions in tmp/,
-// and scratch/ as the janitor last measured it — a scratch file a staging
-// links is counted in tmp/ alone, since it has two names.
+// files, current and retiring, the downloads, staged adoptions and staged
+// memo pages in tmp/, and scratch/ as the janitor last measured it — a
+// scratch file a staging links is counted in tmp/ alone, since it has two
+// names.
 func (c *Cache) total() int64 {
 	return c.heldBytes.Load() + c.tmpBytes.Load() + c.scratchBytes.Load()
 }
 
-// evictToBudget evicts repositories, least recently used first, while the
-// cache is over its budget, and answers how many. Only an EVICTABLE entry is
-// a candidate (evictable), and one that stops being one before its turn is
-// passed over; none left over the budget, and the pass stops there.
+// memoShare is the most the memo may hold of the budget: the budget divided
+// by MemoShare.
+func (c *Cache) memoShare() int64 { return c.maxBytes / MemoShare }
+
+// memoExcess is what the memo holds past its share — the pages it keeps
+// (memoBytes) and those reads' runs have staged for it (memoStaged)
+// together — or zero: what the memo's own trim gives back (trimMemo).
+func (c *Cache) memoExcess() int64 {
+	return max(c.memoBytes.Load()+c.memoStaged.Load()-c.memoShare(), 0)
+}
+
+// overBudget is what the cache holds past its budget that a REPOSITORY'S
+// eviction is for: its total less the memo's excess over its share
+// (memoExcess), positive when an eviction is due. The memo's excess is its own
+// trim's to give back, never a repository's: one evicted for a page a read is
+// still cutting, or for pages the memo holds past its share, costs a cold sync
+// of every pack it holds — a GET each from the object store — for bytes the
+// memo was never entitled to, and the trim then takes the pages anyway.
+func (c *Cache) overBudget() int64 { return c.total() - c.memoExcess() - c.maxBytes }
+
+// evictToBudget evicts repositories, least recently used first, while an
+// eviction is due (overBudget), and answers how many. Only an EVICTABLE
+// entry is a candidate (evictable), and one that stops being one before its
+// turn is passed over; none left with an eviction due, and the pass stops
+// there.
 func (c *Cache) evictToBudget(ctx context.Context) int {
-	if c.total() <= c.maxBytes {
+	if c.overBudget() <= 0 {
 		return 0
 	}
 	type candidate struct {
@@ -191,7 +216,7 @@ func (c *Cache) evictToBudget(ctx context.Context) int {
 	})
 	evicted := 0
 	for _, cand := range candidates {
-		if c.total() <= c.maxBytes || ctx.Err() != nil || c.life.Err() != nil {
+		if c.overBudget() <= 0 || ctx.Err() != nil || c.life.Err() != nil {
 			break
 		}
 		if c.evict(cand.e) {

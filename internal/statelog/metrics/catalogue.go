@@ -1002,11 +1002,13 @@ func Catalogue() []Instrument {
 				"comparison — kept so the next read that asks the same is " +
 				"answered from a file rather than from git: part of " +
 				"`crewlet.code.cache.bytes`, each answer counted at the whole " +
-				"disk blocks it takes. Held to a sixteenth of the cache's budget " +
-				"before any repository is evicted, so it sits at that sixteenth " +
-				"on a node seats read busily; falling to nothing at once is a " +
-				"history restored or recreated under the node, which drops " +
-				"every answer read from it.",
+				"disk blocks it takes. Held, with the pages reads are still " +
+				"cutting for it, to a sixteenth of the cache's budget before " +
+				"any repository is evicted — and no repository is evicted for " +
+				"what it holds past that — so it sits at that sixteenth, less " +
+				"what is being cut, on a node seats read busily; falling to " +
+				"nothing at once is a history restored or recreated under the " +
+				"node, which drops every answer read from it.",
 		},
 		{
 			Name: CodeCacheMemoLookups, Kind: KindCounter, Unit: UnitCount,

@@ -612,7 +612,7 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 // RETIRED incarnation moves its directory into trash/ and kicks the janitor;
 // the removal itself is the janitor's, so a request that lets go of a 20 GiB
 // directory returns at once. The last release of a current incarnation while
-// the cache is over its budget kicks the janitor too: a repository too large
+// an eviction is due (overBudget) kicks the janitor too: a repository too large
 // to keep is served while a request holds it, and evicted as soon as none
 // does rather than at the next tick. Safe after Stop.
 func (c *Cache) release(e *entry, inc *incarnation, by gitproc.Repairer) {
@@ -628,7 +628,7 @@ func (c *Cache) release(e *entry, inc *incarnation, by gitproc.Repairer) {
 // unpin drops one pin on inc; the entry's mu is held. With the last one, a
 // retired incarnation is discarded, and unpin answers the directory its
 // caller moves into trash/ once it has let go of the entry (Cache.trash);
-// and a current one while the cache is over its budget kicks the janitor,
+// and a current one while an eviction is due (overBudget) kicks the janitor,
 // since it was not evictable while held. What a reader's release and the
 // maintainer's share — a maintenance run's pin keeps a repository from the
 // budget exactly as a reader's does, so its end must not leave the eviction
@@ -641,7 +641,7 @@ func (c *Cache) unpin(e *entry, inc *incarnation) string {
 	case inc.retired:
 		e.retiring = slices.DeleteFunc(e.retiring, func(r *incarnation) bool { return r == inc })
 		return c.discard(inc)
-	case c.total() > c.maxBytes:
+	case c.overBudget() > 0:
 		c.kick()
 	}
 	return ""

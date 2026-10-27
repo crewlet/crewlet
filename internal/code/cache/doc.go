@@ -372,10 +372,12 @@
 // running total, per copy and node-wide (Cache.memoBytes), never a measure's:
 // a stat of its directory is the directory's few KiB. The janitor lists what a
 // previous process left in a copy's memo once this process first touches it,
-// holds the memo to a MemoShare-th of the budget before it evicts any
-// repository — the memos of copies untouched since the boot whole, then
-// single entries, the least recently used first — and writes a copy's state
-// again once its memo's bytes moved. A history gone drops it whole and shuts
+// holds the memo to a MemoShare-th of the budget — the pages runs have staged
+// for it counted with those it keeps — before it evicts any repository, and
+// never evicts one for what the memo holds past that (overBudget): the memos
+// of copies untouched since the boot whole, then single entries, the least
+// recently used first; and it writes a copy's state again once its memo's
+// bytes moved. A history gone drops it whole and shuts
 // it until the round that dropped it has swept the replaced history's packs,
 // and no batch begun before the drop places anything after it.
 //

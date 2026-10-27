@@ -192,6 +192,201 @@ func TestTheMemoIsTrimmedToItsShareBeforeAnyRepository(t *testing.T) {
 	}
 }
 
+// A RUN'S STAGED PAGES ARE THE MEMO'S. A page a read's run has staged and not
+// yet placed counts against the memo's share beside the pages it keeps, so the
+// janitor makes room for it from the memo's own answers — never by evicting a
+// repository, which would cost a cold sync of every pack it holds, a GET each
+// from the object store, for bytes the memo was never entitled to.
+//
+// The case stages one page that takes the cache one byte past its budget,
+// with the memo's kept pages within their share and those and the staged page
+// together past it: so only the share's count of the staged page decides
+// whether a repository goes. The idle copy is the only one an eviction may
+// take; the copy the run reads stays pinned.
+//
+// Mutation: hold only the kept pages to the share (trimMemo reading
+// memoBytes alone) — the pass leaves the kept and staged pages together past
+// the share; and with the eviction counting the memo's excess too (overBudget
+// reading the total alone), the idle repository is evicted for the page.
+func TestARunsStagedPagesAreTheMemos(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	idle, hot := w.repo(t, 1), w.repo(t, 2)
+	// A mebibyte the compressor cannot shrink, so a sixteenth of a budget
+	// holding it holds a dozen of the memo's pages.
+	w.push(t, idle, "refs/heads/main", map[string]string{"noise": noise(1, 1<<20)})
+	w.push(t, hot, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	w.sync(t, c, idle).Release()
+	clk.Add(time.Minute)
+	s := w.sync(t, c, hot)
+	defer s.Release()
+
+	// The kept pages, m of them at a block each, and one staged page of a
+	// block's body: the most m whose pages fit the share once the budget is
+	// one byte short of the staged page — which then takes them past it.
+	repos := cache.Total(c)
+	body := make([]byte, 4096)
+	staged := cache.MemoStagedBytes(len(body))
+	entry := memoEntry(0)
+	m := int((repos + staged - 1) / (15 * entry))
+	keys := memoKeys("kept", m)
+	memoize(t, c, s, keys)
+	kept := cache.MemoBytes(c)
+	if kept != memoEntries(m) {
+		t.Fatalf("the memo counts %d bytes, want its %d entries' %d", kept, m, memoEntries(m))
+	}
+	budget := repos + kept + staged - 1
+	share := budget / cache.MemoShare
+	if kept > share || kept+staged <= share || staged > share {
+		t.Fatalf("the case's figures miss what it is about: kept %d, staged %d, share %d of a budget of %d",
+			kept, staged, share, budget)
+	}
+	b := c.Memo(s)
+	b.Put(memoKeys("staged", 1)[0], body)
+	if got := cache.MemoStaged(c); got != staged {
+		t.Fatalf("the run staged %d bytes, want its page's %d", got, staged)
+	}
+	cache.SetMaxBytes(c, budget)
+	cache.JanitorPass(c)
+
+	repoKept := func(when string) {
+		t.Helper()
+		if _, ok := cache.Repos(c)[idle]; !ok {
+			t.Errorf("%s: the idle repository was evicted for a page the memo's share counts", when)
+		}
+		if got := cache.MemoBytes(c) + cache.MemoStaged(c); got > share {
+			t.Errorf("%s: the memo holds %d bytes, its kept and staged pages together, past its share %d", when,
+				got, share)
+		}
+	}
+	repoKept("while the page is staged")
+	b.Place(func(int) []byte { return []byte(memoTail) })
+	cache.JanitorPass(c)
+	repoKept("once the page is placed")
+}
+
+// A PAGE PAST THE MEMO'S SHARE IS NEVER STAGED. A run's page that would take
+// every run's staged pages past the memo's share is not staged at all: the
+// memo could never keep it, and staged it would hold room the repositories'
+// budget is for. So four pages of some 6 KB against a share of a few hundred
+// bytes are answered unmemoized, none of their bytes is counted, and no
+// repository goes for them, while they are cut or after.
+//
+// Mutation: stage whatever the share (stageMemo always finding room) — the
+// staged pages hold more than the share.
+func TestAPagePastTheMemosShareIsNeverStaged(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	idle, hot := w.repo(t, 1), w.repo(t, 2)
+	w.push(t, idle, "refs/heads/main", nil)
+	w.push(t, hot, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	w.sync(t, c, idle).Release()
+	clk.Add(time.Minute)
+	s := w.sync(t, c, hot)
+	defer s.Release()
+	budget := cache.Total(c) + 8<<10
+	cache.SetMaxBytes(c, budget)
+	share := budget / cache.MemoShare
+
+	b := c.Memo(s)
+	keys := memoKeys("past", 4)
+	for _, k := range keys {
+		b.Put(k, []byte(strings.Repeat("x", 6000)))
+	}
+	if got := cache.MemoStaged(c); got > share {
+		t.Errorf("the run staged %d bytes against a share of %d", got, share)
+	}
+	cache.JanitorPass(c)
+	if _, ok := cache.Repos(c)[idle]; !ok {
+		t.Error("the idle repository was evicted while pages past the memo's share were cut")
+	}
+	b.Place(func(int) []byte { return []byte(memoTail) })
+	cache.JanitorPass(c)
+	if _, ok := cache.Repos(c)[idle]; !ok {
+		t.Error("the idle repository was evicted once pages past the memo's share were placed")
+	}
+	for _, k := range keys {
+		if _, ok := c.MemoGet(s, k); ok {
+			t.Errorf("a page past the memo's whole share was memoized: %s", k)
+		}
+	}
+	if got := cache.MemoStaged(c); got != 0 {
+		t.Errorf("the memo counts %d bytes staged once the run's batch is placed", got)
+	}
+}
+
+// WHAT THE MEMO HOLDS PAST ITS SHARE IS NO REPOSITORY'S TO MAKE ROOM FOR. An
+// eviction is for what the repositories hold past their room — the budget
+// less what the memo may hold — never for the memo's own excess, which its
+// trim gives back: so an eviction pass on its own, with the memo past its
+// share and the cache past its budget by no more than that, evicts nothing.
+// It closes what the trim before it cannot: a page staged between the trim
+// and the eviction.
+//
+// Mutation: evict while the total is past the budget (overBudget counting the
+// memo's excess) — the idle repository is evicted.
+func TestTheMemosExcessEvictsNoRepository(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	idle, hot := w.repo(t, 1), w.repo(t, 2)
+	w.push(t, idle, "refs/heads/main", nil)
+	w.push(t, hot, "refs/heads/main", nil)
+	c := w.open(t, clk.on)
+	w.sync(t, c, idle).Release()
+	clk.Add(time.Minute)
+	s := w.sync(t, c, hot)
+	defer s.Release()
+	memoize(t, c, s, memoKeys("excess", 8))
+	budget := cache.Total(c) - 1
+	cache.SetMaxBytes(c, budget)
+	if excess := cache.MemoBytes(c) - budget/cache.MemoShare; excess < 1 {
+		t.Fatalf("the memo holds %d bytes past its share, and the case is about its excess", excess)
+	}
+	if n := cache.EvictToBudget(c); n != 0 {
+		t.Errorf("an eviction pass evicted %d repositories for what the memo holds past its share", n)
+	}
+	if _, ok := cache.Repos(c)[idle]; !ok {
+		t.Error("the idle repository was evicted for the memo's excess")
+	}
+}
+
+// A PLACEMENT PAST THE MEMO'S SHARE WAKES THE JANITOR. No eviction is due for
+// the memo's excess (overBudget), so no release or round kicks a pass for it:
+// the placement that takes the memo past its share does, and the trim follows
+// at once rather than at the janitor's tick, which never comes here. The
+// copy's memo is first touched within its share, and the pass that touch
+// kicks waited for, so the placement past it is the only kick there is.
+//
+// Mutation: place without the kick — the memo stays past its share.
+func TestAPlacementPastTheShareWakesTheJanitor(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	keys := memoKeys("woken", 8)
+	share := memoEntries(len(keys) / 2)
+	c := w.open(t, neverTicks)
+	cache.SetMaxBytes(c, cache.MemoShare*share)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	startIdle(t, w, c)
+	sentinel := w.path("trash", "sentinel")
+	write(t, sentinel, "removed by the pass the memo's first touch kicks")
+	memoize(t, c, s, keys[:1])
+	eventually(t, "the pass the memo's first touch kicked has ended", func() bool {
+		return !exists(sentinel) && cache.Running(c) == 0
+	})
+	memoize(t, c, s, keys[1:])
+	eventually(t, "the memo trimmed to its share", func() bool {
+		return cache.MemoBytes(c) <= share && cache.Running(c) == 0
+	})
+}
+
 // A COLD INCARNATION'S MEMO GOES WHOLE. A copy whose memo this process has
 // neither read nor written since it opened — nobody asked of it since the
 // boot — is trimmed by moving its tree into trash/ in one rename, before an
