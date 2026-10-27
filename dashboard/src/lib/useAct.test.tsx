@@ -13,7 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
-import { caveatToast, readingDuration, useAct } from "./useAct.ts";
+import { caveatToast, useAct } from "./useAct.ts";
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
@@ -455,25 +455,17 @@ test("a press is told its caveats in a person's words, never the receipt's model
   expect(screen.queryByText(/Use ask:/)).toBeNull();
 });
 
-// A TOAST THAT GOES BY ITSELF STAYS AS LONG AS IT TAKES TO READ: the kit's
-// four seconds fit a title, and a thirty-word caveat was gone before its
-// second line was read. Never sooner than the kit's own default, never longer
-// than a cap past which the sentence is one somebody must act on.
-test("an info caveat stays as long as its sentence takes to read", () => {
-  expect(readingDuration("Saved.")).toBe(4_000);
-  const thirty = Array.from({ length: 30 }, () => "word").join(" ");
-  expect(readingDuration(thirty)).toBe(11_000);
-  expect(readingDuration(`${thirty} ${thirty}`)).toBe(15_000);
-  const pending = caveatToast(
-    [{ code: "date_truncated", message: thirty, action: "none" }],
-    "Sent. This node has not applied it yet.",
-  );
-  expect(pending?.message.startsWith("Sent. This node has not applied it yet.")).toBe(true);
-  expect(pending?.duration).toBe(readingDuration(pending?.message ?? ""));
-  expect(pending!.duration!).toBeGreaterThan(11_000);
+// A PENDING PRESS'S CAVEATS ARE SAID AFTER ITS OWN SENTENCE, in one toast.
+test("a pending press's caveats follow its own sentence", () => {
   expect(
-    caveatToast([{ code: "default_assignee_gone", message: thirty, action: "required" }])?.duration,
-  ).toBeUndefined();
+    caveatToast(
+      [{ code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" }],
+      "Sent. This node has not applied it yet.",
+    ),
+  ).toEqual({
+    variant: "info",
+    message: "Sent. This node has not applied it yet. Saved as 2026-03-04.",
+  });
 });
 
 // A CONTROL THAT DRAWS ITS PRESS'S CAVEATS ITSELF is not told them again in
@@ -524,11 +516,7 @@ test("a caveat that asks nothing goes by itself, and one that needs a person sta
       { code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" },
       { code: "body_links_capped", message: "Only the first 25 are linked.", action: "none" },
     ]),
-  ).toEqual({
-    variant: "info",
-    message: "Saved as 2026-03-04. Only the first 25 are linked.",
-    duration: readingDuration("Saved as 2026-03-04. Only the first 25 are linked."),
-  });
+  ).toEqual({ variant: "info", message: "Saved as 2026-03-04. Only the first 25 are linked." });
   // ONE THAT NEEDS A PERSON makes the press's toast a warning, which the kit
   // keeps until it is dismissed.
   expect(
