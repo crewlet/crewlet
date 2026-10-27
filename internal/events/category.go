@@ -483,15 +483,15 @@ var unfed = map[string]string{
 		"reader watches out of a ring that holds the whole company's last " +
 		"few hundred events; their spend reaches every spend figure through " +
 		"the rollups, and a turn's page reads them by its turn id",
-	"code_fetched": "AN AUDIT, NOT ACTIVITY: one record per read of a " +
-		"`visibility: unit` repository's contents, and a CI token fetching " +
-		"on every build — or a seat reading a file a line range at a time — " +
-		"writes them faster than a person reads a feed, pushing the turns, " +
-		"failures and deliveries a reader watches out of a ring that holds " +
-		"the whole company's last few hundred events. Who read a repository " +
-		"is answered where it is asked: the code host's readers route and " +
-		"`code_repo_readers`, summed across the fleet from the usage domain " +
-		"these rows are derived into",
+	"code_fetched": "AN AUDIT, NOT ACTIVITY: one record per reader of a " +
+		"`visibility: unit` repository's contents per fifteen-second flush, " +
+		"and a busy company's readers — a CI token fetching on every build, " +
+		"seats reading files a line range at a time — write them faster than " +
+		"a person reads a feed, pushing the turns, failures and deliveries a " +
+		"reader watches out of a ring that holds the whole company's last few " +
+		"hundred events. Who read a repository is answered where it is asked: " +
+		"the code host's readers route and `code_repo_readers`, summed across " +
+		"the fleet from the usage domain these rows are derived into",
 }
 
 // liveOnly is the subset of [excluded] that still drives the live projection.

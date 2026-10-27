@@ -483,10 +483,10 @@ INSERT INTO crewlet_events (
 	input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, provider_key, work_item,
 	calls, spend_stage,
-	read_repo_id, read_principal_kind, read_principal, read_via, read_seat, read_bytes
+	read_repo_id, read_principal_kind, read_principal, read_via, read_seat, read_bytes, read_reads
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -621,15 +621,15 @@ func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 		parties: partiesOf(tags, seats)}, nil
 }
 
-// repoRead is what a repository read's columns hold (node/0052): who read
-// which repository, how, and what they were sent — the fields the usage day
-// groups and sums a day of reads by ([DB.usageRepoReads]), filled when the row
-// is written so the derivation, paid on every tick its day moves, reads no
-// JSON. The zero value writes the columns' defaults, which is every other
-// row's.
+// repoRead is what a repository read's columns hold (node/0052, and node/0053
+// its count): who read which repository, how, how many times and what they
+// were sent — the fields the usage day groups and sums a day of reads by
+// ([DB.usageRepoReads]), filled when the row is written so the derivation,
+// paid on every tick its day moves, reads no JSON. The zero value writes the
+// columns' defaults, which is every other row's.
 type repoRead struct {
 	repo, kind, principal, via, seat string
-	bytes                            int
+	bytes, reads                     int
 }
 
 // repoReadFor is a row's repository read: a `code_fetched` record's fields,
@@ -647,7 +647,7 @@ func repoReadFor(eventType string, payload []byte) repoRead {
 	return repoRead{
 		repo: jsonString(body["repo_id"]), kind: jsonString(body["principal_kind"]),
 		principal: jsonString(body["principal"]), via: jsonString(body["via"]),
-		seat: jsonString(body["seat"]), bytes: jsonInt(body["bytes"]),
+		seat: jsonString(body["seat"]), bytes: jsonInt(body["bytes"]), reads: jsonInt(body["reads"]),
 	}
 }
 
@@ -676,7 +676,7 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// name two different items. See schema/0033.
 		tags["work_item"],
 		spend.Calls, spend.Stage,
-		read.repo, read.kind, read.principal, read.via, read.seat, read.bytes,
+		read.repo, read.kind, read.principal, read.via, read.seat, read.bytes, read.reads,
 	); err != nil {
 		return err
 	}

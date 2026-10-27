@@ -32,17 +32,22 @@ func TestACodeReadIsItsReadersAct(t *testing.T) {
 }
 
 // A feed line names the repository and what was read of it: a fetch by what
-// it was sent, a server-side read by its kind and size.
+// it was sent, a server-side read by its kind and size — and, where the record
+// stands for more than one read, how many times.
 func TestACodeReadsSummaryNamesTheRepositoryAndTheRead(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		read CodeFetched
 		want string
 	}{
-		{CodeFetched{Principal: "pat:7", Seat: "ceo", RepoName: "platform", Via: FetchedViaGit, Bytes: 2048},
-			"ceo fetched platform (2048 bytes)"},
+		{CodeFetched{Principal: "pat:7", Seat: "ceo", RepoName: "platform", Via: FetchedViaGit, Reads: 1,
+			Bytes: 2048}, "ceo fetched platform (2048 bytes)"},
 		{CodeFetched{Principal: "dev", Seat: "dev", RepoName: "platform", Via: FetchedViaTool, Kind: "blob",
-			Bytes: 900}, "dev read platform's blob (900 bytes)"},
+			Reads: 1, Bytes: 900}, "dev read platform's blob (900 bytes)"},
+		{CodeFetched{Principal: "token:ci", RepoName: "platform", Via: FetchedViaGit, Reads: 6,
+			Bytes: 12288}, "token:ci fetched platform 6 times (12288 bytes)"},
+		{CodeFetched{Principal: "dev", Seat: "dev", RepoName: "platform", Via: FetchedViaTool, Kind: "blob",
+			Reads: 3, Bytes: 2700}, "dev read platform's blob 3 times (2700 bytes)"},
 	} {
 		if got := summaryOf(tc.read, ""); got != tc.want {
 			t.Errorf("%s: summary = %q, want %q", tc.read.Via, got, tc.want)
@@ -67,7 +72,7 @@ func TestAnUnknownCodeReadVia(t *testing.T) {
 	}
 	const raw = `{"id":"6f1c3d2e-0000-4000-8000-000000000041","type":"code_fetched",` +
 		`"timestamp":"2026-09-24T09:00:00Z","source":"","repo_id":"r1","repo_name":"platform",` +
-		`"principal_kind":"system","principal":"expiry","via":"mirror","bytes":12}`
+		`"principal_kind":"system","principal":"expiry","via":"mirror","reads":2,"bytes":12}`
 	var ev events.Event
 	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -76,7 +81,7 @@ func TestAnUnknownCodeReadVia(t *testing.T) {
 	if !ok {
 		t.Fatalf("decoded as %T", ev.Data)
 	}
-	if read.Via.Valid() || read.PrincipalKind.Valid() || read.Bytes != 12 {
+	if read.Via.Valid() || read.PrincipalKind.Valid() || read.Reads != 2 || read.Bytes != 12 {
 		t.Errorf("decoded %+v; want the newer build's values, reported unknown", *read)
 	}
 }

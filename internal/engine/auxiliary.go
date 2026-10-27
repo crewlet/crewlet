@@ -366,27 +366,6 @@ func (e *Engine) seatCompactor(c *Company, handle string, use auxspend.Use) comp
 	return e.compactorFor(c).For(c.Org.AgentSeatByHandle(handle), use)
 }
 
-// auxSpendStopBudget is how long an orderly stop waits for the ledger's last
-// flush.
-//
-// FIVE SECONDS. A flush holds at most one [coalesce.FlushInterval] of records —
-// a few dozen on a busy node — and each is one publish to a broker that is up,
-// so five seconds is orders of magnitude over what it needs; and its first
-// refusal ends it, so a stop with no member reachable spends at most this
-// before the custody's own flush.
-const auxSpendStopBudget = 5 * time.Second
-
-// stopAuxSpend flushes the ledger one last time. Ordered by the teardown after
-// every producer of auxiliary calls has stopped, and before the usage
-// publisher's last flush — whose day counts these records — the custody flush
-// and the broker's close, so the last records reach a stream that is still
-// there and a day that is published after them. Nil-safe.
-func (e *Engine) stopAuxSpend(ctx context.Context) {
-	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), auxSpendStopBudget)
-	defer cancel()
-	e.auxSpend.Stop(bounded)
-}
-
 // conversationBlock is the prior turns of this conversation as a turn is given
 // them: the newest whole, and the older ones that will not fit
 // [ledger.InjectedMaxChars] condensed by the seat's auxiliary model into one

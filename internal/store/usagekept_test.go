@@ -83,8 +83,8 @@ func personRecord(t *testing.T, id string, at time.Time, seat string, total int)
 		Category: "system", Tags: store.ExtractTags(payload), Payload: payload}
 }
 
-// fetchRecord is one read of a unit repository, as the code host and the
-// query server publish it ([types.CodeFetched]).
+// fetchRecord is a record of reads of a unit repository, as the node's reads
+// ledger publishes it ([types.CodeFetched], internal/code/readaudit).
 func fetchRecord(t *testing.T, id string, at time.Time, read types.CodeFetched) store.EventRecord {
 	t.Helper()
 	payload, err := json.Marshal(read)

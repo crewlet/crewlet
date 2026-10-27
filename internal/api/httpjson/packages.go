@@ -51,7 +51,7 @@ var goPackages = map[string]bool{
 	"prefetch": true, "procgroup": true, "procgrouptest": true, "prompts": true,
 	"presence": true, "provenance": true,
 	"provision": true, "queries": true, "queue": true, "queuetest": true,
-	"redact": true, "references": true, "regexlit": true, "regexlittest": true,
+	"readaudit": true, "redact": true, "references": true, "regexlit": true, "regexlittest": true,
 	"rendezvous": true, "replicated": true, "routing": true, "runner": true, "runtoken": true,
 	"s3fake": true, "s3obj": true, "sandbox": true, "sandboxtest": true,
 	"schedule": true, "scheduletest": true, "search": true, "seat": true,

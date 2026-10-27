@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -859,6 +860,17 @@ type Engine struct {
 	// is spend already made, and a ledger that came with an epoch would
 	// drop whatever the apply that replaced it had not flushed.
 	auxSpend *auxspend.Ledger
+
+	// codeReads is this node's reads ledger: every read of a `visibility:
+	// unit` repository its code host and git reads answer, coalesced per
+	// reader and published as `code_fetched` — see [Engine.recordCodeRead]
+	// and internal/code/readaudit.
+	//
+	// On the engine for auxSpend's reason: a bucket is reads already
+	// answered, and the code host it records is built at an apply after
+	// boot as often as at the boot itself, so a ledger that came with the
+	// runtime would drop what a rebuilt one had not flushed.
+	codeReads *readaudit.Ledger
 }
 
 // Options configure an engine.
@@ -1262,7 +1274,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ON THE NODE'S OWN QUEUE, which on a node without `data` is the
 		// publish its custody hands to a data node — so a stateless node's
 		// auxiliary spend reaches the history like its phases do.
-		auxSpend:            auxspend.NewLedger(backends.Queue),
+		auxSpend: auxspend.NewLedger(backends.Queue),
+		// And the reads of unit repositories, on the same queue: every
+		// git node holds data, so its reads are written by its own event
+		// store.
+		codeReads:           readaudit.New(backends.Queue),
 		steers:              steers,
 		presenceWire:        presenceWire,
 		dataTurns:           builtin.NewDataTurns(nil),
@@ -2059,6 +2075,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	// it — an apply's first passes — wait in their buckets for its first
 	// tick, and [Engine.teardown] flushes whatever is left.
 	e.auxSpend.Run(context.WithoutCancel(ctx))
+	// AND THE READS LEDGER'S, on the same terms: a read the code host
+	// answered before it waits in its reader's bucket for the first tick.
+	e.codeReads.Run(context.WithoutCancel(ctx))
 	// AFTER the host is running, and detached from the caller's context
 	// like the host itself. Before it, every watched duty reads as not
 	// live and the watchdog stands down for the life of the process —
@@ -2424,11 +2443,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	// by a next start, and a node that never starts again leaves it out of
 	// the fleet's history: the learning passes, whose auxiliary calls spend;
 	// the scheduler, whose late fire records a dispatch; the code host, which
-	// records every fetch and git read of a `visibility: unit` repository it
-	// serves; the auxiliary-spend ledger's last flush, once every producer of
-	// it has stopped — the turns and reflections with the seats, the
-	// sandbox's condensations above, the learning passes, a person's question
-	// with the HTTP surface before the teardown began; and the custody
+	// files every fetch and git read of a `visibility: unit` repository it
+	// serves in the reads ledger; the two ledgers' last flush, once every
+	// producer of them has stopped — for the auxiliary spend, the turns and
+	// reflections with the seats, the sandbox's condensations above, the
+	// learning passes, a person's question with the HTTP surface before the
+	// teardown began, and for the reads, the code host; and the custody
 	// keeper, whose settles make a stateless node's rows count. The drain
 	// already ended the turns, whose phases and completions are the rest.
 	//
@@ -2451,11 +2471,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	// has already finished or cut, so what stops here is the cache those
 	// reads are answered from — a peer's read asked of this node from now on
 	// is answered unready, and its walk asks the runner-up
-	// ([Engine.stopCodeHost]).
+	// ([Engine.stopCodeHost]). And so BEFORE THE LEDGERS' LAST FLUSH: no read
+	// is filed in the reads ledger after its cache stops.
 	e.stopCodeHost(ctx)
 	// BEFORE the custody flush below, which is what carries a node without
-	// `data` its records.
-	e.stopAuxSpend(ctx)
+	// `data` its records — the two at once, on one budget ([Engine.stopLedgers]).
+	e.stopLedgers(ctx)
 	// AND LEAVING THE GROUP, not only ending the pass: the group's
 	// attachment would otherwise keep taking batches until the queue closes.
 	// BEFORE backends.Close, which closes the store the keeper writes and the

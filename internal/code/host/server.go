@@ -121,10 +121,13 @@ type Options struct {
 	// surface's audit, which outlives the request.
 	Audit func(ctx context.Context, e types.OperatorActed)
 	// Fetched records one fetch of a `visibility: unit` repository whose
-	// answer carried a pack (fetch.go) — published by the engine into the
-	// node's event log, from which the usage domain derives who read it. Its
-	// publish outlives the request: a client that hung up after its pack
-	// still read the repository.
+	// answer carried a pack (fetch.go), before the response ends — filed by
+	// the engine in the node's reads ledger (internal/code/readaudit), which
+	// publishes every reader's reads of a flush as one record into the
+	// node's event log, from which the usage domain derives who read it. It
+	// returns at once, so no fetch's answer waits on the broker for its own
+	// record, and the record outlives the request: a client that hung up
+	// after its pack still read the repository.
 	Fetched func(ctx context.Context, e types.CodeFetched)
 	// Limits is the CURRENT epoch's code.limits.
 	Limits func() code.Limits

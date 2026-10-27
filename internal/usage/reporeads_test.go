@@ -20,8 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// fetched records one read of a unit repository the way the code host and the
-// query server publish it (types.CodeFetched).
+// fetched records a record of reads of a unit repository the way the node's
+// reads ledger publishes it (types.CodeFetched, internal/code/readaudit).
 func (e *events) fetched(at time.Time, read types.CodeFetched) {
 	e.t.Helper()
 	e.seq++
@@ -41,7 +41,7 @@ func (e *events) fetched(at time.Time, read types.CodeFetched) {
 func gitFetch(repo, principal, seat string, bytes int64) types.CodeFetched {
 	return types.CodeFetched{RepoID: repo, RepoName: "name-of-" + repo,
 		PrincipalKind: types.CodeReaderOperator, Principal: principal, Seat: seat,
-		Via: types.FetchedViaGit, Bytes: bytes}
+		Via: types.FetchedViaGit, Reads: 1, Bytes: bytes}
 }
 
 // reader is one credential of person seat reading by git, reads times.

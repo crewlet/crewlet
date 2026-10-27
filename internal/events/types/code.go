@@ -18,18 +18,28 @@ import (
 // this record nothing in the engine kept the answer: a fetch was a log line
 // on the node that served it, and a server-side read nothing at all.
 //
-// # One record per read that SENT CONTENTS
+// # A read is one that SENT CONTENTS
 //
-// A git fetch is recorded once its request ended well and its answer carried a
+// A git fetch is a read once its request ended well and its answer carried a
 // pack. A fetch over a stateless transport negotiates in ROUNDS, each a request
 // of its own whose answer is acknowledgments and no object, and only the round
 // that ends the negotiation is answered with the pack — so a clone or a fetch
-// is one record however many rounds it took, and a round that sent nothing is
+// is one read however many rounds it took, and a round that sent nothing is
 // none. An `ls-refs`, an advertisement and a fetch the node ended before its
-// answer was whole are no record: they sent no contents, or not all of them.
-// A server-side read — a code tool's tree, file, diff, comparison or landed-in
-// answer — is recorded once it answered, from the repository's copy or from its
+// answer was whole are no read: they sent no contents, or not all of them. A
+// server-side read — a code tool's tree, file, diff, comparison or landed-in
+// answer — is a read once it answered, from the repository's copy or from its
 // memo alike, since the memo is the copy's and answers every asker.
+//
+// # One record per reader per flush
+//
+// The node that served the reads keeps them in a ledger (internal/code/readaudit)
+// and publishes, every fifteen seconds, ONE record for each reader's reads of
+// one repository by one way — of one kind, for a server-side read — in one
+// company day, counting them ([CodeFetched.Reads]) and summing what they were
+// sent. So a CI token fetching a repository every few seconds is a record a
+// flush rather than a record a fetch, and no read's answer waits for the
+// broker to take its record: the record is published off the read's path.
 //
 // # Never for a company repository
 //
@@ -95,13 +105,18 @@ func CodeReaderKinds() []CodeReaderKind { return []CodeReaderKind{CodeReaderOper
 // Valid reports whether this build knows the value.
 func (k CodeReaderKind) Valid() bool { return slices.Contains(CodeReaderKinds(), k) }
 
-// CodeFetched records one read of a `visibility: unit` repository's contents:
-// a git fetch whose answer carried a pack, or a server-side read that
-// answered. Recorded on the node that SERVED it, and never for a
+// CodeFetched records the reads ONE READER made of a `visibility: unit`
+// repository's contents, one way, since the serving node's last flush — git
+// fetches whose answers carried a pack, or server-side reads of one kind that
+// answered — within one company day, which the envelope's instant, the newest
+// read's, falls in. Recorded on the node that SERVED them, and never for a
 // `visibility: company` repository, whose readers nobody audits.
+//
+// A producer hands the node's ledger one read at a time in this same shape,
+// Reads 1, and the ledger folds a reader's reads into the record it publishes.
 type CodeFetched struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
-	// name as the read named it.
+	// name as the newest of the reads named it.
 	RepoID   string `json:"repo_id"`
 	RepoName string `json:"repo_name"`
 
@@ -124,8 +139,14 @@ type CodeFetched struct {
 	Via  CodeFetchedVia `json:"via"`
 	Kind string         `json:"kind,omitempty"`
 
-	// Bytes is what the reader was sent: the whole answer that carried the
-	// pack, for a fetch, and the answer's encoding, for a server-side read.
+	// Reads is how many reads the record stands for: one at least. A record
+	// that counts none is no read, and the day's derivation skips it as it
+	// skips one nobody can attribute (store.DB.UsageForDay).
+	Reads int64 `json:"reads"`
+
+	// Bytes is what the reader was sent, over every read the record stands
+	// for: the whole answer that carried the pack, for a fetch, and the
+	// answer's encoding, for a server-side read.
 	Bytes int64 `json:"bytes"`
 }
 
@@ -144,14 +165,18 @@ func (e CodeFetched) Actor() string {
 }
 
 // SummaryFor names the repository and what was read of it: a fetch by its
-// size, a server-side read by its kind.
+// size, a server-side read by its kind, each with how many times where the
+// record stands for more than one.
 func (e CodeFetched) SummaryFor(actor string) string {
+	what := "fetched " + e.RepoName
 	if e.Via == FetchedViaTool {
-		what := "read " + e.RepoName
+		what = "read " + e.RepoName
 		if e.Kind != "" {
 			what += "'s " + e.Kind
 		}
-		return lead(actor, what+" ("+strconv.FormatInt(e.Bytes, 10)+" bytes)")
 	}
-	return lead(actor, "fetched "+e.RepoName+" ("+strconv.FormatInt(e.Bytes, 10)+" bytes)")
+	if e.Reads > 1 {
+		what += " " + strconv.FormatInt(e.Reads, 10) + " times"
+	}
+	return lead(actor, what+" ("+strconv.FormatInt(e.Bytes, 10)+" bytes)")
 }

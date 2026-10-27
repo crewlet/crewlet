@@ -16,10 +16,11 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -155,37 +156,33 @@ func (e *Engine) auditGit(ctx context.Context, r types.OperatorActed) {
 	operator.Audit(ctx, e.backends.Queue, types.NewOperatorActed(r))
 }
 
-// publishCodeFetched publishes one read of a `visibility: unit` repository —
-// a fetch the code host served, a read the git reads answered — onto this
-// node's queue, as the knowledge reads are published
-// ([Engine.publishPrefetchRead]): an event the event store writes into this
-// node's log, or into its custody keeper's on a node without `data`, from
-// which the usage publisher derives who read the repository (internal/usage,
-// kind repo_read). Its envelope names the reading seat for a seat's read and
-// nobody otherwise.
+// recordCodeRead files one read of a `visibility: unit` repository — a fetch
+// the code host served, a read the git reads answered — in this node's reads
+// ledger ([Engine.codeReads], internal/code/readaudit), stamped with the
+// instant it was answered, the company day that falls in on the CURRENT
+// epoch's clock ([Engine.Zone]) and the trace it was served under, and
+// returns. The ledger publishes every reader's reads of a flush as one
+// `code_fetched` event, which the event store writes into this node's log —
+// every git node holds data — and from which the usage publisher derives who
+// read the repository (internal/usage, kind repo_read).
+//
+// NEVER A PUBLISH OF ITS OWN, and that is the point: a read's answer — a
+// fetch's response, a server-side read's slot on the git lane, and every read
+// waiting on the page it cuts — waited for the broker's replicated, fsynced
+// acknowledgement and the event store's commit, up to the client's five
+// seconds while the event stream had no leader, and lost its record for good
+// where the broker refused it. Filed, it costs the read a fold under a lock;
+// the ledger's flush publishes off every read's path, keeps a refused record
+// for the next flush, and outlives the request, so a client that hung up once
+// it had its pack is still recorded.
 //
 // NEVER THROUGH THE OPERATOR AUDIT ([Engine.auditGit]): that record's source is
 // the runtime audit's, whose types the dashboard's audit log reads as people's
-// calls, and a read is neither a call nor necessarily a person's. UNDER THE
-// READ'S CONTEXT WITHOUT ITS CANCEL, so the record outlives a client that hung
-// up once it had its pack and a read whose asker stopped listening; and BEST
-// EFFORT, as every telemetry publish is: a broker that refuses it is logged,
-// never answered to the read it describes.
-func (e *Engine) publishCodeFetched(ctx context.Context, read types.CodeFetched) {
-	if e.backends == nil || e.backends.Queue == nil {
-		return
-	}
-	ev := events.NewFrom(read, tracing.TraceOf(ctx))
-	if ev == nil {
-		return
-	}
-	if read.PrincipalKind == types.CodeReaderAgent {
-		ev.Source = read.Seat
-	}
-	if err := e.backends.Queue.Publish(context.WithoutCancel(ctx), topics.Event(ev.Type), ev); err != nil {
-		log.WarnContext(ctx, "code_fetched_publish_failed", "repo", read.RepoName, "principal", read.Principal,
-			"via", string(read.Via), "error", err)
-	}
+// calls, and a read is neither a call nor necessarily a person's.
+func (e *Engine) recordCodeRead(ctx context.Context, read types.CodeFetched) {
+	at := time.Now().UTC()
+	e.codeReads.Add(readaudit.Read{Fetched: read, At: at,
+		Day: period.At(period.Day, at, e.Zone()).Label, Trace: tracing.TraceOf(ctx)})
 }
 
 // roleNeeded is [seat.Config.RoleNeeded]: the CURRENT epoch's company's
@@ -318,7 +315,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	reads, err := query.New(query.Options{
 		NodeID: nodeID, Cache: c, Git: pool,
 		Share:  code.NewGitShare(nodeID, pool.Slots(gitproc.ClassRead), e.metrics),
-		Roster: e.codeRoster, Current: e.admits, Fetched: e.publishCodeFetched,
+		Roster: e.codeRoster, Current: e.admits, Fetched: e.recordCodeRead,
 	})
 	if err != nil {
 		c.Stop(context.WithoutCancel(ctx))
@@ -332,7 +329,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// to included, so the host is handed no chart of its own.
 	h, err := host.New(host.Options{
 		Cache: c, Git: pool, Estate: seam, Objects: objects,
-		Audit: e.auditGit, Fetched: e.publishCodeFetched,
+		Audit: e.auditGit, Fetched: e.recordCodeRead,
 		Limits: e.codeLimits, DeletedRetention: e.codeDeletedRetention,
 		NodeID: nodeID, Timing: host.Production, Metrics: e.metrics,
 	})

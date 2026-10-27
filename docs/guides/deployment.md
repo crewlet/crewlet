@@ -1309,7 +1309,8 @@ longest turn (or the longest clone or push the pod should finish) is the part
 of the grace it needs; what follows the
 drain — giving its leases back, closing the HTTP listeners (five seconds each,
 which an open sandbox bridge session spends whole), flushing the auxiliary
-spend and the day's usage, closing the store — takes milliseconds on a healthy
+spend, the reads of unit repositories and the day's usage, closing the store —
+takes milliseconds on a healthy
 fleet but up to about 46 s on a member that has lost both its event stream and
 its coordination store, and about 50 s on a node without `data`, each step
 waiting out its own bound (see
@@ -2046,7 +2047,7 @@ category.
 | Stored, not in the activity feed | Why |
 |---|---|
 | `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
-| `code_fetched` | **An audit, not activity**: one read of a `visibility: unit` repository's contents — a fetch whose answer carried a pack, or a code tool's answer ([Code Host § Who read it](../concepts/code-host.md#who-read-it)). A CI token fetching on every build, or a seat reading a file a line range at a time, writes them faster than anybody reads a feed. Who read a repository is answered by `GET /code/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
+| `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, or a code tool's answers — coalesced per fifteen-second flush, with how many and their bytes ([Code Host § Who read it](../concepts/code-host.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /code/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
 
 #### Querying events
 

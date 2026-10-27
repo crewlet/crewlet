@@ -97,8 +97,10 @@
 // person has no agent id, no turns and no reads ([KindPerson]). A
 // repository-day: every credential and seat that read a `visibility: unit`
 // repository's contents on the node that served them — a git fetch that
-// carried a pack, a code tool's answer (types.CodeFetched) — with how often
-// and how many bytes, capped at [ReadersPerRepoDay] with the remainder counted
+// carried a pack, a code tool's answer, which that node records a reader's
+// reads of a flush at a time (types.CodeFetched, internal/code/readaudit) —
+// with how often and how many bytes, capped at [ReadersPerRepoDay] with the
+// remainder counted
 // ([KindRepoRead], record version 2: the one kind a build at version 1
 // retains rather than applies). A record is always the cumulative value; an
 // apply REPLACES.

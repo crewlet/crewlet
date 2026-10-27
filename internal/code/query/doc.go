@@ -178,9 +178,13 @@
 // the record would let a second reader of a page go unrecorded
 // (TestAUnitRepositorysToolReadIsRecorded). A read of a `visibility: company`
 // repository records nothing — every seat reads it by declaration — and nor
-// does a read refused or unready, which handed nothing over. The engine
-// publishes the record as an event of this node's own log, which its usage
-// publisher derives into the day's repo_read record (internal/usage).
+// does a read refused or unready, which handed nothing over. The engine files
+// the read in this node's reads ledger (internal/code/readaudit), which
+// publishes each reader's reads of a flush as one event of the node's own log
+// OFF THE READ'S PATH — no read's answer, its slot on the git lane, nor a read
+// waiting on the page it cuts, waits on the broker for a record — and the
+// node's usage publisher derives the day's repo_read record from those
+// (internal/usage).
 //
 // # Pages
 //

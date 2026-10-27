@@ -331,9 +331,11 @@
 // an ls-refs, the advertisement and a fetch the node ended record nothing
 // (TestAUnitRepositorysFetchIsRecorded, TestAFetchTheNodeEndedIsNoRecord);
 // nor does any read of a `visibility: company` repository, whose readers are
-// every seat by declaration. The engine publishes the record as an event of
-// the node's own log, which its usage publisher derives into the day's
-// repo_read record (internal/usage).
+// every seat by declaration. The engine files the read in the node's reads
+// ledger (internal/code/readaudit), which publishes each reader's reads of a
+// flush as one event of the node's own log OFF THE REQUEST'S PATH — no fetch's
+// answer waits on the broker for its record — and the node's usage publisher
+// derives the day's repo_read record from those (internal/usage).
 //
 // # The hook relay cannot end the process
 //

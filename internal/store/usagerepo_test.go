@@ -9,12 +9,53 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// unitFetch is a git fetch of the unit repository `platform` by principal,
+// unitFetch is one git fetch of the unit repository `platform` by principal,
 // bound to seat ("" for nobody), that sent 100 bytes.
 func unitFetch(principal, seat string) types.CodeFetched {
 	return types.CodeFetched{RepoID: "repo-platform", RepoName: "platform",
 		PrincipalKind: types.CodeReaderOperator, Principal: principal, Seat: seat,
-		Via: types.FetchedViaGit, Bytes: 100}
+		Via: types.FetchedViaGit, Reads: 1, Bytes: 100}
+}
+
+// A DAY COUNTS THE READS ITS RECORDS STAND FOR, not its records: a record is
+// one reader's reads of a flush (internal/code/readaudit), so a CI token that
+// fetched six times in two flushes is two records and six reads. A record that
+// counts no read is no read — neither its bytes nor its instant are the
+// reader's.
+//
+// Mutation: count the records (COUNT(*)), and the reader read three times;
+// drop the filter on the count, and the record of none adds its bytes and its
+// newer instant.
+func TestADayCountsTheReadsItsRecordsStandFor(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	log := db.Events()
+	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
+	at := func(h int) time.Time { return day.Add(time.Duration(h) * time.Hour) }
+	four, two, none := unitFetch("token:ci", ""), unitFetch("token:ci", ""), unitFetch("token:ci", "")
+	four.Reads, four.Bytes = 4, 400
+	two.Reads, two.Bytes = 2, 200
+	none.Reads, none.Bytes = 0, 9999
+	for i, rec := range []store.EventRecord{
+		fetchRecord(t, "f-1", at(1), four),
+		fetchRecord(t, "f-2", at(2), two),
+		fetchRecord(t, "f-3", at(3), none),
+	} {
+		if err := log.Append(t.Context(), rec); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	got, err := db.UsageForDay(t.Context(), usageDayOf(day, day.Add(24*time.Hour)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RepoReads) != 1 {
+		t.Fatalf("the day's repository reads are %+v, want the CI token's alone", got.RepoReads)
+	}
+	if r := got.RepoReads[0]; r.Reads != 6 || r.Bytes != 600 || !r.LastAt.Equal(at(2)) {
+		t.Errorf("the CI token read %d times, was sent %d bytes and last read at %s — want 6, 600 "+
+			"and %s", r.Reads, r.Bytes, r.LastAt, at(2))
+	}
 }
 
 // A DAY COUNTS ITS REPOSITORY READS, one entry per reader: per repository, per
@@ -40,7 +81,7 @@ func TestADayCountsItsRepoReads(t *testing.T) {
 	renamed.RepoName, renamed.Bytes = "platform-core", 50
 	tool := types.CodeFetched{RepoID: "repo-platform", RepoName: "platform",
 		PrincipalKind: types.CodeReaderAgent, Principal: "dev", Seat: "dev", Via: types.FetchedViaTool,
-		Kind: "blob", Bytes: 900}
+		Kind: "blob", Reads: 1, Bytes: 900}
 	other := unitFetch("token:ci", "")
 	other.RepoID, other.RepoName = "repo-billing", "billing"
 	nobody := unitFetch("", "")

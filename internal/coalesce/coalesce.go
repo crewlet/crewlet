@@ -6,15 +6,17 @@
 //
 // # One implementation, for every such record
 //
-// A record made at a rate no broker should be asked to keep pace with — what
-// the seats' auxiliary model spends (internal/auxspend: a compaction of
-// seventy rewrites, a turn's prefetch) — is counted by its node's usage day,
-// and so is every other record a ledger here carries. Each owner says what its
-// records are — the key, how a bucket becomes its event, what a lost one costs
-// ([Records]) — and everything else is here, once (ADR-0008): the fold under
-// one lock, the seal, the flush, the backlog and the order it is kept in, the
-// timer and the stop. The backlog's order is the half a second copy would get
-// wrong, as the first copy did ([Ledger.keep]).
+// Two records are made at rates no broker should be asked to keep pace with,
+// and a node's usage day counts both: what the seats' auxiliary model spends
+// (internal/auxspend: a compaction of seventy rewrites, a turn's prefetch) and
+// who read a `visibility: unit` repository (internal/code/readaudit: a CI
+// token fetching on every build, a seat reading a file a line range at a
+// time). Each owner says what its records are — the key, how a bucket becomes
+// its event, what a lost one costs ([Records]) — and everything else is here,
+// once (ADR-0008): the fold under one lock, the seal, the flush, the backlog
+// and the order it is kept in, the timer and the stop. The backlog's order is
+// the half a second copy would get wrong, as the first copy did
+// ([Ledger.keep]).
 //
 // # Off the caller's path
 //
@@ -82,7 +84,9 @@ const (
 	// memory — its event and the bucket it was sealed from — so a full
 	// backlog is under three megabytes, whichever records it holds. How long
 	// an outage that is depends on how many keys a node fills a flush: a busy
-	// company's auxiliary spend fills a few dozen, so most of an hour. Past it
+	// company's auxiliary spend fills a few dozen, so most of an hour; a busy
+	// node's readers of unit repositories — a key a reader, repository, way
+	// and kind — tens, so from about ten minutes to most of an hour. Past it
 	// the oldest is dropped, and said with what it held ([Records.Held]), so
 	// the gap can be named.
 	MaxPending = 4096

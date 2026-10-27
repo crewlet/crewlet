@@ -89,26 +89,27 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	// AND EVERY WRITER OF A ROW ITS DAY COUNTS IS DOWN BEFORE ITS LAST FLUSH:
 	// what one writes after it is published only by a next start, which a
 	// node that never starts again does not have. The learning passes spend
-	// auxiliary calls, the scheduler records fires, the code host records
+	// auxiliary calls, the scheduler records fires, the code host files
 	// every fetch and git read of a unit's repository it serves — a peer's
-	// read on its git lane among them, until its cache stops — the
-	// auxiliary-spend ledger's last flush writes the spend of every one of
-	// them, and the custody keeper settles a stateless node's rows into this
-	// node's days until it leaves the group. (The memory fill is none of
-	// them: it only embeds, and its order is the memory sync's, below.)
+	// read on its git lane among them, until its cache stops — the ledgers'
+	// last flush writes the spend and the reads of every one of them, and the
+	// custody keeper settles a stateless node's rows into this node's days
+	// until it leaves the group. (The memory fill is none of them: it only
+	// embeds, and its order is the memory sync's, below.)
 	for _, writer := range []string{"stopLearning", "stopScheduler", "stopCodeHost",
-		"stopAuxSpend", "stopKeeper"} {
+		"stopLedgers", "stopKeeper"} {
 		if at(writer) > at("stopUsage") {
 			t.Errorf("the teardown runs the usage publisher's last flush before %s, "+
 				"so what it writes after that flush is in no published day", writer)
 		}
 	}
-	// The ledger's last flush once every producer of auxiliary spend has
-	// stopped.
-	for _, producer := range []string{"stopLearning", "stopSandbox"} {
-		if at(producer) > at("stopAuxSpend") {
-			t.Errorf("the teardown flushes the auxiliary-spend ledger before %s, "+
-				"whose spend then reaches no flush", producer)
+	// The ledgers' last flush once every producer of their records has
+	// stopped: of auxiliary spend, the learning passes and the sandbox's
+	// condensations; of reads, the code host.
+	for _, producer := range []string{"stopLearning", "stopSandbox", "stopCodeHost"} {
+		if at(producer) > at("stopLedgers") {
+			t.Errorf("the teardown flushes the ledgers before %s, whose records then "+
+				"reach no flush", producer)
 		}
 	}
 	// THE MEMORY SYNC carries what the memory fill and the learning passes
@@ -185,15 +186,15 @@ func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 //
 // On a node without `data` an event reaches the company's history only
 // through the custody buffer, which hands it to a data node's keeper: the
-// authentication trail's last minute and the auxiliary spend ledger's last
-// records are each published by a final flush, so a flush run after the
-// custody's own puts its records in a buffer nothing will ever empty. The
-// custody and the keeper are never on one node — the custody is a node
-// without `data`'s, the keeper a data node's — so how the two are ordered says
-// nothing; the keeper's place is before the usage publisher's last flush
+// authentication trail's last minute and the ledgers' last records are each
+// published by a final flush, so a flush run after the custody's own puts its
+// records in a buffer nothing will ever empty. The custody and the keeper are
+// never on one node — the custody is a node without `data`'s, the keeper a
+// data node's — so how the two are ordered says nothing; the keeper's place is
+// before the usage publisher's last flush
 // (TestTheDutiesStopBeforeTheirLeasesAndTheLogs).
 //
-// Mutation: move stopAuthEvents or stopAuxSpend below stopCustody, and this
+// Mutation: move stopAuthEvents or stopLedgers below stopCustody, and this
 // fails naming it.
 func TestEveryFinalFlushPrecedesTheCustodyThatCarriesIt(t *testing.T) {
 	t.Parallel()
@@ -206,7 +207,7 @@ func TestEveryFinalFlushPrecedesTheCustodyThatCarriesIt(t *testing.T) {
 		}
 		return i
 	}
-	for _, flush := range []string{"stopAuthEvents", "stopAuxSpend"} {
+	for _, flush := range []string{"stopAuthEvents", "stopLedgers"} {
 		if at(flush) > at("stopCustody") {
 			t.Errorf("the teardown flushes the custody before %s, whose final "+
 				"records then sit in a buffer nothing empties", flush)

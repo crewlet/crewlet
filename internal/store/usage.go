@@ -1081,20 +1081,24 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 		[]any{types.KnowledgeRead{}.EventType(), EncodeTime(w.Start), EncodeTime(w.End)}
 }
 
-// usageRepoReads folds the window's reads of `visibility: unit` repositories
-// ([types.CodeFetched]) into one entry per (repository, principal kind,
-// principal, via, seat): how many, what they were sent, the newest, and the
+// usageRepoReads folds the window's records of reads of `visibility: unit`
+// repositories ([types.CodeFetched], each one reader's reads of a flush) into
+// one entry per (repository, principal kind, principal, via, seat): how many
+// reads their records count, what they were sent, the newest, and the
 // repository's name as the newest of its reads named it.
 //
-// OFF THE COLUMNS node/0052 promoted, never the payload: a day is derived
-// again on every tick it moves, and read out of each row's JSON the grouping
-// cost more than the rest of the day did — 272 ms a busy day of 50 000 reads,
-// past the 150 ms (1 % of the publisher's 15 s tick) a derived day may add
-// (BenchmarkUsageForDay; the migration states the measurement). On the
-// columns the same day's reads add 86 ms (151 ms the day, 65 ms without them;
-// `-benchtime 5x -count 1`, two cores of an Intel Core Ultra 7 265U) — the
-// grouping's sort of 50 000 rows, which no index serves without giving up the
-// seek of the window every derivation takes.
+// OFF THE COLUMNS node/0052 and node/0053 promoted, never the payload: a day is
+// derived again on every tick it moves, and read out of each row's JSON the
+// grouping cost more than the rest of the day did — 272 ms a busy day of 50
+// 000 rows, past the 150 ms (1 % of the publisher's 15 s tick) a derived day
+// may add (BenchmarkUsageForDay; the migrations state the measurements). On
+// the columns, summing each record's count, the same day's 50 000 records
+// add 116 ms (193 ms the day, 77 ms without them; `-benchtime 5x -count 1`,
+// two cores of an Intel Core Ultra 7 265U, beside another session's builds) —
+// the grouping's sort of 50 000 rows, which no index serves without giving up
+// the seek of the window every derivation takes. A record costs that whatever
+// it counts, so the reads a day can hold before this matters grew by as many
+// as the ledger folds into one record.
 //
 // THE NAME IS A LABEL, read once per repository rather than once per read:
 // off the row of its newest read, found by that read's instant
@@ -1161,16 +1165,19 @@ func (d *DB) usageRepoReads(ctx context.Context, w UsageWindow) ([]UsageRepoRead
 }
 
 // usageRepoReadsSQL is [DB.usageRepoReads]'s statement and its arguments: the
-// window's reads, grouped by everything a reader is, in that order — each row a
-// seek of the window that probes the in-flight key
-// (TestEveryUsageCountSeeksItsWindow) — and no JSON read.
+// window's records of reads, grouped by everything a reader is, in that order,
+// each record's reads summed — each row a seek of the window that probes the
+// in-flight key (TestEveryUsageCountSeeksItsWindow) — and no JSON read. A
+// record counting no read is no read, the producer's own rule (a record is a
+// reader's reads of a flush, never fewer than one), so a row that slipped past
+// it adds neither reads nor bytes nor an instant.
 func usageRepoReadsSQL(w UsageWindow) (string, []any) {
 	return `
 		SELECT e.read_repo_id, e.read_principal_kind, e.read_principal, e.read_via, e.read_seat,
-		       COUNT(*), SUM(e.read_bytes), MAX(e.event_time)
+		       SUM(e.read_reads), SUM(e.read_bytes), MAX(e.event_time)
 		  FROM crewlet_events AS e
 		 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
-		   AND e.read_repo_id != '' AND ` + keptRowSQL + `
+		   AND e.read_repo_id != '' AND e.read_reads > 0 AND ` + keptRowSQL + `
 		 GROUP BY e.read_repo_id, e.read_principal_kind, e.read_principal, e.read_via, e.read_seat
 		 ORDER BY e.read_repo_id, e.read_principal_kind, e.read_principal, e.read_via, e.read_seat`,
 		[]any{repoReadType, EncodeTime(w.Start), EncodeTime(w.End)}

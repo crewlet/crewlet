@@ -77,10 +77,13 @@ type Options struct {
 	// (code.UnreadyBehindConfig). nil is current.
 	Current func() bool
 	// Fetched records one read this node answered of a `visibility: unit`
-	// repository (step 11) — published by the engine into the node's event
-	// log, from which the usage domain derives who read it. REQUIRED, for
-	// the host's reason: a read answered and recorded by nobody is an audit
-	// short of what the node served.
+	// repository (step 11) — filed by the engine in the node's reads ledger
+	// (internal/code/readaudit), which publishes every reader's reads of a
+	// flush as one record into the node's event log, from which the usage
+	// domain derives who read it. It returns at once: no read, and no read
+	// waiting on the page one cuts, waits on the broker for a record.
+	// REQUIRED, for the host's reason: a read answered and recorded by nobody
+	// is an audit short of what the node served.
 	Fetched func(ctx context.Context, e types.CodeFetched)
 }
 
@@ -409,8 +412,11 @@ func (s *Server) serve(ctx context.Context, q code.GitQuery) (code.GitAnswer, er
 }
 
 // audit is step 11: a read answered of a `visibility: unit` repository,
-// recorded as its asker read it — the answer's encoding its bytes, which is
-// what the asker is sent beside its envelope.
+// recorded as its asker read it — one read, the answer's encoding its bytes,
+// which is what the asker is sent beside its envelope. Before the read
+// returns, and before the page flight it leads lets its waiters go, which is
+// why the engine's Fetched only files it in the node's reads ledger and never
+// waits on the broker.
 func (r *read) audit(ctx context.Context, a code.GitAnswer) error {
 	repo := r.synced.Repo
 	if repo.Visibility != code.VisibilityUnit {
@@ -422,7 +428,8 @@ func (r *read) audit(ctx context.Context, a code.GitAnswer) error {
 	}
 	r.s.o.Fetched(ctx, types.CodeFetched{RepoID: repo.ID, RepoName: repo.Name,
 		PrincipalKind: types.CodeReaderKind(r.q.Asker.Kind), Principal: askerName(r.q.Asker),
-		Seat: r.q.Asker.Seat, Via: types.FetchedViaTool, Kind: string(r.q.Kind), Bytes: int64(len(encoded))})
+		Seat: r.q.Asker.Seat, Via: types.FetchedViaTool, Kind: string(r.q.Kind), Reads: 1,
+		Bytes: int64(len(encoded))})
 	return nil
 }
 

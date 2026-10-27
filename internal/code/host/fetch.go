@@ -168,7 +168,9 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 // contents (Options.Fetched): its request ended well and its answer carried a
 // pack — read by the sink's own reading of the answer (sink.PackSent), the
 // reading the hold releases the answer by. As the principal its admission
-// resolved (admission.principal), and the bytes the client was written.
+// resolved (admission.principal), one read, and the bytes the client was
+// written — before the response ends, which is why the engine's Fetched only
+// files it in the node's reads ledger and never waits on the broker.
 //
 // FETCHES THAT SENT CONTENTS, NOT REQUESTS: over a stateless transport a fetch
 // negotiates in rounds, each a request of its own whose answer is
@@ -184,7 +186,7 @@ func (s *Server) fetched(ctx context.Context, adm admission, out *sink) {
 	p := adm.principal()
 	s.o.Fetched(ctx, types.CodeFetched{RepoID: adm.repo.ID, RepoName: adm.name,
 		PrincipalKind: types.CodeReaderKind(p.Kind), Principal: p.OperatorID, Seat: p.Seat,
-		Via: types.FetchedViaGit, Bytes: out.Sent()})
+		Via: types.FetchedViaGit, Reads: 1, Bytes: out.Sent()})
 }
 
 // gitsAnswer reports whether a fetch's last run ended in an answer of git's

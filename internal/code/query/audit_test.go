@@ -54,12 +54,14 @@ func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 	got := rec.all()
 	want := []types.CodeFetched{
 		{RepoID: repo, RepoName: codetest.RepoName, PrincipalKind: types.CodeReaderAgent, Principal: "eng-dev",
-			Seat: "eng-dev", Via: types.FetchedViaTool, Kind: string(code.GitTree), Bytes: int64(encoded(t, first))},
+			Seat: "eng-dev", Via: types.FetchedViaTool, Kind: string(code.GitTree), Reads: 1,
+			Bytes: int64(encoded(t, first))},
 		{RepoID: repo, RepoName: codetest.RepoName, PrincipalKind: types.CodeReaderAgent, Principal: "eng-lead",
-			Seat: "eng-lead", Via: types.FetchedViaTool, Kind: string(code.GitTree), Bytes: int64(encoded(t, again))},
+			Seat: "eng-lead", Via: types.FetchedViaTool, Kind: string(code.GitTree), Reads: 1,
+			Bytes: int64(encoded(t, again))},
 		{RepoID: repo, RepoName: codetest.RepoName, PrincipalKind: types.CodeReaderOperator,
 			Principal: person.OperatorID, Seat: person.Seat, Via: types.FetchedViaTool, Kind: string(code.GitTree),
-			Bytes: int64(encoded(t, theirs))},
+			Reads: 1, Bytes: int64(encoded(t, theirs))},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("the reads recorded are %+v, want the two seats' and the person's", got)

@@ -1692,13 +1692,26 @@ readers, in the order of their kind, their principal, how they read and the
 seat; the `next` it carries, handed back as `cursor`, is the page after it,
 and the last page carries none.
 
-**How it is kept.** Each read is a `code_fetched` event in the serving node's
-own event log, kept out of the activity feed — a CI token fetching on every
-build would bury it there. The node's usage publisher derives each day of
-them, every fifteen seconds, into one record per repository naming every
-reader that day: the `repo_read` kind of the usage log, kept
-[181 days](../guides/retention.md) like the rest of it
+**How it is kept.** The serving node files each read as it answers it, and
+every fifteen seconds publishes **one `code_fetched` event per reader** of
+each repository — one per credential or seat, way and, for a server-side read,
+kind — counting its reads and the bytes they were sent, into its own event log,
+kept out of the activity feed: a CI token fetching on every build would bury
+it there. So a CI token fetching every few seconds is one record a flush, not
+one a fetch, and no read waits for the event stream to take its record: a
+clone completes, and a code tool answers, at the speed of its own work while
+the stream elects a leader or is short of its quorum. A record the stream
+refuses is published again by the next flush, and the node keeps up to 4 096
+of them through an outage, the oldest dropped past that and logged
+(`code_fetched_dropped`, with the reads it held). The node's usage publisher
+derives each day of them, every fifteen seconds, into one record per
+repository naming every reader that day: the `repo_read` kind of the usage
+log, kept [181 days](../guides/retention.md) like the rest of it
 ([ADR-0020](https://github.com/crewlet/crewlet/blob/main/adr/0020-a-nodes-own-day-is-a-compacted-domain.md)).
+A read is in the answer within about thirty seconds — the node's flush, then
+the publisher's tick. A node stopped in an orderly way publishes its last
+reads before it goes; one that dies loses the reads since its last flush, and
+any records the stream was refusing.
 A question is answered from those records, every node's at once, by whichever
 data node serves the usage log, so the readers of a repository include those
 of a node that has since left the fleet. One record names at most **1 024
@@ -2333,6 +2346,9 @@ reference](../reference/metrics.md)).
 | `code_hook_protocol`, `code_hook_refused` | `WARN` | A push's hook spoke out of turn — git's version block or its commands not what git sends — or a connection to the hook socket named no session the engine started; the push fails and nothing is stored. A failure of the push's own work after the hook spoke is `code_push_unchecked`. |
 | `code_hook_panic` | `ERROR` | The engine failed while serving one push's hook: that push was refused and its stack logged, and the node goes on serving. |
 | `code_host_stop_unfinished` | `WARN` | The node stopped with git requests still running past its stop's wait. |
+| `code_fetched_unpublished` | `WARN` | Under the component `code.readaudit`: the event stream refused a flush of this node's records of [who read](#who-read-it) its unit repositories. The records it held back (`records`, and the `reads` they count) are kept, sealed, and published again by the next flush, fifteen seconds later. |
+| `code_fetched_dropped` | `WARN` | Under `code.readaudit`: the stream refused this node's records of reads for longer than the node keeps them (4 096 records): the oldest `records`, and the `reads` they counted, are dropped, and who read those repositories answers without them. |
+| `code_fetched_lost_at_stop` | `WARN` | Under `code.readaudit`: the node stopped while the stream was refusing its last records of reads; those `records` and their `reads` are in no answer. |
 | `code_git_reads_stop_unfinished` | `WARN` | Under the component `code.query`: stopping its code host, the node cut its [server-side reads](#server-side-reads) in flight — each answered unready, so its asker took it to the next git node — and some had still not returned when the stop's wait ended. A read of a `visibility: unit` repository that answers after this line is recorded after the code host's stop, and so after the node's stop has flushed what [who read it](#who-read-it) is kept from. |
 | `code_status_answerer_not_withdrawn` | `WARN` | Stopping its code host, the node could not finish withdrawing its answers to the fleet's code-status question (`crewlet.code.status`), which it stops answering first so that no peer is told of a cache that is going: the broker refused to drop its subscription, or answers already in flight outlasted the stop's wait — the `error` says which. Either way the node starts no answer after this line, and the host's stop goes ahead. |
 | `code_verify_finished` | `INFO` | A check of this node's copy of a repository ended: the `packs` it checked, how many files the sync before it had found damaged and `repaired_by_sync` in place, the `problems` it found, and how a repair put it right: `repaired_in_place`, its own directory read whole in place, and `rebuilt`, a new copy (both, a rebuild of what the read in place left). Its report is read at `GET /code/repos/{name}/verify/{id}` for an hour after. |

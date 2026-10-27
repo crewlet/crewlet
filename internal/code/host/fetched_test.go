@@ -43,7 +43,7 @@ func fetchRounds(c *codetest.Case) uint64 {
 	return n
 }
 
-// A UNIT REPOSITORY'S FETCH IS RECORDED: one record for every fetch whose
+// A UNIT REPOSITORY'S FETCH IS RECORDED: one read for every fetch whose
 // request ended well and whose answer carried a pack — as the credential that
 // fetched and the person it is bound to (none for a token bound to nobody),
 // its bytes what the client read — and none for anything else: a company
@@ -68,7 +68,7 @@ func TestAUnitRepositorysFetchIsRecorded(t *testing.T) {
 		}
 		want := types.CodeFetched{RepoID: repo, RepoName: codetest.RepoName,
 			PrincipalKind: types.CodeReaderOperator, Principal: iam.TokenLogin("ceo"), Seat: "ceo",
-			Via: types.FetchedViaGit, Bytes: got[0].Bytes}
+			Via: types.FetchedViaGit, Reads: 1, Bytes: got[0].Bytes}
 		if got[0] != want || got[0].Bytes <= 0 {
 			t.Errorf("the clone is recorded as %+v, want %+v with the bytes it was sent", got[0], want)
 		}
