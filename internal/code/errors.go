@@ -110,6 +110,21 @@ var (
 	// published.
 	ErrBadBundle = errors.New("code: a pack bundle is not the one its row describes")
 
+	// ErrBadLayer is a published layer whose files are not the layer its
+	// row describes, or not git's formats as this package reads them
+	// ([CheckLayer], [LayLayer]): a trailer, a pack it covers, the
+	// multi-pack-index its bitmap belongs to, the bases its commit-graph
+	// layer names, a section's size — wrapped naming the field. A DEFINITE
+	// answer about the bytes, never retried: a git node reads a part
+	// through the store's own hash check ([FetchLayerPart]), so the bytes
+	// are the ones the publisher stored, and what differs is the
+	// publisher's — the node serves from the chain below the layer, and the
+	// maintainer's next publication replaces it. A read of a file that
+	// failed is never this, nor a value the applier sees: a layer that
+	// fails it is installed nowhere and named by no record its publisher
+	// proposes.
+	ErrBadLayer = errors.New("code: a published layer's files are not what its row says")
+
 	// ErrObjectNotFound is an object id a read by oid ([GitQuery]) named —
 	// whole, or an abbreviation no object begins with — that the repository
 	// does not hold. Concluded only at the log's head: the git node that

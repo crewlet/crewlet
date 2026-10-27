@@ -570,6 +570,12 @@ func (p LayerPart) Content() objstore.Object {
 // Size is the layer's bytes: its three sections, which its parts cut.
 func (l LayerRef) Size() int64 { return l.MidxBytes + l.BitmapBytes + l.GraphBytes }
 
+// Sections are the layer's three files' sizes, in the order its bytes hold
+// them: the multi-pack-index, its bitmap, and the commit-graph layer (0 where
+// it carries none) — the cut its parts are made by ([StoreLayer]) and laid
+// back by ([FetchLayerPart]).
+func (l LayerRef) Sections() [3]int64 { return [3]int64{l.MidxBytes, l.BitmapBytes, l.GraphBytes} }
+
 // RetireSweep removes a repository's retired pack rows at or below Through,
 // oldest first — the code-retention duty's sweep of what a record retired,
 // once its grace has passed ([Store.RetireSweep]).

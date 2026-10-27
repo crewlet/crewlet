@@ -153,3 +153,16 @@ var DecideEach = decideEach
 // refused — the bound a grant's refusal sentence is held under, since the
 // receiver carries it into a proposal.
 const MaxDetailBytes = maxDetailBytes
+
+// LayerCut is where the size bytes of a layer that begin at the layer's byte
+// start lie in its three files, whose sizes are sections — the one cut
+// StoreLayer reads a part by and FetchLayerPart lays it back by — each run as
+// its file (0 the multi-pack-index, 1 its bitmap, 2 the commit-graph layer),
+// its offset in that file and its bytes.
+func LayerCut(sections [3]int64, start, size int64) [][3]int64 {
+	var out [][3]int64
+	for _, s := range layerSpans(sections, start, size) {
+		out = append(out, [3]int64{int64(s.section), s.offset, s.bytes})
+	}
+	return out
+}

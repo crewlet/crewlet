@@ -436,13 +436,16 @@
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits
 // the pushes a receiving node proposes and the compactions a git node
-// proposes, answers reads of the rows, and holds a
-// bundle's bytes to the row that names them when a caller tees them through a
-// [SealWriter]. It moves object bytes in ONE place: [StoreBundle], the upload
-// of a pack bundle [LayBundle] laid out from the files a git wrote, sealed on
-// its way — the one store every writer of a stored pack takes, through the
-// [Putter] it is handed, so none lays a bundle out or seals it by a copy of
-// its own.
+// proposes, answers reads of the rows, holds a bundle's bytes to the row that
+// names them when a caller tees them through a [SealWriter], and holds a
+// published layer's files to theirs ([CheckLayer]). It moves object bytes in
+// TWO places, each the one way its kind of object moves: [StoreBundle], the
+// upload of a pack bundle [LayBundle] laid out from the files a git wrote,
+// sealed on its way — the one store every writer of a stored pack takes,
+// through the [Putter] it is handed, so none lays a bundle out or seals it by
+// a copy of its own — and a published layer's parts, cut by one rule both
+// ways: [StoreLayer] uploads them at once, and [FetchLayerPart] lays each back
+// where it came from, read through the store's verified read.
 //
 // # Five horizons, each a function of the record that applies it
 //
@@ -669,6 +672,31 @@
 // code_repos_unpublished_idx (replicated 0062), the engine's own read. A purge
 // removes the chain with the rest of a repository, in its final record: the
 // chain is bounded apart from what a part counts.
+//
+// # A layer's files are git's, read without git
+//
+// A git process trusts a layer's files by their names — a layer's
+// multi-pack-index and its commit-graph layer are named by their own trailing
+// checksum, and git reads neither checksum when it opens one — so every git
+// node holds a layer's three files to its row before any git process is
+// handed them, and the maintainer states a row's byte fields from the files
+// its build wrote, by ONE reading of git's three formats (layer.go,
+// ADR-0008): [ParseMidx], [ParseBitmap] and [ParseGraph], each rule citing
+// the git 2.56.0 reader it follows, as exact as git's writer about what every
+// file it writes has and as lenient as git's reader about what that reader
+// ignores. [CheckLayer] is the install's half — each file exactly its
+// section, the multi-pack-index's trailer the row's id and its packs the
+// row's, the bitmap that multi-pack-index's, the commit-graph layer's bases
+// the GraphIDs of the rows below it and its filters version 2 — and
+// [LayLayer] the publisher's, which holds the files to each other the same
+// way, so a build no node would install is refused before a byte is stored. A
+// refusal is [ErrBadLayer], definite and never retried, apart from a read
+// that failed. No reader holds a file: each reads a header, a table of
+// contents and the chunks a count is read from, every one held to the file's
+// size before it is read, and hashes the rest as it streams past. A layer's
+// bytes, the three files back to back, are stored as [LayerPartBytes] parts
+// ([LayerContentType]), every part uploaded at once so every key is named
+// within objstore.RecordWithin.
 //
 // # Measured
 //

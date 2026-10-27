@@ -39,9 +39,10 @@ import (
 var bundleSections = [3]string{".pack", ".idx", ".rev"}
 
 // Putter stores one object: the *objstore.Store satisfies it. Declared here,
-// by its one caller, StoreBundle — a writer of a stored pack holds its store
-// as a Putter only to hand it to StoreBundle, which is where the bundle's put
-// and its seal are made together.
+// by its two callers, StoreBundle and StoreLayer (layer.go) — a writer of a
+// stored pack or of a published layer holds its store as a Putter only to
+// hand it to one of them, which is where a bundle's put and its seal are made
+// together, and a layer's parts are cut and put at once.
 type Putter interface {
 	Put(ctx context.Context, r io.Reader, limit int64, m objstore.PutMeta) (objstore.Object, error)
 }
@@ -221,8 +222,10 @@ func StoreBundle(ctx context.Context, put Putter, packPath string, ref *PackRef,
 }
 
 // hitReader calls hit before each read of r, at the offset of the bytes r has
-// handed over so far. It holds the upload's context because io.Reader's Read
-// takes none: the hit is made under the deadline the put runs under.
+// handed over so far — counted from at, which a layer's part starts at its
+// own place in the layer (StoreLayer) and a bundle at 0. It holds the
+// upload's context because io.Reader's Read takes none: the hit is made under
+// the deadline the put runs under.
 type hitReader struct {
 	ctx context.Context
 	hit func(ctx context.Context, at int64) error

@@ -100,15 +100,17 @@ var sentinels = []sentinel{
 	{"search.ErrIndexBuilding", search.ErrIndexBuilding},
 	{"search.ErrNoMethods", search.ErrNoMethods},
 
-	// THE CODE HOST'S, every one of them — ErrBadBundle, ErrSuperseded and
-	// ErrAnswerDue included, though none is answered across the wire today (a
-	// bad bundle never leaves the receiving node; a superseded reconcile is
-	// the deciding node's own; a read whose answer fell due is answered
-	// unready by the git node it fell due on) — for the reason the list is
-	// complete at all.
+	// THE CODE HOST'S, every one of them — ErrBadBundle, ErrBadLayer,
+	// ErrSuperseded and ErrAnswerDue included, though none is answered across
+	// the wire today (a bad bundle never leaves the receiving node, nor a bad
+	// layer the git node that checked it; a superseded reconcile is the
+	// deciding node's own; a read whose answer fell due is answered unready
+	// by the git node it fell due on) — for the reason the list is complete
+	// at all.
 	{"code.ErrAnswerDue", code.ErrAnswerDue},
 	{"code.ErrBadBundle", code.ErrBadBundle},
 	{"code.ErrBadCursor", code.ErrBadCursor},
+	{"code.ErrBadLayer", code.ErrBadLayer},
 	{"code.ErrBadLevel", code.ErrBadLevel},
 	{"code.ErrInvalid", code.ErrInvalid},
 	{"code.ErrInvalidLayer", code.ErrInvalidLayer},
