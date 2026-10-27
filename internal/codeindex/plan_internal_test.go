@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"regexp"
 	"regexp/syntax"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -415,6 +416,71 @@ func TestAPlanRefusesWhatTheIndexCannotNarrow(t *testing.T) {
 	case !strings.Contains(qe.Reason, fmt.Sprintf("%d instructions", insts)) || !strings.Contains(qe.Reason, ".*"):
 		t.Errorf("the refusal %q names neither the program's %d instructions nor what to write instead",
 			qe.Reason, insts)
+	}
+}
+
+// A CLAUSE OF MANY LITERALS UNIONS THEIR BLOBS ONCE. An alternation of
+// literals is one clause, which a blob holding any of them satisfies, and a
+// query of MaxQueryBytes can name a hundred; their blobs are merged as one
+// union, whose work is the blobs admitted times ⌈log₂ k⌉ and whose buffers
+// are two, never folded in one literal at a time into a fresh slice each,
+// which copied what was admitted so far once for each literal after it. A
+// clause of 64 words over a segment whose 2 048 blobs each hold one of them
+// allocates what a clause of 2 words does over a segment whose 2 048 blobs
+// each hold one of those. The words share no trigram, so what each literal's
+// own lookup costs is the blobs it admits, whichever clause it is in.
+func TestAClauseOfManyLiteralsUnionsTheirBlobsOnce(t *testing.T) {
+	// Not parallel: runtime.MemStats counts every goroutine's allocations,
+	// and a parallel case's would be counted as the plan's.
+	const blobs = 2048
+	rng := rand.New(rand.NewPCG(20261027, 5))
+	candidates := func(words int) uint64 {
+		alts := make([]string, words)
+		texts := make([][]byte, blobs)
+		seen := map[Trigram]bool{}
+		for i := range alts {
+			// Neighbours differ in their first letter, or Go's parser
+			// factors their common prefix out of the alternation, and the
+			// plan is of the prefix and the rest.
+			word := []byte{"pq"[i%2], 0, 0, 0, 0, 0, 0, 0}
+			for again := true; again; {
+				for j := 1; j < len(word); j++ {
+					word[j] = byte('a' + rng.IntN(26))
+				}
+				again = slices.ContainsFunc(Trigrams(word), func(t Trigram) bool { return seen[t] })
+			}
+			for _, t := range Trigrams(word) {
+				seen[t] = true
+			}
+			alts[i] = string(word)
+		}
+		for i := range texts {
+			texts[i] = []byte("x := " + alts[i%words] + "\n")
+		}
+		plan, err := NewPlan(regexp.MustCompile(strings.Join(alts, "|")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.index) != 1 || len(plan.index[0].alts) != words {
+			t.Fatalf("the plan of %d words is %d clauses, the first of %d literals; want one of %d", words,
+				len(plan.index), len(plan.index[0].alts), words)
+		}
+		s := segmentOf(t, texts, 1, 1)
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		got, err := plan.Candidates(s)
+		runtime.ReadMemStats(&after)
+		if err != nil || len(got) != blobs {
+			t.Fatalf("a clause of %d words admits %d of the %d blobs holding one (%v)", words, len(got), blobs, err)
+		}
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	two, many := candidates(2), candidates(64)
+	t.Logf("the candidates of %d blobs allocated %d bytes for a clause of 2 words and %d for one of 64", blobs, two,
+		many)
+	if many > two+two/2 {
+		t.Errorf("a clause of 64 words allocated %d bytes for its candidates and one of 2 words %d, over as many "+
+			"blobs: what a clause allocates grows with its literals", many, two)
 	}
 }
 

@@ -569,8 +569,12 @@ func MergeSegments(w io.Writer, segs []*Segment, keep func(OID) bool) error {
 	}
 	// THE POSTINGS: the inputs' tables merged by trigram, each list mapped
 	// onto the merged ordinals — rising still, since both tables are in id
-	// order — and the lists of one trigram merged.
-	var merged, decoded, scratch []uint32
+	// order — and the lists of one trigram merged, by one union kept from
+	// trigram to trigram. The next trigram, as the next blob above, is
+	// found by a scan of the inputs' heads: k steps for each one written,
+	// never for each posting, which is what the lists folded in one at a
+	// time cost.
+	var u union
 	var encoded []byte
 	clear(at)
 	for {
@@ -586,7 +590,7 @@ func MergeSegments(w io.Writer, segs []*Segment, keep func(OID) bool) error {
 		if !found {
 			break
 		}
-		merged = merged[:0]
+		u.reset()
 		for k, s := range segs {
 			if at[k] >= s.trigrams {
 				continue
@@ -594,52 +598,116 @@ func MergeSegments(w io.Writer, segs []*Segment, keep func(OID) bool) error {
 			if got, _ := s.entry(at[k]); got != t {
 				continue
 			}
-			decoded, err = s.decode(s.list(at[k]), decoded[:0])
-			if err != nil {
+			// Decoded straight into the union and mapped where it lies,
+			// the dropped left out.
+			from := len(u.buf)
+			if u.buf, err = s.decode(s.list(at[k]), u.buf); err != nil {
 				return err
 			}
-			scratch = scratch[:0]
-			for _, o := range decoded {
+			kept := u.buf[:from]
+			for _, o := range u.buf[from:] {
 				if n := remaps[k][o]; n != dropped {
-					scratch = append(scratch, n)
+					kept = append(kept, n)
 				}
 			}
-			merged = unionInto(merged, scratch)
+			u.buf = kept
+			u.end()
 			at[k]++
 		}
-		encoded = appendPostings(encoded[:0], merged)
+		encoded = appendPostings(encoded[:0], u.merged())
 		out.list(t, encoded)
 	}
 	return out.close()
 }
 
-// unionInto is the ascending union of a and b, both ascending, each element
-// once; it may reuse a's storage.
-func unionInto(a, b []uint32) []uint32 {
-	if len(b) == 0 {
-		return a
+// union is ascending lists of ordinals, none holding one twice, merged into
+// one ascending list holding each once: a trigram's lists across the
+// segments a merge reads, a clause's blobs across its literals.
+//
+// THE LISTS ARE MERGED IN PAIRS, a round at a time, between two buffers kept
+// from one union to the next: k lists of L ordinals in all take L·⌈log₂ k⌉
+// steps and, once the buffers have grown, allocate nothing. Folding them in
+// one at a time, each into a fresh slice, copies what is merged so far once
+// for each list after it — k·L steps and as much garbage: merging 696 163
+// postings of 512 blobs allocated 69 bytes a posting from 32 segments and 4.9
+// from 2, and allocates 0.37 from either merged in pairs
+// (TestAMergeAllocatesForWhatItWritesHoweverManyItMerges).
+type union struct {
+	// buf is the lists back to back; ends is where each ends in it.
+	buf  []uint32
+	ends []int
+	// spare and spareEnds are what a round merges into.
+	spare     []uint32
+	spareEnds []int
+}
+
+// reset empties u for its next union.
+func (u *union) reset() { u.buf, u.ends = u.buf[:0], u.ends[:0] }
+
+// add adds list, ascending, to the union.
+func (u *union) add(list []uint32) {
+	u.buf = append(u.buf, list...)
+	u.end()
+}
+
+// end ends the list appended to buf since the one before it ended — what a
+// caller decoding a list straight into buf adds it with. An empty list adds
+// nothing.
+func (u *union) end() {
+	last := 0
+	if n := len(u.ends); n > 0 {
+		last = u.ends[n-1]
 	}
-	if len(a) == 0 {
-		return append(a, b...)
+	if len(u.buf) > last {
+		u.ends = append(u.ends, len(u.buf))
 	}
-	out := make([]uint32, 0, len(a)+len(b))
+}
+
+// merged is the union of the lists added since u was reset: ascending, each
+// ordinal once. It is u's own storage, valid until u is next used.
+func (u *union) merged() []uint32 {
+	for len(u.ends) > 1 {
+		u.spare, u.spareEnds = slices.Grow(u.spare[:0], len(u.buf)), u.spareEnds[:0]
+		from := 0
+		for i := 0; i < len(u.ends); i += 2 {
+			if i+1 < len(u.ends) {
+				u.spare = appendUnion(u.spare, u.buf[from:u.ends[i]], u.buf[u.ends[i]:u.ends[i+1]])
+				from = u.ends[i+1]
+			} else {
+				u.spare = append(u.spare, u.buf[from:u.ends[i]]...)
+				from = u.ends[i]
+			}
+			u.spareEnds = append(u.spareEnds, len(u.spare))
+		}
+		u.buf, u.spare = u.spare, u.buf
+		u.ends, u.spareEnds = u.spareEnds, u.ends
+	}
+	if len(u.ends) == 0 {
+		return u.buf[:0]
+	}
+	return u.buf[:u.ends[0]]
+}
+
+// appendUnion appends to dst the ascending union of a and b, both ascending
+// with no element twice, each element once.
+func appendUnion(dst, a, b []uint32) []uint32 {
 	i, j := 0, 0
 	for i < len(a) && j < len(b) {
 		switch {
 		case a[i] < b[j]:
-			out = append(out, a[i])
+			dst = append(dst, a[i])
 			i++
 		case a[i] > b[j]:
-			out = append(out, b[j])
+			dst = append(dst, b[j])
 			j++
 		default:
-			out = append(out, a[i])
+			dst = append(dst, a[i])
 			i++
 			j++
 		}
 	}
-	out = append(out, a[i:]...)
-	return append(out, b[j:]...)
+	dst = append(dst, a[i:]...)
+	return append(dst, b[j:]...)
 }
 
 // intersect is the ascending intersection of a and b, both ascending; it

@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"math/rand/v2"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -250,6 +252,94 @@ func TestASegmentThisBuildDidNotWriteIsRefused(t *testing.T) {
 	var out bytes.Buffer
 	if err := MergeSegments(&out, []*Segment{bad}, nil); !errors.Is(err, ErrMalformed) {
 		t.Errorf("a merge reads a posting naming no blob: %v", err)
+	}
+}
+
+// A MERGE ALLOCATES FOR WHAT IT WRITES, HOWEVER MANY SEGMENTS IT MERGES.
+//
+// A trigram's lists, one from each segment holding it, are merged in pairs
+// between two buffers kept from trigram to trigram (union), so what a merge
+// allocates is its tables and those buffers, never anything a posting.
+// Folded in one at a time, each into a fresh slice, they copied what was
+// merged so far once for each segment after it — k·L work and as much
+// garbage, which over 32 segments was some seventy bytes allocated a posting
+// written. The same 512 blobs of about 2 KiB of words, their ids interleaved
+// across the segments, are merged from 2 segments and from 32: both write
+// the bytes a build of every blob writes, the 32-way merge allocates what
+// the 2-way one does, and each less than it writes.
+func TestAMergeAllocatesForWhatItWritesHoweverManyItMerges(t *testing.T) {
+	// Not parallel: runtime.MemStats counts every goroutine's allocations,
+	// and a parallel case's would be counted as the merge's.
+	rng := rand.New(rand.NewPCG(20261027, 3))
+	words := make([]string, 300)
+	for i := range words {
+		w := make([]byte, 3+rng.IntN(8))
+		for j := range w {
+			w[j] = byte('a' + rng.IntN(26))
+		}
+		words[i] = string(w)
+	}
+	const blobs = 512
+	texts := make([][]byte, blobs)
+	for i := range texts {
+		var b bytes.Buffer
+		for b.Len() < 2<<10 {
+			b.WriteString(words[rng.IntN(len(words))])
+			if rng.IntN(12) == 0 {
+				b.WriteByte('\n')
+			} else {
+				b.WriteByte(' ')
+			}
+		}
+		texts[i] = b.Bytes()
+	}
+	write := func(k, j int) []byte {
+		var b Builder
+		for i := j; i < blobs; i += k {
+			if err := b.Add(testOID(i+1), texts[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var out bytes.Buffer
+		if err := WriteSegment(&out, &b); err != nil {
+			t.Fatal(err)
+		}
+		return out.Bytes()
+	}
+	whole := write(1, 0)
+	postings := 0
+	for _, trigrams := range postingsByBlob(t, opened(t, whole)) {
+		postings += len(trigrams)
+	}
+	merge := func(k int) uint64 {
+		segs := make([]*Segment, k)
+		for j := range segs {
+			segs[j] = opened(t, write(k, j))
+		}
+		out := bytes.NewBuffer(make([]byte, 0, len(whole)))
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		err := MergeSegments(out, segs, nil)
+		runtime.ReadMemStats(&after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(out.Bytes(), whole) {
+			t.Fatalf("merging the blobs from %d segments writes other bytes than building them whole", k)
+		}
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	// Five leaves a list unpaired in two of its rounds.
+	two, five, many := merge(2), merge(5), merge(32)
+	t.Logf("%d postings in %d bytes; a merge of 2 segments allocated %d bytes, of 5 %d, of 32 %d", postings,
+		len(whole), two, five, many)
+	if most := max(five, many); most > two+two/8 {
+		t.Errorf("merges of 5 and 32 segments allocated %d and %d bytes and one of 2 %d: what a merge allocates "+
+			"grows with the segments it merges", five, many, two)
+	}
+	if limit := uint64(len(whole)); max(two, five, many) > limit {
+		t.Errorf("merges writing %d bytes (%d postings) allocated %d (2 segments), %d (5) and %d (32): more "+
+			"than they write", len(whole), postings, two, five, many)
 	}
 }
 

@@ -245,9 +245,6 @@ func (p *Plan) Candidates(s *Segment) ([]OID, error) {
 		if err != nil {
 			return nil, err
 		}
-		if c.folded {
-			got = unionInto(got, s.escapes)
-		}
 		if i == 0 {
 			set = got
 		} else {
@@ -266,17 +263,23 @@ func (p *Plan) Candidates(s *Segment) ([]OID, error) {
 	return out, nil
 }
 
-// blobs is the ordinals of the blobs of s that can hold one of c's literals.
+// blobs is the ordinals of the blobs of s that can hold one of c's literals,
+// ascending — and, where c holds a folded literal, of every blob holding an
+// escape. A clause of an alternation can hold a hundred literals, so their
+// blobs are merged as one union, never folded in one at a time.
 func (c clause) blobs(s *Segment) ([]uint32, error) {
-	var union []uint32
+	var u union
 	for _, a := range c.alts {
 		got, err := a.blobs(s)
 		if err != nil {
 			return nil, err
 		}
-		union = unionInto(union, got)
+		u.add(got)
 	}
-	return union, nil
+	if c.folded {
+		u.add(s.escapes)
+	}
+	return u.merged(), nil
 }
 
 // blobs is the ordinals of the blobs of s that hold every trigram of a: the
