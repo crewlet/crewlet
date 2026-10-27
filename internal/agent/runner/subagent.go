@@ -139,6 +139,7 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 		Guard: func(child *tools.Surface) tools.Guard {
 			return r.guardFor(phase.Subagent, round, child, nil).tools()
 		},
+		Counter: r.counter(),
 		Telemetry: func(ctx context.Context, res subagent.Result) {
 			emit.subagentCompleted(ctx, res)
 			emit.skillsInjected(ctx, phase.Subagent, offer.Drain())
@@ -196,4 +197,13 @@ func (r *Runner) parentRemaining(ctx context.Context) (int, bool) {
 		return 0, false
 	}
 	return remaining, true
+}
+
+// counter is the recorder a worker's surface counts into, or a nil interface
+// when the runner holds none (never a nil pointer inside one).
+func (r *Runner) counter() tools.Counter {
+	if r.cfg.Metrics == nil {
+		return nil
+	}
+	return r.cfg.Metrics
 }

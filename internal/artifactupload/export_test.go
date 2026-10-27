@@ -59,3 +59,13 @@ func ClaimUpload(ctx context.Context, s *Service, c artifactsdomain.Call, upload
 	_, err := s.claim(ctx, c, c.Authority.Actor.Name, upload, purposePublish, id)
 	return err
 }
+
+// Brings is [run.brings] over a version whose files are new (true) or carried
+// (false) from the version before.
+func Brings(files map[string]bool, path string) bool {
+	r := &run{files: map[string]*pending{}}
+	for p, isNew := range files {
+		r.files[p] = &pending{path: p, carried: !isNew}
+	}
+	return r.brings(path)
+}

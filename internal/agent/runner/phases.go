@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -92,6 +93,11 @@ type Config struct {
 	// per-round charge, which is the embedded single-node case where no
 	// counter is shared with anyone.
 	Budget toolloop.BudgetMeter
+
+	// Metrics is the node's recorder, which every surface of the turn
+	// counts its refusal-loop decisions into
+	// ([metrics.ToolPolicyRefusalLoops]). Nil counts nothing.
+	Metrics *metrics.Recorder
 
 	// Sessions is where every phase's tools are served to its CLI — this
 	// process's one [toolsession.Host], whose directory is what admits a
@@ -1520,6 +1526,9 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
 	surface = tools.NewSurface(ph.String(), snapshot, active).
 		ForTurn(m.turn.InPhase(types.Phase(ph)))
+	if r.cfg.Metrics != nil {
+		surface = surface.WithCounter(r.cfg.Metrics)
+	}
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
 	// what the catalogue showed cannot disagree: both match the skills
 	// against the surface's universe (catalogueSurface), and the catalogue's

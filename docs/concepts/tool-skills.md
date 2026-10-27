@@ -241,7 +241,7 @@ Catalogue entries carry only the summary. The full body reaches the LLM via `loa
 load_tool_skill(key="mcp:github") → returns the full body as a tool result
 ```
 
-Available in **Execute** (always-on: it is a builtin, so it needs no `activate_tool` promotion) and **Sub-agent** (same as Execute). Returns an error with the list of registered keys if the key doesn't exist, so the LLM can recover.
+Available in **Execute** (always-on: it is a builtin, so it needs no `activate_tool` promotion) and **Sub-agent** (same as Execute). A key that does not exist is refused `not_found` with the keys that hold it first ("did you mean `skill:artifacts`?" for `artifacts`) and then every registered key, at most 30, so the LLM recovers in one step rather than guessing again.
 
 Review intentionally doesn't have it — Review's contract is the decision enum, not domain action.
 

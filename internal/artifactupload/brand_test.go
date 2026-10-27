@@ -112,14 +112,20 @@ func TestAKitIsStoredWithItsLogosInTheEnginesForm(t *testing.T) {
 }
 
 // A KIT OUTSIDE THE FORMAT IS REFUSED, EVERY FINDING NAMING ITS FILE: a
-// drawing that runs a script and a file the index does not name are each a
-// brand_format finding, and nothing is stored.
+// drawing that runs a script, a file the index does not name and a key the
+// index does not carry are each a brand_format finding of the ONE refusal,
+// though the drawing is refused before the format check, and nothing is
+// stored.
+//
+// Mutation: answer the drawing's refusal without CheckIndex and the index's
+// faults wait for the next attempt.
 func TestAKitOutsideTheFormatIsRefusedFileByFile(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, options{})
 	files := kitFiles(t, "#111111")
 	files["logos/primary.svg"] = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50"><script>alert(1)</script></svg>`
 	files["notes.txt"] = "draft"
+	files[brandformat.EntryPath] = strings.Replace(files[brandformat.EntryPath], `"v": 1,`, `"v": 1, "fonts": {},`, 1)
 	_, err := createKit(h, files)
 	var refusal *lint.Refusal
 	if !errors.As(err, &refusal) {
@@ -132,8 +138,10 @@ func TestAKitOutsideTheFormatIsRefusedFileByFile(t *testing.T) {
 		}
 		paths[f.Path] = true
 	}
-	if !paths["logos/primary.svg"] {
-		t.Errorf("the refusal does not name the drawing that runs a script: %v", refusal.Findings)
+	for _, p := range []string{"logos/primary.svg", "notes.txt", brandformat.EntryPath} {
+		if !paths[p] {
+			t.Errorf("the refusal names nothing at %s: %v", p, refusal.Findings)
+		}
 	}
 }
 

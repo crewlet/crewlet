@@ -32,6 +32,8 @@ func (s rankedSearcher) Search(context.Context, knowledge.Query) knowledge.Resul
 // pageSkills serves one tool skill read from a named page.
 type pageSkills struct{ loaded skills.Loaded }
 
+func (p pageSkills) Keys() []string { return []string{"skill:page"} }
+
 func (p pageSkills) Load(key string) (skills.Loaded, bool) {
 	if key != "deploys" {
 		return skills.Loaded{}, false

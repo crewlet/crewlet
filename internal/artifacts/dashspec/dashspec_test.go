@@ -130,7 +130,7 @@ func TestABoardOutsideTheFormatIsRefusedNamingTheField(t *testing.T) {
 		change func(spec map[string]any)
 		want   string
 	}{
-		{"an unknown field", func(s map[string]any) { s["widget"] = []any{} }, `unknown field "widget"`},
+		{"an unknown field", func(s map[string]any) { s["widget"] = []any{} }, "widget is not a key the dashboard format carries: the top level of dashboard.json takes v, title, params, datasets, widgets"},
 		{"another format version", func(s map[string]any) { s["v"] = 2 }, "v: is 2"},
 		{"a widget over no dataset", func(s map[string]any) { at(s, "widgets", 0)["dataset"] = "nope" },
 			`widgets[0].dataset: "nope" is not a dataset`},

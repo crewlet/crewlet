@@ -13,7 +13,7 @@ description: >
 
 These are the tools of a person's Crewlet company, served to you at the
 company's `/operator/mcp` endpoint under the person's own credential:
-`list_artifacts`, `get_artifact`, `list_dashboard_sources`, `get_company_brand`,
+`list_artifacts`, `get_artifact`, `list_dashboard_sources`, `get_artifact_format`, `get_company_brand`,
 `create_artifact`, `publish_artifact`, `update_artifact`, `share_artifact`,
 `unshare_artifact`, `upload_artifact_asset`, `create_artifact_folder` and
 `move_artifact`, and the datastore's `read_artifact_data`,
@@ -352,6 +352,12 @@ as any page, framed on its own.
 - **A brand kit is drafted, then adopted.** Anybody may draft one as a `brand`
   artifact; only an administrator adopts a version, and until then nothing
   takes it.
+- **Read the brand format before you write `brand.json`.**
+  `get_artifact_format` with `kind: "brand"` lists every key with its type and
+  rule, the one-source rule for a typeface, the logo and SVG rules and an
+  example that reads clean. Write only what it lists: never probe the format
+  with keys you know to be wrong. A kit holds `brand.json` and the files it
+  names, nothing else (no notes file).
 
 ## Filing artifacts in folders
 
@@ -400,5 +406,10 @@ as any page, framed on its own.
   should. Stop, report what was done and what is left, and let the next turn
   continue.
 - A policy refusal lists every finding at once. Fix them all, then publish
-  again.
+  again. A refusal of a closed format (a brand kit, a deck, a canvas, a
+  dashboard, a doc's index) points at `get_artifact_format`: read it before the
+  next attempt rather than guessing.
+- Told to stop retrying a tool: stop. Raise a blocker on the work item with
+  what you tried and the last refusal, finish what does not depend on it and
+  end the turn.
 <!-- contract:end -->

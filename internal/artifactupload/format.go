@@ -37,7 +37,11 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 	case artifacts.FormatNone:
 		return nil
 	case artifacts.FormatSlides:
-		deck, err := slideformat.Read(versionSource{ctx: ctx, run: r, m: m})
+		read := slideformat.Read
+		if r.brings(slideformat.IndexPath) {
+			read = slideformat.Check
+		}
+		deck, err := read(versionSource{ctx: ctx, run: r, m: m})
 		var refused *slideformat.Refused
 		if errors.As(err, &refused) {
 			return slideRefusal(refused)
@@ -48,7 +52,11 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 		r.formatted = deck
 		return nil
 	case artifacts.FormatDoc:
-		doc, err := docindex.Read(versionSource{ctx: ctx, run: r, m: m}, m.Entry)
+		read := docindex.Read
+		if r.brings(docindex.IndexPath) {
+			read = docindex.Check
+		}
+		doc, err := read(versionSource{ctx: ctx, run: r, m: m}, m.Entry)
 		var refused *docindex.Refused
 		if errors.As(err, &refused) {
 			return docRefusal(refused)
@@ -59,7 +67,11 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 		r.formatted = doc
 		return nil
 	case artifacts.FormatDashboard:
-		board, err := dashspec.Read(versionSource{ctx: ctx, run: r, m: m})
+		read := dashspec.Read
+		if r.brings(dashspec.EntryPath) {
+			read = dashspec.Check
+		}
+		board, err := read(versionSource{ctx: ctx, run: r, m: m})
 		var invalid *dashspec.Invalid
 		if errors.As(err, &invalid) {
 			return boardRefusal(invalid)
@@ -85,6 +97,17 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 	}
 	return fmt.Errorf("artifactupload: a %s artifact's format %q is not one this pipeline "+
 		"validates", r.kind, spec.Format)
+}
+
+// brings reports the publish writes new bytes for the file at p: an index this
+// publish writes is held to its format as written today ([jsonform.Decode]),
+// and one it carries from the version before is read as it was stored
+// ([jsonform.Stored]), so a publish that changes one slide of a deck
+// accepted before ADR-0059 tightened its keys is not refused for keys it never
+// touched.
+func (r *run) brings(p string) bool {
+	f := r.files[p]
+	return f != nil && !f.carried
 }
 
 // slideRefusal is a deck's refusal in the linter's shape, so a publish
@@ -198,7 +221,11 @@ func (v versionSource) Read(p string) ([]byte, error) {
 // canvas for the search text. The entry is canvas.json already: the kind's
 // entry rule fixes it.
 func (r *run) checkCanvas(v versionSource) error {
-	canvas, err := canvasformat.Read(v, v.m)
+	read := canvasformat.Read
+	if r.brings(canvasformat.Path) {
+		read = canvasformat.Check
+	}
+	canvas, err := read(v, v.m)
 	var refused *canvasformat.Error
 	if errors.As(err, &refused) {
 		return designRefusal(refused.Problems...)

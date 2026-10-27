@@ -819,6 +819,15 @@ func Catalogue() []Instrument {
 				"climb in it is a model that cannot keep to the brief's shape.",
 		},
 		{
+			Name: ToolPolicyRefusalLoops, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool"},
+			Shows: "Runs of policy refusals a seat's or a worker's write tool answered in a " +
+				"row on one target until it reached the limit (internal/tools." +
+				"PolicyRefusalLimit), each counted once when it did, by `tool`: the model was " +
+				"told to stop retrying and raise a blocker. A climb names a tool whose " +
+				"contract the model cannot see or cannot meet.",
+		},
+		{
 			Name: AssistantBriefRowsDropped, Kind: KindCounter, Unit: UnitCount,
 			Shows: "Records a brief cited (a row, or its recommendation's press) that the " +
 				"engine left out because the record was not in what its turn read, or " +
