@@ -300,8 +300,8 @@ func TestADeliverableAddressIsOneGitHubReaches(t *testing.T) {
 	}
 }
 
-// AN APP FOR AN ADDRESS GITHUB CANNOT REACH IS CREATED WITH ITS WEBHOOK OFF,
-// never pointed at a placeholder: an inactive hook is a state GitHub's own
+// AN APP FOR AN ADDRESS GITHUB CANNOT REACH IS CREATED WITH NO WEBHOOK, never
+// pointed at a placeholder: an app with no webhook is a state GitHub's own
 // settings page shows, and an unreachable one fails every delivery while the
 // app reads as healthy.
 func TestAManifestGitHubCannotDeliverToHasNoWebhook(t *testing.T) {
