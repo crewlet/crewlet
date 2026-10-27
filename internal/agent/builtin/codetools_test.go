@@ -68,8 +68,11 @@ type codeHost struct {
 	detail  code.RepoDetail
 	listing []code.RepoSummary // the repos listing; the one repository when nil
 	refs    map[string]string  // whole ref → oid
-	floor   statelog.Position
-	at      statelog.Position
+	// moved is where each ref last moved, the push that set it (movedAt):
+	// below at, as every row a read answers is below its checkpoint.
+	moved map[string]statelog.Position
+	floor statelog.Position
+	at    statelog.Position
 
 	// replaced, set, is the repository every read BY NAME after the first
 	// names: a name deleted and declared again between two reads — and a
@@ -86,14 +89,29 @@ type codeHost struct {
 
 var _ builtin.CodeReader = (*codeHost)(nil)
 
+// newCodeHost is the code host holding site: its refs each last moved at a
+// position of its own, between this node's own floor and the checkpoint every
+// read answers at, so a read's floor says which of the three it was given.
 func newCodeHost() *codeHost {
 	return &codeHost{
 		detail: siteDetail(),
 		refs: map[string]string{
 			"refs/heads/main": mainOID, "refs/heads/feature": featureOID, "refs/tags/v1": mainOID,
 		},
-		floor: codeAt(9), at: codeAt(12),
+		moved: map[string]statelog.Position{
+			"refs/heads/main": codeAt(10), "refs/heads/feature": codeAt(11), "refs/tags/v1": codeAt(8),
+		},
+		floor: codeAt(3), at: codeAt(12),
 	}
+}
+
+// movedAt is where ref last moved: its own position, or the log's first for a
+// ref a case added without one.
+func (h *codeHost) movedAt(ref string) statelog.Position {
+	if at, ok := h.moved[ref]; ok {
+		return at
+	}
+	return codeAt(1)
 }
 
 func (h *codeHost) named(name string) (code.RepoRef, error) {
@@ -144,7 +162,7 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 			}
 			sort.Strings(names)
 			for _, name := range names {
-				out.Refs = append(out.Refs, code.RefRow{Ref: name, OID: h.refs[name], Position: h.at})
+				out.Refs = append(out.Refs, code.RefRow{Ref: name, OID: h.refs[name], Position: h.movedAt(name)})
 			}
 		}
 		return out, nil
@@ -169,7 +187,7 @@ func (h *codeHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 	}
 	for _, name := range names {
 		if oid, ok := h.refs[name]; ok {
-			return code.RefAnswer{Repo: ref, Ref: name, OID: oid, Position: h.at}, nil
+			return code.RefAnswer{Repo: ref, Ref: name, OID: oid, Moved: h.movedAt(name), Position: h.at}, nil
 		}
 	}
 	return code.RefAnswer{}, fmt.Errorf("%w: repository %s holds no live %s", code.ErrRefNotFound, q.Repo,
@@ -479,24 +497,30 @@ func mustActor(t *testing.T, ctx context.Context) builtin.Actor {
 // is at the seat's level (linearizable); the repository is read once a turn and
 // never again in it; a ref is resolved each time a call names one and an id
 // never is; and every read by object id carries the furthest of the node's own
-// floor and the positions its refs were read at, so the copy that answers holds
-// both. The operator surface has no turn, and reads the repository once a
-// call.
+// floor and the positions its refs LAST MOVED at, so the copy that answers
+// holds both — never the checkpoint a resolve read its ref at, which its own
+// barrier takes past every push, so a copy current to them all would sync for
+// nothing to answer it. A landed-in read is judged up to its tip's own move.
+// The operator surface has no turn, and reads the repository once a call.
 //
-// Mutation: resolveRev resolving an oid as a ref, or repo() reading past the
-// turn's lookups → red.
+// Mutation: resolveRev resolving an oid as a ref, repo() reading past the
+// turn's lookups, or a read floored at where its ref was read (the resolve's
+// checkpoint) → red.
 func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	t.Parallel()
 	host := newCodeHost()
 	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
 	turn := codeTurn(t)
+	floorOf := func(q code.GitQuery) []statelog.Position { return q.Fresh.Floors }
+	main, feature := host.movedAt("refs/heads/main"), host.movedAt("refs/heads/feature")
 
 	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
 	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main", "path": "README.md"})
 	_, _, gits := host.asked()
 	if got := gits[len(gits)-1].Fresh; got.Level != statelog.ReadSession ||
-		!slices.Equal(got.Floors, []statelog.Position{host.at}) {
-		t.Errorf("a read by a ref's id carried %+v, want a session floor at the ref's position %v", got, host.at)
+		!slices.Equal(got.Floors, []statelog.Position{main}) {
+		t.Errorf("a read by a ref carried %+v, want a session floor where the ref last moved, %v — never "+
+			"where the resolve read it, %v", got, main, host.at)
 	}
 	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID, "path": "README.md"})
 	_, resolvesBefore, gits := host.asked()
@@ -504,9 +528,18 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 		t.Errorf("a read by an id carried %+v, want this node's own floor %v", got, host.floor)
 	}
 	callCode(t, reg, turn, builtin.CodeDiffTool, map[string]any{"repo": "site", "base": "main", "head": "feature"})
+	if _, _, gits = host.asked(); !slices.Equal(floorOf(gits[len(gits)-1]), []statelog.Position{feature}) {
+		t.Errorf("a diff of main and feature was floored at %v, want the later of their moves, %v",
+			floorOf(gits[len(gits)-1]), feature)
+	}
 	callCode(t, reg, turn, builtin.CodeResolveTool, map[string]any{"repo": "site", "ref": "v1"})
 	callCode(t, reg, turn, builtin.CodeLandedInTool, map[string]any{"repo": "site", "commit": featureOID,
 		"target": "main"})
+	if _, _, gits = host.asked(); gits[len(gits)-1].LandedIn.At != main ||
+		!slices.Equal(floorOf(gits[len(gits)-1]), []statelog.Position{main}) {
+		t.Errorf("a landed-in read of main was judged up to %v and floored at %v, want both at main's own "+
+			"move %v", gits[len(gits)-1].LandedIn.At, floorOf(gits[len(gits)-1]), main)
+	}
 
 	reads, resolves, gits := host.asked()
 	if n := readsOf(reads, code.ReadRepo); n != 1 {
@@ -533,6 +566,10 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 		at := q.Fresh.Floor(topics.CodeLogStream)
 		if before, err := at.Before(host.floor); err != nil || before {
 			t.Errorf("a git read was floored at %v, below the node's own %v", at, host.floor)
+		}
+		if below, err := at.Before(host.at); err != nil || !below {
+			t.Errorf("a git read was floored at %v, at or past the checkpoint %v its refs were read at", at,
+				host.at)
 		}
 	}
 

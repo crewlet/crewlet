@@ -376,6 +376,15 @@ type RefAnswer struct {
 	// Ref is the whole ref it resolved to.
 	Ref string `json:"ref"`
 	OID string `json:"oid"`
+	// Moved is the position of the record that last moved the ref — the
+	// push that set it to OID, its row's own position — at or before
+	// Position. WHAT A READ OF OID IS FLOORED AT: OID's objects landed in
+	// that record or an earlier one, so every copy of the repository at or
+	// past Moved holds them, and the target's moves up to its tip are every
+	// move up to Moved. Never Position, which a linearizable read takes past
+	// its own barrier, so a copy current to every push still sits below it
+	// and a floor there would make a git node sync for nothing.
+	Moved statelog.Position `json:"moved"`
 	// Position is the checkpoint the ref was read at, read in the read's
 	// own transaction.
 	Position statelog.Position `json:"position"`
@@ -758,9 +767,10 @@ type LandedInQuery struct {
 	// Target is the whole ref asked about (refs/heads/main).
 	Target string `json:"target"`
 	// TargetOID is the commit Target named when the asker resolved it — a
-	// whole id — and At the position that resolution read it at: the git
-	// node's copy is brought to At before it judges, so the moves of Target
-	// up to that tip are in the index it searches.
+	// whole id — and At the position of the record that moved Target there
+	// ([RefAnswer.Moved]): the git node's copy is brought to At before it
+	// judges, so the moves of Target up to that tip — every move it had when
+	// it was resolved — are in the index it searches.
 	TargetOID string            `json:"target_oid"`
 	At        statelog.Position `json:"at"`
 }
@@ -984,7 +994,7 @@ func (q LandedInQuery) validate() error {
 		return fmt.Errorf("%w: landed_in.target_oid: %q is not the whole id of the tip the target was resolved to",
 			ErrInvalid, q.TargetOID)
 	case q.At.IsZero() || q.At.Stream != topics.CodeLogStream:
-		return fmt.Errorf("%w: landed_in.at: %s is not the code log position the target was resolved at",
+		return fmt.Errorf("%w: landed_in.at: %s is not the code log position the target last moved at",
 			ErrInvalid, q.At)
 	}
 	return nil
@@ -1050,7 +1060,8 @@ type LandedInAnswer struct {
 	// Commit is the commit asked about, whole.
 	Commit string `json:"commit"`
 	// Target is the whole ref, TargetOID the tip it was judged against and
-	// At the position that tip was resolved at — the query's own.
+	// At the position of the record that moved the target there — the
+	// query's own.
 	Target    string            `json:"target"`
 	TargetOID string            `json:"target_oid"`
 	At        statelog.Position `json:"at"`

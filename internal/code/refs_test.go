@@ -111,38 +111,46 @@ func TestARefsListingPagesByName(t *testing.T) {
 // RESOLVEREF PREFERS HEADS, THEN TAGS: a short name is a branch where one is
 // live, else a tag — a branch deleted falls through to a tag of its name — a
 // whole ref is itself, and a name none of them hold is not found, naming
-// every name tried. The answer carries the repository and the checkpoint it
-// was read at. A name no ref can have, no level, no asker and a deleted
-// repository are refused, the last in the sentence the code host's admission
-// says.
+// every name tried. The answer carries the repository, the checkpoint it was
+// read at, and where the ref last moved: the position of the push that set
+// it, never a later one's or the checkpoint's. A name no ref can have, no
+// level, no asker and a deleted repository are refused, the last in the
+// sentence the code host's admission says.
 //
-// Mutation: the tags tried before the heads → v1 resolves to the tag.
+// Mutation: the tags tried before the heads → v1 resolves to the tag; the
+// answer's Moved the checkpoint → v1 moved at the read.
 func TestResolveRefPrefersHeadsThenTags(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	id := seededRepo(t, n, "app")
-	n.push(id, entry("p1",
+	p1 := n.push(id, entry("p1",
 		set("refs/heads/v1", code.ZeroOID, oidOf("branch v1")),
 		set("refs/tags/v1", code.ZeroOID, oidOf("tag v1")),
 		set("refs/tags/rel", code.ZeroOID, oidOf("rel")),
 		set("refs/heads/old", code.ZeroOID, oidOf("branch old")),
 		set("refs/tags/old", code.ZeroOID, oidOf("tag old"))))
 	n.push(id, entry("p2", set("refs/heads/old", oidOf("branch old"), code.ZeroOID)))
+	p3 := n.push(id, entry("p3", set("refs/heads/rel", code.ZeroOID, oidOf("branch rel"))))
+	n.push(id, entry("p4", set("refs/heads/later", code.ZeroOID, oidOf("later"))))
 	resolve := func(ref string) (code.RefAnswer, error) {
 		return n.reader.ResolveRef(t.Context(), code.RefQuery{Repo: "app", Ref: ref, Fresh: stale, Asker: asker})
 	}
-	for ref, want := range map[string][2]string{
-		"v1":            {"refs/heads/v1", oidOf("branch v1")},
-		"refs/tags/v1":  {"refs/tags/v1", oidOf("tag v1")},
-		"rel":           {"refs/tags/rel", oidOf("rel")},
-		"old":           {"refs/tags/old", oidOf("tag old")},
-		"refs/heads/v1": {"refs/heads/v1", oidOf("branch v1")},
+	for ref, want := range map[string]struct {
+		ref, oid string
+		moved    statelog.Position
+	}{
+		"v1":            {"refs/heads/v1", oidOf("branch v1"), p1.Position},
+		"refs/tags/v1":  {"refs/tags/v1", oidOf("tag v1"), p1.Position},
+		"rel":           {"refs/heads/rel", oidOf("branch rel"), p3.Position},
+		"refs/tags/rel": {"refs/tags/rel", oidOf("rel"), p1.Position},
+		"old":           {"refs/tags/old", oidOf("tag old"), p1.Position},
+		"refs/heads/v1": {"refs/heads/v1", oidOf("branch v1"), p1.Position},
 	} {
 		got, err := resolve(ref)
-		if err != nil || got.Ref != want[0] || got.OID != want[1] || got.Repo.ID != id ||
-			got.Position != n.waiter.Committed() {
-			t.Errorf("ResolveRef(%s) = %+v, %v; want %s at %s, read at the checkpoint %v", ref, got, err,
-				want[0], want[1], n.waiter.Committed())
+		if err != nil || got.Ref != want.ref || got.OID != want.oid || got.Repo.ID != id ||
+			got.Position != n.waiter.Committed() || got.Moved != want.moved {
+			t.Errorf("ResolveRef(%s) = %+v, %v; want %s at %s, moved at %v and read at the checkpoint %v", ref,
+				got, err, want.ref, want.oid, want.moved, n.waiter.Committed())
 		}
 	}
 	for ref, names := range map[string]string{

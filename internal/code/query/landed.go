@@ -14,9 +14,9 @@ import (
 // WHETHER A COMMIT LANDED IN A TARGET, AND WHICH PUSH LANDED IT. The first half
 // is one ancestry check against the tip the asker was shown (`git merge-base
 // --is-ancestor <commit> <tip>`); the second is the copy's index of pushes
-// (cache.Provenance): the target's moves in log order up to the position that
-// tip was resolved at, searched with ancestry checks — never a walk of the log
-// or of history. The landing push is the first move after which EVERY move
+// (cache.Provenance): the target's moves in log order up to the move that put
+// that tip there, searched with ancestry checks — never a walk of the log or
+// of history. The landing push is the first move after which EVERY move
 // kept the commit reachable, so a commit a force-push removed and a later push
 // put back is answered with the push that put it back.
 //

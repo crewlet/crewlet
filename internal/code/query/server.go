@@ -441,9 +441,10 @@ func (r *read) held() error {
 // buys an answer the copy cannot give; what a floor buys is a copy holding the
 // asker's own pushes, which step 7's second look covers for every other id.
 //
-// A LANDED-IN READ is brought to the position its tip was resolved at, at
-// least: the moves of the target up to that tip are what its index must hold
-// to name the push that landed the commit there.
+// A LANDED-IN READ is brought to the position its tip's own move landed at
+// (code.LandedInQuery.At), at least: the moves of the target up to that tip are
+// what its index must hold to name the push that landed the commit there, and
+// no move of the target lies between that one and the read that resolved it.
 //
 // The asker's floor is on the code log: a floor on any other is refused with
 // the request ([code.GitQuery.Validate]).

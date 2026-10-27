@@ -1667,15 +1667,14 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, name string, asker Princi
 	if !g.MayRead() {
 		return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
 	}
-	var head sql.NullString
-	err = tx.QueryRowContext(ctx, liveRefSQL, id, branchPrefix+v.ref.DefaultBranch).Scan(&head)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	head, _, _, err := liveRefIn(ctx, tx, id, branchPrefix+v.ref.DefaultBranch)
+	if err != nil {
 		return fmt.Errorf("code: read %s's head: %w", name, err)
 	}
 	// THE COUNTS ARE THE ROW'S, kept by the applier as it moves the refs:
 	// counted here they were a walk of every ref the namespace holds,
 	// tombstones included, on every detail read.
-	summary := v.summary(head.String)
+	summary := v.summary(head)
 	summary.Access = g.Access.String()
 	out.Repo = &RepoDetail{RepoSummary: summary,
 		Branches: v.branches, Tags: v.tags, Tombstones: v.tombstones,
@@ -2030,9 +2029,11 @@ func cutPublishCursor(s string) (int64, string, bool) {
 // claim; the repository, a deleted or purging one answered [ErrRepoNotFound]
 // in [RepoGone]'s sentence for its state, which the code host's admission
 // says too; the asker's grant ([ErrNotPermitted]); then the ref — the whole
-// ref the query names, or a short name as a branch and then as a tag. A
-// deleted ref is absent, and none found is [ErrRefNotFound] naming every
-// name tried. Its scope is the name's, as [Reader.Resolve]'s is.
+// ref the query names, or a short name as a branch and then as a tag — with
+// the position of the record that last moved it ([RefAnswer.Moved]), its
+// row's own, read in the same lookup. A deleted ref is absent, and none found
+// is [ErrRefNotFound] naming every name tried. Its scope is the name's, as
+// [Reader.Resolve]'s is.
 func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) {
 	if err := pointLevel(q.Fresh); err != nil {
 		return RefAnswer{}, err
@@ -2080,14 +2081,14 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 			return fmt.Errorf("%w: %s", ErrNotPermitted, g.ReadRefusal())
 		}
 		for _, name := range names {
-			var oid string
-			switch err := tx.QueryRowContext(ctx, liveRefSQL, id, name).Scan(&oid); {
-			case errors.Is(err, sql.ErrNoRows):
-				continue
+			oid, moved, found, err := liveRefIn(ctx, tx, id, name)
+			switch {
 			case err != nil:
 				return fmt.Errorf("code: read %s of %s: %w", name, q.Repo, err)
+			case !found:
+				continue
 			}
-			out = RefAnswer{Repo: v.ref, Ref: name, OID: oid, Position: cp.At}
+			out = RefAnswer{Repo: v.ref, Ref: name, OID: oid, Moved: moved, Position: cp.At}
 			return nil
 		}
 		return fmt.Errorf("%w: repository %s holds no live %s", ErrRefNotFound, q.Repo,
@@ -2121,6 +2122,24 @@ func refNames(ref string) ([]string, error) {
 		return nil, fmt.Errorf("%w: ref: %q is no ref, branch or tag name", ErrInvalid, ref)
 	}
 	return names, nil
+}
+
+// liveRefIn is repository id's live ref by its whole name, read in tx: the
+// object it names, and the position of the record that last moved it — its
+// row's, which every move of the ref writes (apply_push.go) — or false where
+// no live ref has the name.
+func liveRefIn(ctx context.Context, tx *sql.Tx, id, ref string) (string, statelog.Position, bool, error) {
+	var (
+		oid   string
+		moved int64
+	)
+	switch err := tx.QueryRowContext(ctx, liveRefSQL, id, ref).Scan(&oid, &moved); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", statelog.Position{}, false, nil
+	case err != nil:
+		return "", statelog.Position{}, false, err
+	}
+	return oid, unpacked(moved), true, nil
 }
 
 // mayReadIn refuses an asker that may not read repository id, judged from
@@ -2437,9 +2456,10 @@ const (
 		ORDER BY repo_id, pattern`
 	// repoGrantSQL is what a grant reads of one repository's row.
 	repoGrantSQL = `SELECT name, owner_kind, owner, visibility FROM code_repos WHERE id = ?`
-	// liveRefSQL is one live ref's target by its whole name: a repository's
-	// head, and a ref a RefQuery names.
-	liveRefSQL = `SELECT target FROM code_refs INDEXED BY ` + refsKey + `
+	// liveRefSQL is one live ref's target and the position it last moved at,
+	// by its whole name: a repository's head, and a ref a RefQuery names
+	// (liveRefIn).
+	liveRefSQL = `SELECT target, position FROM code_refs INDEXED BY ` + refsKey + `
 		WHERE repo_id = ? AND ref = ? AND target != ''`
 	// refsUnderSQL is a page of the live refs between two names, by name —
 	// over the live refs' partial index, its predicate verbatim

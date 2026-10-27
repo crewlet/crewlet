@@ -43,12 +43,17 @@ import (
 // level — linearizable on both surfaces ([seatReadLevel]), so an answer
 // includes every push that landed before the call. What an object id names is
 // the same object on every node at every position, so a read by one needs no
-// level: it is asked with the caller's floor on the code log (its own pushes,
-// and the position a ref it named was resolved at) as the git node's SYNC
-// level, never a barrier. A turn pays one barrier per repository it names —
-// the repository is resolved ONCE A TURN ([CodeDeps.repo], kept on the turn's
-// lookups) — and one per ref a call names; a call that names commits by id
-// pays none beyond the repository's.
+// level: it is asked with the caller's floor on the code log — its own pushes,
+// and where each ref it named last MOVED, the push that set it — as the git
+// node's SYNC level, never a barrier. NEVER WHERE THE RESOLVE READ THE REF: a
+// linearizable read's checkpoint is past its own barrier, so a copy current to
+// every push of the repository still sits below it, and a floor there made the
+// git node run a sync round for nothing on every read by a ref; floored at the
+// ref's move, a current copy answers as it stands, and only one behind the
+// commits a call names syncs first. A turn pays one barrier per repository it
+// names — the repository is resolved ONCE A TURN ([CodeDeps.repo], kept on the
+// turn's lookups) — and one per ref a call names; a call that names commits by
+// id pays none beyond the repository's.
 //
 // # Text somebody else wrote is fenced
 //
@@ -323,8 +328,9 @@ func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
 
 // resolveRef is a NAME as a ref of repo: ONE code.resolve_ref at the seat's
 // level — linearizable, the one read about a ref that pays a barrier —
-// answering the ref's row: its oid, its whole name and the position the read
-// saw it at, which a read by object id is then floored at. THE ONE
+// answering the ref's row: its oid, its whole name, the position the read saw
+// it at, and where it last moved, which a read by object id is then floored
+// at ([resolvedRev.at]). THE ONE
 // code.RefQuery in this package: code_resolve's `ref` and code_landed_in's
 // `target` call it directly (a ref, never an id), and [CodeDeps.resolveRev] for
 // a revision that is not an id.
@@ -354,12 +360,15 @@ type resolvedRev struct {
 	ref *code.RefAnswer
 }
 
-// at is the position the revision's ref was read at, zero for an id.
+// at is what a read of the revision is floored at: the position of the record
+// that last moved its ref ([code.RefAnswer.Moved]), where the commit it names
+// had landed at the latest — zero for an id, whose read names no floor of its
+// own.
 func (r resolvedRev) at() statelog.Position {
 	if r.ref == nil {
 		return statelog.Position{}
 	}
-	return r.ref.Position
+	return r.ref.Moved
 }
 
 // revArg is the revision a call names in arg, or the refusal of an argument
@@ -424,10 +433,10 @@ func (d CodeDeps) resolvePair(ctx context.Context, turn *turnctx.Turn, tool stri
 }
 
 // gitFresh is what a read by object id is asked with: the furthest of this
-// node's own floor on the code log and the positions the call's refs were read
-// at — a SYNC level for the copy that answers, so it holds the commits those
-// refs named and this node's own pushes — or none, which reads the copy as it
-// stands.
+// node's own floor on the code log and the positions the call's refs last
+// moved at — a SYNC level for the copy that answers, so it holds the commits
+// those refs named and this node's own pushes — or none, which reads the copy
+// as it stands.
 func (d CodeDeps) gitFresh(revs ...resolvedRev) statelog.Freshness {
 	floor := d.Code.Floor()
 	for _, r := range revs {
@@ -1363,10 +1372,13 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	resolved := resolvedRev{oid: tip.OID, ref: &tip}
+	// THE TIP'S OWN MOVE, never where the resolve read it: the target's moves
+	// up to the one that put the tip there are every move it had when it was
+	// resolved, which is all the index must hold.
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitLandedIn,
 		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(commit, resolved),
 		LandedIn: &code.LandedInQuery{Commit: commit.oid, Target: tip.Ref, TargetOID: tip.OID,
-			At: tip.Position}})
+			At: resolved.at()}})
 	if refusal != nil {
 		return *refusal, nil
 	}
