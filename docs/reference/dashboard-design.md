@@ -772,8 +772,10 @@ empty, the field says where the task lands — the project's default assignee
 field's help line is its control's description, so a screen reader hears it
 with the field. `applied` opens the new task by the
 key the engine minted; `pending` closes with the not-yet-applied toast; a
-refusal stays in the sheet in the engine's own sentence, which names the
-argument it refused (drawn as a value, not in backticks). What the engine would
+refusal stays in the sheet in the words the engine wrote for a person (a
+title over its cap is "The title is too long"), or, for a refusal nobody has
+worded for one yet, in its kind's own sentence: never the tool's sentence to a
+model, which names arguments (ADR-0060). What the engine would
 refuse is said on the field BEFORE the press: the title and the description are
 counted in the engine's unit (UTF-8 bytes, against `worklet.MaxTitle`, 256, and
 `MaxBody`, 32 KiB, held by `contract/work.ts`), counting down in the last fifth

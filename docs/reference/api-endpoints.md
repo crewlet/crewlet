@@ -5724,13 +5724,19 @@ record's refusal, and its `detail` says what did land — with that record's
 outcome and position — because the earlier change is on every node and "not
 made" would send a person to redo it.
 
-A refusal is the engine's envelope — `{error, detail}` with `tool` and the
+A refusal is the engine's envelope, `{error, message}` with `tool` and the
 object the arguments named (`item`, `page`, `project`, `handle`) beside them,
-so a refusal or an unknown outcome says which object to read. A tool's refusal
-is its own sentence, which names the argument it refused, and the authority
-table's adds the rule's `reason` and the `grants` that would have admitted the
-caller. **The status is read from the refusal's CLASS, never from its
-sentence**, through the one mapping the [human write
+so a refusal or an unknown outcome says which object to read. **Every sentence
+on it is written for a person** (ADR-0060). `message` is the code's own
+sentence. `detail`, where present, is the refusal in a person's words, naming
+what to change or whom to ask; a refusal nobody has worded for a person yet
+carries **no** `detail`, and its `message` stands alone. The sentence the same
+tool answers a model with (naming the tool, its arguments and what to call
+next) is never on this answer. The authority table's refusal adds the rule's
+`reason` and the `grants` that would have admitted the caller; an argument the
+tool does not read is named in `fields`; and the route's own refusals below
+carry the code and `tool` alone. **The status is read from the refusal's
+CLASS, never from its sentence**, through the one mapping the [human write
 surface](#the-human-write-surface) answers with too. The transport's own codes:
 
 | `error` | Status | When |
@@ -5751,7 +5757,8 @@ surface](#the-human-write-surface) answers with too. The transport's own codes:
 | `draining` | `503` | This node is [draining](#during-a-drain) |
 | `starting` | `503` | This node is [still starting](#while-a-node-is-starting): its listener is bound and the surface that serves this route is not up yet; `Retry-After: 10` |
 
-And the tool's own refusal, carrying the tool's sentence as `detail`:
+And the tool's own refusal, carrying its person's words as `detail` where it
+has them:
 
 | `error` | Status |
 |---|---|
@@ -5769,7 +5776,7 @@ answered is `503` `unavailable`, never a refusal: whether it landed is
 unknown, so the answer carries **`outcome: "unknown"`** and the `op_id`, and
 says to send it again with the same key. A tool that made its write and could
 not confirm it — the broker's acknowledgement was lost — is answered the same
-way, with the tool's own sentence as `tool_detail`; and one this node's
+way, naming the object to read; and one this node's
 operation ledger cannot vouch for adds `unvouched: true` and **no**
 `Retry-After`, because the same request asked here answers the same way until
 the write reaches this node — ask another node, or read whether it landed.
@@ -5881,29 +5888,33 @@ so there is nothing to route.
 
 ### What a request answers
 
-Through the **one mapping** the act route answers with — read from the
-refusal's class and cause, never from its sentence — so a status and a code
-mean the same thing on every write surface:
+Through the **one mapping** the act route answers with, read from the
+refusal's class and cause, never from its sentence, so a status and a code
+mean the same thing on every write surface. As there, a refusal's `detail` is
+written for a person, and is present only where the refusal has been worded
+for one; otherwise its `message`, the code's own sentence, stands alone
+(ADR-0060):
 
 | Status | `error` | When | Carries |
 |---|---|---|---|
 | `200` | | The write was **applied** on this node, so the next read here sees it | the tool's own receipt, its `outcome`, `position`, `op_id` and `caveats` |
 | `202` | | The write is **pending**: durable, and not yet applied on this node | the same, and the `position` to read at |
-| `400` | `invalid_body` | The body is malformed, names a different object than the path, or carries an argument the tool does not declare | `detail` naming it |
+| `400` | `invalid_body` | The body is malformed, names a different object than the path, or carries an argument the tool does not declare | the undeclared arguments in `fields` |
 | `401` | `invalid_token` | Nobody presented a credential | |
-| `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `detail`, worded exactly as a seat and your assistant are told it, beside `reason` and `grants` (or the window) |
-| `403` | `forbidden` | The domain forbids this caller the gesture — rewriting somebody else's remark | `detail`: the domain's own sentence |
+| `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `reason` and `grants` (or the window), and the verb in `action` where the route decided it itself |
+| `403` | `forbidden` | The domain forbids this caller the gesture, such as rewriting somebody else's remark | `detail` in a person's words, where the refusal has them |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `If-Match`, a title taken, a race lost — or the state the request needs is not there | `detail`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `If-Match`, a title taken, a race lost — or the state the request needs is not there | `message`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
-| `422` | `invalid` | The domain refused the write on its own rules — a purge whose `?confirm=` names another item among them | `detail`: the domain's own sentence |
+| `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item among them | `detail` in a person's words, where the refusal has them |
 | `500` | `internal_error` | The engine failed at something of its own | nothing a retry changes; the detail is in the node's log |
 | `503` | `unavailable`, `no_active_revision`, `identity_unavailable` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — `"outcome": "unknown"` and the `op_id` to retry with, on every route, a tool-backed one included. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
 
-The `403` wording is the point of the `unauthorized` row: the three surfaces that serve
-these verbs refuse in ONE sentence, formed by one function, so a person told one
-thing by the dashboard and another by their assistant is never left asking
-which is wrong.
+The `unauthorized` row is one DECISION on all three surfaces that serve these
+verbs: a seat and your assistant read it in one sentence, formed by one
+function, and this surface answers the same rule's `reason` and `grants`, so a
+person told one thing by the dashboard and another by their assistant is never
+left asking which is wrong.
 
 ### A retry is the same operation
 

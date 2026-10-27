@@ -316,8 +316,12 @@ it in words for a model, naming the tool and argument it would use next; a
 person is told it in the words of the screen, and is never shown advice that
 names an argument they have no control for. Each caveat also says whether
 somebody has to act on it, which is what decides whether its toast stays
-until dismissed or goes by itself
-([ADR-0060](../../adr/0060-a-caveat-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md),
+until dismissed or goes by itself. A refusal follows the same rule: an agent
+is told what to change in its own terms, and a person is told in the words of
+the screen, or, where nobody has worded that refusal for a person yet, in the
+plain sentence for its kind ("Somebody changed this after you read it"),
+never in the agent's words
+([ADR-0060](../../adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md),
 [What it answers](../reference/api-endpoints.md#what-it-answers)).
 
 **The binding lives in the directory**, not on the token and not in the
