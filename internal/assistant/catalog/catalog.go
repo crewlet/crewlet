@@ -215,6 +215,14 @@ type Tool struct {
 	// (a row's origin, the backend that answered) or the call that asked
 	// it (the route a generic read named), in place of Trust.
 	TrustOf func(args Args, answer any) provenance.Trust
+	// Narrow are the arguments that narrow a read to less of what it reads
+	// (a search's words, a filter, a shorter window), named where a read is
+	// too large to show so the model and the person know how to ask for
+	// less ([narrowing]). EXPLICIT, never derived from the schema: an
+	// argument that widens (finished work included, a longer page) or
+	// merely pages or picks a view is not one. Each entry sends only query
+	// parameters [narrowingQuery] holds (TestEveryNarrowingArgumentNarrows).
+	Narrow []string
 	// Infer marks a read whose card is drawn from the answer's own shape
 	// ([cards.Infer]) rather than a declared spec, and whose model text is
 	// the answer itself, redacted, fenced and cut: a generic read, whose

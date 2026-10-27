@@ -100,6 +100,7 @@ func readTools() []Tool {
 	return []Tool{
 		{
 			Name: "search_work", Phrase: "search tasks",
+			Narrow: []string{"q"},
 			Description: "Find tasks by what they are about, ranked. Search before proposing a " +
 				"new task, so you do not file a duplicate.",
 			schema: object([]string{"q"}, map[string]*schema{
@@ -127,6 +128,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_tasks", Phrase: "list tasks",
+			Narrow: []string{"q", "assignee", "project", "status", "priority", "type", "tag", "due"},
 			Description: "List tasks by their fields: what is open, overdue or due soon, assigned to " +
 				"somebody, in a status, of a priority or a type, in a project. Lists are filtered " +
 				"to what the person may see.",
@@ -232,6 +234,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_my_work", Phrase: "read your work",
+			Narrow: []string{"unread"},
 			Description: "The person's own work: what is assigned to them, their priority order, " +
 				"the questions asked of them, or their task notices (inbox: mentions, assignments " +
 				"and comments, the Inbox screen's Updates). The Inbox screen's Needs you is not " +
@@ -328,6 +331,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_workload", Phrase: "read the workload",
+			Narrow: []string{"unit"},
 			Description: "Open work per assignee, agents and people alike: how much each holds, " +
 				"blocked and overdue.",
 			schema: object(nil, map[string]*schema{
@@ -405,6 +409,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_agent", Phrase: "read this agent",
+			Narrow: []string{"days"},
 			Description: "One seat now (its activity, phase and last turn), or every seat's turns " +
 				"per day over a window.",
 			schema: object(nil, map[string]*schema{
@@ -498,6 +503,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_turns", Phrase: "list this seat's turns",
+			Narrow: []string{"handle", "failed", "days"},
 			Description: "One seat's recent turns: outcome, model, tokens and duration, newest " +
 				"first, and for a failed turn why it failed. Rows the person may not read are " +
 				"left out.",
@@ -567,6 +573,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_spend", Phrase: "read token spend",
+			Narrow: []string{"handle", "days"},
 			Description: "Token spend over a window of company days, by agent, by model or by " +
 				"phase. By agent also lists each person's own assistant use, marked as a " +
 				"person's: say so, and leave it out when ranking the agents.",
@@ -602,6 +609,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_spend_series", Phrase: "read spend over time",
+			Narrow: []string{"days"},
 			Description: "Token spend per day or week over a window, the company's whole, or its " +
 				"largest groups. Use bucket week to compare this week with last week in one read.",
 			schema: object(nil, map[string]*schema{
@@ -680,6 +688,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "search_knowledge", Phrase: "search the knowledge base",
+			Narrow:      []string{"q"},
 			Description: "Search the company's pages, ranked, with the passage each matched on.",
 			schema: object([]string{"q"}, map[string]*schema{
 				"q": text("What to find, in plain words.", queryBytes),
@@ -772,6 +781,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_artifacts", Phrase: "list artifacts",
+			Narrow: []string{"kind", "q"},
 			Description: "The artifacts the person can open: documents, decks, sheets and " +
 				"dashboards, newest first.",
 			schema: object(nil, map[string]*schema{

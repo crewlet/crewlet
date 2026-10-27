@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -270,36 +269,53 @@ func fitAnswer(t Tool, trust provenance.Trust, b provenance.Boundary, answer str
 		t.Name, cards.ModelBytes)
 }
 
-// notNarrowing are the arguments that do not narrow a read: they name the one
-// record it is of, page through it or pick its view, or (a generic read's)
-// carry the request itself.
-var notNarrowing = map[string]bool{"limit": true, "cursor": true, "after": true,
-	"before": true, "before_id": true, "before_time": true, "next": true, "sort": true,
-	"view": true, "handle": true, "key": true, "id": true, "item": true, "route": true,
-	"path": true, "query": true}
+// narrowingQuery are the query parameters that narrow a read to less of what
+// it reads: a search's words, a filter that keeps only matching rows, a
+// window's bounds. THE ONE LIST, explicit rather than everything but a few:
+// a parameter that widens (`show_closed`, `archived`, `removed`, `snoozed`,
+// `history`, `previous`, `include_*`), pages (`limit`, `cursor`, `before_*`),
+// orders, groups or picks a view is left out, and so is any parameter the
+// list does not name. A generic read is offered the ones the API reference
+// documents for its route; a dedicated read's [Tool.Narrow] sends only these
+// (TestEveryNarrowingArgumentNarrows).
+var narrowingQuery = map[string]bool{
+	"q": true, "seat": true, "actor": true, "agent": true, "type": true, "source": true,
+	"category": true, "trace_id": true, "channel_id": true, "turn_id": true,
+	"work_key": true, "work_item": true, "failed": true, "feed_only": true, "since": true,
+	"until": true, "days": true, "model": true, "status": true, "status_group": true,
+	"assignee": true, "reporter": true, "watcher": true, "collaborator": true, "tag": true,
+	"priority": true, "project": true, "container": true, "unit": true, "kind": true,
+	"kinds": true, "task": true, "unread": true, "primary_only": true, "folder": true,
+	"label": true, "title": true, "asked_of": true, "asked_by": true, "has_open_asks": true,
+	"collection": true, "field": true, "due": true,
+}
 
-// narrowing is what a read takes that would narrow it, in the words a person
-// reads them in, in a stable order: the tool's own arguments, or for a generic
-// read ([Tool.Infer]) the query parameters the API reference documents for
-// the route it read. Every name is the engine's own (the catalogue's schema,
-// the reference's question table), never the answer's.
+// narrowWords are the arguments a person reads by other words than their
+// name.
+var narrowWords = map[string]string{"q": "the search words", "handle": "the seat"}
+
+// narrowing is what would narrow a read, in the words a person reads them in:
+// a dedicated read's [Tool.Narrow], or for a generic read ([Tool.Infer]) the
+// query parameters the API reference documents for the route it read that
+// [narrowingQuery] holds, sorted. Every name is the engine's own (the
+// catalogue's, the reference's), never the answer's.
 func narrowing(t Tool, route string) []string {
-	var names []string
-	switch {
-	case t.Infer:
-		names = slices.Sorted(slices.Values(queryParams(route)))
-	case t.schema != nil:
-		names = slices.Sorted(maps.Keys(t.schema.properties))
-	}
-	var out []string
-	for _, name := range names {
-		switch {
-		case notNarrowing[name]:
-		case name == "q":
-			out = append(out, "the search words")
-		default:
-			out = append(out, strings.ReplaceAll(name, "_", " "))
+	names := t.Narrow
+	if t.Infer {
+		names = nil
+		for _, name := range slices.Sorted(slices.Values(queryParams(route))) {
+			if narrowingQuery[name] {
+				names = append(names, name)
+			}
 		}
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if words, ok := narrowWords[name]; ok {
+			out = append(out, words)
+			continue
+		}
+		out = append(out, strings.ReplaceAll(name, "_", " "))
 	}
 	return out
 }
@@ -323,7 +339,7 @@ const cutNote = "None of this answer reached you or the person: it is larger tha
 // written by whoever wrote the payload, and a cut read is otherwise unfenced
 // text nobody vouched for. The fact goes through [modelFact], fenced or
 // defused as every result of the tool is, held to the same bound and labelled
-// with the tool's trust.
+// with the trust the call earns.
 func oversize(t Tool, args Args, b provenance.Boundary) (Result, error) {
 	title := t.StepLabel(args)
 	var open *wire.Link
@@ -343,12 +359,20 @@ func oversize(t Tool, args Args, b provenance.Boundary) (Result, error) {
 	if route != "" {
 		cut["route"] = route
 	}
-	model, err := modelFact(t, t.Trust, b, map[string]any{"cut": cut})
+	// THE TRUST THE CALL EARNS, decided as every read's is: the tool's, or
+	// what its TrustOf makes of the call with no answer to read, so a
+	// generic read of a route outside the company still marks the turn
+	// (a cut read of the event log is still a read of it).
+	trust := t.Trust
+	if t.TrustOf != nil {
+		trust = t.TrustOf(args, nil)
+	}
+	model, err := modelFact(t, trust, b, map[string]any{"cut": cut})
 	if err != nil {
 		return Result{}, err
 	}
 	return Result{Cards: []wire.Card{cards.Oversize(title, open, narrow)}, Model: model,
-		Trust: t.Trust}, nil
+		Trust: trust}, nil
 }
 
 // readRoute is the route pattern a read's call was sent to, as the engine
