@@ -289,13 +289,14 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		worklet.WriteProjectFileTool:  true,
 		worklet.RemoveProjectFileTool: true,
 
-		// THE ARTIFACTS: the four reads (the company's brand among them)
+		// THE ARTIFACTS: the five reads (the company's brand among them)
 		// are reads, and every write is read by the people the artifact is
 		// shared with; a folder made or an artifact filed is where a whole
 		// team finds its work.
 		builtin.ListArtifactsTool:        false,
 		builtin.GetArtifactTool:          false,
 		builtin.DashboardSourcesTool:     false,
+		builtin.ArtifactFormatTool:       false,
 		builtin.CompanyBrandTool:         false,
 		builtin.CreateArtifactTool:       true,
 		builtin.PublishArtifactTool:      true,
@@ -971,6 +972,8 @@ func TestEverySeatScopedToolRefusesWithoutASeat(t *testing.T) {
 type toolSkills struct{}
 
 func (toolSkills) Load(string) (skills.Loaded, bool) { return skills.Loaded{}, false }
+
+func (toolSkills) Keys() []string { return nil }
 
 type searcher struct{}
 

@@ -1,11 +1,9 @@
 package slideformat
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
 	"slices"
 	"sort"
@@ -13,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
 )
 
 // ---- the files ------------------------------------------------------------ //
@@ -284,6 +283,10 @@ func slideID(p string) (string, bool) {
 
 var faceKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
+// IndexForm is every key `deck.json` may carry and the type of each, derived
+// from [Index] ([jsonform.Of]): what [ParseIndex] admits and [Reference] lists.
+var IndexForm = jsonform.Of[Index]()
+
 // ParseIndex reads `deck.json`, answering nil with the findings where it
 // cannot be read at all.
 func ParseIndex(raw []byte) (*Index, []Finding) {
@@ -292,14 +295,13 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 		found = append(found, Finding{Path: IndexPath, Rule: RuleIndex, Message: fmt.Sprintf(format, args...)})
 	}
 	var idx Index
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&idx); err != nil {
-		bad("deck.json is not the deck index: %v", err)
-		return nil, found
+	// EVERY STRUCTURAL FAULT AT ONCE ([jsonform.Decode]): an unknown key
+	// names the keys its object takes, a wrong type the shape read there.
+	d := jsonform.Decode(raw, IndexForm, jsonform.Subject{File: IndexPath, Format: "the deck index"}, &idx)
+	for _, f := range d.Faults {
+		found = append(found, Finding{Path: IndexPath, Line: f.Line, Rule: RuleIndex, Message: f.Message})
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		bad("deck.json holds more than one JSON value")
+	if len(d.Faults) > 0 {
 		return nil, found
 	}
 	switch {

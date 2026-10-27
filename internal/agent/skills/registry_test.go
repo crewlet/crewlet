@@ -483,3 +483,21 @@ func TestAnOfferRecordsEachRenderOnce(t *testing.T) {
 		t.Error("a nil registry's offer is a non-nil catalogue, which renders a header over nothing")
 	}
 }
+
+// KEYS ARE EVERY KEY SERVED, sorted, a shadowed duplicate once: what a miss of
+// load_tool_skill lists so a model corrects its guess in one step.
+func TestKeysAreEveryKeyServed(t *testing.T) {
+	t.Parallel()
+	r := registry(t, skill("skill:github", skills.Trigger{Tool: "t"}, false),
+		skill("skill:artifacts", skills.Trigger{Tool: "t"}, true))
+	if _, err := r.PutPage(onPage("dup-page", "skill:github", skills.Trigger{Tool: "t"}, false)); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Keys(); !slices.Equal(got, []string{"skill:artifacts", "skill:github"}) {
+		t.Errorf("keys %v", got)
+	}
+	var none *skills.Registry
+	if none.Keys() != nil {
+		t.Error("a nil registry lists keys")
+	}
+}

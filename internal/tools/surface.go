@@ -447,6 +447,7 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 		// call did not happen as far as the ledger is concerned.
 		return toolloop.ToolResult{}, err
 	}
+	res.Result = s.refusalLoop(call.Name, e.Annotations, turn, res.Result)
 	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed,
 		Cause: res.Cause})
 	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure

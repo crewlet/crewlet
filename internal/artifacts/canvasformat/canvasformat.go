@@ -32,8 +32,6 @@
 package canvasformat
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -42,6 +40,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 )
@@ -235,36 +234,27 @@ func Parse(data []byte, m artifacts.Manifest) (Canvas, error) {
 	return c, nil
 }
 
+// Form is every key `canvas.json` may carry and the type of each, derived from
+// [Canvas] ([jsonform.Of]): what [Parse] admits and [Reference] lists.
+var Form = jsonform.Of[Canvas]()
+
 // decode reads the JSON strictly: one document, no field this build does not
-// know, and the right type for every field.
+// know, and the right type for every field, every structural fault at once
+// ([jsonform.Decode]).
 func decode(data []byte) (Canvas, []Problem) {
 	if !utf8.Valid(data) {
 		return Canvas{}, []Problem{{Message: "the file is not UTF-8 text"}}
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	var c Canvas
-	if err := dec.Decode(&c); err != nil {
-		return Canvas{}, []Problem{{Message: "the file is not a canvas: " + decodeReason(err)}}
+	d := jsonform.Decode(data, Form, jsonform.Subject{File: Path, Format: "the canvas format"}, &c)
+	if len(d.Faults) == 0 {
+		return c, nil
 	}
-	if dec.More() {
-		return Canvas{}, []Problem{{Message: "the file holds more than one JSON document"}}
+	out := make([]Problem, len(d.Faults))
+	for i, f := range d.Faults {
+		out[i] = Problem{Message: f.Message}
 	}
-	return c, nil
-}
-
-// decodeReason is a JSON error in an author's words.
-func decodeReason(err error) string {
-	var syntax *json.SyntaxError
-	var typ *json.UnmarshalTypeError
-	switch {
-	case errors.As(err, &syntax):
-		return fmt.Sprintf("invalid JSON at byte %d (%s)", syntax.Offset, syntax.Error())
-	case errors.As(err, &typ):
-		return fmt.Sprintf("%s is %s, and the format takes %s", typ.Field, typ.Value, typ.Type)
-	}
-	// An unknown field reads `json: unknown field "x"`, which already says it.
-	return strings.TrimPrefix(err.Error(), "json: ")
+	return Canvas{}, out
 }
 
 // check holds a decoded canvas to every rule of the format.

@@ -168,9 +168,11 @@ func (t *createArtifact) Description() string {
 	return "Create a NEW artifact in this Crewlet company (not claude.ai): an " +
 		"interactive HTML page, a design canvas of HTML artboards, a document, a " +
 		"slide deck, or a sheet, shared with the " +
-		"colleagues who must use it. Load the artifacts tool skill first: it is the " +
-		"design contract every page is held to. When a person asked for it, they are " +
-		"made an editor. Begin a deck with `starter` rather than writing every slide. " +
+		"colleagues who must use it. Load the `" + ArtifactsToolSkillKey + "` tool skill " +
+		"first: it is the design contract every page is held to. Before writing a " +
+		"brand kit, a deck's index, a design's canvas, a dashboard or a doc's index, read " +
+		"its exact format with " + ArtifactFormatTool + ". When a person asked for it, " +
+		"they are made an editor. Begin a deck with `starter` rather than writing every slide. " +
 		"When your company has a brand, read get_company_brand before writing slides, " +
 		"logos or typefaces. To change an existing artifact use publish_artifact; the " +
 		"answer carries the `url` to send people."
@@ -583,13 +585,9 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"what was done and what is left, and let the next turn continue.", tool,
 			turn.Used, turn.Limit, strings.ReplaceAll(turn.What, "_", " ")))
 	case errors.As(err, &policy):
-		lines := make([]string, 0, len(policy.Findings))
-		for _, f := range policy.Findings {
-			lines = append(lines, "- "+f.String())
-		}
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the version: "+
 			"it breaks the artifact policy, so nothing was published. Fix every finding "+
-			"and publish again:\n%s", tool, strings.Join(lines, "\n")))
+			"and publish again:\n%s", tool, policyFindings(policy.Findings)))
 	case errors.As(err, &edit):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused edit %d on "+
 			"%q (%s), so nothing was published. An `old_str` must be quoted exactly from "+

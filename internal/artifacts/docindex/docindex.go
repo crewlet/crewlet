@@ -30,11 +30,8 @@
 package docindex
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"slices"
 	"strings"
@@ -42,6 +39,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
 )
 
 // IndexPath is a tabbed doc's index, its entry.
@@ -309,6 +307,10 @@ func tabFile(src artifacts.FileSource, p string) *Finding {
 	return nil
 }
 
+// IndexForm is every key `doc.json` may carry and the type of each, derived
+// from [Index] ([jsonform.Of]).
+var IndexForm = jsonform.Of[Index]()
+
 // ParseIndex reads `doc.json`, answering every problem with it. A nil index is
 // one that could not be read at all.
 func ParseIndex(raw []byte) (*Index, []Finding) {
@@ -318,14 +320,12 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 			Message: fmt.Sprintf(format, args...)})
 	}
 	var idx Index
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&idx); err != nil {
-		bad("doc.json is not the doc index: %v", err)
-		return nil, found
+	// EVERY STRUCTURAL FAULT AT ONCE ([jsonform.Decode]).
+	d := jsonform.Decode(raw, IndexForm, jsonform.Subject{File: IndexPath, Format: "the doc index"}, &idx)
+	for _, f := range d.Faults {
+		found = append(found, Finding{Path: IndexPath, Rule: RuleIndex, Message: f.Message})
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		bad("doc.json holds more than one JSON value")
+	if len(d.Faults) > 0 {
 		return nil, found
 	}
 	if idx.V != IndexVersion {
