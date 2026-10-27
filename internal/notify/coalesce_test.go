@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -337,6 +338,31 @@ func TestAddressedSurvivesAMergeWithUnaddressedTraffic(t *testing.T) {
 	}, at(0, 1))
 	if len(merged.Messages) != 2 || !merged.Messages[0].Addressed || merged.Messages[1].Addressed {
 		t.Fatalf("per-constituent flags lost: %+v", merged.Messages)
+	}
+}
+
+// EACH CONSTITUENT KEEPS WHO WROTE IT. A burst of comments on one work item
+// merged into one trigger can be several people, and a turn's requester and
+// senders are read per constituent: carried on the flat fields alone, every
+// earlier writer of the burst would read as the latest one.
+func TestEachConstituentKeepsItsOwnWriter(t *testing.T) {
+	ana := notify.FirstPartyWriter(iam.ActorHuman, "ana")
+	bo := notify.FirstPartyWriter(iam.ActorAgent, "bo")
+	merged, _ := notify.Coalesce(prompts(), []types.ExternalNotification{
+		note("ana", "first", "comment", func(n *types.ExternalNotification) { n.Writer = ana }),
+		note("bo", "latest", "comment", func(n *types.ExternalNotification) { n.Writer = bo }),
+	}, at(0, 1))
+	if len(merged.Messages) != 2 {
+		t.Fatalf("%d constituents survived, want 2", len(merged.Messages))
+	}
+	for i, want := range []*types.NotificationWriter{ana, bo} {
+		if got := merged.Messages[i].Writer; got == nil || *got != *want {
+			t.Errorf("constituent %d was written by %+v, want %+v", i, got, want)
+		}
+	}
+	if merged.Writer == nil || *merged.Writer != *bo {
+		t.Errorf("the merged event's writer is %+v, want the latest constituent's %+v",
+			merged.Writer, bo)
 	}
 }
 

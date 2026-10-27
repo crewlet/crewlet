@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/routing"
 )
@@ -233,6 +234,11 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		Subject:   n.Title,
 		Body:      wakeBody(record),
 		Metadata:  meta,
+		// AND WHO THE SENDER IS, by the record's own kind: a seat's handle
+		// and a credential's login are spelled alike, and only the kind
+		// tells a turn this wakes whether a colleague is asking
+		// (notify.FirstPartyWriter).
+		Writer: notify.FirstPartyWriter(iam.ActorKind(record.ActorKind), record.Actor),
 	}
 }
 

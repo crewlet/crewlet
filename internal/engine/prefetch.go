@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -410,22 +411,29 @@ func subjectsOf(registry *notify.Registry, ev *types.ExternalNotification) []lea
 		out := make([]learning.Subject, 0, len(ev.Messages))
 		for _, m := range ev.Messages {
 			out = append(out, subjectOf(registry, ev.NotificationSource,
-				m.Sender, m.Metadata))
+				m.Sender, m.Metadata, m.Writer))
 		}
 		return out
 	}
 	return []learning.Subject{
-		subjectOf(registry, ev.NotificationSource, ev.Sender, ev.Metadata),
+		subjectOf(registry, ev.NotificationSource, ev.Sender, ev.Metadata, ev.Writer),
 	}
 }
 
-// subjectOf resolves one sender to the identity their profile is keyed on.
-func subjectOf(registry *notify.Registry, source, sender string, metadata map[string]string) learning.Subject {
+// subjectOf resolves one sender to the identity their profile is keyed on: a
+// first-party notice's by the writer its record names ([writerSubject]), a
+// vendor's as an id in the vendor's own namespace.
+func subjectOf(registry *notify.Registry, source, sender string, metadata map[string]string,
+	writer *types.NotificationWriter) learning.Subject {
+
 	external := strings.TrimSpace(metadata[notify.ActorField])
 	if external == "" {
 		// Every parser stamps the actor, but an engine-authored
 		// notification has none — the sender field is then all there is.
 		external = strings.TrimSpace(sender)
+	}
+	if writer != nil {
+		return writerSubject(registry, source, sender, external, *writer)
 	}
 	subject := learning.Subject{
 		ExternalID: external, Platform: source, Name: strings.TrimSpace(sender),
@@ -443,6 +451,43 @@ func subjectOf(registry *notify.Registry, source, sender string, metadata map[st
 		}
 	}
 	return subject
+}
+
+// writerSubject is who a FIRST-PARTY notice's writer is to the seat it woke
+// ([types.NotificationWriter]), read by the kind its record names: such a
+// source has no namespace of its own to look an id up in, and its actor is
+// spelled as a seat's handle, a credential's login or a node's name alike.
+//
+// A SEAT'S WRITE — an agent's, or a person's as the seat they hold — is that
+// seat, by its handle, while the chart holds it: the colleague whose comment
+// woke a turn is the requester its reads are decided for again
+// (builtin.ceilingOf), and what a seat learns of them on its own tracker
+// joins what it learned of them on chat. THE ENGINE'S OWN WRITE names nobody:
+// a repair telling a seat it was unblocked is no one's errand, as a
+// schedule's fire is not, and a profile of a node's name is a profile of
+// nobody. ANY OTHER WRITER — a credential acting as no seat, a seat the chart
+// no longer holds, a kind this build cannot read — keeps the platform
+// identity a vendor's unknown sender keeps, which is the closed end: a turn
+// it woke reads as a stranger's, and is let read nothing for them.
+func writerSubject(registry *notify.Registry, source, sender, external string,
+	w types.NotificationWriter) learning.Subject {
+
+	switch w.Kind {
+	case iam.ActorSystem:
+		return learning.Subject{}
+	case iam.ActorAgent, iam.ActorHuman:
+		if seat := strings.TrimSpace(w.Seat); registry != nil && seat != "" {
+			if party, ok := registry.ByHandle(seat); ok {
+				name := party.Name
+				if name == "" {
+					name = strings.TrimSpace(sender)
+				}
+				return learning.Subject{Handle: party.Handle, ExternalID: seat,
+					Platform: source, Name: name}
+			}
+		}
+	}
+	return learning.Subject{ExternalID: external, Platform: source, Name: strings.TrimSpace(sender)}
 }
 
 // interactionsOf renders a turn's trigger as the interactions a learning
@@ -463,7 +508,7 @@ func (e *Engine) interactionsOf(evs []*events.Event) []types.InboundInteraction 
 		if len(n.Messages) == 0 {
 			out = append(out, interaction(registry, n.NotificationSource,
 				n.SourceEventType, n.Sender, salientBody(n), n.Metadata,
-				n.ContextRequiresRecon))
+				n.ContextRequiresRecon, n.Writer))
 			continue
 		}
 		// A COALESCED EVENT'S FLAT FIELDS MIRROR THE LATEST constituent,
@@ -472,7 +517,7 @@ func (e *Engine) interactionsOf(evs []*events.Event) []types.InboundInteraction 
 		for _, m := range n.Messages {
 			out = append(out, interaction(registry, n.NotificationSource,
 				m.SourceEventType, m.Sender, m.Body, m.Metadata,
-				m.ContextRequiresRecon))
+				m.ContextRequiresRecon, m.Writer))
 		}
 	}
 	return out
@@ -480,9 +525,9 @@ func (e *Engine) interactionsOf(evs []*events.Event) []types.InboundInteraction 
 
 // interaction assembles one, resolving its sender the way a profile is keyed.
 func interaction(registry *notify.Registry, source, rawType, sender, body string,
-	metadata map[string]string, requiresRecon bool,
+	metadata map[string]string, requiresRecon bool, writer *types.NotificationWriter,
 ) types.InboundInteraction {
-	subject := subjectOf(registry, source, sender, metadata)
+	subject := subjectOf(registry, source, sender, metadata, writer)
 	return types.InboundInteraction{
 		Sender: types.CanonicalIdentity{
 			Handle: subject.Handle, ExternalID: subject.ExternalID,

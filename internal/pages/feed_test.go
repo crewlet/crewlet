@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -129,6 +130,44 @@ func TestAMentionAndTheLeadFallbackBothRouteOffTheRelayedRecord(t *testing.T) {
 		if !pages.Addressed(c.Inbound.Metadata) {
 			t.Error("a mention is not marked as an ask, so nothing is waiting " +
 				"for bob to answer")
+		}
+	}
+}
+
+// A PAGE'S NOTICE SAYS WHO WROTE THE CHANGE, BY THE RECORD'S OWN KIND. A
+// person writes as the seat they hold, an agent as its seat, and a credential
+// acting as no seat under its own login — three actors spelled alike, of
+// which only the kind tells a turn the notice wakes whether a colleague is
+// asking. A wake that named only the actor read every one of them as a vendor
+// id nobody holds, which is a stranger.
+func TestAPageNoticeSaysWhoWroteTheChange(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	for _, c := range []struct {
+		actor pages.Actor
+		want  types.NotificationWriter
+	}{
+		{author("jane"), types.NotificationWriter{Kind: iam.ActorHuman, Seat: "jane"}},
+		{agent("swe"), types.NotificationWriter{Kind: iam.ActorAgent, Seat: "swe"}},
+		{pages.Actor{Handle: "token:ci", Kind: pages.AuthorOperator},
+			types.NotificationWriter{Kind: iam.ActorOperator}},
+	} {
+		if _, _, err := r.store.Comment(t.Context(), c.actor, page.Page.ID,
+			pages.NewComment{Body: "@bob is this current?", Mentions: []string{"bob"}}); err != nil {
+			t.Fatalf("comment as %s: %v", c.actor.Handle, err)
+		}
+		var wake *notify.Routed
+		for _, routed := range r.route(r.lastRecord(), nil) {
+			if routed.To.Handle == "bob" {
+				wake = &routed
+			}
+		}
+		if wake == nil {
+			t.Fatalf("%s's mention of bob woke nobody", c.actor.Handle)
+		}
+		if got := wake.Writer; got == nil || *got != c.want {
+			t.Errorf("%s's comment names its writer %+v, want %+v", c.actor.Handle, got, c.want)
 		}
 	}
 }

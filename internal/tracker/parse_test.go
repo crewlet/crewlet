@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -59,6 +60,43 @@ func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 	}
 	if _, woken := reasons["ana"]; woken {
 		t.Error("the actor was woken about their own comment")
+	}
+}
+
+// A NOTICE SAYS WHO WROTE THE CHANGE, BY THE RECORD'S OWN KIND.
+//
+// The record's actor is a seat's handle, a credential's login or a node's
+// name, spelled alike, and a turn the notice wakes decides from it whose
+// errand it is: a colleague's comment is the colleague's, the engine's own
+// repair is nobody's. A wake that named only the actor left every one of them
+// to be read as a vendor id nobody holds, which is a stranger.
+func TestANoticeSaysWhoWroteTheChangeByTheRecordsKind(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		actor string
+		kind  tracker.AuthorKind
+		want  types.NotificationWriter
+	}{
+		{"ana", tracker.AuthorHuman, types.NotificationWriter{Kind: iam.ActorHuman, Seat: "ana"}},
+		{"bo", tracker.AuthorAgent, types.NotificationWriter{Kind: iam.ActorAgent, Seat: "bo"}},
+		{"token:ci", tracker.AuthorOperator, types.NotificationWriter{Kind: iam.ActorOperator}},
+		// A NODE NAMED LIKE A SEAT is still the engine.
+		{"bo", tracker.AuthorSystem, types.NotificationWriter{Kind: iam.ActorSystem}},
+	} {
+		record := parseRecord(&tracker.Notify{
+			Kind: tracker.ChangeComment, Excerpt: "can you look at this",
+			Snapshot: tracker.Snapshot{Key: "ENG-1", Project: "ENG", Assignee: "cy"},
+		})
+		record.Actor, record.ActorKind = c.actor, c.kind
+		routed, err := tracker.NewParser(tracker.ParserOptions{}).Parse(
+			t.Context(), delivery(t, record), registry(t, "ana", "bo", "cy"))
+		if err != nil || len(routed) != 1 {
+			t.Fatalf("Parse = (%d, %v), want cy's one wake", len(routed), err)
+		}
+		if got := routed[0].Writer; got == nil || *got != c.want {
+			t.Errorf("a %s write by %s names its writer %+v, want %+v",
+				c.kind, c.actor, got, c.want)
+		}
 	}
 }
 

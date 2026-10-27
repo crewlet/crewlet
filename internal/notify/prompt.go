@@ -6,6 +6,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Prompt is everything the spine needs to know about ONE third-party app.
@@ -190,6 +193,13 @@ type Inbound struct {
 	// colleague through Parties where one is known.
 	Sender string
 
+	// Writer is who wrote the record a FIRST-PARTY notice announces — set by
+	// the engine's own producers alone, from the record ([FirstPartyWriter]),
+	// and nil on every vendor's: a first-party Sender is a handle, a login or
+	// a node's name, and only the record's actor kind says which. See
+	// [types.NotificationWriter].
+	Writer *types.NotificationWriter
+
 	Subject string
 
 	// Body is the message as it arrived. The prompt turns it into the
@@ -213,6 +223,20 @@ type Inbound struct {
 	// it is one first-party promise, and nine prompts answering "" to it
 	// would be nine places to forget that a merge has to carry it.
 	Owes string
+}
+
+// FirstPartyWriter is the writer a first-party notice states
+// ([Inbound.Writer]), from the actor and the actor kind its record names: the
+// actor as the seat's handle for a seat's write and for a person's, which
+// iam.ActorFor records under the seat they hold, and no seat for a
+// credential's or the engine's. THE KIND DECIDES, NEVER THE SPELLING: a
+// handle is one segment, and so can be a node's name.
+func FirstPartyWriter(kind iam.ActorKind, actor string) *types.NotificationWriter {
+	w := &types.NotificationWriter{Kind: kind}
+	if kind == iam.ActorAgent || kind == iam.ActorHuman {
+		w.Seat = strings.TrimSpace(actor)
+	}
+	return w
 }
 
 // Parties resolves a third-party app's external id to a colleague in the org.

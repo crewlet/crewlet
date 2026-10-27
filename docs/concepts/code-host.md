@@ -1529,7 +1529,8 @@ last. In this release a seat reads a repository through its code tools
 
 ### Reads made for somebody else
 
-A turn somebody woke — a person's message, a colleague seat's message or ask —
+A turn somebody woke — a person's message, a colleague seat's message or ask,
+or a change either of them made on a work item or a page that wakes the seat —
 is that somebody's errand, and a seat that read out for them whatever it may
 read itself would hand a `visibility: unit` repository to anybody who can
 message one of the unit's seats. So inside such a turn every code read the
@@ -1538,11 +1539,17 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 
 | The turn was woken by | What the seat reads |
 |---|---|
-| nobody — a schedule, a watch, the seat's own work | what its own grant allows |
+| nobody — a schedule, a watch, the seat's own work, or the engine's own notice on a work item, such as one it reports unblocked | what its own grant allows |
 | a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
-| somebody the company does not know — a chat sender no seat or person maps to | nothing |
+| somebody the company does not know — a chat sender no seat or person maps to — or a credential acting as no seat, such as an automation's change on a work item or a page | nothing |
+
+A change on a work item or a page names who made it by the kind its record
+holds, never by how the name is spelled: a seat's change, or a person's made
+as the seat they hold, is that seat's, and the engine's own is nobody's. A
+credential acting as no seat holds no seat a ceiling could be decided for, so
+the turn its change wakes reads nothing, as a stranger's does.
 
 The colleague's grant is judged where the seat's own is: by the node that
 answers each read, from its own chart and the repository's row, and never

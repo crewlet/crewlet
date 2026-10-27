@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -290,6 +291,70 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 	// are one story.
 	if woken[0].TraceID != "" && woken[0].TraceID == events.NewTrace().TraceID {
 		t.Fatal("the wake minted a fresh trace")
+	}
+}
+
+// A FIRST-PARTY WAKE SAYS WHO WROTE ITS CHANGE, and a vendor's says nothing.
+//
+// The writer is what a turn reads off a first-party notice to know whose
+// errand it is (types.NotificationWriter): a colleague's comment, a person's,
+// the engine's own repair. Dropped between the parser and the wake, each of
+// them reads downstream as a vendor id nobody holds — a stranger's — and the
+// seat it woke may read nothing for them.
+func TestAFirstPartyWakeSaysWhoWroteItsChange(t *testing.T) {
+	h := newService(t, nil)
+	written := to(notify.Recipient{Handle: "engineering-lead"}, "please look")
+	written.Writer = notify.FirstPartyWriter(iam.ActorAgent, "backend-engineer")
+	vendors := to(notify.Recipient{Handle: "backend-engineer"}, "please look")
+	h.parser.out = []notify.Routed{written, vendors}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	wakeOf := func(handle string) *types.ExternalNotification {
+		t.Helper()
+		woken := h.inbox(t, handle)
+		if len(woken) != 1 {
+			t.Fatalf("%s was woken %d times", handle, len(woken))
+		}
+		n, ok := events.DataAs[*types.ExternalNotification](woken[0])
+		if !ok {
+			t.Fatalf("%s's wake carries %T", handle, woken[0].Data)
+		}
+		return n
+	}
+	want := types.NotificationWriter{Kind: iam.ActorAgent, Seat: "backend-engineer"}
+	if got := wakeOf("engineering-lead").Writer; got == nil || *got != want {
+		t.Errorf("the first-party wake names its writer %+v, want %+v", got, want)
+	}
+	if got := wakeOf("backend-engineer").Writer; got != nil {
+		t.Errorf("a vendor's wake names a writer %+v, and a vendor's sender is an id in "+
+			"its own namespace, never a first-party writer", got)
+	}
+}
+
+// THE KIND DECIDES WHO A FIRST-PARTY WRITER IS, NEVER THE SPELLING. A seat's
+// handle is one segment, and so can be a node's name: a writer read off its
+// actor alone would turn the engine's own repair into a colleague's ask
+// wherever a node is named like a seat.
+func TestAFirstPartyWriterIsASeatByItsKindAlone(t *testing.T) {
+	for _, c := range []struct {
+		kind  iam.ActorKind
+		actor string
+		seat  string
+	}{
+		{iam.ActorAgent, " backend-engineer ", "backend-engineer"},
+		{iam.ActorHuman, "dana-founder", "dana-founder"},
+		{iam.ActorOperator, "token:ci", ""},
+		{iam.ActorSystem, "engineering-lead", ""},
+		// A RECORD THAT STATES NO KIND names no seat either.
+		{"", "engineering-lead", ""},
+	} {
+		w := notify.FirstPartyWriter(c.kind, c.actor)
+		if w == nil || w.Kind != c.kind || w.Seat != c.seat {
+			t.Errorf("FirstPartyWriter(%q, %q) = %+v, want kind %q and seat %q",
+				c.kind, c.actor, w, c.kind, c.seat)
+		}
 	}
 }
 

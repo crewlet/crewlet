@@ -396,7 +396,9 @@ reshapes it or reshares it. The company document's
 restores, purges, transfers or force-publishes anything: those verbs are a
 person's.
 
-**Who the agent is acting for.** Inside a turn somebody woke, every artifact
+**Who the agent is acting for.** Inside a turn somebody woke — with a message,
+an ask, or a change of theirs on a work item or a page, named by the kind its
+record holds — every artifact
 verb an agent takes is decided a second time for that requester, on the same
 artifact, and admitted only when both may take it: an agent never shows a
 requester an artifact the requester could not open, nor writes into one on
@@ -408,7 +410,9 @@ work an agent owns. Reading its own artifact back, and sharing it, are never
 exempt, and neither is what such an edit hands back: the live files a stale
 publish answers with, and a conflicting data write's current rows, are shown
 only where the requester could read them. A turn woken by somebody the company does not know reaches only those
-edits; a turn nobody woke (a schedule, a watch) is bounded by the agent alone.
+edits, and so does one a credential acting as no seat woke with a change on a
+work item or a page, since no seat stands behind it; a turn nobody woke (a
+schedule, a watch, the engine's own notice) is bounded by the agent alone.
 
 The decision is
 [ADR-0034](https://github.com/crewlet/crewlet/blob/main/adr/0034-an-artifact-is-shared-and-a-share-is-a-relation.md),
