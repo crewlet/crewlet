@@ -2067,7 +2067,7 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 // repository was last expunged, its live packs and bytes, and the version its
 // row was read at.
 //
-// ONE WALK of code_repos_expunging_idx (replicated 0063), its partial
+// ONE WALK of code_repos_expunging_idx (replicated 0064), its partial
 // predicate repeated verbatim, which holds exactly the repositories with an
 // expunge open or a request waiting — a handful in a fleet of any size, every
 // one of which its maintainer finishes or serves before it plans anything

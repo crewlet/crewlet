@@ -770,7 +770,7 @@
 // live packs is decided as ever. The repository's maintainer finds the
 // expunges it owes by the [ReadExpungeDue] listing — the active and archived
 // repositories with an expunge open or a request waiting, by id, one walk of
-// code_repos_expunging_idx (replicated 0063), the engine's own read. Its
+// code_repos_expunging_idx (replicated 0064), the engine's own read. Its
 // bounds: at most [MaxExpungeInputs] inputs and [MaxExpungeOutputs] outputs a
 // begin, so its record writes at most 2 625 rows (expungeBeginRows).
 //
