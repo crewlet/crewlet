@@ -85,19 +85,29 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	"paused_by_kind", "agent_handle", "note_id", "turn_id", "model", "kind", "ref",
 	// THE QUESTION A RUN ASKED, which the person answering it read and is
 	// shown again as what their answer answers.
-	"question", "reference", "role", "shared_with", "asset", "name",
-	// AN ANSWER A MODEL WROTE FOR THE PERSON WHO ASKED (answer_knowledge),
-	// in markdown: it is the product, read as the person's own answer, and
-	// never a tool's sentence to a model.
-	"answer_md"}
+	"question", "reference", "role", "shared_with", "asset", "name"}
 
-// AnswerProblems is every sentence a write's decoded answer carries that is not
-// worded for a person, each named by its path: every string at any depth
+// writtenForThePerson are the answers whose text at one path is a model's
+// answer written FOR the person who asked, by tool and path: the product
+// itself, read as the person's own answer and never a tool's sentence to a
+// model. Scoped to the tool and the path, never the key: the same key on
+// another tool, or deeper in this one, is walked like any other.
+var writtenForThePerson = map[string][]string{
+	// answer_knowledge's answer, in markdown, as the tool answers it and
+	// as the act route nests it under `receipt`.
+	builtin.AnswerKnowledgeTool: {".answer_md", ".receipt.answer_md"},
+}
+
+// AnswerProblems is every sentence the decoded answer of tool carries that is
+// not worded for a person, each named by its path: every string at any depth
 // outside the value fields, so a receipt field a tool fills with a model's
 // sentence is found whatever it is called.
-func AnswerProblems(answer any) []string {
+func AnswerProblems(tool string, answer any) []string {
 	var out []string
 	sentences("", answer, func(path, text string) {
+		if slices.Contains(writtenForThePerson[tool], path) {
+			return
+		}
 		for _, problem := range Problems(text) {
 			out = append(out, fmt.Sprintf("%s is not worded for a person: %s: %q",
 				path, problem, text))

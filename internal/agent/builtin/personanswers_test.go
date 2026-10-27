@@ -193,7 +193,7 @@ func TestEveryAnswerAPersonCanBeGivenIsWordedForAPerson(t *testing.T) {
 	t.Parallel()
 	answers := everyLandedAnswer(t)
 	for name, res := range answers {
-		for _, problem := range caveattest.AnswerProblems(personAnswer(t, name, res)) {
+		for _, problem := range caveattest.AnswerProblems(name, personAnswer(t, name, res)) {
 			t.Errorf("%s: %s", name, problem)
 		}
 	}

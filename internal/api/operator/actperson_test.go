@@ -320,7 +320,7 @@ func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 		if caveats, _ := answer["caveats"].([]any); len(caveats) == 0 {
 			t.Errorf("%s answered no caveats: %v", tc.name, answer)
 		}
-		for _, problem := range caveattest.AnswerProblems(answer) {
+		for _, problem := range caveattest.AnswerProblems(tc.tool, answer) {
 			t.Errorf("%s: %s", tc.name, problem)
 		}
 	}

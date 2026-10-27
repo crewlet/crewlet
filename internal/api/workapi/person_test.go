@@ -37,7 +37,7 @@ func TestTheWorkSurfaceAnswersAPersonInAPersonsWords(t *testing.T) {
 		t.Errorf("the answer carries caveats %v, want both in a person's words",
 			got.body["caveats"])
 	}
-	for _, problem := range caveattest.AnswerProblems(got.body) {
+	for _, problem := range caveattest.AnswerProblems(worklet.CreateWorkItemTool, got.body) {
 		t.Errorf("a create: %s", problem)
 	}
 
@@ -51,7 +51,7 @@ func TestTheWorkSurfaceAnswersAPersonInAPersonsWords(t *testing.T) {
 		t.Errorf("a refused create answered %d %v, want its code's own sentence",
 			got.status, got.body)
 	}
-	for _, problem := range caveattest.AnswerProblems(got.body) {
+	for _, problem := range caveattest.AnswerProblems(worklet.CreateWorkItemTool, got.body) {
 		t.Errorf("a refused create: %s", problem)
 	}
 }
