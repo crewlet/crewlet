@@ -376,8 +376,9 @@
 // for it counted with those it keeps — before it evicts any repository, and
 // never evicts one for what the memo holds past that (overBudget): the memos
 // of copies untouched since the boot whole, then single entries, the least
-// recently used first; and it writes a copy's state again once its memo's
-// bytes moved. A history gone drops it whole and shuts
+// recently used first; and at its tick, once a minute at most, it writes a
+// copy's state again once its memo's bytes moved. A history gone drops it
+// whole and shuts
 // it until the round that dropped it has swept the replaced history's packs,
 // and no batch begun before the drop places anything after it.
 //

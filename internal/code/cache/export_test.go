@@ -29,11 +29,21 @@ import (
 // synchronously, the moments a case must hold still, and what the cache
 // holds in memory read back.
 
-// JanitorPass runs one janitor pass, synchronously, as work of the cache's
-// own (a stopped cache runs none).
+// JanitorPass runs one janitor pass between its ticks — a kicked one —
+// synchronously, as work of the cache's own (a stopped cache runs none).
 func JanitorPass(c *Cache) {
 	if c.enter() {
-		c.janitorPass(context.Background())
+		c.janitorPass(context.Background(), false)
+		c.leave()
+	}
+}
+
+// JanitorTick runs one of the janitor's TICKED passes, synchronously: the pass
+// JanitorPass runs, every repository's last use stamped, and the state of
+// every copy whose memo moved since it was last written written again.
+func JanitorTick(c *Cache) {
+	if c.enter() {
+		c.janitorPass(context.Background(), true)
 		c.leave()
 	}
 }

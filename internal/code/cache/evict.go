@@ -72,10 +72,7 @@ func (c *Cache) janitor(ctx context.Context) {
 		case <-c.kicks:
 		default:
 		}
-		c.janitorPass(ctx)
-		if ticked {
-			c.recordUse(ctx)
-		}
+		c.janitorPass(ctx, ticked)
 		c.leave()
 		ticked = false
 		select {
@@ -98,9 +95,19 @@ func (c *Cache) janitor(ctx context.Context) {
 // every pack it holds; the cache evicted to its budget for what the
 // repositories hold past their room (overBudget), least recently used first —
 // and trash/ emptied again when anything was moved there, so an eviction gives
-// its disk back within the pass; the states whose memo moved written again;
-// then the gauges.
-func (c *Cache) janitorPass(ctx context.Context) {
+// its disk back within the pass; on a TICKED pass alone, every repository's
+// last use stamped and the states whose memo moved written again; then the
+// gauges.
+//
+// THE STATES ONCE A TICK, never once a pass: a state written is two syncs —
+// the file and its directory (persist) — on the janitor's goroutine, beside
+// the durability syncs of rounds and adoptions on the same disk, and passes
+// follow kicks, which on a busy node come after every few misses (a placement
+// past the share, a release with an eviction due). Written at most once an
+// EvictInterval a copy, a boot still counts the memo within a tick of its
+// writes (Layout.Held), which is all the state is there for: a memo is a
+// cache of a cache, and the bytes a crash costs the count are a tick's.
+func (c *Cache) janitorPass(ctx context.Context, ticked bool) {
 	c.emptyTrash(ctx)
 	c.measureScratch(ctx)
 	c.listMemos(ctx)
@@ -108,7 +115,10 @@ func (c *Cache) janitorPass(ctx context.Context) {
 	if c.evictToBudget(ctx) > 0 || trimmed {
 		c.emptyTrash(ctx)
 	}
-	c.stateMemos(ctx)
+	if ticked {
+		c.recordUse(ctx)
+		c.stateMemos(ctx)
+	}
 	c.setGauges()
 }
 

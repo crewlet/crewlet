@@ -90,8 +90,10 @@ import (
 // LISTED by the janitor, behind the serving, never by a request (listMemos),
 // each such entry counted as used before any this process used. The janitor
 // writes a copy's state again once its memo's bytes have moved since it was
-// last written, so a boot counts the memo within a tick of its writes
-// (Layout.Held) without walking it.
+// last written — at its TICK, so at most once an EvictInterval a copy however
+// often the memo moves, since a state is two syncs (janitorPass) — so a boot
+// counts the memo within a tick of its writes (Layout.Held) without walking
+// it.
 
 // memoFile is this file as the memo's declared write names its writer
 // (Writer.File): every placement, link and removal of an entry is made here.
@@ -1080,7 +1082,9 @@ func (c *Cache) trimEntry(e *entry, inc *incarnation, k MemoKey, used int64) (in
 
 // stateMemos writes again the state of every copy whose memo's bytes moved
 // since its state was last written, so a boot counts the memo within a tick
-// of its writes (Layout.Held) without walking it. Only a copy with a state —
+// of its writes (Layout.Held) without walking it — on the janitor's ticked
+// pass alone (janitorPass), so a copy's memo costs its disk at most one
+// state's two syncs an EvictInterval. Only a copy with a state —
 // one a round or a boot gave it — is written: a state is never made for a copy
 // that has none, whose first full round writes it.
 func (c *Cache) stateMemos(ctx context.Context) {

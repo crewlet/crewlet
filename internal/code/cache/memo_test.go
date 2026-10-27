@@ -405,7 +405,7 @@ func TestAColdIncarnationsMemoGoesWhole(t *testing.T) {
 	sc := w.sync(t, c, cold)
 	coldDir := sc.Dir
 	memoize(t, c, sc, memoKeys("cold", 32))
-	cache.JanitorPass(c) // the copy's state records its memo
+	cache.JanitorTick(c) // the copy's state records its memo
 	sc.Release()
 
 	c = w.reopen(t, c, clk.on)
@@ -659,7 +659,7 @@ func TestTheHeldBytesCountTheMemo(t *testing.T) {
 	cache.MarkWhole(c, repo, cache.RebuildShape, 0) // a full round, whose own index measures again
 	s.Release()
 	w.sync(t, c, repo)
-	cache.JanitorPass(c)
+	cache.JanitorTick(c)
 
 	if st, _ := cache.MemoOf(c, repo); st.Bytes != want || st.Stated != want {
 		t.Errorf("after a maintenance run and a round's index the memo records %d bytes (its state %d), want its "+
@@ -684,5 +684,65 @@ func TestTheHeldBytesCountTheMemo(t *testing.T) {
 	defer layout.Release()
 	if floor := doc.DiskBytes + want; layout.Held < floor {
 		t.Errorf("the layout holds %d bytes, less than the copy's packs and its memo's %d", layout.Held, floor)
+	}
+}
+
+// A COPY'S MEMO IS WRITTEN DOWN ONCE A TICK AT MOST. A state written is two
+// syncs, the file and its directory, so the janitor writes a copy's state for
+// its memo's moves on its TICK alone — however many passes kicks run between
+// two ticks, and however often the memo moves — and the tick writes each copy
+// whose memo moved once, the state then recording what the memo holds.
+//
+// Mutation: write the moved memos' states on every pass (stateMemos outside
+// the ticked branch) — the kicked passes write them.
+func TestACopysMemoIsWrittenDownOnceATickAtMost(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	var (
+		mu     sync.Mutex
+		writes int
+	)
+	c := w.open(t, func(o *cache.Options) {
+		cache.StateWriteFails(o, func(id string, round bool) error {
+			if id == repo && !round {
+				mu.Lock()
+				writes++
+				mu.Unlock()
+			}
+			return nil
+		})
+	})
+	written := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return writes
+	}
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	keys := memoKeys("ticked", 6)
+	for i, k := range keys[:3] {
+		memoize(t, c, s, []cache.MemoKey{k})
+		if _, ok := c.MemoGet(s, k); !ok {
+			t.Fatalf("entry %d was not memoized", i)
+		}
+		cache.JanitorPass(c)
+	}
+	if n := written(); n != 0 {
+		t.Errorf("the janitor's kicked passes wrote the copy's state %d times for its memo's moves, want none "+
+			"before a tick", n)
+	}
+	cache.JanitorTick(c)
+	if n := written(); n != 1 {
+		t.Errorf("the tick wrote the copy's state %d times, want once for the memo's moves since its last", n)
+	}
+	if st, _ := cache.MemoOf(c, repo); st.Stated != st.Bytes || st.Bytes != memoEntries(3) {
+		t.Errorf("after the tick the state records the memo at %d bytes and the memo holds %d, want its entries' %d",
+			st.Stated, st.Bytes, memoEntries(3))
+	}
+	cache.JanitorTick(c)
+	if n := written(); n != 1 {
+		t.Errorf("a tick with nothing moved since the last wrote the state again: %d writes", n)
 	}
 }
