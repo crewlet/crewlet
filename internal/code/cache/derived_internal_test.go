@@ -300,6 +300,8 @@ func TestValidateRefusesATreeThatIsNoDirectoryOfItsOwn(t *testing.T) {
 			"Owns[0].Main"},
 		{"an entry's digest on a file git writes", DerivedMidx, func(d *Derived) { d.Check = CheckEntryDigest },
 			"Check"},
+		{"a move of no tree", DerivedProvenance, func(d *Derived) { d.Seed = SeedMove }, "Seed"},
+		{"a tree linked an entry at a time", DerivedMemo, func(d *Derived) { d.Seed = SeedLink }, "Seed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

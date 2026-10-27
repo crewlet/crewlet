@@ -437,7 +437,7 @@ type Write struct {
 }
 
 // SeedRule is what a rebuild does with a declaration's files in the
-// incarnation it replaces (rebuild.go's seedRebuild).
+// incarnation it replaces (rebuild.go's seedRebuild and promote).
 type SeedRule string
 
 const (
@@ -453,10 +453,24 @@ const (
 	// for in the new one, and one it has not is held to its Check before
 	// anything reads it there, as it would have been in the old.
 	SeedLink SeedRule = "link"
+	// SeedMove: MOVED whole into the new incarnation as it is promoted — ONE
+	// rename of the directory the declaration owns whole (Owned.Tree), its
+	// record and its in-memory half with it (memo.go's carryMemo) — for a
+	// tree of files that are a function of what the new incarnation holds as
+	// the old did, and of no other number: linked file by file, the memo of
+	// a hot repository would cost a stat and a link an answer inside the
+	// round that holds the repository, which a request's repair waits on, and
+	// carried by a compaction's swap the same way it would cost that on
+	// every git node that holds the repository. Moved at the PROMOTION
+	// rather than at the seeding, so the replaced incarnation serves it
+	// until the new one does and a rebuild that fails leaves it where it
+	// was; a reader still holding the replaced incarnation misses from then
+	// on. Only a tree is moved, and a tree is never linked (Validate).
+	SeedMove SeedRule = "move"
 )
 
 // SeedRules is every SeedRule.
-var SeedRules = []SeedRule{SeedNone, SeedLink}
+var SeedRules = []SeedRule{SeedNone, SeedLink, SeedMove}
 
 // Valid reports whether r is one of SeedRules.
 func (r SeedRule) Valid() bool { return slices.Contains(SeedRules, r) }
@@ -641,10 +655,11 @@ func DerivedFiles() []Derived {
 		// or recreated log is another history, which the memo cannot tell entry
 		// by entry — so it goes whole, and is computed again on demand.
 		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
-		// A rebuild repairs packs, not answers: every entry is linked into the
-		// new incarnation, where every read holds it to its key and digest as
-		// it did here.
-		Seed: SeedLink,
+		// A rebuild repairs packs, not answers: the whole tree moves into the
+		// new incarnation as it is promoted, one rename whatever it holds,
+		// where every read holds an entry to its key and digest as it did
+		// here.
+		Seed: SeedMove,
 	}}
 }
 
@@ -788,8 +803,17 @@ func (d Derived) Validate() error {
 			return bad("On("+string(e)+")", "is %q, none of %v", d.On(e), Changes)
 		}
 	}
-	if !d.Seed.Valid() {
+	switch {
+	case !d.Seed.Valid():
 		return bad("Seed", "is %q, none of %v", d.Seed, SeedRules)
+	case d.Seed == SeedMove && !d.tree():
+		return bad("Seed", "is %q, which moves the directory a declaration owns whole, and this one owns none",
+			d.Seed)
+	case d.Seed == SeedLink && d.tree():
+		// A TREE MOVES WHOLE: linked, it would be a stat and a link an entry
+		// inside the round that holds the repository.
+		return bad("Seed", "is %q on a directory owned whole, which a rebuild moves in one rename: %q", d.Seed,
+			SeedMove)
 	}
 	return nil
 }

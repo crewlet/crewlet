@@ -735,8 +735,9 @@ before a pack it may name leaves the directory, so no git process reads an
 index that names a pack that is gone; the index of pushes is built from the
 push rows rather than the packs, and the memo's answers are about objects
 rather than packs, so a pack leaving changes nothing of either, a rebuild links
-each into its new directory, and a log restored or recreated under the node
-drops both. One the node has not written since it started is held to its
+the index of pushes into its new directory and moves the memo there whole, in
+one rename however many answers it holds, and a log restored or recreated under
+the node drops both. One the node has not written since it started is held to its
 checksum before it serves — git's for the first two, the run's own for the
 index of pushes — and every file of a copy is checked again behind the
 serving; a memo's answer is checked by every read of it instead. Anything else in the directory that is neither one of them nor the
@@ -1433,7 +1434,10 @@ then single answers, the least recently used first. Every read checks the
 answer against its own header — the key it answers and the SHA-256 of what it
 holds — so one a crash cut short or a disk damaged is computed again rather
 than served, and nothing behind the serving hashes the memo. A rebuild keeps
-it, since an answer is about objects rather than packs; a log restored or
+it, since an answer is about objects rather than packs — the whole memo moves
+into the rebuilt copy in one rename as that copy takes over, so a rebuild costs
+the same at ten answers or a million — and a request still reading the copy it
+replaced simply misses from then on; a log restored or
 recreated under the node drops it whole, since it may answer for objects the
 history that replaced it does not hold, and nothing a read cut before that
 history's packs were swept is kept after. `crewlet.code.cache.memo.bytes` is
@@ -2166,6 +2170,8 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_provenance_seeded` | `INFO` | A rebuild linked the `runs` of the repository's index into the new copy, so the index outlives it. |
 | `code_cache_provenance_dropped` | `INFO` | The backfill found the repository gone from the rows at a position that had held it (`why`) — purged — and dropped its index; the repository's next sync takes its copy out of the cache. |
 | `code_cache_provenance_unpersisted` | `WARN` | The backfill changed a repository's index but could not write the copy's record of it (`error`): the index serves the change, and the runs it replaced stay on the disk, named by the record there, until the next write of the record — a sync's, the maintainer's or the backfill's own — catches up and takes them off the disk with it; a restart before it reads the index as that record left it. A disk refusing writes, or full. |
+| `code_cache_memo_carried` | `INFO` | A rebuild moved the repository's memo of answers into the new copy (`from` and `to` are the copies' numbers), whole and in one rename, with the `bytes` it holds. |
+| `code_cache_memo_uncarried` | `WARN` | A rebuild could not move the memo into the new copy (`error`): the new copy starts with none and computes its answers again; the old copy's goes with it. The disk refusing a rename within the cache's own directory. |
 | `code_cache_backfill_failed` | `WARN` | A step of the backfill failed for the `repo` (`error`): a page the data nodes could not serve, a run it could not write, or two runs it could not merge — kept as they are, a lookup reading one more run meanwhile. That repository's steps wait `retry_in`, five seconds doubling to five minutes with each of its failures in a row, while every other repository's steps go on; only failures of more than one repository in a row make the backfill as a whole wait, doubling the same way. One now and then is a data node restarting; one repository's, again and again, is rows of it the data nodes cannot serve this node (a rolling upgrade's record deferred everywhere) or a disk refusing its writes; every repository's, while `crewlet.code.cache.provenance.behind` stays up, is the data nodes unreachable from this node, or its disk full. |
 | `code_cache_backfill_unpaced` | `WARN` | The backfill could not count the fleet's live git and data nodes to pace its next page (`error`), so it waits five seconds, doubling to five minutes, and counts again rather than reading on a guess. |
 | `code_cache_round_index_held` | `INFO` | A cold sync of a repository with many packs answered without writing its index first, because the background work in flight left the node's memory no room for it (`estimate` against the `budget`). Slower, never wrong; the background index follows. |

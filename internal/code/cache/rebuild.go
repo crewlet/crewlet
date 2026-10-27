@@ -1096,16 +1096,18 @@ func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason, w
 // ref names what they hold.
 //
 // Of the derived files (derived.go) it links only those whose declaration a
-// rebuild keeps (Seed: SeedLink) — the index of pushes, a function of the rows
-// a rebuild would read again unchanged (seedIndex), and the memo, a function of
-// object ids the new incarnation holds as the old did (seedMemo). Every other is written
-// again over the new incarnation's packs — the round's index by its own round,
-// the maintainer's index and the commit-graph by the maintainer, the graph
-// first — rather than linked from the copy being replaced, whose derived files
-// may be what failed.
+// rebuild links (Seed: SeedLink) — the index of pushes, a function of the rows
+// a rebuild would read again unchanged (seedIndex). The memo, a function of
+// object ids the new incarnation holds as the old did, is no link's: it MOVES
+// into the new incarnation whole, one rename, as that is promoted (SeedMove,
+// promote's carryMemo), so the replaced copy serves it until then and a
+// rebuild that fails leaves it there. Every other is written again over the
+// new incarnation's packs — the round's index by its own round, the
+// maintainer's index and the commit-graph by the maintainer, the graph first
+// — rather than linked from the copy being replaced, whose derived files may
+// be what failed.
 func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string) error {
 	c.seedIndex(e, replaced, inc)
-	c.seedMemo(e, replaced, inc)
 	from := filepath.Join(replaced.dir, "objects", "pack")
 	into := filepath.Join(inc.dir, "objects", "pack")
 	seeded := 0
@@ -1132,8 +1134,13 @@ func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string
 // promote makes a rebuild's incarnation inc current in place of old, which is
 // retired — moved into trash/ once the entry is let go if nobody holds it,
 // else with its last reader — and records the rebuild: inc stands one attempt
-// further along old's line, and holds exactly what that attempt read.
+// further along old's line, and holds exactly what that attempt read. The
+// memo moves from old into inc first, in one rename (carryMemo): served from
+// old until here, and from inc from here on.
 func (c *Cache) promote(e *entry, old, inc *incarnation, reason RebuildReason, took time.Duration) {
+	if old != nil {
+		c.carryMemo(e, old, inc)
+	}
 	e.mu.Lock()
 	var gone string
 	if old != nil {

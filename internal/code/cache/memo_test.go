@@ -434,13 +434,18 @@ func TestAColdIncarnationsMemoGoesWhole(t *testing.T) {
 	}
 }
 
-// A REBUILD KEEPS THE MEMO. A rebuild repairs packs, not answers: every entry
-// of the copy it replaces is linked into the new one — the same file — with
-// what the old copy recorded of it, and is answered there as it was.
+// A REBUILD MOVES THE MEMO WHOLE. A rebuild repairs packs, not answers, and
+// the memo of the copy it replaces MOVES into the new one as that is promoted:
+// one rename of its tree, whatever it holds — so the tree in the rebuilt copy
+// is the very directory the replaced copy held, never a new one filled an
+// entry at a time, and the round that holds the repository pays nothing an
+// answer for it. Every entry is answered there as it was and counted once;
+// the replaced copy, which a reader still holds, answers none from then on.
 //
-// Mutation: seed nothing (seedMemo returns at once) — the rebuilt copy answers
-// none.
-func TestARebuildKeepsTheMemo(t *testing.T) {
+// Mutations: link the tree an entry at a time, as a seeding would — the
+// rebuilt copy's tree is another directory; carry nothing — the rebuilt copy
+// answers none.
+func TestARebuildMovesTheMemoWhole(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
@@ -450,36 +455,96 @@ func TestARebuildKeepsTheMemo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys := memoKeys("rebuild", 3)
+	defer s.Release()
+	keys := memoKeys("rebuild", 64)
 	memoize(t, c, s, keys)
 	before, _ := cache.MemoOf(c, repo)
-	oldEntry := filepath.Join(cache.MemoTree(s.Dir), keys[0].String())
-	oldInfo, err := os.Stat(oldEntry)
+	held := cache.MemoBytes(c)
+	oldTree, err := os.Stat(cache.MemoTree(s.Dir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	rebuilt, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildCorrupt,
 		Began: time.Now()})
 	if err != nil {
-		s.Release()
 		t.Fatalf("the rebuild: %v", err)
 	}
 	defer rebuilt.Release()
-	newInfo, err := os.Stat(filepath.Join(cache.MemoTree(rebuilt.Dir), keys[0].String()))
+	newTree, err := os.Stat(cache.MemoTree(rebuilt.Dir))
 	switch {
 	case err != nil:
-		t.Errorf("the rebuilt copy holds no entry of the copy it replaced: %v", err)
-	case !os.SameFile(oldInfo, newInfo):
-		t.Error("the rebuilt copy's entry is another file than the replaced copy's: a rebuild links it")
+		t.Fatalf("the rebuilt copy holds no memo of the copy it replaced: %v", err)
+	case !os.SameFile(oldTree, newTree):
+		t.Error("the rebuilt copy's memo is another directory than the replaced copy's: a rebuild moves it whole")
 	}
-	s.Release()
+	if statOK(t, cache.MemoTree(s.Dir)) {
+		t.Error("the replaced copy still holds a memo tree beside the one the rebuild carried")
+	}
 	for i, k := range keys {
 		if got, ok := c.MemoGet(rebuilt, k); !ok || string(got) != string(memoBody(i))+memoTail {
 			t.Errorf("the rebuilt copy answers entry %d %q (%t), want the replaced copy's", i, got, ok)
 		}
 	}
+	if _, ok := c.MemoGet(s, keys[0]); ok {
+		t.Error("the replaced copy answered from a memo the rebuild carried away")
+	}
 	if after, _ := cache.MemoOf(c, repo); after.Bytes != before.Bytes {
 		t.Errorf("the rebuilt copy's memo counts %d bytes, want the replaced copy's %d", after.Bytes, before.Bytes)
+	}
+	if got := cache.MemoBytes(c); got != held {
+		t.Errorf("the node counts its memo at %d bytes after the rebuild, want the %d it held once", got, held)
+	}
+}
+
+// A REBUILD OVER ANOTHER HISTORY CARRIES NO MEMO. An answer is a function of
+// object ids only while the history it was cut from stands, so a rebuild
+// whose round reads another history carries nothing of the replaced copy's
+// memo: not over a log recreated under the node, which marks the replaced
+// copy's history gone, nor over a log reanchored at another generation, whose
+// copy the rebuild's own round finds gone and drops a memo of.
+//
+// Mutations: carry a memo whose history is marked gone (carryMemo's
+// historyGone) — the recreated case's rebuilt copy answers it; carry into a
+// copy that dropped a memo (carryMemo's generation) — the reanchored one's.
+func TestARebuildOverAnotherHistoryCarriesNoMemo(t *testing.T) {
+	t.Parallel()
+	for _, how := range []string{"recreated", "reanchored"} {
+		t.Run(how, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			w.push(t, repo, "refs/heads/main", nil)
+			c := w.open(t)
+			w.sync(t, c, repo).Release()
+			earlier := w.log.state()
+			w.push(t, repo, "refs/heads/main", nil)
+			s, err := c.Sync(t.Context(), repo, linearizable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Release()
+			keys := memoKeys(how, 3)
+			memoize(t, c, s, keys)
+			if how == "recreated" {
+				w.log.recreate(earlier)
+			} else {
+				w.log.set(func(f *fakeLog) { f.gen++ })
+			}
+			rebuilt, err := cache.RebuildWhole(t.Context(), c, s, cache.Failure{Reason: cache.RebuildCorrupt,
+				Began: time.Now()})
+			if err != nil {
+				t.Fatalf("the rebuild: %v", err)
+			}
+			defer rebuilt.Release()
+			for _, k := range keys {
+				if _, ok := c.MemoGet(rebuilt, k); ok {
+					t.Errorf("the rebuilt copy answered entry %s of the history it no longer reads", k)
+				}
+			}
+			if st, _ := cache.MemoOf(c, repo); st.Recorded {
+				t.Errorf("the rebuilt copy records a memo of %d bytes from the history it no longer reads", st.Bytes)
+			}
+		})
 	}
 }
 

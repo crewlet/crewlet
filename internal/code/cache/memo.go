@@ -42,8 +42,9 @@ import (
 // naming whole ids is answered from it before any git runs — the copy is not
 // asked again whether it holds them (internal/code/query). That rests on an
 // incarnation never losing an object it held while its history stands: packs
-// are only added to it, a rebuild holds the same rows' packs (and links the
-// memo, SeedLink), and an object leaves a copy only with its history — a log
+// are only added to it, a rebuild holds the same rows' packs (and the memo
+// moves into it whole, SeedMove), and an object leaves a copy only with its
+// history — a log
 // restored or recreated under the node, another history, which the memo
 // cannot tell entry by entry. So a history gone drops the memo whole
 // (OnHistoryGone) and SHUTS it until the full round that dropped it has swept
@@ -195,7 +196,7 @@ type memoIndex struct {
 	// the volume it takes and its last use.
 	entries map[MemoKey]memoEntry
 	// listed: every entry on disk is in entries — the janitor listed the tree
-	// (listMemo), or this process made it (Place) or linked it (seedMemo).
+	// (listMemo), or this process made it (Place).
 	// Until then the incarnation's record counts what its state did, and an
 	// entry no write of this process placed is counted there.
 	listed bool
@@ -1113,73 +1114,66 @@ func (c *Cache) stateMemos(ctx context.Context) {
 	}
 }
 
-// seedMemo is a rebuild's seeding of its memo (seedRebuild): every entry of
-// the memo of the incarnation it replaces hard-linked into the new one
-// (SeedLink), each with the last use the old index knew — an answer is a
-// function of object ids, which the new incarnation holds as the old did, and
-// every read there holds an entry to its key and digest as it did here, so
-// nothing is hashed on the way. Nothing for a memo whose log a round has
-// marked gone (incarnation.historyGone), which that round would drop, nor for
-// one shut (dropMemo). An entry that cannot be linked is left behind, logged
-// once; the rebuild goes on.
-func (c *Cache) seedMemo(e *entry, replaced, inc *incarnation) {
-	if d := c.image.decl(DerivedMemo); d == nil || d.Seed != SeedLink {
+// carryMemo moves the memo of from, an incarnation a rebuild replaces, into
+// to, the incarnation replacing it, as to is promoted (rebuild.go's promote):
+// ONE RENAME OF THE TREE, whatever it holds (SeedMove), its record and its
+// index with it — so the carry costs the same at ten answers or a million, and
+// the round that holds the repository, which a request's repair waits on,
+// pays one syscall for it rather than a stat and a link an answer. An answer
+// is a function of object ids, which to holds as from did, and every read
+// there holds an entry to its key and digest as it did here, so nothing is
+// read on the way. A compaction's swap carries a memo the same way.
+//
+// Under from's memo lock and then to's, so no answer is placed into from's
+// tree as it moves, nor counted for a tree no longer there; and from's memo is
+// SHUT once its tree is gone — its record and index taken, its generation
+// moved — so a batch begun on from places nothing (Place), none begins
+// (Memo), and a reader still holding from misses. Nothing is carried from a
+// memo whose log a round has marked gone (incarnation.historyGone), which
+// that round would drop, nor from one shut (dropMemo), nor into an
+// incarnation whose own round has dropped a memo (its generation moved): what
+// it holds is then not the history from's answers were cut from. A tree that
+// cannot be moved is logged and left in from, and goes with it: to starts
+// with none.
+//
+// NO SYNC: a memo is a cache of a cache. A crash that loses the rename leaves
+// the tree in from, the lower incarnation, which the boot moves aside; one
+// that keeps it before to's state records it leaves a tree to's first full
+// round finds (foundMemo) and the janitor counts.
+func (c *Cache) carryMemo(e *entry, from, to *incarnation) {
+	if d := c.image.decl(DerivedMemo); d == nil || d.Seed != SeedMove {
 		return
 	}
+	from.memoMu.Lock()
+	defer from.memoMu.Unlock()
+	to.memoMu.Lock()
+	defer to.memoMu.Unlock()
 	e.mu.Lock()
-	_, recorded := replaced.derived[DerivedMemo]
-	gone := replaced.historyGone || replaced.memoShut
-	uses := map[MemoKey]int64{}
-	if replaced.memo != nil {
-		for k, en := range replaced.memo.entries {
-			uses[k] = en.used
-		}
-	}
+	_, recorded := from.derived[DerivedMemo]
+	carry := recorded && !from.historyGone && !from.memoShut && !from.discarded && !to.discarded &&
+		to.memoGen == 0
 	e.mu.Unlock()
-	if !recorded || gone {
+	if !carry {
 		return
 	}
-	from := filepath.Join(replaced.dir, memoRel)
-	list, err := os.ReadDir(from)
+	err := os.Mkdir(filepath.Join(to.dir, engineRoot), hostbox.DirMode)
+	if err == nil || errors.Is(err, fs.ErrExist) {
+		err = os.Rename(filepath.Join(from.dir, memoRel), filepath.Join(to.dir, memoRel))
+	}
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			c.log.Warn("code_cache_rebuild_seed_failed", "repo", e.id, "file", memoRel, "error", err)
+			c.log.Warn("code_cache_memo_uncarried", "repo", e.id, "from", from.n, "to", to.n, "error", err)
 		}
 		return
-	}
-	if _, err := c.makeMemoTree(inc); err != nil {
-		c.log.Warn("code_cache_rebuild_seed_failed", "repo", e.id, "file", memoRel, "error", err)
-		return
-	}
-	into := filepath.Join(inc.dir, memoRel)
-	entries := make(map[MemoKey]memoEntry, len(list))
-	logged := false
-	for _, d := range list {
-		k, ok := parseMemoKey(d.Name())
-		if !ok || !d.Type().IsRegular() {
-			continue
-		}
-		info, ierr := d.Info()
-		if ierr == nil {
-			ierr = os.Link(filepath.Join(from, d.Name()), filepath.Join(into, d.Name()))
-		}
-		if ierr != nil {
-			if !logged && !errors.Is(ierr, fs.ErrNotExist) {
-				logged = true
-				c.log.Warn("code_cache_rebuild_seed_failed", "repo", e.id, "file", filepath.Join(memoRel, d.Name()),
-					"error", ierr)
-			}
-			continue
-		}
-		entries[k] = memoEntry{bytes: memoBytesOf(info.Size()), used: uses[k]}
-	}
-	var total int64
-	for _, en := range entries {
-		total += en.bytes
 	}
 	e.mu.Lock()
-	inc.memo = &memoIndex{entries: entries, listed: true}
-	c.setDerived(inc, DerivedMemo, derivedState{Bytes: total, Step: StepMemo}, true)
+	rec, idx := from.derived[DerivedMemo], from.memo
+	c.setDerived(from, DerivedMemo, derivedState{}, false)
+	from.memo = nil
+	from.memoGen++
+	from.memoShut = true
+	c.setDerived(to, DerivedMemo, rec, true)
+	to.memo = idx
 	e.mu.Unlock()
-	c.log.Info("code_cache_memo_seeded", "repo", e.id, "incarnation", inc.n, "entries", len(entries))
+	c.log.Info("code_cache_memo_carried", "repo", e.id, "from", from.n, "to", to.n, "bytes", rec.Bytes)
 }

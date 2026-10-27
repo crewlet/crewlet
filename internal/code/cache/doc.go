@@ -380,7 +380,9 @@
 // copy's state again once its memo's bytes moved. A history gone drops it
 // whole and shuts
 // it until the round that dropped it has swept the replaced history's packs,
-// and no batch begun before the drop places anything after it.
+// and no batch begun before the drop places anything after it. A rebuild
+// MOVES it whole into the incarnation it promotes, one rename however many
+// entries it holds (carryMemo, SeedMove), never a link an entry.
 //
 // # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //
