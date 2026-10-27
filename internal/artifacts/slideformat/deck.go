@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 // ---- the files ------------------------------------------------------------ //

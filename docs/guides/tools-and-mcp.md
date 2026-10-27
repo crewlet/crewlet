@@ -300,8 +300,10 @@ with every finding at once, the first 20 listed and the rest counted, and a
 closed format's refusal points at `get_artifact_format`. Any write tool (an
 artifact's or another) that answers a policy refusal (`invalid`) for the
 fourth time in one phase appends a plain instruction to stop retrying, raise a
-blocker on the work item and end the branch, and logs
-`tool_policy_refusal_loop`; the call itself still runs, so a version that is
+blocker on the work item and end the branch, logs
+`tool_policy_refusal_loop` and counts `crewlet.tools.policy_refusal_loops`
+([ADR-0059](../../adr/0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md));
+the call itself still runs, so a version that is
 finally right still publishes. File text another principal wrote is
 [fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a long one
 is condensed by the seat's auxiliary model unless the call passes `offset`.

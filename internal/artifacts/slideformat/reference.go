@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 // Reference is the slide format as an agent reads it before writing a deck:

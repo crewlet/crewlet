@@ -41,6 +41,10 @@ type Surface struct {
 	// installed second.
 	guard Guard
 
+	// counter counts the refusal-loop guard's decisions, or nil
+	// ([Surface.WithCounter]).
+	counter Counter
+
 	mu     sync.Mutex
 	active []string
 	called []Call

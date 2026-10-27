@@ -40,9 +40,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 // Path is where a design version keeps its canvas: the kind's entry.

@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
-	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 // ---- reading a kit -------------------------------------------------------- //

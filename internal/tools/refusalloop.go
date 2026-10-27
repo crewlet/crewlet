@@ -6,6 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // PolicyRefusalLimit is how many policy refusals one write tool answers on one
@@ -21,11 +22,25 @@ const PolicyRefusalLimit = 4
 
 var loopLog = logging.Get("tools.refusals")
 
+// Counter is where a surface counts what it decided, consumer-defined and one
+// method wide: the node's metrics recorder answers it.
+type Counter interface {
+	Add(name string, n uint64, attrs metrics.Attrs)
+}
+
+// WithCounter installs the counter the refusal-loop guard records into
+// ([metrics.ToolPolicyRefusalLoops]) and returns the surface. Nil counts
+// nothing, which is a test's and a validate command's case.
+func (s *Surface) WithCounter(c Counter) *Surface {
+	s.counter = c
+	return s
+}
+
 // refusalLoop is a write tool's answer once the tool has refused on its policy
 // [PolicyRefusalLimit] times or more on this surface: the refusal, unchanged,
 // then a plain instruction to stop, raise the blocker on the work item and end
-// the branch; and a log line, so an operator sees a loop the turn's own record
-// shows only as failed calls.
+// the branch; and a log line and a count ([metrics.ToolPolicyRefusalLoops]),
+// so an operator sees a loop the turn's own record shows only as failed calls.
 //
 // NEVER A SILENT CAP. The call ran and its refusal is answered whole; the
 // guard adds the sentence a model needs to stop, and refuses nothing itself,
@@ -48,6 +63,9 @@ func (s *Surface) refusalLoop(tool string, ann Annotations, turn *turnctx.Turn, 
 		attrs = append(attrs, "turn", turn.RunID, "work_key", turn.WorkKey)
 	}
 	loopLog.Warn("tool_policy_refusal_loop", attrs...)
+	if s.counter != nil {
+		s.counter.Add(metrics.ToolPolicyRefusalLoops, 1, metrics.Attrs{"tool": tool})
+	}
 	res.Output += fmt.Sprintf("\n\nSTOP RETRYING %s. It has refused %d calls in this turn on its "+
 		"policy, so another guess will not land. Do not probe it with other values or look "+
 		"for a way round it. Raise a blocker on the work item instead: say what you were "+

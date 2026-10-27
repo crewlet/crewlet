@@ -893,7 +893,7 @@ one, agents included, and many may exist.
   `doc`, `design`, `dashboard`) answers its own index the same way.
 - **Held to its format at publish, every fault in one refusal.** `brand.json`
   is read strictly (`internal/artifacts/brandformat` over
-  `internal/artifacts/jsonform`): an unknown key (named with the keys its
+  `internal/jsonform`): an unknown key (named with the keys its
   object takes), a value of the wrong type (named with the shape read there),
   a key written twice, a value outside its grammar, a file the index does not
   name, and a logo or face outside its asset rule are each refused, naming the

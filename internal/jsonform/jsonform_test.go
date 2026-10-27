@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 type face struct {

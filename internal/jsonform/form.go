@@ -1,7 +1,9 @@
 // Package jsonform is the one strict reader the artifact formats hold their
 // JSON indexes to (a brand kit's `brand.json`, a deck's `deck.json`, a doc's
 // `doc.json`, a design's `canvas.json`, a dashboard's `dashboard.json`), and
-// the one account of each index's shape an agent reads before it writes one.
+// the one account of each index's shape an agent reads before it writes one:
+// a tool's contract is its validator's, and every fault comes back at once
+// (ADR-0059).
 //
 // ONE SOURCE FOR THE CHECK AND THE REFERENCE. A [Form] is derived by
 // reflection from the Go type the format decodes into, so the keys and types

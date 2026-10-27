@@ -386,6 +386,10 @@ type Config struct {
 	// required skills.
 	Guard func(*tools.Surface) tools.Guard
 
+	// Counter is where the worker's surface counts its refusal-loop
+	// decisions, the parent turn's recorder. Nil counts nothing.
+	Counter tools.Counter
+
 	// Telemetry receives every child's Result, once, on every path a child
 	// can end on.
 	//
@@ -721,6 +725,9 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	// the parent's — see [runGraph].
 	if cfg.Turn != nil {
 		surface = surface.ForTurn(cfg.Turn.InPhase(types.PhaseSubagent).WithCalls(calls))
+	}
+	if cfg.Counter != nil {
+		surface = surface.WithCounter(cfg.Counter)
 	}
 	if cfg.Guard != nil {
 		// AFTER the surface exists and from that surface, so what the

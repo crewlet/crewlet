@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 // EntryPath is where a dashboard's spec lives in its version: the kind's

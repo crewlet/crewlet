@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/artifacts/jsonform"
 	"github.com/crewlet/crewlet/internal/artifacts/svgsafe"
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 // ---- the reference -------------------------------------------------------- //
