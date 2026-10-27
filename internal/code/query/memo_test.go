@@ -1,16 +1,20 @@
 package query_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -308,5 +312,99 @@ func TestAMemoHitIsJudgedByTheGrantFirst(t *testing.T) {
 	}
 	if got := lookups() - before; got != 0 {
 		t.Errorf("the outsider's refused read counted %d memo lookups, want none", got)
+	}
+}
+
+// held is a query.Pool that holds the first process of subcommand sub until
+// release is closed, telling entered once it is held, and records every
+// process it runs beside.
+type held struct {
+	recording
+	sub      string
+	entered  chan struct{}
+	release  chan struct{}
+	holding  sync.Once
+	occupied atomic.Bool
+}
+
+func (h *held) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	if c.Args[0] == h.sub && h.occupied.CompareAndSwap(false, true) {
+		h.holding.Do(func() { close(h.entered) })
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+		}
+	}
+	return h.recording.Run(ctx, c)
+}
+
+// TWO READS OF ONE PAGE NO MEMO HOLDS RUN ONE GIT. A read that misses a page
+// another read of the node is cutting waits for that read's run and is
+// answered from the memo it filled — the same page — rather than run the same
+// git beside it: so the seats a push's review fans out to, asking one page
+// at once, cost the node one process, one write of the page's files and one
+// unit of its share. The first read's listing is held until the second waits,
+// so the two overlap whatever the machine's speed.
+//
+// Mutation: lead every miss (await answering at once) — the second read runs
+// its own ls-tree beside the held one, and waits on nothing.
+func TestTwoReadsOfOnePageNoMemoHoldsRunOneGit(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	files := map[string]string{}
+	for i := range 40 {
+		files[fmt.Sprintf("dir/file-%02d.txt", i)] = fmt.Sprintf("content %d\n", i)
+	}
+	head := x.commit(files, "a tree to list")
+	repo := x.repo(codetest.RepoName)
+	x.settle(0, repo)
+	h := &held{sub: "ls-tree", entered: make(chan struct{}), release: make(chan struct{})}
+	h.Pool = x.f.Nodes()[0].Pool()
+	s := x.server(0, query.Options{Git: h})
+	q := treeQ(repo, code.TreeQuery{Rev: head, Recursive: true})
+
+	var (
+		wg      sync.WaitGroup
+		answers [2]code.GitAnswer
+		errs    [2]error
+	)
+	read := func(i int) {
+		defer wg.Done()
+		answers[i], errs[i] = s.Read(t.Context(), q)
+	}
+	wg.Add(2)
+	go read(0)
+	select {
+	case <-h.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first read ran no ls-tree within 30s")
+	}
+	go read(1)
+	deadline := time.Now().Add(30 * time.Second)
+	for query.Waiting(s) != 1 {
+		if time.Now().After(deadline) {
+			close(h.release)
+			wg.Wait()
+			t.Fatalf("the second read of the page the first is cutting waited on nothing within 30s; it ran %v",
+				kinds(&h.recording, 0))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(h.release)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+	}
+	if n := ran(kinds(&h.recording, 0), "ls-tree"); n != 1 {
+		t.Errorf("two reads of one page ran ls-tree %d times, want once: %v", n, kinds(&h.recording, 0))
+	}
+	if answers[0].Memo || !answers[1].Memo {
+		t.Errorf("the first read answered from the memo %t and the second %t, want the first cut and the "+
+			"second from its memo", answers[0].Memo, answers[1].Memo)
+	}
+	if !reflect.DeepEqual(unstamped(answers[0]), unstamped(answers[1])) {
+		t.Errorf("the second read answered\n%+v\nwant the page the first cut\n%+v", answers[1], answers[0])
 	}
 }

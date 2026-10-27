@@ -1,8 +1,10 @@
 package query
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 
@@ -136,22 +138,60 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 func memoizable(q code.GitQuery) bool { return q.Kind != code.GitLandedIn }
 
 // recallWhole is the memo's answer to a read naming whole ids alone, asked
-// before any git runs: none for a read that names an abbreviation, or whose
-// grant this copy refuses — objects judges that at the log's head, and the
-// memo is asked after it.
-func (r *read) recallWhole(at cursor) (code.GitAnswer, bool) {
+// before any git runs — and on a miss, the answer of the read cutting the same
+// page now, waited for (await): none for a read that names an abbreviation, or
+// whose grant this copy refuses — objects judges that at the log's head, and
+// the memo is asked after it.
+func (r *read) recallWhole(ctx context.Context, at cursor) (code.GitAnswer, bool, error) {
 	if !memoizable(r.q) || r.grant() != nil {
-		return code.GitAnswer{}, false
+		return code.GitAnswer{}, false, nil
 	}
 	whole := map[string]string{}
 	for _, rev := range revsOf(r.q) {
 		if !gitref.ValidOID(rev) {
-			return code.GitAnswer{}, false
+			return code.GitAnswer{}, false, nil
 		}
 		whole[rev] = rev
 	}
 	r.recalled = true
-	return r.recall(whole, at)
+	if a, ok := r.recall(whole, at); ok {
+		return a, true, nil
+	}
+	return r.await(ctx, whole, at)
+}
+
+// await is a memo miss's SINGLE FLIGHT: where another read of this node is
+// cutting the page this one missed — the same repository and memo key — the
+// read waits for that read to answer, its pages placed, and asks the memo
+// again; where none is, it LEADS, its own run the page's flight until it has
+// answered (Read lands it). A read whose memo still misses after the wait —
+// the leader's run failed, was too large, or memoized nothing — runs its own,
+// as any miss does, leading nothing. The wait holds no unit of the share and
+// no slot of the read lane, and ends with the read's answer as a wait for the
+// share does: due, it answers unready (share), which another git node answers
+// meanwhile.
+func (r *read) await(ctx context.Context, whole map[string]string, at cursor) (code.GitAnswer, bool, error) {
+	k := flightKey{repo: r.q.RepoID, key: r.memoKey(whole, at)}
+	f, lead := r.s.join(k)
+	if lead {
+		r.landing = func() { r.s.land(k, f) }
+		return code.GitAnswer{}, false, nil
+	}
+	r.s.waiting.Add(1)
+	select {
+	case <-f.done:
+		r.s.waiting.Add(-1)
+	case <-ctx.Done():
+		r.s.waiting.Add(-1)
+		if code.AnswerDue(ctx) {
+			return code.GitAnswer{}, false, r.unready(code.UnreadyShare, fmt.Sprintf("%s was cutting the page "+
+				"for another read until the read's answer fell due, its asker's attempt spent; another git node "+
+				"answers meanwhile", r.s.o.NodeID))
+		}
+		return code.GitAnswer{}, false, ctx.Err()
+	}
+	a, ok := r.recall(whole, at)
+	return a, ok, nil
 }
 
 // recall is the memo's page at at of the read, its revisions read as whole

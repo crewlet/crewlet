@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -86,6 +88,50 @@ type Server struct {
 	gitBudget time.Duration
 	pageBytes int
 	probes    int
+	// flights is every page a read of this node is cutting that its copy's
+	// memo held none of, by repository and the page's memo key: a read that
+	// misses the same page waits for that read's run and asks the memo again,
+	// rather than run the same git beside it (read.await). Under flightsMu;
+	// waiting counts the reads waiting on one now, which a case reads to know
+	// a read waits (export_test.go).
+	flightsMu sync.Mutex
+	flights   map[flightKey]*flight
+	waiting   atomic.Int64
+}
+
+// flightKey names one page a read's run is cutting: its repository and its
+// memo key, which every argument of the page is in.
+type flightKey struct {
+	repo string
+	key  cache.MemoKey
+}
+
+// flight is one page being cut, closed once the read that cuts it has
+// answered — its pages placed in the memo, or given back.
+type flight struct{ done chan struct{} }
+
+// join is the flight of the page k: one already flying, and false; or a new
+// one the caller leads, and true.
+func (s *Server) join(k flightKey) (*flight, bool) {
+	s.flightsMu.Lock()
+	defer s.flightsMu.Unlock()
+	if f, ok := s.flights[k]; ok {
+		return f, false
+	}
+	if s.flights == nil {
+		s.flights = map[flightKey]*flight{}
+	}
+	f := &flight{done: make(chan struct{})}
+	s.flights[k] = f
+	return f, true
+}
+
+// land ends the flight f of the page k, letting every read waiting on it go.
+func (s *Server) land(k flightKey, f *flight) {
+	s.flightsMu.Lock()
+	delete(s.flights, k)
+	s.flightsMu.Unlock()
+	close(f.done)
 }
 
 // New is a server over o, refusing a field it needs by name.
@@ -142,7 +188,11 @@ func New(o Options) (*Server, error) {
 //     read naming whole ids, as soon as its grant is judged and before any
 //     git runs; for one naming an abbreviation, once step 7 has expanded it.
 //     A hit holds no unit of the share and goes on through steps 9 and 10
-//     as a page cut does.
+//     as a page cut does. A miss of a page ANOTHER READ OF THIS NODE IS
+//     CUTTING waits for that read's run and asks the memo again (await): N
+//     seats asking one page a push just made — a review's fan-out — run one
+//     git, write the page's files once and hold one unit of the share, not N
+//     of each; one whose memo still misses runs its own.
 //  7. Every abbreviated id is expanded from the objects alone, and every id
 //     and path checked present with one batch (objects.go); an id the copy
 //     lacks is code.ErrObjectNotFound. No refusal of steps 5 and 7 is
@@ -207,7 +257,17 @@ func (s *Server) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 	if err := r.sync(ctx, r.fresh()); err != nil {
 		return code.GitAnswer{}, err
 	}
-	a, ok := r.recallWhole(at)
+	// A read that leads a page's flight lets those waiting on it go once it
+	// has answered, whatever it answered: its pages are placed by then.
+	defer func() {
+		if r.landing != nil {
+			r.landing()
+		}
+	}()
+	a, ok, err := r.recallWhole(ctx, at)
+	if err != nil {
+		return code.GitAnswer{}, err
+	}
 	if !ok {
 		if a, err = r.compute(ctx, at); err != nil {
 			return code.GitAnswer{}, err
@@ -230,8 +290,12 @@ func (r *read) compute(ctx context.Context, at cursor) (code.GitAnswer, error) {
 		return code.GitAnswer{}, err
 	}
 	if !r.recalled && memoizable(r.q) {
-		if a, ok := r.recall(wholeOf(r.q, objs), at); ok {
+		whole := wholeOf(r.q, objs)
+		if a, ok := r.recall(whole, at); ok {
 			return a, nil
+		}
+		if a, ok, err := r.await(ctx, whole, at); err != nil || ok {
+			return a, err
 		}
 	}
 	r.index(commitsOf(r.q, objs))
@@ -326,8 +390,10 @@ type read struct {
 	coverage  *code.Coverage
 	named     []string
 	// recalled: the memo was asked before any git ran (recallWhole), so it
-	// is not asked again once the read's objects are found.
+	// is not asked again once the read's objects are found. landing ends the
+	// flight of the page the read leads (await), nil where it leads none.
 	recalled bool
+	landing  func()
 	// metered is set once the read's own git has begun (step 8), and gitLeft
 	// is what is left of its budget of run time: each of its processes is
 	// given that as its deadline ([read.budget]) and charged what it ran

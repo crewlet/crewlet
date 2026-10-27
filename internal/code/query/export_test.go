@@ -13,6 +13,10 @@ func SetPageBytes(s *Server, n int) { s.pageBytes = n }
 // TextCost is what b costs inside a JSON string, the page's own measure.
 func TextCost(b []byte) int { return textCost(b) }
 
+// Waiting is how many of s's reads wait now for another read cutting the page
+// they missed.
+func Waiting(s *Server) int64 { return s.waiting.Load() }
+
 // SetLandedProbes scales the ancestry checks s's landed-in searches run —
 // production's MaxLandedProbes — so a case reaches the bound with a handful
 // of forced moves.

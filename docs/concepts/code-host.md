@@ -1411,7 +1411,10 @@ answer's end — a listing's, a file's or its line range's, a stat's, a
 patch's — and the memo keeps each: reading a file page by page streams it once,
 and listing that tree page by page runs `ls-tree` once. A comparison is kept
 whole; whether a commit landed in a branch never is, since its answer moves
-with the branch.
+with the branch. A read that misses a page another read on the node is
+cutting waits for it and is answered from what that read kept, so the seats a
+push's review reaches, all asking for the same diff at once, cost the node one
+git process rather than one each.
 
 **Measured.** Over a history of 14 080 commits under a tree of 10 000 files,
 on two cores of a laptop, a page from the memo is answered in 21 to 90 µs,

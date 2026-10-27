@@ -168,7 +168,12 @@
 // found its objects there. git cannot seek inside an object or a listing, so
 // the fiftieth page of a file is a read of everything before it: the run that
 // misses cuts every page from the one asked to its answer's end and memoizes
-// each, so reading a file page by page streams it once.
+// each, so reading a file page by page streams it once. And a read that
+// misses a page another read of the node is cutting waits for that one and is
+// answered from the memo it filled (read.await): seats asking one page at
+// once — a review's fan-out right after a push — cost one git process, one
+// write of the page's files and one unit of the share, where each ran its
+// own.
 //
 // # Measured
 //
