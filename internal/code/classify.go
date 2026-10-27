@@ -107,7 +107,8 @@ var byteOrderMark = []byte("\uFEFF")
 //   - every comment go/ast calls a directive — //go:… (pragmas, //go:embed,
 //     //go:generate, //go:linkname, //go:build), //line and its /*line …*/
 //     form, //export, //extern, and every //name:value line of the form
-//     [a-z0-9]+:[a-z0-9], //lint:ignore and //nolint:errcheck among them;
+//     [a-z0-9]+:[a-z0-9], //lint:ignore and //nolint:errcheck among them,
+//     read past the blanks before it as revive reads // revive:disable;
 //   - the build's // +build lines, and every // +word marker a generator
 //     reads (Kubernetes' +k8s:…, controller-gen's +kubebuilder:…);
 //   - a linter's suppression: //nolint as golangci-lint reads it, so
@@ -800,9 +801,9 @@ func (f *goFile) kindOf(text string, header bool) commentKind {
 	return plainComment
 }
 
-// goDirective reports a line comment's body, past its //, that Go's own
-// tools read as a directive: go/ast's list — "line ", "extern ", "export ",
-// and the form [a-z0-9]+:[a-z0-9]…, which every tool that follows Go's
+// goDirective reports a line comment's body, past its //, that a tool reads
+// as a directive: go/ast's list — "line ", "extern ", "export ", and the
+// //name:value form (nameValue), which every tool that follows Go's
 // convention writes (lint:ignore, nolint:errcheck, revive:disable) — and any
 // go: or lint: at all, which the compiler and staticcheck take whatever
 // follows the colon.
@@ -812,8 +813,19 @@ func goDirective(body string) bool {
 			return true
 		}
 	}
-	name, rest, ok := strings.Cut(body, ":")
-	return ok && name != "" && rest != "" && lowerAlnum(name) && lowerAlnum(rest[:1])
+	_, ok := nameValue(body)
+	return ok
+}
+
+// nameValue reports a directive body of the form [a-z0-9]+:[a-z0-9]…, and its
+// name, read past any blanks before it as revive reads its own
+// (`^//[\s]*revive:`): go/ast's form wants none, but // revive:disable, with
+// the space most comments carry, turns revive's rules off to the file's end
+// all the same — and a person's prose that takes the form erring toward code
+// is the safe side.
+func nameValue(body string) (string, bool) {
+	name, rest, ok := strings.Cut(strings.TrimLeft(body, " \t\v\f"), ":")
+	return name, ok && name != "" && rest != "" && lowerAlnum(name) && lowerAlnum(rest[:1])
 }
 
 // generatorMarker reports a // +word line: go/build's +build form, which code
