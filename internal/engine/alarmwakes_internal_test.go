@@ -86,6 +86,64 @@ func TestAnAlarmWakesExactlyTheSeatsTheHealthToolsAdmit(t *testing.T) {
 	}
 }
 
+// AN ALARM'S WAKE IS NOBODY'S ERRAND. A transition reaches a granted seat
+// through the real path — the delivery the outbox publishes, the alarms' own
+// parser and prompt, the notification service's wake — and the turn it wakes
+// names no requester and no sender: the engine's own notice, as its repair on
+// a work item is. So the requester ceiling every code read is decided under
+// (builtin.ceilingOf) bounds nothing in it, and the seat reads on its own
+// grant — never as a turn a stranger woke, which reads no code at all, the
+// code_status the wake's prompt sends it to beside fleet_health among it.
+//
+// Mutation: give the alarms' inbound a sender — the node that raised the
+// alarm, say, which no seat or person maps to — and the wake reads as a
+// stranger's: red.
+func TestAnAlarmsWakeIsNobodysErrand(t *testing.T) {
+	t.Parallel()
+	c, err := NewCompany(parseCompany(t, healthToolsCompany))
+	if err != nil {
+		t.Fatalf("NewCompany: %v", err)
+	}
+	parsers, _ := (&Engine{}).nativeParsers(c)
+	var parser notify.Parser
+	for _, p := range parsers {
+		if p.Source() == alarmwake.Source {
+			parser = p
+		}
+	}
+	if parser == nil {
+		t.Fatalf("the epoch routes no %s", alarmwake.Source)
+	}
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	w, err := alarmwake.Encode(statelog.AlarmTransition{
+		ID:   statelog.TransitionID("node-a", statelog.KindApplyLag, "", statelog.TransitionFired, at),
+		Node: "node-a", Kind: statelog.KindApplyLag, Change: statelog.TransitionFired,
+		Detail: "this node is 4m12s behind the log", Since: at, At: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := notify.NewRegistry(c.Org, nil)
+	e := &Engine{}
+	e.notify.registry = reg
+	evs := []*events.Event{noticeOf(t, reg, parser, alarmwake.Prompt{}, w.BodyRaw, "sre")}
+
+	interactions := e.interactionsOf(evs)
+	if len(interactions) == 0 {
+		t.Fatalf("the wake carries no interaction, so this case proves nothing")
+	}
+	if got := requesterOf(evs, interactions, "sre"); got != "" {
+		t.Errorf("the alarm's wake is acting for %q, want nobody", got)
+	}
+	if got := sendersSpoken(interactions); len(got) != 0 {
+		t.Errorf("the alarm's wake names the senders %+v, want none: a sender nobody maps to is a "+
+			"stranger, and a turn a stranger woke reads no code", got)
+	}
+	if got := sendersOf(reg, evs); len(got) != 0 {
+		t.Errorf("the alarm's wake profiles %+v as a counterparty, want nobody", got)
+	}
+}
+
 // refusingBroker refuses its first refuse publishes, then takes every one.
 type refusingBroker struct {
 	mu       sync.Mutex
