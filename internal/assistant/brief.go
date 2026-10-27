@@ -242,9 +242,10 @@ func (s *surface) answerBrief(ctx context.Context, tool catalog.Tool,
 // resolveBrief turns a checked draft into the card: the scope from the page
 // context, each row kept only for a record this turn read that the person may
 // open, its tone held to the facts that read carried, and every action built
-// by the engine.
+// by the engine. The verdict is the rows that survive: a row dropped here is
+// one the card does not count.
 func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire.BriefCard, error) {
-	card := &wire.BriefCard{Summary: d.Summary, Needs: []wire.BriefNeed{},
+	card := &wire.BriefCard{About: d.About, Needs: []wire.BriefNeed{}, Context: d.Context,
 		FollowUps: append([]string{}, d.FollowUps...), AsOf: s.t.svc.now().UTC()}
 	if page := s.t.page; page != nil {
 		card.Scope = wire.BriefScope{Screen: page.Screen, Title: page.Title, Record: page.Selection}
@@ -266,24 +267,6 @@ func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire
 			need.Action = askAction(n.Question)
 		}
 		card.Needs = append(card.Needs, need)
-	}
-	if r := d.Recommended; r != nil {
-		step := &wire.BriefStep{Text: r.Text}
-		switch r.Action {
-		case catalog.BriefActionOpen:
-			record, err := s.resolved(ctx, *r.Ref)
-			if err != nil {
-				return nil, err
-			}
-			// THE STEP STAYS, ITS PRESS DOES NOT: a recommendation whose
-			// record cannot be opened for the person is still advice.
-			if record != nil {
-				step.Action = record.open()
-			}
-		case catalog.BriefActionAsk:
-			step.Action = askAction(r.Question)
-		}
-		card.Recommended = step
 	}
 	if err := card.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBriefInvalid, err)

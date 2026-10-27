@@ -664,3 +664,81 @@ func TestNothingSaidIsStoredInTheClear(t *testing.T) {
 		}
 	}
 }
+
+// A STORED CARD IN A SHAPE TODAY'S CONTRACT REFUSES IS READ AS A NOTICE, never
+// as its body: the brief cards an engine recorded before ADR-0062 (a
+// summary, a recommendation and a neutral row, and no about line) come back as
+// one notice on every read the transcript, the card and the model's history
+// share, while a card in today's shape and a kind this build does not know
+// are read as they were written. Mutation: drop the check and the earlier
+// brief reads as a brief with no about line, which the dashboard draws empty;
+// replace an unknown kind too and a newer peer's card is lost.
+func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	sealer := newSealer(t)
+	ada := uuid.New()
+	c := person(ada, "ada")
+	conversation := n.conversation(c, "Brief: Inbox")
+	turn := n.openTurn(c, conversation)
+	message := n.say(c, turn, 1, wire.RoleAssistant, "")
+	record := func(i int) uuid.UUID {
+		id := assistantdomain.CardID(turn, i)
+		if _, err := n.writer.RecordCard(t.Context(), fresh(c), turn, wire.CardEvent{
+			CardID: id, MessageID: message,
+			Card: wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{
+				Tone: wire.NoticeInfo, Text: "Placeholder"}},
+		}, []string{"worklet"}); err != nil {
+			t.Fatalf("record card %d: %v", i, err)
+		}
+		return id
+	}
+	store := func(id uuid.UUID, kind wire.CardKind, body string) {
+		sealed, err := sealer.Seal([]byte(body), assistantdomain.AAD(conversation,
+			assistantdomain.RecordCard, id, assistantdomain.ColumnBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := n.db.Tx(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `UPDATE assistant_cards SET type = ?,
+				body_sealed = ? WHERE id = ?`, string(kind), sealed, id.String())
+			return err
+		}); err != nil {
+			t.Fatalf("store card %s: %v", id, err)
+		}
+	}
+	earlier, today, newer := record(1), record(2), record(3)
+	store(earlier, wire.CardBrief, `{"type":"brief","brief":{"scope":{"screen":"inbox",`+
+		`"title":"Inbox"},"summary":"Product Manager asks whether to move ENG-20.",`+
+		`"needs":[{"ref":{"kind":"task","id":"ENG-20"},"text":"ENG-20 waits on you",`+
+		`"tone":"neutral"}],"recommended":{"text":"Open ENG-20"},"follow_ups":["a","b","c"],`+
+		`"as_of":"2026-10-27T08:03:17Z"}}`)
+	store(newer, "timeline", `{"type":"timeline","timeline":{"events":[]}}`)
+
+	want := assistantdomain.EarlierShapeNotice()
+	got, err := n.reader.Transcript(t.Context(), ada, conversation)
+	if err != nil {
+		t.Fatalf("read the transcript: %v", err)
+	}
+	cards := map[uuid.UUID]assistantdomain.Card{}
+	for _, card := range got.Cards {
+		cards[card.ID] = card
+	}
+	if card := cards[earlier]; card.Type != wire.CardNotice || card.Card.Brief != nil ||
+		card.Card.Notice == nil || *card.Card.Notice != *want.Notice {
+		t.Errorf("the earlier brief reads as %+v, want the notice", card.Card)
+	}
+	if err := cards[earlier].Card.Validate(); err != nil {
+		t.Errorf("the notice an earlier card reads as is refused by today's contract: %v", err)
+	}
+	if card := cards[today]; card.Type != wire.CardNotice || card.Card.Notice.Text != "Placeholder" {
+		t.Errorf("a card in today's shape reads as %+v", card.Card)
+	}
+	if card := cards[newer]; card.Type != "timeline" || card.Card.Type != "timeline" {
+		t.Errorf("a newer peer's card reads as %+v, want it as written", card.Card)
+	}
+	one, err := n.reader.Card(t.Context(), ada, earlier)
+	if err != nil || one.Type != wire.CardNotice || one.Card.Notice == nil {
+		t.Errorf("the earlier brief read alone is %+v, %v, want the notice", one.Card, err)
+	}
+}

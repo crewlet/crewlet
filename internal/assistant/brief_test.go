@@ -30,9 +30,9 @@ func itemPage() *wire.PageContext {
 // briefOf is an answer_brief call citing ENG-7 in a row of tone.
 func briefOf(id string, tone wire.BriefTone) evals.Round {
 	return evals.Call(id, catalog.AnswerBriefTool, map[string]any{
-		"summary": "ENG-7, Rotate keys, waits on you.",
+		"about": "ENG-7, Rotate keys, waits on your review.",
 		"needs": []any{map[string]any{"ref_kind": "task", "ref_id": "ENG-7",
-			"text": "ENG-7 waits on your review", "tone": string(tone), "action": "open"}},
+			"do": "Review ENG-7: Rotate keys", "tone": string(tone), "action": "open"}},
 		"follow_ups": []any{"Who is on ENG-7?"},
 	})
 }
@@ -115,8 +115,8 @@ func TestABriefAnswersWithOneBriefCard(t *testing.T) {
 func TestABriefIsWrittenAgainOnceThenFails(t *testing.T) {
 	t.Parallel()
 	bad := func(id string) evals.Round {
-		return evals.Call(id, catalog.AnswerBriefTool, map[string]any{"summary": "",
-			"needs": []any{}, "follow_ups": []any{}})
+		return evals.Call(id, catalog.AnswerBriefTool, map[string]any{"about": "",
+			"needs": []any{}})
 	}
 	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
 		Handler: task, Rounds: []evals.Round{bad("c1"), bad("c2"), evals.Say("Sorry.")}})
@@ -141,10 +141,9 @@ func TestABriefIsWrittenAgainOnceThenFails(t *testing.T) {
 func TestABriefRowAboutAnUnreadRecordIsDropped(t *testing.T) {
 	t.Parallel()
 	unread := evals.Call("c1", catalog.AnswerBriefTool, map[string]any{
-		"summary": "Nothing waits on you.",
+		"about": "ENG-7, Rotate keys, is in review.",
 		"needs": []any{map[string]any{"ref_kind": "task", "ref_id": "ENG-9",
-			"text": "ENG-9 is overdue", "tone": "warning", "action": "open"}},
-		"follow_ups": []any{},
+			"do": "Chase ENG-9: it is overdue", "tone": "warning", "action": "open"}},
 	})
 	handler := assistanttest.Routes(map[string]exec.Response{
 		"GET /worklet/ENG-9": assistanttest.Task("ENG-9", "Ghost", "Never read."),
@@ -168,14 +167,13 @@ func TestABriefRowAboutAnUnreadRecordIsDropped(t *testing.T) {
 }
 
 // overLong is an answer_brief call with two faults the model could not see
-// one at a time: a summary of 366 characters (the live case) and a row's
-// text of 130.
+// one at a time: an about line of 366 characters (the length of the live
+// case's summary) and a row's do of 130.
 func overLong(id string) evals.Round {
 	return evals.Call(id, catalog.AnswerBriefTool, map[string]any{
-		"summary": strings.Repeat("ENG-7 waits. ", 29)[:366],
+		"about": strings.Repeat("ENG-7 waits. ", 29)[:366],
 		"needs": []any{map[string]any{"ref_kind": "task", "ref_id": "ENG-7",
-			"text": strings.Repeat("r", 130), "tone": "warning", "action": "open"}},
-		"follow_ups": []any{},
+			"do": strings.Repeat("r", 130), "tone": "warning", "action": "open"}},
 	})
 }
 
@@ -253,7 +251,7 @@ func captured(f *assistanttest.Rig) *logLines {
 }
 
 // A REFUSED BRIEF NAMES EVERY FAULT AT ONCE, so its one retry fixes them all
-// and lands: the live failure was a refusal naming the summary alone, a
+// and lands: the live failure was a refusal naming the first line alone, a
 // retry that fixed it, and a second refusal for the row it had not named.
 // The engine's own log says why the brief was refused, and never its words.
 //
@@ -280,8 +278,10 @@ func TestABriefRefusalNamesEveryFaultAndItsRetryLands(t *testing.T) {
 	if !ok || !refusal.Failed {
 		t.Fatalf("the first answer was answered %+v, want refused", refusal)
 	}
-	for _, want := range []string{"summary is 366 characters and the most it takes is 200",
-		"needs[0].text is 130 characters and the most it takes is 120", "last attempt"} {
+	for _, want := range []string{
+		fmt.Sprintf("about is 366 characters and the most it takes is %d", wire.BriefAboutMaxRunes),
+		fmt.Sprintf("needs[0].do is 130 characters and the most it takes is %d",
+			wire.BriefTextMaxRunes), "last attempt"} {
 		if !strings.Contains(refusal.Output, want) {
 			t.Errorf("the refusal does not say %q: %s", want, refusal.Output)
 		}
@@ -295,7 +295,7 @@ func TestABriefRefusalNamesEveryFaultAndItsRetryLands(t *testing.T) {
 		line["final"] != false {
 		t.Errorf("refusal logged as %v, want turn %s, attempt 1, not final", line, accepted.TurnID)
 	}
-	if reason, _ := line["reason"].(string); !strings.Contains(reason, "summary is 366") ||
+	if reason, _ := line["reason"].(string); !strings.Contains(reason, "about is 366") ||
 		strings.Contains(reason, "ENG-7 waits") {
 		t.Errorf("reason = %q, want the fault and none of the brief's words", reason)
 	}
@@ -394,7 +394,7 @@ func TestABriefRefusedInTheTurnsLastRoundIsFinal(t *testing.T) {
 	if len(ended) != 1 || ended[0]["error_code"] != string(wire.ErrorBriefInvalid) {
 		t.Fatalf("turn ends logged %v, want one brief_invalid", ended)
 	}
-	if reason, _ := ended[0]["reason"].(string); !strings.Contains(reason, "summary is 366") {
+	if reason, _ := ended[0]["reason"].(string); !strings.Contains(reason, "about is 366") {
 		t.Errorf("the turn's end gives reason %q, want the last refusal's", reason)
 	}
 }

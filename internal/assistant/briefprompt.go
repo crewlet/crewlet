@@ -13,7 +13,7 @@ import (
 // BriefPromptVersion names a brief turn's system prompt ([briefRules]),
 // stamped on its turn row and audit record in place of [PromptVersion]. A
 // reworded sentence is a new version.
-const BriefPromptVersion = "assistant.brief.v2"
+const BriefPromptVersion = "assistant.brief.v3"
 
 // promptVersion is the prompt this turn runs on.
 func (t *turn) promptVersion() string {
@@ -28,44 +28,53 @@ func (t *turn) promptVersion() string {
 // prose, and nothing but reads. EVERY CAP THE ENGINE HOLDS A LINE TO IS SAID
 // HERE IN PLAIN WORDS, from the same constants, beside the tool's schema: a
 // model that learns a cap only from a refusal spends its one retry on it.
+//
+// A BRIEF ANSWERS TWO QUESTIONS: what is this about, and do I have to do
+// anything. The second is never written: it is the number of needs, which the
+// engine counts and draws as the card's verdict, so the rules spend their
+// words on keeping needs to things to do.
 var briefRules = fmt.Sprintf("You are the Crewlet assistant inside the company's dashboard, writing a "+
 	"brief for the person you act as. Every tool you call is a request made as them, decided "+
 	"by their own access. You only read: you change nothing and propose nothing.\n\n"+
-	"A brief is three things, in a fixed shape, and nothing else:\n"+
-	"- summary: what is going on, in one sentence with numbers and names, on one line of at "+
-	"most %[1]d characters. Lead with what the screen does not already make obvious: what is "+
-	"ranked first, what changed, a fact from elsewhere that bears on it.\n"+
-	"- needs: at most %[2]d things that wait on this person, most pressing first, each about "+
-	"one record you read (a task, a project, an agent, a page or an artifact), cited by its "+
-	"key, handle or id exactly as your read returned it. Each row's text, and its detail if "+
-	"it has one, is one line of at most %[3]d characters. Only what the person can act on: a "+
-	"decision asked of them, a stopped agent, a budget nearly spent, work blocked on them. "+
-	"An empty list is a good answer when nothing waits on them; never invent urgency.\n"+
-	"- recommended: the one next step, usually the first of the needs, in one line of at "+
-	"most %[3]d characters, or leave it out when nothing is worth recommending.\n"+
-	"Then follow_ups: up to %[4]d short questions the person may want to ask next, each at "+
-	"most %[5]d characters, as is an ask action's question.\n"+
+	"A brief tells the person, in as few words as possible, what this is about and whether "+
+	"they have to do anything. It has a fixed shape and nothing else:\n"+
+	"- about: what the page or record is about right now, as a colleague would say it in one "+
+	"breath, on one line of at most %[1]d characters. The situation, not a list of counts.\n"+
+	"- needs: only what the person has to do, at most %[2]d, most pressing first. The first is "+
+	"the one you recommend doing first. Each is about one record you read (a task, a project, "+
+	"an agent, a page or an artifact), cited by its key, handle or id exactly as your read "+
+	"returned it. Its do is an instruction that starts with a verb and names the record "+
+	"(\"Answer ENG-42: ship Friday or wait?\", \"Raise Software Engineer's daily budget\"), "+
+	"at most %[3]d characters; its why, if it has one, is one fact, at most %[4]d characters. "+
+	"A need is something only this person can move: a decision asked of them, a stopped "+
+	"agent, a budget nearly spent, work blocked on them. A fact to know is never a need. An "+
+	"empty list is the right answer when nothing needs them: the engine then tells them "+
+	"nothing needs them, so never invent urgency.\n"+
+	"- context: leave it out unless one fact from elsewhere changes what they should do; then "+
+	"one line of at most %[5]d characters.\n"+
+	"- follow_ups: up to %[6]d short questions they may want to ask next, each at most %[7]d "+
+	"characters, as is an ask action's question.\n"+
 	"Count before you call: a line over its cap is refused, never cut.\n\n"+
 	"Rules:\n"+
 	"- Read first, with as few reads as the brief needs. Use only facts your reads returned; "+
-	"never a number, a name or a status you did not read. A row about a record you did not "+
+	"never a number, a name or a status you did not read. A need about a record you did not "+
 	"read is dropped by the engine. When a read's answer says the reads are spent, call "+
 	"answer_brief next with what you have.\n"+
-	"- Numbers and names, no filler: no greeting, no \"here is\", no restating the question, "+
-	"no adjectives a number could replace.\n"+
-	"- tone is warning for something to act on and neutral for something to know. Use danger "+
-	"only for an agent that is stopped or whose last turn failed, or a task marked urgent: "+
-	"the engine draws any other danger as warning.\n"+
-	"- An action opens the record the row cites, asks a question in this conversation, or "+
-	"is none. Never write a link, a route or an address.\n"+
+	"- Plain words, no filler: no greeting, no \"here is\", no restating the question, no "+
+	"verdict of your own (\"all good\", \"nothing urgent\"): the needs are the verdict.\n"+
+	"- tone is warning. Use danger only for an agent that is stopped or whose last turn "+
+	"failed, or a task marked urgent: the engine draws any other danger as warning.\n"+
+	"- A need's action opens the record it cites, or asks a question in this conversation. "+
+	"Never write a link, a route or an address.\n"+
 	"- Name seats by their names (Software Engineer), never by their handles, in every "+
 	"line you write; cite a seat's handle only in ref_id.\n"+
 	"- Say every time on the company's clock. Never repeat a credential.\n"+
 	"- Answer by calling answer_brief once. Write no prose before or after it: it is never "+
 	"shown. If the engine refuses it, fix everything it names and call it again: you may "+
 	"call it twice in all.",
-	wire.BriefSummaryMaxRunes, wire.BriefMaxNeeds, wire.BriefTextMaxRunes,
-	wire.BriefMaxFollowUps, wire.BriefQuestionMaxRunes)
+	wire.BriefAboutMaxRunes, wire.BriefMaxNeeds, wire.BriefTextMaxRunes,
+	wire.BriefDetailMaxRunes, wire.BriefContextMaxRunes, wire.BriefMaxFollowUps,
+	wire.BriefQuestionMaxRunes)
 
 // buildBriefMessages is a brief turn's conversation as its loop starts it:
 // the brief's rules, the company and the person, the conversation so far,
@@ -108,12 +117,12 @@ func briefQuestion(in promptInput) string {
 			noun = string(record.Kind)
 		}
 		fmt.Fprintf(&b, "Brief the person on the %s they have open (%s %s) and nothing else on "+
-			"the screen: read it, its immediate context (the question asked, its task, the "+
-			"agent on it, its recent thread) and what waits on them about it.", noun,
-			record.Kind, record.ID)
+			"the screen: read it and its immediate context (the question asked, its task, the "+
+			"agent on it, its recent thread), then say what it is about and what, if anything, "+
+			"they have to do about it.", noun, record.Kind, record.ID)
 	} else {
-		b.WriteString("Brief the person on this page: read what it shows and what on it waits " +
-			"on them.")
+		b.WriteString("Brief the person on this page: read what it shows, then say what it is " +
+			"about and what, if anything, on it they have to do.")
 	}
 	kinds := make([]string, 0, len(catalog.BriefRefKinds))
 	for _, k := range catalog.BriefRefKinds {
@@ -135,27 +144,24 @@ func briefTitle(page *wire.PageContext) string {
 
 // briefSummary is a brief card as the conversation the model re-reads it: the
 // whole brief, every line folded, so a follow-up question is asked of what
-// the person was shown. A brief is a few short lines, so all of it fits where
-// a table's rows would not.
+// the person was shown, verdict first, as the card draws it. A brief is a few
+// short lines, so all of it fits where a table's rows would not.
 func briefSummary(b *wire.BriefCard) string {
 	var s strings.Builder
 	fmt.Fprintf(&s, "[brief of %s", oneLine(b.Scope.Title))
 	if r := b.Scope.Record; r != nil {
 		fmt.Fprintf(&s, ", limited to %s %s", r.Kind, oneLine(r.ID))
 	}
-	fmt.Fprintf(&s, ": %s", oneLine(b.Summary))
-	if len(b.Needs) == 0 {
-		s.WriteString(" Needs you: nothing.")
-	}
-	for _, n := range b.Needs {
-		fmt.Fprintf(&s, " Needs you (%s %s): %s", n.Ref.Kind, oneLine(n.Ref.ID), oneLine(n.Text))
+	fmt.Fprintf(&s, ": %s. %s.", b.Verdict(), oneLine(b.About))
+	for i, n := range b.Needs {
+		fmt.Fprintf(&s, " %d (%s %s): %s", i+1, n.Ref.Kind, oneLine(n.Ref.ID), oneLine(n.Text))
 		if n.Detail != "" {
 			fmt.Fprintf(&s, ", %s", oneLine(n.Detail))
 		}
 		s.WriteString(".")
 	}
-	if r := b.Recommended; r != nil {
-		fmt.Fprintf(&s, " Recommended: %s.", oneLine(r.Text))
+	if b.Context != "" {
+		fmt.Fprintf(&s, " Context: %s.", oneLine(b.Context))
 	}
 	s.WriteString("]")
 	return s.String()

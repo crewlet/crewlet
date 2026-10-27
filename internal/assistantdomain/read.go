@@ -859,7 +859,28 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 	if err := json.Unmarshal(body, &c.Card); err != nil {
 		return Card{}, fmt.Errorf("assistantdomain: card %s: %w", id, err)
 	}
+	if c.Card.Type.Valid() && c.Card.Validate() != nil {
+		c.Type, c.Card = wire.CardNotice, EarlierShapeNotice()
+	}
 	return c, nil
+}
+
+// EarlierShapeNotice is what a stored card of a kind this build draws, but in
+// a shape its contract no longer accepts, is read as: a plain notice in its
+// place, never the body.
+//
+// A CARD IS VALIDATED BEFORE IT IS RECORDED and never rewritten after, so a
+// stored card this build's [wire.Card.Validate] refuses was written to an
+// earlier contract of an unreleased surface (a brief before ADR-0062). Such a
+// card is not read, migrated or tolerated field by field: the transcript, the
+// dashboard and the conversation the model re-reads all see this notice, and
+// asking again writes the card in today's shape. A kind this build does not
+// know at all is a newer peer's and passes through untouched, as the
+// dashboard already draws one it cannot.
+func EarlierShapeNotice() wire.Card {
+	return wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{Tone: wire.NoticeInfo,
+		Text: "This answer was written in an earlier format and can no longer be shown. " +
+			"Ask again to see it now."}}
 }
 
 // proposalColumns is every column a Proposal is read from, in

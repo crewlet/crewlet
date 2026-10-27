@@ -426,8 +426,14 @@ func (p *ProposalCard) validate() error {
 	return nil
 }
 
-// BriefCard is a brief: one sentence on what is going on, what waits on the
-// person, one recommended next step, and the questions worth asking next.
+// BriefCard is a brief: what the page or its open record is about, and the
+// things the person has to do, ranked, each with the one press that deals
+// with it.
+//
+// THE VERDICT IS NOT A FIELD. Whether anything needs the person is the
+// number of rows ([BriefCard.Verdict]), so no writer can put "nothing needs
+// you" beside a row that needs them. The first row is the recommendation: a
+// separate next step would say it again.
 //
 // THE MODEL WRITES THE WORDS, THE ENGINE EVERYTHING ELSE. Each row's record is
 // one this turn read and resolved for the person, its address is the link
@@ -437,17 +443,32 @@ type BriefCard struct {
 	// Scope is what the brief covers: the page, or the one record it has
 	// open.
 	Scope BriefScope `json:"scope"`
-	// Summary is what is going on, in one sentence.
-	Summary string `json:"summary"`
-	// Needs are what waits on the person, at most [BriefMaxNeeds]; none is
-	// "Nothing needs you".
+	// About is what the page or record is about right now, in one line.
+	About string `json:"about"`
+	// Needs are what the person has to do, most pressing first, at most
+	// [BriefMaxNeeds]; none is "Nothing needs you".
 	Needs []BriefNeed `json:"needs"`
-	// Recommended is the one next step, absent where none is worth it.
-	Recommended *BriefStep `json:"recommended,omitempty"`
+	// Context is one fact from elsewhere that bears on what to do, absent
+	// where none does.
+	Context string `json:"context,omitempty"`
 	// FollowUps are questions to ask next, at most [BriefMaxFollowUps].
 	FollowUps []string `json:"follow_ups"`
 	// AsOf is when the engine finished reading for it.
 	AsOf time.Time `json:"as_of"`
+}
+
+// Verdict is whether anything needs the person, in the words the
+// conversation the model re-reads says it: derived from the rows, never
+// written.
+func (b *BriefCard) Verdict() string {
+	switch n := len(b.Needs); n {
+	case 0:
+		return "Nothing needs you"
+	case 1:
+		return "1 thing needs you"
+	default:
+		return fmt.Sprintf("%d things need you", n)
+	}
 }
 
 // BriefScope is what a brief covers: the screen, and the record it has open
@@ -461,23 +482,19 @@ type BriefScope struct {
 	Record *ResourceRef `json:"record,omitempty"`
 }
 
-// BriefNeed is one thing that waits on the person, citing its record.
+// BriefNeed is one thing the person has to do, citing its record.
 type BriefNeed struct {
-	Ref    ResourceRef  `json:"ref"`
-	Text   string       `json:"text"`
+	Ref ResourceRef `json:"ref"`
+	// Text is what to do, as an instruction naming the record.
+	Text string `json:"text"`
+	// Detail is why now, in one fact.
 	Detail string       `json:"detail,omitempty"`
 	Tone   BriefTone    `json:"tone"`
-	Action *BriefAction `json:"action,omitempty"`
+	Action *BriefAction `json:"action"`
 }
 
-// BriefStep is the brief's recommended next step.
-type BriefStep struct {
-	Text   string       `json:"text"`
-	Action *BriefAction `json:"action,omitempty"`
-}
-
-// BriefAction is the one press a row or the recommendation offers: open a
-// record's screen at the address the engine built, or ask a question.
+// BriefAction is the one press a row offers: open a record's screen at the
+// address the engine built, or ask a question.
 type BriefAction struct {
 	Kind  BriefActionKind `json:"kind"`
 	Label string          `json:"label"`
@@ -487,19 +504,26 @@ type BriefAction struct {
 	Question string `json:"question,omitempty"`
 }
 
-// The bounds on a brief, in characters: short enough that the card stays a
-// brief, long enough for a number and a name in each line.
+// The bounds on a brief, in characters: each line one glance in a 420 pixel
+// drawer (about 60 characters a line at the card's size), so the about line
+// and a row's instruction are at most two lines, a row's reason and every
+// question one or two, and the whole brief at its caps about 650 characters
+// where the shape before it allowed about 1,500. Three rows is a short list
+// the reader takes in at once; two follow-ups are the next questions, not a
+// menu.
 const (
 	BriefMaxNeeds         = 3
-	BriefMaxFollowUps     = 3
-	BriefSummaryMaxRunes  = 200
-	BriefTextMaxRunes     = 120
-	BriefQuestionMaxRunes = 160
+	BriefMaxFollowUps     = 2
+	BriefAboutMaxRunes    = 90
+	BriefTextMaxRunes     = 80
+	BriefDetailMaxRunes   = 60
+	BriefContextMaxRunes  = 100
+	BriefQuestionMaxRunes = 80
 	briefLabelMaxRunes    = 40
 )
 
 // Validate reports what is wrong with a brief: its bounds, every closed set,
-// and that each action carries exactly what its kind needs.
+// and that each row carries the one action its kind needs.
 func (b *BriefCard) Validate() error {
 	switch {
 	case !screenPattern.MatchString(b.Scope.Screen):
@@ -508,9 +532,12 @@ func (b *BriefCard) Validate() error {
 	case !briefText(b.Scope.Title, pageTitleMaxRunes):
 		return fmt.Errorf("%w: a brief's scope title is not one line of at most %d characters",
 			ErrInvalid, pageTitleMaxRunes)
-	case b.Summary == "" || !briefText(b.Summary, BriefSummaryMaxRunes):
-		return fmt.Errorf("%w: a brief's summary is not one line of 1 to %d characters",
-			ErrInvalid, BriefSummaryMaxRunes)
+	case b.About == "" || !briefText(b.About, BriefAboutMaxRunes):
+		return fmt.Errorf("%w: a brief's about is not one line of 1 to %d characters",
+			ErrInvalid, BriefAboutMaxRunes)
+	case !briefText(b.Context, BriefContextMaxRunes):
+		return fmt.Errorf("%w: a brief's context is not one line of at most %d characters",
+			ErrInvalid, BriefContextMaxRunes)
 	case len(b.Needs) > BriefMaxNeeds:
 		return fmt.Errorf("%w: a brief lists %d needs, over %d", ErrInvalid, len(b.Needs),
 			BriefMaxNeeds)
@@ -530,27 +557,20 @@ func (b *BriefCard) Validate() error {
 		case n.Text == "" || !briefText(n.Text, BriefTextMaxRunes):
 			return fmt.Errorf("%w: brief need %d is not one line of 1 to %d characters",
 				ErrInvalid, i, BriefTextMaxRunes)
-		case !briefText(n.Detail, BriefTextMaxRunes):
+		case !briefText(n.Detail, BriefDetailMaxRunes):
 			return fmt.Errorf("%w: brief need %d's detail is not one line of at most %d "+
-				"characters", ErrInvalid, i, BriefTextMaxRunes)
+				"characters", ErrInvalid, i, BriefDetailMaxRunes)
 		case !n.Tone.Valid():
 			return fmt.Errorf("%w: brief need %d tone %q is not one of %v", ErrInvalid, i,
 				n.Tone, BriefTones)
+		case n.Action == nil:
+			return fmt.Errorf("%w: brief need %d offers no action", ErrInvalid, i)
 		}
 		if err := n.Ref.validate(); err != nil {
 			return err
 		}
 		if err := n.Action.validate(); err != nil {
 			return fmt.Errorf("%w (brief need %d)", err, i)
-		}
-	}
-	if r := b.Recommended; r != nil {
-		if r.Text == "" || !briefText(r.Text, BriefTextMaxRunes) {
-			return fmt.Errorf("%w: a brief's recommendation is not one line of 1 to %d "+
-				"characters", ErrInvalid, BriefTextMaxRunes)
-		}
-		if err := r.Action.validate(); err != nil {
-			return fmt.Errorf("%w (brief recommendation)", err)
 		}
 	}
 	for i, q := range b.FollowUps {
@@ -563,12 +583,8 @@ func (b *BriefCard) Validate() error {
 }
 
 // validate holds an action to its kind: an open carries a link from the link
-// table's grammar and no question, an ask a question and no link. Nil is no
-// action.
+// table's grammar and no question, an ask a question and no link.
 func (a *BriefAction) validate() error {
-	if a == nil {
-		return nil
-	}
 	switch {
 	case !a.Kind.Valid():
 		return fmt.Errorf("%w: brief action kind %q is not one of %v", ErrInvalid, a.Kind,

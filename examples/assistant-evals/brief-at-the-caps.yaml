@@ -1,5 +1,6 @@
 # A brief written exactly at its caps, in characters of more than one byte
-# (é, ë, €): a summary of 200 characters and a row of 120. The engine counts
+# (é, ë, €): an about line of 90 characters, a row's do of 80 and its why of
+# 60, a context line of 100 and a follow-up of 80. The engine counts
 # characters as the model does, so a model that respects the schema it is
 # handed is accepted first time; the script has no second answer to fall
 # back on.
@@ -30,10 +31,11 @@ script:
   - call: list_decisions
   - call: answer_brief
     args:
-      summary: "1 decision waits on you, Zoë: QA asks which build to test on ENG-42, budget at 80 % of €1,200 this month, and nothing else on the Inbox waits on you or on the agents today, so this is the brief's one "
+      about: "QA asks which build to test on ENG-42 before the café opening; the budget is at 80 %, Zoë."
       needs:
-        - {ref_kind: task, ref_id: ENG-42, text: "QA asks which build to test on ENG-42 before the café release, asked at 09:00 by the QA Engineer, still unanswered today", tone: warning, action: open}
-      follow_ups: ["Which store build did the QA Engineer test last week, and did it pass every check on the release list before the café launch? Please list them all"]
+        - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: test the store build before the café release, as QA asked at 9:00", why: "Asked at 09:00 by the QA Engineer; budget at 80 % of €1,200.", tone: warning, action: open}
+      context: "The review window opens tomorrow, 09:00; the Android signing key is due back for the café, Zoë says."
+      follow_ups: ["Which store build did QA test last week, and did it pass all tests for the café?"]
 expect:
   calls: [list_decisions, answer_brief]
   proposals: 0

@@ -59,7 +59,7 @@ func TestDangerNeedsAFactTheRecordsReadCarries(t *testing.T) {
 		}
 	}
 	if toneOf(wire.BriefDanger, false) != wire.BriefWarning || toneOf(wire.BriefDanger, true) !=
-		wire.BriefDanger || toneOf(wire.BriefNeutral, true) != wire.BriefNeutral {
+		wire.BriefDanger || toneOf(wire.BriefWarning, true) != wire.BriefWarning {
 		t.Error("a danger without its fact is not drawn warning, or a chosen tone was moved")
 	}
 }
@@ -119,23 +119,30 @@ func TestABriefIsOfferedOnlyReadsAndItsAnswer(t *testing.T) {
 	}
 }
 
-// A BRIEF IS RE-READ WHOLE by the next turn's model, so a follow-up is asked
-// of what the person was shown. Mutation: summarise it as "[card]" and this
-// fails.
+// A BRIEF IS RE-READ WHOLE by the next turn's model, verdict first, so a
+// follow-up is asked of what the person was shown, and a brief of nothing to
+// do is re-read as saying so. Mutation: summarise it as "[card]", or drop the
+// verdict, and this fails.
 func TestABriefIsReReadWholeByTheNextTurn(t *testing.T) {
 	t.Parallel()
 	got := cardSummary(wire.Card{Type: wire.CardBrief, Brief: &wire.BriefCard{
-		Scope:   wire.BriefScope{Screen: "inbox", Title: "Inbox"},
-		Summary: "2 decisions wait.",
+		Scope: wire.BriefScope{Screen: "inbox", Title: "Inbox"},
+		About: "QA asks which build to test.",
 		Needs: []wire.BriefNeed{{Ref: wire.ResourceRef{Kind: wire.ResourceTask, ID: "ENG-4"},
-			Text: "QA asks", Detail: "2 hours", Tone: wire.BriefWarning}},
-		Recommended: &wire.BriefStep{Text: "Answer ENG-4."},
+			Text: "Answer ENG-4", Detail: "Asked 2 hours ago", Tone: wire.BriefWarning}},
+		Context: "The beta ships Thursday.",
 	}})
-	for _, want := range []string{"Inbox", "2 decisions wait.", "task ENG-4", "QA asks",
-		"2 hours", "Answer ENG-4."} {
+	for _, want := range []string{"Inbox", "1 thing needs you", "QA asks which build to test.",
+		"task ENG-4", "Answer ENG-4", "Asked 2 hours ago", "The beta ships Thursday."} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the brief's summary %q does not carry %q", got, want)
 		}
+	}
+	clear := cardSummary(wire.Card{Type: wire.CardBrief, Brief: &wire.BriefCard{
+		Scope: wire.BriefScope{Screen: "home", Title: "Home"}, About: "Every agent is working."}})
+	if !strings.Contains(clear, "Nothing needs you") {
+		t.Errorf("a brief with no rows is re-read as %q, which does not say nothing needs them",
+			clear)
 	}
 }
 
@@ -145,9 +152,11 @@ func TestABriefIsReReadWholeByTheNextTurn(t *testing.T) {
 func TestTheBriefPromptStatesEveryCap(t *testing.T) {
 	t.Parallel()
 	for _, want := range []string{
-		fmt.Sprintf("one line of at most %d characters", wire.BriefSummaryMaxRunes),
-		fmt.Sprintf("at most %d things", wire.BriefMaxNeeds),
-		fmt.Sprintf("one line of at most %d characters", wire.BriefTextMaxRunes),
+		fmt.Sprintf("one line of at most %d characters", wire.BriefAboutMaxRunes),
+		fmt.Sprintf("at most %d, most pressing first", wire.BriefMaxNeeds),
+		fmt.Sprintf("at most %d characters; its why", wire.BriefTextMaxRunes),
+		fmt.Sprintf("one fact, at most %d characters", wire.BriefDetailMaxRunes),
+		fmt.Sprintf("one line of at most %d characters.\n- follow_ups", wire.BriefContextMaxRunes),
 		fmt.Sprintf("up to %d short questions", wire.BriefMaxFollowUps),
 		fmt.Sprintf("each at most %d characters", wire.BriefQuestionMaxRunes),
 		"fix everything it names",

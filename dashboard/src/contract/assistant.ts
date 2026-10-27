@@ -173,7 +173,7 @@ export type AssistantRecordNoun =
 export type AssistantTurnMode = "ask" | "brief";
 
 /** How loud a brief's row is; danger only where the engine read a fact that says so. */
-type AssistantBriefTone = "danger" | "warning" | "neutral";
+type AssistantBriefTone = "danger" | "warning";
 
 /** What a brief's action does: open a record's screen, or ask a question. Never a write. */
 type AssistantBriefActionKind = "open" | "ask";
@@ -873,15 +873,17 @@ export interface AssistantFileCard {
 }
 
 /**
- * A brief: what is going on, what waits on the person (each row a record the
- * engine read and resolved for them), one next step, and questions to ask
- * next. Its actions only open an address the engine built or ask a question.
+ * A brief: what the page is about, and what the person has to do, ranked
+ * (each row a record the engine read and resolved for them, the first the
+ * one to do first), then questions to ask next. Whether anything needs them
+ * is the number of rows, never a field. Its actions only open an address the
+ * engine built or ask a question.
  */
 export interface AssistantBriefCard {
   scope: AssistantBriefScope;
-  summary: string;
+  about: string;
   needs: AssistantBriefNeed[];
-  recommended?: AssistantBriefStep;
+  context?: string;
   follow_ups: string[];
   as_of: string;
 }
@@ -893,19 +895,13 @@ interface AssistantBriefScope {
   record?: AssistantResourceRef;
 }
 
-/** One thing that waits on the person, citing its record. */
+/** One thing the person has to do, citing its record: what to do, why now, and its press. */
 interface AssistantBriefNeed {
   ref: AssistantResourceRef;
   text: string;
   detail?: string;
   tone: AssistantBriefTone;
-  action?: AssistantBriefAction;
-}
-
-/** A brief's recommended next step. */
-interface AssistantBriefStep {
-  text: string;
-  action?: AssistantBriefAction;
+  action: AssistantBriefAction;
 }
 
 /** The one press a brief row offers: an engine-built link to open, or a question to ask. */

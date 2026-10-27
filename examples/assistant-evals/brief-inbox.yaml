@@ -1,7 +1,9 @@
 # A brief of the Inbox: one decision waits on the person and the QA Engineer
-# is stopped. The model cites both, and a third task no read returned. The
-# engine keeps the two it read and the person may open, draws the stopped
-# seat danger from the seat's own read, and drops the row about ENG-99.
+# is stopped. The model ranks both, and a third task no read returned. The
+# engine keeps the two it read and the person may open, in the model's order,
+# so the stopped seat is the one to do first; it draws that seat danger from
+# the seat's own read, drops the row about ENG-99, and counts the verdict
+# from the rows it kept: two things, not the three the model wrote.
 person:
   apps: [worklet]
 page:
@@ -39,12 +41,11 @@ script:
   - call: list_agents
   - call: answer_brief
     args:
-      summary: 1 decision waits on you; the QA Engineer is stopped on its budget.
+      about: QA waits on your answer on ENG-42, and the QA Engineer is stopped on its budget.
       needs:
-        - {ref_kind: seat, ref_id: qa, text: The QA Engineer is stopped on its budget, tone: danger, action: open}
-        - {ref_kind: task, ref_id: ENG-42, text: QA asks which build to test on ENG-42, detail: "Asked at 09:00", tone: warning, action: open}
-        - {ref_kind: task, ref_id: ENG-99, text: ENG-99 is overdue, tone: warning, action: open}
-      recommended: {text: "Answer ENG-42 so QA can test once it runs again.", ref_kind: task, ref_id: ENG-42, action: open}
+        - {ref_kind: seat, ref_id: qa, do: "Raise the QA Engineer's budget so it can run again", why: Stopped on its budget, tone: danger, action: open}
+        - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: which build QA tests", why: "Asked at 09:00", tone: warning, action: open}
+        - {ref_kind: task, ref_id: ENG-99, do: Chase ENG-99, why: Overdue, tone: warning, action: open}
       follow_ups: ["Why is the QA Engineer out of budget?"]
 expect:
   calls: [list_decisions, list_agents, answer_brief]
@@ -53,4 +54,5 @@ expect:
   brief:
     needs: [qa, ENG-42]
     tones: [danger, warning]
+    verdict: 2 things need you
   shows: ["#/worklet/ENG-42", "#/company/org/seats/qa"]

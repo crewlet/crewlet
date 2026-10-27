@@ -1,7 +1,7 @@
 # The #407 incident, replayed (ADR-0059): a brief whose first answer is past
-# THREE of its caps at once (the summary at nearly twice its 200, a row's text and a
-# follow-up past theirs), the shape of the live failure where each retry met a
-# cap the last refusal had not named. The engine refuses the first naming
+# FIVE of its caps at once (the about line, a row's do and why, the context
+# and a follow-up), the shape of the live failure where each retry met a cap
+# the last refusal had not named. The engine refuses the first naming
 # every fault, and a retry that fixes them all is drawn: one retry is enough
 # when the refusal names everything at once.
 person:
@@ -31,21 +31,23 @@ script:
   - call: list_decisions
   - call: answer_brief
     args:
-      summary: "1 decision waits on you: the QA Engineer asked at 09:00 on ENG-42 which store build to test, and nothing else on the Inbox is blocked on you today, so answering it is the one thing that moves QA forward before the release candidate is cut this afternoon and the store review window opens tomorrow, which is also when the Android signing key is due back from the platform team."
+      about: "The QA Engineer asked at 09:00 on ENG-42 which store build to test, before the release candidate is cut this afternoon."
       needs:
-        - {ref_kind: task, ref_id: ENG-42, text: "QA asks which store build to test on ENG-42, and whether the iOS and Android builds should be tested together or one after the other this week", tone: warning, action: open}
-      follow_ups: ["Which of the three release candidates cut this week should QA test first, given the store review window opens tomorrow and the Android build is still waiting on a signing key?"]
+        - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: say which store build QA tests, and whether iOS and Android are tested together", why: "Asked at 09:00 this morning by the QA Engineer, and still unanswered", tone: warning, action: open}
+      context: "The store review window opens tomorrow, which is also when the Android signing key is due back from the platform team."
+      follow_ups: ["Which of the three release candidates cut this week should QA test first, given the review window?"]
   - call: answer_brief
     args:
-      summary: 1 decision waits on you; the QA Engineer asks which build to test on ENG-42.
+      about: The QA Engineer asks which build to test on ENG-42.
       needs:
-        - {ref_kind: task, ref_id: ENG-42, text: "QA asks which build to test on ENG-42", tone: warning, action: open}
+        - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: which build QA tests", why: Asked at 09:00, tone: warning, action: open}
+      context: The store review window opens tomorrow.
       follow_ups: ["Which build should QA test first?"]
 expect:
   calls: [list_decisions, answer_brief, answer_brief]
-  # THE FIRST REFUSAL NAMES ALL THREE CAPS, so the one retry can fix them all.
+  # THE FIRST REFUSAL NAMES ALL FIVE CAPS, so the one retry can fix them all.
   refusals:
-    - [summary, "needs[0].text", "follow_ups[0]"]
+    - [about, "needs[0].do", "needs[0].why", context, "follow_ups[0]"]
   proposals: 0
   state: completed
   brief:
