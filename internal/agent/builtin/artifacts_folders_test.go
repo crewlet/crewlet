@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // companyShare is a top-level folder's "Everyone at the company" preset.
@@ -180,7 +181,7 @@ func TestAMissingFolderIsRefusedWithTheNearestPaths(t *testing.T) {
 func (r artifactRig) loggedCall(t *testing.T, turn *turnctx.Turn, name string, args map[string]any) tools.Result {
 	t.Helper()
 	got := r.call(t, turn, name, args)
-	turn.CallLog().Record(name, args)
+	turn.CallLog().Record(name, toolargs.Of(nil, args))
 	return got
 }
 

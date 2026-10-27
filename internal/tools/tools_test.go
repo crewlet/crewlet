@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 type fakeTool struct {
@@ -507,8 +508,8 @@ func TestAnUnofferedToolAndAnUnknownOneReadDifferently(t *testing.T) {
 // a tool whose skill has not been loaded.
 type denyAll struct{}
 
-func (denyAll) Check(string, string) string    { return "load the skill first" }
-func (denyAll) Observe(string, map[string]any) {}
+func (denyAll) Check(string, string) string   { return "load the skill first" }
+func (denyAll) Observe(string, toolargs.Args) {}
 
 func TestTheSurfaceClassesItsOwnRefusalsAndPassesAToolsThrough(t *testing.T) {
 	t.Parallel()
@@ -748,7 +749,7 @@ func (g *recordingGuard) Check(_, server string) string {
 	g.servers = append(g.servers, server)
 	return ""
 }
-func (g *recordingGuard) Observe(string, map[string]any) {}
+func (g *recordingGuard) Observe(string, toolargs.Args) {}
 
 func TestABuiltinHasNoServer(t *testing.T) {
 	t.Parallel()

@@ -287,7 +287,7 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	r.mu.Unlock()
 	for _, call := range called {
 		if !call.Failed {
-			guard.Observe(call.Name, call.Args)
+			guard.Observe(call.Name, surface.ArgsOf(call.Name, call.Args))
 		}
 	}
 	return surface, meter, nil
@@ -416,7 +416,7 @@ func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload],
 			continue
 		}
 		if _, _, err := tools.Invoke(ctx, tools.Invocation{Name: SubmitWorkTool, Tool: submit,
-			Args: call.Args, Where: "replay"}); err != nil {
+			Args: tools.ArgsOf(submit, false, call.Args), Where: "replay"}); err != nil {
 			log.WarnContext(ctx, "agent_run_submission_replay_failed", "error", err.Error())
 		}
 	}

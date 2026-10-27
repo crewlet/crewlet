@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // --- doubles ---------------------------------------------------------------
@@ -3208,7 +3209,7 @@ func TestAWorkerCountsTheRunsCallsButNotItsSiblings(t *testing.T) {
 	cfg := baseConfig(t, w, p)
 	cfg.ParentRemaining = 0
 	calls := turnctx.NewCallLog()
-	calls.Record(counter.Name(), map[string]any{"v": "parent"})
+	calls.Record(counter.Name(), toolargs.Of(nil, map[string]any{"v": "parent"}))
 	cfg.Turn = &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: cfg.Seat.Role,
 		Org: cfg.Seat.Org, Calls: calls}
 

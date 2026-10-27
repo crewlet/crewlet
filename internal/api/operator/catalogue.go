@@ -449,11 +449,16 @@ func (s *Server) run(ctx context.Context, cat catalogue, c Call) (tools.Result, 
 	if !served {
 		return tools.Result{}, fmt.Errorf("%w: %q", ErrNotServed, c.Tool)
 	}
+	// THE CANONICAL ARGUMENTS ARE MADE HERE, ONCE ([tools.ArgsOf]), and the
+	// call carries them from here on: the tool and the audit record read
+	// the same form, so a retry spelt "Draft" after "draft" is one call.
+	args := tools.ArgsOf(tool, false, c.Args)
+	c.Args = args.Map()
 	// THROUGH [tools.Invoke], as every caller calls a tool: an operator's
 	// call is held to the schema the tool advertises like a seat's
 	// (ADR-0059), a value the tool would misread refused before it runs.
 	invoked, _, err := tools.Invoke(withKey(ctx, c.Key), tools.Invocation{
-		Name: c.Tool, Tool: tool, Args: c.Args, Where: "operator", Counter: s.counter,
+		Name: c.Tool, Tool: tool, Args: args, Where: "operator", Counter: s.counter,
 	})
 	result := invoked.Result
 	if !readOnly(c.Tool) {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // argCorpus is every awkward spelling a model has sent, or could, where a
@@ -140,9 +141,9 @@ func TestWhatTheCheckAdmitsIsWhatTheToolReads(t *testing.T) {
 		set := []any{"body", "comments"}
 		enum := map[string]any{"type": "string", "enum": set}
 		if !misread(enum, v) && v != nil {
-			read := argString(tools.Canonical(map[string]any{
+			read := argString(toolargs.Of(map[string]any{
 				"type": "object", "properties": map[string]any{"x": enum},
-			}, args), "x")
+			}, args).Map(), "x")
 			outside := false
 			for _, f := range tools.CheckArgs("probe", map[string]any{
 				"type": "object", "properties": map[string]any{"x": enum},

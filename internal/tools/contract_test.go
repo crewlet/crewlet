@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // contractSchema is a schema of every kind the builtin tools advertise.
@@ -276,7 +277,7 @@ func TestANoteNeverTouchesTheToolsOutput(t *testing.T) {
 	const receipt = `{"key": "ENG-9", "outcome": "applied"}`
 	tool := &contractTool{name: "make_thing", answer: tools.Result{Output: receipt}}
 	res, refused, err := tools.Invoke(context.Background(), tools.Invocation{Name: "make_thing",
-		Tool: tool, Args: map[string]any{"title": "t", "tittle": "x"}, Where: "operator"})
+		Tool: tool, Args: toolargs.Of(nil, map[string]any{"title": "t", "tittle": "x"}), Where: "operator"})
 	if err != nil || refused {
 		t.Fatalf("Invoke: refused %v, %v", refused, err)
 	}
@@ -315,7 +316,7 @@ func TestAClosedSetIsReadByOneRule(t *testing.T) {
 	tool := &seeingTool{contractTool: contractTool{name: "make_thing"}}
 	rec := &countingRecorder{}
 	res, refused, err := tools.Invoke(context.Background(), tools.Invocation{Name: "make_thing", Tool: tool,
-		Args: map[string]any{"title": "t", "status": " DONE ", "labels": []any{"a"}}, Counter: rec})
+		Args: tools.ArgsOf(tool, false, map[string]any{"title": "t", "status": " DONE ", "labels": []any{"a"}}), Counter: rec})
 	if err != nil || refused || res.Note != "" {
 		t.Fatalf("a case variant of a member answered refused %v, note %q (%v)", refused, res.Note, err)
 	}

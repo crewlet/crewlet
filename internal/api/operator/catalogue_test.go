@@ -293,3 +293,51 @@ func TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns(t *testing.T) {
 		t.Errorf("a lossless value was answered %+v (%v)", got, err)
 	}
 }
+
+// creatingPages records each page the knowledge base is asked to create, by
+// the operation key and the status it was written under.
+type creatingPages struct {
+	recordingPages
+	created []string
+}
+
+func (p *creatingPages) Create(_ context.Context, actor doclet.Actor,
+	page doclet.NewPage) (doclet.Written, error) {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.created = append(p.created, actor.OpKey+"|"+string(page.Status))
+	return doclet.Written{}, nil
+}
+
+// AN OPERATOR'S RETRY SPELT ANOTHER WAY IS THE SAME WRITE (#423 re-verify):
+// the operator surface makes the canonical arguments once, at its entry, so a
+// request sent again under its key with "Draft" for "draft" asks the store
+// for the very same write (one key, one status), which the store makes once.
+//
+// Mutation: hand the tool the arguments as sent and the store is asked for a
+// page with status "Draft".
+func TestAnOperatorsRetrySpeltAnotherWayIsTheSameWrite(t *testing.T) {
+	t.Parallel()
+	kb := &creatingPages{}
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+	})})
+	ctx := iam.WithPrincipal(t.Context(),
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
+	key := statelog.NewOpID(time.Now(), "")
+	for _, status := range []string{"Draft", " draft "} {
+		got, err := s.Dispatch(ctx, operator.Call{Transport: types.TransportAct, Key: key,
+			Tool: builtin.WritePageTool, Args: map[string]any{
+				"title": "Runbook", "body": "the steps", "container": "ENG", "status": status}})
+		if err != nil || got.Failed {
+			t.Fatalf("status %q was answered %+v (%v)", status, got, err)
+		}
+	}
+	kb.mu.Lock()
+	defer kb.mu.Unlock()
+	if len(kb.created) != 2 || kb.created[0] != kb.created[1] ||
+		!strings.HasSuffix(kb.created[0], "|"+string(doclet.StatusDraft)) {
+		t.Errorf("the store was asked for %q, want one write twice, as a draft", kb.created)
+	}
+}

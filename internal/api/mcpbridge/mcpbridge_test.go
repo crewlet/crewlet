@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // The bridge is the one place a sandbox can reach a live seat's tools, so
@@ -101,7 +102,7 @@ func (g denyGuard) Check(name, _ string) string {
 	return ""
 }
 
-func (g denyGuard) Observe(string, map[string]any) {}
+func (g denyGuard) Observe(string, toolargs.Args) {}
 
 // --- fixture ---------------------------------------------------------------
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // withLoader is the surface a guard can arm on: it has the unlock.
@@ -199,7 +200,7 @@ func TestASuccessfulLoadUnlocksTheToolsItCovers(t *testing.T) {
 	r := registry(t, skill("code", skills.Trigger{MCPServer: "gitlab"}, true))
 	g := skills.NewGuard(r, prompts.PhaseExecute, withLoader(nil, "gitlab"))
 
-	g.Observe(skills.LoaderTool, map[string]any{"key": "code"})
+	g.Observe(skills.LoaderTool, toolargs.Of(nil, map[string]any{"key": "code"}))
 	if got := g.Check("create_mr", "gitlab"); got != "" {
 		t.Fatalf("the tool is still gated after its skill loaded: %s", got)
 	}
@@ -225,7 +226,7 @@ func TestOnlyALoadOfTheRightSkillUnlocksIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			g := skills.NewGuard(r, prompts.PhaseExecute, withLoader(nil, "gitlab"))
-			g.Observe(tc.tool, tc.args)
+			g.Observe(tc.tool, toolargs.Of(nil, tc.args))
 			if g.Check("create_mr", "gitlab") == "" {
 				t.Fatalf("%s unlocked the tool", tc.name)
 			}

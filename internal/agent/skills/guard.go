@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // Load-before-use, enforced in code rather than in prose.
@@ -174,11 +176,11 @@ const LoaderTool = "load_tool_skill"
 // result is prose for the model and parsing a key out of it would be
 // guessing at a format nothing promises. The arguments are what the model
 // asked for and what the tool resolved.
-func (g *Guard) Observe(tool string, args map[string]any) {
+func (g *Guard) Observe(tool string, args toolargs.Args) {
 	if g == nil || tool != LoaderTool {
 		return
 	}
-	key, _ := args["key"].(string)
+	key, _ := argval.String(args.Map()["key"])
 	g.Loaded(strings.TrimSpace(key))
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // ---- the one way a tool is called (ADR-0059) ------------------------------ //
@@ -25,8 +26,9 @@ type Invocation struct {
 	Name string
 	Tool Callable
 
-	// Args are the call's arguments, as the model or the caller sent them.
-	Args map[string]any
+	// Args are the call's arguments in the canonical form the caller's
+	// entry made of them ([ArgsOf]), the form every step of the call reads.
+	Args toolargs.Args
 
 	// AsSeat calls the tool as a phase's surface does: a [Detached] tool
 	// detached, a [SeatCallable] one for Turn, any other through its Call.
@@ -47,6 +49,18 @@ type Invocation struct {
 	Counter Counter
 }
 
+// ArgsOf is a call's arguments as its caller's entry hands them on, made
+// ONCE, before anything else reads them ([toolargs]): a first-party tool's
+// closed-set members spelt as its schema spells them, the one rule the check
+// reads by, so a tool keeps no normalisation of its own; a third-party tool's
+// as sent, since it holds its own schema.
+func ArgsOf(tool Callable, thirdParty bool, raw map[string]any) toolargs.Args {
+	if thirdParty || tool == nil {
+		return toolargs.Of(nil, raw)
+	}
+	return toolargs.Of(tool.Parameters(), raw)
+}
+
 // Invoke calls a tool, holding a first-party call to the schema the tool
 // advertises ([CheckArgs]): a value the tool would misread is refused before
 // it runs (refused is true, and the tool was never called), and every other
@@ -55,12 +69,7 @@ type Invocation struct {
 func Invoke(ctx context.Context, in Invocation) (res DetachedResult, refused bool, err error) {
 	var faults []ArgFault
 	if !in.ThirdParty {
-		// A CLOSED SET'S MEMBER IS HANDED TO THE TOOL AS THE SET SPELLS
-		// IT ([Canonical]), the one rule the check reads by too, so a
-		// tool keeps no normalisation of its own.
-		schema := in.Tool.Parameters()
-		in.Args = Canonical(schema, in.Args)
-		faults = CheckArgs(in.Name, schema, in.Args)
+		faults = CheckArgs(in.Name, in.Tool.Parameters(), in.Args.Map())
 	}
 	if misread(faults) {
 		return DetachedResult{Result: Result{Output: misreadAnswer(in.Name, faults), Failed: true,
@@ -90,17 +99,17 @@ func Invoke(ctx context.Context, in Invocation) (res DetachedResult, refused boo
 // registry, and the one that needs the fact asks for it.
 func call(ctx context.Context, in Invocation) (DetachedResult, error) {
 	if !in.AsSeat {
-		res, err := in.Tool.Call(ctx, in.Args)
+		res, err := in.Tool.Call(ctx, in.Args.Map())
 		return DetachedResult{Result: res}, err
 	}
 	switch t := in.Tool.(type) {
 	case Detached:
-		return t.CallDetached(ctx, in.Turn, in.Args)
+		return t.CallDetached(ctx, in.Turn, in.Args.Map())
 	case SeatCallable:
-		res, err := t.CallForTurn(ctx, in.Turn, in.Args)
+		res, err := t.CallForTurn(ctx, in.Turn, in.Args.Map())
 		return DetachedResult{Result: res}, err
 	default:
-		res, err := in.Tool.Call(ctx, in.Args)
+		res, err := in.Tool.Call(ctx, in.Args.Map())
 		return DetachedResult{Result: res}, err
 	}
 }
