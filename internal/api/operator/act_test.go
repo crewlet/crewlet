@@ -936,19 +936,22 @@ func TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels(t *testing.T) {
 	}
 }
 
-// THE RECEIPT LOSES ITS MODEL WORDS AND NOTHING ELSE: a receipt that is not an
-// object, or carries no warnings, is answered exactly as the tool wrote it.
+// THE RECEIPT LOSES ITS MODEL WORDS AND NOTHING ELSE: a receipt that carries
+// no warnings is answered exactly as the tool wrote it. A tool answer that is
+// not a receipt at all (not a JSON object) is the tool's words to a model, so
+// the write's outcome stands and the answer carries no receipt (ADR-0060).
 func TestTheActReceiptLosesOnlyTheModelsWarnings(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct{ output, want string }{
 		"warnings and fields":  {`{"key":"ENG-1","warnings":["Use ask: ana"]}`, `{"key":"ENG-1"}`},
 		"no warnings":          {`{"key": "ENG-1"}`, `{"key": "ENG-1"}`},
-		"not an object":        {`["a","b"]`, `["a","b"]`},
-		"a sentence, not JSON": {`done`, `"done"`},
+		"not an object":        {`["a","b"]`, `null`},
+		"a sentence, not JSON": {`Filed ENG-1; call get_work_item to read it.`, `null`},
 	} {
 		got := operator.ReceiptOf("t", tools.Result{Output: c.output})
-		if string(got.Receipt) != c.want {
-			t.Errorf("%s: receipt %s, want %s", name, got.Receipt, c.want)
+		if string(got.Receipt) != c.want || got.Outcome != statelog.OutcomeApplied {
+			t.Errorf("%s: receipt %s (%s), want %s applied", name, got.Receipt,
+				got.Outcome, c.want)
 		}
 	}
 }

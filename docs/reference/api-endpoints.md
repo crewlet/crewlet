@@ -5898,7 +5898,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 
 | Status | `error` | When | Carries |
 |---|---|---|---|
-| `200` | | The write was **applied** on this node, so the next read here sees it | the tool's own receipt, its `outcome`, `position`, `op_id` and `caveats` |
+| `200` | | The write was **applied** on this node, so the next read here sees it | the tool's own receipt without its `warnings` (written for a model), its `outcome`, `position` and `op_id`, and its `caveats` in a person's words, always a list |
 | `202` | | The write is **pending**: durable, and not yet applied on this node | the same, and the `position` to read at |
 | `400` | `invalid_body` | The body is malformed, names a different object than the path, or carries an argument the tool does not declare | the undeclared arguments in `fields` |
 | `401` | `invalid_token` | Nobody presented a credential | |
@@ -5908,7 +5908,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 | `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `If-Match`, a title taken, a race lost — or the state the request needs is not there | `message`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item among them | `detail` in a person's words, where the refusal has them |
-| `500` | `internal_error` | The engine failed at something of its own | nothing a retry changes; the detail is in the node's log |
+| `500` | `internal_error` | The engine failed at something of its own, or a tool answered something that is not a receipt | nothing a retry changes; the reason, and anything the tool said instead, is in the node's log |
 | `503` | `unavailable`, `no_active_revision`, `identity_unavailable` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — `"outcome": "unknown"` and the `op_id` to retry with, on every route, a tool-backed one included. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
 
 The `unauthorized` row is one DECISION on all three surfaces that serve these

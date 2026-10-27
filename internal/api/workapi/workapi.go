@@ -668,28 +668,37 @@ func (s *served) answerDispatched(w http.ResponseWriter, r *http.Request, key,
 		// again under a fresh one.
 		operator.Interrupted(w, r, key, verb, err)
 	default:
-		answerTool(w, key, about, result)
+		answerTool(w, r, key, verb, about, result)
 	}
 }
 
-// answerTool renders one tool's receipt, or its failure beside about.
-func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
-	result tools.Result) {
+// KeyCaveats is the key a write's caveats are answered under, in a person's
+// words: the act route's `caveats`, flat beside the receipt's own fields.
+const KeyCaveats = "caveats"
+
+// answerTool renders one tool's receipt, or its failure beside about, as the
+// act route does and through the same two functions ([operator.FailTool],
+// [operator.PersonsReceipt]): a person's words or the code's for a refusal,
+// and a receipt without its model-worded `warnings`, its caveats in
+// `caveats` (ADR-0060).
+func answerTool(w http.ResponseWriter, r *http.Request, key, verb string,
+	about httpjson.Detail, result tools.Result) {
 
 	if result.Failed {
-		// In a person's words or none, never the model's (ADR-0060).
-		operator.Fail(w, result.Cause, result.PersonRefusal, key, about)
+		operator.FailTool(w, r, result, key, about)
 		return
 	}
+	raw, caveats, readable := operator.PersonsReceipt(verb, result)
 	var receipt map[string]any
-	if err := json.Unmarshal([]byte(result.Output), &receipt); err != nil {
+	if !readable || json.Unmarshal(raw, &receipt) != nil {
 		// EVERY WRITE TOOL ANSWERS JSON, so this is a tool that changed
-		// shape rather than a caller's mistake.
-		log.Warn("api_work_receipt_unreadable", "error", err)
-		httpjson.FailWith(w, http.StatusInternalServerError,
-			httpjson.CodeInternalError, map[string]string{"detail": result.Output})
+		// shape rather than a caller's mistake; what it said is in this
+		// node's log, never in the answer.
+		httpjson.FailWithFields(w, http.StatusInternalServerError,
+			httpjson.CodeInternalError, about)
 		return
 	}
+	receipt[KeyCaveats] = caveats
 	subtreeStoppedHere(receipt)
 	moveStoppedHere(receipt)
 	// A RECEIPT CARRIES NO LEDGER FACTS: a tool reports an outcome nobody

@@ -69,3 +69,45 @@ func Problems(text string) []string {
 	}
 	return out
 }
+
+// valueFields are the keys of a write's answer, at any depth, whose strings are
+// values a screen reads (ids, keys, positions, codes, enumerations, the
+// grants and the fields a refusal names) and never sentences it draws.
+var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item", "key",
+	"status", "rank", "code", "action", "type", "project", "assignee", "labels_created",
+	"error", "reason", "grants", "field", "fields", "window"}
+
+// AnswerProblems is every sentence a write's decoded answer carries that is not
+// worded for a person, each named by its path: every string at any depth
+// outside the value fields, so a receipt field a tool fills with a model's
+// sentence is found whatever it is called.
+func AnswerProblems(answer any) []string {
+	var out []string
+	sentences("", answer, func(path, text string) {
+		for _, problem := range Problems(text) {
+			out = append(out, fmt.Sprintf("%s is not worded for a person: %s: %q",
+				path, problem, text))
+		}
+	})
+	return out
+}
+
+// sentences calls check with every string value carries outside the value
+// fields, at any depth, named by its path.
+func sentences(path string, value any, check func(path, text string)) {
+	switch v := value.(type) {
+	case string:
+		check(path, v)
+	case []any:
+		for i, item := range v {
+			sentences(fmt.Sprintf("%s[%d]", path, i), item, check)
+		}
+	case map[string]any:
+		for key, item := range v {
+			if slices.Contains(valueFields, key) {
+				continue
+			}
+			sentences(path+"."+key, item, check)
+		}
+	}
+}

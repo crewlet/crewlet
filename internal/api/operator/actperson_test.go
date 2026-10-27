@@ -279,34 +279,6 @@ func (placingWork) PlaceTask(context.Context, string, worklet.Place,
 	}, nil
 }
 
-// valueFields are the keys of an act answer, at any depth, whose strings are
-// values a screen reads (ids, keys, positions, codes, enumerations) and never
-// sentences it draws. Every other string an answer carries is held to a
-// person's words, so a receipt field a tool fills with a model's sentence
-// fails the walk whatever it is called.
-var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item", "key",
-	"status", "rank", "code", "action", "type", "project", "assignee", "labels_created"}
-
-// everySentence calls check with every string an answer carries outside
-// [valueFields], at any depth, named by its path.
-func everySentence(path string, value any, check func(path, text string)) {
-	switch v := value.(type) {
-	case string:
-		check(path, v)
-	case []any:
-		for i, item := range v {
-			everySentence(fmt.Sprintf("%s[%d]", path, i), item, check)
-		}
-	case map[string]any:
-		for key, item := range v {
-			if slices.Contains(valueFields, key) {
-				continue
-			}
-			everySentence(path+"."+key, item, check)
-		}
-	}
-}
-
 // EVERY ANSWER THE ACT ROUTE GIVES IS WORDED FOR A PERSON, a write that landed
 // included (ADR-0060).
 //
@@ -348,11 +320,8 @@ func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 		if caveats, _ := answer["caveats"].([]any); len(caveats) == 0 {
 			t.Errorf("%s answered no caveats: %v", tc.name, answer)
 		}
-		everySentence("", answer, func(path, text string) {
-			for _, problem := range caveattest.Problems(text) {
-				t.Errorf("%s: %s is not worded for a person: %s: %q", tc.name, path,
-					problem, text)
-			}
-		})
+		for _, problem := range caveattest.AnswerProblems(answer) {
+			t.Errorf("%s: %s", tc.name, problem)
+		}
 	}
 }

@@ -283,15 +283,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	if result.Failed {
 		log.InfoContext(r.Context(), "operator_act", append(logged,
 			"refused", true, "refusal", string(classOf(result.Cause)))...)
-		// THE PERSON'S WORDS, NEVER THE MODEL'S (ADR-0060): Output is the
-		// tool's sentence for a model, and the refusal is answered in
-		// the phrasing written for a person, or in its code's own
-		// sentence where nobody has written one.
-		Fail(w, result.Cause, result.PersonRefusal, key, About(name, args))
-		// AND THE MODEL'S, to the one reader that can act on it: an
-		// assistant's model executing what its person approved hears the
-		// tool's sentence in process, never on the answer above.
-		modelnote.Tell(r.Context(), result.Output)
+		FailTool(w, r, result, key, About(name, args))
 		return
 	}
 	answer := receiptOf(name, result)
@@ -372,21 +364,21 @@ func decodeAct(raw []byte) (actRequest, error) {
 // answer that cannot tell a caller to stop looking at a write it cannot vouch
 // for.
 func receiptOf(name string, result tools.Result) ActAnswer {
-	output := result.Output
+	receipt, caveats, readable := PersonsReceipt(name, result)
 	answer := ActAnswer{Tool: name, Outcome: statelog.OutcomeApplied,
-		Caveats: caveat.ForPeople(result.Caveats)}
-	if !json.Valid([]byte(output)) {
-		// Every first-party write answers JSON; a sentence is carried as a
-		// string rather than dropped.
-		answer.Receipt, _ = json.Marshal(output)
+		Caveats: caveats, Receipt: json.RawMessage("null")}
+	if !readable {
+		// THE WRITE LANDED, and its tool answered something that is not a
+		// receipt: the outcome stands, and the tool's words, written for
+		// a model, are in this node's log and not in the answer.
 		return answer
 	}
-	answer.Receipt = withoutWarnings(json.RawMessage(output))
+	answer.Receipt = receipt
 	var stated struct {
 		Outcome  *string `json:"outcome"`
 		Position *string `json:"position"`
 	}
-	if err := json.Unmarshal([]byte(output), &stated); err != nil {
+	if err := json.Unmarshal(receipt, &stated); err != nil {
 		return answer
 	}
 	if stated.Outcome != nil && *stated.Outcome != "" {
@@ -401,23 +393,46 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 	return answer
 }
 
-// withoutWarnings is a tool's answer with its model-worded caveats
-// ([builtin.WarningsKey]) taken off, the rest of it as the tool wrote it. An
-// answer that is not an object, or carries no such key, is returned as it is.
-func withoutWarnings(receipt json.RawMessage) json.RawMessage {
+// PersonsReceipt is a tool call that landed, as every surface answering a
+// PERSON answers it (ADR-0060): the tool's receipt with its model-worded
+// caveats ([builtin.WarningsKey]) taken off, the rest as the tool wrote it,
+// and its caveats in a person's words, always a list. The act route and the
+// human write surface both answer through it, so neither can come to hand a
+// person what the other strips.
+//
+// A RECEIPT THAT IS NOT A JSON OBJECT is not readable: every first-party
+// write answers one, so this is a tool that changed shape, and what it said
+// instead is written for a model. It is logged here, under the tool's name,
+// and never answered; the caller says what the write came to without it.
+func PersonsReceipt(tool string, result tools.Result) (json.RawMessage, []caveat.Shown, bool) {
+	caveats := caveat.ForPeople(result.Caveats)
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(receipt, &fields) != nil {
-		return receipt
+	if json.Unmarshal([]byte(result.Output), &fields) != nil || fields == nil {
+		log.Warn("operator_receipt_unreadable", "tool", tool, "output", result.Output)
+		return nil, caveats, false
 	}
 	if _, carried := fields[builtin.WarningsKey]; !carried {
-		return receipt
+		return json.RawMessage(result.Output), caveats, true
 	}
 	delete(fields, builtin.WarningsKey)
 	out, err := json.Marshal(fields)
 	if err != nil {
 		// Unreachable: every value was just decoded from valid JSON. The
 		// receipt is never answered with the model's words left on it.
-		return json.RawMessage("{}")
+		return json.RawMessage("{}"), caveats, true
 	}
-	return out
+	return out, caveats, true
+}
+
+// FailTool answers a refused tool call to a person, as every surface answering
+// one does (ADR-0060): in the person's words the refusal carries, or its
+// code's own sentence ([Fail]), and never the tool's sentence, which is
+// written for a model. That sentence is told in process to the one reader
+// that can act on it, an assistant's model executing what its person approved
+// (internal/modelnote), and to nobody else.
+func FailTool(w http.ResponseWriter, r *http.Request, result tools.Result, key string,
+	about httpjson.Detail) {
+
+	Fail(w, result.Cause, result.PersonRefusal, key, about)
+	modelnote.Tell(r.Context(), result.Output)
 }
