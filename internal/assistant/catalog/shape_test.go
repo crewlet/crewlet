@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
@@ -562,4 +563,78 @@ func TestAnEmptySearchSaysWhatItAskedAndWhy(t *testing.T) {
 func jsonText(s string) string {
 	out, _ := json.Marshal(s)
 	return strings.Trim(string(out), `"`)
+}
+
+// A REFUSAL IS TOLD WHOLE, EACH SENTENCE HELD TO 2 KiB: a route that wrote a
+// detail past that has it cut on a character with a mark, its hint kept, and
+// the refusal still fits what the model is handed, fenced or defused as the
+// tool's results are. Mutation: drop the clip and a 20 KiB detail fails the
+// step rather than reaching the model as a refusal.
+func TestARefusalsSentencesAreHeldToTheirBound(t *testing.T) {
+	t.Parallel()
+	b := provenance.NewBoundary()
+	long := strings.Repeat("é the route said more than a sentence. ", 520)
+	body, err := json.Marshal(map[string]any{"error": "invalid", "message": long,
+		"hint": "Name a smaller window."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"list_tasks", "get_page"} {
+		tool := mustTool(t, name)
+		res, err := catalog.Shape(tool, assistanttest.ExampleArgs(t, tool.Parameters),
+			exec.Response{Status: 400, Body: body}, b, evals.Epoch, cards.Options{})
+		if err != nil {
+			t.Fatalf("%s: a long refusal failed the step: %v", name, err)
+		}
+		if !res.Failed() || len(res.Model) > cards.ModelBytes {
+			t.Fatalf("%s: the refusal is %d bytes to the model, past %d", name, len(res.Model), cards.ModelBytes)
+		}
+		var refusal struct {
+			Refused struct{ Message, Hint string } `json:"refused"`
+		}
+		text := res.Model
+		var outer struct {
+			Answer *string `json:"answer"`
+		}
+		if json.Unmarshal([]byte(text), &outer) == nil && outer.Answer != nil {
+			text = provenance.Unfence(b, *outer.Answer)
+		}
+		if err := json.Unmarshal([]byte(text), &refusal); err != nil {
+			t.Fatalf("%s: the model reads no refusal: %s", name, res.Model)
+		}
+		msg := refusal.Refused.Message
+		if len(msg) > 2<<10 || !strings.HasSuffix(msg, " [cut]") || !utf8.ValidString(msg) ||
+			!strings.HasPrefix(long, strings.TrimSuffix(msg, " [cut]")) {
+			t.Errorf("%s: the refusal's message is %d bytes, ending %q", name, len(msg),
+				msg[max(0, len(msg)-24):])
+		}
+		if refusal.Refused.Hint != "Name a smaller window." {
+			t.Errorf("%s: the hint reads %q", name, refusal.Refused.Hint)
+		}
+	}
+}
+
+// NARROW_BY IS A LIST, EMPTY OR NOT: a read that declares nothing narrowing
+// tells the model `"narrow_by":[]`, never null, so the field is the same
+// shape on every cut read. Mutation: start narrowing's list as nil and the
+// read with nothing to narrow says null.
+func TestACutReadWithNothingToNarrowSaysAnEmptyList(t *testing.T) {
+	t.Parallel()
+	b := provenance.NewBoundary()
+	tool := mustTool(t, "list_agents")
+	if len(tool.Narrow) != 0 {
+		t.Fatalf("list_agents narrows by %v; pick a read that declares nothing", tool.Narrow)
+	}
+	res, err := catalog.Shape(tool, nil, exec.Response{Status: 200, Body: []byte(`{"agents":[`),
+		Truncated: true}, b, evals.Epoch, cards.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := cutOf(t, b, res.Model)
+	if list, ok := cut["narrow_by"].([]any); !ok || len(list) != 0 {
+		t.Errorf("a read with nothing to narrow tells the model narrow_by=%#v", cut["narrow_by"])
+	}
+	if len(res.Cards) != 1 || res.Cards[0].Oversize == nil || res.Cards[0].Oversize.Narrow == nil {
+		t.Errorf("its card says narrow=%+v", res.Cards)
+	}
 }
