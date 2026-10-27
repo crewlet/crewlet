@@ -532,8 +532,6 @@ providers:
   sandbox:
     setup:
       - name: git-auth            # the recipe in the code sandbox guide
-        files:
-          .config/crewlet/github-token: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
         # ...
 
 mcp_servers:
@@ -550,6 +548,10 @@ roles:
     sandbox:
       env:
         GITHUB_TOKEN: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
+      setup:
+        - name: github-token      # the file the completion poll keeps current
+          files:
+            .config/crewlet/github-token: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
     integrations:
       github:
         tier: full_access
@@ -559,9 +561,12 @@ roles:
 `${GITHUB_APP_TOKEN_<HANDLE>}` is answered in three places, and only there: the
 seat's own tool servers (`role.mcp_env`), its coding box's environment and setup
 files (`role.sandbox.env`, `providers.sandbox.setup` and `role.sandbox.setup`),
-and the servers rendered into that box (`role.sandbox.mcp`). A provider-wide
-setup step names one seat's variable only when its file is meant for that seat;
-a recipe shared by several seats belongs on each seat's own `sandbox.setup`.
+and the servers rendered into that box (`role.sandbox.mcp`). Every
+provider-wide setup step reaches every agent seat's box, so a seat's
+`${GITHUB_APP_TOKEN_<HANDLE>}` belongs on that seat's own `sandbox.setup` or
+`sandbox.env`: named in a provider-wide step, it resolves for that seat alone,
+and every other seat's run starts without it and logs `sandbox_env_unresolved`
+at warning, on every launch.
 
 - **Each seat reads only its own.** The token is laid in front of the
   company's secret store for that seat's reads alone. A seat that names
