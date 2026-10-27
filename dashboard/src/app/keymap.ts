@@ -159,9 +159,9 @@ const FRAME: KeyRow[] = [
     by: "dashboard",
     ...(ws.service ? { service: ws.service } : {}),
   })),
-  // THE ONE `g` SEQUENCE THAT IS NOT A WORKSPACE: a running turn is an object,
-  // and reaching it was a workspace, a card, a profile and a tab away. Not a
-  // `go.` row, which is the family derived from `nav.ts`.
+  // TWO `g` SEQUENCES ARE NOT WORKSPACES, so neither is a `go.` row, the
+  // family derived from `nav.ts`. The first is a running turn: an object, and
+  // reaching it was a workspace, a card, a profile and a tab away.
   {
     id: "running",
     scope: "frame",
@@ -169,8 +169,8 @@ const FRAME: KeyRow[] = [
     does: "Watch running turns",
     by: "dashboard",
   },
-  // AND THE SCOPE OF WORK: the switcher under Work's trail, or centred over
-  // any other page, where nothing moves until a project is chosen.
+  // THE SECOND IS THE SCOPE OF WORK: the switcher under Work's trail, or
+  // centred over any other page, where nothing moves until a project is chosen.
   {
     id: "project",
     scope: "frame",
