@@ -110,6 +110,17 @@ and memory, delegation and sandbox tools a person's assistant can reach. The
 authority table's refusal already answers values a screen words itself
 (`reason`, `grants`) and needs none.
 
+**Compatibility starts at the first tag that carries this record.** No tag
+has shipped any of these surfaces (the only release, v0.1.0, holds no Go
+code), so a node keeps no compatibility with an unreleased build: the
+estate's `Caveats` replace the list of sentences an earlier unreleased build
+sent with no reader of the old shape, and the act answer's `caveats` and
+person-worded `detail` replace what came before outright. From the first tag
+that ships this record on, its wire shapes (a caveat's `{code, agent,
+person}`, a refusal phrasing on `caveat.Said`, the act answer's `caveats`) are
+a released surface, and changing them is owed what RELEASING.md says a
+shipped surface is owed.
+
 The operation key's own refusals (`op_id_invalid`) and an unknown outcome's
 `detail` (`opkey.UnknownDetail`) are a protocol's rule for a client sending
 the `Idempotency-Key` header, shared by every write surface; the dashboard

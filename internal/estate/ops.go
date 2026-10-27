@@ -955,11 +955,9 @@ type ensureTagsArgs struct {
 	Tags    []string
 }
 
-// ensuredTags is [TrackerWriter.EnsureTags]' two answers, named.
-//
-// CAVEATS UNDER A NEW NAME rather than the old `Warnings` retyped, for
-// [worklet.WriteResult.Caveats]' reason: an older peer's list of sentences
-// decoded into a list of caveats would fail the whole answer mid-upgrade.
+// ensuredTags is [TrackerWriter.EnsureTags]' two answers, named. Its caveats
+// are rebuilt from the peer's answer at the router, as a write's are
+// ([worklet.WriteResult.Caveats]).
 type ensuredTags struct {
 	Created []string
 	Caveats []caveat.Caveat

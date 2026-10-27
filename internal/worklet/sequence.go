@@ -266,10 +266,11 @@ type WriteResult struct {
 	// caveat. Each carries a model's phrasing and a person's
 	// ([caveat.Caveat]), because the same write answers both.
 	//
-	// A NEW NAME, never the old `Warnings` retyped: a result crosses the
-	// estate router between nodes as JSON, and during a rolling upgrade an
-	// older peer's list of sentences decoded into this type would fail the
-	// whole answer, where an unknown field is simply not read.
+	// A result crosses the estate router between nodes as JSON, and the
+	// router rebuilds these from a peer's answer ([caveat.RebuildFromPeer]).
+	// No compatibility is kept with the list of sentences this field
+	// replaced: no tag has shipped it, so no fleet runs a peer that sends
+	// one (ADR-0060).
 	Caveats []caveat.Caveat
 }
 
