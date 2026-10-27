@@ -639,6 +639,60 @@ test("a long save's lines are a preview that counts the rest and opens the save"
   );
 });
 
+// A LONG PAGE IS COMPARED, NEVER REPLACED WHOLE: past 2,000 lines the design
+// system's line diff answers every line removed and re-added, and the tile
+// said a typo fixed on line 1,800 removed the page's first six lines.
+test("a save to a long page previews the line it changed, never the page's first lines", async () => {
+  const before = Array.from({ length: 2_500 }, (_, i) => `- step ${i}`);
+  const after = before.map((line, i) => (i === 1_799 ? "- step 1799, fixed" : line));
+  landing({
+    page_activity: { changes: [written("c-1", "2026-09-24T23:00:00Z")] },
+    page: detailOf("p-1", "Runbook", after.join("\n"), [
+      { version: 5, author: "swe", created_at: "2026-09-24T23:00:00Z" },
+      { version: 4, author: "swe", created_at: "2026-09-20T09:00:00Z" },
+    ]),
+    page_revision: { page_id: "p-1", version: 4, title: "Runbook", body: before.join("\n") },
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  const diff = await within(latest).findByRole("group", { name: "Latest change" });
+  expect(
+    [...diff.querySelectorAll<HTMLElement>(".diff-view__line")].map((row) => [
+      row.dataset.kind,
+      row.querySelector(".diff-view__text")?.textContent,
+    ]),
+  ).toEqual([
+    ["remove", "- step 1799"],
+    ["add", "- step 1799, fixed"],
+  ]);
+  expect(latest.textContent).not.toContain("more changed line");
+});
+
+// A COMPARISON NOT MADE IS SAID: a preview of it would list unchanged lines
+// as removed, so the tile says the save was not compared and links it.
+test("a save the line diff did not compare says so and opens the save", async () => {
+  const before = Array.from({ length: 2_001 }, (_, i) => `old ${i}`).join("\n");
+  const after = Array.from({ length: 2_001 }, (_, i) => `new ${i}`).join("\n");
+  landing({
+    page_activity: { changes: [written("c-1", "2026-09-24T23:00:00Z")] },
+    page: detailOf("p-1", "Runbook", after, [
+      { version: 5, author: "swe", created_at: "2026-09-24T23:00:00Z" },
+      { version: 4, author: "swe", created_at: "2026-09-20T09:00:00Z" },
+    ]),
+    page_revision: { page_id: "p-1", version: 4, title: "Runbook", body: before },
+  });
+  const latest = await screen.findByRole("article", { name: "Newest change" });
+  await waitFor(() =>
+    expect(latest.textContent).toContain(
+      "The save was not compared line by line: more than 4,000 lines were removed or added. Open this save to read it.",
+    ),
+  );
+  expect(within(latest).queryByRole("group", { name: "Latest change" })).toBeNull();
+  expect(latest.querySelector(".diff-view__line")).toBeNull();
+  expect(within(latest).getByRole("link", { name: "this save" }).getAttribute("href")).toBe(
+    "#/knowledge/pages/p-1?version=5",
+  );
+});
+
 // A DIFF IS OF ONE PAIR OF VERSIONS: a read keeps its last answer while the
 // next one is asked, so an answer for another version is never diffed.
 test("a revision answered for another version is not diffed against the save", async () => {

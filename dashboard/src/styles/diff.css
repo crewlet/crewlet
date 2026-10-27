@@ -137,6 +137,14 @@
   color: var(--color-text-tertiary);
   font-size: var(--font-size-compact);
 }
+/* A COMPARISON NOT MADE IS SAID in place of every row, and in the secondary
+   ink rather than the quiet tertiary of "Nothing changed": the reader came for
+   a diff, and this sentence is what stands in for it. */
+.diff-view__uncompared {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
 /* ON A NARROW DIFF A SETTING'S VALUE TAKES THE ROW UNDER ITS PATH: 40% of a
    340px diff is a path broken over three lines beside a value squeezed into
    the rest. The diff's own width decides, as it decides split against

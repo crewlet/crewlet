@@ -10,8 +10,18 @@
  * not a failure and an added one is not done, and on a page that also draws a
  * failed check, a red removed line beside a red failed-check chip makes one red
  * mean two things. So every diff is drawn by this one component, from the
- * package's tokens and its pure line diff (`diffLines`, `collapseDiff`), and
- * none of the three is imported anywhere (`styles/diffs.test.ts`).
+ * package's tokens, and none of the three is imported anywhere
+ * (`styles/diffs.test.ts`).
+ *
+ * # Two texts are compared by the dashboard's one line diff
+ *
+ * Handed two texts rather than hunks, the diff compares them with
+ * `lib/lineDiff.ts` — the shortest edit, at a cost that follows what changed —
+ * never with the package's `diffLines`, which past 2,000 lines a side compares
+ * nothing and answers every line of one text removed and every line of the
+ * other added. Where the comparison is not made (past what it reads, or past
+ * the lines it marks), a sentence says so and why, in place of every row: a
+ * comparison not made is never drawn as though it had been.
  *
  * # What tells a line's kind, with no hue
  *
@@ -83,9 +93,10 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { MAX_DIFF_LINES, VisuallyHidden, collapseDiff, cx, diffLines } from "@crewlethq/ui";
+import { VisuallyHidden, cx } from "@crewlethq/ui";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { plural } from "~/lib/format.ts";
+import { compareLines, notComparedReason } from "~/lib/lineDiff.ts";
 import { scrollerOf } from "~/lib/scroller.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
 import { changedRuns, type ChangedRuns, type Run } from "~/lib/wordDiff.ts";
@@ -97,8 +108,8 @@ import "~/styles/diff.css";
 export type DiffLineKind = "same" | "add" | "remove";
 
 /**
- * One line of a diff: the design system's `DiffLine`, so its line diff's
- * output is this shape as it is, with the `path` a setting is located by.
+ * One line of a diff: the design system's `DiffLine`, the shape the
+ * dashboard's line diff answers in, with the `path` a setting is located by.
  */
 export interface DiffLine {
   kind: DiffLineKind;
@@ -118,7 +129,7 @@ export interface DiffLine {
 
 /**
  * A run of lines, and how many unchanged lines were left out before it: the
- * design system's `DiffSection`, which `collapseDiff` returns.
+ * design system's `DiffSection`, the shape `lib/lineDiff.ts` answers in.
  */
 export interface DiffHunk {
   lines: readonly DiffLine[];
@@ -140,7 +151,7 @@ type DiffSource =
   | {
       before: string;
       after: string;
-      /** Unchanged lines kept either side of a change: `collapseDiff`'s own three when unset. */
+      /** Unchanged lines kept either side of a change: the line diff's own three when unset. */
       context?: number | undefined;
       hunks?: undefined;
     };
@@ -331,18 +342,11 @@ function pairsOf(hunks: readonly DiffHunk[], keyed: boolean): Pairs {
  * the lines one side has beyond the other sit at places position cannot see,
  * and every pair after the first of them is two neighbours, underlined as one
  * line edited wherever neighbours share a word at an end: a YAML key, a
- * table's cells, a `return`. And not in a change longer than
- * [MAX_DIFF_LINES] on a side, whatever its counts, since that is past what
- * the package's line diff aligns: from `diffLines` it is the whole
- * replacement it reports there — every line of the older text removed and
- * every line of the newer added, compared nowhere — whose kth lines are
- * whatever stood kth in each text, so after one line inserted or a paragraph
- * moved, every pair below it is two neighbours. From any other diff a change
- * that long is a rewrite, and it gives up its underline rather than risk a
- * false one on each of thousands of rows.
+ * table's cells, a `return`. A change's LENGTH decides nothing: a long change
+ * of a real diff is as many lines replaced as any short one, and its lines are
+ * paired, or not, by the same two shapes.
  */
 function alignedByPosition(removed: number, added: number): boolean {
-  if (removed > MAX_DIFF_LINES || added > MAX_DIFF_LINES) return false;
   return removed === added || Math.min(removed, added) === 1;
 }
 
@@ -450,6 +454,9 @@ function blocksOf(rows: readonly Row[]): Row[][] {
   }
   return out;
 }
+
+/** The hunks of two texts that were not compared: none, and the sentence in their place. */
+const NO_HUNKS: readonly DiffHunk[] = [];
 
 /** The blocks a windowed diff holds before the observer has said where it is: the first. */
 const FIRST: ReadonlySet<number> = new Set([0]);
@@ -661,10 +668,12 @@ function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pair
 export function DiffView(props: DiffViewProps) {
   const { layout = "unified", against, empty, "aria-label": label } = props;
   const { hunks: given, before, after, context } = props;
-  const hunks = useMemo<readonly DiffHunk[]>(
-    () => given ?? collapseDiff(diffLines(before ?? "", after ?? ""), context),
+  // TWO TEXTS ARE COMPARED ONCE, for as long as they are the two texts.
+  const compared = useMemo(
+    () => (given ? null : compareLines(before ?? "", after ?? "", context)),
     [given, before, after, context],
   );
+  const hunks = given ?? (compared?.kind === "compared" ? compared.hunks : NO_HUNKS);
   const shape = useMemo(() => shapeOf(hunks), [hunks]);
   const changed = shape.added > 0 || shape.removed > 0;
   const root = useRef<HTMLDivElement>(null);
@@ -680,6 +689,13 @@ export function DiffView(props: DiffViewProps) {
   const blocks = useMemo(() => blocksOf(rows), [rows]);
   const shown = useWindow(body, blocks, rows.length > WINDOW_FROM_ROWS);
 
+  if (compared && compared.kind !== "compared") {
+    return (
+      <p className="diff-view__uncompared">
+        The two versions were not compared line by line: {notComparedReason(compared)}.
+      </p>
+    );
+  }
   if (!changed) {
     return <>{empty ?? <p className="diff-view__empty">Nothing changed.</p>}</>;
   }

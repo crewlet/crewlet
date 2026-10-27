@@ -8,8 +8,9 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { ArtifactCompare, lineHunks } from "./ArtifactCompare.tsx";
+import { ArtifactCompare } from "./ArtifactCompare.tsx";
 import { Router } from "~/app/router.tsx";
+import { MAX_EDITS } from "~/lib/lineDiff.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
 
@@ -146,23 +147,23 @@ test("the files are compared by digest, and the changed page line by line", asyn
   expect(within(lines).getByText("1 unchanged line")).toBeTruthy();
 });
 
-// THE GAP BEFORE EACH RUN IS COUNTED IN THE OLDER VERSION'S LINES: after two
-// lines replaced from line 3, a line inserted after line 9 skips the five
-// unchanged lines between them, and each line keeps its own number.
-test("a text file's runs skip the unchanged lines between them", () => {
-  const hunks = lineHunks([
-    { fromStart: 3, from: ["c", "d"], toStart: 3, to: ["C"] },
-    { fromStart: 10, from: [], toStart: 9, to: ["new"] },
-  ]);
-  expect(hunks.map((h) => h.skipped)).toEqual([2, 5]);
-  expect(hunks.map((h) => h.lines.map((l) => [l.kind, l.before, l.after, l.text]))).toEqual([
-    [
-      ["remove", 3, null, "c"],
-      ["remove", 4, null, "d"],
-      ["add", null, 3, "C"],
-    ],
-    [["add", null, 9, "new"]],
-  ]);
+// A COMPARISON NOT MADE IS SAID, never drawn: past the line diff's bounds a
+// changed file is a sentence naming the bound, and no line of it is drawn as
+// though it had been compared.
+test("a text file past the line diff's bounds says it was not compared, and draws no line", async () => {
+  const page = `/artifacts/${ID}/versions/12/files/index.html`;
+  const kept = texts[page]!;
+  texts[page] = Array.from({ length: MAX_EDITS + 1 }, (_, i) => `<p>${i}</p>`).join("\n");
+  try {
+    mount(12, 11);
+    const note = await screen.findByText(/^index\.html was not compared line by line/);
+    expect(note.textContent).toBe(
+      "index.html was not compared line by line: more than 4,000 lines were removed or added.",
+    );
+    expect(screen.queryByRole("group", { name: "index.html: the lines that changed" })).toBeNull();
+  } finally {
+    texts[page] = kept;
+  }
 });
 
 test("the older version is the from half whichever was picked first", async () => {

@@ -196,8 +196,8 @@ are not spent on them; and on a screen that also draws a state, a red removed
 line beside a red failed check would make one red mean two things. The design
 system's own `DiffView`, `DiffSummary` and `DiffList` paint an added line in
 the success state's tint and a removed one in the danger state's, which is why
-the dashboard draws its own from the package's tokens and its pure line diff
-(`diffLines`, `collapseDiff`), and draws none of the three.
+the dashboard draws its own from the package's tokens, and draws none of the
+three.
 
 A line's kind is said three ways, each enough alone:
 
@@ -224,9 +224,21 @@ A line's kind is said three ways, each enough alone:
   `contrib/diff-highlight` pairs), or one line against several, the first
   of each. Any other change of a text underlines nothing: one of two lines
   or more a side with unequal counts, where every pair after a line added
-  is two neighbours, and one past 2,000 lines a side — `diffLines`' whole
-  replacement, whose pairs after one line inserted or moved are neighbours
-  too.
+  is two neighbours.
+
+Two texts are compared by the dashboard's one line diff, `lib/lineDiff.ts`,
+which every diff and preview of a text compares with: the shortest edit
+between their lines (Myers' algorithm, the one git's own diff runs), in linear
+space, over lines interned to numbers, with the stretch the two share at their
+start and end walked once and compared no further, so what a comparison costs
+follows what changed rather than the length of the text. It is bounded, and
+says so: past 20,000 lines a side in what changed, or 4,000 lines removed and
+added, two texts are NOT compared, and the diff is a sentence saying which in
+place of every row, never a comparison drawn that was not made. The design
+system's own `diffLines` is why that matters: it fills a table quadratic in
+the two texts, so it stops at 2,000 lines a side, and there it answers every
+line of the older text removed and every line of the newer added, which drew a
+page edited on one line as a page rewritten.
 
 A diff of a text is numbered in both versions, in Geist Mono at the document's
 13px. A diff of SETTINGS — a configuration's paths, an artifact's files — is
@@ -3847,10 +3859,10 @@ would drift exactly as `textcut`'s four copies and `whsec`'s two did, and the
 clause that would go first is the fence.
 
 A page's history shows **what a save changed**, not only what one version
-said. The two revisions are compared by line with the design system's
-`diffLines` (the longest common subsequence of their lines; past 2,000 lines
-a side, a whole replacement rather than a frozen tab, with nothing in it
-underlined) and drawn by the one
+said. The two revisions are compared by the dashboard's one line diff (the
+shortest edit between their lines; past 20,000 lines a side in what changed,
+or 4,000 lines removed and added, a sentence saying the two were not compared
+line by line, and why, in place of any row) and drawn by the one
 `DiffView` ([Diffs carry no hue](#diffs-carry-no-hue)), over the count of
 lines added and removed against the revision before. Inside an edited line
 it underlines ONE run, never a word-by-word diff, because these documents are
@@ -6898,7 +6910,9 @@ palette and the trail.
   (back-to-back saves of one page by one writer on one company day are one
   row, "saved it twice"), the lines the newest save changed as the page's
   History draws them (six at most, with the count of the rest and a link to
-  that save), and the page's opening, never ending on a heading with nothing
+  that save; a save the line diff did not compare says so and links it, rather
+  than listing the page's first lines as removed), and the page's opening,
+  never ending on a heading with nothing
   under it. That costs ONE `page` read, of the featured page alone, and the
   `page_revision` before the save; a change to a page since purged never
   leads. **Recently written** runs down the right with the rest of the same
@@ -8769,8 +8783,9 @@ brings that carries a design-system rule.
   the stacked bar, the activity strip and the sparkline with them. The one
   peer the dashboard does not draw is the package's diff: its `DiffView`,
   `DiffSummary` and `DiffList` paint by state, which a diff is not, so every
-  diff is `components/DiffView.tsx`, built from the package's tokens and its
-  line diff ([Diffs carry no hue](#diffs-carry-no-hue)).
+  diff is `components/DiffView.tsx`, built from the package's tokens over the
+  dashboard's own line diff, since the package's stops comparing at 2,000
+  lines a side ([Diffs carry no hue](#diffs-carry-no-hue)).
 - **What is left of `src/ui/` is of three kinds, and none of them is a second
   recipe for something the package already draws.** A VOCABULARY the package
   does not have and should not — `Tone`, the six words the engine's own

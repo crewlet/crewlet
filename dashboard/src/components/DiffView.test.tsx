@@ -9,8 +9,8 @@
 
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { MAX_DIFF_LINES } from "@crewlethq/ui";
 
+import { MAX_COMPARE_LINES, MAX_EDITS } from "~/lib/lineDiff.ts";
 import { changedRuns } from "~/lib/wordDiff.ts";
 import { sheetRules } from "~/test/sheets.ts";
 import { DiffView, WINDOW_BLOCK_ROWS, WINDOW_FROM_ROWS, type DiffHunk } from "./DiffView.tsx";
@@ -214,34 +214,108 @@ describe("which lines of a text are one line edited", () => {
     }
   });
 
-  // PAST MAX_DIFF_LINES A SIDE the package's line diff compares nothing: it
-  // reports every older line removed and every newer one added, whose kth
-  // lines are whatever stood kth in each text — so after one line inserted,
-  // or one moved, every pair below it is two neighbours.
-  test.each([
-    ["inserted at the top", (older: string[]) => ["- name: queue", ...older]],
-    ["moved to the end", (older: string[]) => [...older.slice(1), older[0]!]],
-  ])("in nothing of a whole replacement, one line %s", (_, edit) => {
+  // A CHANGE'S LENGTH DECIDES NOTHING: a long run of lines each edited in
+  // place is paired line by line exactly as a short one is.
+  test("in a change of thousands of lines a side, as in a short one", () => {
     const restore = installObserver();
     try {
-      const read = vi.mocked(changedRuns);
-      read.mockClear();
-      const older = Array.from({ length: MAX_DIFF_LINES + 1 }, (_, i) => `- name: item${i}`);
-      const { container } = render(
-        <DiffView before={older.join("\n")} after={edit(older).join("\n")} />,
+      const n = 2_001;
+      const hunks: DiffHunk[] = [
+        {
+          skipped: 0,
+          lines: [
+            ...Array.from({ length: n }, (_, i) => removed(i + 1, `- name: item${i} old`)),
+            ...Array.from({ length: n }, (_, i) => added(i + 1, `- name: item${i} new`)),
+          ],
+        },
+      ];
+      const { container } = render(<DiffView hunks={hunks} />);
+      // The first block is the first removed lines, each underlined where it
+      // differs from the line in its place.
+      expect(runs(container)).toEqual(
+        Array.from({ length: WINDOW_BLOCK_ROWS }, () => ["remove", "old"]),
       );
-      // The first block holds the first lines removed; the block where they
-      // end holds the first lines added, which position would pair them with.
-      Observer.made[0]!.say([{ block: Math.floor(older.length / WINDOW_BLOCK_ROWS), near: true }]);
-      const drawn = lines(container);
-      expect(drawn).toHaveLength(2 * WINDOW_BLOCK_ROWS);
-      expect(drawn[0]).toEqual(["remove", "- name: item0"]);
-      expect(drawn).toContainEqual(["add", edit(older)[0]]);
-      expect(runs(container)).toEqual([]);
-      expect(read).not.toHaveBeenCalled();
     } finally {
       restore();
     }
+  });
+});
+
+// A TEXT IS COMPARED, NEVER REPLACED WHOLE. Past 2,000 lines a side the design
+// system's line diff compares nothing and answers every older line removed and
+// every newer one added, which drew a page edited on one line as a page
+// rewritten; the dashboard's own line diff draws the edit the text had.
+describe("a long text", () => {
+  /** 2,001 lines: one past where the design system's line diff stops comparing. */
+  const older = Array.from({ length: 2_001 }, (_, i) => `- name: item${i}`);
+
+  test.each([
+    [
+      "edited in place",
+      older.map((line, i) => (i === 1_000 ? `${line}-v2` : line)),
+      [
+        ["remove", "- name: item1000"],
+        ["add", "- name: item1000-v2"],
+      ],
+      [["add", "-v2"]],
+    ],
+    ["inserted at the top", ["- name: queue", ...older], [["add", "- name: queue"]], []],
+    [
+      "moved to the end",
+      [...older.slice(1), older[0]!],
+      [
+        ["remove", "- name: item0"],
+        ["add", "- name: item0"],
+      ],
+      [],
+    ],
+  ])("draws one line %s as that line changed, among its context", (_, newer, changed, under) => {
+    const { container } = render(
+      <DiffView before={older.join("\n")} after={newer.join("\n")} against="rev 1" />,
+    );
+    const drawn = lines(container);
+    expect(drawn.filter(([kind]) => kind !== "same")).toEqual(changed);
+    // ONLY THE CONTEXT BESIDE IT: three lines either side, in at most two places.
+    expect(drawn.length).toBeLessThanOrEqual(changed.length + 12);
+    expect(runs(container)).toEqual(under);
+    const count = (kind: string) => changed.filter(([k]) => k === kind).length;
+    expect(container.querySelector(".diff-view__head [aria-hidden='true']")?.textContent).toBe(
+      `+${count("add")} −${count("remove")}`,
+    );
+  });
+
+  // A COMPARISON NOT MADE IS SAID, and no row is drawn: past the lines the
+  // line diff reads, or the lines it marks, two texts are a sentence that says
+  // which, never a diff that says something false.
+  test.each([
+    [
+      "with more lines removed and added than the diff marks",
+      Array.from({ length: MAX_EDITS / 2 + 1 }, (_, i) => `old ${i}`),
+      Array.from({ length: MAX_EDITS / 2 + 1 }, (_, i) => `new ${i}`),
+      "more than 4,000 lines were removed or added",
+    ],
+    [
+      "whose change spans more lines than the diff reads",
+      Array.from({ length: MAX_COMPARE_LINES + 1 }, (_, i) => `line ${i}`),
+      [
+        "first, edited",
+        ...Array.from({ length: MAX_COMPARE_LINES - 1 }, (_, i) => `line ${i + 1}`),
+        "last, edited",
+      ],
+      "what changed spans 20,001 lines, more than the 20,000 a comparison reads",
+    ],
+  ])("draws a sentence and no row for two texts %s", (_, before, after, why) => {
+    const { container } = render(
+      <DiffView
+        before={before.join("\n")}
+        after={after.join("\n")}
+        against="rev 1"
+        empty={<p>The body did not change</p>}
+      />,
+    );
+    expect(container.textContent).toBe(`The two versions were not compared line by line: ${why}.`);
+    expect(container.querySelector(".diff-view")).toBeNull();
+    expect(container.querySelector(".diff-view__line")).toBeNull();
   });
 });
 

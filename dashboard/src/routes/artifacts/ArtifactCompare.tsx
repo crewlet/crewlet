@@ -11,7 +11,8 @@
  *   dashboard's one [DiffView]: the files as a diff KEYED by path, a changed
  *   file being its old facts removed and its new ones added (the digest
  *   among them, since a file can change and keep its type and size), and the
- *   lines numbered in both versions.
+ *   lines numbered in both versions, compared by the dashboard's one line
+ *   diff (`lib/lineDiff.ts`) or said in words not to have been.
  * - SIDE BY SIDE: both versions drawn, a page in two frames or a document
  *   rendered twice. Data is live and not versioned with the page, so both
  *   show today's data, and the pane says so. A kind compared ITEM BY ITEM
@@ -28,7 +29,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Callout, Select, Skeleton, VersionCompare } from "@crewlethq/ui";
+import { Select, Skeleton, VersionCompare } from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactEntry } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
@@ -39,12 +40,10 @@ import { versionFile } from "~/lib/artifacts/api.ts";
 import {
   MAX_COMPARE_BYTES,
   compareFiles,
-  compareLines,
   isComparableText,
   type FileChange,
-  type Hunk,
-  type LineComparison,
 } from "~/lib/artifacts/compare.ts";
+import { compareLines, notComparedReason, type LineComparison } from "~/lib/lineDiff.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
 import { contentIsData, dataBesideVersions } from "~/lib/artifacts/kinds.ts";
@@ -268,37 +267,6 @@ function fileHunks(changes: readonly FileChange[]): DiffHunk[] {
   }));
 }
 
-/**
- * A text file's changed runs as a diff numbered in both versions: each run its
- * hunk, its older lines removed and its newer ones added, opening on how many
- * unchanged lines lay between it and the run before.
- */
-export function lineHunks(hunks: readonly Hunk[]): DiffHunk[] {
-  // The older version's lines accounted for by the runs so far.
-  let seen = 0;
-  return hunks.map((h) => {
-    const skipped = h.fromStart - 1 - seen;
-    seen = h.fromStart - 1 + h.from.length;
-    return {
-      skipped,
-      lines: [
-        ...h.from.map((text, i) => ({
-          kind: "remove" as const,
-          text,
-          before: h.fromStart + i,
-          after: null,
-        })),
-        ...h.to.map((text, i) => ({
-          kind: "add" as const,
-          text,
-          before: null,
-          after: h.toStart + i,
-        })),
-      ],
-    };
-  });
-}
-
 /** The lines that changed in one text file between the two versions. */
 function LineCompare({
   detail,
@@ -323,12 +291,14 @@ function LineCompare({
         versionFile(detail.id, older, from.path, signal),
         versionFile(detail.id, newer, to.path, signal),
       ]);
-      return compareLines(await a.text(), await b.text());
+      // THE RUNS ALONE, with no unchanged line around them: each opens on
+      // how many unchanged lines lie between it and the run before.
+      return compareLines(await a.text(), await b.text(), 0);
     },
   );
   // Built with the answer, for the reason `fileDiff` is.
   const lineDiff = useMemo(
-    () => (answer.data?.kind === "hunks" ? lineHunks(answer.data.hunks.slice(0, SHOWN_HUNKS)) : []),
+    () => (answer.data?.kind === "compared" ? answer.data.hunks.slice(0, SHOWN_HUNKS) : []),
     [answer.data],
   );
   if (tooBig) {
@@ -349,20 +319,13 @@ function LineCompare({
   const result = answer.data;
   switch (result.kind) {
     case "too-large":
-      return (
-        <p className="artifact-note">
-          {to.path} has {result.lines.toLocaleString()} lines, too many to compare line by line
-          here.
-        </p>
-      );
     case "too-different":
       return (
-        <Callout variant="info" title={`${to.path} was rewritten`}>
-          The two versions of this file have almost nothing in common, so a line by line comparison
-          would list every line. Open each version to read it.
-        </Callout>
+        <p className="artifact-note">
+          {to.path} was not compared line by line: {notComparedReason(result)}.
+        </p>
       );
-    case "hunks":
+    case "compared":
       return (
         <div className="artifact-compare-lines">
           <h3 className="artifact-compare-heading">
