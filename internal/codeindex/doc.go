@@ -54,13 +54,38 @@
 // can be looked up is REFUSED rather than answered by reading every file —
 // the cost a search budget exists to keep off a git node — and so is one that
 // can match across a line (regexlit.LineLocal), because a search answers
-// lines, confirms them one at a time, and would find no match of it there.
+// lines, confirms them one at a time, and would find no match of it there;
+// and one whose program costs too much to run on a line (below).
 //
 // Candidates are CONFIRMED with Go's regexp, line by line, and only on a line
 // that holds what every match needs (Plan.Confirm): an answer is RE2's
 // whichever path offered the blob, the index or `git grep -F` over the plan's
 // literals. A second dialect — ERE through `git grep -E` — would answer the
 // same query two ways.
+//
+// # What a confirm may cost
+//
+// Go's regexp runs in time linear in its input, but the factor is the
+// program: it may step every instruction at every byte, and a run of it
+// takes no context and cannot be stopped part way. A counted repetition
+// compiles to as many copies of what it repeats, so 400 bytes of pattern can
+// be a hundred thousand instructions, one and a half milliseconds a byte of
+// a line — some twenty-five minutes of a CPU over a minified file's one
+// mebibyte line, on the git node every clone and push of the repository is
+// served from. So the cost is bounded where it is decided, three ways. A
+// pattern whose program is past MaxProgram instructions is REFUSED
+// (ErrTooComplex), which nothing a person or a seat searches for comes near.
+// Confirm runs the expression on a line only where the line's bytes times
+// the program's instructions are within MaxLineWork (Plan.LineBytes); a
+// longer line that could match is COUNTED, never run, and never answered as
+// holding no match. And Confirm takes its caller's context and checks it
+// between lines, so a search's budget holds to within one line's run, which
+// MaxLineWork bounds to 0.22 s on the cores it was measured on.
+//
+// The obvious alternatives are worse. A bound on a line's bytes alone,
+// whatever its pattern, would keep a literal search out of the minified files
+// a short program reads whole within the same cost; and running the regexp in
+// a goroutine a search abandons at its deadline leaves it burning the CPU.
 //
 // # Skipped
 //

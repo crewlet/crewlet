@@ -2,8 +2,10 @@ package codeindex
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"regexp"
 	"regexp/syntax"
@@ -118,6 +120,21 @@ func sameHits(a, b []Hit) bool {
 	return slices.EqualFunc(a, b, func(x, y Hit) bool {
 		return x.Line == y.Line && bytes.Equal(x.Text, y.Text) && x.Start == y.Start && x.End == y.End
 	})
+}
+
+// confirmed is every hit Confirm finds in blob, read whole: no line of it past
+// the plan's bound, and nothing to end it.
+func confirmed(t *testing.T, p *Plan, blob []byte) []Hit {
+	t.Helper()
+	var hits []Hit
+	long, err := p.Confirm(t.Context(), blob, func(h Hit) bool {
+		hits = append(hits, h)
+		return true
+	})
+	if err != nil || long != 0 {
+		t.Fatalf("Confirm of %s over %q stopped (%v) or left %d lines unrun", p.re, blob, err, long)
+	}
+	return hits
 }
 
 // trigramSet is the trigrams of lowered, as a set.
@@ -254,9 +271,9 @@ func TestAPlanNeverRejectsAMatchGoRegexpFinds(t *testing.T) {
 				}
 				continue
 			}
-			if confirmed := slices.Collect(plan.Confirm(text)); !sameHits(confirmed, want) {
+			if got := confirmed(t, plan, text); !sameHits(got, want) {
 				t.Fatalf("Confirm of %s over %q answers %+v; regexp line by line finds %+v", pattern, text,
-					confirmed, want)
+					got, want)
 			}
 			hits += len(want)
 			if len(want) == 0 {
@@ -341,25 +358,36 @@ func TestAPlanNeverRejectsAMatchGoRegexpFinds(t *testing.T) {
 		unnarrowed, blobs, matched, ruledOut, skipped, hits, unicodeOnly, escapeOnly, merged)
 }
 
-// A PLAN REFUSES WHAT THE INDEX CANNOT NARROW, and what a line cannot hold.
+// A PLAN REFUSES WHAT THE INDEX CANNOT NARROW, what a line cannot hold, and
+// what costs too much to run on one.
+//
+// The last is a program past MaxProgram instructions: a counted repetition
+// compiles to as many copies of what it repeats, and the 398 bytes of "the",
+// forty-nine .{0,999} and "zzz" — within MaxQueryBytes, line-local, holding a
+// literal — compile to nearly a hundred thousand, two milliseconds a byte of
+// a line holding no match. foo.{0,500}bar, just within the bound, plans.
 func TestAPlanRefusesWhatTheIndexCannotNarrow(t *testing.T) {
 	t.Parallel()
+	multiplied := "the" + strings.Repeat(".{0,999}", 49) + "zzz"
 	for pattern, want := range map[string]error{
-		`foo`:         nil,
-		`(?m)^func`:   nil,
-		`(?i)ſtatus`:  nil,
-		`foo|barbaz`:  nil,
-		`ab`:          ErrNoLiteral,
-		`a.b`:         ErrNoLiteral,
-		`\w+`:         ErrNoLiteral,
-		`(?i)ab`:      ErrNoLiteral,
-		`fo|barbaz`:   ErrNoLiteral, // its one clause holds a literal no trigram finds
-		`\x{212A}x`:   ErrNoLiteral, // four bytes, two once lowered
-		`foo\nbar`:    ErrNotLineLocal,
-		`(?s)foo.bar`: ErrNotLineLocal,
-		`\Afoo`:       ErrNotLineLocal,
-		`foo\s+bar`:   ErrNotLineLocal,
-		`^foo`:        ErrNotLineLocal, // the text's start, without (?m)
+		`foo`:            nil,
+		`(?m)^func`:      nil,
+		`(?i)ſtatus`:     nil,
+		`foo|barbaz`:     nil,
+		`foo.{0,500}bar`: nil,
+		`ab`:             ErrNoLiteral,
+		`a.b`:            ErrNoLiteral,
+		`\w+`:            ErrNoLiteral,
+		`(?i)ab`:         ErrNoLiteral,
+		`fo|barbaz`:      ErrNoLiteral, // its one clause holds a literal no trigram finds
+		`\x{212A}x`:      ErrNoLiteral, // four bytes, two once lowered
+		`foo\nbar`:       ErrNotLineLocal,
+		`(?s)foo.bar`:    ErrNotLineLocal,
+		`\Afoo`:          ErrNotLineLocal,
+		`foo\s+bar`:      ErrNotLineLocal,
+		`^foo`:           ErrNotLineLocal, // the text's start, without (?m)
+		`foo.{0,600}bar`: ErrTooComplex,
+		multiplied:       ErrTooComplex,
 	} {
 		_, err := NewPlan(regexp.MustCompile(pattern))
 		switch {
@@ -370,5 +398,136 @@ func TestAPlanRefusesWhatTheIndexCannotNarrow(t *testing.T) {
 		case want != nil && !errors.Is(err, ErrBadQuery):
 			t.Errorf("NewPlan(%s)'s refusal %v is not ErrBadQuery", pattern, err)
 		}
+	}
+
+	// The sentence says how large the program is and what to write instead.
+	insts, err := program(regexp.MustCompile(multiplied))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Query{Text: multiplied, Mode: ModeRegex}.Plan()
+	var qe *QueryError
+	switch {
+	case insts < 50*MaxProgram:
+		t.Errorf("the forty-nine repetitions compile to %d instructions, so the case proves little", insts)
+	case !errors.As(err, &qe) || !errors.Is(err, ErrTooComplex):
+		t.Errorf("a query of the forty-nine repetitions plans: %v", err)
+	case !strings.Contains(qe.Reason, fmt.Sprintf("%d instructions", insts)) || !strings.Contains(qe.Reason, ".*"):
+		t.Errorf("the refusal %q names neither the program's %d instructions nor what to write instead",
+			qe.Reason, insts)
+	}
+}
+
+// CONFIRM STOPS BETWEEN LINES ONCE ITS CONTEXT ENDS, and says so. A run of
+// Go's regexp over a line cannot be stopped part way, so a search holds its
+// budget to within one line's run by checking between them: once the
+// context ends, no further line is run, a matching one included, and the
+// caller is told why the answer ends there. A hit refused stops it with
+// nothing to tell.
+func TestAConfirmStopsBetweenLinesOnceItsContextEnds(t *testing.T) {
+	t.Parallel()
+	plan, err := NewPlan(regexp.MustCompile(`needle`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := []byte(strings.Repeat("a needle\n", 3) + strings.Repeat("hay\n", 1000) + "the last needle\n")
+	if hits := confirmed(t, plan, blob); len(hits) != 4 || hits[3].Line != 1004 {
+		t.Fatalf("the blob read whole answers %+v, want lines 1–3 and 1004", hits)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var lines []int
+	long, err := plan.Confirm(ctx, blob, func(h Hit) bool {
+		lines = append(lines, h.Line)
+		if len(lines) == 3 {
+			cancel()
+		}
+		return true
+	})
+	if !errors.Is(err, context.Canceled) || !slices.Equal(lines, []int{1, 2, 3}) || long != 0 {
+		t.Errorf("a context ended at the third hit: lines %v, %d long, %v; want lines 1–3 and the context's "+
+			"error", lines, long, err)
+	}
+	lines = nil
+	if _, err := plan.Confirm(ctx, blob, func(h Hit) bool { lines = append(lines, h.Line); return true }); !errors.Is(err, context.Canceled) || len(lines) != 0 {
+		t.Errorf("a context already ended: lines %v, %v; want none and the context's error", lines, err)
+	}
+
+	lines = nil
+	if _, err := plan.Confirm(t.Context(), blob, func(h Hit) bool {
+		lines = append(lines, h.Line)
+		return false
+	}); err != nil || !slices.Equal(lines, []int{1}) {
+		t.Errorf("a hit refused at the first: lines %v, %v; want line 1 alone and no error", lines, err)
+	}
+}
+
+// A LINE LONGER THAN ITS PLAN RUNS ON IS COUNTED, NEVER RUN: what confirming
+// a line costs is its bytes times its program's instructions (MaxLineWork),
+// and a run cannot be stopped part way. Only a line that could match is
+// counted — one that cannot holds no match whatever its length — so the
+// count is of what the search did not read. The bound is the plan's own: a
+// short program runs on a whole MaxFileBytes line, the longest a blob the
+// index holds can have.
+func TestALineLongerThanItsPlanRunsOnIsCountedNotRun(t *testing.T) {
+	t.Parallel()
+	plan, err := NewPlan(regexp.MustCompile(`foo.{0,500}bar`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := plan.LineBytes()
+	if limit != MaxLineWork/plan.insts || plan.insts < MaxProgram/2 {
+		t.Fatalf("a program of %d instructions runs on lines of %d bytes; the case needs one near MaxProgram",
+			plan.insts, limit)
+	}
+	line := func(n int, holds string) string { return holds + strings.Repeat("y", n-len(holds)) }
+	blob := line(limit, "foo bar") + "\n" + line(limit+1, "foo bar") + "\n" + line(limit+1, "foo") + "\nfoo bar\n"
+	var lines []int
+	long, err := plan.Confirm(t.Context(), []byte(blob), func(h Hit) bool {
+		lines = append(lines, h.Line)
+		return true
+	})
+	if err != nil || !slices.Equal(lines, []int{1, 4}) || long != 1 {
+		t.Errorf("lines of %d, %d (could match), %d (cannot) and 7 bytes against a bound of %d: hits on %v, %d "+
+			"counted, %v; want hits on 1 and 4 and line 2 counted", limit, limit+1, limit+1, limit, lines, long, err)
+	}
+
+	short, err := NewPlan(regexp.MustCompile(`needle`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole := []byte(strings.Repeat("y", MaxFileBytes-len("needle")) + "needle")
+	if hits := confirmed(t, short, whole); short.LineBytes() < MaxFileBytes || len(hits) != 1 {
+		t.Errorf("a program of %d instructions runs on lines of %d bytes and finds %d hits on a whole "+
+			"MaxFileBytes line; want the line run and one hit", short.insts, short.LineBytes(), len(hits))
+	}
+}
+
+// BenchmarkALineAtTheWorkBound is MaxLineWork's measurement: one line's
+// confirm at the bound, by a regexp holding every instruction of its program
+// live at every byte — [a-z]{3} starts a thread at each letter and .{0,k}
+// keeps one at each count — over a line holding the literal its plan needs
+// and no match. program=1024 is MaxProgram's program over its LineBytes;
+// program=24 a short one over a whole MaxFileBytes line, which its bound
+// passes.
+func BenchmarkALineAtTheWorkBound(b *testing.B) {
+	for _, k := range []int{508, 8} {
+		plan, err := NewPlan(regexp.MustCompile(fmt.Sprintf(`[a-z]{3}.{0,%d}zzz`, k)))
+		if err != nil {
+			b.Fatal(err)
+		}
+		n := min(plan.LineBytes(), MaxFileBytes)
+		line := append([]byte("zzz"), bytes.Repeat([]byte("ab"), n/2)...)[:n]
+		b.Run(fmt.Sprintf("program=%d", plan.insts), func(b *testing.B) {
+			for b.Loop() {
+				hits := 0
+				long, err := plan.Confirm(b.Context(), line, func(Hit) bool { hits++; return true })
+				if err != nil || long != 0 || hits != 0 {
+					b.Fatalf("the line was not run to its end: %d hits, %d long, %v", hits, long, err)
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(plan.insts)/float64(n),
+				"ns/inst-byte")
+		})
 	}
 }
