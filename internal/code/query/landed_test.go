@@ -3,6 +3,7 @@ package query_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -232,6 +234,82 @@ func TestTheLandingSearchIsBoundedAndSaysSo(t *testing.T) {
 		t.Errorf("the answer's detail is %q, want it to name push %s, the third rewrite, and the 3 forced "+
 			"moves at and below it", a.Detail, reached.PushID)
 	}
+}
+
+// A LANDING SEARCH THE READ'S BUDGET ENDS SAYS HOW FAR IT REACHED, as one its
+// bound of checks ends does: the search's checks share the read's one budget
+// of git with the check against the tip, and a check that runs out what the
+// budget had left leaves the search knowing the oldest move that kept the
+// commit, which is answered — never the read refused as too large, which
+// would throw that away and ask for a narrowing no landed-in read can make.
+// The check against the tip is not the search's: run out, nothing is known,
+// and the read is too large. Here main is rewritten by five force-pushes that
+// each keep the commit, and the fourth ancestry check — the search's third,
+// below the second rewrite from the top — runs the budget out.
+//
+// Mutations: answer every check the budget ends as the read too large
+// (landing.stopped with only its bound's case) — the search's is refused, red;
+// answer the tip's check the budget ends as a search's — the read is
+// answered, red.
+func TestALandingSearchTheBudgetEndsSaysHowFarItReached(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, forceable())
+	x.commit(map[string]string{"base.txt": "base\n"}, "base")
+	kept := x.commit(map[string]string{"kept.txt": "kept\n"}, "the commit asked about")
+	x.commit(map[string]string{"top.txt": "0\n"}, "a tip to rewrite")
+	var rewrites []string
+	for _, m := range []string{"a", "b", "c", "d", "e"} {
+		x.git("commit", "-q", "--amend", "-m", "rewritten "+m)
+		x.push(codetest.RepoName, "main")
+		rewrites = append(rewrites, x.p.Head(x.work))
+	}
+	repo := x.repo(codetest.RepoName)
+	tip, at := x.tip("refs/heads/main")
+	q := landedQ(repo, kept, "refs/heads/main", tip, at, false)
+	reached := x.pushesMoving(repo, "refs/heads/main", rewrites[3])[0]
+	pool := x.f.Nodes()[0].Pool()
+	searching := x.server(0, query.Options{Git: &checkEnding{Pool: pool, n: 4}})
+	tipping := x.server(0, query.Options{Git: &checkEnding{Pool: pool, n: 1}})
+
+	t.Run("a check of the search", func(t *testing.T) {
+		a := mustRead(t, searching, q).LandedIn
+		switch {
+		case !a.Landed:
+			t.Fatalf("the commit is not landed in main: %+v", a)
+		case a.LandedBy != nil:
+			t.Errorf("a search its budget ended named push %s", a.LandedBy.PushID)
+		case a.Probes != 3:
+			t.Errorf("the search ran %d checks, want the 3 the budget ended it on", a.Probes)
+		case !strings.Contains(a.Detail, "landed at or before push "+reached.PushID) ||
+			!strings.Contains(a.Detail, "4 forced moves of refs/heads/main were not searched past within "+
+				"the read's 10s of git"):
+			t.Errorf("the answer's detail is %q, want it to name push %s, the second rewrite from the top, the "+
+				"4 forced moves at and below it, and the read's budget", a.Detail, reached.PushID)
+		}
+	})
+	t.Run("the check against the tip", func(t *testing.T) {
+		if _, err := tipping.Read(t.Context(), q); !errors.Is(err, code.ErrSliceTooLarge) {
+			t.Errorf("a read whose check against the tip ran out its budget = %v, want code.ErrSliceTooLarge", err)
+		}
+	})
+}
+
+// checkEnding is a query.Pool whose n-th ancestry check — the first a
+// landed-in read runs being its check against the tip — runs out all the
+// read's budget of git had left, answered as gitproc answers a run killed at
+// its deadline; every other process runs on the pool beneath.
+type checkEnding struct {
+	query.Pool
+	n    int64
+	seen atomic.Int64
+}
+
+func (p *checkEnding) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	if c.Args[0] == "merge-base" && p.seen.Add(1) == p.n {
+		return gitproc.Result{Exit: -1, Took: c.Deadline}, fmt.Errorf("gitproc: git merge-base ran past its %v "+
+			"deadline and was killed: %w", c.Deadline, gitproc.ErrDeadline)
+	}
+	return p.Pool.Run(ctx, c)
 }
 
 // A LANDING THE INDEX DOES NOT HOLD IS NOT ATTRIBUTED. The landing is a move

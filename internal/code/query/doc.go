@@ -38,11 +38,13 @@
 // A LANDED-IN READ (landed.go) is one ancestry check against the tip the
 // asker resolved and the position it read it at, the copy brought there,
 // then a segmented binary search of the branch's moves in the index — never a
-// walk of the log or of the history — bounded by MaxLandedProbes. It names
-// the first move after which every move kept the commit, and never a move the
-// commit was reachable before: a landing older than the index's oldest move
-// of the branch, or inside its gap, is answered with no push and the range it
-// lies in (TestALandingTheIndexDoesNotHoldIsNotAttributed).
+// walk of the log or of the history — bounded by MaxLandedProbes and by the
+// read's one budget of git, either of which ends it with how far it reached
+// (TestALandingSearchTheBudgetEndsSaysHowFarItReached). It names the first
+// move after which every move kept the commit, and never a move the commit
+// was reachable before: a landing older than the index's oldest move of the
+// branch, or inside its gap, is answered with no push and the range it lies
+// in (TestALandingTheIndexDoesNotHoldIsNotAttributed).
 //
 // # By object id, never by ref
 //
@@ -128,10 +130,12 @@
 // A read's own git — every process of its kind, a comparison's two walks and
 // its stat or a landed-in search's ancestry checks as a listing's one — is
 // given ONE budget of run time, gitproc.ReadDeadline, each process what the
-// ones before it left: run out, the read is too large to answer anywhere. Its
-// wait for each process's read-lane slot is charged nothing, since it is the
-// node's contention and not the read's size. The short checks before it
-// (objects.go) run to their own bound, outside it.
+// ones before it left: run out, the read is too large to answer anywhere —
+// save a landed-in search, which by then knows the oldest move that kept its
+// commit and answers how far it reached, as its bound of checks ends it
+// (landed.go). Its wait for each process's read-lane slot is charged nothing,
+// since it is the node's contention and not the read's size. The short checks
+// before it (objects.go) run to their own bound, outside it.
 //
 // And the caller's context ENDS WHEN THE ANSWER IS DUE (code.AnswerBy, the
 // estate's git arm and its in-process run alike): every wait takes it, and a

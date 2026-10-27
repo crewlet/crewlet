@@ -2006,8 +2006,10 @@ and a later push put back is named with the push that put it back. It never
 names a move the commit was reachable before: where the commit already stood
 on the branch before the oldest move the index holds of it, or before the
 first move past its gap, the answer names no push and says which range the
-landing lies in. A search runs at most 64 ancestry checks; past them it names
-how far it reached and how many forced moves it did not search past.
+landing lies in. A search runs at most 64 ancestry checks, and they share the
+read's ten seconds of git with its check against the tip; whichever ends it
+first, it names how far it reached and how many forced moves it did not search
+past, rather than refusing the read.
 
 **Kept like the rest of the copy.** The index is a set of immutable runs under
 `crewlet/` in the repository's directory, merged in the background eight

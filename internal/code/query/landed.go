@@ -28,8 +28,9 @@ import (
 // move already reaches the commit and a forced move began it, the commit was
 // reachable just before it exactly when it is reachable from that move's old
 // value, which one more check asks — and if it was, the landing lies below,
-// in the segment before. MaxLandedProbes bounds the checks: past it the
-// answer names how far the search reached rather than a push.
+// in the segment before. MaxLandedProbes bounds the checks, and so does the
+// read's one budget of git, which they share with the check against the tip:
+// past either, the answer names how far the search reached rather than a push.
 //
 // NEVER A WRONG PUSH. A move is the landing only where the commit was NOT
 // reachable from its old value: inside a segment the move before it says so,
@@ -57,8 +58,8 @@ import (
 // reached rather than with seconds of that lane. Without the graph a check
 // walks by date — 24 ms over the same history for the longest, the commit
 // against the tip — and the gigabyte's walks are thirty times longer; the
-// read's budget bounds those, and a search that runs it out is too large to
-// answer, as a comparison is.
+// read's budget bounds those, and a search that runs it out answers how far
+// it reached, as one this bound ends does (landing.stopped).
 const MaxLandedProbes = 64
 
 // landedRead answers whether the query's commit is in its target's history at
@@ -195,19 +196,37 @@ func (l *landing) search() (int, string, error) {
 	}
 }
 
-// stopped is the answer of a search a check ended: past MaxLandedProbes, no
-// push, the oldest move known to keep the commit — last, n where the search
-// knew none — and how many forced moves below it, the segment it stopped in
-// begun by bounds[k] among them, it did not search past; any other failure,
-// the check's.
+// stopped is the answer of a search a check ended. TWO ENDS ARE THE SEARCH'S
+// OWN, and each is answered with how far it reached: past MaxLandedProbes
+// (errProbes), and past the read's one budget of git, which its checks share
+// with the check against the tip (code.ErrSliceTooLarge from a check of the
+// search: one that ran all the budget had left, or one it had nothing left
+// for) — no push, the oldest move known to keep the commit (last, n where the
+// search knew none), and how many forced moves below it, the segment it
+// stopped in begun by bounds[k] among them, it did not search past. Any other
+// failure is the check's, and the read's answer.
+//
+// THE BUDGET'S END IS NOT THE READ TOO LARGE, as it is for a comparison,
+// which has nothing to answer until its walks finish: the search has already
+// found a move that keeps the commit, and refusing the read would throw that
+// away and ask for a narrowing no landed-in read can make. Only the check
+// against the tip, which comes before the search and decides whether the
+// commit landed at all, runs the budget out as the read too large.
 func (l *landing) stopped(err error, bounds []int, k, last int) (int, string, error) {
-	if !errors.Is(err, errProbes) {
+	// within is what the search ran out of; the answer's Probes says how
+	// many checks that was.
+	var within string
+	switch {
+	case errors.Is(err, errProbes):
+		within = fmt.Sprintf("the %d ancestry checks a search runs", l.r.s.probes)
+	case errors.Is(err, code.ErrSliceTooLarge):
+		within = fmt.Sprintf("the read's %s of git", l.r.s.gitBudget)
+	default:
 		return -1, "", err
 	}
 	target := l.r.q.LandedIn.Target
 	if last >= l.view.Len() {
-		return -1, fmt.Sprintf("the search reached its bound of %d ancestry checks before it read a move of %s",
-			l.r.s.probes, target), nil
+		return -1, fmt.Sprintf("the search ran out of %s before it read a move of %s", within, target), nil
 	}
 	// A segment the index's gap began, rather than a forced move or a
 	// deletion, is said apart.
@@ -221,7 +240,7 @@ func (l *landing) stopped(err error, bounds []int, k, last int) (int, string, er
 	}
 	at := l.view.At(last).By
 	detail := fmt.Sprintf("landed at or before push %s (position %s); %d forced moves of %s were not searched "+
-		"past within the %d ancestry checks a search runs", at.PushID, at.Position, forced, target, l.r.s.probes)
+		"past within %s", at.PushID, at.Position, forced, target, within)
 	if gap {
 		detail += ", nor a range of its moves this node has not indexed yet"
 	}
@@ -295,7 +314,11 @@ func (l *landing) ancestorBudgeted(tip string) (bool, error) {
 // commit-graph, given what is left of the read's one budget of git
 // ([read.budget]) and charged what it ran ([read.failed]) — never a walk of
 // the whole history (gitproc.HistoryWalk), which no asker waits for, a git
-// read's attempt being seventeen seconds (compare.go).
+// read's attempt being seventeen seconds (compare.go). A check the budget
+// ends — it ran all the budget had left, or the budget had nothing left for
+// it — is code.ErrSliceTooLarge, and only that: the read too large where it
+// is the check against the tip, how far the search reached where it is one of
+// the search's (landing.stopped).
 func (l *landing) ancestor(tip string) (bool, error) {
 	if tip == l.commit {
 		return true, nil

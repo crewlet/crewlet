@@ -1313,8 +1313,10 @@ type LandedInAnswer struct {
 	// Probes is the ancestry checks the search for the landing ran.
 	Probes int `json:"probes"`
 	// Detail says why LandedBy is nil: the landing predates what the index
-	// holds, falls in a range it has not read yet, or lies past the bound of
-	// the search's checks (internal/code/query's MaxLandedProbes).
+	// holds, falls in a range it has not read yet, or lies past what the
+	// search checked — its bound of checks (internal/code/query's
+	// MaxLandedProbes) or the read's budget of git — named with the oldest
+	// push the search knows kept the commit.
 	Detail string `json:"detail,omitempty"`
 }
 
