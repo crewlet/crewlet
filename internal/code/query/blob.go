@@ -99,8 +99,8 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 			Binary: true, Lines: widest, StartLine: widest, EndLine: widest, StartByte: widest, Text: "x",
 			Continues: true}}
 	room := r.room(envelope) + 1
-	pages := newBlobPages(&blobPage{from: from, fromByte: fromByte, to: r.q.Blob.EndLine, left: room, line: 1,
-		decided: true}, room, m != nil, func(pg *blobPage) { m.put(pg.begun, page(pg), pg.left) })
+	pages := newBlobPages(&blobPage{from: from, fromByte: fromByte, to: r.q.Blob.EndLine, left: room, line: 1},
+		room, m != nil, func(pg *blobPage) { m.put(pg.begun, page(pg), pg.left) })
 
 	deadline, err := r.budget()
 	if err != nil {
@@ -343,7 +343,7 @@ func (w *blobPages) chain(nl, eof bool) {
 			col = w.col
 		}
 		next := &blobPage{from: done.next.a, fromByte: start, to: w.asked.to, left: w.room, line: w.line,
-			col: col, decided: true, begun: done.next}
+			col: col, begun: done.next}
 		w.cur = next
 		if len(w.lineBuf) > 0 {
 			next.feed(w.lineBuf)
@@ -357,27 +357,20 @@ func (w *blobPages) chain(nl, eof bool) {
 	}
 }
 
-// blobPage is a Cmd.Stdout cutting one page of a file's lines out of its
-// stream and counting the rest: the window from byte fromByte of line from to
-// the end of line to (0: the file's end), while the page's text costs at most
-// left. A page past the one a read asked for is begun by blobPages at the
-// cursor the page before it names (begun), fed from there.
+// blobPage cuts one page of a file's lines out of the stream blobPages feeds
+// it: the window from byte fromByte of line from to the end of line to (0: the
+// file's end), while the page's text costs at most left. A page past the one a
+// read asked for is begun by blobPages at the cursor the page before it names
+// (begun), fed from there. The file's binary test and its line count are the
+// stream's, which blobPages keeps once for every page it cuts.
 type blobPage struct {
 	from, fromByte, to int
 	left               int
 	begun              cursor
 
-	// sniff holds the file's opening until binary is decided.
-	sniff   []byte
-	decided bool
-	binary  bool
-
 	// line and col are where the next byte is: its line, 1-based, and how
 	// many bytes into it.
 	line, col int
-	newlines  int
-	bytes     int64
-	last      byte
 
 	// The page: started once the window begins, done once it is cut.
 	started, done      bool
@@ -397,58 +390,11 @@ type blobPage struct {
 	over               bool
 }
 
-func (b *blobPage) Write(p []byte) (int, error) {
-	n := len(p)
-	b.bytes += int64(n)
-	if n > 0 {
-		b.last = p[n-1]
-	}
-	if !b.decided {
-		take := min(len(p), codeindex.BinaryProbeBytes-len(b.sniff))
-		b.sniff = append(b.sniff, p[:take]...)
-		p = p[take:]
-		if len(b.sniff) < codeindex.BinaryProbeBytes {
-			return n, nil
-		}
-		if b.decide() {
-			return n, errStop
-		}
-	}
-	b.feed(p)
-	return n, nil
-}
-
-// decide calls the file binary or feeds its opening: true for binary, whose
-// stream is ended there.
-func (b *blobPage) decide() bool {
-	b.decided = true
-	if codeindex.Binary(b.sniff) {
-		b.binary = true
-		return true
-	}
-	b.feed(b.sniff)
-	b.sniff = nil
-	return false
-}
-
-// finish ends the stream: a file shorter than the probe is decided now, and a
-// last line with no newline is settled.
+// finish ends the stream: a last line with no newline is settled.
 func (b *blobPage) finish() {
-	if !b.decided && b.decide() {
-		return
-	}
 	if b.started && !b.done && b.col > 0 {
 		b.settle(false)
 	}
-}
-
-// lines is how many lines the file has: its newlines, and one more for a
-// last line without one.
-func (b *blobPage) lines() int {
-	if b.bytes > 0 && b.last != '\n' {
-		return b.newlines + 1
-	}
-	return b.newlines
 }
 
 // feed takes p's bytes, line by line. A line's opening that p ends on is
@@ -465,7 +411,6 @@ func (b *blobPage) feed(p []byte) {
 			return
 		}
 		b.segment(p[:i])
-		b.newlines++
 		if b.started && !b.done {
 			b.settle(true)
 		}
