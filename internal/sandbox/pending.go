@@ -531,7 +531,9 @@ var Active = []string{
 // the fleet's coordination store where a node running a different build reads
 // it — so the json tags are a wire format and the type must not carry a
 // dependency the store layer has no business on. Same rule the rest of
-// [PendingRun] follows: add fields, never rename one.
+// [PendingRun] follows: add fields, never rename one — and a key this build
+// does not know is carried in [BridgeCall.Extra], so a field a later build adds
+// to a call survives every write this build makes to the record.
 type BridgeCall struct {
 	Name string `json:"name"`
 	// Args is what the caller passed, as JSON text rather than a decoded
@@ -570,6 +572,11 @@ type BridgeCall struct {
 	// it. Empty on a call nothing answered (a refused one).
 	Origin string `json:"origin,omitempty"`
 	Server string `json:"server,omitempty"`
+
+	// Extra is every key of the call this build does not know, kept verbatim
+	// and written back by every write of the record (wirekeys.go). Filled by
+	// the decode, never by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // BridgeAppend is one finished bridged call as the bridge hands it to the row
@@ -886,8 +893,9 @@ type PendingRun struct {
 	//
 	// A KEY OF ITS OWN AT THE TOP OF THE ROW rather than a field of
 	// [RecordedEnding], because the row is rewritten whole by every node
-	// that steps an ending, and only keys at the top survive a build that
-	// does not know them ([PendingRun.Extra]).
+	// that steps an ending, and a key a build does not know survives only
+	// at the top ([PendingRun.Extra]) or inside a section that carries its
+	// own (wirekeys.go) — which [RecordedEnding] does not.
 	Stop *RunStop `json:"stop,omitempty"`
 
 	// WorkItem is the one work item the launching turn was charged to, nil

@@ -48,8 +48,10 @@ import (
 // run's launch to its turn's end.
 //
 // A WIRE FORMAT like the rest of [PendingRun]: a node on another build reads
-// it, so fields are added and never renamed, and an older build carries the
-// whole section through [PendingRun.Extra] untouched.
+// it, so fields are added and never renamed. A build that does not know the
+// section carries it whole through [PendingRun.Extra]; one that does carries
+// every key it does not know in the section's own Extra, and in each note's
+// and each read's — so a later build may add a field at any level of it.
 type RunSteer struct {
 	// Seat is the SEALED ANCHOR naming the seat the run serves — the seat a
 	// person's authority to steer the turn is decided on. Written by the
@@ -71,6 +73,11 @@ type RunSteer struct {
 	// — what tells a run whose CLI never read its notes from one that had
 	// none to read.
 	Pulled string `json:"pulled,omitempty"`
+
+	// Extra is every key of the section this build does not know, kept
+	// verbatim and written back by every write of the record (wirekeys.go).
+	// Filled by the decode, never by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // RunNote is one note on a run's record.
@@ -97,6 +104,10 @@ type RunNote struct {
 	// write that hands the note over, so a note is never handed over and
 	// left waiting, nor recorded read and never handed over.
 	Read *NoteRead `json:"read,omitempty"`
+
+	// Extra is every key of the note this build does not know — see
+	// [RunSteer.Extra].
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // Waiting reports whether nothing has read the note yet.
@@ -119,6 +130,10 @@ type NoteRead struct {
 	Round     int       `json:"round,omitempty"`
 	Boundary  string    `json:"boundary"`
 	Launch    string    `json:"launch,omitempty"`
+
+	// Extra is every key of the read this build does not know — see
+	// [RunSteer.Extra].
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // NoteFiled is what became of a note filed on a run's record.

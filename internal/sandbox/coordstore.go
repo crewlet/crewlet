@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"slices"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -1215,34 +1212,12 @@ func outranked(run PendingRun, fence Fence) bool {
 	return fence.Fenced() && run.OwnerEpoch > fence.Epoch
 }
 
-// encodeRun writes a run back whole, keys this build does not know included.
-//
-// THE KNOWN FIELDS WIN. [PendingRun.Extra] holds only what the decode could
-// not place in the struct, so a key in both can only mean a caller put it
-// there by hand, and the value this build decided is the one that lands.
-// "Known" is what the struct DECLARES ([pendingRunKeys]), never what the
-// marshal happened to emit: an omitempty field left at its zero value emits
-// nothing, and testing presence would let a carried key of the same name
-// bring back the value this build just cleared.
+// encodeRun writes a run back whole, keys this build does not know included —
+// at the top of the record from [PendingRun.Extra], and inside each section that
+// carries its own (wirekeys.go) — under the one rule [marshalCarrying] states:
+// the fields this build declares win.
 func encodeRun(run PendingRun) ([]byte, error) {
-	raw, err := json.Marshal(run)
-	if err != nil {
-		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
-	}
-	if len(run.Extra) == 0 {
-		return raw, nil
-	}
-	fields := map[string]json.RawMessage{}
-	if err = json.Unmarshal(raw, &fields); err != nil {
-		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
-	}
-	declared := pendingRunKeys()
-	for key, value := range run.Extra {
-		if !declared[key] {
-			fields[key] = value
-		}
-	}
-	raw, err = json.Marshal(fields)
+	raw, err := marshalCarrying(run, pendingRunKeys(), run.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
 	}
@@ -1253,23 +1228,11 @@ func encodeRun(run PendingRun) ([]byte, error) {
 // [PendingRun.Extra] for the rolling upgrade that loses it otherwise.
 func decodeRun(record coord.Record) (PendingRun, error) {
 	var run PendingRun
-	if err := json.Unmarshal(record.Value, &run); err != nil {
+	extra, err := unmarshalCarrying(record.Value, &run, pendingRunKeys())
+	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(record.Value, &fields); err != nil {
-		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
-	}
-	known := pendingRunKeys()
-	for key, value := range fields {
-		if known[key] {
-			continue
-		}
-		if run.Extra == nil {
-			run.Extra = map[string]json.RawMessage{}
-		}
-		run.Extra[key] = value
-	}
+	run.Extra = extra
 	// A null state is NO state. The struct writes one for a run that has
 	// none, and a raw field reads the null back as four bytes — which every `len(...) == 0` asking "is a
 	// conversation parked here?" would answer wrongly.
@@ -1283,22 +1246,5 @@ func decodeRun(record coord.Record) (PendingRun, error) {
 	return run, nil
 }
 
-// pendingRunKeys is every wire key [PendingRun] declares, read off its own
-// tags so a field added to the struct is known here the moment it exists — a
-// hand-kept list would be one more place a new field could be forgotten, and
-// a forgotten one would be carried in Extra AND written from the struct.
-var pendingRunKeys = sync.OnceValue(func() map[string]bool {
-	keys := map[string]bool{}
-	typ := reflect.TypeFor[PendingRun]()
-	for field := range typ.Fields() {
-		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-		switch {
-		case name == "-" || !field.IsExported():
-			continue
-		case name == "":
-			name = field.Name
-		}
-		keys[name] = true
-	}
-	return keys
-})
+// pendingRunKeys is every wire key [PendingRun] declares ([wireKeys]).
+func pendingRunKeys() map[string]bool { return wireKeys(reflect.TypeFor[PendingRun]()) }

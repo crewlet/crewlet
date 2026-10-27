@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -51,6 +52,8 @@ var noteRawCases = []struct {
 	fn   func(*testing.T, sandbox.PendingStore, coord.SandboxRuns)
 }{
 	{"NotesSurviveEveryWriteThatIsNotTheirs", testNotesSurviveEveryWriteThatIsNotTheirs},
+	{"AKeyALaterBuildAddsInsideASectionSurvivesEveryWrite",
+		testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite},
 }
 
 // The turn's bounds every filing here is held to: internal/agent/steer's,
@@ -135,7 +138,7 @@ func testANoteWaitsUntilATakeReadsIt(t *testing.T, s sandbox.PendingStore) {
 		t.Errorf("a note the take read still waits: %v", got)
 	}
 	stored := mustGet(t, s, "t-wait").Steer.Notes[0].Read
-	if stored == nil || *stored != *read {
+	if stored == nil || !reflect.DeepEqual(*stored, *read) {
 		t.Errorf("the record holds the read %+v, the take answered %+v", stored, read)
 	}
 	again, err := s.TakeNotes(ctx, "t-wait", bridgeTake(launch, "n-1"))
@@ -704,4 +707,158 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 	check("its release")
 	park(t, s, "t-raw-notes")
 	check("a park")
+}
+
+// A KEY A LATER BUILD ADDS INSIDE A SECTION SURVIVES EVERY WRITE THIS BUILD
+// MAKES. The record is rewritten whole by every node that touches it, so a
+// field a newer build adds to the notes section, to one note, to where a note
+// was read or to a bridged call is gone the moment this build writes the record
+// back — unless every level that can grow keeps what it does not know. Seeded
+// at each of those four levels at once, as a newer build would write them, and
+// read back off the raw record after every kind of write this build makes:
+// a status write, a lease, a bridged call, a filing, a take, a pull, a claim
+// and its release, a park, and a relaunch's reset that carries the round on.
+//
+// Mutation: drop any one section's Extra from its decode or its encode, and the
+// key at that level is gone after the first write.
+func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s sandbox.PendingStore,
+	runs coord.SandboxRuns,
+) {
+	ctx := t.Context()
+	const turn = "t-nested-keys"
+	r := run(turn)
+	r.Steer = sandbox.RunSteer{Seat: []byte("sealed-seat")}
+	launch := mustLaunched(t, s, r)
+	mustFile(t, s, turn, "n-1")
+	mustFile(t, s, turn, "n-2")
+	if _, err := s.TakeNotes(ctx, turn, bridgeTake(launch, "n-1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// THE NEWER BUILD'S WRITE: one key of its own at every level.
+	seeded := map[string]string{
+		"the notes section": `{"quorum":2}`,
+		"a note":            `"high"`,
+		"a note's read":     `"hook"`,
+		"a bridged call":    `{"span":"s-1"}`,
+	}
+	if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
+		var row map[string]any
+		if err := json.Unmarshal(current.Value, &row); err != nil {
+			return coord.SandboxRunChange{}, err
+		}
+		section := row["steer"].(map[string]any)
+		section["quorum_rule"] = json.RawMessage(seeded["the notes section"])
+		first := section["notes"].([]any)[0].(map[string]any)
+		first["priority"] = json.RawMessage(seeded["a note"])
+		first["read"].(map[string]any)["carrier"] = json.RawMessage(seeded["a note's read"])
+		row["bridge_calls"].([]any)[0].(map[string]any)["trace"] = json.RawMessage(seeded["a bridged call"])
+		raw, err := json.Marshal(row)
+		return coord.SandboxRunChange{Put: raw}, err
+	}); err != nil || !ok {
+		t.Fatalf("seed the newer build's keys: %v %v", ok, err)
+	}
+
+	check := func(step string) {
+		t.Helper()
+		record, found, err := runs.SandboxRun(ctx, turn)
+		if err != nil || !found {
+			t.Fatalf("%s: read the raw row: %v %v", step, found, err)
+		}
+		var row struct {
+			Steer struct {
+				Quorum json.RawMessage `json:"quorum_rule"`
+				Notes  []struct {
+					ID       string          `json:"id"`
+					Priority json.RawMessage `json:"priority"`
+					Read     *struct {
+						Carrier json.RawMessage `json:"carrier"`
+					} `json:"read"`
+				} `json:"notes"`
+			} `json:"steer"`
+			Calls []struct {
+				Name  string          `json:"name"`
+				Trace json.RawMessage `json:"trace"`
+			} `json:"bridge_calls"`
+		}
+		if err := json.Unmarshal(record.Value, &row); err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		got := map[string]string{"the notes section": string(row.Steer.Quorum)}
+		for _, n := range row.Steer.Notes {
+			if n.ID != "n-1" {
+				continue
+			}
+			got["a note"] = string(n.Priority)
+			if n.Read != nil {
+				got["a note's read"] = string(n.Read.Carrier)
+			}
+		}
+		if len(row.Calls) > 0 && row.Calls[0].Name == "read_page" {
+			got["a bridged call"] = string(row.Calls[0].Trace)
+		}
+		for level, want := range seeded {
+			if compact(t, got[level]) != compact(t, want) {
+				t.Errorf("%s dropped the key a later build added to %s: got %q, want %s",
+					step, level, got[level], want)
+			}
+		}
+	}
+
+	check("the seed")
+	if err := s.SetStatus(ctx, turn, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	check("a status write")
+	if _, err := s.ClaimOwnership(ctx, turn, "node-b", 2); err != nil {
+		t.Fatal(err)
+	}
+	check("a lease")
+	if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+		Call: sandbox.BridgeCall{Name: "write_page"}}); err != nil {
+		t.Fatal(err)
+	}
+	check("a bridged call")
+	mustFile(t, s, turn, "n-3")
+	check("a filing")
+	if _, err := s.TakeNotes(ctx, turn, bridgeTake(launch, "n-2")); err != nil {
+		t.Fatal(err)
+	}
+	check("a take")
+	if _, err := s.MarkPulled(ctx, turn, launch); err != nil {
+		t.Fatal(err)
+	}
+	check("a pull")
+	claimed := mustClaim(t, s, turn)
+	check("the claim")
+	mustRelease(t, s, claimed)
+	check("its release")
+	park(t, s, turn)
+	check("a park")
+	again := run(turn)
+	again.Continues = true
+	again.BriefNotes = []sandbox.RunNote{{ID: "n-3",
+		Read: &sandbox.NoteRead{Phase: "execute", Iteration: 1, Round: 1, Boundary: "brief"}}}
+	if _, err := s.BeginLaunch(ctx, again, sandbox.Fence{}); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	check("a relaunch's reset")
+}
+
+// compact is JSON text without its insignificant space, so a value is compared
+// as a value and not as the bytes one encoder happened to write.
+func compact(t *testing.T, text string) string {
+	t.Helper()
+	if text == "" {
+		return ""
+	}
+	var b bytes.Buffer
+	if err := json.Compact(&b, []byte(text)); err != nil {
+		t.Fatalf("compact %q: %v", text, err)
+	}
+	return b.String()
 }
