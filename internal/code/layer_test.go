@@ -457,7 +457,8 @@ func trailerHex(b []byte) string { return hex.EncodeToString(b[len(b)-sha1.Size:
 //
 // Mutations: CheckLayer skips the PNAM comparison, and the row naming a pack
 // the multi-pack-index does not is red; LayLayer holds the commit-graph layer
-// to no base, and its wrong-base builds are red.
+// to no base, and its wrong-base builds are red; the bitmap's hash cache or
+// its pseudo-merge table is held to no room, and their rows are red.
 func TestACheckRefusesEveryMismatch(t *testing.T) {
 	t.Parallel()
 	g := writeLayers(t)
@@ -504,6 +505,41 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 	crowded := slices.Clone(tip[1])
 	binary.BigEndian.PutUint32(crowded[8:12], 1<<20)
 	crowded = reseal(crowded)
+	// Bitmaps of the tip's header naming in their options one table with no
+	// room for it — each arm of git's header check alone — resealed: a hash
+	// cache (BITMAP_OPT_HASH_CACHE, four bytes an object of the
+	// multi-pack-index) in a file of nothing but the header and the trailer;
+	// and a pseudo-merge table (BITMAP_OPT_PSEUDO_MERGES) with no room for its
+	// 24-byte end, then one whose end sizes it past the room the file has,
+	// then one counting more merges than it holds the offsets of.
+	optioned := func(options uint16, between []byte) []byte {
+		b := slices.Concat(tip[1][:32], between, make([]byte, sha1.Size))
+		binary.BigEndian.PutUint16(b[6:8], options)
+		return reseal(b)
+	}
+	pseudoEnd := func(merges uint32, table uint64) []byte {
+		var end [24]byte
+		binary.BigEndian.PutUint32(end[:4], merges)
+		binary.BigEndian.PutUint64(end[16:], table)
+		return end[:]
+	}
+	const fullDAG, hashCache, pseudoMerges = 0x1, 0x4, 0x20
+	noCache := optioned(fullDAG|hashCache, nil)
+	noEnd := optioned(fullDAG|pseudoMerges, nil)
+	pastRoom := optioned(fullDAG|pseudoMerges, pseudoEnd(0, 1000))
+	tooManyMerges := optioned(fullDAG|pseudoMerges, pseudoEnd(10, 24))
+	bitmapOf := func(b []byte) code.LayerRef {
+		return edited(func(r *code.LayerRef) { r.BitmapBytes = int64(len(b)) })
+	}
+	// What each refusal of a bitmap's tables says, so a row is refused by the
+	// arm it is about rather than by another of the same field.
+	says := map[string]string{
+		"a bitmap whose lookup table cannot fit":                   "lookup table",
+		"a bitmap whose hash cache cannot fit":                     "hash cache",
+		"a bitmap with no room for its pseudo-merge table's end":   "pseudo-merge table's 24-byte end",
+		"a bitmap whose pseudo-merge table runs past its room":     "its 1000-byte pseudo-merge table",
+		"a bitmap whose pseudo-merge table cannot hold its merges": "too short for its 10 merges",
+	}
 
 	for _, c := range []struct {
 		name, field string
@@ -521,6 +557,12 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 		{"a bitmap naming another midx", "bitmap.midx", with(1, base[1]),
 			edited(func(r *code.LayerRef) { r.BitmapBytes = int64(len(base[1])) }), bases},
 		{"a bitmap whose lookup table cannot fit", "bitmap", with(1, crowded), row, bases},
+		{"a bitmap whose hash cache cannot fit", "bitmap", with(1, noCache), bitmapOf(noCache), bases},
+		{"a bitmap with no room for its pseudo-merge table's end", "bitmap", with(1, noEnd), bitmapOf(noEnd), bases},
+		{"a bitmap whose pseudo-merge table runs past its room", "bitmap", with(1, pastRoom), bitmapOf(pastRoom),
+			bases},
+		{"a bitmap whose pseudo-merge table cannot hold its merges", "bitmap", with(1, tooManyMerges),
+			bitmapOf(tooManyMerges), bases},
 		{"a graph base naming a wrong base", "graph.bases", tip, row, []string{other}},
 		{"a graph over a base the chain lacks", "graph.bases", tip, row, nil},
 		{"another graph", "graph_id", tip, edited(func(r *code.LayerRef) { r.GraphID = g.base.graphID }), bases},
@@ -537,8 +579,11 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 			edited(func(r *code.LayerRef) { r.Packs = []string{r.Packs[0], r.Packs[0]} }), bases},
 	} {
 		err := c.files.check(t.Context(), c.row, c.bases)
-		if !errors.Is(err, code.ErrBadLayer) || !strings.Contains(err.Error(), ": "+c.field+": ") {
+		switch {
+		case !errors.Is(err, code.ErrBadLayer) || !strings.Contains(err.Error(), ": "+c.field+": "):
 			t.Errorf("%s: CheckLayer = %v, want ErrBadLayer naming %s", c.name, err, c.field)
+		case says[c.name] != "" && !strings.Contains(err.Error(), says[c.name]):
+			t.Errorf("%s: CheckLayer = %v, want the refusal of its %q", c.name, err, says[c.name])
 		}
 	}
 	// A row its own check refuses is refused as the row is.
