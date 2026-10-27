@@ -118,11 +118,6 @@ type ActAnswer struct {
 	Position *string          `json:"position"`
 	OpID     string           `json:"op_id"`
 	Receipt  json.RawMessage  `json:"receipt"`
-
-	// ArgumentsNote names the arguments the call sent outside its tool's
-	// schema, which the tool did not read as sent ([tools.Result.Note]),
-	// beside the receipt rather than inside it, which is the tool's JSON.
-	ArgumentsNote string `json:"arguments_note,omitempty"`
 }
 
 // actRequest is the body: the tool's arguments, and nothing else.
@@ -350,13 +345,14 @@ func decodeAct(raw []byte) (actRequest, error) {
 // build does not know is reported `unknown`, never `applied`: it is the one
 // answer that cannot tell a caller to stop looking at a write it cannot vouch
 // for.
-// answerOf is a tool's successful result as the act transport answers it:
-// the receipt the tool's JSON is, and the note on its arguments beside it,
-// never inside it ([tools.Result.Note]).
+//
+// answerOf is a tool's successful result as the act transport answers it: the
+// receipt the tool's JSON is, and nothing else. THE NOTE ON THE CALL'S
+// ARGUMENTS ([tools.Result.Note]) IS THE MODEL'S, worded for the model that
+// wrote the call, and a person reads this answer, so it is never carried here
+// (ADR-0059; ADR-0060 keeps model-worded text out of what a person reads).
 func answerOf(name string, result tools.Result) ActAnswer {
-	answer := receiptOf(name, result.Output)
-	answer.ArgumentsNote = result.Note
-	return answer
+	return receiptOf(name, result.Output)
 }
 
 func receiptOf(name, output string) ActAnswer {

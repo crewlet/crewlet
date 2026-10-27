@@ -880,12 +880,13 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	}
 }
 
-// A RECEIPT STAYS THE TOOL'S JSON WHEN THE CALL'S ARGUMENTS WERE NOTED
-// (ADR-0059): the note rides beside the receipt (`arguments_note`), never
-// inside the tool's answer, which a screen decodes.
+// AN ACT ANSWER IS THE TOOL'S RECEIPT AND NEVER THE MODEL'S NOTE (ADR-0059,
+// ADR-0060): the note on a call's arguments is worded for the model that
+// wrote the call, and a person reads this answer, so it carries neither the
+// note nor a field for it.
 //
-// Mutation: carry the note in the tool's Output and the receipt is a string.
-func TestAnArgumentsNoteRidesBesideTheReceipt(t *testing.T) {
+// Mutation: carry the note beside the receipt and its text is in the answer.
+func TestAnActAnswerCarriesNoModelNote(t *testing.T) {
 	t.Parallel()
 	answer := operator.AnswerOf(worklet.CreateWorkItemTool, tools.Result{
 		Output: `{"key": "ENG-9", "outcome": "applied"}`, Note: "`ops[0].opp` is not an argument"})
@@ -893,7 +894,8 @@ func TestAnArgumentsNoteRidesBesideTheReceipt(t *testing.T) {
 	if err := json.Unmarshal(answer.Receipt, &receipt); err != nil || receipt["key"] != "ENG-9" {
 		t.Errorf("the receipt is %s (%v), want the tool's own JSON answer", answer.Receipt, err)
 	}
-	if answer.ArgumentsNote != "`ops[0].opp` is not an argument" {
-		t.Errorf("the answer's note is %q", answer.ArgumentsNote)
+	raw, _ := json.Marshal(answer)
+	if strings.Contains(string(raw), "is not an argument") || strings.Contains(string(raw), "note") {
+		t.Errorf("a person's answer carries the model's note: %s", raw)
 	}
 }

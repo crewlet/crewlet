@@ -437,9 +437,8 @@ A third-party MCP server holds its own schema and is not checked here.
   engine's own tools always refused one (and the refusal carries every
   finding). An unknown key inside an object argument is noted, not refused. If
   the tool answers successfully while something was not read as sent, a note
-  names it. A model or an MCP client reads the note after the answer, and an
-  act or work API answer carries it as `arguments_note` beside the receipt,
-  never inside it. The call is logged as `tool_args_outside_schema` and
+  names it. A model or an MCP client reads the note after the answer. An act
+  or work API answer, which a person reads, never carries it. The call is logged as `tool_args_outside_schema` and
   counted in `crewlet.tools.args_outside_schema`, by tool.
 - **The lenient readings are kept.** A number or a boolean where a string
   belongs, one string or a comma-separated one where a list belongs, and a

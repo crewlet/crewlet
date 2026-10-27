@@ -1,23 +1,30 @@
 package workapi_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A WORK RECEIPT STAYS THE TOOL'S JSON WHEN THE CALL'S ARGUMENTS WERE NOTED
-// (ADR-0059): the work API decodes the tool's answer, so a note on the
-// arguments rides as its own field beside the receipt's, never inside the
-// answer it decodes.
+// A WORK RECEIPT IS THE TOOL'S JSON AND NEVER THE MODEL'S NOTE (ADR-0059,
+// ADR-0060): the note on a call's arguments is worded for the model that
+// wrote the call, and a person reads this receipt, so it carries neither the
+// note nor a field for it.
 //
-// Mutation: carry the note in the tool's Output and the receipt does not decode.
-func TestANoteRidesBesideAWorkReceipt(t *testing.T) {
+// Mutation: carry the note as `arguments_note` and its text is in the receipt.
+func TestAWorkReceiptCarriesNoModelNote(t *testing.T) {
 	t.Parallel()
+	const note = "`blocking.extra` is not an argument"
 	receipt, err := workapi.ReceiptOf(tools.Result{Output: `{"key": "ENG-9", "outcome": "applied"}`,
-		Note: "`blocking.extra` is not an argument"})
-	if err != nil || receipt["key"] != "ENG-9" || receipt["arguments_note"] != "`blocking.extra` is not an argument" {
-		t.Errorf("the receipt is %v (%v), want the tool's JSON and the note beside it", receipt, err)
+		Note: note})
+	if err != nil || receipt["key"] != "ENG-9" {
+		t.Fatalf("the receipt is %v (%v), want the tool's JSON", receipt, err)
+	}
+	raw, _ := json.Marshal(receipt)
+	if len(receipt) != 2 || strings.Contains(string(raw), "is not an argument") {
+		t.Errorf("a person's receipt carries the model's note: %s", raw)
 	}
 }
