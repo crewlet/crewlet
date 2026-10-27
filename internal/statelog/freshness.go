@@ -25,6 +25,9 @@ import (
 //
 // One value carrying all four means a reader that takes it cannot take less,
 // and a call site that drops one is a compile error rather than a comment.
+// That holds only where the value travels whole, so an ask derived from
+// another is a copy of it with only what it changes reassigned
+// ([Freshness.On]), never a literal naming the parts it keeps.
 //
 // # The floors
 //
@@ -164,6 +167,19 @@ func (f Freshness) OnlyOn(streams ...string) error {
 // never the others, which that half's reader refuses as positions on another
 // log ([Reader.Read]), and which are the other halves' to wait for.
 //
+// # A copy of the whole ask, never a literal naming its parts
+//
+// The half is read on its own, so a part of the ask it is not handed is one
+// nothing downstream can restore: a staleness bound dropped here reads both
+// halves of the company feed unbounded while the answer still says `stale`.
+// Built field by field, the half carried each part only for as long as the
+// literal named it, and a part added to [Freshness] later would be left out
+// without a word, which is the silent drop this type exists to make
+// impossible. So the half starts as a copy of the ask and changes only what
+// this method is for: its floors, narrowed into a slice of its own (never the
+// ask's, which every other half is cut from too), and a `session` level left
+// with nothing to wait for (below).
+//
 // # A `session` half with no floor of its own is read `stale`
 //
 // `session` IS the floor's wait: no answer from before the caller's own last
@@ -181,7 +197,8 @@ func (f Freshness) OnlyOn(streams ...string) error {
 // bound (every grammar refuses one beside it), so the half is unbounded, as
 // the surface's own default is.
 func (f Freshness) On(stream string) Freshness {
-	out := Freshness{Level: f.Level, MaxLag: f.MaxLag, MaxLagSeq: f.MaxLagSeq}
+	out := f
+	out.Floors = nil
 	if at := f.Floor(stream); !at.IsZero() {
 		out.Floors = []Position{at}
 	}

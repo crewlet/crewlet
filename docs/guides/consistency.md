@@ -202,6 +202,11 @@ knows which logs it reads:
 - **A question read from several logs** hands each half the floor on that
   half's own log, so each half waits for exactly the caller's write to its
   log and no other; a floor on a log none of its halves reads is refused.
+  The rest of the ask reaches every half whole — its level, save the
+  `session` case below, and any [staleness bound](#bounding-staleness) — so
+  `max_lag_seq=250` on the company feed holds its work and its pages each to
+  250 records, and the feed is refused `too_stale` when either half is
+  further behind.
 - **A `session` read names a floor on each log the caller wrote**, so a half
   whose log it named no floor on has nothing of the caller's to wait for. That
   half is read `stale` — what serving this node's rows with nothing to wait

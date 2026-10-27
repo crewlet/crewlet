@@ -3,8 +3,11 @@ package statelog_test
 import (
 	"database/sql"
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -116,6 +119,65 @@ func TestAComposedReadWaitsOnEachLogsFloor(t *testing.T) {
 	if !errors.Is(err, statelog.ErrForeignPosition) || !strings.Contains(err.Error(), secondProbeStream) {
 		t.Errorf("one half handed both logs' floors answered %v, want %v naming %s",
 			err, statelog.ErrForeignPosition, secondProbeStream)
+	}
+}
+
+// A HALF OF A COMPOSED READ IS HANDED THE WHOLE ASK, ITS FLOORS NARROWED TO ITS
+// OWN LOG AND NOTHING ELSE CHANGED.
+//
+// The half is read on its own, so a part of the ask [statelog.Freshness.On]
+// leaves out is one nothing after it can put back: `max_lag_seq=250` on the
+// company feed would read both of its halves unbounded and still answer
+// `stale`. On built the half field by field, which carried a part only for
+// as long as its literal named it, and every case of a composed read asked
+// with no bound, so dropping both bounds passed them all. The half is
+// compared WHOLE here, against an ask that sets every part, so a part added
+// to the ask is held from the day it lands: the guard below fails until the
+// ask sets it, and the comparison then fails if a half drops it.
+//
+// AND THE ASK ITSELF IS LEFT AS IT WAS: each half is cut from the same ask,
+// so a half narrowing the ask's own slice in place would hand the next half
+// floors the first one cut.
+//
+// Mutation: build the half as `Freshness{Level: f.Level}`, or leave out any
+// one part, and the comparison goes red; narrow `out.Floors` in place, and
+// the ask's floors do.
+func TestAHalfOfAComposedReadIsHandedTheWholeAsk(t *testing.T) {
+	t.Parallel()
+	first := statelog.Position{Stream: probeStream, Generation: 1, Seq: 1 << 30}
+	second := statelog.Position{Stream: secondProbeStream, Generation: 1, Seq: 1 << 29}
+	ask := statelog.Freshness{
+		Level: statelog.ReadStale, MaxLag: 30 * time.Second, MaxLagSeq: 250,
+		Floors: []statelog.Position{first, second},
+	}
+	asked := slices.Clone(ask.Floors)
+	whole := reflect.ValueOf(ask)
+	for i := range whole.NumField() {
+		if whole.Field(i).IsZero() {
+			t.Fatalf("the ask leaves %s unset: set it, or a half that drops it passes",
+				whole.Type().Field(i).Name)
+		}
+	}
+	for _, half := range []struct {
+		stream string
+		floors []statelog.Position
+	}{
+		{probeStream, []statelog.Position{first}},
+		{secondProbeStream, []statelog.Position{second}},
+		// A LOG THE CALLER NAMED NO FLOOR ON: the half has none, and keeps
+		// the rest of the ask, its bound included.
+		{"CREWLET_THIRD_PROBE_LOG", nil},
+	} {
+		want := ask
+		want.Floors = half.floors
+		if got := ask.On(half.stream); !reflect.DeepEqual(got, want) {
+			t.Errorf("the %s half of %+v is %+v, want %+v: the whole ask, its floors on "+
+				"that log alone", half.stream, ask, got, want)
+		}
+	}
+	if !slices.Equal(ask.Floors, asked) {
+		t.Errorf("cutting the halves left the ask's floors %v, want them as asked, %v",
+			ask.Floors, asked)
 	}
 }
 
