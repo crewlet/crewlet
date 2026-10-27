@@ -508,7 +508,7 @@ flowchart TD
     S5["5. Wait for in-flight handlers"] --> S6
     S6["6. Release every seat"] --> S7
     S7["7. Finish the git requests, then close the HTTP listener<br/>dashboard · REST · webhooks · git · probes"] --> S8
-    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · object collector · code retention · trash reaper"] --> S9
+    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · code host · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · object collector · code retention · trash reaper"] --> S9
     S9["9. Reap shared MCP servers; custody flush (node without data);<br/>close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
@@ -576,7 +576,12 @@ flowchart TD
    usage day counts, but it reads the store step 9 closes, and the vectors it
    fills ride the memory sync, which stops after it. Then everything that
    writes a row this node's usage day counts: the learning passes and the cron
-   scheduler; the auxiliary-spend
+   scheduler; the code host, whose clones, fetches and server-side reads of a
+   `visibility: unit` repository record who read it
+   ([Code Host § Who read it](code-host.md#who-read-it)) — its requests
+   finished in step 7, so what stops here is its cache, and a peer's read
+   asked of this node from now on is answered unready and asked of the next
+   git node; the auxiliary-spend
    ledger's last records — what the seats' auxiliary model spent since its last
    15-second flush — published on a budget of five seconds once every producer
    of them has stopped, and before a node without `data` flushes its

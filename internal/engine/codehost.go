@@ -698,6 +698,13 @@ func cacheVolumeTenants(boot *config.Bootstrap) []string {
 // answered `unknown` to a client that is gone; its row lands or not by the
 // log, never by the host. By then the API's listener is closed, and every git
 // request it let through has finished (cmd/crewlet's shutdown order).
+//
+// AND BEFORE THE USAGE PUBLISHER'S LAST FLUSH ([Engine.stopUsage]), with every
+// other writer of a row the node's day counts: a peer's git read is answered on
+// this node's git lane until the cache stops, and every read of a `visibility:
+// unit` repository it answers is one ([types.CodeFetched]). Stopped after that
+// flush, the reads in between reached a published day only at a next start,
+// which a node that never starts again does not have.
 func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHost(ctx) }
 
 // stopCodeHost is [Engine.stopCodeHost] on this runtime, and the stop its own

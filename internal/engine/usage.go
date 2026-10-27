@@ -107,8 +107,9 @@ func (s *stateLog) usageCaught() bool {
 // bounded by [usage.FinalFlushBudget]).
 //
 // ORDERED BY THE TEARDOWN after every writer of a row this node's day counts —
-// the learning passes, the scheduler, the auxiliary-spend ledger's last flush,
-// the custody keeper leaving its group — and before the
+// the learning passes, the scheduler, the code host and the reads of unit
+// repositories it serves, the auxiliary-spend ledger's last flush, the custody
+// keeper leaving its group — and before the
 // trim and long before the core's logs (TestTheDutiesStopBeforeTheirLeasesAndTheLogs).
 // Both halves are what that last flush needs: the day it derives is the
 // node's last, with nothing written after it, and the usage log it publishes

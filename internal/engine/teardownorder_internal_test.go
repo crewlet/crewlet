@@ -59,9 +59,9 @@ func TestTheViewTriggersStopBeforeWhatTheyReArm(t *testing.T) {
 // be checked against.
 //
 // Mutation: move stopRetention above stopEmbedding, any duty — the object
-// collector included — below releaseDuties, any writer of a usage row below
-// stopUsage, or stopMemorySync above stopMemoryFill, and this fails naming the
-// pair.
+// collector included — below releaseDuties, any writer of a usage row — the
+// code host included — below stopUsage, or stopMemorySync above
+// stopMemoryFill, and this fails naming the pair.
 func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	t.Parallel()
 	order := callsIn(t, "teardown")
@@ -89,12 +89,14 @@ func TestTheDutiesStopBeforeTheirLeasesAndTheLogs(t *testing.T) {
 	// AND EVERY WRITER OF A ROW ITS DAY COUNTS IS DOWN BEFORE ITS LAST FLUSH:
 	// what one writes after it is published only by a next start, which a
 	// node that never starts again does not have. The learning passes spend
-	// auxiliary calls, the scheduler records fires, the auxiliary-spend
-	// ledger's last flush writes the spend of every one of them, and the
-	// custody keeper settles a stateless node's rows into this node's days
-	// until it leaves the group. (The memory fill is none of them: it only
-	// embeds, and its order is the memory sync's, below.)
-	for _, writer := range []string{"stopLearning", "stopScheduler",
+	// auxiliary calls, the scheduler records fires, the code host records
+	// every fetch and git read of a unit's repository it serves — a peer's
+	// read on its git lane among them, until its cache stops — the
+	// auxiliary-spend ledger's last flush writes the spend of every one of
+	// them, and the custody keeper settles a stateless node's rows into this
+	// node's days until it leaves the group. (The memory fill is none of
+	// them: it only embeds, and its order is the memory sync's, below.)
+	for _, writer := range []string{"stopLearning", "stopScheduler", "stopCodeHost",
 		"stopAuxSpend", "stopKeeper"} {
 		if at(writer) > at("stopUsage") {
 			t.Errorf("the teardown runs the usage publisher's last flush before %s, "+

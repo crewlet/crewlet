@@ -2423,13 +2423,14 @@ func (e *Engine) teardown(ctx context.Context) {
 	// publisher's last flush — or what they write after it is published only
 	// by a next start, and a node that never starts again leaves it out of
 	// the fleet's history: the learning passes, whose auxiliary calls spend;
-	// the scheduler, whose late fire records a dispatch; the auxiliary-spend
-	// ledger's last flush, once every producer of it has stopped — the turns
-	// and reflections with the seats, the sandbox's condensations above, the
-	// learning passes, a person's question with the HTTP surface before the
-	// teardown began; and the custody keeper, whose settles make a stateless
-	// node's rows count. The drain already ended the turns, whose phases and
-	// completions are the rest.
+	// the scheduler, whose late fire records a dispatch; the code host, which
+	// records every fetch and git read of a `visibility: unit` repository it
+	// serves; the auxiliary-spend ledger's last flush, once every producer of
+	// it has stopped — the turns and reflections with the seats, the
+	// sandbox's condensations above, the learning passes, a person's question
+	// with the HTTP surface before the teardown began; and the custody
+	// keeper, whose settles make a stateless node's rows count. The drain
+	// already ended the turns, whose phases and completions are the rest.
 	//
 	// The memory fill stops beside them although it writes no such row — it
 	// only embeds, and spends nothing a day counts — because it and the
@@ -2441,6 +2442,17 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMemoryFill()
 	e.stopLearning()
 	e.stopScheduler()
+	// THE CODE HOST WITH THEM, and not with the publishers it shares a
+	// reason with further down (the committer and the estate subject, which
+	// it still stops before): its git reads are answered for peers on this
+	// node's git lane until its cache stops, and each one of a unit's
+	// repository is a read this day counts. The requests it serves are a
+	// client's, which the API's listener, closed before this teardown began,
+	// has already finished or cut, so what stops here is the cache those
+	// reads are answered from — a peer's read asked of this node from now on
+	// is answered unready, and its walk asks the runner-up
+	// ([Engine.stopCodeHost]).
+	e.stopCodeHost(ctx)
 	// BEFORE the custody flush below, which is what carries a node without
 	// `data` its records.
 	e.stopAuxSpend(ctx)
@@ -2498,13 +2510,10 @@ func (e *Engine) teardown(ctx context.Context) {
 	// runner-up, and finishes the batch in flight with its real outcome
 	// ([Engine.stopCommitter]).
 	//
-	// AND THE CODE HOST BEFORE BOTH: every push in flight proposes through
-	// the estate to a committer, and every sync's linearizable read appends a
-	// barrier to the code log, so it is a publisher like the rest — and the
-	// requests it serves are a client's, which the API's listener, closed
-	// before this teardown began, has already finished or cut
-	// ([Engine.stopCodeHost]).
-	e.stopCodeHost(ctx)
+	// AND THE CODE HOST BEFORE BOTH, stopped above with the writers of the
+	// usage day: every push in flight proposes through the estate to a
+	// committer, and every sync's linearizable read appends a barrier to the
+	// code log, so it is a publisher like the rest.
 	e.stopCommitter(ctx)
 	e.stopServingEstate(ctx)
 	// AFTER THE DRAIN AND AFTER EVERY LOOP THAT PUBLISHES, which is what the
