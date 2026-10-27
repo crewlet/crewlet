@@ -3,9 +3,14 @@ package storetest
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
+	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // CopyHoldWait is how long a case waits for held copies to reach their
@@ -101,6 +106,44 @@ func (h *CopyHold) Wait(n int, within time.Duration) int {
 			defer h.mu.Unlock()
 			return h.held
 		}
+	}
+}
+
+// HoldCopy copies db while hold holds the copy, runs during while the copy
+// holds db's write-ahead log, then lets it finish and removes it — so during
+// sees the copy in flight ([store.DB.Copies]), and db then carries what it held
+// back ([store.DB.CopyHoldsBack]). db must have been opened with hold's Wrap.
+//
+// A COPY THAT DOES NOT GET THERE, OR DOES NOT RETURN, FAILS THE CASE within
+// [CopyHoldWait], and one during abandons is failed at its VACUUM INTO rather
+// than left waiting on the gate.
+func HoldCopy(tb testing.TB, db *store.DB, hold *CopyHold, during func()) {
+	tb.Helper()
+	dest := filepath.Join(tb.TempDir(), "held-copy.db")
+	done := make(chan error, 1)
+	hold.Arm()
+	defer hold.Release(errors.New("storetest: the case ended before it let the held copy through"))
+	go func() {
+		_, err := db.Backup(tb.Context(), dest)
+		done <- err
+	}()
+	if got := hold.Wait(1, CopyHoldWait); got < 1 {
+		tb.Fatalf("storetest: the copy of %s did not reach its VACUUM INTO within %s",
+			db.Path(), CopyHoldWait)
+	}
+	during()
+	hold.Release(nil)
+	select {
+	case err := <-done:
+		if err != nil {
+			tb.Fatalf("storetest: the held copy of %s: %v", db.Path(), err)
+		}
+	case <-time.After(CopyHoldWait):
+		tb.Fatalf("storetest: the held copy of %s, let through, did not return within %s",
+			db.Path(), CopyHoldWait)
+	}
+	if err := store.RemoveCopy(dest); err != nil {
+		tb.Fatalf("storetest: remove the held copy: %v", err)
 	}
 }
 

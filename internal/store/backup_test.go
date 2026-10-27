@@ -348,6 +348,16 @@ func TestACopyTakesOneConnectionFromItsPool(t *testing.T) {
 			"keeps one, and two such copies at once need four of the replicated estate's two",
 			got, len(copies), storetest.CopyHoldWait)
 	}
+	// AND EACH FILE LISTS THE COPIES HOLDING ITS LOG, the one holding it
+	// longest first: the node file its one, the replicated estate both of
+	// its own.
+	if held := node.Copies(); len(held) != 1 {
+		t.Errorf("the node file lists %d copies holding its log, want its 1: %+v", len(held), held)
+	}
+	if held := replicated.Copies(); len(held) != 2 || held[1].Since.Before(held[0].Since) {
+		t.Errorf("the replicated estate lists %+v holding its log, want its 2, the one "+
+			"holding it longest first", held)
+	}
 	hold.Release(nil)
 	timeout := time.After(storetest.CopyHoldWait)
 	for range copies {

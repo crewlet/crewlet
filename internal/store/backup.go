@@ -198,7 +198,8 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// Also why this is an ExecContext rather than the [DB.Tx] every other
 	// write in this package goes through: VACUUM cannot run inside a
 	// transaction.
-	if err := d.vacuumInto(ctx, part); err != nil {
+	held, err := d.vacuumInto(ctx, part)
+	if err != nil {
 		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup %s to %s: %w", d.path, dest, err)
 	}
@@ -278,10 +279,14 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	if err != nil {
 		return BackupInfo{}, fmt.Errorf("store: backup: measure %s: %w", dest, err)
 	}
+	// HELD_LOG IS WHAT THE COPY HELD BACK on the live file's volume while it
+	// ran (copies.go): beside `took`, the two numbers an operator sizes that
+	// volume's room for the next copy against.
 	log.InfoContext(ctx, "store_backed_up",
 		"estate", string(d.estate),
 		"source", d.path, "path", dest, "bytes", info.Size(),
-		"took", took.String(), "migrations", len(migrations), "sha256", digest)
+		"took", took.String(), "held_log", held,
+		"migrations", len(migrations), "sha256", digest)
 	return BackupInfo{
 		Path:       dest,
 		SHA256:     digest,
@@ -386,7 +391,7 @@ func integrityCheck(ctx context.Context, pool *sql.DB) error {
 
 // databaseSidecars are the files a database grows beside itself. Named once,
 // because a list that is written twice is a list that stops matching.
-var databaseSidecars = []string{"-wal", "-shm", "-tshm"}
+var databaseSidecars = []string{walSidecar, "-shm", "-tshm"}
 
 // removeDatabaseFiles deletes a database path and every sidecar of it.
 func removeDatabaseFiles(path string) error {
@@ -481,7 +486,10 @@ func remove(path string) error {
 // mark is backfilled while it stands, so the write-ahead log grows by what the
 // writers commit during the copy and is folded in by the first checkpoint
 // after it. That is the price of any online copy that is one point in time;
-// mainline SQLite's own VACUUM INTO pays it the same way.
+// mainline SQLite's own VACUUM INTO pays it the same way. So the copy is
+// LISTED while it holds the log ([DB.Copies]) and MEASURES how far the log grew
+// under it, before the hold ends ([DB.CopyHoldsBack]), which it answers as
+// held: copies.go says who reads each, and why.
 //
 // # Through one connection drawn from this handle
 //
@@ -491,19 +499,22 @@ func remove(path string) error {
 // answers [ErrNoEstate], the state every caller branches on, rather than
 // database/sql's "database is closed", which none does. It is drawn before
 // the hold, so a handle already closed opens nothing.
-func (d *DB) vacuumInto(ctx context.Context, part string) error {
+func (d *DB) vacuumInto(ctx context.Context, part string) (held int64, err error) {
 	conn, err := d.conn(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = conn.Close() }()
 	release, err := d.holdViewFor(ctx, conn)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer release()
+	copying := d.copies.begin(d.path, part)
 	_, err = conn.ExecContext(ctx, "VACUUM INTO "+sqlStringLiteral(part))
-	return err
+	// MEASURED HERE, before the deferred release ends the hold and lets a
+	// checkpoint fold the log back in ([copies.end]).
+	return d.copies.end(d.path, copying, err == nil), err
 }
 
 // holdViewFor holds a view for a copy conn is about to take, and returns what

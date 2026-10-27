@@ -441,6 +441,11 @@ type DB struct {
 	// reaches it too.
 	connector *connector
 
+	// copies is what this handle knows of the copies taken of its file: the
+	// ones holding its write-ahead log now, and what the last to finish held
+	// back — see copies.go.
+	copies copies
+
 	// slot is the replicated estate this node holds open, on a node's own
 	// handle, and nil on every other. The node handle owns its lifetime:
 	// its Close takes it down, because a process holding the replicated

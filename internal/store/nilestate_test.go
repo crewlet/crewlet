@@ -172,6 +172,16 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 			}
 		},
 		"Caps": func(t *testing.T) { _ = d.Caps() },
+		"Copies": func(t *testing.T) {
+			if got := d.Copies(); len(got) != 0 {
+				t.Errorf("Copies() = %+v, want none: nothing copies a handle that is not open", got)
+			}
+		},
+		"CopyHoldsBack": func(t *testing.T) {
+			if got := d.CopyHoldsBack(1 << 30); got != 0 {
+				t.Errorf("CopyHoldsBack() = %d, want nothing measured", got)
+			}
+		},
 		"ReplicatedDB": func(t *testing.T) {
 			replicated, err := d.ReplicatedDB()
 			wantErrNoEstate(t, err)
