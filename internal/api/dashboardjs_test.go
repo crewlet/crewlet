@@ -1270,8 +1270,10 @@ const (
 	// as times and a link-only row opened by Enter, on uilet 0.70.0
 	// (FilterPill, the grid's align and icon columns, the value trigger),
 	// took it to 4581.4 KiB. 4582 KiB, which still refuses a doubled
-	// baseline.
-	treeBudget = 4<<20 + 486<<10
+	// baseline. uilet 0.71.0's toast that stays up for as long as its words
+	// take to read took it to 4582.1 KiB. 4583 KiB, which still refuses a
+	// doubled baseline.
+	treeBudget = 4<<20 + 487<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
