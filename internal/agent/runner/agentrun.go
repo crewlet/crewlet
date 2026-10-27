@@ -415,7 +415,8 @@ func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload],
 		if call.Name != SubmitWorkTool || call.Failed {
 			continue
 		}
-		if _, err := submit.Call(ctx, call.Args); err != nil {
+		if _, _, err := tools.Invoke(ctx, tools.Invocation{Name: SubmitWorkTool, Tool: submit,
+			Args: call.Args, Where: "replay"}); err != nil {
 			log.WarnContext(ctx, "agent_run_submission_replay_failed", "error", err.Error())
 		}
 	}

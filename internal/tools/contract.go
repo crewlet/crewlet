@@ -9,9 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
@@ -461,37 +459,6 @@ func misreadAnswer(tool string, faults []ArgFault) string {
 	return fmt.Sprintf("%s did not run, so nothing was done: it would have read some of these "+
 		"arguments as something other than what you sent. Fix every one and call it again:\n%s",
 		tool, faultLines(faults))
-}
-
-// withFaults is a tool's answer carrying the findings its call's arguments
-// had: on a refusal of the arguments, every one, so the next call answers
-// them all; on a success, a note naming what was not read as sent, logged
-// and counted ([metrics.ToolArgsOutsideSchema]) as the drift between the
-// schema and the tool's reading. Any other answer is left as it was.
-func (s *Surface) withFaults(tool string, res Result, faults []ArgFault, turn *turnctx.Turn) Result {
-	if len(faults) == 0 {
-		return res
-	}
-	switch {
-	case res.Failed && RefusalOf(res) == RefusalInvalid:
-		res.Output += fmt.Sprintf("\n\nEvery argument outside %s's schema:\n%s", tool, faultLines(faults))
-	case !res.Failed:
-		res.Output += fmt.Sprintf("\n\nNote: %s ran, but these arguments are outside its schema and "+
-			"were not read as sent; send them as described next time:\n%s", tool, faultLines(faults))
-		paths := make([]string, len(faults))
-		for i, f := range faults {
-			paths[i] = f.Path
-		}
-		attrs := []any{"tool", tool, "paths", strings.Join(paths, ","), "phase", s.Phase()}
-		if turn != nil {
-			attrs = append(attrs, "turn", turn.RunID)
-		}
-		contractLog.Info("tool_args_outside_schema", attrs...)
-		if s.counter != nil {
-			s.counter.Add(metrics.ToolArgsOutsideSchema, 1, metrics.Attrs{"tool": tool})
-		}
-	}
-	return res
 }
 
 // faultLines are findings one to a line, misreads first, then by path, at

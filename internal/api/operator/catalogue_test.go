@@ -256,3 +256,40 @@ func (p *recordingPages) keys() []string {
 	defer p.mu.Unlock()
 	return append([]string(nil), p.opKeys...)
 }
+
+// AN OPERATOR'S CALL IS HELD TO ITS TOOL'S SCHEMA LIKE A SEAT'S (ADR-0059):
+// the operator surface calls a tool through tools.Invoke, so a value the tool
+// would misread (an object where the comment's text belongs, read as "") is
+// refused before the tool runs and nothing is written, with every finding
+// named; a lossless value (a number where a string belongs) is written.
+//
+// Mutation: call the tool directly from Server.run and the empty comment is
+// written.
+func TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns(t *testing.T) {
+	t.Parallel()
+	kb := &recordingPages{}
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+	})})
+	ctx := iam.WithPrincipal(t.Context(),
+		person("jane.founder", "jane-founder", iam.GrantDoclet))
+	got, err := s.Dispatch(ctx, operator.Call{Transport: types.TransportAct,
+		Key: statelog.NewOpID(time.Now(), ""), Tool: builtin.CommentOnPageTool,
+		Args: map[string]any{"page": "Runbook", "body": map[string]any{"text": "the step is wrong"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Failed || !strings.Contains(got.Output, "comment_on_page did not run") ||
+		!strings.Contains(got.Output, "`body` is an object, and comment_on_page reads a string there") {
+		t.Errorf("a misread was answered %q", got.Output)
+	}
+	if n := len(kb.keys()); n != 0 {
+		t.Errorf("a misread wrote %d comments", n)
+	}
+	got, err = s.Dispatch(ctx, operator.Call{Transport: types.TransportAct,
+		Key: statelog.NewOpID(time.Now(), ""), Tool: builtin.CommentOnPageTool,
+		Args: map[string]any{"page": "Runbook", "body": 42.0}})
+	if err != nil || got.Failed || len(kb.keys()) != 1 {
+		t.Errorf("a lossless value was answered %+v (%v)", got, err)
+	}
+}

@@ -16,7 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// everySchema is every registered builtin's advertised schema, by tool.
+// everySchema is every builtin's advertised schema, by where it is served and
+// its name: each one a seat is registered with, and each one the operator
+// surface serves (an operator's assistant, the work API's dispatch), which
+// is a set of its own.
 func everySchema(t *testing.T) map[string]map[string]any {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -25,20 +28,28 @@ func everySchema(t *testing.T) map[string]map[string]any {
 	}
 	out := map[string]map[string]any{}
 	for _, e := range reg.Snapshot().Entries() {
-		out[e.Tool.Name()] = e.Tool.Parameters()
+		out["seat:"+e.Tool.Name()] = e.Tool.Parameters()
+	}
+	operator := builtin.OperatorTools(operatorDeps(t))
+	if len(operator) == 0 {
+		t.Fatal("the operator surface serves no tool")
+	}
+	for _, tool := range operator {
+		out["operator:"+tool.Name()] = tool.Parameters()
 	}
 	return out
 }
 
-// EVERY BUILTIN'S SCHEMA IS ONE THE SURFACE'S CHECK CAN KEEP (ADR-0059): a
-// keyword or a type the check does not implement is a promise to the model
-// nothing holds a call to.
+// EVERY BUILTIN'S SCHEMA IS ONE THE CHECK CAN KEEP (ADR-0059), the seat's and
+// the operator surface's alike, since every caller calls a tool through
+// tools.Invoke: a keyword or a type the check does not implement is a promise
+// to the model nothing holds a call to.
 //
 // Mutation: add `"pattern"` to a property and this names it.
 func TestEveryBuiltinSchemaIsOneTheCheckKeeps(t *testing.T) {
 	t.Parallel()
 	schemas := everySchema(t)
-	if len(schemas) < 40 {
+	if len(schemas) < 60 {
 		t.Fatalf("%d builtins registered, which is not the set", len(schemas))
 	}
 	for name, schema := range schemas {

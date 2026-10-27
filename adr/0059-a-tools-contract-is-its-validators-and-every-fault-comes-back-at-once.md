@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/jsonform`
-- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`, `internal/tools/argval.TestEachReadIsItsHelpers`, `internal/tools.TestEachLossyValueIsAMisreadAtItsPath`, `internal/tools.TestEachLosslessValueIsNoFinding`, `internal/tools.TestOutsideAndUnknownAreNamedAndLeftToTheTool`, `internal/tools.TestAMisreadIsRefusedBeforeTheToolRuns`, `internal/tools.TestTheToolsAnswerCarriesEveryFinding`, `internal/agent/builtin.TestEveryBuiltinSchemaIsOneTheCheckKeeps`, `internal/agent/builtin.TestNoArgumentIsReadAsTextAgainstItsType`, `internal/agent/structured.TestEveryFaultOfASubmissionIsNamedAtOnce`, `internal/worklet.TestEveryFaultOfADecisionIsNamedAtOnce`, `internal/assistant/catalog.TestEveryAssistantToolNamesEveryFaultAtOnce`, `internal/assistant/wire.TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`
+- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`, `internal/tools/argval.TestEachReadIsItsHelpers`, `internal/tools.TestEachLossyValueIsAMisreadAtItsPath`, `internal/tools.TestEachLosslessValueIsNoFinding`, `internal/tools.TestOutsideAndUnknownAreNamedAndLeftToTheTool`, `internal/tools.TestAMisreadIsRefusedBeforeTheToolRuns`, `internal/tools.TestTheToolsAnswerCarriesEveryFinding`, `internal/agent/builtin.TestEveryBuiltinSchemaIsOneTheCheckKeeps`, `internal/agent/builtin.TestNoArgumentIsReadAsTextAgainstItsType`, `internal/agent/structured.TestEveryFaultOfASubmissionIsNamedAtOnce`, `internal/worklet.TestEveryFaultOfADecisionIsNamedAtOnce`, `internal/assistant/catalog.TestEveryAssistantToolNamesEveryFaultAtOnce`, `internal/assistant/wire.TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`, `internal/tools.TestEveryToolIsCalledThroughInvoke`, `internal/api/operator.TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns`
 - **Measured:** GP-38 (brand kit): 14 refusals, rounds 11 to 24 and beyond, more than eight minutes of one turn, 12 distinct structural faults learned one per attempt. The brief (#407): 4 of 4 briefs ended `brief_invalid` at 7 steps. Replayed after this change: the GP-38 version gets all 14 of its findings in one refusal and its fixed version lands on the next attempt; a kit written from the format reference lands on the first.
 - **Cost-when-tried:** the brief fix (#407) repaired one tool: its caps went into its schema and its validator started naming every fault. Two days later the brand kit failed the same way through a different tool, because nothing had changed for any other tool.
 - **Tag-status:** unreleased
@@ -66,11 +66,20 @@ the branch; the run is logged (`tool_policy_refusal_loop`) and counted
 is a phase's: a resumed phase counts again. The call still runs: never a
 silent cap.
 
-**Every first-party tool's call is held to the schema it advertises, at the
-tool surface.** `tools.CheckArgs` checks the call against the tool's
+**Every first-party tool's call is held to the schema it advertises,
+whoever makes it.** Every caller calls a tool through `tools.Invoke`: a
+phase's surface (a seat's turn, a worker), the operator surface (an
+operator's assistant over `/operator/mcp`, the work API's dispatch) and a
+replay of a run's submission. A test walks the tree and refuses a tool's
+own call made anywhere else, so a caller added later inherits the check by
+calling a tool at all. `tools.CheckArgs` checks the call against the tool's
 `Parameters`, every finding in one pass with its path and the shape read
-there, and `tools.Surface` acts on three kinds of finding. Third-party MCP
+there, and `tools.Invoke` acts on three kinds of finding. Third-party MCP
 servers hold their own schemas and are not checked.
+
+THE CHECK IS ON THE CALL PATH, NOT ON ONE CALLER: its first version sat in
+`tools.Surface`, and the operator surface, which calls the same builtins
+through `operator.Server.run`, skipped it.
 
 - **A misread is refused before the tool runs.** A misread is a value the
   tool's own read would change without saying so, which writes wrong data
@@ -92,7 +101,7 @@ servers hold their own schemas and are not checked.
   tool tolerated) is answered with a note naming each one, logged
   (`tool_args_outside_schema`) and counted
   (`crewlet.tools.args_outside_schema`). That count is the drift signal for a
-  later decision, per tool, to refuse at the surface.
+  later decision, per tool, to refuse before the tool runs.
 - **The lossless leniencies stay accepted, exactly as the tools read them.**
   They are not findings at all:
   - a number or a boolean where a string belongs;
@@ -172,9 +181,9 @@ passes.
 | A page (`html`) | the design contract in `skill:artifacts` | yes, the linter already listed every finding |
 | `answer_brief` | the catalogue schema, which is also its validator (#407) | yes (#407) |
 | Other assistant catalogue tools, and a page action's arguments | the catalogue schema, which is also its validator | yes: `Tool.Check` and `ActionArgs.Check` name every problem |
-| `submit_work`, `submit_review`, a worker's submit (`structured.Remarshal`) | the hand-written schema, held to its struct by a walk, and checked at the surface | yes: accepted as before, every fault named |
-| A `decision` on a work item (`comment_on_work_item`, `create_work_item`) | the tool's schema, checked at the surface | yes: every rule's fault and every missing reference named |
-| `create_work_item`, `update_work_item`, `write_work_catalogue`, `set_artifact_schema`, `write_artifact_data` and the other first-party seat tools | the advertised schema, checked at the surface | yes: a misread refused before the tool runs; every other finding on its answer |
+| `submit_work`, `submit_review`, a worker's submit (`structured.Remarshal`) | the hand-written schema, held to its struct by a walk, and checked through `tools.Invoke`, whoever calls | yes: accepted as before, every fault named |
+| A `decision` on a work item (`comment_on_work_item`, `create_work_item`) | the tool's schema, checked through `tools.Invoke`, whoever calls | yes: every rule's fault and every missing reference named |
+| `create_work_item`, `update_work_item`, `write_work_catalogue`, `set_artifact_schema`, `write_artifact_data` and the other first-party seat tools | the advertised schema, checked through `tools.Invoke`, whoever calls | yes: a misread refused before the tool runs; every other finding on its answer |
 | Configuration written through a tool (an assistant proposal) | the route's own check (ADR-0055) | yes, the config validator collects every problem |
 
 ## What this does not decide

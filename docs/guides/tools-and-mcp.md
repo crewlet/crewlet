@@ -411,8 +411,9 @@ before granting a seat a new server.
 ### A call is held to the schema its tool advertises
 
 Every call to one of the engine's own tools is checked against the JSON schema
-that tool hands the model, before the tool runs, with every finding named in one
-pass by its path and the shape the tool reads there
+that tool hands the model, before the tool runs, whoever makes it (a seat, a
+worker, an operator's assistant over `/operator/mcp`, or the work API), with
+every finding named in one pass by its path and the shape the tool reads there
 ([ADR-0059](../../adr/0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md)).
 A third-party MCP server holds its own schema and is not checked here.
 

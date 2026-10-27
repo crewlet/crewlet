@@ -446,26 +446,16 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 	// one for a seat at all. An outer answer wins — see
 	// [turnctx.WithPrincipal] — so a surface reached through somebody's
 	// own credential still acts as them.
-	// THE CALL IS HELD TO THE SCHEMA ITS TOOL ADVERTISES (ADR-0059), every
-	// first-party one: a third-party MCP server holds its own. A value the
-	// tool would misread is refused here, before anything runs; every other
-	// finding rides on the tool's own answer below.
-	var faults []ArgFault
-	if _, fromMCP := e.FromMCP(); !fromMCP {
-		faults = CheckArgs(call.Name, e.Tool.Parameters(), args)
-	}
+	//
+	// THROUGH [Invoke], which holds a first-party call to the schema its
+	// tool advertises (ADR-0059): a value the tool would misread is refused
+	// before anything runs, and every other finding rides on the answer.
+	_, fromMCP := e.FromMCP()
 	target := TargetOf(e.Tool, args)
-	if misread(faults) {
-		recorded, run := s.settle(Call{Name: call.Name, Args: args, Output: misreadAnswer(call.Name, faults),
-			Failed: true, Cause: RefusalInvalid}, e.Annotations, target)
-		s.reportLoop(call.Name, target, run, turn)
-		span.SetAttributes(
-			attribute.Bool("crewlet.tool_failed", true),
-			attribute.String("crewlet.tool_outcome", "refused_by_contract"))
-		return toolloop.ToolResult{Output: recorded.Output, Failed: true, Cause: RefusalInvalid}, nil
-	}
-
-	res, err := s.invoke(turnctx.WithPrincipal(ctx, turn), turn, e.Tool, args)
+	res, refusedByContract, err := Invoke(turnctx.WithPrincipal(ctx, turn), Invocation{
+		Name: call.Name, Tool: e.Tool, Args: args, AsSeat: true, Turn: turn,
+		ThirdParty: fromMCP, Where: s.Phase(), Counter: s.counter,
+	})
 	if err != nil {
 		tracing.Fail(span, err)
 		// The caller's own context ended — the turn is being torn down.
@@ -473,7 +463,15 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 		// call did not happen as far as the ledger is concerned.
 		return toolloop.ToolResult{}, err
 	}
-	res.Result = s.withFaults(call.Name, res.Result, faults, turn)
+	if refusedByContract {
+		recorded, run := s.settle(Call{Name: call.Name, Args: args, Output: res.Output,
+			Failed: true, Cause: RefusalInvalid}, e.Annotations, target)
+		s.reportLoop(call.Name, target, run, turn)
+		span.SetAttributes(
+			attribute.Bool("crewlet.tool_failed", true),
+			attribute.String("crewlet.tool_outcome", "refused_by_contract"))
+		return toolloop.ToolResult{Output: recorded.Output, Failed: true, Cause: RefusalInvalid}, nil
+	}
 	recorded, run := s.settle(Call{Name: call.Name, Args: args, Output: res.Output,
 		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target)
 	res.Output = recorded.Output
@@ -533,34 +531,6 @@ func invokedOutcome(failed, suspended bool) string {
 		return "failed"
 	default:
 		return "ok"
-	}
-}
-
-// invoke runs one tool, telling it who is calling when it asks.
-//
-// THE SEAT COMES FROM THE SURFACE, never from the arguments. A tool that acts
-// for a seat — asking a colleague, marking an onboarding step, writing to a
-// diary — must not be able to be pointed at another one by a model that
-// spelled a different handle in its arguments. The surface is built per turn
-// by the runner, which is the frame that knows.
-//
-// An OPTIONAL interface rather than a parameter on Callable, because Callable
-// is the MCP tool contract as well: an MCP server has no notion of a turn, and
-// widening the signature would put a turn-shaped argument on every bridged
-// tool to be ignored. This way the two kinds of tool coexist under one
-// registry, and the one that needs the fact asks for it.
-func (s *Surface) invoke(ctx context.Context, turn *turnctx.Turn, tool Callable,
-	args map[string]any,
-) (DetachedResult, error) {
-	switch t := tool.(type) {
-	case Detached:
-		return t.CallDetached(ctx, turn, args)
-	case SeatCallable:
-		res, err := t.CallForTurn(ctx, turn, args)
-		return DetachedResult{Result: res}, err
-	default:
-		res, err := tool.Call(ctx, args)
-		return DetachedResult{Result: res}, err
 	}
 }
 
