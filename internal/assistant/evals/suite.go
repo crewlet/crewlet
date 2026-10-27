@@ -85,6 +85,15 @@ type Expect struct {
 	Shows []string `yaml:"shows"`
 	// Brief is what a brief turn's card holds.
 	Brief *ExpectBrief `yaml:"brief"`
+	// Refusals are what each refused call's answer names, in the order the
+	// calls were refused: the i-th list holds text the i-th refusal must
+	// contain, ignoring case (a path such as `needs[0].text`). So a case
+	// holds the engine to naming EVERY fault of a refused call in one
+	// answer (ADR-0059), which the turn's frames cannot show: a refusal's
+	// sentence reaches the model and no card. Judged against a scripted
+	// model, which hears every answer; a live model's answers travel inside
+	// its own CLI, and the expectation is not judged there.
+	Refusals [][]string `yaml:"refusals"`
 }
 
 // ExpectBrief is what a brief's card must hold: the records its rows cite,
@@ -98,7 +107,8 @@ type ExpectBrief struct {
 // empty reports whether e expects nothing.
 func (e Expect) empty() bool {
 	return len(e.Calls) == 0 && len(e.Never) == 0 && e.Proposals == nil && e.State == "" &&
-		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 && e.Brief == nil
+		len(e.Says) == 0 && len(e.NeverSays) == 0 && len(e.Shows) == 0 && e.Brief == nil &&
+		len(e.Refusals) == 0
 }
 
 // LoadSuite reads every `*.yaml` case in dir, in name order, each checked.
@@ -249,6 +259,16 @@ func (c Case) Validate() error {
 		for i, tone := range b.Tones {
 			if !tone.Valid() {
 				fail("expect.brief.tones[%d]: %q is not a tone (%v)", i, tone, wire.BriefTones)
+			}
+		}
+	}
+	for i, names := range c.Expect.Refusals {
+		if len(names) == 0 {
+			fail("expect.refusals[%d]: names nothing, so it cannot fail", i)
+		}
+		for j, n := range names {
+			if strings.TrimSpace(n) == "" {
+				fail("expect.refusals[%d][%d]: is empty", i, j)
 			}
 		}
 	}

@@ -43,6 +43,9 @@ script:
       follow_ups: ["Which build should QA test first?"]
 expect:
   calls: [list_decisions, answer_brief, answer_brief]
+  # THE FIRST REFUSAL NAMES ALL THREE CAPS, so the one retry can fix them all.
+  refusals:
+    - [summary, "needs[0].text", "follow_ups[0]"]
   proposals: 0
   state: completed
   brief:
