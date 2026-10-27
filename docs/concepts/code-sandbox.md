@@ -697,10 +697,13 @@ session and no other:
   step`). A note admitted and never delivered is never confirmed, and its
   review reads it.
 - **It asks, and never insists**: a poll is held up to the route's ten seconds
-  and given twenty, a confirmation ten; a failed request is made again after a
-  pause of a second, doubling to thirty and reset by the next success; and a
-  refused token (`401`) or a run with no notes route (`404`) ends the plugin
-  for the rest of the run, its notes waiting for the review.
+  and given twenty, a confirmation ten; a failed request — a stopping node's
+  `503` among them — is made again after a pause of a second, doubling to
+  thirty and reset by the next success; a poll that admitted nothing is
+  followed by the next no sooner than a second after it began, so no answer
+  can drive it into a loop of requests; and a refused token (`401`) or a run
+  with no notes route (`404`) ends the plugin for the rest of the run, its
+  notes waiting for the review.
 - **It writes nothing**: OpenCode reloads a configured plugin whose directory
   changes, and a note never touches the box's disk.
 

@@ -494,7 +494,9 @@ func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 			c := route.next("GET notes", "poll")
 			calls = append(calls, c)
 			if status == http.StatusOK {
-				c.reply(status, notesBody())
+				// A SUCCESS THAT ADMITTED A NOTE, whose next poll is at once
+				// — one that admitted nothing waits out the floor instead.
+				c.reply(status, notesBody(noteNumbered(1)))
 				continue
 			}
 			c.reply(status, `{"error":"try again"}`)
@@ -509,10 +511,40 @@ func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 			t.Errorf("asked again %s after the second failure in a row, want the pause doubled to two seconds", g)
 		}
 		if g := gap(2); g > 900*time.Millisecond {
-			t.Errorf("asked again %s after a poll that succeeded, want at once", g)
+			t.Errorf("asked again %s after a poll that admitted a note, want at once", g)
 		}
 		if g := gap(3); g < 900*time.Millisecond || g > 3500*time.Millisecond {
 			t.Errorf("asked again %s after a failure that followed a success, want the pause back at a second", g)
+		}
+	})
+
+	t.Run("waits a second before polling again after an answer that admitted nothing", func(t *testing.T) {
+		t.Parallel()
+		route, pr := newNotesRoute(t), startProbe(t, node, entry)
+		pr.setup("a", route.url(), steerSession)
+		pr.expect("setup")
+		pr.event("a", "session.execution.started", steerSession, nil)
+		// AN EMPTY ANSWER AT ONCE, as a server that would not hold the poll
+		// gives one — twice, so a floor that only spaced the first is red.
+		first := route.next("GET notes", "poll")
+		first.reply(http.StatusOK, notesBody())
+		second := route.next("GET notes", "poll after an empty answer")
+		second.reply(http.StatusOK, `{"notes":[]}`)
+		third := route.next("GET notes", "poll after a second empty answer")
+		for i, gap := range []time.Duration{second.at.Sub(first.at), third.at.Sub(second.at)} {
+			if gap < 900*time.Millisecond {
+				t.Errorf("poll %d came %s after an empty answer that arrived at once, want a second's floor",
+					i+2, gap)
+			}
+		}
+		// AND AN ANSWER THAT ARRIVED AFTER THE FLOOR IS ASKED AGAIN AT ONCE:
+		// the long poll's own empty answer, after its hold.
+		time.Sleep(1200 * time.Millisecond)
+		answered := time.Now()
+		third.reply(http.StatusOK, notesBody())
+		if fourth := route.next("GET notes", "poll after a held empty answer"); fourth.at.Sub(answered) > 800*time.Millisecond {
+			t.Errorf("a poll held past the floor was asked again %s after its answer, want at once",
+				fourth.at.Sub(answered))
 		}
 	})
 

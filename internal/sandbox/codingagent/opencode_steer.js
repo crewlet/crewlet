@@ -35,10 +35,12 @@
 // OpenCode holds every prompt until every plugin's setup has resolved, so a
 // setup that waited on the engine would hold the brief. Every request is
 // bounded, a failed one is asked again after a pause that doubles from a
-// second to thirty and resets on a success, and a refusal of the route — its
-// token no longer resolves (401), or the run has no notes route (404) — ends
-// the plugin for the rest of the run: its notes wait for its review. The
-// cleanup setup returns ends everything at once.
+// second to thirty and resets on a success — a stopping node's 503 among them —
+// and a poll that admitted nothing is never followed by the next sooner than a
+// second after it began, so no answer can drive the plugin into a loop of
+// requests. A refusal of the route — its token no longer resolves (401), or the
+// run has no notes route (404) — ends the plugin for the rest of the run: its
+// notes wait for its review. The cleanup setup returns ends everything at once.
 //
 // IT WRITES NOTHING, anywhere: OpenCode reloads a configured plugin whose
 // directory changes, and the notes themselves never touch the box's disk.
@@ -59,6 +61,16 @@ const readAbortMs = 10_000
 // it is not.
 const backoffFirstMs = 1_000
 const backoffMostMs = 30_000
+
+// pollFloorMs is the least time from one poll's start to the next one's, after
+// an answer that admitted nothing. The engine answers an empty poll only once
+// its hold is over, so polling again at once is the long poll working — but an
+// answer that came back empty sooner was cut short, by the engine or by
+// anything between, and asking again at once would make the plugin's rate of
+// requests whatever the network's round trip is, for as long as that lasts. A
+// second, the first pause after a failure: no answer of any server can drive
+// the plugin faster than that.
+const pollFloorMs = backoffFirstMs
 
 export default {
   id: "crewlet.steer",
@@ -146,6 +158,8 @@ function arm(ctx, url, session) {
   const poll = async (gated) => {
     let wait = 0
     while (!gated.aborted && !life.signal.aborted) {
+      const began = Date.now()
+      const past = cursor
       const answer = await call(life.signal, "GET", url + "/notes?after=" + cursor, undefined, pollAbortMs, gated)
       if (gated.aborted || life.signal.aborted) return
       if (answer.refused) {
@@ -154,6 +168,11 @@ function arm(ctx, url, session) {
       }
       if (answer.ok && (await admit(answer.text, gated))) {
         wait = 0
+        // AN ANSWER THAT ADMITTED NOTHING waits out the floor (pollFloorMs)
+        // before the next poll; one that admitted a note asks at once for
+        // the notes after it.
+        const early = pollFloorMs - (Date.now() - began)
+        if (cursor === past && early > 0) await sleep(early, life.signal, gated)
         continue
       }
       wait = next(wait)
