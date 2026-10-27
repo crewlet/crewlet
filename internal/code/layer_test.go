@@ -578,32 +578,110 @@ func TestACheckRefusesEveryMismatch(t *testing.T) {
 	}
 }
 
-// A FILE THAT CANNOT BE READ IS NOT A BAD LAYER. A disk that fails a read says
-// nothing about the bytes, and a refusal the installer would never retry
-// would cost the node the layer until the maintainer published it again: the
-// read's failure is answered as it came, apart from ErrBadLayer.
+// A FILE THAT CANNOT BE READ IS NOT A BAD LAYER, WHEREVER THE READ FAILS. A
+// disk that fails a read says nothing about the bytes, and a refusal the
+// installer would never retry would cost the node the layer until the
+// maintainer published it again — and a bad sector inside a 2.6 GB root layer
+// fails a read in the middle of its trailer's hash, not its first. So each of
+// the tip's three files is checked with its k-th read failing, for every k
+// until a check makes no k-th read, its trailer hashed through a buffer of 64
+// bytes: each check answers that read's own failure, never ErrBadLayer, and
+// the reads failed are every place a check reads a file at — its size's two
+// reads, its header, its table of contents, each chunk a count is read from
+// (the multi-pack-index's fanout and pack names; the commit-graph layer's
+// fanout, its filters' version, its last filter's end and its bases), the
+// first read of its trailer's hash and a later one, and its trailer.
 //
-// Mutation: answer every failure of a read as a refusal of the bytes — red.
+// Mutation: answer a failed read of a header, a table or a chunk, or of the
+// hash, as a refusal of the bytes — red.
 func TestAFailedReadIsNotABadLayer(t *testing.T) {
 	t.Parallel()
 	g := writeLayers(t)
-	tip, row := filesOf(t, g.tip), rowFor(t, g.tip, g.base.id, []string{g.base.graphID})
+	tip, bases := filesOf(t, g.tip), []string{g.base.graphID}
+	row := rowFor(t, g.tip, g.base.id, bases)
 	failed := errors.New("the disk failed the read")
-	for i := range 3 {
-		readers := [3]io.ReaderAt{bytes.NewReader(tip[0]), bytes.NewReader(tip[1]), bytes.NewReader(tip[2])}
-		readers[i] = failingAt{failed}
-		err := code.CheckLayer(t.Context(), row, readers[0], readers[1], readers[2], []string{g.base.graphID},
-			code.Pieces{})
-		if !errors.Is(err, failed) || errors.Is(err, code.ErrBadLayer) {
-			t.Errorf("a failed read of the layer's file %d: %v, want the read's failure and not ErrBadLayer", i, err)
+
+	// Every read a check makes of each file, by where it begins and its
+	// bytes, read from the file's own table of contents.
+	sites := [3]map[string]fileRead{}
+	for i, b := range tip {
+		size := int64(len(b))
+		sites[i] = map[string]fileRead{
+			"its last byte": {size - 1, 1}, "past its end": {size, 1},
+			"the first read of its hash": {0, 64}, "a later read of its hash": {64, 64},
+			"its trailer": {size - 20, 20},
+		}
+	}
+	table := func(b []byte, header int) fileRead {
+		return fileRead{int64(header), (int64(b[6]) + 1) * 12}
+	}
+	chunk := func(start, end int64) fileRead { return fileRead{start, end - start} }
+	sites[0]["its header"] = fileRead{0, gittest.MidxHeader}
+	sites[0]["its table of contents"] = table(tip[0], gittest.MidxHeader)
+	sites[0]["its fanout"] = chunk(gittest.MidxChunk(t, g.tip.midx, "OIDF"))
+	sites[0]["its pack names"] = chunk(gittest.MidxChunk(t, g.tip.midx, "PNAM"))
+	sites[1]["its header"] = fileRead{0, 32} // the signature, version, options, commits and the index's checksum
+	sites[2]["its header"] = fileRead{0, gittest.GraphHeader}
+	sites[2]["its table of contents"] = table(tip[2], gittest.GraphHeader)
+	sites[2]["its fanout"] = chunk(gittest.GraphChunk(t, g.tip.graph, "OIDF"))
+	bdat, _ := gittest.GraphChunk(t, g.tip.graph, "BDAT")
+	sites[2]["its filters' version"] = fileRead{bdat, 4}
+	_, bidx := gittest.GraphChunk(t, g.tip.graph, "BIDX")
+	sites[2]["its last filter's end"] = fileRead{bidx - 4, 4}
+	sites[2]["its bases"] = chunk(gittest.GraphChunk(t, g.tip.graph, "BASE"))
+
+	for i := range tip {
+		var failedReads []fileRead
+		for k := 1; ; k++ {
+			readers := [3]io.ReaderAt{bytes.NewReader(tip[0]), bytes.NewReader(tip[1]), bytes.NewReader(tip[2])}
+			f := &failingRead{r: bytes.NewReader(tip[i]), k: k, err: failed}
+			readers[i] = f
+			err := code.CheckLayer(t.Context(), row, readers[0], readers[1], readers[2], bases,
+				code.Pieces{Buf: make([]byte, 64)})
+			if f.reads < k {
+				// No k-th read: every read the check makes has failed once.
+				if err != nil {
+					t.Errorf("file %d, checked with no read failing: %v", i, err)
+				}
+				break
+			}
+			failedReads = append(failedReads, f.failed)
+			if !errors.Is(err, failed) || errors.Is(err, code.ErrBadLayer) {
+				t.Errorf("file %d, its read %d failing (%d bytes at %d): %v, want that read's failure and not "+
+					"ErrBadLayer", i, k, f.failed.n, f.failed.at, err)
+			}
+		}
+		for name, site := range sites[i] {
+			if !slices.Contains(failedReads, site) {
+				t.Errorf("file %d: no read the check made is of %s (%d bytes at %d); the reads were %v", i, name,
+					site.n, site.at, failedReads)
+			}
 		}
 	}
 }
 
-// failingAt is a file whose every read fails.
-type failingAt struct{ err error }
+// fileRead is one read of a file: where it begins and how many bytes it asks.
+type fileRead struct{ at, n int64 }
 
-func (f failingAt) ReadAt([]byte, int64) (int, error) { return 0, f.err }
+// failingRead is a file whose k-th read fails and every other answers its
+// bytes: how many reads were made, and which one failed, are kept.
+type failingRead struct {
+	r   *bytes.Reader
+	k   int
+	err error
+
+	reads  int
+	failed fileRead
+}
+
+func (f *failingRead) ReadAt(p []byte, off int64) (int, error) {
+	f.reads++
+	if f.reads == f.k {
+		f.failed = fileRead{off, int64(len(p))}
+		return 0, f.err
+	}
+	return f.r.ReadAt(p, off)
+}
 
 // A LAYER'S CHECK HASHES ITS FILES A PIECE A SLOT AND STOPS WITH ITS CALLER. A
 // git node's installer reads every byte of a layer for its trailers —
