@@ -371,7 +371,14 @@ var peerRebuilders = []string{"RebuildFromPeer", "SaidFromPeer"}
 // resolved through the file's own import table rather than by the name a
 // reference is spelled with: under an alias (`cv.RebuildFromPeer`), through a
 // dot import (a bare `RebuildFromPeer`), and never for another package that
-// happens to be called caveat.
+// happens to be called caveat. A call, a method value read off its result
+// (`caveat.SaidFromPeer(s).Words`) and a function value (`f :=
+// caveat.SaidFromPeer`) are all references.
+//
+// EVERY NODE IS VISITED: the walk is never pruned, so a reference nested in
+// any expression is reached however it is wrapped. Names that are not
+// references (a selector's field or method name, a composite literal's field
+// key, a method's own name) are told apart by where they stand.
 func peerRebuildsIn(file *ast.File) []string {
 	var named []string
 	dotted := false
@@ -392,6 +399,21 @@ func peerRebuildsIn(file *ast.File) []string {
 	if len(named) == 0 && !dotted {
 		return nil
 	}
+	// THE NAMES THAT ARE NOT REFERENCES, by position.
+	notReferences := map[*ast.Ident]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			notReferences[x.Sel] = true
+		case *ast.KeyValueExpr:
+			if key, ok := x.Key.(*ast.Ident); ok {
+				notReferences[key] = true
+			}
+		case *ast.FuncDecl:
+			notReferences[x.Name] = true
+		}
+		return true
+	})
 	var found []string
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -401,18 +423,9 @@ func peerRebuildsIn(file *ast.File) []string {
 				slices.Contains(peerRebuilders, x.Sel.Name) {
 				found = append(found, x.Sel.Name)
 			}
-			// The selector's own name is a field or method, never the
-			// dot-imported function.
-			ast.Inspect(x.X, func(inner ast.Node) bool {
-				if id, ok := inner.(*ast.Ident); ok && dotted && id.Obj == nil &&
-					slices.Contains(peerRebuilders, id.Name) {
-					found = append(found, id.Name)
-				}
-				return true
-			})
-			return false
 		case *ast.Ident:
-			if dotted && x.Obj == nil && slices.Contains(peerRebuilders, x.Name) {
+			if dotted && x.Obj == nil && !notReferences[x] &&
+				slices.Contains(peerRebuilders, x.Name) {
 				found = append(found, x.Name)
 			}
 		}
@@ -444,6 +457,21 @@ func f() { _ = SaidFromPeer("x") }`, []string{"SaidFromPeer"}},
 		"a dot import's call inside a selector": {`package p
 import . "github.com/crewlet/crewlet/internal/caveat"
 func f() { _ = SaidFromPeer("x").Words }`, []string{"SaidFromPeer"}},
+		"a call read through a selector": {`package p
+import "github.com/crewlet/crewlet/internal/caveat"
+var _ = caveat.SaidFromPeer("x").Words`, []string{"SaidFromPeer"}},
+		"an aliased call read through a selector": {`package p
+import cv "github.com/crewlet/crewlet/internal/caveat"
+var _ = cv.SaidFromPeer("x").Words`, []string{"SaidFromPeer"}},
+		"a function value": {`package p
+import "github.com/crewlet/crewlet/internal/caveat"
+func f() { g := caveat.SaidFromPeer; _ = g }`, []string{"SaidFromPeer"}},
+		"a dot import beside a field key and a method of the same name": {`package p
+import . "github.com/crewlet/crewlet/internal/caveat"
+type T struct{ SaidFromPeer int }
+func (T) RebuildFromPeer() {}
+var _ = T{SaidFromPeer: 1}
+var _ = RebuildFromPeer`, []string{"RebuildFromPeer"}},
 		"another package called caveat": {`package p
 import "example.com/other/caveat"
 var _ = caveat.RebuildFromPeer`, nil},
@@ -482,8 +510,12 @@ func TestOnlyTheEstateRouterRebuildsAPeersWords(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
+			// node_modules and .git hold no Go of the module's, and the go
+			// tool never builds a testdata directory, at any depth. Every
+			// other directory is walked, static/ (static.go) and dashboard/
+			// included.
 			switch d.Name() {
-			case "node_modules", "static", "dashboard", ".git", "testdata":
+			case "node_modules", ".git", "testdata":
 				return filepath.SkipDir
 			}
 			return nil
