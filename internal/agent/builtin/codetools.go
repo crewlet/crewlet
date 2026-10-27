@@ -679,16 +679,26 @@ func codeCursorArg() map[string]any {
 	}
 }
 
-// codeRevArg describes a revision argument.
+// codeRevArg describes a revision argument by its role alone, and points to
+// [revisionGrammar] in code_resolve's description for what a revision is.
+//
+// THE GRAMMAR IS STATED ONCE: every round of every seat of a company hosting
+// code carries the catalogue uncached, and the grammar, written into each of
+// the six arguments that take a revision, was a sixth of its eleven
+// kilobytes — the same sentence, near three hundred bytes rendered, six times.
 func codeRevArg(what string) map[string]any {
 	return map[string]any{
-		"type": "string",
-		"description": what + ": a commit id — whole, or its first 7 or more hex digits, which costs " +
-			"nothing — or a branch, a tag, a whole ref, or " + headRev + " for the default branch, " +
-			"each resolved to the commit it points at now. A branch whose name is all hex digits is " +
-			"named by its whole ref (refs/heads/<name>).",
+		"type":        "string",
+		"description": what + ": a revision, as " + CodeResolveTool + " describes one.",
 	}
 }
+
+// revisionGrammar is what a revision argument takes, in the description of
+// the one tool every revision argument points to ([codeRevArg]).
+const revisionGrammar = "A revision — what the other code tools' `rev`, `base`, `head` and `commit` take — " +
+	"is a commit id, whole or its first 7 or more hex digits, which resolves no ref; or a branch, a tag, " +
+	"a whole ref, or " + headRev + " for the default branch, resolved to the commit it points at when the " +
+	"call reads it. A branch whose name is all hex digits is named by its whole ref (refs/heads/<name>)."
 
 // ---- code_list_repos ---------------------------------------------------- //
 
@@ -982,12 +992,13 @@ func (t *codeResolve) Name() string { return CodeResolveTool }
 // so the calls after it name the commit. Never that it is the one read that
 // waits for the newest push — every code read of a row is linearizable, the
 // repositories' listing and detail and every ref a call names alike — which
-// taught the model that naming a branch anywhere else was free.
+// taught the model that naming a branch anywhere else was free. And it states
+// the revision grammar every other code tool's revision argument points to.
 func (t *codeResolve) Description() string {
 	return "Resolve a branch, a tag, a whole ref or HEAD to the commit it points at now, so the calls " +
 		"after it can name that commit by its id. Call it once per ref you need and pass the id it " +
 		"answers to the other code tools: a call naming a commit by id resolves no ref, and reads " +
-		"the same commit however the branch moves meanwhile."
+		"the same commit however the branch moves meanwhile. " + revisionGrammar
 }
 
 func (t *codeResolve) Parameters() map[string]any {

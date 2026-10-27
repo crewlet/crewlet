@@ -24,6 +24,8 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -1125,6 +1127,54 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 	args["repo"] = "site"
 	got := callIn(t, codeRegistry(t, builtin.CodeDeps{Code: host}), turn, tool, args)
 	return fencesIn(t, b, got.Output)
+}
+
+// ---- the catalogue, the guidance and the docs --------------------------- //
+
+// codeCatalogueBudget is the most bytes the seven code tools' definitions may
+// add to a tool catalogue as a CLI's prompt renders it.
+//
+// 10 300: measured at 9 570 (~2 393 tokens), so ~8% headroom — a sentence can
+// be added and a tool cannot, the executor prompt's rule (a code tool a later
+// part adds raises this deliberately, with its measured cost). 10 654 → 9 570
+// when the revision grammar, written into each of the six revision arguments,
+// was stated once in code_resolve's description.
+const codeCatalogueBudget = 10_300
+
+// THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
+// code carries the seven definitions on every round of every turn: a CLI's
+// catalogue rides in the user text (cliagent.RenderPrompt), so nothing caches
+// them, and each byte is paid again every round. Measured as that catalogue
+// renders them — indented, HTML-escaped, the seven added to a catalogue
+// already holding a tool, so each one's separator and indentation count — and
+// held to a budget, so a later description edit is a decision rather than
+// drift, as the executor prompt's budgets make a sentence one
+// (internal/agent/prompts budget_test.go).
+func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
+	t.Parallel()
+	rendered := func(defs []llm.ToolDef) int {
+		t.Helper()
+		text, err := cliagent.RenderPrompt(llm.Request{Tools: defs})
+		if err != nil {
+			t.Fatalf("render the catalogue: %v", err)
+		}
+		return len(text)
+	}
+	other := llm.ToolDef{Name: "lookup_colleague", Description: "Who to ask.",
+		Parameters: map[string]any{"type": "object"}}
+	with := []llm.ToolDef{other}
+	for _, tool := range builtin.CodeTools(builtin.CodeDeps{Code: newCodeHost()}) {
+		with = append(with, llm.ToolDef{Name: tool.Name(), Description: tool.Description(),
+			Parameters: tool.Parameters()})
+	}
+	got := rendered(with) - rendered([]llm.ToolDef{other})
+	if got > codeCatalogueBudget {
+		t.Errorf("the code tools add %d bytes (~%d tokens) to every round's catalogue, past their budget of %d",
+			got, cliagent.EstimateTokens(strings.Repeat(" ", got)), codeCatalogueBudget)
+		return
+	}
+	t.Logf("the code tools add %d bytes (~%d tokens) to every round's catalogue (budget %d, headroom %d)", got,
+		cliagent.EstimateTokens(strings.Repeat(" ", got)), codeCatalogueBudget, codeCatalogueBudget-got)
 }
 
 // ---- the guidance and the docs ------------------------------------------ //
