@@ -429,7 +429,11 @@
 // directive, what follows it up to the next token, or where any comment of
 // its group sits changed; a function body holding an example's Output: and a
 // cgo preamble are code whole; and a file's build constraints are compared as
-// go/build reads them from its header. Documentation — a doc comment above a
+// go/build reads them from its header. Each is read as its tool reads it:
+// go generate's commands as go generate does, a line at a time whatever
+// lexeme a line sits in — a command in a block comment or a raw string is
+// one — and a directive's text with the carriage returns the compiler reads
+// and the lexer drops. Documentation — a doc comment above a
 // pragma, a license above a //go:build line — changes freely. A class is
 // judged a path at a time and gives none to a version past
 // [MaxClassedBlobBytes]. The walk holds one gap of a version's comments at a

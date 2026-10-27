@@ -143,6 +143,22 @@ var byteOrderMark = []byte("\uFEFF")
 // blank line or a block comment far from a constraint decides whether it
 // holds.
 //
+// EACH IS READ AS ITS TOOL READS IT, which is not always as the lexer does.
+// go generate reads LINES, not tokens: every line of the file that starts
+// //go:generate and a blank is a command it runs, whatever lexeme the line
+// sits in — a block comment or a raw string as much as a comment of its own
+// (cmd/go: "lines that look like directives in comments or multiline strings
+// will be treated as directives"). And the compiler reads a directive with
+// every carriage return the lexer drops from a comment's text, but for the
+// one a Windows line ending leaves at its end — so a carriage return can
+// split a pragma, or sit in an embed's pattern or a //line directive's file
+// name, as one in front of a //go:generate hides its line from go generate.
+// So the lines go generate runs are compared as it reads them
+// (sameGenerateLines), and a directive's text as the compiler reads it: a
+// command planted in a comment, or one a carriage return's removal arms, is
+// code. Documentation keeps the lexer's reading, under which a carriage
+// return is whitespace.
+//
 // NO CLASS for a version that is empty — a file added or deleted, which a
 // caller judges before it asks — or past [MaxClassedBlobBytes], for one with a
 // lexical error, or where one version has a byte-order mark and the other
@@ -158,7 +174,7 @@ func ClassifyGo(before, after []byte) (ChangeClass, bool) {
 	if !j.lexInStep(lexGo(before), lexGo(after)) {
 		return "", false
 	}
-	if !slices.Equal(buildConstraints(before), buildConstraints(after)) {
+	if !slices.Equal(buildConstraints(before), buildConstraints(after)) || !sameGenerateLines(before, after) {
 		return "", false
 	}
 	if j.sameText {
@@ -437,7 +453,7 @@ func (j *judgement) sameWholes(a, b *goFile) bool {
 		return false
 	}
 	for i := range a.gap {
-		if a.gap[i].key != b.gap[i].key || !j.sameCommentText(a, a.gap[i], b, b.gap[i]) {
+		if a.gap[i].key != b.gap[i].key || !j.sameEntryText(a, a.gap[i], b, b.gap[i]) {
 			return false
 		}
 	}
@@ -464,7 +480,7 @@ func (j *judgement) sameContexts(a, b *goFile) bool {
 			return true
 		}
 		cx, cy := a.gap[x-1], b.gap[y-1]
-		if px != layoutEntry && !j.sameCommentText(a, cx, b, cy) || px != textEntry && cx.key != cy.key {
+		if px != layoutEntry && !j.sameEntryText(a, cx, b, cy) || px != textEntry && cx.key != cy.key {
 			return false
 		}
 	}
@@ -531,6 +547,30 @@ func isOutput(c lexComment) bool { return c.output }
 // the same text as the lexer returns it.
 func (j *judgement) sameCommentText(a *goFile, x lexComment, b *goFile, y lexComment) bool {
 	return bytes.Equal(a.text(x, &j.text[0]), b.text(y, &j.text[1]))
+}
+
+// sameEntryText reports whether two comments a directive's context holds
+// read alike: a directive as the compiler reads it (directiveText), anything
+// else as the lexer returns it. Where only one is a directive their texts
+// differ, since what the lexer returns of the two would.
+func (j *judgement) sameEntryText(a *goFile, x lexComment, b *goFile, y lexComment) bool {
+	if x.kind == directiveComment || y.kind == directiveComment {
+		return bytes.Equal(a.directiveText(x), b.directiveText(y))
+	}
+	return j.sameCommentText(a, x, b, y)
+}
+
+// directiveText is directive c's text as the compiler reads one: its bytes,
+// every carriage return the lexer drops from its text kept — one splitting a
+// pragma leaves none, and one in an embed's pattern or a //line directive's
+// file name names another — but for the one a Windows line ending leaves at
+// a line comment's end, which the compiler and the lexer both drop.
+func (f *goFile) directiveText(c lexComment) []byte {
+	raw := f.src[c.off:c.end]
+	if raw[1] == '/' && raw[len(raw)-1] == '\r' {
+		return raw[:len(raw)-1]
+	}
+	return raw
 }
 
 // text is c's text as the lexer returns it: its bytes, but for the carriage
@@ -913,6 +953,74 @@ header:
 		}
 	}
 	return lines
+}
+
+// goGenerate opens a line go generate runs, when a blank follows it.
+var goGenerate = []byte("//go:generate")
+
+// generateLineBytes is the longest line go generate reads, its newline
+// included: it reads a file through a bufio.Reader of the default size, 4 096
+// bytes, and fails on a //go:generate line the reader cannot hold ("directive
+// too long"), skipping any other.
+const generateLineBytes = 4096
+
+// sameGenerateLines reports whether two versions hold the same commands go
+// generate runs, read as it reads them (cmd/go's generate.go): the file a line
+// at a time, up to each newline, whatever lexeme a line sits in — a line that
+// starts //go:generate and a blank, in a comment of its own, inside a block
+// comment or a raw string, is a command — less the one carriage return a
+// Windows line ending leaves before the newline. A command go generate fails
+// on instead — one no newline ends, or one longer than its reader holds
+// (generateLineBytes) — stops it with an error, and it runs nothing after it
+// in the package; so whether it runs each line is compared beside the line,
+// and a carriage return that takes a command past the reader's bound, or
+// back within it, is code. A line's number, which go generate gives its
+// command as GOLINE, is not held: a whitespace change above a command moves
+// it as it moves every position a tool reports, and a command that reads its
+// own file reads every byte of it, which no class can be true of.
+func sameGenerateLines(a, b []byte) bool {
+	at, bt := 0, 0
+	for {
+		la, runsA, okA := nextGenerateLine(a, &at)
+		lb, runsB, okB := nextGenerateLine(b, &bt)
+		if okA != okB || runsA != runsB || !bytes.Equal(la, lb) {
+			return false
+		}
+		if !okA {
+			return true
+		}
+	}
+}
+
+// nextGenerateLine is the next line of src from *at on that go generate
+// reads as a command, without its newline and the carriage return before
+// it; whether go generate runs it — a newline ends it within
+// generateLineBytes — or fails on it; and whether there is one. *at moves
+// past it.
+func nextGenerateLine(src []byte, at *int) (line []byte, runs, ok bool) {
+	for *at < len(src) {
+		i := bytes.Index(src[*at:], goGenerate)
+		if i < 0 {
+			break
+		}
+		start := *at + i
+		*at = start + 1
+		if start > 0 && src[start-1] != '\n' {
+			continue
+		}
+		if blank := start + len(goGenerate); blank >= len(src) || src[blank] != ' ' && src[blank] != '\t' {
+			continue
+		}
+		end := bytes.IndexByte(src[start:], '\n')
+		if end < 0 {
+			*at = len(src)
+			return src[start:], false, true
+		}
+		*at = start + end + 1
+		return bytes.TrimSuffix(src[start:start+end], []byte("\r")), end < generateLineBytes, true
+	}
+	*at = len(src)
+	return nil, false, false
 }
 
 // lineStart is the offset at which the line holding off starts. The walk asks

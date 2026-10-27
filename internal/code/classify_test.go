@@ -1,7 +1,9 @@
 package code_test
 
 import (
+	"bufio"
 	"bytes"
+	"errors"
 	"go/parser"
 	"go/scanner"
 	"go/token"
@@ -327,6 +329,92 @@ func TestAWhitespaceChangeAroundADirectiveIsCode(t *testing.T) {
 	}
 }
 
+// GO GENERATE READS LINES, NOT TOKENS: every line of a file that starts
+// //go:generate and a blank is a command it runs — inside a block comment or
+// a raw string as much as in a comment of its own — and a carriage return the
+// lexer drops from a comment or a raw string is a byte it reads. So a change
+// to such a line, wherever it sits, is code, as is the newline that ends one
+// (go generate fails on a last line with none) and a carriage return that
+// takes one past the reader go generate reads it through (it fails on a line
+// too long), while a change elsewhere in a file holding one keeps its class.
+func TestAGoGenerateLineIsCodeWhereverItSits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, before, after string }{
+		{"a command added in a block comment",
+			"package p\n\nfunc f() {}\n",
+			"package p\n\n/*\n//go:generate stringer -type=Kind\n*/\nfunc f() {}\n"},
+		{"a command edited in a block comment",
+			"package p\n\n/*\n//go:generate stringer -type=Kind\n*/\nfunc f() {}\n",
+			"package p\n\n/*\n//go:generate stringer -type=Mode\n*/\nfunc f() {}\n"},
+		{"a carriage return dropped before a command in a block comment",
+			"package p\n\n/*\n\r//go:generate stringer -type=Kind\n*/\nfunc f() {}\n",
+			"package p\n\n/*\n//go:generate stringer -type=Kind\n*/\nfunc f() {}\n"},
+		{"a carriage return dropped before a command in a raw string",
+			"package p\n\nconst s = `\n\r//go:generate stringer -type=Kind\n`\n",
+			"package p\n\nconst s = `\n//go:generate stringer -type=Kind\n`\n"},
+		{"a carriage return dropped inside a command's directive",
+			"package p\n\n//go:gen\rerate stringer -type=Kind\ntype Kind int\n",
+			"package p\n\n//go:generate stringer -type=Kind\ntype Kind int\n"},
+		{"a carriage return dropped inside a command",
+			"package p\n\n//go:generate stringer -type=Ki\rnd\ntype Kind int\n",
+			"package p\n\n//go:generate stringer -type=Kind\ntype Kind int\n"},
+		{"the newline after a command in a block comment dropped",
+			"package p\n\n/*\n//go:generate stringer -type=Kind */\n",
+			"package p\n\n/*\n//go:generate stringer -type=Kind */"},
+	} {
+		wantClass(t, tc.name, tc.before, tc.after, noClass)
+	}
+	// go generate reads a line through a bufio.Reader of the default size, its
+	// newline included, and fails on a command the reader cannot hold, running
+	// nothing after it: a carriage return at the end of a command that fills
+	// the reader to the byte stops go generate there, and dropping it runs the
+	// command. One byte shorter, the command fits either way.
+	fits := "//go:generate echo " + strings.Repeat("x", bufio.NewReader(nil).Size()-len("//go:generate echo \n"))
+	wantClass(t, "a carriage return taking a command past go generate's reader",
+		"package p\n\n"+fits+"\ntype Kind int\n", "package p\n\n"+fits+"\r\ntype Kind int\n", noClass)
+	short := fits[:len(fits)-1]
+	wantClass(t, "a carriage return ending a command within go generate's reader",
+		"package p\n\n"+short+"\ntype Kind int\n", "package p\n\n"+short+"\r\ntype Kind int\n", code.ChangeClassWhitespaceOnly)
+	const generating = "package p\n\n/*\n//go:generate stringer -type=Kind\n*/\nvar _ int\n\n// Kind is a kind.\ntype Kind int\n"
+	wantClass(t, "documentation elsewhere in a file with a command",
+		generating, strings.Replace(generating, "a kind.", "a sort.", 1), code.ChangeClassCommentOnly)
+	wantClass(t, "the words around a command in its block comment",
+		generating, strings.Replace(generating, "/*\n", "/* Run before a release.\n", 1), code.ChangeClassCommentOnly)
+	wantClass(t, "windows line endings across a file with commands",
+		"package p\n\n//go:generate stringer -type=Kind\ntype Kind int\n\n/*\n//go:generate stringer -type=Mode\n*/\ntype Mode int\n",
+		"package p\r\n\r\n//go:generate stringer -type=Kind\r\ntype Kind int\r\n\r\n/*\r\n//go:generate stringer -type=Mode\r\n*/\r\ntype Mode int\r\n",
+		code.ChangeClassWhitespaceOnly)
+}
+
+// A DIRECTIVE IS READ AS ITS TOOL READS IT: the compiler reads a pragma, an
+// embed's pattern and a //line directive with every carriage return the
+// lexer drops from a comment's text, but for the one a Windows line ending
+// leaves at its end. So a carriage return inside a directive is code — a
+// pragma it splits, a pattern or a file name it changes — while the Windows
+// line endings of a file of directives, and one inside documentation, are
+// whitespace.
+func TestADirectivesCarriageReturnsAreCode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, before, after string }{
+		{"a carriage return inside a pragma",
+			"package p\n\n//go:noin\rline\nfunc f() {}\n",
+			"package p\n\n//go:noinline\nfunc f() {}\n"},
+		{"a carriage return inside an embed's pattern",
+			"package p\n\nimport _ \"embed\"\n\n//go:embed hel\rlo.txt\nvar s string\n",
+			"package p\n\nimport _ \"embed\"\n\n//go:embed hello.txt\nvar s string\n"},
+		{"a carriage return inside a line directive's file",
+			"package p\n\nfunc f() {\n//line ge\rn.y:10\n\tg()\n}\n",
+			"package p\n\nfunc f() {\n//line gen.y:10\n\tg()\n}\n"},
+	} {
+		wantClass(t, tc.name, tc.before, tc.after, noClass)
+	}
+	const directives = "package p\n\n//go:noinline\nfunc f() {\n//line gen.y:10\n\tg() //nolint:errcheck\n}\n"
+	wantClass(t, "windows line endings across directives",
+		directives, strings.ReplaceAll(directives, "\n", "\r\n"), code.ChangeClassWhitespaceOnly)
+	wantClass(t, "a carriage return inside documentation",
+		"package p\n\n// f does\r x.\nfunc f() {}\n", "package p\n\n// f does x.\nfunc f() {}\n", code.ChangeClassWhitespaceOnly)
+}
+
 // AN EXAMPLE'S BODY IS ITS TEST: go test compares an example's output with
 // the last comment group of its body, so a comment added below an Output:
 // leaves a test that compares nothing, and every comment of a top-level body
@@ -481,8 +569,10 @@ func leastAllocated(f func()) uint64 {
 // and a version against itself is whitespace_only wherever it lexes; and a
 // class given is TRUE — read again by means ClassifyGo does not share: a lexer
 // dropping the comments finds the same tokens, go/parser accepts both or
-// neither, the plainest directives read alike in both, and a whitespace_only
-// change differs in nothing but blanks and line breaks.
+// neither, the plainest directives read alike in both, byte for byte as their
+// tools read them, go generate's reading of the file a line at a time finds
+// the same commands, and a whitespace_only change differs in nothing but
+// blanks and line breaks.
 func FuzzClassifyGo(f *testing.F) {
 	for _, seed := range [][2]string{
 		{"package p\n\nfunc f() {\n\ta()\n\tb()\n}\n", "package p\n\nfunc f() {\n    a()\n\n    b()\n}\n"},
@@ -498,6 +588,9 @@ func FuzzClassifyGo(f *testing.F) {
 		{"\uFEFFpackage p\n", "package p\n"},
 		{"package p\n\ntype T struct {\n\t// +optional\n\tN int // nolint\n}\n", "package p\n\ntype T struct {\n\t// +optional\n\tN int //nolint\n}\n"},
 		{"// Package p.\npackage p\n", "// Code generated by x. DO NOT EDIT.\n\n// Package p.\npackage p\n"},
+		{"package p\n\n/*\n//go:generate x\n*/\n", "package p\n\n/*\n\r//go:generate x\n*/\n"},
+		{"package p\n\nconst s = `\n//go:generate x\n`\n", "package p\r\n\r\nconst s = `\r\n//go:generate x\r\n`\r\n"},
+		{"package p\n\n//go:noin\rline\nfunc f() {}\n", "package p\n\n//go:noinline\nfunc f() {}\n"},
 	} {
 		f.Add([]byte(seed[0]), []byte(seed[1]))
 	}
@@ -526,6 +619,9 @@ func FuzzClassifyGo(f *testing.F) {
 		if !slices.Equal(directivesOf(before), directivesOf(after)) {
 			t.Fatalf("classed %q, and the directives differ:\n%q\n%q", class, directivesOf(before), directivesOf(after))
 		}
+		if !slices.Equal(generateLinesOf(before), generateLinesOf(after)) {
+			t.Fatalf("classed %q, and go generate's commands differ:\n%q\n%q", class, generateLinesOf(before), generateLinesOf(after))
+		}
 		if class == code.ChangeClassWhitespaceOnly && spaceless(before) != spaceless(after) {
 			t.Fatalf("classed whitespace_only, and the versions differ in more than blanks and line breaks")
 		}
@@ -533,37 +629,41 @@ func FuzzClassifyGo(f *testing.F) {
 }
 
 // scanAll calls see with every token of src the lexer returns in mode, and
-// reports whether it found no lexical error.
-func scanAll(src []byte, mode scanner.Mode, see func(tok token.Token, lit string)) bool {
+// where its bytes start and end, and reports whether it found no lexical
+// error.
+func scanAll(src []byte, mode scanner.Mode, see func(off, end int, tok token.Token, lit string)) bool {
 	var s scanner.Scanner
-	s.Init(token.NewFileSet().AddFile("", -1, len(src)), src, nil, mode)
+	file := token.NewFileSet().AddFile("", -1, len(src))
+	s.Init(file, src, nil, mode)
 	for {
-		_, tok, lit := s.Scan()
+		pos, tok, lit := s.Scan()
 		if tok == token.EOF {
 			return s.ErrorCount == 0
 		}
-		see(tok, lit)
+		see(file.Offset(pos), file.Offset(s.End()), tok, lit)
 	}
 }
 
 // lexes reports whether src lexes with no error.
 func lexes(src []byte) bool {
-	return scanAll(src, scanner.ScanComments, func(token.Token, string) {})
+	return scanAll(src, scanner.ScanComments, func(int, int, token.Token, string) {})
 }
 
 // tokensOf is src's tokens with its comments dropped and the semicolons the
 // lexer inserts kept: what the two versions of a classed change share.
 func tokensOf(src []byte) []string {
 	var toks []string
-	scanAll(src, 0, func(tok token.Token, lit string) { toks = append(toks, tok.String()+" "+lit) })
+	scanAll(src, 0, func(_, _ int, tok token.Token, lit string) { toks = append(toks, tok.String()+" "+lit) })
 	return toks
 }
 
 // directivesOf is src's comments that read as the plainest directives, in
-// order.
+// order, each as its tool reads it: its bytes from its start to the newline
+// or the */ that ends it, carriage returns and all, but the one a Windows
+// line ending leaves at a line comment's end.
 func directivesOf(src []byte) []string {
 	var out []string
-	scanAll(src, scanner.ScanComments, func(tok token.Token, lit string) {
+	scanAll(src, scanner.ScanComments, func(off, _ int, tok token.Token, lit string) {
 		if tok != token.COMMENT {
 			return
 		}
@@ -571,11 +671,63 @@ func directivesOf(src []byte) []string {
 		for _, prefix := range []string{"//go:", "//line ", "/*line ", "//export ", "//extern ", "//nolint:", "//nolint ", "//lint:", "// +build"} {
 			plain = plain || strings.HasPrefix(lit, prefix)
 		}
-		if plain {
-			out = append(out, lit)
+		if !plain {
+			return
 		}
+		raw := src[off:]
+		if strings.HasPrefix(lit, "//") {
+			if nl := bytes.IndexByte(raw, '\n'); nl >= 0 {
+				raw = raw[:nl]
+			}
+			raw = bytes.TrimSuffix(raw, []byte("\r"))
+		} else if end := bytes.Index(raw[2:], []byte("*/")); end >= 0 {
+			raw = raw[:2+end+2]
+		}
+		out = append(out, string(raw))
 	})
 	return out
+}
+
+// generateLinesOf is the commands go generate finds in src, read as it reads
+// them, its loop restated (cmd/go's generate.go): a line at a time through a
+// bufio.Reader of the default size, whatever lexeme a line sits in. A line
+// that starts //go:generate and a blank is a command, less the carriage
+// return a Windows line ending leaves before its newline; one the reader
+// cannot hold, or one no newline ends, is go generate's error, and nothing
+// after it runs. Any other line too long for the reader is skipped whole.
+func generateLinesOf(src []byte) []string {
+	var commands []string
+	input := bufio.NewReader(bytes.NewReader(src))
+	for {
+		line, err := input.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			if isGoGenerate(line) {
+				return append(commands, "fails on a line too long: "+string(line))
+			}
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = input.ReadSlice('\n')
+			}
+			if err != nil {
+				return commands
+			}
+			continue
+		}
+		if err != nil {
+			if isGoGenerate(line) {
+				commands = append(commands, "fails on "+string(line))
+			}
+			return commands
+		}
+		if isGoGenerate(line) {
+			commands = append(commands, "runs "+string(bytes.TrimSuffix(bytes.TrimSuffix(line, []byte("\n")), []byte("\r"))))
+		}
+	}
+}
+
+// isGoGenerate reports a line go generate reads as a command: cmd/go's own
+// test.
+func isGoGenerate(line []byte) bool {
+	return bytes.HasPrefix(line, []byte("//go:generate ")) || bytes.HasPrefix(line, []byte("//go:generate\t"))
 }
 
 // parses reports whether go/parser accepts src.
