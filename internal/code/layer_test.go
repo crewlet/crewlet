@@ -3,6 +3,7 @@ package code_test
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha1" //nolint:gosec // git's hashfile trailer is a SHA-1; the case reseals a file as git would
 	"encoding/binary"
@@ -1054,6 +1055,142 @@ func TestALayerIsStoredInPartsAndLaidBackWhereItCameFrom(t *testing.T) {
 type failingWriterAt struct{ err error }
 
 func (f failingWriterAt) WriteAt([]byte, int64) (int, error) { return 0, f.err }
+
+// EVERY PART OF A LAYER IS LAID BACK AT ITS OWN PLACE, the parts past the
+// first among them — every layer over LayerPartBytes, the root layer of
+// every large repository, is those. A layer of three parts at the shipped
+// LayerPartBytes, its files p + 100, p − 50 and 1 000 bytes, is fetched part
+// by part, the LAST FIRST, through a store that streams each part's bytes as
+// a pattern of their places in the layer — zeros, but for a mark at each
+// part's ends, each file's ends and inside them, each mark's byte its own —
+// into three files that hold every write to the bytes the pattern has at
+// the place it lands: every byte of every file lands exactly once, and where
+// its place in the layer says. No gibibyte is held: the pattern is made as it
+// is read and checked as it is written.
+//
+// Mutation: FetchLayerPart lays every part back as part 0 — red.
+func TestEveryPartOfALayerIsLaidBackAtItsPlace(t *testing.T) {
+	t.Parallel()
+	const p = code.LayerPartBytes
+	sections := [3]int64{p + 100, p - 50, 1000}
+	row := withParts(code.LayerRef{
+		LayerID: strings.Repeat("a", 40), GraphID: strings.Repeat("b", 40), Packs: []string{strings.Repeat("c", 40)},
+		MidxBytes: sections[0], BitmapBytes: sections[1], GraphBytes: sections[2], Objects: 1, Commits: 1,
+		Git: "2.56.0",
+	})
+	if err := row.Check(); err != nil || len(row.Parts) != 3 {
+		t.Fatalf("a row of three parts: %v, %d parts", err, len(row.Parts))
+	}
+	total := row.Size()
+	bases := [3]int64{0, sections[0], sections[0] + sections[1]}
+	layer := &patterned{starts: map[objstore.Key]int64{}}
+	for i, part := range row.Parts {
+		start := int64(i) * p
+		layer.starts[part.Object] = start
+		layer.marks = append(layer.marks, start, start+part.Size-1, start+part.Size/2)
+	}
+	for s, base := range bases {
+		layer.marks = append(layer.marks, base, base+sections[s]-1)
+	}
+	slices.Sort(layer.marks)
+	layer.marks = slices.Compact(layer.marks)
+	if len(layer.marks) > 255 || layer.marks[len(layer.marks)-1] >= total {
+		t.Fatalf("the marks %v do not fit the layer's %d bytes", layer.marks, total)
+	}
+
+	buf := make([]byte, 1<<20)
+	var files [3]*laidBack
+	var into [3]io.WriterAt
+	for s := range files {
+		files[s] = &laidBack{layer: layer, base: bases[s], want: make([]byte, len(buf))}
+		into[s] = files[s]
+	}
+	for i := len(row.Parts) - 1; i >= 0; i-- {
+		if err := code.FetchLayerPart(t.Context(), layer, row, i, into, buf); err != nil {
+			t.Fatalf("fetch part %d: %v", i, err)
+		}
+	}
+	for s, f := range files {
+		if len(f.wrong) > 0 {
+			t.Errorf("file %d was written bytes that are not the layer's at that place: %v", s, f.wrong)
+		}
+		slices.SortFunc(f.landed, func(a, b [2]int64) int { return cmp.Compare(a[0], b[0]) })
+		at := int64(0)
+		for _, w := range f.landed {
+			if w[0] != at {
+				t.Errorf("file %d: a write lands at %d, where the bytes before it end at %d", s, w[0], at)
+			}
+			at = max(at, w[1])
+		}
+		if at != sections[s] {
+			t.Errorf("file %d: the writes end at %d, and it is %d bytes", s, at, sections[s])
+		}
+	}
+}
+
+// patterned is a layer's bytes, made as they are read: every byte zero but
+// for a mark at each place marks names (sorted), whose byte is its index
+// there plus one — so a byte laid back at another place than its own is seen
+// — and the store's read of each part (Open), by where it starts.
+type patterned struct {
+	marks  []int64
+	starts map[objstore.Key]int64
+}
+
+// fill writes into b the layer's bytes from its byte at.
+func (l *patterned) fill(b []byte, at int64) {
+	clear(b)
+	i, _ := slices.BinarySearch(l.marks, at)
+	for ; i < len(l.marks) && l.marks[i] < at+int64(len(b)); i++ {
+		b[l.marks[i]-at] = byte(i + 1)
+	}
+}
+
+func (l *patterned) Open(_ context.Context, o objstore.Object) (io.ReadCloser, error) {
+	start, ok := l.starts[o.Key]
+	if !ok {
+		return nil, objstore.ErrNotFound
+	}
+	return io.NopCloser(&patternRead{layer: l, at: start, left: o.Size}), nil
+}
+
+// patternRead is a part's bytes as the store hands them over.
+type patternRead struct {
+	layer    *patterned
+	at, left int64
+}
+
+func (r *patternRead) Read(b []byte) (int, error) {
+	if r.left == 0 {
+		return 0, io.EOF
+	}
+	n := int(min(int64(len(b)), r.left))
+	r.layer.fill(b[:n], r.at)
+	r.at, r.left = r.at+int64(n), r.left-int64(n)
+	return n, nil
+}
+
+// laidBack is one of a layer's files as a node lays it back, beginning at the
+// layer's byte base: every write held to the bytes the layer has where it
+// lands (want is the scratch they are made in), and where it landed kept.
+type laidBack struct {
+	layer *patterned
+	base  int64
+	want  []byte
+
+	landed [][2]int64
+	wrong  []string
+}
+
+func (f *laidBack) WriteAt(b []byte, off int64) (int, error) {
+	want := f.want[:len(b)]
+	f.layer.fill(want, f.base+off)
+	if !bytes.Equal(b, want) {
+		f.wrong = append(f.wrong, fmt.Sprintf("%d bytes at %d", len(b), off))
+	}
+	f.landed = append(f.landed, [2]int64{off, off + int64(len(b))})
+	return len(b), nil
+}
 
 // allocated is how many bytes f allocated on the heap: runtime.ReadMemStats's
 // TotalAlloc either side of it, which stops the world, so it counts every
