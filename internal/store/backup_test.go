@@ -1,11 +1,17 @@
 package store_test
 
 import (
+	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -128,4 +134,310 @@ func TestABackupIsNotReadableByTheWholeHost(t *testing.T) {
 	if mode := parent.Mode().Perm(); mode&0o077 != 0 {
 		t.Errorf("the backup directory is mode %04o", mode)
 	}
+}
+
+// A COPY HOLDS EVERY COMMIT THAT RETURNED BEFORE IT BEGAN, whichever
+// connection it draws.
+//
+// The driver's VACUUM INTO reads at the view its connection's PREVIOUS read
+// left behind (see DB.vacuumInto), so this stands the pool where a busy node
+// stands it: every connection a copy can draw last read before the commit,
+// which then returns on the pinned writer's own connection — an applier's
+// shape — before the copy is asked for. A copy that does not take its own view
+// holds the database as it stood before that commit, every time; it is the
+// restored-reanchor case's failure ("the copy's checkpoint is at 1, want the
+// write's own 2") made deterministic.
+func TestACopyHoldsEveryCommitThatReturnedBeforeItBegan(t *testing.T) {
+	t.Parallel()
+	p := openCopyProbe(t)
+	p.commit(t, 1)
+	p.staleEveryReader(t)
+	p.commit(t, 2)
+
+	dest := filepath.Join(t.TempDir(), "copy.db")
+	if _, err := p.db.Backup(t.Context(), dest); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if a, b := readCopyProbe(t, dest); a != 2 || b != 2 {
+		t.Fatalf("the copy holds %d and %d, want the 2 whose commit returned before "+
+			"the copy began — it copied the view its connection's last read took", a, b)
+	}
+}
+
+// THE TRIPWIRE for the driver behaviour DB.vacuumInto exists for: a bare
+// VACUUM INTO on a connection whose last read came before a commit still
+// copies the database as it stood at that read. The day a pin bump makes it
+// take a view of its own, this fails and the hold in DB.vacuumInto is
+// revisited — though not simply removed: a copy is one moment only while a
+// read mark guards its view against checkpoints, so the hold goes only once
+// the driver's VACUUM INTO holds a read transaction for its whole run.
+func TestTheDriversVacuumIntoStillCopiesItsConnectionsLastView(t *testing.T) {
+	t.Parallel()
+	p := openCopyProbe(t)
+	ctx := t.Context()
+	p.commit(t, 1)
+	p.staleEveryReader(t)
+	p.commit(t, 2)
+
+	dest := filepath.Join(t.TempDir(), "bare.db")
+	conn, err := p.db.SQL().Conn(ctx)
+	if err != nil {
+		t.Fatalf("draw a connection: %v", err)
+	}
+	literal := "'" + strings.ReplaceAll(dest, "'", "''") + "'"
+	_, err = conn.ExecContext(ctx, "VACUUM INTO "+literal)
+	_ = conn.Close()
+	if err != nil {
+		t.Fatalf("a bare VACUUM INTO: %v", err)
+	}
+	if a, b := readCopyProbe(t, dest); a != 1 || b != 1 {
+		t.Fatalf("a bare VACUUM INTO on a connection that last read 1 copied %d and %d: "+
+			"the driver now takes a view of its own — revisit the hold in "+
+			"DB.vacuumInto, which may go once the driver also holds a read lock "+
+			"for the copy's whole run", a, b)
+	}
+}
+
+// EVERY COPY TAKEN UNDER WRITES AND CHECKPOINTS IS ONE MOMENT, at or after
+// every commit that returned before it began.
+//
+// The writer commits the two probe tables to the same value in ONE
+// transaction, without pause, and checkpoints are forced beside it as fast as
+// they complete — each one free, while nothing holds a read mark, to backfill
+// newer frames into the file under a copy or to restart the log. A copy whose
+// view nothing holds reads a page from the file as the file is NOW, so it can
+// hold the two tables at different values, a state the database never held;
+// the table between them makes the copy read them far apart.
+func TestACopyTakenUnderWritesAndCheckpointsIsOneMoment(t *testing.T) {
+	t.Parallel()
+	p := openCopyProbe(t)
+	ctx := t.Context()
+	p.commit(t, 0)
+
+	var returned atomic.Int64
+	stop := make(chan struct{})
+	var bg sync.WaitGroup
+	// STOPPED ON EVERY WAY OUT, a failed read of a copy included: a writer
+	// left running past the case would commit into a store its cleanup is
+	// closing and report it on a test that has ended.
+	quiesce := sync.OnceFunc(func() { close(stop); bg.Wait() })
+	defer quiesce()
+	bg.Go(func() {
+		for n := int64(1); ; n++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := p.tryCommit(ctx, n); err != nil {
+				t.Errorf("commit %d: %v", n, err)
+				return
+			}
+			returned.Store(n)
+		}
+	})
+	var checkpoints atomic.Int64
+	bg.Go(func() {
+		for {
+			// A MILLISECOND APART: as often as one can complete, with
+			// the pool's other connection free between attempts for the
+			// copy to draw.
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Millisecond):
+			}
+			if p.checkpoint(ctx) {
+				checkpoints.Add(1)
+			}
+		}
+	})
+
+	dir := t.TempDir()
+	for i := range copyUnderWrites {
+		before := returned.Load()
+		dest := filepath.Join(dir, fmt.Sprintf("copy-%d.db", i))
+		if _, err := p.db.Backup(ctx, dest); err != nil {
+			t.Errorf("copy %d: %v", i, err)
+			break
+		}
+		a, b := readCopyProbe(t, dest)
+		if a != b {
+			t.Errorf("copy %d holds the two tables one transaction writes at %d and %d: "+
+				"it is not one moment", i, a, b)
+		}
+		if min(a, b) < before {
+			t.Errorf("copy %d holds %d, older than the %d whose commit returned before "+
+				"it began", i, min(a, b), before)
+		}
+		for _, suffix := range []string{"", "-wal", "-shm", "-tshm"} {
+			_ = os.Remove(dest + suffix)
+		}
+	}
+	quiesce()
+	// THE CASE HAS TO HAVE BEEN ONE: copies taken while nothing committed,
+	// or while no checkpoint completed, would pass whatever a copy holds.
+	if n := returned.Load(); n < copyUnderWrites {
+		t.Errorf("the writer committed %d times across %d copies, which tests "+
+			"nothing about a copy under writes", n, copyUnderWrites)
+	}
+	if checkpoints.Load() == 0 {
+		t.Error("no checkpoint completed beside the copies, so nothing moved the " +
+			"file under any of them")
+	}
+}
+
+const (
+	// copyUnderWrites is how many copies the case under writes and
+	// checkpoints takes, in about ten seconds under the race detector on
+	// two cores. Measured there: a copy whose view nothing held came out torn
+	// 20 times in 120, so forty copies catch it every run; one whose view was
+	// taken before its hold, once in 120 — which is why DB.holdViewFor takes
+	// both steps rather than leaving their order to a caller.
+	copyUnderWrites = 40
+
+	// copyProbeReaders is the readers the probe's pool is opened with: a
+	// small pool, so staleEveryReader can hold every one of them at once.
+	copyProbeReaders = 2
+
+	// copyProbeBetweenRows is how many rows the table between the two probe
+	// tables holds, a kibibyte each: enough pages that a copy reads the two
+	// tables far apart, which is when a checkpoint can land between them.
+	copyProbeBetweenRows = 1_000
+)
+
+// copyProbe is a replicated estate whose pool has copyProbeReaders readers,
+// with one pinned writer and the tables a copy is judged by: crewlet_copy_a
+// and crewlet_copy_b, written to the same value in ONE transaction, and
+// crewlet_copy_between, created between them so a copy reads it in between.
+type copyProbe struct {
+	db *store.DB
+	w  *store.Writer
+}
+
+func openCopyProbe(t *testing.T) *copyProbe {
+	t.Helper()
+	_, db := openReplicated(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{MaxOpenConns: copyProbeReaders}, 1)
+	ctx := t.Context()
+	if err := db.Tx(ctx, func(tx *sql.Tx) error {
+		for _, stmt := range []string{
+			`CREATE TABLE crewlet_copy_a (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`,
+			`CREATE TABLE crewlet_copy_between (id INTEGER PRIMARY KEY, pad BLOB NOT NULL)`,
+			`CREATE TABLE crewlet_copy_b (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`,
+			`INSERT INTO crewlet_copy_a (id, n) VALUES (1, -1)`,
+			`INSERT INTO crewlet_copy_b (id, n) VALUES (1, -1)`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		for i := range copyProbeBetweenRows {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO crewlet_copy_between (id, pad)
+				VALUES (?, zeroblob(1024))`, i); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed the probe tables: %v", err)
+	}
+	w, err := db.Writer(ctx)
+	if err != nil {
+		t.Fatalf("pin the writer: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	return &copyProbe{db: db, w: w}
+}
+
+// commit writes n to both probe tables in one transaction on the pinned
+// writer's connection, which no copy can draw.
+func (p *copyProbe) commit(t *testing.T, n int64) {
+	t.Helper()
+	if err := p.tryCommit(t.Context(), n); err != nil {
+		t.Fatalf("commit %d: %v", n, err)
+	}
+}
+
+func (p *copyProbe) tryCommit(ctx context.Context, n int64) error {
+	return p.w.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE crewlet_copy_a SET n = ? WHERE id = 1`, n); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE crewlet_copy_b SET n = ? WHERE id = 1`, n)
+		return err
+	})
+}
+
+// staleEveryReader reads once on every connection a copy can draw, all at once
+// so each read takes a connection of its own, and hands them back: each then
+// carries the view its read took into whatever is asked of it next.
+func (p *copyProbe) staleEveryReader(t *testing.T) {
+	t.Helper()
+	var read, release, done sync.WaitGroup
+	read.Add(copyProbeReaders)
+	release.Add(1)
+	errs := make(chan error, copyProbeReaders)
+	for range copyProbeReaders {
+		done.Go(func() {
+			// ONCE, and on every way out: a read that fails before its
+			// body runs must still let the others be released rather
+			// than hang the case, and one the store retries runs its
+			// body twice.
+			var once sync.Once
+			signal := func() { once.Do(read.Done) }
+			defer signal()
+			errs <- p.db.Read(t.Context(), func(tx *sql.Tx) error {
+				var n int64
+				err := tx.QueryRowContext(t.Context(),
+					`SELECT n FROM crewlet_copy_a WHERE id = 1`).Scan(&n)
+				signal()
+				release.Wait()
+				return err
+			})
+		})
+	}
+	read.Wait()
+	release.Done()
+	done.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("read on every connection: %v", err)
+		}
+	}
+}
+
+// checkpoint asks for a TRUNCATE checkpoint and reports whether it completed:
+// one is refused rather than waited for while a reader holds a read mark.
+func (p *copyProbe) checkpoint(ctx context.Context) bool {
+	conn, err := p.db.SQL().Conn(ctx)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = conn.Close() }()
+	var busy, frames, backfilled int64
+	err = conn.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).
+		Scan(&busy, &frames, &backfilled)
+	return err == nil && busy == 0
+}
+
+// readCopyProbe is the two probe tables as the copy at path holds them.
+func readCopyProbe(t *testing.T, path string) (a, b int64) {
+	t.Helper()
+	ctx := t.Context()
+	copied, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{MaxOpenConns: 1})
+	if err != nil {
+		t.Fatalf("open the copy at %s: %v", path, err)
+	}
+	defer func() { _ = copied.Close() }()
+	if err := copied.Read(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `SELECT n FROM crewlet_copy_a WHERE id = 1`).Scan(&a); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx, `SELECT n FROM crewlet_copy_b WHERE id = 1`).Scan(&b)
+	}); err != nil {
+		t.Fatalf("read the copy at %s: %v", path, err)
+	}
+	return a, b
 }

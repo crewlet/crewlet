@@ -432,6 +432,15 @@ type DB struct {
 	caps   Capabilities
 	estate Estate
 
+	// connector is what sql opens its connections with, kept for the one
+	// connection this handle opens OUTSIDE its pool: the view a copy holds
+	// while it runs ([DB.holdViewFor]). The same connector rather than a second
+	// one built from the same settings, so that connection carries the same
+	// session state, the same begin mode and the same [Options.WrapDriver]
+	// instance as every pooled one — a fault injector armed on the handle
+	// reaches it too.
+	connector *connector
+
 	// slot is the replicated estate this node holds open, on a node's own
 	// handle, and nil on every other. The node handle owns its lifetime:
 	// its Close takes it down, because a process holding the replicated
@@ -710,7 +719,7 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 	// replicated estate, so the node's own file keeps its readers and
 	// nothing else.
 	db.pins.declared = opts.pins
-	if db.sql, err = openPrepared(ctx, path, opts); err != nil {
+	if db.sql, db.connector, err = openConnected(ctx, path, opts); err != nil {
 		return nil, err
 	}
 	// Straight to the field, not through [DB.LearnEmbeddingDim]: that one
@@ -785,17 +794,25 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 // callers want opposite things from it: an open holds it for the life of the
 // handle, and Pending takes it only across its read.
 func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, error) {
+	pool, _, err := openConnected(ctx, path, opts)
+	return pool, err
+}
+
+// openConnected is [openPrepared] answering the connector the pool draws from
+// as well, for the handle that opens a connection outside its pool
+// ([DB.connector]).
+func openConnected(ctx context.Context, path string, opts Options) (*sql.DB, *connector, error) {
 	// BEFORE THE POOL, because the driver loads its native library on the
 	// first connection and PANICS if the shared cache it loads from is
 	// half-written. Preparing it here turns a process that dies on its
 	// first query into an error a caller can read, and stops two engines
 	// starting at once from corrupting that cache at all.
 	if err := prepareTursoLibrary(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	pool, err := openPool(path, opts.busyTimeout(), opts.WrapDriver)
+	pool, conns, err := openPool(path, opts.busyTimeout(), opts.WrapDriver)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pool.SetMaxOpenConns(opts.poolSize())
 	// Idle capacity matches open capacity: these are file handles on local
@@ -806,9 +823,9 @@ func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, erro
 
 	if err := pool.PingContext(ctx); err != nil {
 		_ = pool.Close()
-		return nil, fmt.Errorf("store: open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
-	return pool, nil
+	return pool, conns, nil
 }
 
 // engineVersion is what the database engine calls itself, for the one log line
@@ -1013,15 +1030,18 @@ func (d *DB) SQL() *sql.DB {
 // passed in the DSN either — Turso's DSN parser takes a path and a small set
 // of its own options, and none of them is a pragma. A connector wrapping the
 // driver is the one place that runs on every connection, identically.
+//
+// It answers that connector beside the pool, for the one connection a handle
+// opens outside it ([DB.connector]).
 func openPool(path string, busy time.Duration,
 	wrap func(driver.Driver) driver.Driver,
-) (*sql.DB, error) {
+) (*sql.DB, *connector, error) {
 	// sql.Open is lazy — it validates the driver name and nothing else — so
 	// this costs no I/O and exists only to reach the registered driver
 	// value, which database/sql offers no other accessor for.
 	probeHandle, err := sql.Open(driverName, path)
 	if err != nil {
-		return nil, fmt.Errorf("store: driver %q: %w", driverName, err)
+		return nil, nil, fmt.Errorf("store: driver %q: %w", driverName, err)
 	}
 	drv := probeHandle.Driver()
 	_ = probeHandle.Close()
@@ -1033,7 +1053,7 @@ func openPool(path string, busy time.Duration,
 		drv = wrap(drv)
 	}
 
-	return sql.OpenDB(&connector{
+	conns := &connector{
 		drv: drv,
 		dsn: path,
 		session: []string{
@@ -1074,7 +1094,8 @@ func openPool(path string, busy time.Duration,
 			fmt.Sprintf("PRAGMA cache_size = %d", -nodeCacheKiB),
 			fmt.Sprintf("PRAGMA busy_timeout = %d", busy.Milliseconds()),
 		},
-	}), nil
+	}
+	return sql.OpenDB(conns), conns, nil
 }
 
 // connector opens driver connections and applies session state to each one.

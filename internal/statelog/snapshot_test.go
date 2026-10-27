@@ -607,6 +607,51 @@ func TestASnapshotNamesThePositionTheFileKeeps(t *testing.T) {
 	}
 }
 
+// A SNAPSHOT HOLDS EVERY COMMIT THAT RETURNED BEFORE IT WAS TAKEN, whichever
+// connection its copy draws.
+//
+// The donor judges from its live state that it is caught up and holds nothing
+// deferred, and a recipient resumes from the checkpoint the copy keeps — so the
+// copy has to be the estate as of the take, never the estate as the connection
+// it happens to draw last read it. Here the applier's commit lands on the
+// pinned writer's own connection, which no copy draws, after the pool's last
+// read; a copy that took its connection's last view would be offered at the
+// checkpoint before that commit.
+func TestASnapshotHoldsEveryCommitThatReturnedBeforeItWasTaken(t *testing.T) {
+	t.Parallel()
+	h := newSnapHarness(t)
+	ctx := t.Context()
+	w, err := h.estate.Writer(ctx)
+	if err != nil {
+		t.Fatalf("pin the applier's writer: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	var stood int64
+	if err := h.estate.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT seq FROM statelog_cursor WHERE stream = ?`,
+			probeStream).Scan(&stood)
+	}); err != nil || stood != 4_200 {
+		t.Fatalf("the pool's last read before the commit: %d, %v", stood, err)
+	}
+	if err := w.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE statelog_cursor SET seq = 4207 WHERE stream = ?`,
+			probeStream)
+		return err
+	}); err != nil {
+		t.Fatalf("the applier's commit: %v", err)
+	}
+
+	m, err := h.snap.Take(ctx)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if got := m.Domains["probe"]; got.Seq != 4_207 {
+		t.Fatalf("the snapshot is offered at %d, want the 4207 whose commit returned "+
+			"before it was taken — its copy took the view its connection last read",
+			got.Seq)
+	}
+}
+
 // A DOMAIN THAT HAS APPLIED NOTHING IS AT THE ZERO POSITION, in the manifest
 // and in the file alike.
 //

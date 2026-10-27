@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // THE COPY'S OWN POSITION IS IN THE MANIFEST, read from the file rather than
@@ -131,6 +133,77 @@ func TestTheBackupPinsTheLogWhileItCopiesAndReleasesIt(t *testing.T) {
 	if remaining, err := fleet.Holds(t.Context()); err != nil || len(remaining) != 0 {
 		t.Fatalf("%d hold(s) survive the backup (%v)", len(remaining), err)
 	}
+}
+
+// THE COPY HOLDS EVERY COMMIT THAT RETURNED BEFORE IT BEGAN, the position the
+// hold pinned included.
+//
+// The applier commits throughout a backup, and the hold is taken at the
+// position the node stood at just before the copies — so a replicated copy
+// older than that position would leave every record between the two pinned by
+// nothing, for the trim to take before a restore replays them. Here the
+// applier's commit lands while the hold is being put: after the read the hold
+// took its position from, before either estate is copied, and on the pinned
+// writer's own connection, which no copy draws. The connection the copy does
+// draw last read before that commit, and a copy that took its connection's
+// last view instead of its own holds the position the hold pinned and nothing
+// after it.
+func TestTheCopyHoldsEveryCommitThatReturnedBeforeItBegan(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 41)
+	w, err := storetest.ReplicatedDB(t, db.Replicated()).Writer(t.Context())
+	if err != nil {
+		t.Fatalf("pin the applier's writer: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	fleet := memory.NewFleet()
+	held := &committingHolds{HoldRegister: fleet, commit: func(ctx context.Context) error {
+		return w.Tx(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE statelog_cursor SET seq = 42
+				WHERE stream = 'CREWLET_TRACKER_LOG'`)
+			return err
+		})
+	}}
+
+	manifest, err := build(t, backup.Options{
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "node-0", Holds: held, Backups: fleet,
+		Now: func() time.Time { return clock },
+	}).Take(t.Context(), filepath.Join(t.TempDir(), "b"))
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	if held.err != nil {
+		t.Fatalf("the applier's commit during the hold: %v", held.err)
+	}
+	if at := held.pinned["CREWLET_TRACKER_LOG"]; at.Seq != 41 {
+		t.Fatalf("the hold pinned %+v, want the 41 the node stood at before the commit", at)
+	}
+	if at := manifest.Domains["CREWLET_TRACKER_LOG"]; at.Seq != 42 {
+		t.Fatalf("the copy holds %+v, want the 42 whose commit returned before the copy "+
+			"began — the copy took the view its connection last read", at)
+	}
+}
+
+// committingHolds is a register whose first put commits the applier's next
+// write before it answers, which is where a backup's copy has not begun yet.
+type committingHolds struct {
+	coord.HoldRegister
+	commit func(context.Context) error
+	once   sync.Once
+	pinned map[string]coord.Position
+	err    error
+}
+
+func (c *committingHolds) PutHold(ctx context.Context, h coord.TrimHold) error {
+	if err := c.HoldRegister.PutHold(ctx, h); err != nil {
+		return err
+	}
+	c.once.Do(func() {
+		c.pinned = h.Streams
+		c.err = c.commit(ctx)
+	})
+	return nil
 }
 
 // A REGISTER THAT REFUSES THE PIN REFUSES THE BACKUP.

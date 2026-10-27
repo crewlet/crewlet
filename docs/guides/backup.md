@@ -124,6 +124,15 @@ What is worth knowing about it:
   a surprise on the worst day of the deployment's life; the digest is what
   tells a copy that was truncated in transit from one that was bad when it was
   made. Each is self-contained: no `-wal` travels with it.
+- **Each store copy is one moment**: the database as it stood when its copy
+  began — every write that had committed by then is in it, and nothing
+  committed while it ran is. The engine holds a read transaction open across
+  the copy to make it so, because the database engine's own `VACUUM INTO`
+  holds none: without it a copy could miss writes that had already committed,
+  or hold two halves of one write. While a copy runs, the store's write-ahead
+  log is not checkpointed past its moment, so the `-wal` beside the live file
+  grows by whatever the node commits meanwhile and is folded back in by the
+  first checkpoint after the copy ends.
 - **A node is two databases, and a backup carries both.** The node estate holds
   the audit log, memory, the config revisions and the secret bootstrap; the
   replicated estate holds everything a state log's applier writes. They are

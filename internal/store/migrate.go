@@ -376,7 +376,7 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 	}
 	defer lock.release()
 
-	pool, err := openPrepared(ctx, path, Options{
+	pool, conns, err := openConnected(ctx, path, Options{
 		MaxOpenConns: opts.MaxOpenConns, BusyTimeout: opts.BusyTimeout,
 		WrapDriver: opts.WrapDriver,
 	})
@@ -385,7 +385,7 @@ func pendingOne(ctx context.Context, estate Estate, path string, opts Options) (
 	}
 	defer func() { _ = pool.Close() }()
 
-	db := &DB{sql: pool, path: path, estate: estate,
+	db := &DB{sql: pool, connector: conns, path: path, estate: estate,
 		busy: opts.busyTimeout(), pool: opts.poolSize(),
 		writes: lock.queue()}
 	if out.Applied, err = db.appliedVersions(ctx); err != nil {

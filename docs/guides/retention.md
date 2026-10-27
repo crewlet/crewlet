@@ -535,6 +535,10 @@ Its manifest names every log it carries: a joiner refuses an
 artefact naming a log it does not run, or missing one it does, before a byte
 moves. Artefacts live in `store.snapshot_dir` itself.
 
+**Each snapshot is one moment** of the file: as it stood when the take began,
+with every record the node had applied by then and nothing it applied while
+the copy ran, and the positions its manifest names are read from that copy.
+
 ```
 crewlet retention snapshots
 ```
