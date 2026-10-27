@@ -251,6 +251,11 @@ export function refusedSentence(entry: Record<string, unknown>): string {
       return `${subject}: ${value} is a credential, and setting, changing or clearing one ${grant}.`;
     case "key":
       return `${subject}: ${value} is how another system finds it, and changing it ${grant}.`;
+    // A GRANT THE SEAT'S ROLE CARRIES: `health_tools` hands a seat the
+    // administrator's view of the deployment, so whether a seat holds it is
+    // the administrator's to decide, set or cleared.
+    case "grant":
+      return `${subject}: ${value} gives the seat what only Admin access reads, so setting or clearing it ${grant}.`;
     case "self":
       return `${subject}'s own lead and place decide who may change it, so changing them ${grant}.`;
     // A REFERENCE AT THE ROOT names a root seat or nothing at all: the engine

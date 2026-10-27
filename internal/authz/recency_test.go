@@ -206,6 +206,11 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 		authz.ActionCodeRepoReaders: "a read of who read a unit's repository " +
 			"changes nothing, and it is a tool too — asked through the " +
 			"operator MCP beside the route — which no step-up reaches",
+		authz.ActionFleetHealth: "a read of the fleet's nodes and their alarms " +
+			"changes nothing, and it is a tool a granted seat holds, which no " +
+			"step-up reaches",
+		authz.ActionCodeStatus: "a read of the git nodes' caches changes nothing, " +
+			"and it is a tool a granted seat holds, which no step-up reaches",
 	}
 	walked := 0
 	for _, a := range authz.Actions() {

@@ -149,6 +149,15 @@ type Role struct {
 	// See [RoleCode].
 	Code *RoleCode `yaml:"code,omitempty" json:"code,omitempty" desc:"This seat's access to the company's code, on the native code host and on GitHub."`
 
+	// HealthTools gives this AGENT seat the deployment's health: the
+	// fleet_health and code_status tools, an administrator's reads, which its
+	// role's grant admits it to (see [org.Role.HealthTools]). It is not a
+	// lead's to set: a lead who could give a seat in their team the
+	// administrator's view would read it through that seat's trail, so the
+	// field is listed apart for admin wherever a write is judged against the
+	// subtree rule (internal/config's org diff).
+	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty" desc:"Agent seats: offer this seat fleet_health and code_status, the administrator's reads of the deployment's health. Setting or clearing it takes admin."`
+
 	// Integrations is this seat's own identity on external surfaces: its
 	// chat apps and its GitHub App. See [RoleIntegrations].
 	Integrations RoleIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
@@ -820,6 +829,7 @@ func (r *Role) Seat() *org.Role {
 		// here would be a second statement of that default.
 		seat.CodeAccess = r.Code.Access
 	}
+	seat.HealthTools = r.HealthTools
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))

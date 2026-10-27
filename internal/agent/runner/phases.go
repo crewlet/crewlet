@@ -67,6 +67,20 @@ type Config struct {
 	Models   *phase.Registry
 	Caps     Caps
 
+	// Withheld are the first-party tools of Registry this seat is not
+	// offered on any surface of the turn — its executor's, a resumed one's,
+	// an agent-mode run's bridge, its workers', its reviewer's and its
+	// onboarding pass's ([Runner.seatSnapshot]): the ones the authority table
+	// refuses the seat before any object is named, which the engine asks per
+	// turn (internal/agent/builtin's Withheld) — a tool whose row names a
+	// role grant this seat's role does not carry.
+	//
+	// THE REGISTRY IS THE EPOCH'S, shared by every seat, so a tool only some
+	// seats may call is registered for all of them and left off the surfaces
+	// of the rest here; offered and refused at every call, it is a tool a
+	// model reaches for round after round. Nil withholds nothing.
+	Withheld []string
+
 	// Judge decides round-cap extensions. Nil means every exhaustion goes
 	// straight to the rescue path.
 	Judge extension.Judge
@@ -352,7 +366,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		}
 		return r.executeAsAgentRun(ctx, round, notes, history)
 	}
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), false)
+	snapshot := r.executorUniverse(r.seatSnapshot(), false)
 
 	// The submission is validated against THIS surface's live record, so
 	// the tool cannot exist before the surface and the surface cannot
@@ -588,7 +602,7 @@ func undiscovered(universe tools.Snapshot, active []string) []string {
 // never offered the box is never told how to judge one — and `a2a_ask` named
 // where the registry carries it at all.
 func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (turn.Review, error) {
-	snapshot := r.cfg.Registry.Snapshot()
+	snapshot := r.seatSnapshot()
 	_, offersSandbox := r.executorUniverse(snapshot, r.cfg.AgentRun != nil).Lookup(RunSandboxTool)
 	_, offersA2A := snapshot.Lookup(A2AAskTool)
 	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
@@ -1559,6 +1573,14 @@ func promptPhase(ph phase.Phase) prompts.Phase {
 func catalogueSurface(surface *tools.Surface) prompts.Surface {
 	universe := surface.Universe()
 	return prompts.Surface{Tools: universe.Names(), MCPServers: universe.MCPServers()}
+}
+
+// seatSnapshot is the registry as THIS SEAT is offered it: every surface of the
+// turn is built from it rather than from the registry whole, so a tool the
+// seat is withheld ([Config.Withheld]) is on none of them — not offered, not
+// listed to discover, and not reachable by activating it.
+func (r *Runner) seatSnapshot() tools.Snapshot {
+	return r.cfg.Registry.Snapshot().Without(r.cfg.Withheld...)
 }
 
 // executorUniverse is the snapshot an executor's surface is built from: the

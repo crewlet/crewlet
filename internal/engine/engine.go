@@ -2,6 +2,7 @@ package engine
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"slices"
 	"time"
@@ -232,7 +233,7 @@ func (c *Company) Seats() []placement.Seat {
 // per-role children. Pass [Engine.seatRegistry]; nil falls back to the
 // epoch's shared surface, which is the correct answer for a seat that
 // declares no per-role server and for any caller that holds no lease.
-func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
+func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
 		return nil, fmt.Errorf("engine: %q is not an agent seat in this company", handle)
@@ -270,6 +271,12 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		Seat: prompts.Seat{Org: c.Org, Role: role, Env: c.contacts,
 			Withheld: in.Turn.Context.WithholdsContacts},
 		Registry: reg,
+		// WHAT THIS SEAT'S SURFACES LEAVE OUT of the epoch's registry: the
+		// builtins the authority table refuses it before any object is
+		// named — the health tools, where its role carries no health grant
+		// — asked of the same decision every call is, so it is offered a
+		// tool exactly where it is admitted to it ([Company.withheldFrom]).
+		Withheld: c.withheldFrom(ctx, handle, reg),
 		Models:   c.Models,
 		Caps: runner.Caps{
 			ExecutorRounds:  te.MaxToolRounds,

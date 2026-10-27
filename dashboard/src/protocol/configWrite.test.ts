@@ -360,6 +360,7 @@ describe("one reading of a /config refusal", () => {
           },
           { kind: "unit", id: "platform", side: "after", place: "platform", why: "self" },
           { kind: "unit", id: "tooling", why: "key", value: "project" },
+          { kind: "seat", id: "sre", why: "grant", value: "health_tools" },
           { kind: "setting", id: "mission" },
           {
             kind: "seat",
@@ -396,6 +397,12 @@ describe("one reading of a /config refusal", () => {
         undefined,
         "tooling",
         "Unit tooling: project is how another system finds it, and changing it takes Admin access.",
+      ],
+      [
+        "refused",
+        "sre",
+        undefined,
+        "@sre: health_tools gives the seat what only Admin access reads, so setting or clearing it takes Admin access.",
       ],
       ["refused", undefined, undefined, "The company's mission setting takes Admin access."],
       [

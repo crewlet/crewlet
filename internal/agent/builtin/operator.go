@@ -33,7 +33,7 @@ import (
 //
 // What is left is the surface an operator's assistant actually needs: read
 // the board, file and move work, read and write the wiki, search what the
-// company knows, and read the company's code.
+// company knows, read the company's code, and read the deployment's health.
 
 // OperatorDeps are the halves an operator surface can serve.
 type OperatorDeps struct {
@@ -55,6 +55,11 @@ type OperatorDeps struct {
 	// `visibility: unit` repository — served only where Code serves the
 	// code reads ([CodeDeps.serves]). A nil reader omits the tool.
 	Readers ReadersDeps
+
+	// Health is the health tools' — the SAME [HealthTools] list a seat's
+	// registry takes, its code half's Actor the request's principal. The
+	// zero value omits both.
+	Health HealthDeps
 
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
@@ -199,7 +204,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// THE CODE READ TOOLS, the list a seat's registry takes whole: a
 		// person reads every repository, so their assistant answers the
 		// same questions a seat's turn does, about all of them.
-		codeCandidates(deps.Code))
+		codeCandidates(deps.Code),
+		// AND THE HEALTH TOOLS, the list a granted seat's registry takes:
+		// the deployment as an administrator reads it, which the table
+		// keeps an administrator's on this surface.
+		healthCandidates(deps.Health))
 	var out []tools.Callable
 	for _, c := range candidates {
 		if c.on {

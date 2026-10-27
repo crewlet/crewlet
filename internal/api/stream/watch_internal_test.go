@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -184,6 +185,11 @@ func (*heldChart) MemberOf(context.Context, string, string) (bool, error) {
 	return false, nil
 }
 
+// SeatGranted answers that no role carries a grant: no watch names one.
+func (*heldChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
+}
+
 // mutableChart answers the one lead question the case asks, changeably,
 // counting how often it was asked.
 type mutableChart struct {
@@ -234,6 +240,13 @@ func (c *mutableChart) LeadsAnyone(_ context.Context, actor string) (bool, error
 // MemberOf answers that nobody sits in any unit: no case here shares an
 // artifact with a team.
 func (c *mutableChart) MemberOf(context.Context, string, string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return false, c.err
+}
+
+// SeatGranted answers that no role carries a grant: no watch names one.
+func (c *mutableChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return false, c.err

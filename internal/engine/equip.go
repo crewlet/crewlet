@@ -114,6 +114,12 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// the `git` role reads the company's repositories through the nodes
 	// that hold them.
 	deps.Code = CodeToolDeps(e)
+	// AND THE HEALTH TOOLS, on the same deps the operator catalogue builds
+	// per call: registered for every seat, as everything here is, and
+	// offered only to a seat whose role carries the health grant — the
+	// table refuses every other seat, which is what leaves them off its
+	// surfaces ([Company.withheldFrom]).
+	deps.Health = HealthToolDeps(e)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}

@@ -192,6 +192,36 @@ func TestTheHotListHoldsEachWindowsHottest(t *testing.T) {
 	}
 }
 
+// A FLEET'S HOT LIST IS KEPT BY THE SAME RULE, ONE ENTRY A NODE. Several nodes'
+// lists put one repository in once for every node that served it, so the rule
+// is asked over entries that may share an id and answers their places: two
+// entries of one repository each keep their own place by their own heat, and
+// two that tie on everything are kept in the order given, the same on every
+// call. Mutation: key the kept set by id rather than by place, and node 3's
+// entry of cli, below the hour's three, is kept because node 2's was.
+func TestAFleetsHotListKeepsEachNodesEntry(t *testing.T) {
+	t.Parallel()
+	use := func(fetches int64) cache.Use { return cache.Use{Fetches: fetches} }
+	entries := []cache.RepoHeat{
+		{ID: "api", Hour: use(9), Day: use(9)},  // node 1
+		{ID: "web", Hour: use(1), Day: use(30)}, // node 1
+		{ID: "api", Hour: use(7), Day: use(7)},  // node 2
+		{ID: "cli", Hour: use(3), Day: use(3)},  // node 2
+		{ID: "cli", Hour: use(3), Day: use(3)},  // node 3, tied with node 2's
+	}
+	got := cache.Hottest(entries, 2)
+	if want := []int{0, 2, 1}; !slices.Equal(got, want) {
+		t.Fatalf("Hottest = %v, want both of api's entries for the hour and web for the day: %v",
+			got, want)
+	}
+	if again := cache.Hottest(entries, 3); !slices.Equal(again, []int{0, 2, 3, 1}) {
+		t.Errorf("Hottest(3) = %v, want the tie kept in the order given: [0 2 3 1]", again)
+	}
+	if none := cache.Hottest(entries, 0); none != nil {
+		t.Errorf("Hottest(0) = %v, want nothing", none)
+	}
+}
+
 // A HEAT COUNT NEVER WRAPS, AND NEVER GOES BELOW NOTHING: a bucket counts at
 // most four billion, and saturates there rather than reading as a quiet
 // repository; a negative use counts nothing; and a use that counts nothing

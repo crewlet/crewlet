@@ -779,6 +779,46 @@ own — every rollout produces lag. See
 [the control plane](../concepts/control-plane.md) for when lag becomes a
 posture change.
 
+### The health tools
+
+Two read-only tools put the same view in front of an assistant or an agent:
+
+| Tool | What it answers |
+|---|---|
+| `fleet_health` | Every live node as its own heartbeat states it — its roles, how its broker takes part, the turns it is running, whether it is draining, the config posture it concluded, the seats it holds — and every alarm its own table has firing, by kind and since, the longest-standing first. A node with no table it evaluated says `alarms_evaluated: false`, never an empty list. |
+| `code_status` | The git nodes, each as it states itself: its cache's bytes against its budget, the repositories it holds a copy of, the copies it evicted and repaired over the last hour and day, and the fleet's hottest repositories — each node's own count of what it served of one and its copy there, the hottest twenty of the hour and of the day. With `repo`, one repository on every git node instead. Its `coverage` names any git node that did not answer inside the fleet read budget. Offered where the company hosts code. |
+
+**They set no thresholds of their own.** What is wrong is the
+[alarm table's](../reference/alarms.md) to say: `fleet_health` reports each
+node's alarms exactly as the node raised them, beside the facts its heartbeat
+states, and judges nothing else — a node running many turns or draining with
+nothing firing is reported with nothing firing. `code_status` reports what
+the nodes counted, and a cache past its budget is two numbers, never a flag.
+
+**Who may read them.** A person holding `admin` reads both through their
+own assistant, as they read `GET /fleet`. An agent seat reads them only where
+its role carries the grant, in the company document:
+
+```yaml
+roles:
+  - name: SRE
+    handle: sre
+    health_tools: true   # fleet_health and code_status, an administrator's reads
+```
+
+Every seat's registry holds the two tools, and a seat whose role does not
+carry the grant is never offered them: the authority table refuses it before
+anything is named, and the same decision is what leaves them off its
+surfaces, so a seat is offered them exactly where a call would be admitted.
+Setting or clearing `health_tools` takes `admin`, even inside a team a person
+leads — a lead who could give a seat of theirs the administrator's view would
+read it through that seat's trail. The grant opens the deployment's view and
+never a repository: `code_status` holds a seat to its own
+[repository grant](../concepts/code-host.md), so its answer leaves out every
+repository the seat may not read and says how many (`withheld`), and a
+repository named with `repo` that the seat may not read is refused, as the
+code tools refuse it.
+
 ## How a node that fell behind catches up
 
 The work tracker, the knowledge base's pages and embeddings, the identity

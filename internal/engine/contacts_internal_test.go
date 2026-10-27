@@ -78,7 +78,7 @@ func leadPrompt(t *testing.T, c *Company) string {
 		t.Fatalf("phase registry: %v", err)
 	}
 	c.Models = models
-	r, err := c.RunnerFor("ceo", tools.NewRegistry(), RunnerInput{Task: "plan the week",
+	r, err := c.RunnerFor(t.Context(), "ceo", tools.NewRegistry(), RunnerInput{Task: "plan the week",
 		Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("RunnerFor: %v", err)

@@ -416,6 +416,18 @@ never offered it, a seat watching who reads the code being a model watching the
 people it works for. `GET /code/repos/{name}/readers` answers the same pages
 to a script.
 
+### The deployment's health
+
+Two read-only tools, `fleet_health` and `code_status`, read the deployment as
+an administrator does: every live node with the alarms its own table has
+firing, and the git nodes' caches and hottest repositories. They are one list
+on both surfaces, like the code tools: a person's assistant holds them on the
+`admin` permission, and an agent seat is offered them only where its role
+carries the grant (`health_tools: true`) — every other seat's registry holds
+them too, and its surfaces leave them out because the authority table refuses
+it them. Neither sets a threshold of its own; what is wrong is the alarm
+table's to say. See [The health tools](fleet.md#the-health-tools).
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).

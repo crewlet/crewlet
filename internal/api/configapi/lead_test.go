@@ -378,6 +378,18 @@ func TestALeadWritesInsideTheirSubtreeAndOnlyThere(t *testing.T) {
 		{"an address naming a variable", configapi.EntityRoles, "sre",
 			func(_ *testing.T, e map[string]any) { e["email"] = "${SOME_SECRET}" }, false,
 			"seat/sre///credential/no_grant"},
+		// THE HEALTH GRANT IS ADMIN'S: a seat in their own team given the
+		// administrator's view of the deployment is a lead reading it through
+		// that seat's trail — and so is a seat added carrying it.
+		{"the health grant given to a seat in their team", configapi.EntityRoles, "sre",
+			func(_ *testing.T, e map[string]any) { e["health_tools"] = true }, false,
+			"seat/sre///grant/no_grant"},
+		{"a seat added to their team carrying the health grant", configapi.EntityUnits,
+			"platform", func(_ *testing.T, e map[string]any) {
+				e["roles"] = append(rolesOf(e), map[string]any{
+					"name": "Watcher", "handle": "watcher", "llm": "zulu",
+					"health_tools": true})
+			}, false, "seat/watcher///grant/no_grant"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

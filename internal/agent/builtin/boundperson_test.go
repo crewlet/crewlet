@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -62,6 +63,12 @@ func (c *seatChart) LeadsAnyone(context.Context, string) (bool, error) {
 // MemberOf answers that nobody sits in any unit: no case here shares an
 // artifact with a team.
 func (*seatChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+// SeatGranted answers that no role carries a grant: no case here asks a verb
+// that names one.
+func (*seatChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
 	return false, nil
 }
 

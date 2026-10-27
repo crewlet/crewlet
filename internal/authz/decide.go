@@ -242,6 +242,12 @@ var relationClasses = []Class{
 // what it should not: an artifact the caller holds no relation to is answered
 // not found, exactly as the shared class answers them ([concealed]).
 //
+// THEN A SEAT GRANT, where the row names one, and for an AGENT only: its role
+// carrying the grant is the whole of its answer ([rule.seatGrant]), and the
+// class below never reads it — a seat holds no permission the class could
+// admit it on, and an agent the grant refuses is told so rather than that it
+// lacks admin. Every other principal goes on to the class.
+//
 // THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
 // because the chart can fail and the permission cannot: an administrator must
 // not be told "I cannot tell" by a node that is behind. [ClassShared] asks an
@@ -287,7 +293,12 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if throughToken && r.presence == PresenceRequired {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonTokenRefused})
 	}
-	d := withApp(p, r, decideClass(ctx, p, r, o, chart))
+	var d Decision
+	if r.seatGrant != "" && p.Kind == iam.KindSeat {
+		d = decideSeatGrant(ctx, p, r.seatGrant, chart)
+	} else {
+		d = withApp(p, r, decideClass(ctx, p, r, o, chart))
+	}
 	// THE PROOF LAST, and only over an ADMISSION: a refusal is already
 	// the answer, and an unknown is already "ask me again". See the
 	// package doc and [rule.recency].
@@ -599,6 +610,33 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 	// than a panic for the reason the unknown action above is: the safe
 	// answer to "I have no rule" is no.
 	return Decision{Reason: ReasonUnknownAction}
+}
+
+// decideSeatGrant is an agent seat on a row naming grant: admitted exactly
+// where the chart says its role carries the grant ([Chart.SeatGranted]),
+// refused [ReasonNotGranted] where it does not, and UNKNOWN where the chart
+// cannot say — never a refusal, for [Chart]'s reason: a seat whose role does
+// carry the grant, told on a lagging node that it does not, would go and ask
+// for something it already holds.
+//
+// IT NAMES THE GRANT ([Decision.SeatGrant]) on every answer and NO PERMISSION
+// on any: no permission a seat could hold would change it, and the remedy is
+// the role's, in the company document.
+func decideSeatGrant(ctx context.Context, p iam.Principal, grant SeatGrant, chart Chart) Decision {
+	switch {
+	case p.Seat == "":
+		return Decision{Reason: ReasonNotGranted, SeatGrant: grant}
+	case chart == nil:
+		return Decision{Reason: ReasonNotGranted, SeatGrant: grant, Err: ErrNoChart}
+	}
+	held, err := chart.SeatGranted(ctx, p.Seat, grant)
+	switch {
+	case err != nil:
+		return Decision{Reason: ReasonNotGranted, SeatGrant: grant, Err: err}
+	case held:
+		return Decision{Allowed: true, Reason: ReasonSeatGrant, SeatGrant: grant}
+	}
+	return Decision{Reason: ReasonNotGranted, SeatGrant: grant}
 }
 
 // withApp holds a RELATION class's decision to the row's app ([rule.app]).

@@ -90,7 +90,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		return r.resumeAgentRun(ctx, history, state, answer, r.cfg.Resume.Bridged)
 	}
 
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), false)
+	snapshot := r.executorUniverse(r.seatSnapshot(), false)
 
 	// The submission tool is rebuilt, not replayed: it is where the phase
 	// ENDS, and the re-entered conversation has not ended yet. Its checks

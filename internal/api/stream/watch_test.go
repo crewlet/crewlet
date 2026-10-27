@@ -251,6 +251,14 @@ func (c *leadChart) MemberOf(context.Context, string, string) (bool, error) {
 	return false, nil
 }
 
+// SeatGranted answers that no role carries a grant: no watch names one.
+func (c *leadChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	return false, nil
+}
+
 var _ authz.Chart = (*leadChart)(nil)
 
 // watchFixture is a socket server whose tokens are bound to seats.

@@ -113,7 +113,7 @@ type AgentRunRequest struct {
 func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	history []ledger.Iteration,
 ) (turn.Work, turn.Surface, error) {
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
+	snapshot := r.executorUniverse(r.seatSnapshot(), true)
 
 	// The submission tool is on the surface for the same reason it is in a
 	// native pass: it is how the executor says what it did. The CLI calls
@@ -224,7 +224,7 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	state execstate.State, answer string, bridged []ledger.Call,
 ) (turn.Work, turn.Surface, error) {
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
+	snapshot := r.executorUniverse(r.seatSnapshot(), true)
 
 	var surface *tools.Surface
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,

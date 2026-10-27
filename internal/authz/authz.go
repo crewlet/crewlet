@@ -45,8 +45,8 @@
 // Everything [Decide] needs arrives as an argument: the principal, the verb,
 // the object. The one thing it cannot hold is the org chart — that is a fact
 // about the company, it is edited live, and a copy here would be a second
-// opinion about the hierarchy. So the chart is a five-method seam the consumer
-// implements, and every other input is a value a test can write down. A rule
+// opinion about the hierarchy. So the chart is a small seam the consumer
+// implements ([Chart]), and every other input is a value a test can write down. A rule
 // exercised only through a running engine is a rule nobody re-reads.
 //
 // THE INSTANT IS AN ARGUMENT TOO, for the same reason. Some verbs ask how
@@ -157,6 +157,17 @@
 // role offers the tool takes it — asking a colleague, starting a coding run —
 // with no permission at all, because which seats are offered it is the role's
 // registry's decision and a person has no turn for it to spend.
+//
+// # A seat grant
+//
+// The third fact about a verb and an agent: a row may name a ROLE GRANT
+// ([rule.seatGrant], [SeatGrant]) that decides an agent seat in place of the
+// class. The health tools are admin's, and a seat never holds admin, so a seat
+// that watches the deployment is given them by its role (`role.health_tools`)
+// rather than by a permission: the chart says whether its role carries the
+// grant ([Chart.SeatGranted]), and that is the agent's whole answer, while a
+// person is decided by the class as on every row. The grant is the role's,
+// which the company document states and only an administrator writes.
 //
 // # An artifact is decided per object, by its shares
 //
@@ -468,8 +479,9 @@ type Decision struct {
 	// a human-only verb, a person taking a seat-only one, a machine token
 	// taking a verb that needs a person present, a verb with no rule, an
 	// agent kept off somebody else's artifact by the company's setting
-	// ([Object.AgentsManageOthers]) and a turn's requester who could not
-	// take the verb ([DecideWithin]).
+	// ([Object.AgentsManageOthers]), a turn's requester who could not
+	// take the verb ([DecideWithin]) and an agent decided by its role's
+	// grant ([Decision.SeatGrant] names the grant instead).
 	//
 	// ON THE DECISION rather than looked up beside it, because a refusal
 	// that names what would have admitted the caller has to name what the
@@ -501,6 +513,14 @@ type Decision struct {
 	// into the record a write forms (the effective role) and what it shows
 	// a reader as their own role; see [Standing] for when it is exact.
 	Standing Standing
+
+	// SeatGrant is the role grant an agent seat was decided by, on a row
+	// naming one ([rule.seatGrant]): set on a [ReasonSeatGrant] admission,
+	// a [ReasonNotGranted] refusal and an unknown the chart left, and on
+	// nothing else. It is what a refusal tells the seat to have its role
+	// given, in place of the permissions [Decision.Grants] names elsewhere —
+	// none of which would admit it.
+	SeatGrant SeatGrant
 
 	// Elevated reports an admission ONLY THE ADMIN PATH made: an
 	// administrator whose relations to the artifact, if any, do not reach
@@ -612,6 +632,15 @@ const (
 	// acting on could not ([DecideWithin]). It names no permission, because
 	// none the agent could hold would change it.
 	ReasonCeiling Reason = "ceiling"
+	// ReasonSeatGrant is an admission on a ROLE GRANT: the verb's row names
+	// one ([rule.seatGrant]) and the agent's role carries it, which
+	// [Decision.SeatGrant] names.
+	ReasonSeatGrant Reason = "seat_grant"
+	// ReasonNotGranted is a refusal an agent gets on a verb whose row names
+	// a role grant its role does not carry ([Decision.SeatGrant] names it).
+	// It names no permission, because no permission a seat could hold would
+	// change it: the role is what is given the grant.
+	ReasonNotGranted Reason = "not_granted"
 )
 
 // Reasons are every one, in declaration order.
@@ -621,6 +650,7 @@ var Reasons = []Reason{
 	ReasonSeatRefused, ReasonTokenRefused, ReasonStage, ReasonUnnamed,
 	ReasonUnknownAction, ReasonStepUp, ReasonEverybody, ReasonAsked,
 	ReasonSeatOnly, ReasonShared, ReasonNotShared, ReasonRole, ReasonCeiling,
+	ReasonSeatGrant, ReasonNotGranted,
 }
 
 // Valid reports whether a reason is one this build knows.

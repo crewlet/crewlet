@@ -2985,7 +2985,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// through, which that runtime decides can be read at all.
 	agentRun := e.agentRunFor(company, req.Handle, turnIdentity.Context)
 	box := steerBox(agentRun)
-	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
+	r, err := company.RunnerFor(ctx, req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Compact: e.compactorFor(company),
 		Context: blocks,

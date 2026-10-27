@@ -4997,7 +4997,11 @@ write answers its `op_id` here, and takes it back, by the tracker's own rule
 (`code.native`), it serves the code reads too — `code_list_repos`,
 `code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare` and
 `code_landed_in` (see [The company's code](../guides/tools-and-mcp.md#the-companys-code)) —
-read as you, so every repository, and none recorded as `operator_acted`. A schema, a default, a trimmed field and the wording of a
+read as you, so every repository, and none recorded as `operator_acted`. And
+it serves the deployment's health — `fleet_health`, and `code_status` where the
+code reads are — an administrator's reads, refused to anybody else, which an
+agent seat holds only by its role's grant (see
+[The health tools](../guides/fleet.md#the-health-tools)). A schema, a default, a trimmed field and the wording of a
 refusal are each written once — two copies of "file an item" drift on exactly
 the parts nobody looks at, and only one of the two is ever tested.
 

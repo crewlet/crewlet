@@ -1,5 +1,6 @@
 // Package operator serves the company's own tracker and knowledge base — and,
-// where it hosts code, its repositories' read tools — to the people who run
+// where it hosts code, its repositories' read tools, and the deployment's
+// health tools — to the people who run
 // it: ONE catalogue of tools, built for every call from what this node serves
 // at that moment, and every transport that reaches it drawing from that one
 // value through one dispatch.
@@ -167,6 +168,13 @@ type Halves struct {
 	// repository, from the usage domain — served only with Code.
 	Readers builtin.ReadersDeps
 
+	// Health is the health tools' half — the fleet's nodes and their alarms,
+	// and the git nodes' status — or the zero value on a node with no
+	// coordination store. Read with the halves, for every call, as Code is:
+	// code_status follows the code host. Its code half's Actor is set per
+	// call.
+	Health builtin.HealthDeps
+
 	// Company names the company in the MCP server's own title, so an
 	// operator with two of these connected can tell which is which.
 	Company string
@@ -323,8 +331,9 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 	if !up {
 		return catalogue{}, false
 	}
-	work, kb, arts, repos := halves.Work, halves.Pages, halves.Artifacts, halves.Code
-	work.Actor, kb.Actor, repos.Actor = workActor, pageActor, workActor
+	work, kb, arts, repos, health := halves.Work, halves.Pages, halves.Artifacts, halves.Code,
+		halves.Health
+	work.Actor, kb.Actor, repos.Actor, health.Code.Actor = workActor, pageActor, workActor, workActor
 	// THE CALL'S OWN OPERATION, where its transport names one: an artifact
 	// write's records derive from it, as a page write's do.
 	arts.CallerKey = keyFrom
@@ -333,7 +342,8 @@ func (s *Server) catalogueFor() (catalogue, bool) {
 		workActor, workActor, workActor, workActor
 	callables := builtin.OperatorTools(builtin.OperatorDeps{
 		Work: work, Pages: kb, Knowledge: halves.Knowledge, Artifacts: arts,
-		ArtifactData: halves.ArtifactData, Code: repos, Readers: halves.Readers, Org: s.org,
+		ArtifactData: halves.ArtifactData, Code: repos, Readers: halves.Readers, Health: health,
+		Org:       s.org,
 		Authorize: s.authorize, Runs: runs, Pauses: pauses,
 		Steer: steer, Answer: answer,
 	})

@@ -134,6 +134,7 @@ var roleFields = map[string]classified{
 	"Sandbox":              {exposureGuarded, "setup commands and env, the usual home of a registry credential", ""},
 	"Placement":            {exposureGuarded, "node ids and labels describing the deployment", ""},
 	"Code":                 {exposureGuarded, "how much of a repository this seat may do: which seats can write is a map of what to attack, and it was guarded under integrations.github before it left that block", ""},
+	"HealthTools":          {exposureGuarded, "which seats read the administrator's view of the deployment, an authority the role carries and as much a map of what to attack as its code access", ""},
 	"Integrations":         {exposureGuarded, "vendor identities, bot tokens and signing secrets", ""},
 	"Project":              {exposureGuarded, "a tracker project key: the container this seat files work in", ""},
 	"Space":                {exposureGuarded, "a knowledge container key: where this seat writes pages", ""},

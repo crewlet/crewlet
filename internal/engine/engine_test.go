@@ -91,19 +91,19 @@ func TestTheSeatListIsStable(t *testing.T) {
 func TestARunnerIsBuiltPerSeat(t *testing.T) {
 	t.Parallel()
 	c := company(t, companyDoc)
-	if _, err := c.RunnerFor("ceo", nil, engine.RunnerInput{Task: "post it", Reply: turn.NoReply()}); err != nil {
+	if _, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Task: "post it", Reply: turn.NoReply()}); err != nil {
 		t.Errorf("RunnerFor(ceo): %v", err)
 	}
 	// A human seat has no runner, and the refusal must name the seat —
 	// "not an agent seat" sent to the wrong place is a debugging session.
-	_, err := c.RunnerFor("founder", nil, engine.RunnerInput{})
+	_, err := c.RunnerFor(t.Context(), "founder", nil, engine.RunnerInput{})
 	if err == nil {
 		t.Fatal("a human seat got a runner")
 	}
 	if !strings.Contains(err.Error(), "founder") {
 		t.Errorf("the refusal does not name the seat: %v", err)
 	}
-	if _, err := c.RunnerFor("nobody", nil, engine.RunnerInput{}); err == nil {
+	if _, err := c.RunnerFor(t.Context(), "nobody", nil, engine.RunnerInput{}); err == nil {
 		t.Error("an unknown handle got a runner")
 	}
 }
@@ -177,13 +177,13 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 	// would disable round-cap extensions for every company that never
 	// mentioned them.
 	c := company(t, companyDoc)
-	if got, err := c.RunnerFor("ceo", nil, engine.RunnerInput{Reply: turn.NoReply()}); err != nil {
+	if got, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Reply: turn.NoReply()}); err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	} else if !got.Caps().ExtensionOn {
 		t.Error("an unset extension_enabled disabled the round-cap judge")
 	}
 	off := company(t, companyDoc+"\nturn_engine:\n  extension_enabled: false\n")
-	got, err := off.RunnerFor("ceo", nil, engine.RunnerInput{Reply: turn.NoReply()})
+	got, err := off.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Reply: turn.NoReply()})
 	if err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	}

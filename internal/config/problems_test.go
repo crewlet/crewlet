@@ -157,21 +157,24 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 	}
 }
 
-// The four rules that refuse a key on a human seat, by their messages: the org
+// The five rules that refuse a key on a human seat, by their messages: the org
 // model's, over every field a running seat alone reads, and the config
-// layer's three admission rules — over what a seat holds on a code host, its
+// layer's four admission rules — over what a seat holds on a code host, its
 // code access tier and its own GitHub App, which nothing running reads off a
-// human seat, and over its avatar, which the org model carries no field for.
+// human seat, over the health grant, which the chart answers for an agent
+// only, and over its avatar, which the org model carries no field for.
 const (
 	agentOnlyOnHuman  = "agent-only field set on a human seat"
 	codeAccessOnHuman = "a human seat has no code access tier"
 	githubAppOnHuman  = "a human seat has no GitHub App"
+	healthOnHuman     = "a human seat carries no health grant"
 	avatarOnHuman     = "a human seat is drawn as the person it is"
 )
 
 // humanSeatRules is every rule that refuses a key on a human seat: the org
-// model's, then the config layer's three.
-var humanSeatRules = []string{agentOnlyOnHuman, codeAccessOnHuman, githubAppOnHuman, avatarOnHuman}
+// model's, then the config layer's four.
+var humanSeatRules = []string{agentOnlyOnHuman, codeAccessOnHuman, githubAppOnHuman,
+	healthOnHuman, avatarOnHuman}
 
 // humanSeatKey is one key a seat is authored with, as a human seat would
 // carry it.
@@ -217,6 +220,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
 	{"code", "{access: review}", codeAccessOnHuman},
 	{"integrations.github", "{repos: [acme/api]}", githubAppOnHuman},
+	{"health_tools", "true", healthOnHuman},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 
@@ -329,6 +333,10 @@ func TestEveryAgentOnlyKeyIsRefusedOnAHumanSeatWhereItWasWritten(t *testing.T) {
 		want = []located{{"roles[0].integrations.github", "conflict", "sarah", ""}}
 		if got := locatedOf(problems, githubAppOnHuman); !reflect.DeepEqual(got, want) {
 			t.Errorf("GitHub App refusals = %+v, want %+v", got, want)
+		}
+		want = []located{{"roles[0].health_tools", "conflict", "sarah", ""}}
+		if got := locatedOf(problems, healthOnHuman); !reflect.DeepEqual(got, want) {
+			t.Errorf("health grant refusals = %+v, want %+v", got, want)
 		}
 		want = []located{{"roles[0].avatar", "conflict", "sarah", ""}}
 		if got := locatedOf(problems, avatarOnHuman); !reflect.DeepEqual(got, want) {

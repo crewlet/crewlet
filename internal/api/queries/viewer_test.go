@@ -96,6 +96,11 @@ func (flatChart) MemberOf(context.Context, string, string) (bool, error) {
 	return false, nil
 }
 
+// SeatGranted answers that no role carries a grant: no question names one.
+func (flatChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
+}
+
 // answer runs one question and insists it succeeded, so a case about a VALUE
 // never quietly becomes a case about a refusal.
 func answerMap(t *testing.T, got any, err error) map[string]any {

@@ -257,6 +257,15 @@ const (
 	// checking.
 	ActionFleetRead Action = "fleet.read"
 	ActionAuditRead Action = "audit.read"
+	// ActionFleetHealth is the tool `fleet_health`: every live node as its
+	// own heartbeat states it, with the alarms its own table has firing.
+	// ActionCodeStatus is the tool `code_status`: the git nodes' caches and
+	// the repositories they served most, or one repository's state on each.
+	// READS OF THE DEPLOYMENT, admin's as the `fleet` question is — and a
+	// SEAT'S only where its role carries the health grant
+	// ([SeatGrantHealth], `role.health_tools`); see [rule.seatGrant].
+	ActionFleetHealth Action = "fleet_health"
+	ActionCodeStatus  Action = "code_status"
 	// ActionSandboxRun starts a detached coding run: an agent's, and only
 	// one whose role offers the tool — see [rule.seatOnly].
 	ActionSandboxRun Action = "run_sandbox"
@@ -448,6 +457,34 @@ var Presences = []Presence{
 // Valid reports whether a presence is one this build knows.
 func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 
+// SeatGrant is an authority a seat's ROLE carries in the company document —
+// `role.health_tools: true` — that admits an AGENT SEAT to the verbs whose
+// rows name it ([rule.seatGrant]), in place of their class.
+//
+// A FACT ABOUT THE ROLE, NOT A PERMISSION. A seat holds every app and never
+// admin (internal/agent/turnctx), and a permission is a decision about a
+// PERSON; what a seat may do beyond the apps is its role's to say, in the
+// document an administrator writes — which is why the field that carries a
+// grant is admin's to set and never a lead's (internal/config's org diff
+// lists it apart). The chart answers whether a role carries one
+// ([Chart.SeatGranted]).
+//
+// Its zero is no grant: a row naming none decides every principal by its
+// class.
+type SeatGrant string
+
+const (
+	// SeatGrantHealth is `role.health_tools`: the fleet's health and the
+	// code host's status, which a person reads as an administrator.
+	SeatGrantHealth SeatGrant = "health_tools"
+)
+
+// SeatGrants are every grant, in declaration order.
+var SeatGrants = []SeatGrant{SeatGrantHealth}
+
+// Valid reports whether a grant is one this build knows.
+func (g SeatGrant) Valid() bool { return slices.Contains(SeatGrants, g) }
+
 // rule is one verb's row: which class decides it, which app it belongs to,
 // and the facts about the verb itself that every class composes with.
 //
@@ -505,6 +542,30 @@ type rule struct {
 	// ask for a permission that would change nothing. A walk refuses a row
 	// that is both.
 	seatOnly bool
+
+	// seatGrant is the ROLE GRANT that decides an AGENT SEAT on this verb in
+	// place of the class ([SeatGrant]): an agent is admitted exactly where the
+	// chart says its role carries the grant ([Chart.SeatGranted]), whatever
+	// permission it holds, and refused everywhere else — and every other
+	// principal, a person, a token and the engine, is decided by the class
+	// as on any row.
+	//
+	// IT EXISTS FOR A VERB WHOSE CLASS NO SEAT MEETS. The health tools are
+	// admin's, as the `fleet` question is, and a seat never holds admin
+	// (internal/agent/turnctx), so without this a seat that watches the
+	// deployment could never be given them; with admin itself handed to a
+	// seat it could rewrite the company it runs inside. The grant opens the
+	// two reads and nothing else.
+	//
+	// READ BY [Decide], AND SO BY EVERYTHING THAT ASKS IT: the gate on every
+	// call, and the question a surface asks before it offers a verb at all
+	// (internal/agent/builtin's Admits, which withholds a verb from a seat's
+	// surfaces when the table refuses it before any object is named). One
+	// rule, so a seat is offered a granted verb exactly where it is admitted
+	// to it. A walk refuses a row that names a grant beside humanOnly, which
+	// would never reach an agent, or beside seatOnly, which would leave the
+	// class deciding nobody.
+	seatGrant SeatGrant
 
 	// presence is which arms need a PERSON at the keyboard — see
 	// [Presence] — refused to a request that presented a machine token.
@@ -861,6 +922,13 @@ var rules = map[Action]rule{
 	ActionSetupConnect: {class: ClassAdmin, recency: iam.RecencyStepUp},
 	ActionFleetOperate: {class: ClassAdmin, recency: iam.RecencyStepUp},
 	ActionFleetRead:    {class: ClassAdmin, recency: iam.RecencyAny},
+	// THE FLEET'S HEALTH IS ADMIN'S, as the `fleet` question it reads beside
+	// is, and A SEAT'S ONLY BY ITS ROLE'S GRANT: an agent whose role carries
+	// `health_tools` reads both, and every other agent is refused before the
+	// class is read ([rule.seatGrant]). Reads, so no proof — and tools,
+	// which no step-up reaches.
+	ActionFleetHealth: {class: ClassAdmin, seatGrant: SeatGrantHealth, recency: iam.RecencyAny},
+	ActionCodeStatus:  {class: ClassAdmin, seatGrant: SeatGrantHealth, recency: iam.RecencyAny},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
@@ -1092,6 +1160,16 @@ func HumanOnlyOf(a Action) (bool, bool) {
 func SeatOnlyOf(a Action) (bool, bool) {
 	r, ok := rules[a]
 	return r.seatOnly, ok
+}
+
+// SeatGrantOf reports the role grant that decides an agent seat on a verb —
+// see [rule.seatGrant] — empty where its class decides every principal, and
+// whether the table knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func SeatGrantOf(a Action) (SeatGrant, bool) {
+	r, ok := rules[a]
+	return r.seatGrant, ok
 }
 
 // MinRoleOf reports the least artifact role a verb's row admits (see

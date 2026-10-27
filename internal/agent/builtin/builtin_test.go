@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -322,6 +323,11 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeDiffTool:      false,
 		builtin.CodeCompareTool:   false,
 		builtin.CodeLandedInTool:  false,
+
+		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
+		// publishes, which a worker of a granted seat may be handed.
+		builtin.FleetHealthTool: false,
+		builtin.CodeStatusTool:  false,
 	}
 
 	reg := tools.NewRegistry()
@@ -1043,6 +1049,11 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// every walk over this fixture met their seven authority rows as
 		// rules no registered tool answers.
 		Code: codeDeps(newCodeHost()),
+		// AND THE HEALTH TOOLS, over a lease table and the git nodes' status
+		// scatter: left out, their two rows read as rules no registered tool
+		// answers.
+		Health: builtin.HealthDeps{Leases: coordmem.New(), Status: &statusAsker{},
+			Code: builtin.CodeDeps{Code: newCodeHost()}},
 	}
 }
 

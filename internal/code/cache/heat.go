@@ -404,9 +404,9 @@ func (h *Heat) sweep(day int64) {
 // Hot is the n hottest repositories of the hour and the n hottest of the day,
 // in one list of at most 2n: those hottest in the hour first, each window's
 // heat its count of git operations, its bytes out breaking a tie and its id
-// the next. A repository with nothing in a window is never one of that
-// window's hottest. So a reader may order the list by either window and cut
-// it at n, and read that window's n hottest exactly.
+// the next ([Hottest]). A repository with nothing in a window is never one of
+// that window's hottest. So a reader may order the list by either window and
+// cut it at n, and read that window's n hottest exactly.
 func (h *Heat) Hot(n int) []RepoHeat {
 	if n <= 0 {
 		return nil
@@ -422,20 +422,52 @@ func (h *Heat) Hot(n int) []RepoHeat {
 		all = append(all, r.heat(id, at))
 	}
 	h.mu.Unlock()
+	keep := Hottest(all, n)
+	out := make([]RepoHeat, len(keep))
+	for i, k := range keep {
+		out[i] = all[k]
+	}
+	return out
+}
+
+// Hottest is which of entries a hot list keeps, as their indices in entries,
+// in the list's order: the n hottest of the hour and the n hottest of the day,
+// at most 2n, those hottest in the hour first — each window's heat its count
+// of git operations, its bytes out breaking a tie, then its id, then its place
+// in entries. An entry with nothing in a window is never one of that window's
+// hottest. So a reader may order the list by either window and cut it at n,
+// and read that window's n hottest exactly.
+//
+// ONE RULE for one node's list ([Heat.Hot]) and for a list several nodes'
+// lists make — a fleet's, where one repository stands once for every node that
+// served it, which is why the answer is indices rather than ids: two entries
+// may name one repository, and the caller knows which node each came from.
+func Hottest(entries []RepoHeat, n int) []int {
+	if n <= 0 {
+		return nil
+	}
+	order := make([]int, len(entries))
+	for i := range order {
+		order[i] = i
+	}
 	hour := func(r RepoHeat) Use { return r.Hour }
 	day := func(r RepoHeat) Use { return r.Day }
-	keep := map[string]bool{}
+	keep := make(map[int]bool, 2*n)
 	for _, in := range []func(RepoHeat) Use{hour, day} {
-		slices.SortFunc(all, func(a, b RepoHeat) int { return hotter(in(a), in(b), a.ID, b.ID) })
-		for _, r := range all[:min(n, len(all))] {
-			if !in(r).zero() {
-				keep[r.ID] = true
+		slices.SortFunc(order, func(i, j int) int {
+			return cmp.Or(hotter(in(entries[i]), in(entries[j]), entries[i].ID, entries[j].ID),
+				cmp.Compare(i, j))
+		})
+		for _, i := range order[:min(n, len(order))] {
+			if !in(entries[i]).zero() {
+				keep[i] = true
 			}
 		}
 	}
-	out := slices.DeleteFunc(all, func(r RepoHeat) bool { return !keep[r.ID] })
-	slices.SortFunc(out, func(a, b RepoHeat) int {
-		return cmp.Or(hotter(a.Hour, b.Hour, "", ""), hotter(a.Day, b.Day, a.ID, b.ID))
+	out := slices.DeleteFunc(order, func(i int) bool { return !keep[i] })
+	slices.SortFunc(out, func(i, j int) int {
+		a, b := entries[i], entries[j]
+		return cmp.Or(hotter(a.Hour, b.Hour, "", ""), hotter(a.Day, b.Day, a.ID, b.ID), cmp.Compare(i, j))
 	})
 	return out
 }

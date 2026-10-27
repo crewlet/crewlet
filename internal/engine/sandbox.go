@@ -907,7 +907,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// The runtime, and the note box it decides — see [steerBox].
 	agentRun := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
 	box := steerBox(agentRun)
-	r, err := company.RunnerFor(in.Turn.Handle(),
+	r, err := company.RunnerFor(ctx, in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
 			Task:    resumeTask(in),
 			Compact: e.compactorFor(company),

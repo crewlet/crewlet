@@ -270,7 +270,8 @@ func (c *Company) ValidateRunnable() error {
 // refuses (see [org.Organization.ValidateAdmission], which also says why no
 // NAME is held unique), a unit with no id, duplicate sandbox setup step names
 // within one list, a code access tier or a GitHub App on a human seat
-// ([Company.validateHumanSeatCode]), an avatar the dashboard cannot draw or
+// ([Company.validateHumanSeatCode]), the health grant on a human seat
+// ([Company.validateHumanSeatGrants]), an avatar the dashboard cannot draw or
 // one on a human seat ([Company.validateAvatars]), a providers.llm entry's
 // credential configured where its CLI never reads it
 // ([LLMProvider.validateCredentials]), a model with no provider segment on a
@@ -296,7 +297,8 @@ func (c *Company) ValidateAdmission() error {
 // caller already built.
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
-		c.validateSetupStepNames(), c.validateHumanSeatCode(), c.validateAvatars(),
+		c.validateSetupStepNames(), c.validateHumanSeatCode(), c.validateHumanSeatGrants(),
+		c.validateAvatars(),
 		c.validateLLMCredentials(), c.validateLLMModels(),
 		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateFileRules(),
@@ -358,6 +360,33 @@ func (c *Company) validateHumanSeatCode() error {
 					"an agent acts as, and a person acts as their own login, "+
 					"contact.github_login. Remove this block, or make the seat an "+
 					"agent seat")
+		}
+	}
+	return p.err()
+}
+
+// validateHumanSeatGrants refuses on a human seat what only an agent's role
+// carries: the health grant (`health_tools`).
+//
+// The grant decides an AGENT on the verbs that name it, in place of their
+// class (internal/authz); a person is decided by their own permissions — the
+// health tools are admin's — and is never woken by an engine wake. So the
+// field on a human seat reads as a working setting and does nothing, which is
+// the silence the human-seat rules exist to end.
+//
+// AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: nothing
+// about running reads a grant off a human seat — the chart answers it for an
+// agent only — so a stored revision carrying one runs as it did, and this
+// build applies whatever its newer peer admitted.
+func (c *Company) validateHumanSeatGrants() error {
+	var p problems
+	for role, path := range c.EachRole() {
+		if role.Kind == org.KindHuman && role.HealthTools {
+			p.add(at(path, "health_tools"), ErrConflict,
+				"a human seat carries no health grant: a person reads the "+
+					"deployment's health as an administrator, through their own "+
+					"permissions, and is never woken for it. Remove the field, or "+
+					"make the seat an agent seat")
 		}
 	}
 	return p.err()

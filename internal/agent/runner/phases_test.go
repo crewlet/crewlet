@@ -216,6 +216,10 @@ type buildOpts struct {
 	// sandbox is the seat's role.sandbox gate, for the cases about what a
 	// gate does and does not offer.
 	sandbox *org.RoleSandbox
+
+	// withheld is what the seat's surfaces leave out (runner.Config.Withheld),
+	// for the cases about a tool the authority table refuses the seat.
+	withheld []string
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -307,6 +311,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Turn:      runTurn,
 		Budget:    opts.budget,
 		Compact:   opts.compact,
+		Withheld:  opts.withheld,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)

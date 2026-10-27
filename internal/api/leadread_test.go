@@ -238,3 +238,8 @@ func (c leadOf) LeadsAnyone(_ context.Context, actor string) (bool, error) {
 func (leadOf) MemberOf(context.Context, string, string) (bool, error) {
 	return false, nil
 }
+
+// SeatGranted answers that no role carries a grant: no read here names one.
+func (leadOf) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
+}

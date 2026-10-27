@@ -59,6 +59,11 @@ func (c chart) MemberOf(context.Context, string, string) (bool, error) {
 	return false, c.err
 }
 
+// SeatGranted answers that no role carries a grant: no work route names one.
+func (c chart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, c.err
+}
+
 // ---- principals --------------------------------------------------------- //
 
 // person is somebody signed in and bound to a seat, holding these grants.

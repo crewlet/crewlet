@@ -2152,6 +2152,15 @@
             "null"
           ]
         },
+        "health_tools": {
+          "description": "Agent seats: offer this seat fleet_health and code_status, the administrator's reads of the deployment's health. Setting or clearing it takes admin.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "integrations": {
           "$ref": "#/$defs/RoleIntegrations"
         },

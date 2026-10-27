@@ -132,6 +132,14 @@ type Deps struct {
 	// hosts no code. See codetools.go.
 	Code CodeDeps
 
+	// Health is the health tools' — the fleet's nodes and their alarms, and
+	// the git nodes' status. The zero value omits both. Registered for every
+	// seat with the rest of the epoch's builtins, and offered only to a seat
+	// whose role carries the health grant: the table refuses every other seat
+	// before any object is named, which is what withholds them from its
+	// surfaces ([Withheld]). See healthtools.go.
+	Health HealthDeps
+
 	// Authorize decides whether the party behind a call may make it.
 	//
 	// EVERY TOOL GOES THROUGH IT, wrapped once at registration rather
@@ -254,9 +262,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 	}
 	// AND THE CODE READ TOOLS, the very list the operator catalogue takes
-	// ([CodeTools]): reads, so none of them names a delivery surface.
+	// ([CodeTools]): reads, so none of them names a delivery surface — and
+	// the health tools after them, the same way ([HealthTools]).
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
-		codeCandidates(deps.Code))
+		codeCandidates(deps.Code), healthCandidates(deps.Health))
 
 	var names []string
 	for _, c := range candidates {
@@ -347,6 +356,9 @@ func annotationsFor(name string) tools.Annotations {
 		return a
 	}
 	if a, ok := codeAnnotations(name); ok {
+		return a
+	}
+	if a, ok := healthAnnotations(name); ok {
 		return a
 	}
 	switch name {

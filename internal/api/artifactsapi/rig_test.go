@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -663,6 +664,9 @@ func (chart) LeadsContainer(context.Context, string, string) (bool, error) { ret
 func (chart) LeadsAnyone(_ context.Context, actor string) (bool, error)    { return actor == "lee", nil }
 func (chart) MemberOf(_ context.Context, actor, unit string) (bool, error) {
 	return unit == "ENG" && (actor == "eve" || actor == "lee"), nil
+}
+func (chart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
 }
 
 // roster is the company's units and seats.

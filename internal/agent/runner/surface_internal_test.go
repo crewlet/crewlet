@@ -129,6 +129,58 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 	}
 }
 
+// A TOOL THE SEAT IS WITHHELD IS ON NONE OF ITS SURFACES.
+//
+// The registry is the epoch's, so a tool only some seats may call — the health
+// tools, which a role's grant opens — is registered for every seat, and the
+// engine names what this seat's surfaces must leave out (Config.Withheld).
+// Every surface is built from the seat's snapshot, so a withheld tool is not
+// offered, not listed to discover and not reachable by activation on the
+// executor's — native and agent-mode — the reviewer's or the onboarding
+// pass's, while every other tool stays.
+//
+// Mutation: build any of them from the registry whole and the withheld tool is
+// one activation away there.
+func TestAWithheldToolIsOnNoSurface(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	for _, name := range []string{"fleet_health", "code_status", "lookup_colleague"} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := New(Config{
+		Registry: reg,
+		Models:   &phase.Registry{},
+		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme"}, Role: &org.Role{Name: "Dev"}},
+		Withheld: []string{"code_status", "fleet_health"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, snapshot := range map[string]tools.Snapshot{
+		"the seat's":               r.seatSnapshot(),
+		"the executor's":           r.executorUniverse(r.seatSnapshot(), false),
+		"an agent-mode executor's": r.executorUniverse(r.seatSnapshot(), true),
+		"the onboarding pass's":    r.seatSnapshot().Without(RunSandboxTool),
+	} {
+		for _, withheld := range []string{"fleet_health", "code_status"} {
+			if _, held := snapshot.Lookup(withheld); held {
+				t.Errorf("%s snapshot holds %s, one activation away", name, withheld)
+			}
+			if strings.Contains(snapshot.Discoverable(nil), withheld) {
+				t.Errorf("%s catalogue lists %s", name, withheld)
+			}
+		}
+		if _, held := snapshot.Lookup("lookup_colleague"); !held {
+			t.Errorf("%s snapshot lost lookup_colleague, which nothing withholds", name)
+		}
+	}
+	if got := executorActive(r.executorUniverse(r.seatSnapshot(), false)); slices.Contains(got, "fleet_health") {
+		t.Errorf("the executor is offered %v, the withheld tool among them", got)
+	}
+}
+
 // stubTool is a name on the surface and nothing else — what is under test is
 // which names survive the filter, not what any of them do.
 type stubTool string

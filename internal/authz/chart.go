@@ -4,16 +4,17 @@ import "context"
 
 // Chart is the company hierarchy, as much of it as the rules ask about.
 //
-// CONSUMER-DEFINED AND SIX METHODS. It is declared here because this is the
+// CONSUMER-DEFINED AND SEVEN METHODS. It is declared here because this is the
 // package that calls it, and it is small because a seam is what a caller
 // needs rather than what a provider has: internal/org can answer a dozen
-// questions about a chart and these are the six any authority rule turns
+// questions about a chart and these are the seven any authority rule turns
 // on: who leads a person, a project, a unit and a page container, whether
 // somebody leads ANYBODY, which is the question asked about a record before
-// anybody knows whose it is ([Object.Unresolved]), and who SITS in a unit,
-// which is what a share with a team admits ([ClassShared]). A relation arrives
-// with its first call site — a seam method nothing calls is a declaration
-// connected to nothing.
+// anybody knows whose it is ([Object.Unresolved]), who SITS in a unit,
+// which is what a share with a team admits ([ClassShared]), and which grants
+// a seat's ROLE carries, which is what admits an agent to a verb whose row
+// names one ([rule.seatGrant]). A relation arrives with its first call site —
+// a seam method nothing calls is a declaration connected to nothing.
 //
 // # Every one is THREE-VALUED, and that is the whole reason it exists
 //
@@ -94,6 +95,23 @@ type Chart interface {
 	// A KEY NAMING NO UNIT, or an actor the tree does not seat, answers
 	// false: the tree was read and holds no such membership.
 	MemberOf(ctx context.Context, actor, unitKey string) (bool, error)
+
+	// SeatGranted reports whether actor's seat's ROLE carries grant in the
+	// company document — `role.health_tools`, for [SeatGrantHealth] — which
+	// is what admits an agent seat to a verb whose row names the grant
+	// ([rule.seatGrant]).
+	//
+	// A FACT ABOUT THE ROLE, NOT A RELATION: nobody is above or beside
+	// anybody here. It is on the chart all the same because it is read off
+	// the same tree, at the same moment, as every relation a decision asks,
+	// and three-valued for the same reason: a node holding no company must
+	// say so rather than tell a granted seat it holds nothing.
+	//
+	// A SEAT THE TREE DOES NOT HOLD, A HUMAN SEAT, AND A GRANT THIS BUILD
+	// DOES NOT KNOW answer false: the tree was read and grants nothing of
+	// the kind — a person is decided by the class, and a grant a newer
+	// build wrote opens nothing here, as an unknown permission does not.
+	SeatGranted(ctx context.Context, actor string, grant SeatGrant) (bool, error)
 }
 
 // NoChart is a chart that can answer nothing, and says so.
@@ -132,5 +150,10 @@ func (NoChart) LeadsAnyone(context.Context, string) (bool, error) {
 
 // MemberOf reports that this surface holds no chart.
 func (NoChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, ErrNoChart
+}
+
+// SeatGranted reports that this surface holds no chart.
+func (NoChart) SeatGranted(context.Context, string, SeatGrant) (bool, error) {
 	return false, ErrNoChart
 }

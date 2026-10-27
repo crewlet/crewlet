@@ -396,6 +396,53 @@ func TestAKeyChangeIsListedApart(t *testing.T) {
 	}
 }
 
+// A GRANT THE ROLE CARRIES IS LISTED APART when a change sets, clears or
+// alters it, and on a seat added carrying it.
+//
+// `health_tools` admits a seat to the administrator's reads of the deployment,
+// so a lead who could set it on a seat in their team would read the fleet's
+// health through that seat's trail with no permission of their own. A grant
+// the seat already carried is not judged again, and a field beside it that is
+// no grant is not listed.
+//
+// Mutation: drop health_tools from [granting]'s seat list and every case but
+// the control goes red.
+func TestAGrantTheRoleCarriesIsListedApart(t *testing.T) {
+	t.Parallel()
+	base := parse(t, diffBase)
+	const sre = "            handle: sre\n"
+	granted := strings.Replace(diffBase, sre, sre+"            health_tools: true\n", 1)
+	for _, c := range []struct {
+		name   string
+		before string
+		after  string
+		want   []string
+	}{
+		{"set on a seat", diffBase, granted, []string{"health_tools"}},
+		{"cleared", granted, diffBase, []string{"health_tools"}},
+		{"a seat added carrying it", diffBase, strings.Replace(diffBase, "          - name: SRE\n",
+			"          - name: Watcher\n            handle: watcher\n            llm: zulu\n"+
+				"            health_tools: true\n          - name: SRE\n", 1), []string{"health_tools"}},
+		{"a goal beside a grant the seat carried", granted,
+			strings.Replace(granted, sre, sre+"            goal: watch\n", 1), nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			change := only(t, config.DiffOrg(parse(t, c.before), parse(t, c.after)))
+			if !slices.Equal(change.Grants, c.want) {
+				t.Errorf("grants = %v, want %v", change.Grants, c.want)
+			}
+			if len(change.Keys) != 0 {
+				t.Errorf("a grant was listed as a key another system finds the seat by: %v",
+					change.Keys)
+			}
+		})
+	}
+	if again := config.DiffOrg(base, parse(t, diffBase)); len(again.Changes) != 0 {
+		t.Errorf("the same document diffed to %+v", again.Changes)
+	}
+}
+
 // A NEW OBJECT REACHES EVERY OBJECT ALREADY NAMING ITS ID, before the write.
 //
 // A `lead:` or `manages:` entry may name nothing yet, and one naming a unit's

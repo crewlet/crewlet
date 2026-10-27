@@ -62,7 +62,11 @@ records no call to one. So is the operator-only `code_repo_readers` beside
 them, which no seat's registry ever holds: annotations say what a tool does,
 never who may call it, and who read a unit's repository is an admin's — a
 person's — question, decided by the authority table before anything is read
-([Who read it](code-host.md#who-read-it)).
+([Who read it](code-host.md#who-read-it)). And so are the
+[health tools](../guides/fleet.md#the-health-tools), `fleet_health` and
+`code_status`: proven, idempotent reads of the deployment, which every seat's
+registry holds and a seat is offered only where its role carries the health
+grant — again the authority table's decision, never an annotation's.
 
 ### Where annotations come from, and where they go
 

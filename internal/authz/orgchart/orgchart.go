@@ -1,6 +1,6 @@
 // Package orgchart answers [authz.Chart] over one organization: who leads
-// whom, a project, a unit and a page container, and who sits in a unit, read
-// off the tree a company document builds.
+// whom, a project, a unit and a page container, who sits in a unit, and which
+// grants a seat's role carries, read off the tree a company document builds.
 //
 // # Pure over one tree, and why it is its own package
 //
@@ -230,6 +230,56 @@ func (c chart) LeadsUnit(_ context.Context, actor, unitKey string) (bool, error)
 		}
 	}
 	return false, nil
+}
+
+// SeatGranted reports whether actor's seat's role carries grant: whether it is
+// an AGENT seat of the tree whose role states the grant ([carries]).
+//
+// A seat the tree does not hold, a human seat and a grant this build does not
+// know answer false rather than erroring: the tree was read and grants nothing
+// of the kind — see [authz.Chart.SeatGranted].
+func (c chart) SeatGranted(_ context.Context, actor string, grant authz.SeatGrant) (bool, error) {
+	o, err := c.tree()
+	if err != nil {
+		return false, err
+	}
+	return carries(o.AgentSeatByHandle(actor), grant), nil
+}
+
+// GrantedSeats is the handle of every agent seat of o whose role carries grant,
+// in the tree's walk order: who a wake about what the grant opens is for.
+//
+// THE SAME RULE [chart.SeatGranted] ASKS ([carries]), over every seat rather
+// than one, so the seats a grant admits and the seats it reaches can never
+// differ. A nil tree grants nobody.
+func GrantedSeats(o *org.Organization, grant authz.SeatGrant) []string {
+	if o == nil {
+		return nil
+	}
+	var out []string
+	for role := range o.AllRoles() {
+		if carries(role, grant) {
+			out = append(out, role.Handle())
+		}
+	}
+	return out
+}
+
+// carries reports whether role is an agent seat whose role states grant.
+//
+// AN AGENT'S ALONE: a person is decided by their own permissions, and a grant
+// written on a human seat (which the config layer refuses on admission) opens
+// nothing. A grant this build does not know opens nothing either, as an
+// unknown permission does not.
+func carries(role *org.Role, grant authz.SeatGrant) bool {
+	if role == nil || role.IsHuman() {
+		return false
+	}
+	switch grant {
+	case authz.SeatGrantHealth:
+		return role.HealthTools
+	}
+	return false
 }
 
 // MemberOf reports whether actor's seat sits in the unit key names or in any

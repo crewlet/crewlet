@@ -21,6 +21,7 @@ type chart struct {
 	units      map[[2]string]bool
 	containers map[[2]string]bool
 	members    map[[2]string]bool
+	granted    map[[2]string]bool
 	err        error
 }
 
@@ -84,9 +85,20 @@ func (c chart) MemberOf(_ context.Context, actor, unit string) (bool, error) {
 	return c.members[[2]string{actor, unit}], nil
 }
 
+// SeatGranted answers which grants a seat's role carries, a SIXTH map: a grant
+// is a fact about a role and no relation at all, and a fake that read any of
+// the others for it would agree with a rule that asked a relation instead.
+func (c chart) SeatGranted(_ context.Context, actor string, grant authz.SeatGrant) (bool, error) {
+	if c.err != nil {
+		return false, c.err
+	}
+	return c.granted[[2]string{actor, string(grant)}], nil
+}
+
 // nimbus is the fixture every case below decides against: the CTO leads the
 // SRE, leads the PLATFORM project, and leads the `sre` unit, in which the SRE
-// sits (the CTO does not: leading a unit is not sitting in it).
+// sits (the CTO does not: leading a unit is not sitting in it) — and the SRE's
+// role carries the health grant, which the CTO's does not.
 func nimbus() chart {
 	return chart{
 		leads:      map[[2]string]bool{{"cto", "sre"}: true},
@@ -94,6 +106,7 @@ func nimbus() chart {
 		units:      map[[2]string]bool{{"cto", "sre"}: true},
 		containers: map[[2]string]bool{{"cto", "RUNBOOKS"}: true},
 		members:    map[[2]string]bool{{"sre", "sre"}: true},
+		granted:    map[[2]string]bool{{"sre", string(authz.SeatGrantHealth)}: true},
 	}
 }
 

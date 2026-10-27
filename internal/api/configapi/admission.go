@@ -28,9 +28,10 @@ import (
 // against the document it was read in — where an object was, against the
 // revision being replaced; where it lands and what its new references name,
 // against the revision proposed. A setting, a credential, a `${VAR}` in any
-// field and a key another system finds a seat or unit by — its project, page
-// space, channel, address or contact ids — are never a lead's: all four are
-// asked as `config.write`, which is admin's.
+// field, a key another system finds a seat or unit by — its project, page
+// space, channel, address or contact ids — and a grant a seat's role carries
+// (`health_tools`, the administrator's reads of the deployment) are never a
+// lead's: all five are asked as `config.write`, which is admin's.
 //
 // A WRITE THAT CHANGES NOTHING IS NOT A LEAD'S EITHER. Storing the document
 // unchanged still makes a new revision and re-activates it on every node,
@@ -105,7 +106,8 @@ type RefusedChange struct {
 	// Why is what about the change reaches it — `place`, `self`, `lead`,
 	// `manages`, `named`, `duplicate` — `credential` for a credential the
 	// change sets, clears or alters, `key` for a key another system finds
-	// the object by, or `unchanged` for a write that changes nothing.
+	// the object by, `grant` for a grant the seat's role carries, or
+	// `unchanged` for a write that changes nothing.
 	Why string `json:"why,omitempty"`
 	// Value is the reference, the id, the credential's path or the key's
 	// field.
@@ -177,6 +179,11 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 		for _, field := range change.Keys {
 			refused = append(refused, RefusedChange{Kind: string(change.Kind),
 				ID: change.ID, Op: string(change.Op), Why: "key", Value: field,
+				Reason: company.Reason})
+		}
+		for _, field := range change.Grants {
+			refused = append(refused, RefusedChange{Kind: string(change.Kind),
+				ID: change.ID, Op: string(change.Op), Why: "grant", Value: field,
 				Reason: company.Reason})
 		}
 		for _, touch := range change.Touches {

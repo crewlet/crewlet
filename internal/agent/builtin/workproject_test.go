@@ -495,6 +495,11 @@ func (projectChart) MemberOf(context.Context, string, string) (bool, error) {
 	return false, nil
 }
 
+// SeatGranted answers that no role carries a grant: no project verb names one.
+func (projectChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, nil
+}
+
 // chartLeads and chartRefuses are the two answers a chart that CAN answer
 // gives.
 var (

@@ -811,6 +811,19 @@ type Role struct {
 	// read bare.
 	CodeAccess string `yaml:"code_access,omitempty" json:"code_access,omitempty"`
 
+	// HealthTools is the seat's `role.health_tools`: whether its role carries
+	// the health grant (internal/authz's SeatGrantHealth), which admits this
+	// agent to the fleet_health and code_status tools — an administrator's
+	// reads of the deployment — and which its surfaces offer it for that
+	// reason. False is no grant, the default: a seat never holds admin, and
+	// the deployment's health is given to a seat only by name.
+	//
+	// AN AGENT SEAT'S ALONE, refused on a human seat by the config layer as an
+	// admission rule (internal/config, validateHumanSeatGrants): a person is
+	// decided by their own permissions, so a grant on their seat would read
+	// as live and do nothing.
+	HealthTools bool `yaml:"health_tools,omitempty" json:"health_tools,omitempty"`
+
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
 	Schedules []Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty"`

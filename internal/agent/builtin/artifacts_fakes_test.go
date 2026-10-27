@@ -413,6 +413,11 @@ func (c artifactChart) MemberOf(_ context.Context, actor, unit string) (bool, er
 	return slices.Contains(c.members[actor], unit), c.err
 }
 
+// SeatGranted answers that no role carries a grant: no artifact verb names one.
+func (c artifactChart) SeatGranted(context.Context, string, authz.SeatGrant) (bool, error) {
+	return false, c.err
+}
+
 var _ authz.Chart = artifactChart{}
 
 // requesters composes the principals a turn may be acting for.

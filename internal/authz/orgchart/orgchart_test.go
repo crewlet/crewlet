@@ -2,6 +2,8 @@ package orgchart_test
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/authz"
@@ -251,10 +253,66 @@ func TestNoTreeIsUnknownRatherThanFalse(t *testing.T) {
 		"LeadsContainer": func() (bool, error) { return chart.LeadsContainer(ctx, "cto", "RUNBOOKS") },
 		"LeadsUnit":      func() (bool, error) { return chart.LeadsUnit(ctx, "cto", "engineering") },
 		"MemberOf":       func() (bool, error) { return chart.MemberOf(ctx, "sre", "engineering") },
+		"SeatGranted": func() (bool, error) {
+			return chart.SeatGranted(ctx, "sre", authz.SeatGrantHealth)
+		},
 	} {
 		if _, err := ask(); !errors.Is(err, authz.ErrNoChart) {
 			t.Errorf("%s with no tree: err = %v, want authz.ErrNoChart", name, err)
 		}
+	}
+}
+
+// A GRANT IS THE ROLE'S, AN AGENT'S ALONE, AND THE SEATS IT REACHES ARE THE
+// SEATS IT ADMITS.
+//
+// The SRE's role carries the health grant and nobody else's does: the CEO who
+// manages it and the unit lead above it hold nothing for leading it, a human
+// seat whose document carries the field holds nothing (a person is decided by
+// their own permissions), and a handle the tree does not hold and a grant
+// this build does not know open nothing. GrantedSeats answers the same rule
+// over the whole tree. Mutation: answer SeatGranted from the role without the
+// agent check, or make GrantedSeats read a second field, and this goes red.
+func TestAGrantIsAnAgentRolesAndReachesWhomItAdmits(t *testing.T) {
+	t.Parallel()
+	// UNVALIDATED, because the human seat's grant is an admission rule's
+	// refusal (internal/config): a stored revision carrying one still runs,
+	// and this is what the chart then answers for it.
+	cfg, err := config.ParseCompanyDocument([]byte(strings.Replace(strings.Replace(hierarchyDoc,
+		"          - name: SRE\n            handle: sre\n",
+		"          - name: SRE\n            handle: sre\n            health_tools: true\n", 1),
+		"roles:\n  - name: CEO\n",
+		"roles:\n  - name: Founder\n    handle: founder\n    kind: human\n    health_tools: true\n"+
+			"  - name: CEO\n", 1)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	chart := orgchart.Of(o)
+	for _, c := range []struct {
+		actor string
+		grant authz.SeatGrant
+		want  bool
+	}{
+		{"sre", authz.SeatGrantHealth, true},
+		{"ceo", authz.SeatGrantHealth, false},
+		{"sre-lead", authz.SeatGrantHealth, false},
+		{"founder", authz.SeatGrantHealth, false},
+		{"nobody", authz.SeatGrantHealth, false},
+		{"sre", authz.SeatGrant("root"), false},
+	} {
+		if got, err := chart.SeatGranted(t.Context(), c.actor, c.grant); err != nil || got != c.want {
+			t.Errorf("SeatGranted(%q, %q) = %v, %v; want %v", c.actor, c.grant, got, err, c.want)
+		}
+	}
+	if got := orgchart.GrantedSeats(o, authz.SeatGrantHealth); !slices.Equal(got, []string{"sre"}) {
+		t.Errorf("GrantedSeats = %v, want exactly the seat the grant admits, [sre]", got)
+	}
+	if got := orgchart.GrantedSeats(nil, authz.SeatGrantHealth); got != nil {
+		t.Errorf("GrantedSeats over no tree = %v, want nobody", got)
 	}
 }
 

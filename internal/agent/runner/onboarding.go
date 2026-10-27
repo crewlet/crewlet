@@ -244,7 +244,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	// marks the call failed only after the job has started — leaving a run
 	// nothing collects. A tool in the snapshot is one the prompt lists to
 	// discover and activate_tool reaches.
-	snapshot := r.cfg.Registry.Snapshot().Without(RunSandboxTool)
+	snapshot := r.seatSnapshot().Without(RunSandboxTool)
 	surface, err := r.surfaceWith(ctx, r.ownMeter(), phase.Onboarding, 0, snapshot, nil,
 		onboardingAlwaysOn)
 	if err != nil {
