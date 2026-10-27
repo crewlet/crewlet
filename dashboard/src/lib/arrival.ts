@@ -5,10 +5,12 @@
  * THE ADDRESS SAYS WHICH, so a link opened in a new tab lands where a press in
  * the drawer does, and Back returns to the screen as it was before.
  *
- * A PRESS ON THE ADDRESS ALREADY OPEN ARRIVES AGAIN. A reader who scrolled
- * away and presses the same link a second time changes no hash, so nothing in
- * the route moves; [arriveAgain] is what such a press calls, and every screen
- * waiting on an arrival reveals its section once more.
+ * A PRESS ON THE SECTION ALREADY OPEN ARRIVES AGAIN. A reader who scrolled
+ * away and presses the same link a second time moves nothing the section is
+ * read from: the hash is the same, or differs only in what the screen added
+ * since (a sort, a peek). [namesSection] is how a press knows, and
+ * [arriveAgain] is what it calls; every screen waiting on an arrival reveals
+ * its section once more.
  *
  * A SECTION THAT IS NOT DRAWN IS NOT AN ERROR: a seat the screen does not list,
  * or a card the reader's answer leaves out, reveals nothing and the screen is
@@ -16,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { useRoute } from "~/app/router.tsx";
+import { parseHash, samePath, useRoute } from "~/app/router.tsx";
 import { reveal } from "./scroller.ts";
 import { SECTION_PARAM } from "./remedy.ts";
 
@@ -26,6 +28,16 @@ const listeners = new Set<() => void>();
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/**
+ * Whether the address `hash` already names the section of the screen at
+ * `path`: the same path and the same `section=`, whatever else it carries (a
+ * sort, a column set, a peek), none of which moves the section.
+ */
+export function namesSection(hash: string, path: readonly string[], section: string): boolean {
+  const here = parseHash(hash);
+  return samePath(here.path, path) && here.query.get(SECTION_PARAM) === section;
 }
 
 /** Arrive again at the section the open address names, for a press on that same address. */

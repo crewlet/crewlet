@@ -3,13 +3,14 @@
  * it, at the section that edits it, and to nobody else.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { LimitRemedy } from "./LimitRemedy.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
+import { useSectionArrival } from "~/lib/arrival.ts";
 import { ADMIN_RAISES } from "~/lib/remedy.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -52,6 +53,12 @@ const ADMIN = {
 /** A person with no Admin, who leads no unit. */
 const MEMBER = { ...ADMIN, login: "dee", grants: ["worklet"], handle: "", owner: "dee" };
 
+/** A section of the screen the remedy opens, standing in for Budgets' company card. */
+function CompanySection() {
+  const { ref } = useSectionArrival("company");
+  return <div ref={ref} tabIndex={-1} data-testid="company-section" />;
+}
+
 function mount(remedy: Remedy | null, viewer: unknown = ADMIN) {
   const store = new Store();
   store.applyHealth(healthFrame());
@@ -65,6 +72,7 @@ function mount(remedy: Remedy | null, viewer: unknown = ADMIN) {
       <FrameReadings>
         <Router>
           <LimitRemedy remedy={remedy} />
+          <CompanySection />
         </Router>
       </FrameReadings>
     </ClientContext.Provider>,
@@ -119,4 +127,24 @@ test("a refusal no limit caused draws nothing, and asks no gate", () => {
   // NO VIEWER IS MOUNTED: a remedy-less refusal must not need one.
   render(<LimitRemedy remedy={null} />);
   expect(document.body.textContent).toBe("");
+});
+
+// A PRESS ON THE SECTION ALREADY OPEN ARRIVES AGAIN, whatever the screen added
+// to the address since (a sort, a column set, a peek): none of them moves the
+// section, so a press comparing whole hashes would leave a reader who scrolled
+// away where they were.
+//
+// Mutation: compare the whole hash, and the press brings nothing back.
+test("a press on the section already open arrives again, whatever else the address carries", async () => {
+  location.hash = "#/company/budgets?section=company&sort=-month&peek=seat%3Apm";
+  mount({ setting: "company_token_budget" });
+  await settle();
+  const section = screen.getByTestId("company-section");
+  expect(document.activeElement).toBe(section);
+  section.blur();
+  expect(document.activeElement).not.toBe(section);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("link", { name: "Open company budget" }));
+  });
+  expect(document.activeElement).toBe(section);
 });

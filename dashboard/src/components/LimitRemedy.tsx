@@ -11,8 +11,8 @@
 import { ButtonLink, Text } from "@crewlethq/ui";
 import { ArrowRightGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { arriveAgain } from "~/lib/arrival.ts";
-import { remedyDestination, remedyOffer } from "~/lib/remedy.ts";
+import { arriveAgain, namesSection } from "~/lib/arrival.ts";
+import { SECTION_PARAM, remedyDestination, remedyOffer } from "~/lib/remedy.ts";
 import { useOrgWriteAccessFor } from "~/lib/useWriteAccess.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 
@@ -42,16 +42,17 @@ function Offer({ remedy, label }: { remedy: Remedy; label: string | undefined })
         </Text>
       );
     case "open": {
-      const to = href(offer.destination.path, { ...offer.destination.query });
+      const { path, query } = offer.destination;
       return (
         <ButtonLink
           size="small"
           variant="secondary"
-          href={to}
-          // THE SAME ADDRESS ARRIVES AGAIN: a press on the section already
-          // open changes no hash, so nothing would move without this.
+          href={href(path, { ...query })}
+          // THE SECTION ALREADY OPEN ARRIVES AGAIN: a press on it moves
+          // nothing the section is read from, whatever sort or peek the
+          // screen added to the address since.
           onClick={() => {
-            if (location.hash === to) arriveAgain();
+            if (namesSection(location.hash, path, query[SECTION_PARAM] ?? "")) arriveAgain();
           }}
           trailingIcon={<ArrowRightGlyph size="sm" />}
         >
