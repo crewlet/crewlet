@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
@@ -331,54 +332,65 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 // the multi-pack-index and the commit-graph (git reads a pack the index does
 // not cover from the pack's own index, and the graph names commits that are
 // still there), refs moved keep both (a bitmap names the commits it selected,
-// whichever refs point at them), and a pack removed drops both before it goes
-// (an index naming a missing pack fails every read, a graph may name commits
-// that left with it) — and what the incarnation records it holds follows. The
-// memo's answers, functions of object ids, are kept by every change to the
-// packs and the refs, and dropped with the history a log gone back replaces.
-// The explicit expectations of today's declarations, each read at the one
-// place its change is made (dropFor).
+// whichever refs point at them), a compaction's retirement drops the index and
+// keeps the graph (X04: a merge drops no commit), and a pack removed drops
+// both (an index naming a missing pack fails every read, a graph may name
+// commits that left with it) — and what the incarnation records it holds
+// follows. The memo's answers, functions of object ids, and the index of
+// pushes are kept by every change to the packs and the refs, and dropped with
+// the history a log gone back replaces. The explicit expectations of today's
+// declarations, each read at the one place its change is made: dropFor in
+// place, and a swap's links (swap.go) where a pack leaves a copy a reader
+// holds — the reader here holding every copy, each event's checked in the
+// copy that answers it.
 //
-// Mutation: declare the multi-pack-index dropped on a pack added, and the
-// first delta takes it.
+// Mutations: declare the multi-pack-index dropped on a pack added, and the
+// first delta takes it; declare the graph dropped on a retirement
+// (OnPackRetired), and the compaction's swap leaves it behind.
 func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	clk := newClock()
 	repo := w.repo(t, 1)
+	var rows []code.PackRow
 	for range 3 {
-		w.push(t, repo, "refs/heads/main", nil)
+		_, row := w.push(t, repo, "refs/heads/main", nil)
+		rows = append(rows, row)
 	}
 	c := w.open(t, clk.on)
 	first := w.sync(t, c, repo)
-	dir := first.Dir
 	clk.Add(cache.MidxDebounce)
 	if ran := cache.MaintainerPass(c); len(ran) != 1 {
 		t.Fatalf("the maintainer ran %v, want the repository", ran)
 	}
 	answer := memoKeys("events", 1)
 	memoize(t, c, first, answer)
-	packDir := filepath.Join(dir, "objects", "pack")
-	files := []string{filepath.Join(packDir, "multi-pack-index"), bitmapOf(t, packDir),
-		filepath.Join(dir, "objects", "info", "commit-graph"),
-		cache.MemoEntryFile(first, answer[0])}
-	held := func(event string, want bool) {
+	held := func(event string, s cache.Synced, want map[string]bool) {
 		t.Helper()
-		for _, path := range files {
-			if got := statOK(t, path); got != want {
-				t.Errorf("after %s, %s on disk is %t, want %t", event, filepath.Base(path), got, want)
+		packDir := filepath.Join(s.Dir, "objects", "pack")
+		bitmaps, err := filepath.Glob(filepath.Join(packDir, "*.bitmap"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, got := range map[string]bool{
+			"multi-pack-index": statOK(t, filepath.Join(packDir, "multi-pack-index")),
+			"bitmap":           len(bitmaps) == 1,
+			"commit-graph":     statOK(t, filepath.Join(s.Dir, "objects", "info", "commit-graph")),
+			"memo":             cache.MemoEntryFile(s, answer[0]) != "",
+		} {
+			if got != want[name] {
+				t.Errorf("after %s, the copy's %s on disk is %t, want %t", event, name, got, want[name])
 			}
 		}
 	}
+	every := map[string]bool{"multi-pack-index": true, "bitmap": true, "commit-graph": true, "memo": true}
 	before := w.log.state()
 
 	w.push(t, repo, "refs/heads/main", nil)
-	w.sync(t, c, repo)
-	held("a delta that adds a pack", true)
+	held("a delta that adds a pack", w.sync(t, c, repo), every)
 
 	w.tag(t, repo, "v1", false)
-	w.sync(t, c, repo)
-	held("a delta that only moves refs", true)
+	held("a delta that only moves refs", w.sync(t, c, repo), every)
 
 	w.push(t, repo, "refs/heads/main", nil)
 	w.sync(t, c, repo)
@@ -389,17 +401,28 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	if !ok || len(idx.Runs) != 3 {
 		t.Fatalf("the index of pushes after three deltas is %+v (kept %t), want a run of each", idx, ok)
 	}
+
+	w.compacted(t, repo, rows[0], rows[1])
+	retired := w.sync(t, c, repo)
+	if retired.Dir == first.Dir {
+		t.Fatalf("the compaction answered the copy a reader holds, %s: no swap", retired.Dir)
+	}
+	held("a delta that retires two packs", retired, map[string]bool{"commit-graph": true, "memo": true})
+	if idx, ok := cache.Index(c, repo); !ok || len(idx.Runs) != 3 {
+		t.Errorf("the index of pushes after the compaction is %+v (kept %t), want its three runs carried", idx, ok)
+	}
 	var runs []string
 	for _, n := range idx.Runs {
-		runs = append(runs, filepath.Join(dir, cache.RunRel(n)))
+		runs = append(runs, cache.RunRel(n))
 	}
+
 	w.log.recreate(before)
 	s := w.sync(t, c, repo)
-	held("a full round that removes the packs a log gone back no longer names", false)
+	held("a full round that removes the packs a log gone back no longer names", s, nil)
 	for _, run := range runs {
-		if statOK(t, run) {
+		if statOK(t, filepath.Join(s.Dir, run)) {
 			t.Errorf("after the log went back, %s is on disk: a log gone back drops the index, whose positions "+
-				"name other records now", filepath.Base(run))
+				"name other records now", run)
 		}
 	}
 	// What the state records follows: no index over the packs, no bitmap,

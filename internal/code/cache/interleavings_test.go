@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // THE BEHAVIOURAL HALF of TestNothingButSyncWritesACache: after any
@@ -54,6 +55,13 @@ import (
 //     janitor pass), a rebuild, a maintenance pass with the clock past the
 //     debounce, tombstones swept from the log, and the log recreated holding
 //     an earlier state's rows;
+//   - a COMPACTION — two or three live packs merged into one by git's own
+//     merge and a record retiring them — which the copy's next round takes
+//     out of it by a swap (swap.go); the retirements swept from the rows, so
+//     a copy below them reads them as packs no retirement accounts for; a
+//     swap killed at its rename, which the copy's next round tries again; and
+//     that kill followed by a restart, the next boot reading what was leaving
+//     from the state's floor;
 //   - DAMAGE A PREVIOUS PROCESS LEFT: a byte of an index file — a pack's .idx
 //     or .rev, a multi-pack-index, its bitmap, the commit-graph — flipped in
 //     place, its identity kept, and the same directory booted again; and a
@@ -88,7 +96,10 @@ import (
 // at whose production count no seed maintains a repository over its own
 // index and bitmap; and it is drawn at a weight of six, since a report's
 // repair drops the index it would run over — at four, once the reports were
-// drawn, no seed maintained a repository over its own index.
+// drawn, no seed maintained a repository over its own index. A rebuild is
+// drawn at a weight of five: at three, once the compaction's four operations
+// were drawn beside the rest, no seed's rebuild met a copy a repair had just
+// written, so none answered a request from the copy as it stands.
 // interleavingOutcomes holds the seeds to reaching every outcome; sixteen
 // reach them all, in about ten seconds under the race detector, the
 // seeds in parallel. Forty steps a seed, a check every ten:
@@ -115,7 +126,7 @@ var interleavingOps = []struct {
 	{"killed sync", 8, (*interleaving).killedSync},
 	{"restart", 4, (*interleaving).restart},
 	{"evict", 4, (*interleaving).evict},
-	{"rebuild", 3, (*interleaving).rebuild},
+	{"rebuild", 5, (*interleaving).rebuild},
 	{"maintain", 6, (*interleaving).maintain},
 	{"sweep tombstones", 2, (*interleaving).sweepTombstones},
 	{"recreate backwards", 1, (*interleaving).recreateBackwards},
@@ -125,6 +136,10 @@ var interleavingOps = []struct {
 	{"a request meets damage", 3, (*interleaving).requestMeetsDamage},
 	{"report", 6, (*interleaving).report},
 	{"scrub", 2, (*interleaving).scrub},
+	{"compact", 6, (*interleaving).compact},
+	{"sweep retirements", 2, (*interleaving).sweepRetirements},
+	{"a swap killed", 3, (*interleaving).killedSwap},
+	{"a crash mid-swap", 2, (*interleaving).crashMidSwap},
 }
 
 // interleavingOutcomes is every outcome the seeds must reach between them —
@@ -143,6 +158,8 @@ var interleavingOutcomes = []string{
 	"a verdict withheld",
 	"a report queued a repair round", "a stale report", "a deferred report", "a report in its scrub's cooldown",
 	"a crash made the scrub due", "scrub", "a scrub found damage", "a pack body found damaged",
+	"compact", "sweep retirements", "a swap with the graph kept", "a swap with the graph dropped",
+	"a swap killed at its rename", "a failed swap retried by the next round", "a crash mid-swap",
 }
 
 // errKilled is what a killed sync's fault point answers.
@@ -188,6 +205,19 @@ type interleaving struct {
 	// the check hashes it — told by the cache's check, on its goroutines.
 	swapMu sync.Mutex
 	swap   string
+
+	// killed is each repository whose swap a killedSwap failed at its
+	// rename, by the incarnation the failure left serving and how many
+	// code_cache_swapped lines there were then: what noteSwaps judges a
+	// later swap from that incarnation by. A restart or an eviction ends
+	// the line.
+	killed map[string]swapKilled
+}
+
+// swapKilled is a swap a killedSwap failed: the incarnation it left serving,
+// and the code_cache_swapped lines logged before it.
+type swapKilled struct {
+	from, lines int
 }
 
 // interleaved is the log and the repositories' work trees at one moment.
@@ -203,6 +233,7 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 	in := &interleaving{
 		t: t, w: w, rng: rand.New(rand.NewPCG(seed, 1)), clk: newClock(), faults: &codefault.Script{},
 		last: map[string]statelog.Position{}, exercised: map[string]bool{}, indexed: map[string]bool{},
+		killed: map[string]swapKilled{},
 	}
 	// Logged whatever the verdict: shown with a failure, and under -v the
 	// record of what a passing seed exercised.
@@ -234,6 +265,7 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 		in.noteRoundIndexes()
 		in.noteChecks()
 		in.noteReports()
+		in.noteSwaps()
 		in.remember()
 		in.audit()
 		if step%checkEvery == 0 || step == interleavingSteps {
@@ -495,6 +527,9 @@ func (in *interleaving) restart(string) string {
 		delete(in.indexed, dir)
 		in.indexMu.Unlock()
 	}
+	// What a killed swap left leaving the next process reads from the
+	// state, in place: no swap of this one's follows it.
+	clear(in.killed)
 	in.c = in.w.open(in.t, in.options)
 	return detail
 }
@@ -507,6 +542,11 @@ func (in *interleaving) evict(string) string {
 	evicted := before - len(cache.Repos(in.c))
 	if evicted > 0 {
 		in.saw("evict")
+	}
+	for repo := range in.killed {
+		if _, held := cache.Repos(in.c)[repo]; !held {
+			delete(in.killed, repo)
+		}
 	}
 	return fmt.Sprintf("%d of %d repositories evicted", evicted, before)
 }
@@ -599,6 +639,115 @@ func (in *interleaving) recreateBackwards(string) string {
 	return fmt.Sprintf("to the rows after step %d", at)
 }
 
+// livePacks is repo's live pack rows, as the log holds them now.
+func (f *fakeLog) livePacks(repo string) []code.PackRow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.repos[repo].packs)
+}
+
+// retiredRows is how many retirements of repo the rows still keep.
+func (f *fakeLog) retiredRows(repo string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.repos[repo].retired)
+}
+
+// compact merges two or three of repo's live packs into one, as a git node's
+// compaction would, and writes the record retiring them and adding it: what
+// the copy's next round takes out of it by a swap (swap.go).
+func (in *interleaving) compact(repo string) string {
+	live := in.w.log.livePacks(repo)
+	if len(live) < 2 {
+		return "fewer than two packs to merge"
+	}
+	in.rng.Shuffle(len(live), func(i, j int) { live[i], live[j] = live[j], live[i] })
+	n := 2 + in.rng.IntN(min(len(live), 3)-1)
+	out := in.w.compacted(in.t, repo, live[:n]...)
+	in.last[repo] = out.Added
+	in.saw("compact")
+	return fmt.Sprintf("%d packs into pack-%s", n, out.GitChecksum)
+}
+
+// sweepRetirements takes every retirement of repo the rows keep out of them,
+// as the code-retention duty does a day after a compaction: a copy last
+// synced below it reads its next round whole, and that answer serves none of
+// them, so whatever the copy still holds of them leaves as packs no
+// retirement accounts for.
+func (in *interleaving) sweepRetirements(repo string) string {
+	n := in.w.log.retiredRows(repo)
+	if n == 0 {
+		return "no retirement to sweep"
+	}
+	in.w.log.sweepRetired(repo, in.w.log.head())
+	in.last[repo] = in.w.log.head()
+	in.saw("sweep retirements")
+	return fmt.Sprintf("%d swept", n)
+}
+
+// killedSwap is a compaction, then a linearizable sync whose swap fails at
+// the point before its rename: the round answers from the copy it applied
+// to, which keeps every pack, and what is leaving waits for the next round
+// to swap it — whichever comes, the check's own included (noteSwaps).
+func (in *interleaving) killedSwap(repo string) string {
+	detail := in.compact(repo)
+	hits := in.faults.Hits(codefault.SyncSwapBeforeRename)
+	in.faults.Arm(codefault.SyncSwapBeforeRename, codefault.Action{Once: true, Err: errKilled})
+	defer in.faults.Disarm(codefault.SyncSwapBeforeRename)
+	lines := len(in.w.logs.lines(in.t, "code_cache_swapped"))
+	s := in.syncAt(repo, linearizable)
+	n := cache.Incarnation(s)
+	s.Release()
+	if in.faults.Hits(codefault.SyncSwapBeforeRename) == hits {
+		return detail + "; no swap reached"
+	}
+	in.killed[repo] = swapKilled{from: n, lines: lines}
+	in.saw("a swap killed at its rename")
+	return fmt.Sprintf("%s; the swap from incarnation %d killed at its rename", detail, n)
+}
+
+// crashMidSwap is a killed swap and then a restart: the process ends with
+// what was leaving the copy still in it, and the next boot's first round
+// reads it from the state's floor (LeavingSince) as the retirements it is,
+// in place.
+func (in *interleaving) crashMidSwap(repo string) string {
+	detail := in.killedSwap(repo)
+	_, killed := in.killed[repo]
+	in.c.Stop(in.t.Context())
+	clear(in.killed)
+	in.c = in.w.open(in.t, in.options)
+	if killed {
+		in.saw("a crash mid-swap")
+	}
+	return detail + "; restarted"
+}
+
+// noteSwaps records the outcomes the rounds' swaps reached: a swap that kept
+// the commit-graph, one that dropped it, and a killed swap TRIED AGAIN — a
+// later swap of the same repository from the incarnation the killed one left
+// serving, with nothing leaving it after.
+func (in *interleaving) noteSwaps() {
+	if counter(in.w.rec, metrics.CodeCacheSwaps, "graph", "kept") > 0 {
+		in.saw("a swap with the graph kept")
+	}
+	if counter(in.w.rec, metrics.CodeCacheSwaps, "graph", "dropped") > 0 {
+		in.saw("a swap with the graph dropped")
+	}
+	if len(in.killed) == 0 {
+		return
+	}
+	lines := in.w.logs.lines(in.t, "code_cache_swapped")
+	for repo, k := range in.killed {
+		for _, l := range lines[k.lines:] {
+			if l["repo"] == repo && l["from"] == float64(k.from) && len(cache.Leaving(in.c, repo)) == 0 {
+				in.saw("a failed swap retried by the next round")
+				delete(in.killed, repo)
+				break
+			}
+		}
+	}
+}
+
 // check holds every repository's cache to a fresh cache's at the log's
 // position now, and repos/ to holding no refused push's pack — after a scrub
 // of every copy, whose findings the linearizable sync's round repairs.
@@ -644,6 +793,8 @@ func (in *interleaving) check(step int) {
 	if err != nil {
 		t.Fatalf("reading repos/: %v", err)
 	}
+	// The check's own rounds swap what a killed swap left leaving.
+	in.noteSwaps()
 	if t.Failed() {
 		t.FailNow()
 	}

@@ -37,6 +37,7 @@ type stateDoc struct {
 		LastRun time.Time     `json:"last_run"`
 		Took    time.Duration `json:"took"`
 	} `json:"maintained"`
+	LeavingSince statelog.Position `json:"leaving_since,omitzero"`
 }
 
 // derivedDoc is one declared derived file as the state records it, keyed by
@@ -131,7 +132,8 @@ func readStateDoc(t testing.TB, dir string) stateDoc {
 }
 
 // aState is a state with every field set: the maintainer's multi-pack-index
-// over the three packs with its bitmap, and its commit-graph.
+// over the three packs with its bitmap, and its commit-graph, and pack files a
+// compaction retired below the position still leaving the directory.
 func aState(id string) stateDoc {
 	doc := stateDoc{
 		Format:        2,
@@ -153,6 +155,7 @@ func aState(id string) stateDoc {
 		},
 	}
 	doc.Maintained.LastRun, doc.Maintained.Took = time.Date(2026, 10, 1, 9, 5, 0, 0, time.UTC), 1500*time.Millisecond
+	doc.LeavingSince = statelog.Position{Stream: topics.CodeLogStream, Generation: 2, Seq: 4700}
 	return doc
 }
 

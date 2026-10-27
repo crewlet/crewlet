@@ -1,0 +1,1045 @@
+package cache
+
+import (
+	"cmp"
+	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// THE SWAP: A ROUND THAT TAKES A PACK OUT OF A COPY A READER MAY HOLD BUILDS
+// THE COPY'S NEXT INCARNATION BESIDE IT. A compaction retires packs — the
+// code domain moves their rows into code_packs_retired, the outputs holding
+// every object of them — and each git node's cache learns it from a round:
+// a delta's retired phase, or the retirements a full answer serves above the
+// caller's position. Its pack files then leave the copy. They cannot leave
+// IN PLACE: git opens a pack lazily, part way through a run, so a clone
+// reading the copy's old refs may open a retired pack's files a second after
+// the round, and no pin of a file could say which a running process will
+// touch — a scratch push's pin holds its incarnation whole for the same
+// reason. So the copy is SWAPPED, as a rebuild replaces one: the round
+// applies to its end on the current incarnation — every pack installed or
+// adopted, the refs written, the state renamed in, a truthful superset of
+// the rows at the round's position — and then the next incarnation,
+// repos/<id>.<n+1>.git, is built BY HARD LINKS of every pack the live rows
+// still name, its packed-refs and every derived file a retirement keeps but
+// the memo, renamed into repos/ whole, and made current, the memo's tree
+// MOVED into it whole as it is — one rename however many answers it holds
+// (carryMemo), as a rebuild's promote moves it; the old one is retired, and
+// its readers keep it whole until the last of them lets go (entry.go's
+// retired-incarnation rule). The cost follows the pack COUNT — three links a
+// live pack, the carried files' links, the memo's one rename and two
+// directory syncs — never the bytes: no GET and no git process, but a full
+// round's own index, which it writes over the next incarnation rather than
+// the one it leaves.
+//
+// WHAT LEAVES, AND WHAT IT TAKES WITH IT. The live set (entry.go's live) is
+// the rows the copy last converged to hold, by pack id: set whole by a full
+// round, a delta's added rows set and its retired rows taken out, an adopted
+// pack set. A pack's files leave once no live row names their checksum
+// (incarnation.leaving), each with the event that took it out — a
+// retirement, or a stray no retirement accounts for (a log gone back or
+// recreated, a full answer that served no retirements) — and every derived
+// file whose declaration DROPS on one of those events is simply not linked
+// into the next incarnation, which never holds it, so the drop precedes the
+// change the moment any reader can see it (dropFor's order rule). A merge
+// drops no commit, so a retirement keeps the commit-graph (X04): the next
+// incarnation holds the very same inode; a stray drops it.
+//
+// WHAT CARRIES OVER. A linked file is the same inode, its bytes those this
+// process wrote, checked or scrubbed, so the promote carries every per-file
+// verdict of the files it links — their vouches, the hint hashes of their
+// packs, the scrub's schedule and the packs it found whole, what a repair
+// still owes them — and nothing for a file it dropped; and the repository's
+// own records — its position, its refs, its rebuild line, its maintenance
+// cadence, its last use. Every field of an incarnation is classified in
+// swapFields, which TestEveryIncarnationFieldIsClassifiedForTheSwap holds to
+// the struct both ways, so a field a later part adds is classified before a
+// swap can lose it.
+//
+// NOTHING WRITES A FILE THE SWAP LINKS while it links it: a run of the
+// maintainer in flight on the copy the swap leaves is stopped, and waited
+// for, first — counted as a RUN by the duty cycle, the stop its end and what
+// it had spent its length, since a repository compacted more often than its
+// index run lasts would otherwise have every run stopped and every next one
+// due at once, holding a maintenance slot for ever and writing nothing — and
+// that copy's index of pushes takes no commit from then on (entry.swap).
+//
+// THE OLD COPY'S FILES ARE THE NEXT ONE'S where it kept them, so what is
+// learnt of them after the swap lands on the incarnation serving them now
+// (serving): a verdict reached over them — a scrub that was reading them, a
+// forced check of the round that swapped — is recorded there; what a git
+// process over the old copy reports is that copy's scrub's evidence (observe,
+// handOn), as is what the round's own index reports from the staged directory
+// (swapAt); and a request whose git failed over the old copy runs once more
+// over the one serving, its repair unspent, so damage in a file the two share
+// is repaired there and damage in one that left is simply gone
+// (swappedAnswer). A copy a rebuild replaced is none of these: its successor
+// was read whole and checked.
+//
+// A SWAP THAT FAILS leaves the copy as it was: the staged directory goes into
+// trash/, the current incarnation keeps serving — it holds every live pack and
+// the round's refs — what is leaving stays so, and the round answers from it.
+// The repository's next round, delta or full, tries the swap again. A copy
+// whose live pack is gone from its own directory cannot be linked from; it is
+// marked to be read whole, so its next round — full — puts the pack back
+// with one GET and swaps.
+//
+// A CRASH before the rename leaves the old incarnation the highest in repos/
+// with its state and the staged one in scratch/, which every boot empties;
+// the state names the floor the leaving files' retirements are above
+// (state.LeavingSince), so the boot's first round reads them as retirements
+// and keeps the commit-graph. The rename is the swap's one irreversible step,
+// and its fault point (codefault.SyncSwapBeforeRename) is the moment before
+// it.
+
+// swapGraph is the graph attribute of crewlet.code.cache.swaps: whether the
+// next incarnation kept the commit-graph, or the swap failed.
+const (
+	swapGraphKept    = "kept"
+	swapGraphDropped = "dropped"
+	swapFailed       = "failed"
+)
+
+// swapLeaving swaps inc, the entry's current incarnation, into its next when
+// packs are leaving it (swap), and answers the incarnation that is current
+// once it returns: the next one, or inc after a swap that failed — which
+// leaves inc serving, its leaving kept for the next round. A copy whose live
+// pack is gone from its directory is marked to be read whole. The caller
+// holds the entry's write lock whole, for its round. snap is the snapshot the
+// round APPLIED — a full one's index is written over the next incarnation,
+// which holds exactly its packs — or the zero snapshot where it applied none.
+func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, snap snapshot) *incarnation {
+	e.mu.Lock()
+	leaving := len(inc.leaving) > 0 && e.current == inc && !inc.retired
+	e.mu.Unlock()
+	if !leaving {
+		return inc
+	}
+	began := time.Now()
+	s := &swapping{c: c, e: e, inc: inc, snap: snap}
+	next, err := s.run(ctx)
+	e.mu.Lock()
+	e.swap = nil
+	e.mu.Unlock()
+	if err == nil {
+		c.swapped(s, next, time.Since(began))
+		return next
+	}
+	if s.staged != "" {
+		if terr := toTrash(c.dir, s.staged, newV7()+"-"+filepath.Base(s.staged)); terr != nil &&
+			!errors.Is(terr, fs.ErrNotExist) {
+			c.log.Warn("code_cache_trash_failed", "path", s.staged, "error", terr)
+		}
+	}
+	c.log.Warn("code_cache_swap_failed", "repo", e.id, "incarnation", inc.n, "step", s.step, "error", err)
+	if c.metrics != nil {
+		c.metrics.Add(metrics.CodeCacheSwaps, 1, metrics.Attrs{"graph": swapFailed})
+	}
+	if s.step == stepPacks && errors.Is(err, fs.ErrNotExist) {
+		// A live pack is gone from the copy's own directory: the next
+		// round reads it whole, puts the pack back with one GET (install's
+		// lost), and swaps.
+		e.mu.Lock()
+		c.markWhole(e, inc, Failure{Reason: RebuildStored}, dropRound)
+		e.mu.Unlock()
+	}
+	return inc
+}
+
+// The steps of a swap, as code_cache_swap_failed names the one it failed at.
+// The round's index between the derived files and the state is none: it
+// fails nothing (indexRound).
+const (
+	stepStage   = "stage"
+	stepPacks   = "packs"
+	stepRefs    = "refs"
+	stepDerived = "derived"
+	stepState   = "state"
+	stepRename  = "rename"
+)
+
+// stagedName is the name under scratch/ a swap of repository id stages its
+// next incarnation at: swap.<id>.<v7>.git — the id so a report of a git
+// process run there finds the repository (swapAt), a fresh v7 so no two
+// swaps' stagings, a crashed one's among them, share a name.
+func stagedName(id string) string { return "swap." + id + "." + newV7() + ".git" }
+
+// swapAt is the entry whose swap stages its next incarnation at dir, and the
+// incarnation that swap leaves — the entry's current one until the promote —
+// or nil: a git process run in the staged directory, the round's own index
+// (step 5), reads the live packs' files, which the next incarnation holds as
+// the very inodes the one it leaves does, so what it reports is about the copy
+// serving them now, and the promote carries what that copy makes of it.
+func (c *Cache) swapAt(dir string) (*entry, *incarnation) {
+	if dir == "" || filepath.Dir(dir) != filepath.Join(c.dir, scratchDir) {
+		return nil, nil
+	}
+	parts := strings.Split(filepath.Base(dir), ".")
+	if len(parts) != 4 || parts[0] != "swap" || parts[3] != "git" {
+		return nil, nil
+	}
+	c.mu.Lock()
+	e := c.entries[parts[1]]
+	c.mu.Unlock()
+	if e == nil {
+		return nil, nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if s := e.swap; s != nil && s.stagedAt == dir && e.current == s.inc && !e.dead {
+		return e, s.inc
+	}
+	return nil, nil
+}
+
+// swappedOut reports whether inc is an incarnation a swap replaced whose
+// files the entry's current incarnation serves now (serving), as the very
+// inodes for every one it kept: the copy a reader still holds was swapped
+// under it. One a rebuild replaced is not — its successor was read whole and
+// checked, and holds none of its files unchecked — nor one of a purged or
+// evicted repository. e.mu is held.
+func swappedOut(e *entry, inc *incarnation) bool {
+	return !e.dead && e.current != nil && inc != e.current && serving(inc) == e.current
+}
+
+// swapping is one swap in flight: the incarnation it leaves and the one it
+// builds, what it keeps and what it has done — what the promote's carries
+// (swapFields) read.
+type swapping struct {
+	c    *Cache
+	e    *entry
+	inc  *incarnation
+	snap snapshot
+
+	// next is the incarnation being built, staged at staged until the rename
+	// gives it its number. stagedAt is the staged directory as step 1 named
+	// it, never moved: what a git process run there names (swapAt). step is
+	// the step in flight, which a failure names.
+	next     *incarnation
+	staged   string
+	stagedAt string
+	step     string
+
+	// packs is the live packs by checksum — what the next incarnation holds
+	// — and keys the same checksums as the twenty bytes a vouch keys a pack
+	// by. keep is the declarations a swap may carry: those no event of what
+	// is leaving drops; carried, the ones it linked files of, and the memo
+	// once the promote has moved its tree (carryMemo). linked is every
+	// derived file it linked, by its path relative to the incarnation.
+	packs   map[string]livePack
+	keys    map[[hashTrailer]byte]bool
+	keep    derivedSet
+	carried derivedSet
+	linked  map[string]bool
+	// events is every event that took a pack file out, refsBytes the
+	// packed-refs it linked, and shared the bytes the two incarnations hold
+	// alike: the live packs' and the packed-refs'.
+	events    map[Event]bool
+	refsBytes int64
+	shared    int64
+}
+
+// keepsPack reports whether the next incarnation holds the pack checksum cs.
+func (s *swapping) keepsPack(cs string) bool {
+	_, ok := s.packs[cs]
+	return ok
+}
+
+// keepsDecl reports whether the swap carried the declaration name's files
+// into the next incarnation.
+func (s *swapping) keepsDecl(name DerivedName) bool {
+	return s.carried&s.c.image.set(name) != 0
+}
+
+// holds reports whether the next incarnation holds inc's file at rel, as
+// the same inode: one of a live pack's files, or a derived file it linked.
+func (s *swapping) holds(rel string) bool {
+	if cs, ok := packOfRel(rel); ok {
+		return s.keepsPack(cs)
+	}
+	return s.linked[rel]
+}
+
+// run is the swap's steps, in order, answering the next incarnation made
+// current or the failure that left inc as it was. Each step is named in
+// s.step as it runs.
+func (s *swapping) run(ctx context.Context) (*incarnation, error) {
+	c, e, inc := s.c, s.e, s.inc
+	e.mu.Lock()
+	s.packs = make(map[string]livePack, len(inc.byChecksum))
+	for _, p := range inc.live {
+		s.packs[p.checksum] = p
+	}
+	s.events = map[Event]bool{}
+	for _, ev := range inc.leaving {
+		s.events[ev] = true
+	}
+	branch := inc.repo.DefaultBranch
+	e.mu.Unlock()
+	var drop derivedSet
+	for ev := range s.events {
+		drop |= c.image.dropping(ev)
+	}
+	s.keep = c.image.all() &^ drop
+	s.keys = make(map[[hashTrailer]byte]bool, len(s.packs))
+	for cs := range s.packs {
+		var key [hashTrailer]byte
+		if _, err := hex.Decode(key[:], []byte(cs)); err == nil {
+			s.keys[key] = true
+		}
+	}
+	s.linked = map[string]bool{}
+
+	// 1. STAGE scratch/swap.<id>.<v7>.git: scratch/, because a crash before
+	// the rename must leave the old incarnation the highest in repos/ — and
+	// Open empties scratch/ into trash/ — and because the janitor counts
+	// scratch/ by sole names, so the staged links count only what they alone
+	// hold. Named by the repository, so what a git process run in it reports
+	// reaches the copy whose files it reads (swapAt). Its packed-refs is the
+	// old incarnation's own, linked below. From here the swap is the
+	// entry's (entry.swap), until swapLeaving ends it.
+	s.step = stepStage
+	s.staged = filepath.Join(c.dir, scratchDir, stagedName(e.id))
+	if err := os.Mkdir(s.staged, hostbox.DirMode); err != nil {
+		s.staged = ""
+		return nil, err
+	}
+	s.stagedAt = s.staged
+	e.mu.Lock()
+	e.swap = s
+	e.mu.Unlock()
+	if err := c.skeleton(s.staged, branch, false); err != nil {
+		return nil, err
+	}
+	// THE NEXT INCARNATION stands outside the cache's total while it is
+	// staged — discarded, as an incarnation whose bytes the total does not
+	// count is — so nothing a step records of it moves the total, and a
+	// swap that fails takes nothing back out: the promote counts it in.
+	s.next = &incarnation{dir: s.staged, discarded: true}
+
+	// 2. THE PACKS, every live one, largest first: .pack, .rev, then .idx
+	// last, so a pack is present to git only once whole.
+	s.step = stepPacks
+	order := slices.SortedFunc(maps.Keys(s.packs), func(a, b string) int {
+		return cmp.Or(cmp.Compare(s.packs[b].size, s.packs[a].size), cmp.Compare(a, b))
+	})
+	from, into := filepath.Join(inc.dir, packRel), filepath.Join(s.staged, packRel)
+	for _, cs := range order {
+		linked, err := linkBundle(c.link, filepath.Join(from, "pack-"+cs), into, cs, nil)
+		switch {
+		case err != nil:
+			return nil, err
+		case !linked:
+			return nil, fmt.Errorf("pack-%s is in %s already", cs, into)
+		}
+		s.shared += s.packs[cs].size
+	}
+	if err := syncDir(into); err != nil {
+		return nil, err
+	}
+
+	// 3. PACKED-REFS: never written in place (every rewrite stages and
+	// renames), so a link is a snapshot of the round's own.
+	s.step = stepRefs
+	refs := filepath.Join(s.staged, "packed-refs")
+	if err := c.link(filepath.Join(inc.dir, "packed-refs"), refs); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(refs)
+	if err != nil {
+		return nil, err
+	}
+	s.refsBytes = info.Size()
+	s.shared += s.refsBytes
+
+	// 4. THE DERIVED FILES a retirement keeps, once nothing writes one in the
+	// copy the swap leaves: a maintenance run on it stopped and waited for
+	// (stopRun), and its index of pushes taking no commit while the swap is
+	// the entry's (commitIndex), so what the next incarnation records of a
+	// file is what the swap linked of it.
+	s.step = stepDerived
+	s.stopRun()
+	if err = s.carryDerived(); err != nil {
+		return nil, err
+	}
+
+	// 5. A FULL ROUND'S INDEX over exactly the live packs, written into the
+	// staged directory as it would have been into the old one in place —
+	// part of the round's answer, in the round's read lane, vouched for as
+	// written; what its git reports reaches the copy it reads (swapAt). A
+	// delta writes none. Never a failure of the swap: a round answers
+	// without its index, slower and never wrong (indexRound).
+	if s.snap.full {
+		c.indexRound(ctx, e, s.next, s.snap)
+	}
+
+	// 6. THE STATE, then the rename's fault point, then the NUMBER and the
+	// rename.
+	s.step = stepState
+	if err = s.writeState(ctx); err != nil {
+		return nil, err
+	}
+	s.step = stepRename
+	if c.faults != nil {
+		if err = c.faults.Hit(ctx, codefault.SyncSwapBeforeRename, 0); err != nil {
+			return nil, err
+		}
+	}
+	if err = s.rename(); err != nil {
+		return nil, err
+	}
+	s.staged = ""
+
+	// 7. THE PROMOTE.
+	s.promote()
+	return s.next, nil
+}
+
+// stopRun stops a maintenance run on the incarnation the swap leaves and waits
+// for it to end, as a full round's sweep stops one (stopMaintenance): nothing
+// then writes a derived file of that copy while the swap links it, so what
+// the next incarnation records of a file is what it holds. The stop counts as
+// a RUN of the duty cycle where the run is one it counts (maintRun.duty) —
+// the repository's last run ended now, after what the run had spent — since
+// a run ended from outside records no end of its own (maintain), and a
+// repository compacted more often than its index run lasts would otherwise
+// have every run stopped and every next one due at once: a maintenance slot
+// held for ever, and nothing written. A run that ended by itself meanwhile
+// recorded its own end, which stands. Recorded on the incarnation the swap
+// leaves, it is carried with the rest of its cadence (swapFields), and kept
+// by a swap that fails: the run was stopped either way.
+func (s *swapping) stopRun() {
+	s.e.mu.Lock()
+	m, before := s.e.maint, s.inc.maintained
+	s.e.mu.Unlock()
+	if m == nil || m.inc != s.inc {
+		return
+	}
+	m.cancel()
+	<-m.done
+	if !m.duty {
+		return
+	}
+	s.e.mu.Lock()
+	defer s.e.mu.Unlock()
+	if s.inc.maintained == before {
+		s.inc.maintained = maintainedState{LastRun: s.c.now(), Took: time.Since(m.began)}
+	}
+}
+
+// carryDerived links into the staged incarnation the files of every
+// declaration the swap keeps, and gives it what each records: the files a
+// git process writes by the declaration's own patterns (carryFiles) and the
+// index of pushes by its record (carryIndex). A directory a declaration owns
+// whole — the memo's tree — is never linked: it MOVES into the next
+// incarnation as that is promoted, one rename (promote's carryMemo, SeedMove),
+// where linked an entry at a time it would cost a stat and a link an answer
+// inside the round that holds the repository, on every git node holding it at
+// every compaction. Each directory a link landed in is synced once.
+func (s *swapping) carryDerived() error {
+	var err error
+	s.c.image.each(s.keep, func(i int, d *Derived) {
+		if err != nil {
+			return
+		}
+		var carried bool
+		switch {
+		case d.tree():
+			// Moved at the promote (carryMemo), never linked here.
+		case d.inProcess() && !d.hasMain():
+			carried, err = s.carryIndex(d)
+		default:
+			carried, err = s.carryFiles(d)
+		}
+		if carried {
+			s.carried |= 1 << i
+		}
+	})
+	if err != nil {
+		return err
+	}
+	dirs := map[string]bool{s.staged: true}
+	for rel := range s.linked {
+		dirs[filepath.Join(s.staged, filepath.Dir(rel))] = true
+	}
+	for dir := range dirs {
+		if err = syncDir(dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// carryFiles links every regular file of the old incarnation d owns into the
+// same place in the staged one, and records d there as the old one records
+// it — at the bytes it linked; a part linked beside no main file is counted
+// and never read as made (recordDerived's rule).
+func (s *swapping) carryFiles(d *Derived) (bool, error) {
+	var bytes int64
+	present, main := false, false
+	for _, o := range d.Owns {
+		rel := filepath.FromSlash(o.Dir)
+		list, err := s.c.image.listed(s.inc.dir, rel)
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range list {
+			if !entry.Type().IsRegular() || !o.Name.MatchString(entry.Name()) {
+				continue
+			}
+			to := filepath.Join(s.staged, rel, entry.Name())
+			if err = os.MkdirAll(filepath.Dir(to), hostbox.DirMode); err != nil {
+				return false, err
+			}
+			if err = s.c.link(filepath.Join(s.inc.dir, rel, entry.Name()), to); err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					continue // gone since the listing: nothing to carry
+				}
+				return false, err
+			}
+			info, err := os.Lstat(to)
+			if err != nil {
+				return false, err
+			}
+			s.linked[filepath.Join(rel, entry.Name())] = true
+			bytes += info.Size()
+			present, main = true, main || o.Main
+		}
+	}
+	if !present {
+		return false, nil
+	}
+	s.e.mu.Lock()
+	defer s.e.mu.Unlock()
+	st := s.inc.derived[d.Name]
+	if !main {
+		st = derivedState{}
+	}
+	st.Bytes = bytes
+	s.c.setDerived(s.next, d.Name, st, true)
+	return true, nil
+}
+
+// carryIndex links every run of the old incarnation's index of pushes into
+// the staged one and carries its record — the one it read, which takes no
+// commit while the swap is the entry's (commitIndex), so every run it names
+// is on disk to link; the backfill's work on the old copy from then on is the
+// next copy's to redo. An index whose log a round marked gone carries
+// nothing, and nor does one a run of which is gone from the disk: the next
+// copy starts with no index, which its backfill reads again, rather than a
+// record naming a file it does not hold — and the swap goes on, where failing
+// it would fail every swap of the copy until a full round, keeping retired
+// packs in it for as long.
+func (s *swapping) carryIndex(d *Derived) (bool, error) {
+	s.e.mu.Lock()
+	rec, st, gone := s.inc.record(), s.inc.derived[d.Name], s.inc.historyGone
+	s.e.mu.Unlock()
+	if rec == nil || gone {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Join(s.staged, engineRoot), hostbox.DirMode); err != nil {
+		return false, err
+	}
+	var linked []string
+	for _, r := range rec.Runs {
+		rel := runRel(r.N)
+		err := s.c.link(filepath.Join(s.inc.dir, rel), filepath.Join(s.staged, rel))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			for _, l := range linked {
+				if rerr := os.Remove(filepath.Join(s.staged, l)); rerr != nil {
+					return false, rerr
+				}
+			}
+			s.c.log.Warn("code_cache_provenance_lost", "repo", s.e.id, "incarnation", s.inc.n,
+				"why", "a run the index names is not on disk to link into the next incarnation: it starts with "+
+					"none, made anew by its next full round")
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		linked = append(linked, rel)
+	}
+	for _, rel := range linked {
+		s.linked[rel] = true
+	}
+	s.e.mu.Lock()
+	defer s.e.mu.Unlock()
+	s.c.setDerived(s.next, d.Name, st, true)
+	return true, nil
+}
+
+// writeState writes the staged incarnation's state — staged in tmp/ and
+// renamed in, the directory synced, as every state is — from the records the
+// old incarnation holds now and what the swap counted of the next: its packs,
+// their bytes and the packed-refs', its objects, and its derived files'. It
+// carries the copy's LAST USE as every state written does (writeState's
+// stampUse): a swap is work, no use, and a state stamped with the moment of
+// its write would bring a copy nobody had read in a week back from a restart
+// as the copy read last.
+func (s *swapping) writeState(ctx context.Context) error {
+	s.e.mu.Lock()
+	next, inc := s.next, s.inc
+	next.at, next.stream, next.repo = inc.at, inc.stream, inc.repo
+	next.refsDigest, next.refs = inc.refsDigest, inc.refs
+	next.maintained = inc.maintained
+	next.lastUsed = inc.lastUsed
+	next.packs = len(s.packs)
+	next.objects = 0
+	for _, p := range s.packs {
+		next.objects += p.objects
+	}
+	s.c.setSize(next, s.shared)
+	s.e.mu.Unlock()
+	return s.c.persist(ctx, s.e, next, false)
+}
+
+// rename gives the staged incarnation its number — one past the highest the
+// entry has, current or retiring, past every name repos/ already holds — and
+// renames it into repos/, the one step that makes it the repository's
+// newest: os.Lstat first, because a rename onto an EMPTY directory succeeds
+// silently on both supported platforms, and the next number again where the
+// rename finds the name taken. Race-free: only the entry's round and the
+// boot create incarnation names, and the caller holds the round. repos/ is
+// synced before anything is promoted; a sync that fails fails the swap, and
+// the directory — renamed already — is taken back out of repos/ with the
+// staging (s.staged names where it is).
+func (s *swapping) rename() error {
+	s.e.mu.Lock()
+	n := 1
+	for _, inc := range append([]*incarnation{s.e.current}, s.e.retiring...) {
+		if inc != nil && inc.n >= n {
+			n = inc.n + 1
+		}
+	}
+	s.e.mu.Unlock()
+	repos := filepath.Join(s.c.dir, reposDir)
+	for ; ; n++ {
+		dir := filepath.Join(repos, s.e.id+"."+strconv.Itoa(n)+".git")
+		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		err := os.Rename(s.staged, dir)
+		if errors.Is(err, fs.ErrExist) || errors.Is(err, syscall.ENOTEMPTY) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		s.staged = dir
+		if err = syncDir(repos); err != nil {
+			return err
+		}
+		s.e.mu.Lock()
+		s.next.n, s.next.dir = n, dir
+		s.e.mu.Unlock()
+		return nil
+	}
+}
+
+// promote makes the next incarnation the entry's current one in place of
+// inc, in three steps. Under e.mu, next is counted into the cache's total and
+// inc left counting only the files it holds alone — the leaving packs' and the
+// derived files a retirement drops. Then the memo's tree MOVES into next
+// whole, one rename however many answers it holds (carryMemo), as a rebuild's
+// promote moves it: between the two locked steps, since the memo's lock is
+// taken before e.mu, and before inc is retired, since an inc nobody holds goes
+// into trash/ at its retirement, its tree with it. Then, under e.mu again,
+// every field is carried by its class (swapFields), next is made current, and
+// inc is retired, which stops a maintenance run on it (its cadence carried as
+// a run), and goes into trash/ with its last reader.
+func (s *swapping) promote() {
+	c, e, inc, next := s.c, s.e, s.inc, s.next
+	e.mu.Lock()
+	// THE TOTAL: next counted in — the live packs, the packed-refs and the
+	// derived files it linked — and inc from here on only what it holds
+	// ALONE: the files of the leaving packs and of the declarations a
+	// retirement drops. Every file the two share is counted once, by next,
+	// so the budget sees what the swap gives back when inc goes. next holds
+	// no memo yet: the move below counts it as it moves it (setMemo).
+	next.discarded = false
+	c.heldBytes.Add(next.diskBytes + next.metaBytes)
+	c.setSize(inc, max(inc.diskBytes-s.shared, 0))
+	c.image.each(s.carried, func(_ int, d *Derived) {
+		if st, ok := inc.derived[d.Name]; ok {
+			st.Bytes = 0
+			c.setDerived(inc, d.Name, st, true)
+		}
+	})
+	e.mu.Unlock()
+	// THE MEMO, served from inc until here and from next from here on. None
+	// moves from a memo shut — a round that dropped it with its history
+	// leaves it shut over the packs that history left (apply) — and next
+	// then opens a memo of its own.
+	c.carryMemo(e, inc, next)
+	e.mu.Lock()
+	if _, moved := next.derived[DerivedMemo]; moved {
+		s.carried |= c.image.set(DerivedMemo)
+	}
+	for _, f := range swapFields {
+		if f.carry != nil {
+			f.carry(s)
+		}
+	}
+	inc.successor = next
+	e.current = next
+	// The backfill's work is the new copy's now (schedule.go), as at a
+	// rebuild's promote.
+	c.backfillDirty(e)
+	gone := c.retire(e, inc)
+	e.mu.Unlock()
+	c.trash(gone)
+}
+
+// swapped records a swap made: code_cache_swapped and
+// crewlet.code.cache.swaps, by whether the next incarnation kept the
+// commit-graph — dropped where a stray no retirement accounts for took it,
+// or where the copy held none.
+func (c *Cache) swapped(s *swapping, next *incarnation, took time.Duration) {
+	graph := swapGraphDropped
+	if rel := c.image.mainRel(DerivedGraph); rel != "" && s.linked[rel] {
+		graph = swapGraphKept
+	}
+	dropped := 0
+	s.e.mu.Lock()
+	for key := range s.inc.leaving {
+		if packChecksum.MatchString(key) {
+			dropped++
+		}
+	}
+	s.e.mu.Unlock()
+	c.log.Info("code_cache_swapped", "repo", s.e.id, "from", s.inc.n, "to", next.n, "packs_kept", len(s.packs),
+		"packs_dropped", dropped, "graph", graph, "took", took)
+	if c.metrics != nil {
+		c.metrics.Add(metrics.CodeCacheSwaps, 1, metrics.Attrs{"graph": graph})
+	}
+	c.setGauges()
+}
+
+// link makes newname a hard link of oldname: os.Link, or the suite's link
+// (knobs.link) — a case makes one fail.
+func (c *Cache) link(oldname, newname string) error {
+	if c.knobs != nil && c.knobs.link != nil {
+		return c.knobs.link(oldname, newname)
+	}
+	return os.Link(oldname, newname)
+}
+
+// leavingRetired reports whether a compaction's retirement took out any of
+// leaving: what a state's LeavingSince is written for.
+func leavingRetired(leaving map[string]Event) bool {
+	for _, ev := range leaving {
+		if ev == EventPackRetired {
+			return true
+		}
+	}
+	return false
+}
+
+// lowest is the lower of two positions on the code log, a zero one being
+// none; zero where both are.
+func lowest(a, b statelog.Position) statelog.Position {
+	switch {
+	case a.IsZero():
+		return b
+	case b.IsZero():
+		return a
+	}
+	if before, err := b.Before(a); err == nil && before {
+		return b
+	}
+	return a
+}
+
+// swapClass is how a swap's promote treats one field of an incarnation.
+type swapClass string
+
+const (
+	// carried: next takes inc's value as it stands at the promote — the
+	// repository's, or a record of files next holds as the same inodes.
+	carried swapClass = "carried"
+	// carriedFiltered: next takes inc's value for the files it holds alone —
+	// the live packs, the derived files it linked — and nothing for a file
+	// the swap dropped.
+	carriedFiltered swapClass = "carried-filtered"
+	// notCarried: inc's own — a reader's or a process's of inc's directory,
+	// or what goes with it — and next starts from the zero value.
+	notCarried swapClass = "not-carried"
+	// own: next's own, set by the swap's steps: its number, its directory,
+	// the state it wrote.
+	own swapClass = "own"
+	// recomputed: worked out afresh for next from the live rows and what the
+	// swap linked and wrote.
+	recomputed swapClass = "recomputed"
+)
+
+// swapClasses is every swapClass.
+var swapClasses = []swapClass{carried, carriedFiltered, notCarried, own, recomputed}
+
+// swapField is one field of an incarnation as the swap treats it: its class,
+// why, and — for a carried one alone — the carry the promote makes, under
+// e.mu.
+type swapField struct {
+	name  string
+	class swapClass
+	why   string
+	carry func(s *swapping)
+}
+
+// swapFields is EVERY FIELD OF incarnation, each in exactly one class, in the
+// struct's order: the promote carries each carried field by its own carry,
+// and TestEveryIncarnationFieldIsClassifiedForTheSwap holds the table to the
+// struct both ways, so a field a later part adds is classified before a swap
+// can lose it.
+var swapFields = []swapField{
+	{name: "n", class: own, why: "the number the rename gave it"},
+	{name: "dir", class: own, why: "repos/<id>.<n>.git, its own directory"},
+	{name: "pins", class: notCarried, why: "each reader's pin is of the directory it holds; next is pinned as " +
+		"it is handed out"},
+	{name: "retired", class: notCarried, why: "inc's: retired by the promote"},
+	{name: "discarded", class: own, why: "true while staged, outside the cache's total; the promote counts it in"},
+	{name: "converged", class: carried, why: "inc's own verdict for the round that swapped: next holds what inc " +
+		"converged to, less what left",
+		carry: func(s *swapping) { s.next.converged = s.inc.converged }},
+	{name: "reread", class: carried, why: "a whole read owed, which the next full round answers on next",
+		carry: func(s *swapping) { s.next.reread = s.inc.reread }},
+	{name: "marks", class: carried, why: "the in-place marks a round converges against",
+		carry: func(s *swapping) { s.next.marks = s.inc.marks }},
+	{name: "drop", class: carriedFiltered, why: "the drops reports asked of the declarations next carries",
+		carry: func(s *swapping) { s.next.drop = s.filterDrops(s.inc.drop) }},
+	{name: "packChecks", class: carriedFiltered, why: "a hint's hash of a live pack is of the same inodes",
+		carry: func(s *swapping) {
+			for cs, check := range s.inc.packChecks {
+				if s.keepsPack(cs) {
+					if s.next.packChecks == nil {
+						s.next.packChecks = map[string]*packCheck{}
+					}
+					s.next.packChecks[cs] = check
+				}
+			}
+		}},
+	{name: "rebuilds", class: carried, why: "the line of rebuild attempts is the repository's, not the " +
+		"directory's",
+		carry: func(s *swapping) { s.next.rebuilds = s.inc.rebuilds }},
+	{name: "unmoved", class: own, why: "false: the swap moved the copy's packs, so no rebuild's read is what " +
+		"it holds"},
+	{name: "state", class: own, why: "the state the swap wrote into the staged directory"},
+	{name: "at", class: carried, why: "the position the rows were read at",
+		carry: func(s *swapping) { s.next.at = s.inc.at }},
+	{name: "stream", class: carried, why: "the code log the position is on",
+		carry: func(s *swapping) { s.next.stream = s.inc.stream }},
+	{name: "repo", class: carried, why: "the repository's row as the round read it",
+		carry: func(s *swapping) { s.next.repo = s.inc.repo }},
+	{name: "refsDigest", class: carried, why: "packed-refs is the same file, linked",
+		carry: func(s *swapping) { s.next.refsDigest = s.inc.refsDigest }},
+	{name: "refs", class: carried, why: "packed-refs is the same file, linked",
+		carry: func(s *swapping) { s.next.refs = s.inc.refs }},
+	{name: "packs", class: recomputed, why: "the live packs it linked"},
+	{name: "objects", class: recomputed, why: "the live rows' objects"},
+	{name: "diskBytes", class: recomputed, why: "the live packs' bundles and the packed-refs it linked (setSize)"},
+	{name: "metaBytes", class: recomputed, why: "its derived files' bytes, as setDerived keeps them"},
+	{name: "derived", class: recomputed, why: "what the swap linked of the declarations it carries, the " +
+		"round's index it wrote, and the memo's record, moved with its tree (carryMemo)"},
+	{name: "maintained", class: carried, why: "the duty cycle's clock is the repository's: copied whatever the " +
+		"declarations drop, a run the swap stopped counted on it as a run (stopRun)",
+		carry: func(s *swapping) { s.next.maintained = s.inc.maintained }},
+	{name: "graphFailed", class: carried, why: "a graph-first run that failed waits for the ordinary rules " +
+		"whichever directory it would write in",
+		carry: func(s *swapping) { s.next.graphFailed = s.inc.graphFailed }},
+	{name: "vouched", class: carriedFiltered, why: "a link is the same inode: inc's vouch for a live pack's " +
+		"index files and a linked derived file stands, beside next's own for what the swap wrote",
+		carry: func(s *swapping) { s.carryVouches() }},
+	{name: "checkedOnce", class: carried, why: "every file next holds was held to its trailer by a full round " +
+		"of this process, or written by it",
+		carry: func(s *swapping) { s.next.checkedOnce = s.inc.checkedOnce }},
+	{name: "indexRepair", class: carriedFiltered, why: "an index repair is the multi-pack-index's: owed only " +
+		"where the swap carries it",
+		carry: func(s *swapping) { s.next.indexRepair = s.inc.indexRepair && s.keepsDecl(DerivedMidx) }},
+	{name: "repair", class: carriedFiltered, why: "what the repair still owes a file next holds",
+		carry: func(s *swapping) { s.next.repair = s.filterRepair(s.inc.repair) }},
+	{name: "held", class: notCarried, why: "each reader's held reports are that reader's, keyed on the inc it " +
+		"holds: its repair consumes them, and its release hands what is left to the copy serving inc's files " +
+		"(handOn) — next, whose scrub answers them"},
+	{name: "mapped", class: notCarried, why: "inc's mappings of its runs, held by inc's readers; next maps its " +
+		"own"},
+	{name: "runHolds", class: notCarried, why: "inc's readers' holds of its mappings"},
+	{name: "historyGone", class: carried, why: "a log gone back the next full round drops the index for",
+		carry: func(s *swapping) { s.next.historyGone = s.inc.historyGone }},
+	{name: "provGen", class: carried, why: "the index next carries is the same index",
+		carry: func(s *swapping) { s.next.provGen = s.inc.provGen }},
+	{name: "provNext", class: carried, why: "no run of the index takes a number one before it took",
+		carry: func(s *swapping) { s.next.provNext = max(s.next.provNext, s.inc.provNext) }},
+	{name: "retiredRuns", class: notCarried, why: "inc's runs its index stopped naming, on inc's disk and gone " +
+		"with inc's directory: next links only the runs its record names (carryIndex)"},
+	{name: "memoMu", class: own, why: "the memo's lock of next's own"},
+	{name: "memoListed", class: own, why: "false, or inc's as carryMemo moves the memo's tree in whole as next " +
+		"is promoted: the cohorts on next's disk are those inc's record named, listed or not"},
+	{name: "memoVersion", class: own, why: "moved by next's own record as carryMemo moves the memo in " +
+		"(setMemo), past what the swap's state records, so the janitor writes next's state at its tick"},
+	{name: "memoStated", class: own, why: "the memo's version the state the swap wrote records"},
+	{name: "memoGen", class: own, why: "zero, as a rebuild's new incarnation starts: a batch is begun on next " +
+		"only once it serves, and carryMemo moves a memo only into a copy whose own round has dropped none"},
+	{name: "memoShut", class: own, why: "false, open: a memo is shut until the round that dropped it has made " +
+		"its change visible (reopenMemo), and next holds exactly the live rows' packs — the change is visible " +
+		"in it, whichever round swapped — while a memo shut on inc, which holds what left until its last " +
+		"reader lets go, or carried away from it, stays shut there"},
+	{name: "written", class: carriedFiltered, why: "when this process last wrote a carried declaration's files, " +
+		"the same inodes; next's own write of what the swap wrote stands",
+		carry: func(s *swapping) { s.next.written = s.filterTimes(s.inc.written, s.next.written) }},
+	{name: "damagedAt", class: carriedFiltered, why: "when a carried declaration's files were last dropped for " +
+		"damage",
+		carry: func(s *swapping) { s.next.damagedAt = s.filterTimes(s.inc.damagedAt, s.next.damagedAt) }},
+	{name: "againLogged", class: carriedFiltered, why: "the carried declarations logged damaged again",
+		carry: func(s *swapping) { s.next.againLogged = s.inc.againLogged & s.carried }},
+	{name: "memoryRefused", class: carried, why: "the steps the node's memory refuses the repository, which " +
+		"its objects decide — beside any the round's index the swap wrote was refused",
+		carry: func(s *swapping) { s.next.memoryRefused |= s.inc.memoryRefused }},
+	{name: "inherited", class: carried, why: "whether a previous process left the bytes next holds",
+		carry: func(s *swapping) { s.next.inherited = s.inc.inherited }},
+	{name: "scrubbing", class: notCarried, why: "a scrub running reads inc's files; its verdict lands on the " +
+		"incarnation serving them when it ends (serving)"},
+	{name: "scrubRunning", class: notCarried, why: "the priority of the scrub running over inc"},
+	{name: "scrubDue", class: carried, why: "a scrub due at once is due for the same bytes",
+		carry: func(s *swapping) { s.next.scrubDue = s.inc.scrubDue }},
+	{name: "scrubAsked", class: carried, why: "as old as it was",
+		carry: func(s *swapping) { s.next.scrubAsked = s.inc.scrubAsked }},
+	{name: "scrubBase", class: carried, why: "every byte next holds was held to its checksum then, or placed " +
+		"since by this process",
+		carry: func(s *swapping) { s.next.scrubBase = s.inc.scrubBase }},
+	{name: "scrubbedAt", class: carried, why: "the cooldown runs from the scrub of the same bytes",
+		carry: func(s *swapping) { s.next.scrubbedAt = s.inc.scrubbedAt }},
+	{name: "scrubFound", class: carried, why: "whether that scrub found anything",
+		carry: func(s *swapping) { s.next.scrubFound = s.inc.scrubFound }},
+	{name: "scrubBegan", class: carried, why: "when that scrub began, on the monotonic clock",
+		carry: func(s *swapping) { s.next.scrubBegan = s.inc.scrubBegan }},
+	{name: "scrubEnded", class: carried, why: "when that scrub ended, on the monotonic clock",
+		carry: func(s *swapping) { s.next.scrubEnded = s.inc.scrubEnded }},
+	{name: "scrubWhole", class: carriedFiltered, why: "the live packs that scrub found whole",
+		carry: func(s *swapping) {
+			s.next.scrubWhole = slices.DeleteFunc(slices.Clone(s.inc.scrubWhole), func(cs string) bool {
+				return !s.keepsPack(cs)
+			})
+		}},
+	{name: "repairWrite", class: carried, why: "a repair written into a file next holds, the guard of a request " +
+		"that may have failed on what it replaced",
+		carry: func(s *swapping) { s.next.repairWrite = s.inc.repairWrite }},
+	{name: "forcedAt", class: carried, why: "a forced check's verdict on the same inodes",
+		carry: func(s *swapping) { s.next.forcedAt = s.inc.forcedAt }},
+	{name: "forcedEnded", class: carried, why: "the same, on the monotonic clock",
+		carry: func(s *swapping) { s.next.forcedEnded = s.inc.forcedEnded }},
+	{name: "lastUsed", class: carried, why: "the repository's last use orders the budget: the state the swap " +
+		"wrote carries it, and a use of inc since is carried at the promote",
+		carry: func(s *swapping) { s.next.lastUsed = s.inc.lastUsed }},
+	{name: "stamped", class: own, why: "the last use the state the swap wrote was stamped with (writeState), " +
+		"never the moment of the write: a later use the janitor stamps at its tick"},
+	{name: "live", class: carried, why: "the live rows are what next holds",
+		carry: func(s *swapping) { s.next.live, s.inc.live = s.inc.live, nil }},
+	{name: "byChecksum", class: carried, why: "the live rows' checksums are next's files",
+		carry: func(s *swapping) { s.next.byChecksum, s.inc.byChecksum = s.inc.byChecksum, nil }},
+	{name: "leaving", class: recomputed, why: "empty: the swap took out every file that was leaving"},
+	{name: "leavingSince", class: recomputed, why: "zero: nothing is leaving next"},
+	{name: "successor", class: notCarried, why: "inc's: the promote points it at next"},
+}
+
+// filterDrops is drops for the declarations the swap carries.
+func (s *swapping) filterDrops(drops derivedDrops) derivedDrops {
+	var out derivedDrops
+	for name, ask := range drops {
+		if s.keepsDecl(name) {
+			out.add(name, ask.began, ask.by)
+		}
+	}
+	return out
+}
+
+// filterTimes is the times of the declarations the swap carries, beside
+// next's own, which stand.
+func (s *swapping) filterTimes(from, mine map[DerivedName]time.Time) map[DerivedName]time.Time {
+	out := maps.Clone(mine)
+	for name, at := range from {
+		if _, own := out[name]; own || !s.keepsDecl(name) {
+			continue
+		}
+		if out == nil {
+			out = map[DerivedName]time.Time{}
+		}
+		out[name] = at
+	}
+	return out
+}
+
+// filterRepair is what inc's repair mark still owes a file next holds: the
+// drops of the declarations carried, the findings and the reinstalls of the
+// files and the live packs it holds, the downloads held off of the live
+// packs, and the forced checks owed, which hold every index file next holds.
+func (s *swapping) filterRepair(m repairMark) repairMark {
+	out := repairMark{drops: s.filterDrops(m.drops), forces: m.forces}
+	for rel, f := range m.found {
+		if s.holds(rel) {
+			if out.found == nil {
+				out.found = map[string]checkedFile{}
+			}
+			out.found[rel] = f
+		}
+	}
+	for cs, f := range m.reinstall {
+		if s.keepsPack(cs) {
+			if out.reinstall == nil {
+				out.reinstall = map[string]checkedFile{}
+			}
+			out.reinstall[cs] = f
+		}
+	}
+	for cs, b := range m.fetchFailed {
+		if s.keepsPack(cs) {
+			if out.fetchFailed == nil {
+				out.fetchFailed = map[string]fetchBackoff{}
+			}
+			out.fetchFailed[cs] = b
+		}
+	}
+	return out
+}
+
+// carryVouches carries inc's vouches for the files next holds as the same
+// inodes — a live pack's .idx and .rev, a linked derived file — beside next's
+// own, for what the swap wrote, which stand.
+func (s *swapping) carryVouches() {
+	for key, v := range s.inc.vouched.packs {
+		if !s.keys[key] {
+			continue
+		}
+		if s.next.vouched.packs == nil {
+			s.next.vouched.packs = map[[hashTrailer]byte]packVouch{}
+		}
+		s.next.vouched.packs[key] = v
+	}
+	for rel, stamp := range s.inc.vouched.derived {
+		if _, own := s.next.vouched.derived[rel]; own || !s.linked[rel] {
+			continue
+		}
+		if s.next.vouched.derived == nil {
+			s.next.vouched.derived = map[string]fileStamp{}
+		}
+		s.next.vouched.derived[rel] = stamp
+	}
+}

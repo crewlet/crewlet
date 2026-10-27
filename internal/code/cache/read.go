@@ -61,6 +61,27 @@ type snapshot struct {
 	since  statelog.Position
 	pushes []code.IntroducedRow
 	asked  bool
+	// retiredSince is page 1's StateQuery.RetiredSince: the floor a full
+	// answer was asked to serve the retirements above (retiredFloor) — zero
+	// where it asked for none. retiredFrom is the floor the answer's
+	// retired phase is complete above, the same on every page: since on a
+	// delta, retiredSince on a full answer that honoured it, ZERO on one
+	// that served none — a round then reads every pack file no row names
+	// as one no row accounts for (swap.go). retired is that phase's rows,
+	// in (position, pack id, part) order, each once: what a round takes out
+	// of the incarnation's live set.
+	retiredSince, retiredFrom statelog.Position
+	retired                   []code.RetiredRow
+}
+
+// retiredChecksums is the checksums s's retired phase names, as a set: what
+// a full round reads a stray by (swap.go's strays).
+func (s snapshot) retiredChecksums() map[string]bool {
+	out := make(map[string]bool, len(s.retired))
+	for _, r := range s.retired {
+		out[r.GitChecksum] = true
+	}
+	return out
 }
 
 // kind is what reading s cost.
@@ -127,14 +148,19 @@ func (m *logMark) set(stream time.Time, at statelog.Position) {
 // read is the snapshot of id an incarnation at at, on the stream made at
 // stream, converges to: full, or a delta from at, at fresh — a delta asked for
 // its pushes phase where pushes says the incarnation keeps an index of pushes
-// to fold them into (provenance.go).
+// to fold them into (provenance.go). retired is the floor a full answer is
+// asked to serve the retirements above (StateQuery.RetiredSince), zero for
+// none: a round's is retiredFloor, and a check, which reads no retirement,
+// asks none.
 //
-//  1. Page 1 asks from at (zero when full).
+//  1. Page 1 asks from at (zero when full), and a full answer for the
+//     retirements above retired.
 //  2. A page-1 DELTA keyed to another stream than the incarnation's is the
 //     log RECREATED under the cache — provisioned anew, its stamp not the
 //     one the cache read under (a snapshot restore keeps it, ADR-0053) —
 //     which Since cannot tell the reader: asked again from nothing, once
-//     (restreamed).
+//     (restreamed), and for no retirements, since at is a position of a
+//     log that is gone.
 //  3. An answer on the incarnation's own stream below at is BEHIND; what that
 //     means is the round's to decide by the level it read at (converge).
 //  4. Next is followed to its end; a page that answers code.ErrSnapshotMoved
@@ -143,16 +169,16 @@ func (m *logMark) set(stream time.Time, at statelog.Position) {
 //     or a reanchor moved under a delta.
 //  5. Every page is validated (snapshot.add) — ErrBadSnapshot, naming the
 //     page and the row.
-func (c *Cache) read(ctx context.Context, id string, at statelog.Position, stream time.Time, full, pushes bool,
-	fresh statelog.Freshness) (snapshot, error) {
+func (c *Cache) read(ctx context.Context, id string, at, retired statelog.Position, stream time.Time, full,
+	pushes bool, fresh statelog.Freshness) (snapshot, error) {
 
-	since := at
+	since, retiredSince := at, retired
 	if full {
 		since = statelog.Position{}
 	}
 	restarts, restreamed := 0, false
 	for {
-		snap, err := c.readOnce(ctx, id, since, fresh, pushes && !since.IsZero(), false)
+		snap, err := c.readOnce(ctx, id, since, retiredSince, fresh, pushes && !since.IsZero(), false)
 		switch {
 		case errors.Is(err, code.ErrSnapshotMoved):
 			if restarts == MaxSnapshotRestarts {
@@ -168,7 +194,7 @@ func (c *Cache) read(ctx context.Context, id string, at statelog.Position, strea
 		case !snap.full && !restreamed && !snap.streamCreated.Equal(stream):
 			restreamed = true
 			c.log.Info("code_cache_stream_changed", "repo", id, "was", stream, "now", snap.streamCreated)
-			since = statelog.Position{}
+			since, retiredSince = statelog.Position{}, statelog.Position{}
 			continue
 		case snap.streamCreated.Equal(stream) && !reached(snap.position, at):
 			snap.behind = true
@@ -176,6 +202,22 @@ func (c *Cache) read(ctx context.Context, id string, at statelog.Position, strea
 		snap.restreamed = restreamed
 		return snap, nil
 	}
+}
+
+// retiredFloor is the floor a round of an incarnation at at asks a full
+// answer for the retirements above (read's retired), so a full round can tell
+// a pack file a compaction retired from one no row accounts for (swap.go): at
+// itself — what the full answer stands in for a delta from, a delta's being
+// always those above its own floor, so page 1 weighs the two answers like with
+// like — or leaving, the incarnation's leavingSince, where it is lower: the
+// floor the retirements of the pack files it still holds are all above, which
+// a crash or a failed swap left it holding past the position its round
+// recorded. Zero for an incarnation at none.
+func retiredFloor(at, leaving statelog.Position) statelog.Position {
+	if below, err := leaving.Before(at); !leaving.IsZero() && err == nil && below {
+		return leaving
+	}
+	return at
 }
 
 // fullRounds is the node's slots for FULL READS of a repository's rows
@@ -287,7 +329,7 @@ func logRead(err error) error {
 // again from page 1 when the history moves under it, as read is.
 func (c *Cache) readPacks(ctx context.Context, id string, fresh statelog.Freshness) (snapshot, error) {
 	for restarts := 0; ; restarts++ {
-		snap, err := c.readOnce(ctx, id, statelog.Position{}, fresh, false, true)
+		snap, err := c.readOnce(ctx, id, statelog.Position{}, statelog.Position{}, fresh, false, true)
 		if !errors.Is(err, code.ErrSnapshotMoved) || restarts == MaxSnapshotRestarts {
 			return snap, err
 		}
@@ -295,16 +337,17 @@ func (c *Cache) readPacks(ctx context.Context, id string, fresh statelog.Freshne
 }
 
 // readOnce reads every page of one snapshot — a delta asked for its pushes
-// phase where pushes says so, or, packsOnly, a full one's pages up to the
-// first that serves a ref (readPacks) — or answers the first page's failure
-// as it is: the estate's, as ErrLogRead (logRead). Every page the estate
-// answers is timed (pageAnswered).
+// phase where pushes says so, a full one asked for the retirements above
+// retiredSince, or, packsOnly, a full one's pages up to the first that serves
+// a ref (readPacks) — or answers the first page's failure as it is: the
+// estate's, as ErrLogRead (logRead). Every page the estate answers is timed
+// (pageAnswered).
 //
 // A FULL READ HOLDS ONE OF THE NODE'S SLOTS (fullRounds, MaxFullRounds) from
 // the page it first knows it is full to its last: its first, asked from
 // nothing; its second, when the log answers a delta in full, since page 1
 // decides and was asked as a delta's. A delta's pages hold none.
-func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position,
+func (c *Cache) readOnce(ctx context.Context, id string, since, retiredSince statelog.Position,
 	fresh statelog.Freshness, pushes, packsOnly bool) (snapshot, error) {
 
 	held := false
@@ -320,7 +363,8 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 		held = true
 	}
 	asked := time.Now()
-	page, err := c.fetch.RepoState(ctx, code.StateQuery{RepoID: id, Since: since, Fresh: fresh, Pushes: pushes})
+	page, err := c.fetch.RepoState(ctx, code.StateQuery{RepoID: id, Since: since, Fresh: fresh, Pushes: pushes,
+		RetiredSince: retiredSince})
 	if err != nil {
 		return snapshot{}, logRead(err)
 	}
@@ -331,6 +375,7 @@ func (c *Cache) readOnce(ctx context.Context, id string, since statelog.Position
 	snap := snapshot{
 		full: page.Full, position: page.Position, streamCreated: page.StreamCreated,
 		packs: map[packKey]code.PackRow{}, since: since, asked: pushes && !page.Full,
+		retiredSince: retiredSince, retiredFrom: page.RetiredFrom,
 	}
 	seen := map[string]int{}
 	for n := 1; ; n++ {
@@ -396,6 +441,15 @@ func (s *snapshot) add(id string, n int, page code.RepoSnapshot, seen map[string
 			"did not", page.Full, page.Position, page.StreamCreated, s.full, s.position, s.streamCreated)
 	case !gitref.ValidBranch(page.Repo.DefaultBranch):
 		return bad("default branch %q is not a branch name", page.Repo.DefaultBranch)
+	case page.RetiredFrom != s.retiredFrom:
+		return bad("it serves the retirements above %s, and page 1 those above %s", page.RetiredFrom, s.retiredFrom)
+	case !s.full && s.retiredFrom != s.since:
+		// A delta's retirements are every one above its own floor: what it
+		// takes out of the incarnation it is a delta of.
+		return bad("a delta from %s serves the retirements above %s", s.since, s.retiredFrom)
+	case s.full && !s.retiredFrom.IsZero() && s.retiredFrom != s.retiredSince:
+		return bad("a full answer asked for the retirements above %s serves those above %s", s.retiredSince,
+			s.retiredFrom)
 	}
 	for _, p := range page.Packs {
 		if err := checkPack(p); err != nil {
@@ -439,7 +493,44 @@ func (s *snapshot) add(id string, n int, page code.RepoSnapshot, seen map[string
 			return bad("%v", err)
 		}
 	}
+	for _, r := range page.Retired {
+		if err := s.addRetired(r); err != nil {
+			return bad("%v", err)
+		}
+	}
 	s.repo = page.Repo
+	return nil
+}
+
+// addRetired validates one row of the snapshot's retired phase and takes it
+// in: the retirement of a pack named by a checksum its files can carry, at a
+// position on the code log in (retiredFrom, position], after every row before
+// it in (position, pack id, part) order — so each is served once. A full
+// answer that serves no retirements serves no row of them either.
+func (s *snapshot) addRetired(r code.RetiredRow) error {
+	switch {
+	case s.retiredFrom.IsZero():
+		return fmt.Errorf("pack %s/%s is served retired by a full answer that serves no retirements", r.PackID,
+			r.Part)
+	case !packChecksum.MatchString(r.GitChecksum):
+		return fmt.Errorf("retired pack %s/%s names %q, which is no pack checksum", r.PackID, r.Part,
+			r.GitChecksum)
+	case r.Position.Stream != topics.CodeLogStream || r.Position.Valid() != nil:
+		return fmt.Errorf("pack %s/%s was retired at %s, which is no position on %s", r.PackID, r.Part, r.Position,
+			topics.CodeLogStream)
+	case r.Position.Packed() <= s.retiredFrom.Packed() || r.Position.Packed() > s.position.Packed():
+		return fmt.Errorf("pack %s/%s was retired at %s, outside the retired phase's (%s, %s]", r.PackID, r.Part,
+			r.Position, s.retiredFrom, s.position)
+	}
+	if n := len(s.retired); n > 0 {
+		last := s.retired[n-1]
+		if cmp.Or(cmp.Compare(last.Position.Packed(), r.Position.Packed()), strings.Compare(last.PackID, r.PackID),
+			strings.Compare(last.Part, r.Part)) >= 0 {
+			return fmt.Errorf("pack %s/%s retired at %s is served after pack %s/%s retired at %s", r.PackID, r.Part,
+				r.Position, last.PackID, last.Part, last.Position)
+		}
+	}
+	s.retired = append(s.retired, r)
 	return nil
 }
 

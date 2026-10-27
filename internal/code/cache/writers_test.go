@@ -38,7 +38,8 @@ import (
 // INTERLEAVINGS: after any interleaving of what a node's cache meets —
 // pushes, tags, deletions, refused pushes, adoptions, syncs at every level,
 // syncs killed mid-step, restarts, evictions, rebuilds, maintenance, swept
-// tombstones and a log recreated backwards — every cache equals a cache
+// tombstones, a log recreated backwards, compactions and the swaps that take
+// their packs out, killed or crashed mid-way — every cache equals a cache
 // rebuilt from nothing at the same position, and no file under repos/ holds
 // a pack a refused push uploaded (interleavings_test.go).
 func TestNothingButSyncWritesACache(t *testing.T) {
@@ -457,8 +458,15 @@ var cacheWriters = []writerRow{
 		"the memo of answers by object id, the cache's own derived file under the incarnation's crewlet/memo: " +
 			"each answer staged in tmp/ — with no sync, since every read holds an entry to its digest — " +
 			"completed with its run's tail and renamed into the tree it makes, the tree of the copy a rebuild " +
-			"replaces moved whole into the copy it promotes, an entry that fails its digest or is trimmed " +
-			"removed, and the tree moved whole through layout.go's toTrash", []cache.DerivedName{cache.DerivedMemo}},
+			"replaces or a swap leaves moved whole into the copy it promotes, an entry that fails its digest or " +
+			"is trimmed removed, and the tree moved whole through layout.go's toTrash",
+		[]cache.DerivedName{cache.DerivedMemo}},
+	{"internal/code/cache/swap.go", kindOS,
+		"a swap's next incarnation, staged under scratch/: its directory and the directories of what it " +
+			"links, every live pack's three files, the packed-refs and each derived file a retirement keeps " +
+			"but the memo HARD-LINKED from the incarnation it replaces — the same inodes, written by nothing " +
+			"here — and the whole renamed into repos/ under its number; its skeleton and its state go through " +
+			"entry.go and durable.go, and the memo's tree moves whole through memo.go", nil},
 	{"internal/code/host/receive.go", kindGit + " receive-pack",
 		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
 			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +

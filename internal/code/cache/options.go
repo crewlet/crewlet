@@ -229,6 +229,10 @@ type knobs struct {
 	// pushes that stored merged (mergeSpan): a benchmark counts the merges a
 	// push costs.
 	merged func(runs int)
+	// link, when set, makes every hard link a swap makes (Cache.link) in
+	// place of os.Link: a case makes a link fail, as a filesystem out of
+	// links or room would.
+	link func(oldname, newname string) error
 }
 
 // validate refuses an Options value naming the field and what to set,

@@ -663,7 +663,7 @@ func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedP
 // either way, and the directory is synced with the round's other installs.
 func (c *Cache) installHanded(e *entry, inc *incarnation, packDir string, p code.PackRow, st *staging) bool {
 	defer c.dropStaging(st)
-	linked, err := linkBundle(st.stem, packDir, p.GitChecksum, func(ext string) {
+	linked, err := linkBundle(nil, st.stem, packDir, p.GitChecksum, func(ext string) {
 		c.hookInstall(strings.TrimPrefix(ext, "."), packDir)
 	})
 	if err != nil {

@@ -39,8 +39,12 @@ const (
 	// reposDir holds one incarnation per repository.
 	reposDir = "repos"
 	// scratchDir holds a receive-pack's scratch repositories, the
-	// advertisement views and — unnamed — the requests' spools (Spool);
-	// every one belongs to a request of the process that made it.
+	// advertisement views and — unnamed — the requests' spools (Spool),
+	// every one a request's of the process that made it; and a swap's next
+	// incarnation while it is staged (swap.go), a round's of that process,
+	// renamed into repos/ whole — so a crash before the rename leaves the
+	// incarnation it replaces the highest in repos/, and the boot moves the
+	// staging aside with the rest.
 	scratchDir = "scratch"
 	// tmpDir holds every file before its rename into place, and downloads
 	// in progress.

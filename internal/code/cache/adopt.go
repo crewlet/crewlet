@@ -289,17 +289,22 @@ func removeAll(stem string, exts []string) error {
 }
 
 // linkBundle links a pack's three files from stem into the incarnation's
-// objects/pack as pack-<cs>.*, in bundleOrder, calling placed after each, and
-// reports whether it linked them. A name already there — a file of the same
-// pack, which two pushes of the same content share, or one an install a
-// failed round left — is the pack HELD: whatever this call linked before it
-// is taken back, and nothing else is touched. Any other failure takes back
-// what was linked and is returned. The directory is not synced: its caller
-// makes the step durable.
-func linkBundle(stem, packDir, checksum string, placed func(ext string)) (bool, error) {
+// objects/pack as pack-<cs>.*, through link — os.Link where it is nil; a
+// swap's link, which a case can make fail (Cache.link) — in bundleOrder,
+// calling placed after each, and reports whether it linked them. A name
+// already there — a file of the same pack, which two pushes of the same
+// content share, or one an install a failed round left — is the pack HELD:
+// whatever this call linked before it is taken back, and nothing else is
+// touched. Any other failure takes back what was linked and is returned. The
+// directory is not synced: its caller makes the step durable.
+func linkBundle(link func(oldname, newname string) error, stem, packDir, checksum string,
+	placed func(ext string)) (bool, error) {
+	if link == nil {
+		link = os.Link
+	}
 	to := filepath.Join(packDir, "pack-"+checksum)
 	for i, ext := range bundleOrder {
-		err := os.Link(stem+ext, to+ext)
+		err := link(stem+ext, to+ext)
 		if err == nil {
 			if placed != nil {
 				placed(ext)
@@ -329,12 +334,22 @@ func linkBundle(stem, packDir, checksum string, placed func(ext string)) (bool, 
 func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutcome, error) {
 	defer c.dropStaging(st)
 	packDir := filepath.Join(inc.dir, "objects", "pack")
+	// THE ROW IS LIVE in the incarnation once this ends, whatever it links:
+	// its row has applied, and the pack is either linked here or held
+	// already (swap.go's live set — a compaction's retirement of it takes it
+	// out by this id, before any delta has served it).
+	held := func() {
+		e.mu.Lock()
+		setLive(inc, st.pack.PackID, liveOf(st.pack))
+		e.mu.Unlock()
+	}
 	for _, ext := range bundleOrder {
 		_, err := os.Lstat(filepath.Join(packDir, "pack-"+st.pack.GitChecksum+ext))
 		switch {
 		case err == nil:
 			// Installed — or begun by an install a failed round left,
 			// which the next round finishes.
+			held()
 			return adoptHeld, nil
 		case !errors.Is(err, fs.ErrNotExist):
 			return adoptFailed, err
@@ -345,17 +360,19 @@ func (c *Cache) placeStaging(e *entry, inc *incarnation, st *staging) (adoptOutc
 	if _, err := c.dropFor(e, inc, EventPackAdded, 0); err != nil {
 		return adoptFailed, err
 	}
-	linked, err := linkBundle(st.stem, packDir, st.pack.GitChecksum, nil)
+	linked, err := linkBundle(nil, st.stem, packDir, st.pack.GitChecksum, nil)
 	switch {
 	case err != nil:
 		return adoptFailed, err
 	case !linked:
+		held()
 		return adoptHeld, nil
 	}
 
 	c.vouchPack(e, inc, st.pack.GitChecksum)
 	now := c.now()
 	e.mu.Lock()
+	setLive(inc, st.pack.PackID, liveOf(st.pack))
 	inc.packs++
 	inc.objects += st.pack.Objects
 	c.setSize(inc, inc.diskBytes+st.pack.Size)

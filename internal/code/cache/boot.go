@@ -126,14 +126,20 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 			// the incarnation kept — a rebuild's predecessor, or a retired one a
 			// reader still held — and the kept one holds HARD LINKS of its
 			// packs: a rebuild links its predecessor's every pack a check has
-			// just found whole (seedRebuild). The kept one's state counts
-			// those, so counted by its own state as well, every linked pack
-			// was counted twice, and the engine, which adds Held to the
-			// volume's free space to derive the cache's budget, claimed room
-			// the volume did not have, by the linked bytes. Walked rather
-			// than read from its state: an older incarnation exists only
-			// where a crash left one, its walk one Lstat a file of a
-			// directory the janitor is about to remove.
+			// just found whole (seedRebuild), and a swap its predecessor's
+			// every live pack, its packed-refs and the derived files a
+			// retirement keeps but the memo, whose tree it moves whole
+			// (swap.go). The kept one's state counts those, so counted by its
+			// own state as well, every linked pack was counted twice, and the
+			// engine, which adds Held to the volume's free space to derive the
+			// cache's budget, claimed room the volume did not have, by the
+			// linked bytes. Walked rather than read from its state: an older
+			// incarnation exists only where a crash left one, its walk one
+			// Lstat a file of a directory the janitor is about to remove. Two
+			// older ones can share a file the kept one does not — a pack the
+			// second swap took out, linked by the first — which neither
+			// counts: Held then errs small, the side a walk that cannot read an
+			// entry errs on too, never claiming room the volume lacks.
 			n, werr := sizeUnder(ctx, filepath.Join(repos, older.name), soleNames, skipped, nil)
 			held += n
 			if werr != nil {

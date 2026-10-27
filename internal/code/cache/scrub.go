@@ -477,25 +477,55 @@ func (c *Cache) runScrub(sctx context.Context, e *entry, inc *incarnation, trigg
 	cause := context.Cause(ctx)
 	cancel(nil)
 
+	// A SWAP WHILE THE SCRUB READ linked the files it read into the next
+	// incarnation (swap.go): its verdict is that incarnation's — the one
+	// serving them now — for every file it holds as the same inode. Dropped
+	// with the old one, a scrub of a repository compacted more often than a
+	// scrub of it lasts never landed, and was due again at once, for ever.
 	e.mu.Lock()
 	inc.scrubbing = false
+	at, atDir := serving(inc), ""
+	if at != inc {
+		atDir = at.dir
+	}
+	e.mu.Unlock()
+	same := map[string]bool{}
+	for _, f := range out.damaged {
+		if atDir == "" || lstatID(filepath.Join(atDir, f.rel)) == f.id {
+			same[f.rel] = true
+		}
+	}
+	e.mu.Lock()
 	switch {
+	case serving(inc) != at:
+		// Swapped again while the findings were matched: the next scrub
+		// reads the copy that serves now.
 	case ended:
-		if inc.scrubDue == 0 && why != 0 {
-			inc.scrubDue = why
+		if at.scrubDue == 0 && why != 0 {
+			at.scrubDue = why
 		}
-	case e.current == inc && !e.dead && !inc.retired:
+	case e.current == at && !e.dead && !at.retired:
 		now := c.now()
-		inc.scrubbedAt, inc.scrubBase, inc.scrubFound = now, now, len(out.damaged) > 0
-		inc.scrubBegan, inc.scrubEnded, inc.scrubWhole = began, time.Now(), out.whole
-		inc.scrubAsked = time.Time{}
-		for _, f := range out.damaged {
-			if inc.repair.found == nil {
-				inc.repair.found = map[string]checkedFile{}
-			}
-			inc.repair.found[f.rel] = f
+		whole := out.whole
+		if at != inc {
+			whole = slices.DeleteFunc(slices.Clone(whole), func(cs string) bool {
+				_, live := at.byChecksum[cs]
+				return !live
+			})
 		}
-		if len(out.damaged) > 0 {
+		at.scrubbedAt, at.scrubBase, at.scrubFound = now, now, len(same) > 0
+		at.scrubBegan, at.scrubEnded, at.scrubWhole = began, time.Now(), whole
+		at.scrubAsked = time.Time{}
+		for _, f := range out.damaged {
+			if !same[f.rel] {
+				continue
+			}
+			if at.repair.found == nil {
+				at.repair.found = map[string]checkedFile{}
+			}
+			at.repair.found[f.rel] = f
+		}
+		if len(same) > 0 {
 			// Repaired by the incarnation's next full round — never under a
 			// check of the repository, whose release asks it (report.go).
 			c.repairRound(e)

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -481,9 +482,16 @@ func TestARefMovedBetweenPagesTakesItsNewestRow(t *testing.T) {
 	}
 }
 
+// retiredAt is row's retirement at position at, as a retired phase serves one.
+func retiredAt(row code.PackRow, at statelog.Position) code.RetiredRow {
+	return code.RetiredRow{PackID: row.PackID, Part: row.Part, GitChecksum: row.GitChecksum,
+		RetiredAt: time.Unix(1_800_000_000, 0).UTC(), Position: at}
+}
+
 // A ROW THE CACHE CANNOT INSTALL FAILS THE SYNC, before anything is written: a
 // ref goes into a file git parses line by line, an object id is a path, a
-// pack this build does not split is no pack it can install.
+// pack this build does not split is no pack it can install, and a retirement
+// the snapshot cannot place is none it can take out.
 func TestARowTheCacheCannotInstallFailsTheSync(t *testing.T) {
 	t.Parallel()
 	ref := func(name, oid string) func(*code.RepoSnapshot, code.PackRow, string) {
@@ -533,6 +541,49 @@ func TestARowTheCacheCannotInstallFailsTheSync(t *testing.T) {
 		}},
 		{name: "a ref twice in a full answer", full: true, alter: func(s *code.RepoSnapshot, _ code.PackRow, tip string) {
 			s.Refs = append(s.Refs, code.RefRow{Ref: "refs/heads/main", OID: tip, Position: s.Position})
+		}},
+		// THE RETIRED PHASE: what a round takes out of the copy (swap.go), so
+		// a retirement it cannot place — a floor that is not the one asked, a
+		// row outside the phase's bounds or out of its order — fails the sync
+		// as any other row does.
+		{name: "a delta serving the retirements above another floor", alter: func(s *code.RepoSnapshot, _ code.PackRow,
+			_ string) {
+			s.RetiredFrom.Seq--
+		}},
+		{name: "a full answer serving the retirements above another floor than asked", full: true,
+			alter: func(s *code.RepoSnapshot, _ code.PackRow, _ string) { s.RetiredFrom.Seq-- }},
+		{name: "a later page serving another floor", pages: true, alter: func(s *code.RepoSnapshot, _ code.PackRow,
+			_ string) {
+			if s.Next == nil {
+				s.RetiredFrom.Seq--
+			}
+		}},
+		{name: "a retirement in a full answer that serves none", full: true, alter: func(s *code.RepoSnapshot,
+			row code.PackRow, _ string) {
+			s.RetiredFrom = statelog.Position{}
+			s.Retired = append(s.Retired, retiredAt(row, s.Position))
+		}},
+		{name: "a retirement of no checksum", alter: func(s *code.RepoSnapshot, row code.PackRow, _ string) {
+			r := retiredAt(row, s.Position)
+			r.GitChecksum = "pack-" + row.GitChecksum
+			s.Retired = append(s.Retired, r)
+		}},
+		{name: "a retirement at the delta's floor", alter: func(s *code.RepoSnapshot, row code.PackRow, _ string) {
+			s.Retired = append(s.Retired, retiredAt(row, s.RetiredFrom))
+		}},
+		{name: "a retirement past the answer's position", alter: func(s *code.RepoSnapshot, row code.PackRow,
+			_ string) {
+			past := s.Position
+			past.Seq++
+			s.Retired = append(s.Retired, retiredAt(row, past))
+		}},
+		{name: "a retirement on another log", alter: func(s *code.RepoSnapshot, row code.PackRow, _ string) {
+			r := retiredAt(row, s.Position)
+			r.Position.Stream = "another-log"
+			s.Retired = append(s.Retired, r)
+		}},
+		{name: "two retirements out of their order", alter: func(s *code.RepoSnapshot, row code.PackRow, _ string) {
+			s.Retired = append(s.Retired, retiredAt(row, s.Position), retiredAt(row, s.Position))
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -249,8 +249,9 @@
 // the file and git subcommand that run it, and its argument list), the files
 // it owns and the files a write of it holds only while it runs, its check, the
 // part a damage report names it by, what it promises a reader, and what each
-// change to its inputs — a pack added, a pack removed, the refs rewritten, its
-// own files reported damaged — does to it. There are four: the
+// change to its inputs — a pack added, a pack a compaction retired, a pack
+// removed with no retirement, the refs rewritten, its own files reported
+// damaged — does to it. There are four: the
 // MULTI-PACK-INDEX (a full round's, without a bitmap, once the snapshot names
 // MidxRoundPacks packs; the maintainer's, with its bitmap and lookup table
 // where the node's memory holds one and without one where it does not), the
@@ -259,10 +260,14 @@
 // code and no git — a round's fold and the backfill) and the MEMO (below: the
 // answers of reads by object id, one file an answer in crewlet/memo, a
 // directory it owns whole) — the last two the declarations a change to the
-// packs or the refs keeps. Their files live inside the incarnation, so the
-// budget counts them and they leave with the repository; a rebuild writes the
-// first two again over its packs and links the index's runs and the memo's
-// answers. Each is a REGULAR
+// packs or the refs keeps. A retirement keeps the commit-graph too (X04): a
+// compaction merges packs and drops no commit, so the graph over them names
+// every commit the outputs hold, where a pack removed with no retirement may
+// have taken commits with it. Their files live inside the incarnation, so
+// the budget counts them and they leave with the repository; a rebuild writes
+// the first two again over its packs, links the index's runs and moves the
+// memo's tree whole, and a swap links every one the events of what leaves it
+// keep but the memo, whose tree it moves whole too. Each is a REGULAR
 // file, as every file of the image is — the root's HEAD, config, packed-refs
 // and state too: a symbolic link, or anything else, at one of their names is
 // outside the image, so the next full round moves it into trash/ without
@@ -295,10 +300,13 @@
 // Every reader reads the declarations and nothing spells a derived file
 // beside them: the IMAGE — one predicate a directory, by which the full
 // round's sweep keeps a file and Verify admits it (sweep.go's image) — the
-// one REMOVAL of a derived file, dropFor, called at the one place each change
-// is made (a pack downloaded, adopted or linked from an adoption a round was
-// handed, a pack put back, a pack swept, packed-refs rewritten, a damage
-// report or a failed check) and run before the change is visible to any git
+// one REMOVAL of a derived file IN PLACE, dropFor, called at the one place
+// each change is made (a pack downloaded, adopted or linked from an adoption
+// a round was handed, a pack put back, a pack swept, packed-refs rewritten,
+// a damage report or a failed check), and the SWAP, which links into the
+// next incarnation only what the events of the packs leaving keep, so a
+// dropped file is never in the copy that change is first visible in (swap.go)
+// — each before the change is visible to any git
 // process — stopping first a maintenance run writing what it drops, since a
 // file renamed in after the change would be built over the inputs before it,
 // and no run starts while a round runs or an adoption holds the repository —
@@ -391,9 +399,9 @@
 // copy's state again once its memo's record moved. A history gone drops it
 // whole and shuts it until the round that dropped it has swept the replaced
 // history's packs, and no batch begun before the drop places anything after
-// it. A rebuild MOVES it whole into the incarnation it promotes, one rename
-// however many entries it holds (carryMemo, SeedMove), never a link an
-// entry.
+// it. A rebuild or a swap MOVES it whole into the incarnation it promotes,
+// one rename however many entries it holds (carryMemo, SeedMove), never a
+// link an entry.
 //
 // # What this process did not write is checked before it serves, and every byte is scrubbed behind it
 //
@@ -688,7 +696,10 @@
 // not what a full round writes, a pack no row names, a shape the pool refuses
 // — it reads the copy whole IN PLACE, the full round's sweep putting the
 // directory right with every pack, the multi-pack-index, its bitmap and the
-// graph kept and nothing downloaded; DAMAGE — a pack missing, at another size
+// graph kept and nothing downloaded — but a pack no row names, which leaves
+// the copy the check holds by a swap into its next incarnation, the
+// multi-pack-index and the graph built over it with it, still nothing
+// downloaded; DAMAGE — a pack missing, at another size
 // or not its row's bytes, a derived file failing its checksum — and whatever
 // the read in place leaves, a shape something wrote past its sweep included,
 // it rebuilds into the next incarnation, linking in every pack it has just
@@ -864,8 +875,9 @@
 //	  repos/<id>.<n>.git/           a repository's INCARNATION: a bare repository
 //	    crewlet-state.json          what the directory reflects, renamed in last
 //	    crewlet/provenance.<n>      the index of pushes' runs, which no git reads
-//	    crewlet/memo/<key>          an answer of a read by object id, which no git reads
-//	  scratch/                      a request's own repositories: a push's scratch, a view
+//	    crewlet/memo/<n>/<key>      an answer of a read by object id, in cohort n, which no git reads
+//	  scratch/                      a request's own repositories: a push's scratch, a view;
+//	                                and a swap's next incarnation, staged
 //	  tmp/                          every file before its rename into place
 //	  trash/                        what is being removed, by the janitor
 //	  hooks/proc-receive            the hook every push's receive-pack runs
@@ -916,11 +928,54 @@
 // A reader is handed a repository's directory PINNED ([Synced]), and there is
 // no other way to it: no path accessor skips the pin. Each repository's
 // directory is an INCARNATION (repos/<id>.<n>.git). One taken out of service
-// — replaced by a rebuild, its repository purged or evicted — is RETIRED: it
-// stays where it is while a reader holds it, and moves into trash/ with its
-// last release. Nothing renames a directory a reader holds — a path is a
-// name, and a git process whose GIT_DIR is that name would otherwise open
-// another directory's files half way through its run.
+// — replaced by a rebuild or a swap, its repository purged or evicted — is
+// RETIRED: it stays where it is while a reader holds it, and moves into
+// trash/ with its last release. Nothing renames a directory a reader holds —
+// a path is a name, and a git process whose GIT_DIR is that name would
+// otherwise open another directory's files half way through its run.
+//
+// # A pack leaves a copy a reader may hold by a swap
+//
+// A compaction RETIRES packs — the code domain moves their rows into
+// code_packs_retired, the outputs holding every object of them — which a
+// round learns from a delta's retired phase, or from the retirements a full
+// answer serves above the copy's position; and a full round can meet a pack
+// file no row names that no retirement accounts for — a log gone back, a
+// row gone with no record retiring it. Neither leaves a copy a reader may
+// hold IN PLACE: git opens a pack lazily, part way through a run, so no pin
+// of a file could say which a running process will touch. The round applies
+// to its end on the incarnation it holds, and then SWAPS it (swap.go): the
+// next incarnation is staged under scratch/ by HARD LINKS of every pack the
+// live rows still name (the live set, kept by every round), the packed-refs
+// and each derived file the events of what leaves keep — a retirement keeps
+// the commit-graph (X04: a merge drops no commit), a pack no retirement
+// accounts for drops it, and both drop the multi-pack-index over the packs
+// that left — renamed into repos/ whole under the next number, and made
+// current, the memo's tree moved into it whole as it is (carryMemo, as a
+// rebuild's); the old one retires, whole for its readers until the last lets
+// go. It costs links — three a live pack — and the memo's one rename, and no
+// download and no git process, but a full round's own index, written over the
+// next incarnation. The
+// promote carries every per-file verdict of the files it links (the same
+// inodes) — their vouches, a hint's hash, the scrub's schedule, what a repair
+// still owes them — and the repository's own records, every field of an
+// incarnation classified in swapFields, which
+// TestEveryIncarnationFieldIsClassifiedForTheSwap holds to the struct both
+// ways. A maintenance run on the old copy is stopped first, and counted as a
+// run of the duty cycle. What is learnt of the old copy's files after the
+// swap belongs to the copy serving them now: a verdict reached over them;
+// what a git process over them reports — that copy's scrub's evidence, never
+// a drop, as is what the round's own index reports from the staged
+// directory; and a request whose git failed over the old copy, answered from
+// the copy serving as it stands, so it runs once more with its repair
+// unspent. A swap that FAILS leaves the old incarnation serving — a superset
+// of the rows — and the repository's next round tries again. A CRASH before
+// the rename leaves the old one the highest in repos/ and the staged one in
+// scratch/, which the boot moves aside; its state names the floor its leaving
+// packs' retirements are above (LeavingSince), so the boot's first round
+// reads them as the retirements they are and keeps the graph. An incarnation
+// nobody can hold — one not yet converged and unpinned: a boot's first round,
+// a rebuild's product — sheds what leaves it in place, as it always has.
 //
 // # A boot starts from the disk, once
 //
@@ -937,10 +992,11 @@
 // a push, a node caching a million pushes holds three million files. An
 // older incarnation a crash left beside the kept one counts only the files
 // it alone holds, never by its state: the kept one holds hard links of what
-// they share — a rebuild links every pack a check found whole — and its
-// state counts those, so counted twice they made the boot's budget claim
-// room the volume did not have. The janitor removes what is in trash/ in
-// the background, so a boot never waits on a large removal.
+// they share — a rebuild links every pack a check found whole, a swap every
+// live pack, the packed-refs and the derived files it links — and its state
+// counts those, so counted twice they made the boot's budget claim room the
+// volume did not have. The janitor removes what is in trash/ in the
+// background, so a boot never waits on a large removal.
 //
 // A repository's LAST USE comes back from a restart too, to within
 // [EvictInterval]: the boot reads it from the state file's modification

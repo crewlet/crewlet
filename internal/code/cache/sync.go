@@ -952,6 +952,11 @@ func (c *Cache) converging(e *entry, r *round) (*incarnation, SyncKind, error) {
 //     full.
 //  7. on a full answer, the sweep's pack half (sweep.go).
 //  8. the state, when the directory changed (state.go), renamed in last.
+//  9. where packs left an incarnation a reader may hold — a delta's
+//     retirements, a full answer's strays — the SWAP into its next
+//     incarnation (swap.go), which the round answers from; one that fails
+//     leaves the round answering from this one, a superset of its rows, and
+//     is tried again by the next round.
 //
 // A FIRST incarnation that fails is kept, with no state, so the next round —
 // full, because it has none — reuses every pack it installed.
@@ -993,8 +998,11 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 	)
 	defer func() {
 		if forcedOn != nil {
+			// On the incarnation serving the checked files now: a swap at
+			// the round's end (swap.go) links them into the next one.
 			e.mu.Lock()
-			forcedOn.forcedAt, forcedOn.forcedEnded = forcedCheck.at, forcedCheck.ended
+			on := serving(forcedOn)
+			on.forcedAt, on.forcedEnded = forcedCheck.at, forcedCheck.ended
 			e.mu.Unlock()
 		}
 	}()
@@ -1047,19 +1055,19 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 		res  applied
 	)
 	for {
-		var at statelog.Position
+		var at, leaving statelog.Position
 		var stream time.Time
 		// indexed: the incarnation keeps an index of pushes, which a delta's
 		// pushes phase is folded into before the round answers (apply).
 		indexed := false
 		if inc != nil {
 			e.mu.Lock()
-			at, stream, indexed = inc.at, inc.stream, inc.record() != nil
+			at, leaving, stream, indexed = inc.at, inc.leavingSince, inc.stream, inc.record() != nil
 			e.mu.Unlock()
 		}
 		markStream, markAt := c.mark.read()
 		var snap snapshot
-		snap, err = c.read(ctx, e.id, at, stream, full, indexed, fresh)
+		snap, err = c.read(ctx, e.id, at, retiredFloor(at, leaving), stream, full, indexed, fresh)
 		switch {
 		case errors.Is(err, code.ErrRepoNotFound) && escalate():
 			continue
@@ -1109,7 +1117,11 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			continue
 		case snap.behind && !linearizable:
 			// A copy behind this cache answered a delta: nothing to do,
-			// and the cache never moves backwards for one.
+			// and the cache never moves backwards for one — but a swap the
+			// last round could not make is tried again (swap.go), over
+			// nothing of this answer, which names no pack the copy holds
+			// now: the zero snapshot, so no round's index is written.
+			inc = c.swapLeaving(ctx, e, inc, snapshot{})
 			c.account(e, inc, snap, applied{}, time.Since(began))
 			return inc, snap.kind(), nil
 		}
@@ -1263,7 +1275,13 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			return nil, "", err
 		}
 		if rebuild != "" {
+			// A rebuild's product is a new incarnation nobody held: its
+			// strays left it in place (packStrays).
 			c.promote(e, replaced, inc, rebuild, time.Since(began))
+		} else {
+			// Packs left a copy a reader may hold: the round answers from
+			// the next incarnation, or from this one where the swap failed.
+			inc = c.swapLeaving(ctx, e, inc, snap)
 		}
 		c.account(e, inc, snap, res, time.Since(began))
 		return inc, snap.kind(), nil
@@ -1343,6 +1361,11 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		res       applied
 		found     []checkedFile
 		reinstall []checkedFile
+		// history: the log under the incarnation is no longer the history it
+		// was read from — recreated or gone back — so a pack file no row
+		// names is no compaction's retirement, whatever a retired phase says
+		// (packStrays).
+		history bool
 	)
 	if snap.full {
 		// The sweep lists the directory and moves whatever lies outside the
@@ -1355,7 +1378,12 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// A LOG RECREATED OR GONE BACK under the incarnation drops what its
 		// positions name — the index of pushes (EventHistoryGone) — before
 		// the sweep, and before any git process sees the round's image.
-		if c.historyGone(e, inc, snap) {
+		e.mu.Lock()
+		reread := inc.reread
+		e.mu.Unlock()
+		gone := c.historyGone(e, inc, snap)
+		history = gone || reread == RebuildStream || reread == RebuildRewound
+		if gone {
 			if _, err := c.dropFor(e, inc, EventHistoryGone, 0); err != nil {
 				return res, fmt.Errorf("cache: sync %s: drop derived files: %w", e.id, err)
 			}
@@ -1428,7 +1456,13 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	e.mu.Unlock()
 
 	indexed := false
-	var strays []string
+	var (
+		strays []string
+		// leaving is what a full round's strays leave by the swap — every
+		// pack file no row names, in an incarnation a reader may hold — and
+		// nil where they leave in place or there are none (packStrays).
+		leaving map[string]Event
+	)
 	if snap.full {
 		// A DERIVED-DAMAGE REPAIR drops the files the damage named here,
 		// before the round's own index decides: the damage is confined to
@@ -1460,12 +1494,18 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		// does whatever in objects/pack is no pack's file, so the round's
 		// index — over exactly the snapshot's packs — is written before the
 		// refs' peel reads them, with no dead writer's lock to refuse it.
+		// Strays in an incarnation a reader may hold leave by the SWAP
+		// instead (swap.go): nothing of them is dropped or moved here, and
+		// the round's index is written into the next incarnation, which
+		// holds exactly the snapshot's packs.
 		var moved bool
-		if strays, moved, err = c.packStrays(e, inc, snap); err != nil {
+		if strays, leaving, moved, err = c.packStrays(e, inc, snap, history); err != nil {
 			return res, fmt.Errorf("cache: sync %s: sweep: %w", e.id, err)
 		}
 		res.trashed = res.trashed || moved
-		indexed = c.indexRound(ctx, e, inc, snap)
+		if leaving == nil {
+			indexed = c.indexRound(ctx, e, inc, snap)
+		}
 	}
 
 	refsWritten, err := c.writeRefs(ctx, e, inc, snap, by)
@@ -1487,8 +1527,15 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		res.trashed = res.trashed || trashed
 		// Every pack the copy holds is the snapshot's now, so every object a
 		// read can meet is the history this round read: a memo its history's
-		// drop shut takes answers again (memo.go).
-		c.reopenMemo(e, inc)
+		// drop shut takes answers again (memo.go). NOT WHERE ITS STRAYS LEAVE
+		// BY THE SWAP: this copy holds them until it is retired, and a batch
+		// begun over it meanwhile — a reader atOnce hands it to while the swap
+		// links — could read objects of the history the drop answered and be
+		// moved into the next incarnation with the memo (carryMemo). There the
+		// change is visible, and the memo opens (swap.go's memoShut).
+		if leaving == nil {
+			c.reopenMemo(e, inc)
+		}
 		c.indexFull(e, inc, snap)
 	} else {
 		provenanceWrote = c.foldPushes(ctx, e, inc, snap)
@@ -1509,8 +1556,22 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	// weighs.
 	changed := snap.full || wrote || provenanceWrote || len(inc.retiredRuns) > 0 ||
 		!snap.streamCreated.Equal(inc.stream) || !sameRepo(inc.repo, snap.repo)
-	prevAt, prevStream, prevRepo := inc.at, inc.stream, inc.repo
+	prevAt, prevStream, prevRepo, prevLeaving := inc.at, inc.stream, inc.repo, inc.leavingSince
 	inc.at, inc.stream, inc.repo = snap.position, snap.streamCreated, snap.repo
+	// THE FLOOR OF WHAT IS LEAVING is written down with the state, so a
+	// crash before the swap leaves a boot that reads the retirements of what
+	// it finds beside the rows (state.LeavingSince): a full round's, where
+	// its strays leave by the swap as retirements; a delta's floor, where it
+	// served any — a floor lower than needed only serves a full answer more
+	// retirements, never a wrong one.
+	switch {
+	case snap.full && !leavingRetired(leaving):
+		inc.leavingSince = statelog.Position{}
+	case snap.full:
+		inc.leavingSince = lowest(inc.leavingSince, snap.retiredFrom)
+	case len(snap.retired) > 0:
+		inc.leavingSince = lowest(inc.leavingSince, snap.since)
+	}
 	if snap.full {
 		// The directory holds exactly the snapshot's packs now: their rows'
 		// count, whatever the incarnation counted before the round.
@@ -1531,11 +1592,43 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 			// put back here: the next round's delta re-applies those rows,
 			// which changes nothing twice.
 			e.mu.Lock()
-			inc.at, inc.stream, inc.repo = prevAt, prevStream, prevRepo
+			inc.at, inc.stream, inc.repo, inc.leavingSince = prevAt, prevStream, prevRepo, prevLeaving
 			e.mu.Unlock()
 			return res, fmt.Errorf("cache: sync %s: state: %w", e.id, err)
 		}
 	}
+	// THE LIVE SET follows the rows the round applied (swap.go), only once
+	// the round has applied them whole — a round that failed leaves it, and
+	// what is leaving, as they were, so the next round reads its rows again
+	// against them: a full round's set is its snapshot's packs, and what its
+	// strays leave by the swap; a delta's adds its added rows first, then
+	// takes out its retired ones, so a pack whose files a row added in the
+	// same delta names again stays.
+	e.mu.Lock()
+	if snap.full {
+		liveWhole(inc, snap.packs)
+		inc.leaving = leaving
+	} else {
+		for _, p := range snap.packs {
+			setLive(inc, p.PackID, liveOf(p.Ref()))
+		}
+		for _, r := range snap.retired {
+			if r.Part != "pack" {
+				// A part this build installs none of: no live row is it.
+				continue
+			}
+			if cs := deleteLive(inc, r.PackID); cs != "" {
+				if inc.leaving == nil {
+					inc.leaving = map[string]Event{}
+				}
+				inc.leaving[cs] = EventPackRetired
+			}
+		}
+	}
+	if len(inc.leaving) == 0 {
+		inc.leaving, inc.leavingSince = nil, statelog.Position{}
+	}
+	e.mu.Unlock()
 	if snap.full {
 		e.mu.Lock()
 		inc.converged = c.rereads.Load() == epoch && inc.marks == marks

@@ -413,9 +413,12 @@ func ShapeReason(err error) (Failure, bool) {
 //
 // A failed that is no longer its repository's current incarnation — rebuilt
 // or purged since it was pinned — is answered by a linearizable [Cache.Sync]
-// with no repair. failed stays the caller's to release. ctx bounds the
-// caller's wait and nothing else: the repair runs on for anybody else
-// waiting on it.
+// with no repair. One a SWAP replaced (swap.go) is answered from the copy
+// serving its files now AS IT STANDS — Kind SyncNone, counted
+// reports{outcome=stale} for a pack's or an object's — so the request runs
+// once more over it with its repair unspent (swappedAnswer). failed stays
+// the caller's to release. ctx bounds the caller's wait and nothing else:
+// the repair runs on for anybody else waiting on it.
 func (c *Cache) Rebuild(ctx context.Context, failed Synced, f Failure) (Synced, error) {
 	reason, drops := f.Reason, f.Drops
 	if !slices.Contains(rebuildReasons, reason) {
@@ -469,6 +472,12 @@ func (c *Cache) repairRequest(ctx context.Context, failed Synced, f Failure) (Sy
 	e, inc := failed.entry, failed.inc
 	linearizable := statelog.Freshness{Level: statelog.ReadLinearizable}
 	e.mu.Lock()
+	if swappedOut(e, inc) {
+		// SWAPPED UNDER THE REQUEST: counted stale, as the guard below counts
+		// a failure a repair may have ended (swappedAnswer).
+		c.countPart(partOf(f.Reason), reportStale)
+		return c.swappedAnswer(ctx, e)
+	}
 	if e.dead || e.current != inc {
 		// Somebody rebuilt it, or a purge removed it, since this request
 		// pinned it: the current incarnation answers, or the purge does.
@@ -507,6 +516,30 @@ func (c *Cache) repairRequest(ctx context.Context, failed Synced, f Failure) (Sy
 	c.join(e, w)
 	e.mu.Unlock()
 	return c.awaitRequest(ctx, e, w, failed)
+}
+
+// swappedAnswer answers a request whose copy a SWAP replaced under it
+// (swappedOut) from the copy serving that copy's files now, AS IT STANDS —
+// Kind SyncNone, which the host reads as no repair (host's repair loop) —
+// once no round holds it (asItStands). The swap is a write into the copy
+// after the request pinned it, and the run that failed read the old
+// directory, whose files the new one holds only where it kept them: so the
+// request's git runs once more over the copy serving, its repair unspent.
+// Damage in a file that left — a retired pack, the multi-pack-index — is
+// gone, and that run succeeds; damage in a file the two share fails it again,
+// BEGUN AFTER THE SWAP, and its repair is that copy's, in place. Answered by a
+// sync of the copy serving, as for a copy a rebuild replaced, the request
+// spent its repair on a copy no repair had touched and gave up on damage the
+// next repair would have ended (host's maxRepairs) — a request across the
+// swap of a repository compacted every few minutes. What failed's reader
+// holds stays held on the old copy, for its release to hand on to the copy
+// serving (handOn). e.mu is held, and let go.
+func (c *Cache) swappedAnswer(ctx context.Context, e *entry) (Synced, error) {
+	w := newWaiter(statelog.Freshness{Level: statelog.ReadLinearizable})
+	w.request = true
+	c.asItStands(e, e.current, w)
+	e.mu.Unlock()
+	return c.await(ctx, e, w)
 }
 
 // reinstallHinted asks inc's next full round to install again over its files
@@ -826,6 +859,17 @@ func (c *Cache) rebuild(ctx context.Context, failed Synced, f Failure, refuse bo
 	now := c.now()
 	e.mu.Lock()
 	linearizable := statelog.Freshness{Level: statelog.ReadLinearizable}
+	if swappedOut(e, failed.inc) {
+		if reason != RebuildVerify {
+			return c.swappedAnswer(ctx, e)
+		}
+		// AN OPERATOR'S REPAIR OF A COPY A SWAP REPLACED since its check
+		// (Verify): the copy serving its files holds every one it kept as the
+		// same inode, the damaged ones among them, so it is the copy rebuilt,
+		// seeded with what the check found whole — the same inodes, wherever
+		// it kept them.
+		failed.inc = e.current
+	}
 	if e.dead || e.current != failed.inc {
 		// Somebody rebuilt it, or a purge removed it, since this request
 		// pinned it: the current incarnation answers, or the purge does.
@@ -1112,7 +1156,7 @@ func (c *Cache) seedRebuild(e *entry, replaced, inc *incarnation, whole []string
 	into := filepath.Join(inc.dir, "objects", "pack")
 	seeded := 0
 	for _, cs := range whole {
-		linked, err := linkBundle(filepath.Join(from, "pack-"+cs), into, cs, nil)
+		linked, err := linkBundle(nil, filepath.Join(from, "pack-"+cs), into, cs, nil)
 		switch {
 		case linked:
 			// Found whole by the check that seeded it, bundle and all: what

@@ -161,16 +161,30 @@ func (in *interleaving) scrub(string) string {
 // first scrub reads no index file this process holds a vouch for: damage
 // that landed in one after the copy's first round is the interval's scrub to
 // find, a day of serving later.
+//
+// EVERY HELD COPY IS USED BEFORE THE DAY PASSES, AND AGAIN AFTER IT: a copy no
+// full round of this process has converged yet — its rounds killed, or the
+// repository evicted and fetched again by a killed sync — is converged by
+// that first use, and its interval begins only then (firstScrub: this process
+// placed every file of it), so damage that landed in a file of it this
+// process had already vouched for is the scrub of a day after that round.
+// Used only after the day, such a copy began its interval then and was due
+// for nothing, and damage in place before its first round outlived the check.
 func (in *interleaving) scrubAll() []string {
 	done := cache.ScrubPass(in.c)
 	in.settle()
-	in.clk.Add(cache.ScrubInterval)
-	for _, repo := range in.repos {
-		if _, ok := cache.Repos(in.c)[repo]; ok {
-			s := in.syncAt(repo, stale)
-			s.Release()
+	use := func() {
+		for _, repo := range in.repos {
+			if _, ok := cache.Repos(in.c)[repo]; ok {
+				s := in.syncAt(repo, stale)
+				s.Release()
+			}
 		}
 	}
+	use()
+	in.settle()
+	in.clk.Add(cache.ScrubInterval)
+	use()
 	done = append(done, cache.ScrubPass(in.c)...)
 	if len(done) > 0 {
 		in.saw("scrub")

@@ -20,13 +20,15 @@ import (
 // row per declaration of cache.DerivedFiles and none other, in both
 // directions, each row spelling what its declaration says: its owned files as
 // the declaration's patterns read, its writes' triggers and steps in the
-// declaration's order, and what a removed pack does. A part that adds a
+// declaration's order, what a compaction's retirement does (OnPackRetired)
+// and what any other pack leaving does (OnPackRemoved). A part that adds a
 // declaration cannot land it without the page, and a row whose declaration
 // went fails here.
 //
 // Mutation: add a row for `layers` to the page, and it names a derived file the
 // cache does not declare; drop `.bitmap` from midx's Owns, and the row's files
-// are not what the declaration owns.
+// are not what the declaration owns; declare the graph dropped on a
+// retirement, and its row says it is kept.
 func TestTheConceptPageNamesEveryDerivedFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
@@ -54,16 +56,19 @@ func TestTheConceptPageNamesEveryDerivedFile(t *testing.T) {
 		if want := derivedWritesCell(t, d); row[2] != want {
 			t.Errorf("%s: %s is written by %q, want its declared writes, %q", path, d.Name, row[2], want)
 		}
-		if want := derivedPackRemovedCell(t, d); row[3] != want {
-			t.Errorf("%s: when a pack leaves, %s is %q, want %q", path, d.Name, row[3], want)
+		if want := packLeavingCell(t, d.Name, "OnPackRetired", d.OnPackRetired); row[3] != want {
+			t.Errorf("%s: when a compaction retires a pack, %s is %q, want %q", path, d.Name, row[3], want)
+		}
+		if want := packLeavingCell(t, d.Name, "OnPackRemoved", d.OnPackRemoved); row[4] != want {
+			t.Errorf("%s: when any other pack leaves, %s is %q, want %q", path, d.Name, row[4], want)
 		}
 	}
 }
 
 // derivedTable is the rows of page's table "What the cache writes beside the
 // packs", each keyed by the declaration name its first cell opens with, as
-// its four cells trimmed.
-func derivedTable(t *testing.T, page string) map[string][4]string {
+// its five cells trimmed.
+func derivedTable(t *testing.T, page string) map[string][5]string {
 	t.Helper()
 	const title = "**What the cache writes beside the packs.**"
 	start := strings.Index(page, title)
@@ -71,7 +76,7 @@ func derivedTable(t *testing.T, page string) map[string][4]string {
 		t.Fatalf("the concept page has no paragraph %s", title)
 	}
 	lead := regexp.MustCompile("^`([^`]+)`")
-	rows := map[string][4]string{}
+	rows := map[string][5]string{}
 	inTable := false
 	for _, line := range strings.Split(page[start:], "\n") {
 		if !strings.HasPrefix(line, "|") {
@@ -88,10 +93,10 @@ func derivedTable(t *testing.T, page string) map[string][4]string {
 			continue
 		}
 		cells := strings.Split(strings.Trim(line, "|"), "|")
-		if len(cells) != 4 {
-			t.Fatalf("the table's row %q has %d cells, want 4", line, len(cells))
+		if len(cells) != 5 {
+			t.Fatalf("the table's row %q has %d cells, want 5", line, len(cells))
 		}
-		var row [4]string
+		var row [5]string
 		for i, c := range cells {
 			row[i] = strings.TrimSpace(c)
 		}
@@ -169,16 +174,16 @@ func derivedWritesCell(t *testing.T, d cache.Derived) string {
 	return strings.Join(out, "; ")
 }
 
-// derivedPackRemovedCell is what a pack leaving does to d, in the page's
-// words.
-func derivedPackRemovedCell(t *testing.T, d cache.Derived) string {
+// packLeavingCell is what a pack leaving does to the declaration name, as its
+// field (OnPackRetired or OnPackRemoved) says it, in the page's words.
+func packLeavingCell(t *testing.T, name cache.DerivedName, field string, does cache.Change) string {
 	t.Helper()
-	switch d.OnPackRemoved {
+	switch does {
 	case cache.Drop:
 		return "dropped first"
 	case cache.Keep:
 		return "kept"
 	}
-	t.Fatalf("%s's OnPackRemoved is %q, which the page has no words for", d.Name, d.OnPackRemoved)
+	t.Fatalf("%s's %s is %q, which the page has no words for", name, field, does)
 	return ""
 }

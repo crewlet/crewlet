@@ -276,6 +276,12 @@ type maintRun struct {
 	// maintained: every step the run set out to take ran to its end. Read
 	// once done is closed.
 	maintained bool
+	// began is when it started, a time.Now() reading, and duty whether the
+	// duty cycle counts it (runPlan.duty): what a swap that stops it records
+	// as the repository's last run (swap.go's stopRun), since the run ended
+	// from outside records none of its own.
+	began time.Time
+	duty  bool
 }
 
 // runPlan is what a run was started to do, fixed when it is started under
@@ -843,7 +849,7 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, 
 	//nolint:contextcheck // The cache's lifetime ends the run too: Stop must end the git it started however long the pass's ctx lives.
 	stop := context.AfterFunc(c.life, cancel)
 	m := &maintRun{e: e, inc: inc, cancel: cancel, done: make(chan struct{}),
-		writes: c.mw.written(c.image, c.mw.steps(plan))}
+		writes: c.mw.written(c.image, c.mw.steps(plan)), began: time.Now(), duty: plan.duty()}
 	e.maint = m
 	inc.pins++
 	e.mu.Unlock()
@@ -869,6 +875,12 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, 
 //     persisted, because whoever stopped it writes the state next (a full
 //     round), throws the incarnation away (a retire), or leaves the
 //     directory to the next boot (Stop), whose first round re-measures it.
+//     The one stop that counts it is a SWAP's, made before the swap links
+//     the files the run writes: the stop is recorded as the repository's
+//     last run and what the run had spent as its length (swap.go's stopRun),
+//     and the next incarnation carries it, since a repository compacted more
+//     often than its index run lasts would otherwise have every run stopped
+//     and every next one due at once.
 //   - Any other end is a run, whether it succeeded, failed or hit its
 //     deadline: recorded with when it ended and how long it took, which the
 //     duty cycle reads, and persisted. One whose commit-graph was refused a

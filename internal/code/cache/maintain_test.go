@@ -198,8 +198,9 @@ func (b *blocking) Read([]byte) (int, error) {
 // maintainer's — so a full round asks the FILE, not the state, which reads
 // none beside an index on disk when it was unreadable. A pack the round will
 // sweep takes the index with it, and the round writes one of its own over the
-// packs it keeps — as many as its threshold, which the case lowers — to which
-// the maintainer adds the bitmap.
+// packs it keeps — as many as its threshold, which the case lowers — in the
+// copy it answers, the next incarnation where a reader holds the old one
+// (swap.go), to which the maintainer adds the bitmap.
 func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -235,16 +236,20 @@ func TestARoundNeverReplacesAnIndexThatExists(t *testing.T) {
 		t.Error("a full round with an unreadable state replaced the index on disk, or its bitmap")
 	}
 
+	// The reader the last sync handed out holds the copy, so the pack the
+	// recreated log does not name leaves it by the swap: the round's own
+	// index is written into the next incarnation, which it answers.
 	w.log.recreate(before)
 	s = w.sync(t, c, repo)
 	if statOK(t, filepath.Join(s.Dir, "objects", "pack", "pack-"+last.GitChecksum+".idx")) {
 		t.Fatal("the pack the recreated log does not name is still installed")
 	}
+	midx = filepath.Join(s.Dir, "objects", "pack", "multi-pack-index")
 	if !statOK(t, midx) || inode(t, midx) == first {
 		t.Error("a full round that swept a pack under the index did not write an index of its own")
 	}
-	if statOK(t, bitmap) {
-		t.Error("the bitmap of an index whose pack was swept is still there")
+	if got := bitmaps(t, s.Dir); len(got) != 0 {
+		t.Errorf("the bitmap of an index whose pack was swept is still there: %v", got)
 	}
 	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
 		t.Errorf("fsck after a pack was swept from under the index: %v", err)
@@ -761,52 +766,87 @@ func TestNoRunStartsWhileAnAdoptionHoldsTheRepository(t *testing.T) {
 	}
 }
 
-// A SWEEP DROPS THE MULTI-PACK-INDEX WITH A PACK: a full round that removes a
-// pack the rows no longer name takes the index, its bitmap and the
-// commit-graph with it, so no reader meets an index naming a pack that is
-// gone — and the maintainer writes a new one once it is due again.
+// A SWEEP DROPS THE MULTI-PACK-INDEX WITH A PACK: a full round that finds a
+// pack the rows no longer name — the log recreated holding fewer — takes the
+// index, its bitmap and the commit-graph with it, so no reader meets an index
+// naming a pack that is gone, nor a graph naming a commit that left with it:
+// IN PLACE from a copy nobody can hold yet (a boot's first round), and BY THE
+// SWAP from one a reader holds (swap.go), whose next incarnation never holds
+// them while the reader's copy keeps every one. Either way the copy the round
+// answers is whole to git and records no file over the packs, and the
+// maintainer writes a new index once it is due again.
+//
+// Mutation: declare the graph kept on a pack removed (OnPackRemoved), and both
+// arms keep it.
 func TestASweepDropsTheMultiPackIndexWithAPack(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	clk := newClock()
-	repo := w.repo(t, 1)
-	w.push(t, repo, "refs/heads/main", nil)
-	w.push(t, repo, "refs/heads/main", nil)
-	before := w.log.state()
-	_, dropped := w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t, clk.on)
-	s := w.sync(t, c, repo)
-	clk.Add(cache.MidxDebounce)
-	if ran := cache.MaintainerPass(c); len(ran) != 1 {
-		t.Fatalf("the maintainer ran %v, want the repository", ran)
-	}
-	packDir := filepath.Join(s.Dir, "objects", "pack")
-	bitmap := bitmapOf(t, packDir)
-	graph := filepath.Join(s.Dir, "objects", "info", "commit-graph")
-
-	w.log.recreate(before)
-	s = w.sync(t, c, repo)
-	for _, path := range []string{
-		filepath.Join(packDir, "pack-"+dropped.GitChecksum+".pack"),
-		filepath.Join(packDir, "multi-pack-index"), bitmap, graph,
+	for _, tc := range []struct {
+		name string
+		// boot: the node restarts after the log went back, so its first
+		// round reads a copy nobody holds; otherwise a reader holds it.
+		boot bool
+	}{
+		{"by the swap, from a copy a reader holds", false},
+		{"in place, from a copy a boot's first round reads", true},
 	} {
-		if statOK(t, path) {
-			t.Errorf("%s is still there after the sweep removed a pack under it", path)
-		}
-	}
-	if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
-		t.Errorf("fsck after a pack was removed under the index: %v", err)
-	}
-	if doc := readStateDoc(t, s.Dir); len(doc.overPacks()) != 0 {
-		t.Errorf("the state records %+v after the derived files were dropped, want none over the packs",
-			doc.Derived)
-	}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			clk := newClock()
+			repo := w.repo(t, 1)
+			w.push(t, repo, "refs/heads/main", nil)
+			w.push(t, repo, "refs/heads/main", nil)
+			before := w.log.state()
+			_, dropped := w.push(t, repo, "refs/heads/main", nil)
+			c := w.open(t, clk.on)
+			held := w.sync(t, c, repo)
+			clk.Add(cache.MidxDebounce)
+			if ran := cache.MaintainerPass(c); len(ran) != 1 {
+				t.Fatalf("the maintainer ran %v, want the repository", ran)
+			}
+			heldBitmap := bitmapOf(t, filepath.Join(held.Dir, "objects", "pack"))
 
-	clk.Add(cache.MidxMinInterval)
-	if ran := cache.MaintainerPass(c); len(ran) != 1 {
-		t.Fatalf("the maintainer ran %v after the sweep, want the repository", ran)
+			w.log.recreate(before)
+			if tc.boot {
+				held.Release()
+				c = w.reopen(t, c, clk.on)
+			}
+			s := w.sync(t, c, repo)
+			if inPlace := s.Dir == held.Dir; inPlace != tc.boot {
+				t.Fatalf("the round answered %s, the copy the reader held being %s: in place %t, want %t", s.Dir,
+					held.Dir, inPlace, tc.boot)
+			}
+			packDir := filepath.Join(s.Dir, "objects", "pack")
+			for _, path := range []string{
+				filepath.Join(packDir, "pack-"+dropped.GitChecksum+".pack"),
+				filepath.Join(packDir, "multi-pack-index"),
+				filepath.Join(s.Dir, "objects", "info", "commit-graph"),
+			} {
+				if statOK(t, path) {
+					t.Errorf("%s is still there after the sweep removed a pack under it", path)
+				}
+			}
+			if got := bitmaps(t, s.Dir); len(got) != 0 {
+				t.Errorf("%v are still there after the sweep removed a pack under them", got)
+			}
+			if !tc.boot && !statOK(t, heldBitmap) {
+				t.Errorf("the copy the reader holds lost %s", heldBitmap)
+			}
+			if _, err := runGit(t, w.pool, s.Dir, "", "fsck", "--connectivity-only", "--no-progress"); err != nil {
+				t.Errorf("fsck after a pack was removed under the index: %v", err)
+			}
+			if doc := readStateDoc(t, s.Dir); len(doc.overPacks()) != 0 {
+				t.Errorf("the state records %+v after the derived files were dropped, want none over the packs",
+					doc.Derived)
+			}
+
+			clk.Add(cache.MidxMinInterval)
+			if ran := cache.MaintainerPass(c); len(ran) != 1 {
+				t.Fatalf("the maintainer ran %v after the sweep, want the repository", ran)
+			}
+			bitmapOf(t, packDir)
+		})
 	}
-	bitmapOf(t, packDir)
 }
 
 // MAINTENANCE RUNS ONLY IN A FREE MAINTENANCE SLOT: a pool of two process

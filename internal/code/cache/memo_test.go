@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -663,68 +664,126 @@ func TestARecreatedLogDropsTheMemo(t *testing.T) {
 // NOTHING READ OVER A GONE HISTORY IS MEMOIZED AFTER ITS DROP. A batch begun
 // before the history went — its run read the copy as the old history left it
 // — places nothing once the drop has moved the memo's generation; and while
-// the round that dropped it has not yet swept the old history's packs, the
-// copy's memo is shut: no batch begins, since a read then may meet objects of
-// either history. Once the round has swept them, answers are memoized again.
+// the old history's packs are still in a copy, its memo is shut: no batch
+// begins, since a read then may meet objects of either history. Once they are
+// out, answers are memoized again — in the same copy, where the round that
+// dropped the memo swept them IN PLACE (a copy no reader holds), and in the
+// copy's NEXT incarnation where a reader holds it and they leave by the SWAP
+// (swap.go): the copy the swap leaves keeps them for its readers, and its memo
+// stays shut, through the swap's own window and after.
 //
 // Mutations: let Place ignore the generation — the batch from before the drop
-// places its answer; let Memo ignore the shut memo — the round's own window
-// begins a batch.
+// places its answer in place; let Memo ignore the shut memo — the round's own
+// window begins a batch; reopen the memo of a copy whose strays leave by the
+// swap (apply) — a batch begins over the copy the swap is leaving.
 func TestNothingReadOverAGoneHistoryIsMemoizedAfterItsDrop(t *testing.T) {
 	t.Parallel()
-	w := newSyncWorld(t, onMemory)
-	repo := w.repo(t, 1)
-	w.push(t, repo, "refs/heads/main", nil)
-	var (
-		cc     atomic.Pointer[cache.Cache]
-		held   atomic.Pointer[cache.Synced]
-		gone   atomic.Bool
-		mu     sync.Mutex
-		during []bool // whether a batch began in the round's window
-	)
-	c := w.open(t, func(o *cache.Options) {
-		cache.AfterSweep(o, func(string) {
-			if !gone.Load() {
-				return
+	for _, tc := range []struct {
+		name string
+		// held: a reader holds the copy through the round, so the old
+		// history's packs leave it by the swap.
+		held bool
+	}{
+		{"in place, from a copy no reader holds", false},
+		{"by the swap, from a copy a reader holds", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			w.push(t, repo, "refs/heads/main", nil)
+			faults := &codefault.Script{}
+			var (
+				cc     atomic.Pointer[cache.Cache]
+				held   atomic.Pointer[cache.Synced]
+				gone   atomic.Bool
+				mu     sync.Mutex
+				during []bool // whether a batch began in the round's window
+			)
+			c := w.open(t, func(o *cache.Options) {
+				o.Faults = faults
+				cache.AfterSweep(o, func(string) {
+					if !gone.Load() {
+						return
+					}
+					mu.Lock()
+					defer mu.Unlock()
+					during = append(during, cc.Load().Memo(*held.Load()) != nil)
+				})
+			})
+			cc.Store(c)
+			first := w.sync(t, c, repo)
+			earlier := w.log.state()
+			w.push(t, repo, "refs/heads/main", nil)
+			s := w.sync(t, c, repo)
+			held.Store(&s)
+
+			begun := c.Memo(s)
+			stale := memoKeys("stale", 1)[0]
+			begun.Put(stale, memoBody(0))
+			w.log.recreate(earlier)
+			var now cache.Synced
+			gone.Store(true)
+			if !tc.held {
+				first.Release()
+				s.Release()
+				now = w.sync(t, c, repo)
+			} else {
+				// The swap's own window: the copy it leaves is staged out of,
+				// the old history's pack still in it, and nothing renamed yet.
+				release, reached := make(chan struct{}), make(chan struct{})
+				faults.Arm(codefault.SyncSwapBeforeRename, codefault.Action{Once: true, Block: release,
+					Reached: reached})
+				answered := make(chan cache.Synced, 1)
+				go func() {
+					got, err := c.Sync(context.Background(), repo, linearizable)
+					if err != nil {
+						t.Errorf("the round after the history went: %v", err)
+					}
+					answered <- got
+				}()
+				select {
+				case <-reached:
+				case <-time.After(hangDetector):
+					t.Fatal("the round never reached the swap's rename")
+				}
+				if b := c.Memo(s); b != nil {
+					t.Error("a batch began over the copy the swap is leaving, which still holds the old history's " +
+						"pack")
+				}
+				close(release)
+				now = <-answered
+				t.Cleanup(now.Release)
+			}
+			gone.Store(false)
+			begun.Place(func(int) []byte { return []byte(memoTail) })
+
+			if inPlace := now.Dir == s.Dir; inPlace == tc.held {
+				t.Fatalf("the round answered %s, the copy the batch began over being %s: in place %t, want %t",
+					now.Dir, s.Dir, inPlace, !tc.held)
 			}
 			mu.Lock()
-			defer mu.Unlock()
-			during = append(during, cc.Load().Memo(*held.Load()) != nil)
+			if len(during) == 0 {
+				t.Error("no full round read the gone history's copy whole")
+			}
+			for i, began := range during {
+				if began {
+					t.Errorf("a batch began as round %d tidied, before the old history's packs were out", i)
+				}
+			}
+			mu.Unlock()
+			if _, ok := c.MemoGet(now, stale); ok {
+				t.Error("an answer a run cut before the history went was memoized after its drop")
+			}
+			if tc.held && c.Memo(s) != nil {
+				t.Error("a batch began over the copy the swap left, which still holds the old history's pack")
+			}
+			fresh := memoKeys("fresh", 1)
+			memoize(t, c, now, fresh)
+			if _, ok := c.MemoGet(now, fresh[0]); !ok {
+				t.Error("the copy memoized nothing once the old history's packs were out of it")
+			}
 		})
-	})
-	cc.Store(c)
-	w.sync(t, c, repo)
-	earlier := w.log.state()
-	w.push(t, repo, "refs/heads/main", nil)
-	s := w.sync(t, c, repo)
-	held.Store(&s)
-
-	begun := c.Memo(s)
-	stale := memoKeys("stale", 1)[0]
-	begun.Put(stale, memoBody(0))
-	w.log.recreate(earlier)
-	gone.Store(true)
-	w.sync(t, c, repo)
-	gone.Store(false)
-	begun.Place(func(int) []byte { return []byte(memoTail) })
-
-	mu.Lock()
-	if len(during) == 0 {
-		t.Error("no full round read the gone history's copy whole")
-	}
-	for i, began := range during {
-		if began {
-			t.Errorf("a batch began as round %d tidied, before it had swept the old history's packs", i)
-		}
-	}
-	mu.Unlock()
-	if _, ok := c.MemoGet(s, stale); ok {
-		t.Error("an answer a run cut before the history went was memoized after its drop")
-	}
-	fresh := memoKeys("fresh", 1)
-	memoize(t, c, s, fresh)
-	if _, ok := c.MemoGet(s, fresh[0]); !ok {
-		t.Error("the copy memoized nothing once its round had swept the old history")
 	}
 }
 

@@ -142,6 +142,12 @@ type entry struct {
 	// maint is the maintenance running on an incarnation of the repository,
 	// if any (maintain.go): one at a time a repository.
 	maint *maintRun
+	// swap is the swap in flight (swap.go), from the moment it stages the
+	// next incarnation to its end: the index of pushes of the copy it leaves
+	// takes no commit meanwhile (commitIndex), so every run of the record the
+	// swap carries is on disk for it to link, and what a git process run in
+	// the staged directory reports is that copy's (swapAt).
+	swap *swapping
 	// verifying counts the Verify calls checking the repository: no
 	// maintenance run starts while one does (verify.go), from its listing
 	// to its fsck — which a run in the lane's last free slot would refuse.
@@ -208,7 +214,8 @@ func newEntry(id string) *entry {
 
 // incarnation is one directory of a repository: repos/<id>.<n>.git. A
 // rebuild builds the next number BESIDE the one readers hold rather than
-// renaming a path under them — a path is a NAME, and a git process whose
+// renaming a path under them, and so does a swap, taking packs out of a copy
+// readers may hold (swap.go) — a path is a NAME, and a git process whose
 // GIT_DIR is that name would otherwise open the new directory's files half
 // way through its run.
 type incarnation struct {
@@ -483,6 +490,106 @@ type incarnation struct {
 	// stamped is the last use the disk records (lastUsedOn): read at boot,
 	// moved forward by the janitor's recordUse.
 	stamped time.Time
+
+	// THE LIVE SET (swap.go). live is the incarnation's LIVE ROWS, by pack
+	// id, as the rows it last converged to hold them: set whole by every
+	// full round, a delta's added rows set and its retired rows deleted, an
+	// adopted pack set — by pack id, so a pack adopted and then served again
+	// by the next delta is one entry, never two. byChecksum counts the
+	// entries naming each git checksum (two rows of one checksum share one
+	// file), changed only through setLive and deleteLive, so a pack's files
+	// leave only once NO live row names them. In memory only: a boot's first
+	// round is full, so both are built before a delta reads them. What a
+	// swap keeps and drops is read from them, never from the directory.
+	live       map[string]livePack
+	byChecksum map[string]int
+	// leaving is the pack files the incarnation holds that no live row names
+	// any more, by the checksum they are named by — or, for a file of
+	// objects/pack named like a pack's whose name carries no checksum, by
+	// its name — each with the event that took it out: EventPackRetired, or
+	// EventPackRemoved for a stray no retirement accounts for. Non-empty
+	// only between a round's apply and its swap, and after a swap that
+	// failed, which the repository's next round tries again.
+	leaving map[string]Event
+	// leavingSince is the position the retirements of what is leaving are
+	// all above, zero while nothing is (state.LeavingSince): persisted, and
+	// what a full round asks its retirements from where it is below at, so a
+	// round after a crash between a round and its swap reads those files as
+	// the retirements they are.
+	leavingSince statelog.Position
+	// successor is the incarnation a swap replaced this one by (swap.go),
+	// nil for one no swap replaced: what a verdict reached over this one's
+	// files after the swap — a scrub's, a forced check's — is recorded on
+	// the one serving them now, which holds the same inodes (serving).
+	successor *incarnation
+}
+
+// livePack is one live row as the swap reads it: the checksum its files are
+// named by, and the bundle's bytes and the objects its row counts. A pack id
+// names one bundle for ever — a row is never rewritten — so two rows of one
+// checksum carry the same figures.
+type livePack struct {
+	checksum      string
+	size, objects int64
+}
+
+// liveOf is p as the live set keeps it.
+func liveOf(p code.PackRef) livePack {
+	return livePack{checksum: p.GitChecksum, size: p.Size, objects: p.Objects}
+}
+
+// setLive records the row id names, whose files are p's, as live in inc; e.mu
+// is held. A row already live is left as it is — a pack adopted and then
+// served by the next delta is one row — and a pack a row names again is no
+// longer leaving.
+func setLive(inc *incarnation, id string, p livePack) {
+	if _, ok := inc.live[id]; ok {
+		return
+	}
+	if inc.live == nil {
+		inc.live, inc.byChecksum = map[string]livePack{}, map[string]int{}
+	}
+	inc.live[id] = p
+	inc.byChecksum[p.checksum]++
+	delete(inc.leaving, p.checksum)
+}
+
+// deleteLive takes the row id names out of inc's live set, and answers the
+// checksum of the files it named when NO live row names them any more —
+// files leaving the incarnation — or "" for a row that leaves none, or none
+// the set held: a retirement of a pack the incarnation never held names
+// nothing to drop. e.mu is held.
+func deleteLive(inc *incarnation, id string) string {
+	p, ok := inc.live[id]
+	if !ok {
+		return ""
+	}
+	delete(inc.live, id)
+	if inc.byChecksum[p.checksum]--; inc.byChecksum[p.checksum] > 0 {
+		return ""
+	}
+	delete(inc.byChecksum, p.checksum)
+	return p.checksum
+}
+
+// liveWhole makes inc's live set exactly the rows packs: what a full round's
+// snapshot names. e.mu is held.
+func liveWhole(inc *incarnation, packs map[packKey]code.PackRow) {
+	inc.live = make(map[string]livePack, len(packs))
+	inc.byChecksum = make(map[string]int, len(packs))
+	for _, p := range packs {
+		setLive(inc, p.PackID, liveOf(p.Ref()))
+	}
+}
+
+// serving is the incarnation that serves inc's files now: inc, or the last of
+// the swaps that replaced it, which holds the same inode for every file it
+// kept. e.mu is held.
+func serving(inc *incarnation) *incarnation {
+	for inc.successor != nil {
+		inc = inc.successor
+	}
+	return inc
 }
 
 // repaired stamps that this process has just written into inc what can end a
@@ -504,6 +611,7 @@ func (inc *incarnation) fromState(st *state) {
 	inc.metaBytes = st.derivedBytes()
 	inc.derived, st.Derived = st.Derived, nil
 	inc.maintained = st.Maintained
+	inc.leavingSince = st.LeavingSince
 }
 
 // stateValue is the state inc's in-memory fields describe; the entry's mu is
@@ -522,6 +630,7 @@ func (inc *incarnation) stateValue(id string) state {
 		DiskBytes:     inc.diskBytes,
 		Derived:       maps.Clone(inc.derived),
 		Maintained:    inc.maintained,
+		LeavingSince:  inc.leavingSince,
 		memoVersion:   inc.memoVersion,
 		lastUsed:      inc.lastUsed,
 	}
@@ -652,8 +761,8 @@ func (c *Cache) unpin(e *entry, inc *incarnation) string {
 	return ""
 }
 
-// retire takes inc out of service — a rebuild replaced it, or the repository
-// was purged or evicted; the entry's mu is held. A maintenance run on it is
+// retire takes inc out of service — a rebuild or a swap replaced it, or the
+// repository was purged or evicted; the entry's mu is held. A maintenance run on it is
 // cancelled — what it writes is about to be thrown away — without waiting for
 // it, since its pin keeps the directory until it has ended. Unpinned, it is
 // discarded at once, and retire answers the directory its caller moves into
@@ -861,7 +970,7 @@ func (c *Cache) newIncarnation(e *entry, current bool) (*incarnation, error) {
 			return nil, fmt.Errorf("making %s: %w", dir, err)
 		}
 	}
-	if err := c.skeleton(dir); err != nil {
+	if err := c.skeleton(dir, "main", true); err != nil {
 		if terr := toTrash(c.dir, dir, newV7()+"-"+filepath.Base(dir)); terr != nil {
 			err = errors.Join(err, terr)
 		}
@@ -880,18 +989,24 @@ func (c *Cache) newIncarnation(e *entry, current bool) (*incarnation, error) {
 	return inc, nil
 }
 
-// skeleton writes an empty bare repository's files into dir.
-func (c *Cache) skeleton(dir string) error {
+// skeleton writes an empty bare repository's files into dir: HEAD naming
+// branch, config, and — where refs says so — a packed-refs of the header
+// alone. A swap's staged incarnation takes the skeleton without packed-refs,
+// and links the one its predecessor's round wrote (swap.go).
+func (c *Cache) skeleton(dir, branch string, refs bool) error {
 	for _, d := range []string{"refs/heads", "refs/tags", "objects/pack", "objects/info"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), hostbox.DirMode); err != nil {
 			return fmt.Errorf("making %s: %w", filepath.Join(dir, d), err)
 		}
 	}
-	for _, f := range []struct{ name, content string }{
-		{"HEAD", string(headFor("main"))},
+	files := []struct{ name, content string }{
+		{"HEAD", string(headFor(branch))},
 		{"config", gitproc.RepoConfig},
-		{"packed-refs", packedRefsHeader},
-	} {
+	}
+	if refs {
+		files = append(files, struct{ name, content string }{"packed-refs", packedRefsHeader})
+	}
+	for _, f := range files {
 		staged, err := c.stage(hostbox.FileMode, func(w *os.File) error {
 			_, werr := w.WriteString(f.content)
 			return werr

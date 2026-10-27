@@ -50,9 +50,11 @@ import (
 //     check.go, scrub.go, maintain.go);
 //   - what it promises a reader (Freshness), and what each change to its
 //     inputs does to it (On): a pack added, a pack removed, the refs
-//     rewritten, or its own files reported damaged — every one of them read by
-//     dropFor, the one removal of a derived file, at the one place each change
-//     is made;
+//     rewritten, its own files reported damaged, the log under it gone back,
+//     or a pack a compaction retired — every one of them read by dropFor, the
+//     one removal of a derived file, at the one place each change is made, and
+//     a retired pack's by the swap too, which links into the next incarnation
+//     only what a retirement keeps (swap.go);
 //   - which part of a repository a damage report names it by (Part, in
 //     gitproc's vocabulary: gitproc.Damage.Drops), so a report reaches the
 //     declarations it names and no others.
@@ -245,10 +247,11 @@ const (
 	EventPackAdded Event = "pack-added"
 	// EventPackRemoved is a pack's files taken out of the incarnation, or
 	// renamed over with its bundle again where its index may differ — a full
-	// round's stray (no row names it: a log gone back or recreated under the
-	// cache), and a pack installed again over files at another size than its
-	// row's, or whose index failed its checksum. A derived file built over the
-	// old files may name what is no longer there.
+	// round's stray that no retirement accounts for (no row names it: a log
+	// gone back or recreated under the cache), and a pack installed again
+	// over files at another size than its row's, or whose index failed its
+	// checksum. A derived file built over the old files may name what is no
+	// longer there, and a commit read from them may be gone with them.
 	EventPackRemoved Event = "pack-removed"
 	// EventRefsMoved is a new packed-refs renamed into place by a round.
 	EventRefsMoved Event = "refs-moved"
@@ -270,6 +273,17 @@ const (
 	// the packs alone meets the same change as the packs the restored history
 	// no longer names, which that round's sweep removes as EventPackRemoved.
 	EventHistoryGone Event = "history-gone"
+	// EventPackRetired is a pack file taken out of the incarnation because a
+	// COMPACTION RETIRED it (the code domain's code_packs_retired): its
+	// objects are all in packs the incarnation keeps or installs in the same
+	// round, since a compaction merges packs without judging reachability —
+	// every object of its inputs is in its outputs — and the round that
+	// takes the file out has installed those outputs first. A declaration
+	// built over the packs' NAMES or OFFSETS meets a pack gone; one built
+	// over their COMMITS or OBJECT IDS meets nothing that left. Made by the
+	// round whose answer names the retirement (swap.go): a delta's retired
+	// phase, or a full answer's retirements above its caller's position.
+	EventPackRetired Event = "pack-retired"
 
 	// eventFailedCheck is a file of the declaration FAILING ITS CHECK — the
 	// round's check, the scrub: the bytes' verdict, which no declaration
@@ -282,7 +296,8 @@ const (
 )
 
 // Events is every Event a declaration answers, in the order it states them.
-var Events = []Event{EventPackAdded, EventPackRemoved, EventRefsMoved, EventReported, EventHistoryGone}
+var Events = []Event{EventPackAdded, EventPackRemoved, EventRefsMoved, EventReported, EventHistoryGone,
+	EventPackRetired}
 
 // Valid reports whether e is one of Events.
 func (e Event) Valid() bool { return slices.Contains(Events, e) }
@@ -491,7 +506,7 @@ type Derived struct {
 	Part      gitproc.Part
 	Freshness Freshness
 	// What each Event does to it.
-	OnPackAdded, OnPackRemoved, OnRefsMoved, OnReported, OnHistoryGone Change
+	OnPackAdded, OnPackRemoved, OnRefsMoved, OnReported, OnHistoryGone, OnPackRetired Change
 	// Seed is what a rebuild does with its files.
 	Seed SeedRule
 }
@@ -509,6 +524,8 @@ func (d Derived) On(e Event) Change {
 		return d.OnReported
 	case EventHistoryGone:
 		return d.OnHistoryGone
+	case EventPackRetired:
+		return d.OnPackRetired
 	}
 	return ""
 }
@@ -605,23 +622,34 @@ func DerivedFiles() []Derived {
 			{FilePattern: FilePattern{"objects/pack", midxBitmap}, File: "bitmap"},
 			{FilePattern: FilePattern{"objects/pack", midxRev}, File: "midx-rev", Prior: true},
 		},
-		Check:       CheckTrailer,
-		Part:        gitproc.PartMultiPackIndex,
-		Freshness:   FreshDebounced,
+		Check:     CheckTrailer,
+		Part:      gitproc.PartMultiPackIndex,
+		Freshness: FreshDebounced,
+		// A pack RETIRED drops it as a pack removed does: the index names
+		// every pack it covers by checksum and places each object at an
+		// offset in one of them, so an index naming a pack that left fails
+		// every lookup that reaches it.
 		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop, OnHistoryGone: Keep,
-		Seed: SeedNone,
+		OnPackRetired: Drop,
+		Seed:          SeedNone,
 	}, {
 		Name:   DerivedGraph,
 		Inputs: []Input{InputPacks, InputRefs},
 		Writes: []Write{{Step: StepGraph, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance,
 			Deadline: maintained, BytesPerObject: GraphBytesPerObject, Writer: Writer{maintainFile, procGraph},
 			Args: graphArgs, Holds: []FilePattern{{"objects/info", graphLock}}}},
-		Owns:        []Owned{{FilePattern: FilePattern{"objects/info", graphMain}, File: "commit-graph", Main: true}},
-		Check:       CheckTrailer,
-		Part:        gitproc.PartCommitGraph,
-		Freshness:   FreshDebounced,
+		Owns:      []Owned{{FilePattern: FilePattern{"objects/info", graphMain}, File: "commit-graph", Main: true}},
+		Check:     CheckTrailer,
+		Part:      gitproc.PartCommitGraph,
+		Freshness: FreshDebounced,
+		// A pack RETIRED KEEPS IT (X04): a compaction merges packs and drops
+		// no object, so every commit the graph lists is still in a pack the
+		// incarnation keeps, and git reads the graph by commit id, never by
+		// pack. A pack REMOVED — a stray no retirement accounts for, a log
+		// gone back — may take commits with it, and drops it.
 		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop, OnHistoryGone: Keep,
-		Seed: SeedNone,
+		OnPackRetired: Keep,
+		Seed:          SeedNone,
 	}, {
 		Name:   DerivedProvenance,
 		Inputs: []Input{InputPushRows},
@@ -638,11 +666,12 @@ func DerivedFiles() []Derived {
 		Check:     CheckRunTrailer,
 		Freshness: FreshAtRound,
 		// Its input is the push rows, which no pack and no ref of the
-		// incarnation moves; a report names no file of it, since no git process
-		// reads one; and a log gone back makes every position it records
-		// another record's.
+		// incarnation moves — a pack a compaction retired included; a report
+		// names no file of it, since no git process reads one; and a log gone
+		// back makes every position it records another record's.
 		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
-		Seed: SeedLink,
+		OnPackRetired: Keep,
+		Seed:          SeedLink,
 	}, {
 		Name:   DerivedMemo,
 		Inputs: []Input{InputOID},
@@ -654,16 +683,18 @@ func DerivedFiles() []Derived {
 		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, memoTreeName}, File: "memo", Main: true, Tree: true}},
 		Check:     CheckEntryDigest,
 		Freshness: FreshImmutable,
-		// An object id names one object for ever, so no pack added or removed
-		// and no ref moved alters an answer keyed by the ids it read; a report
+		// An object id names one object for ever, so no pack added, removed or
+		// retired and no ref moved alters an answer keyed by the ids it read —
+		// and a compaction keeps every object of the packs it retires; a report
 		// names no file of it, since no git process reads one; and a restored
 		// or recreated log is another history, which the memo cannot tell entry
 		// by entry — so it goes whole, and is computed again on demand.
 		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
-		// A rebuild repairs packs, not answers: the whole tree moves into the
-		// new incarnation as it is promoted, one rename whatever it holds,
-		// where every read holds an entry to its key and digest as it did
-		// here.
+		OnPackRetired: Keep,
+		// A rebuild repairs packs, not answers, and a compaction's swap keeps
+		// every object: the whole tree moves into the new incarnation as it is
+		// promoted, one rename whatever it holds, where every read holds an
+		// entry to its key and digest as it did here.
 		Seed: SeedMove,
 	}}
 }

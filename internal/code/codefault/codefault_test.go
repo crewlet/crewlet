@@ -76,7 +76,12 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 		t.Fatalf("PushPath() = %v\nwant the order a push reaches them: %v", got, want)
 	}
 
-	syncPoints := []codefault.Point{codefault.SyncDownload, codefault.SyncRefs, codefault.SyncState}
+	syncPoints := []codefault.Point{
+		codefault.SyncDownload,         // a pack's download in flight
+		codefault.SyncRefs,             // the packs in, the refs not yet renamed in
+		codefault.SyncState,            // the refs in, the state not yet renamed in
+		codefault.SyncSwapBeforeRename, // the round applied, the next incarnation staged, not yet renamed in
+	}
 	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints); !slices.Equal(got, wantAll) {
 		t.Fatalf("Points() = %v\nwant the push path, then the sync's: %v", got, wantAll)
 	}

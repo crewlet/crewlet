@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -51,7 +52,11 @@ import (
 // — a maintenance run killed with its node — would refuse the index, since git
 // writes none over another writer's lock. The pack files last (sweepPacks),
 // once the new refs are in, so a reader of the old refs never loses a pack
-// they name.
+// they name — and that only in an incarnation NOBODY may hold: in one a
+// reader may hold, a pack file no row names leaves by the SWAP into the next
+// incarnation instead (swap.go), since git opens a pack lazily, part way
+// through a run, and no pin of a file could say which a running process will
+// touch.
 //
 // A DELTA SWEEPS NOTHING: between two rounds of one process nothing but this
 // package has written the directory, and every writer here leaves only image
@@ -733,12 +738,30 @@ func (t *trashing) dirs(inc string) []string {
 
 // packStrays decides the sweep's second half on a full answer, before the
 // round's index and its refs: every pack file of objects/pack the snapshot
-// does not name — a stray, a pack no row names any more (a log gone back
-// under the cache) — answered for sweepPacks to move once the new refs are
-// in. When there is one, every derived file built over the packs is dropped
-// NOW, first (dropFor, EventPackRemoved): an index naming a missing pack fails
-// every read of the repository, and the round's own index is then written
-// over exactly the snapshot's packs.
+// does not name — a stray, a pack no row names any more — and what took each
+// out: a COMPACTION'S RETIREMENT (EventPackRetired) where the snapshot's
+// retired phase names its checksum and the log under the incarnation is the
+// history it was read from (history false), and otherwise a pack REMOVED
+// (EventPackRemoved): a log gone back or recreated, or a full answer that
+// served no retirements, which leaves no stray accounted for. A stray's
+// leaving is what a declaration built over the packs answers (On): an index
+// is dropped by either, the commit-graph only by a removal — a merge drops no
+// commit (X04).
+//
+// HOW THEY LEAVE turns on who may hold the incarnation. One NOBODY HOLDS and
+// that is not converged — a boot's first round, a rebuild's product before it
+// is promoted: no Synced of it was ever handed out, since nothing is answered
+// at once before an incarnation's first round, and nothing can pin it while
+// this round holds its write lock — has its strays answered for sweepPacks to
+// move once the new refs are in, and every derived file built over the packs
+// is dropped NOW, first, by the strongest event among them (dropFor): an
+// index naming a missing pack fails every read of the repository, and the
+// round's own index is then written over exactly the snapshot's packs. Any
+// OTHER — converged, so atOnce may hand it to a reader while this round runs,
+// or pinned — keeps every file a reader may open, and its strays are answered
+// as leaving, by checksum: the round's end swaps the incarnation for the next
+// (swap.go), which holds the live packs alone, and nothing of them is dropped
+// or moved here.
 //
 // Every other entry the image does not admit goes now too, at this one
 // listing: it is no pack's file, so no reader of the old refs reads it, and
@@ -747,8 +770,10 @@ func (t *trashing) dirs(inc string) []string {
 // is what would refuse the round's index below. Kept for sweepPacks, the lock
 // was refused the index, whose failure removed it from under the sweep that
 // had listed it, and the round failed on the move. It reports whether it
-// moved anything.
-func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot) ([]string, bool, error) {
+// moved anything, or will once the refs are in.
+func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bool) ([]string, map[string]Event,
+	bool, error) {
+
 	packDir := filepath.Join(inc.dir, packRel)
 	want := map[string]bool{}
 	for _, p := range snap.packs {
@@ -758,7 +783,7 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot) ([]string,
 	}
 	list, err := os.ReadDir(packDir)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	var strays []string
 	now := &trashing{c: c}
@@ -770,27 +795,63 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot) ([]string,
 			strays = append(strays, name)
 		default:
 			if now.move(filepath.Join(packDir, name)); now.err != nil {
-				return nil, now.moved, now.err
+				return nil, nil, now.moved, now.err
 			}
 		}
 	}
 	if now.moved {
 		if err = syncDir(packDir); err != nil {
-			return nil, true, err
+			return nil, nil, true, err
 		}
 	}
-	if len(strays) > 0 {
-		if _, err = c.dropFor(e, inc, EventPackRemoved, 0); err != nil {
-			return nil, true, err
+	if len(strays) == 0 {
+		return nil, nil, now.moved, nil
+	}
+	// What took a stray out is what this answer's retirements say, or what
+	// the incarnation already knew of it: a pack an earlier round's
+	// retirements took out, whose swap failed, may lie below the floor this
+	// answer serves retirements above.
+	var retired map[string]bool
+	if !history && !snap.retiredFrom.IsZero() {
+		retired = snap.retiredChecksums()
+	}
+	e.mu.Lock()
+	held := inc.converged || inc.pins > 0
+	known := maps.Clone(inc.leaving)
+	e.mu.Unlock()
+	leaving := map[string]Event{}
+	for _, name := range strays {
+		key, ev := name, EventPackRemoved
+		if m := packFileName.FindStringSubmatch(name); m != nil {
+			key = m[1]
+			if !history && (retired[key] || known[key] == EventPackRetired) {
+				ev = EventPackRetired
+			}
+		}
+		if had, ok := leaving[key]; !ok || had != EventPackRemoved {
+			leaving[key] = ev
 		}
 	}
-	return strays, now.moved || len(strays) > 0, nil
+	if held {
+		return nil, leaving, now.moved, nil
+	}
+	ev := EventPackRetired
+	for _, v := range leaving {
+		if v == EventPackRemoved {
+			ev = EventPackRemoved
+		}
+	}
+	if _, err = c.dropFor(e, inc, ev, 0); err != nil {
+		return nil, nil, true, err
+	}
+	return strays, nil, true, nil
 }
 
 // sweepPacks is the sweep's second half, once the refs are in: every stray
-// packStrays found is moved into trash/, so a reader of the old refs never
-// loses a pack they name — and then the incarnation's counts are MEASURED,
-// whatever they had drifted to.
+// packStrays answered to move — none where the strays leave by the swap — is
+// moved into trash/, so a reader of the old refs never loses a pack they name
+// — and then the incarnation's counts are MEASURED, whatever they had drifted
+// to: strays the swap is about to take out included.
 func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, error) {
 	packDir := filepath.Join(inc.dir, packRel)
 	t := &trashing{c: c}

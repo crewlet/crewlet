@@ -1133,7 +1133,10 @@ func Catalogue() []Instrument {
 				"is, where everything it found is the copy's own " +
 				"directory out of place — a file or entry the engine does " +
 				"not write there, a pack no row names, its shape — every " +
-				"pack, index, bitmap and graph kept and none downloaded; " +
+				"pack, index, bitmap and graph kept and none downloaded, " +
+				"but a pack no row names, which leaves as the copy moves " +
+				"into its next directory, the index and graph built over " +
+				"it along (`crewlet.code.cache.swaps`); " +
 				"rebuilt into a new directory otherwise, or for what that " +
 				"read leaves — a shape written past its sweep included, " +
 				"never counted under `shape` — each counted once it has " +
@@ -1197,6 +1200,30 @@ func Catalogue() []Instrument {
 				"it kept, which downloads nothing, it is mostly that wait: " +
 				"`full_rounds` `waiting` climbing says so, not the object " +
 				"store.",
+		},
+		{
+			Name: CodeCacheSwaps, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"graph"},
+			Shows: "Repositories whose cache on this node moved into its next " +
+				"directory because packs left it — a compaction retired them, " +
+				"or a full read found pack files no row names — built by hard " +
+				"links of every pack still live beside the old directory, " +
+				"which the requests reading it keep until they end; by " +
+				"whether the next one kept the commit-graph. `kept`: every " +
+				"pack that left was a compaction's, which drops no commit, so " +
+				"the graph came along and the multi-pack index and its bitmap " +
+				"alone are written again. `dropped`: a pack left that no " +
+				"retirement accounts for — the code log recreated or restored " +
+				"under the node, or a full read that could not say which were " +
+				"retired — or the copy held no graph: the background indexing " +
+				"writes it again at once. `failed`: the swap could not be " +
+				"made — a link refused, the disk full — and the old directory " +
+				"goes on serving, every live pack in it, until the " +
+				"repository's next sync tries again (`code_cache_swap_failed` " +
+				"names the step). `failed` rising is a cache volume out of " +
+				"room or links; `dropped` beside a quiet log is full reads " +
+				"that cannot see their retirements, every one a graph " +
+				"rewritten.",
 		},
 		{
 			Name: CodeCacheFullRounds, Kind: KindGauge, Unit: UnitCount,

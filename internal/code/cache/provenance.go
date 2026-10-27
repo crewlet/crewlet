@@ -352,11 +352,22 @@ func runNumber(name string) (uint64, bool) {
 // no longer names them either (retireRuns). THE ONE WAY THE INDEX CHANGES
 // BUT ITS MAKING AND ITS DROP, so no writer stores a record over one it did
 // not read.
+//
+// A RETIRED incarnation takes no change: a rebuild or a swap replaced it, and
+// the one serving now reads its own — a swap's carries the record and links
+// every run it names (swap.go), so a page committed into the one it left would
+// be a run read for nothing, counted in the cache's total beside the very
+// runs the two share until that copy's last reader let go. Nor does one a
+// swap is leaving (entry.swap), for the whole of the swap: a commit could
+// retire a run of the record it carries before the swap has linked it — and
+// the next state written of that copy moves a retired run into trash/
+// (retireRuns) — and leave the next incarnation without the index over a file
+// the backfill moved.
 func (c *Cache) commitIndex(e *entry, inc *incarnation, gen uint64, change func(next *provenanceState) bool) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	cur := inc.record()
-	if cur == nil || inc.provGen != gen || inc.discarded {
+	if cur == nil || inc.provGen != gen || inc.discarded || inc.retired || e.swap != nil && e.swap.inc == inc {
 		return false
 	}
 	next := cur.clone()

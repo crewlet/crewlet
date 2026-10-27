@@ -119,6 +119,13 @@ const (
 	// SyncState: the refs are installed, the state staged and not yet renamed
 	// in.
 	SyncState Point = "sync.state"
+	// SyncSwapBeforeRename: packs left an incarnation a reader may hold, the
+	// round has applied to its end there (its state renamed in), and the next
+	// incarnation is staged whole under scratch/ — every live pack, the
+	// packed-refs and the derived files a retirement keeps linked in, its own
+	// state written — and not yet renamed into repos/: the swap's one
+	// irreversible step is next (internal/code/cache's swap.go).
+	SyncSwapBeforeRename Point = "sync.swap_before_rename"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -127,8 +134,11 @@ var pushPath = []Point{
 	HostAfterUpload, CommitterAfterAppend, HostAfterPropose, HostBeforeAdopt, HostHookClose,
 }
 
-// syncPath is the cache sync's points in the order a sync reaches them.
-var syncPath = []Point{SyncDownload, SyncRefs, SyncState}
+// syncPath is the cache sync's points in the order a sync reaches them: a
+// round's download, its refs and its state, then — LAST, since the round has
+// applied to its end on the incarnation it leaves before the swap begins —
+// the swap's rename.
+var syncPath = []Point{SyncDownload, SyncRefs, SyncState, SyncSwapBeforeRename}
 
 // PushPath is the receive pipeline's points in the order a push reaches them:
 // the nine the host hits and the committer's. A fresh copy at every call,

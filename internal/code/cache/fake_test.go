@@ -21,12 +21,17 @@ import (
 // rows a case writes directly, so a case controls exactly when a page moves.
 // Nothing here is invented: page 1 decides full or delta as the reader does
 // (no Since, another stream name or generation, or a Since below the swept
-// tombstones), serves the phases packs, refs and — on a snapshot of more than
-// one page — tail, in the reader's orders and with its cursor rules, and a
-// later page answers code.ErrSnapshotMoved when the stream, the generation or
-// (on a delta) the tombstone floor moved since the cursor was made. The fake
-// is held honest from the other side by the host's suites, which run the
-// cache against the real reader.
+// tombstones or the swept retirements), and the floor the snapshot's
+// retirements are served above (a delta's Since; a full answer's
+// RetiredSince where it is on this generation, at or past the retired mark
+// and no more than code.MaxFullRetirements below the checkpoint — else none),
+// serves the phases packs, refs, a delta's pushes, the retirements and — on a
+// snapshot of more than one page — tail, in the reader's orders and with its
+// cursor rules, and a later page answers code.ErrSnapshotMoved when the
+// stream, the generation, (on a delta) the tombstone floor or the retired
+// floor moved since the cursor was made. The fake is held honest from the
+// other side by the host's suites, which run the cache against the real
+// reader.
 
 // fakeLog is one code log's rows.
 type fakeLog struct {
@@ -69,6 +74,12 @@ type fakeRepo struct {
 	// pushes is every push row the repository still keeps, as the reader
 	// serves one (code.IntroducedRow), in the order they were written.
 	pushes []code.IntroducedRow
+	// retired is every retirement the rows still keep (code_packs_retired),
+	// as the reader serves one (code.RetiredRow), in the order the records
+	// made them; retiredThrough is the packed position at or below which a
+	// sweep took them out, so no retirement there is served any more.
+	retired        []code.RetiredRow
+	retiredThrough int64
 }
 
 // fakePush is one push of a record: the packs it added, the refs it moved
@@ -112,6 +123,9 @@ type fakeCall struct {
 	Level statelog.ReadLevel
 	Since statelog.Position
 	Page  int
+	// RetiredSince is page 1's StateQuery.RetiredSince: the floor a full
+	// answer was asked to serve its retirements above.
+	RetiredSince statelog.Position
 }
 
 // fakeState is a copy of the log's rows at one moment, for a restore.
@@ -197,6 +211,57 @@ func (f *fakeLog) writePushes(repo string, pushes ...fakePush) statelog.Position
 		}
 	}
 	return pos
+}
+
+// compact is one compaction record on repo, as the code domain's apply of one
+// writes it: the packs whose ids retire leave the live rows for the retired
+// ones, and outputs are added, at one position — which it answers.
+func (f *fakeLog) compact(repo string, outputs []code.PackRow, retire ...string) statelog.Position {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	pos := f.at()
+	r := f.repos[repo]
+	for _, id := range retire {
+		i := slices.IndexFunc(r.packs, func(p code.PackRow) bool { return p.PackID == id })
+		if i < 0 {
+			panic(fmt.Sprintf("the fake log: %s holds no live pack %s to retire", repo, id))
+		}
+		p := r.packs[i]
+		r.packs = slices.Delete(r.packs, i, i+1)
+		r.retired = append(r.retired, code.RetiredRow{PackID: p.PackID, Part: p.Part, GitChecksum: p.GitChecksum,
+			RetiredAt: time.Unix(1_800_000_000+int64(f.seq), 0).UTC(), Position: pos})
+	}
+	for _, out := range outputs {
+		out.Added = pos
+		r.packs = append(r.packs, out)
+	}
+	return pos
+}
+
+// sweepRetired takes repo's retirements at or below through out of the rows,
+// as a retire_sweep record does, raising the mark below which a delta is
+// answered in full — a record of its own, which moves the checkpoint.
+func (f *fakeLog) sweepRetired(repo string, through statelog.Position) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.repos[repo]
+	r.retired = slices.DeleteFunc(r.retired, func(x code.RetiredRow) bool {
+		return x.Position.Packed() <= through.Packed()
+	})
+	r.retiredThrough = max(r.retiredThrough, through.Packed())
+	f.seq++
+}
+
+// dropPack takes repo's pack id out of the live rows with no retirement —
+// what no record of the code domain does, and so what a cache meets as a
+// pack file no row accounts for.
+func (f *fakeLog) dropPack(repo, id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.repos[repo]
+	r.packs = slices.DeleteFunc(r.packs, func(p code.PackRow) bool { return p.PackID == id })
+	f.seq++
 }
 
 // expirePushes drops repo's push rows at or below through, as the push
@@ -318,6 +383,7 @@ func cloneRepos(in map[string]*fakeRepo) map[string]*fakeRepo {
 		c.packs = slices.Clone(r.packs)
 		c.refs = maps.Clone(r.refs)
 		c.pushes = slices.Clone(r.pushes)
+		c.retired = slices.Clone(r.retired)
 		out[id] = &c
 	}
 	return out
@@ -462,7 +528,7 @@ func (f *fakeLog) answer(ctx context.Context, q code.StateQuery, loud bool) (cod
 		return code.RepoSnapshot{}, err
 	}
 	f.mu.Lock()
-	call := fakeCall{Repo: q.RepoID, Level: q.Fresh.Level, Since: q.Since, Page: 1}
+	call := fakeCall{Repo: q.RepoID, Level: q.Fresh.Level, Since: q.Since, Page: 1, RetiredSince: q.RetiredSince}
 	if q.Cursor != nil {
 		call.Level, call.Page = statelog.ReadSession, f.pages[q.Cursor]
 	}
@@ -507,14 +573,35 @@ func (f *fakeLog) page(q code.StateQuery, call fakeCall) (code.RepoSnapshot, err
 			return code.RepoSnapshot{}, fmt.Errorf("%w: a session read with no floor", code.ErrBadLevel)
 		}
 		full := q.Since.IsZero() || q.Since.Stream != topics.CodeLogStream ||
-			q.Since.Generation != f.gen || q.Since.Packed() < r.tombstonesThrough
+			q.Since.Generation != f.gen || q.Since.Packed() < r.tombstonesThrough ||
+			q.Since.Packed() < r.retiredThrough
+		// The floor the retirements are served above: a delta's own Since; a
+		// full answer's RetiredSince only where every retirement above it
+		// can be served — else none, so a floor named is a complete one.
+		var retiredFrom statelog.Position
+		switch {
+		case !full:
+			retiredFrom = q.Since
+		case !q.RetiredSince.IsZero() && q.RetiredSince.Stream == topics.CodeLogStream &&
+			q.RetiredSince.Generation == f.gen && q.RetiredSince.Packed() >= r.retiredThrough:
+			above := 0
+			for _, x := range r.retired {
+				if x.Position.Packed() > q.RetiredSince.Packed() {
+					above++
+				}
+			}
+			if above <= code.MaxFullRetirements {
+				retiredFrom = q.RetiredSince
+			}
+		}
 		if f.behindBy > 0 && q.Fresh.Level != statelog.ReadLinearizable {
 			behind := cp
 			behind.Seq -= min(f.behindBy, cp.Seq)
 			return code.RepoSnapshot{Repo: f.repoRef(r, behind), Position: behind,
-				StreamCreated: f.stream, Full: full}, nil
+				StreamCreated: f.stream, Full: full, RetiredFrom: retiredFrom}, nil
 		}
-		cur = code.StateCursor{Full: full, Phase: "packs", From: cp, Seen: cp, Stream: f.stream}
+		cur = code.StateCursor{Full: full, Phase: "packs", From: cp, Seen: cp, Stream: f.stream,
+			RetiredFrom: retiredFrom}
 		if !full {
 			cur.Since, cur.Pushes = q.Since, q.Pushes
 		}
@@ -525,10 +612,14 @@ func (f *fakeLog) page(q code.StateQuery, call fakeCall) (code.RepoSnapshot, err
 			return code.RepoSnapshot{}, fmt.Errorf("%w: the log was recreated or reanchored", code.ErrSnapshotMoved)
 		case !cur.Full && cur.Since.Packed() < r.tombstonesThrough:
 			return code.RepoSnapshot{}, fmt.Errorf("%w: a deletion the delta needed was swept", code.ErrSnapshotMoved)
+		case !cur.RetiredFrom.IsZero() && cur.RetiredFrom.Packed() < r.retiredThrough:
+			return code.RepoSnapshot{}, fmt.Errorf("%w: a retirement the snapshot serves was swept",
+				code.ErrSnapshotMoved)
 		}
 		cur.Seen = cp
 	}
-	out := code.RepoSnapshot{Repo: f.repoRef(r, cp), Position: cur.From, StreamCreated: cur.Stream, Full: cur.Full}
+	out := code.RepoSnapshot{Repo: f.repoRef(r, cp), Position: cur.From, StreamCreated: cur.Stream, Full: cur.Full,
+		RetiredFrom: cur.RetiredFrom}
 	room := f.pageRows
 	if room == 0 {
 		room = code.MaxSnapshotItems
@@ -557,7 +648,10 @@ func (f *fakeLog) page(q code.StateQuery, call fakeCall) (code.RepoSnapshot, err
 			case cur.Phase == "refs" && cur.Pushes:
 				cur.Phase, cur.After = "pushes", ""
 				continue
-			case (cur.Phase == "refs" || cur.Phase == "pushes") && !first:
+			case (cur.Phase == "refs" || cur.Phase == "pushes") && !cur.RetiredFrom.IsZero():
+				cur.Phase, cur.After = "retired", ""
+				continue
+			case (cur.Phase == "refs" || cur.Phase == "pushes" || cur.Phase == "retired") && !first:
 				cur.Phase, cur.After = "tail", ""
 				continue
 			}
@@ -611,6 +705,18 @@ func (f *fakeLog) phase(r *fakeRepo, cur code.StateCursor) []keyed {
 					add: func(s *code.RepoSnapshot) { s.Pushes = append(s.Pushes, p) }})
 			}
 		}
+		return out
+	case "retired":
+		// Every retirement in (RetiredFrom, From], in (position, pack id,
+		// part) order: one past page 1's checkpoint is the next delta's.
+		var out []keyed
+		for _, x := range r.retired {
+			if at := x.Position.Packed(); at > cur.RetiredFrom.Packed() && at <= cur.From.Packed() {
+				out = append(out, keyed{key: fmt.Sprintf("%020d/%s/%s", at, x.PackID, x.Part),
+					add: func(s *code.RepoSnapshot) { s.Retired = append(s.Retired, x) }})
+			}
+		}
+		slices.SortFunc(out, func(a, b keyed) int { return strings.Compare(a.key, b.key) })
 		return out
 	}
 	var out []keyed

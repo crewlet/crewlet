@@ -1671,3 +1671,48 @@ func MemoEntryBytes(n int) int64 { return memoBytesOf(int64(memoHeader + n)) }
 // MemoStagedBytes is what a page of a body of n bytes holds staged, before its
 // tail: its file's length, as the memo's share counts it.
 func MemoStagedBytes(n int) int64 { return int64(memoHeader + n) }
+
+// LinkWith makes every hard link a swap makes (swap.go) go through f in place
+// of os.Link (knobs.link): a case counts them, or makes one fail.
+func LinkWith(f func(oldname, newname string) error) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.link = f
+	}
+}
+
+// Leaving is what is leaving repoID's current incarnation
+// (incarnation.leaving): each pack file no live row names any more, by its
+// checksum — or by its name, where it carries none — with the event that took
+// it out; nil when nothing is, or the cache holds no copy of repoID.
+func Leaving(c *Cache, repoID string) map[string]Event {
+	e := lookup(c, repoID)
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return nil
+	}
+	return maps.Clone(e.current.leaving)
+}
+
+// Maintained is when the last run of the maintainer the duty cycle counts
+// ended on repoID's current incarnation, and how long it took
+// (incarnation.maintained): zero before its first, or where the cache holds
+// no copy of repoID.
+func Maintained(c *Cache, repoID string) (time.Time, time.Duration) {
+	e := lookup(c, repoID)
+	if e == nil {
+		return time.Time{}, 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return time.Time{}, 0
+	}
+	return e.current.maintained.LastRun, e.current.maintained.Took
+}

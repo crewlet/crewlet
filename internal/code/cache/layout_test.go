@@ -306,21 +306,23 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 
 // AN OLDER INCARNATION COUNTS WHAT IT ALONE HOLDS. A boot after a crash can
 // find a repository's older incarnation beside the one it keeps — a
-// rebuild's predecessor a reader still held when the node died — and the one
-// it keeps holds HARD LINKS of the older one's packs: a rebuild links every
-// pack a check has just found whole rather than download it (seedRebuild).
-// The kept incarnation's state counts those packs, so Layout.Held counts an
-// older one by the files no other name holds. Counted by its state as well,
-// every linked pack was counted twice, and the engine — which adds
-// Layout.Held to the volume's free space to derive the cache's budget — gave
-// the cache room the volume did not have, by the linked bytes.
+// rebuild's or a swap's predecessor a reader still held when the node died —
+// and the one it keeps holds HARD LINKS of the older one's files: a rebuild
+// links every pack a check has just found whole rather than download it
+// (seedRebuild), and a swap every live pack, the packed-refs and the derived
+// files a retirement keeps (swap.go). The kept incarnation's state counts
+// those files, so Layout.Held counts an older one by the files no other name
+// holds. Counted by its state as well, every linked file was counted twice,
+// and the engine — which adds Layout.Held to the volume's free space to
+// derive the cache's budget — gave the cache room the volume did not have, by
+// the linked bytes.
 //
 // What Held should be is counted here by inode rather than by link count:
 // the kept incarnation as its state says, and every file of the older one
 // whose inode is none of the kept one's.
 //
 // Mutation: count the older incarnation by its state again (readBoot) — the
-// linked packs are counted twice, and the rebuild's arm fails.
+// linked files are counted twice, and both arms fail.
 func TestABootCountsAnOlderIncarnationBySoleNames(t *testing.T) {
 	t.Parallel()
 	t.Run("a rebuild's predecessor", func(t *testing.T) {
@@ -346,6 +348,21 @@ func TestABootCountsAnOlderIncarnationBySoleNames(t *testing.T) {
 		}
 		c.Stop(context.Background())
 		olderBootCount(t, w, held.Dir, kept)
+	})
+	t.Run("a swap's predecessor", func(t *testing.T) {
+		t.Parallel()
+		// A compaction retires two of the three packs while a reader holds
+		// the copy: the next incarnation links the output, the third pack,
+		// the packed-refs and the commit-graph — and the old one stays in
+		// repos/ until the reader lets go (swap.go).
+		k := newCompactable(t, true)
+		k.compact(t)
+		kept := k.w.sync(t, k.c, k.repo).Dir
+		if kept == k.held.Dir {
+			t.Fatalf("the round that retired two packs left the copy at %s", kept)
+		}
+		k.c.Stop(context.Background())
+		olderBootCount(t, k.w, k.held.Dir, kept)
 	})
 }
 

@@ -312,9 +312,13 @@ func (v *Verification) Release() {
 //     (repairInPlace), counted under reason verify once it has read the copy
 //     whole: the full round's sweep moves the entries aside and writes the
 //     fixed files again, reusing every pack, the multi-pack-index, its bitmap
-//     and the graph, with no download and no new incarnation;
-//     RepairedInPlace, Found the first check's problems, Problems the
-//     second's. Rebuilt instead, the copy had no index, bitmap or graph until
+//     and the graph, with no download and no new incarnation — but for a pack
+//     no row names, which leaves the copy this check holds by a SWAP into its
+//     next incarnation (swap.go), every live pack linked and none downloaded,
+//     the multi-pack-index and the graph built over it left behind with it,
+//     and the second pass checks that incarnation, the one the round
+//     answered; RepairedInPlace, Found the first check's problems, Problems
+//     the second's. Rebuilt instead, the copy had no index, bitmap or graph until
 //     the maintainer wrote them again — minutes to hours of bitmapless clones
 //     of a large repository, and for good on a node whose memory now refuses
 //     the bitmap — for what the sweep puts right. The read is the CHECK's, as
@@ -655,7 +659,11 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	defer l.close()
 	r.Name, r.Position, r.Problems = cmp.Or(l.repo.Name, r.Name), l.at, l.problems
 
-	snap, err := c.read(ctx, e.id, l.at, l.stream, true, false,
+	// No retirement asked: the check holds the listing to the rows alone, and
+	// a pack file the copy holds that no row names — one its swap has not
+	// taken out yet among them — is the copy's own directory out of place,
+	// which a read in place answers by the swap.
+	snap, err := c.read(ctx, e.id, l.at, statelog.Position{}, l.stream, true, false,
 		statelog.FloorAt(statelog.ReadSession, l.at))
 	switch {
 	case err != nil:

@@ -295,6 +295,57 @@ func (w *syncWorld) tagged(t testing.TB, repo, name string) (string, code.PackRo
 	return oid, row
 }
 
+// merged is ONE pack of every object of the packs rows name — a compaction's
+// output, as git's own merge of them writes it (pack-objects --stdin-packs)
+// — stored, and its row answered as a compaction's, not yet written: a case
+// writes it, retiring rows, at the moment it chooses (w.log.compact).
+func (w *syncWorld) merged(t testing.TB, rows ...code.PackRow) code.PackRow {
+	t.Helper()
+	bare := gittest.Empty(t)
+	packDir := filepath.Join(bare, "objects", "pack")
+	var names strings.Builder
+	for _, r := range rows {
+		b := w.bundle(r.GitChecksum)
+		at := int64(0)
+		for _, s := range []struct {
+			ext string
+			n   int64
+		}{{".pack", b.PackBytes}, {".idx", b.IndexBytes}, {".rev", b.ReverseBytes}} {
+			write(t, filepath.Join(packDir, "pack-"+r.GitChecksum+s.ext), string(b.Bytes[at:at+s.n]))
+			at += s.n
+		}
+		names.WriteString("pack-" + r.GitChecksum + ".pack\n")
+	}
+	stdout, stderr, err := w.client.Try(t, bare, strings.NewReader(names.String()),
+		"-c", "pack.writeReverseIndex=true", "-c", "pack.indexVersion=2", "pack-objects", "--stdin-packs", "-q",
+		filepath.Join(packDir, "pack"))
+	if err != nil {
+		t.Fatalf("merging %d packs: %v\n%s", len(rows), err, stderr)
+	}
+	b := gittest.Bundle(t, bare, strings.TrimSpace(stdout))
+	w.mu.Lock()
+	w.bundles[b.Checksum] = b
+	w.mu.Unlock()
+	row := w.storeBundle(t, b, "")
+	row.Kind = "compaction"
+	return row
+}
+
+// compacted is a compaction of rows on repo, written: their merge stored
+// (merged), and ONE record retiring them and adding it, as the code domain's
+// apply of a compaction writes one. It answers the output's row, Added at the
+// record's position.
+func (w *syncWorld) compacted(t testing.TB, repo string, rows ...code.PackRow) code.PackRow {
+	t.Helper()
+	out := w.merged(t, rows...)
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.PackID)
+	}
+	out.Added = w.log.compact(repo, []code.PackRow{out}, ids...)
+	return out
+}
+
 // sync is a linearizable sync that must succeed, released when the case ends.
 func (w *syncWorld) sync(t testing.TB, c *cache.Cache, repo string) cache.Synced {
 	t.Helper()

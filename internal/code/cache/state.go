@@ -93,6 +93,17 @@ type state struct {
 	// file's, because the duty cycle bounds a run of up to two steps — an
 	// index and a graph — over one repository.
 	Maintained maintainedState `json:"maintained"`
+	// LeavingSince is, where the directory still holds pack files a
+	// compaction retired that the swap has not taken out of it yet
+	// (incarnation.leaving: a crash, or a swap that failed, between a round
+	// and its swap), the position the retirements of them are all above:
+	// what a boot's first round asks its full answer's retirements from
+	// (StateQuery.RetiredSince) in place of Position, at or past which none
+	// of them lies — so that round reads them as the retirements they are,
+	// and keeps what a retirement keeps (the commit-graph, X04), rather than
+	// as packs no row accounts for. Zero where the directory holds none: one
+	// position whatever it holds, so the state stays constant-size.
+	LeavingSince statelog.Position `json:"leaving_since,omitzero"`
 
 	// memoVersion is the version of the memo's record this value holds
 	// (incarnation.memoVersion), never written: what the incarnation records

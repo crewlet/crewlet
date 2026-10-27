@@ -728,6 +728,41 @@ bitmaps. Reading a copy whole does not write the graph itself: the request
 it was read for would wait those seconds to spare the rare skewed push the
 same.
 
+**When packs leave a copy.** A compaction merges a repository's packs and
+retires the ones it merged — nothing in this build compacts yet ([what it
+does not do yet](#what-it-does-not-do-yet)), but a cache already follows one
+— and a whole read can find a pack no row names any more, after the code log
+went back under the node. git opens a pack only when a request first needs
+it, part way through, so a pack never leaves a copy a request may be
+reading: the node builds the copy's **next directory** beside it — every pack
+the rows still name, the ref file and the files built over them that the
+change leaves valid, each hard-linked from the old directory, so it
+downloads nothing, runs no git and costs a few file links a pack whatever
+the repository's size — moves it into place whole, moves the memo of answers
+into it in one rename, and serves every later request from it, while the
+requests already reading the old directory keep
+every pack they may still open until the last of them ends. A compaction
+keeps the commit-graph, since a merge drops no commit; a pack that left with
+no compaction retiring it takes the graph with it, and the background
+indexing writes it again at once. The multi-pack index and its bitmap name
+the packs that left, so the next directory starts without them, and the
+background indexing writes them again at its usual pace. A background index
+run the move interrupts counts as one of the repository's runs, so a
+repository compacted more often than its index takes to write holds a
+background slot no more than its usual share of the node's time. The two
+directories share every file the new one kept, so whatever a request still
+reading the old directory learns about one counts for the new one: damage its
+git reports there makes the new directory's scrub due, and a request that
+fails on damage there runs once more over the new directory before any repair
+is spent, which ends it if the damaged file was one that left and repairs it
+in the new directory if the two share it. A move that
+fails — the disk refusing a link, a full disk — leaves the copy as it was,
+still holding every pack the rows name, and the repository's next sync tries
+again; one a crash interrupts leaves the old directory in place, and the
+node's first sync of the repository after its restart finishes the job,
+keeping the graph. `crewlet.code.cache.swaps` counts every move by whether
+the commit-graph came along, and every one that failed.
+
 **What the cache writes beside the packs.** Four kinds of file in a
 repository's cache are the node's own work rather than the rows': the
 multi-pack index — a full read's, written before it answers once the
@@ -738,13 +773,17 @@ answers of seats' reads by object id ([The memo](#the-memo)). Each lives
 inside the repository's own directory, so it counts against the budget and
 leaves with the repository when it is evicted. The multi-pack index and the
 commit-graph are written again over a rebuild's packs, and each is dropped
-before a pack it may name leaves the directory, so no git process reads an
-index that names a pack that is gone; the index of pushes is built from the
-push rows rather than the packs, and the memo's answers are about objects
-rather than packs, so a pack leaving changes nothing of either, a rebuild links
-the index of pushes into its new directory and moves the memo there whole, in
-one rename however many answers it holds, and a log restored or recreated under
-the node drops both. One the node has not written since it started is held to its
+before a pack it may name leaves the directory — the copy's next directory
+never holds it ([When packs leave a copy](#the-cache-on-a-git-node)) — so no
+git process reads an index that names a pack that is gone; the one exception
+is the commit-graph when a compaction retires the pack, since a merge drops no
+commit and the graph names only commits the repository still holds. The index
+of pushes is built from the push rows rather than the packs, and the memo's
+answers are about objects rather than packs, so a pack leaving changes nothing
+of either: a rebuild or a move to the next directory links the index of pushes
+into it and moves the memo there whole, in one rename however many answers it
+holds, and a log restored or recreated under the node drops both. One the node
+has not written since it started is held to its
 checksum before it serves — git's for the first two, the run's own for the
 index of pushes — and every file of a copy is checked again behind the
 serving; a memo's answer is checked by every read of it instead. Anything else in the directory that is neither one of them nor the
@@ -763,12 +802,12 @@ and this table is that list; the steps are what
 refuses one — never `provenance` or `memo`, which the engine's own code
 writes, holding no git slot and charged against no memory budget.
 
-| Declared file | Its files, in the repository's directory | Written by | When a pack leaves |
-|---|---|---|---|
-| `midx`, the multi-pack index | `objects/pack/multi-pack-index`, `objects/pack/multi-pack-index-<checksum>.bitmap`, `objects/pack/multi-pack-index-<checksum>.rev` | a sync, before it answers: `index`; the background indexing: `bitmap`, `index` | dropped first |
-| `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | dropped first |
-| `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept |
-| `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept |
+| Declared file | Its files, in the repository's directory | Written by | When a compaction retires a pack | When any other pack leaves |
+|---|---|---|---|---|
+| `midx`, the multi-pack index | `objects/pack/multi-pack-index`, `objects/pack/multi-pack-index-<checksum>.bitmap`, `objects/pack/multi-pack-index-<checksum>.rev` | a sync, before it answers: `index`; the background indexing: `bitmap`, `index` | dropped first | dropped first |
+| `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | kept | dropped first |
+| `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept |
+| `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | kept |
 
 **Memory.** Every git process a node runs over a whole repository holds memory
 in proportion to the repository's objects, measured on git 2.43 over a source
@@ -1054,7 +1093,10 @@ Where everything it found is the copy's own directory out of place — a file
 the engine does not write there, a fixed file edited or replaced by a link, a
 pack no row names, a shape git is refused in — it reads the copy whole IN
 PLACE, as a shape a request meets is: every pack, the multi-pack-index, its
-bitmap and the graph kept, nothing downloaded. Damage — a pack missing, at
+bitmap and the graph kept, nothing downloaded — but a pack no row names,
+which leaves as the copy moves into its next directory, taking the
+multi-pack-index and the graph built over it along, still with nothing
+downloaded (When packs leave a copy, above). Damage — a pack missing, at
 another size or not its row's bytes, an index failing its checksum — is
 rebuilt into the next copy, and so is whatever the read in place leaves —
 something writing into the directory as the node puts it right, a shape among
@@ -1097,7 +1139,11 @@ bringing up more repositories at once than it reads whole —
 60 ms is the data node's connections queueing, which its
 `crewlet.store.pool.wait` confirms — `crewlet.code.cache.rebuilds` by `reason`,
 `crewlet.code.cache.rebuild.refusals` by `rule` — rising at all, damage no
-rebuild repairs — `crewlet.code.cache.checks` by `outcome`, `file` and
+rebuild repairs — `crewlet.code.cache.swaps` by `graph` — `failed` at all, a
+cache volume refusing links or out of room, and `dropped` beside a code log
+nobody restored, whole reads that could not tell a compaction's packs from
+others, each a commit-graph written again —
+`crewlet.code.cache.checks` by `outcome`, `file` and
 `trigger` — any `damaged` is a disk losing data, or something outside the
 engine writing into the cache, and `damaged` under `file=pack` or
 `trigger=scrub` damage only the scrub could have found —
@@ -1463,9 +1509,10 @@ crash left unrecorded. Every read checks the
 answer against its own header — the key it answers and the SHA-256 of what it
 holds — so one a crash cut short or a disk damaged is computed again rather
 than served, and nothing behind the serving hashes the memo. A rebuild keeps
-it, since an answer is about objects rather than packs — the whole memo moves
-into the rebuilt copy in one rename as that copy takes over, so a rebuild costs
-the same at ten answers or a million — and a request still reading the copy it
+it, and so does a move into the copy's next directory when packs leave it,
+since an answer is about objects rather than packs — the whole memo moves into
+the new copy in one rename as that copy takes over, so either costs the same
+at ten answers or a million — and a request still reading the copy it
 replaced simply misses from then on; a log restored or
 recreated under the node drops it whole, since it may answer for objects the
 history that replaced it does not hold, and nothing a read cut before that
@@ -2194,11 +2241,13 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_rebuild_refused` | `WARN` | A rebuild was asked for and refused: one that did not end the failure ran too recently, or the copy holds exactly what such a rebuild read. The damage is then in the object store or the rows, not in this node's copy. At most once every ten minutes a repository. |
 | `code_cache_rebuild_seeded` | `INFO` | A rebuild linked the `packs` found whole into the new copy, of the `whole` found so — by `crewlet code verify` asked to repair, or by the scrub a request's repair ran before it — so it downloads only the rest. |
 | `code_cache_rebuild_seed_failed` | `WARN` | A rebuild could not link a pack it had already found whole into the new copy, so it downloads that pack instead. The disk refusing a hard link. |
+| `code_cache_swapped` | `INFO` | Packs left a repository's copy — a compaction retired them, or a whole read found pack files no row names — and the node moved the copy into its next directory ([When packs leave a copy](#the-cache-on-a-git-node)): `from` and `to` the two directories' numbers, `packs_kept` the packs the rows still name, hard-linked, `packs_dropped` those that left, `graph` whether the commit-graph came along (`kept`, a compaction's) or not (`dropped`), and `took`. Requests reading the old directory finish there. |
+| `code_cache_swap_failed` | `WARN` | Packs left a repository's copy and the node could not build its next directory (`step`, `error`; `incarnation` the copy's number): the copy keeps serving, every pack the rows name still in it, and the repository's next sync tries again. Recurring, the cache volume is refusing links or is full. |
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
 | `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph`, or `state` when its record could not be written). The repository is served without the index — slower, never wrong — and the next run waits out the interval. |
 | `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused. Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, each of which keeps 224 MiB of it. |
 | `code_cache_provenance_gap` | `WARN` | A sync applied pushes it could not fold into the repository's index of which push introduced each commit (`from`, `through`, `error`: a delta that served no pushes, or one beginning above where the index ends), so it left that range to the backfill, as a full sync does; until it is read, an answer naming a commit in it says the index does not hold it. One now and then is a page the sync could not read; a run of them, `error` says why. |
-| `code_cache_provenance_lost` | `WARN` | A full sync found a run the repository's index names missing from the disk or at another size, so the index was made anew at that sync's position and the backfill reads back below it as far as it is wanted. Something outside the engine removing files in the cache, or a disk losing them. |
+| `code_cache_provenance_lost` | `WARN` | A full sync found a run the repository's index names missing from the disk or at another size, so the index was made anew at that sync's position and the backfill reads back below it as far as it is wanted — or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-git-node)) found one missing, so the next directory starts with no index until its next full sync makes one. Something outside the engine removing files in the cache, or a disk losing them. |
 | `code_cache_provenance_unlisted` | `WARN` | A full sync could not list the repository's `crewlet/` directory (`error`), so it kept the index as its record names it; the next full sync lists it again. A disk refusing reads. |
 | `code_cache_provenance_seeded` | `INFO` | A rebuild linked the `runs` of the repository's index into the new copy, so the index outlives it. |
 | `code_cache_provenance_dropped` | `INFO` | The backfill found the repository gone from the rows at a position that had held it (`why`) — purged — and dropped its index; the repository's next sync takes its copy out of the cache. |
@@ -2211,8 +2260,8 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_cache_memo_unlisted` | `WARN` | The node could not list a copy's memo after its boot (`error`), or count a cohort of it no state recorded: it tries again at the janitor's next pass, and meanwhile counts only what the copy's state recorded. |
 | `code_cache_memo_foreign` | `WARN` | A copy's memo held something no cohort is — `found` names the first, as a build that kept the memo in one directory left it — so the node moved the whole memo aside unread; its answers are computed again as they are asked. |
 | `code_cache_memo_unstated` | `WARN` | The node could not write a copy's state after its memo moved (`error`): it tries again at its next tick, and a restart before then counts the memo as the last state written does. |
-| `code_cache_memo_carried` | `INFO` | A rebuild moved the repository's memo of answers into the new copy (`from` and `to` are the copies' numbers), whole and in one rename, with the `bytes` it holds. |
-| `code_cache_memo_uncarried` | `WARN` | A rebuild could not move the memo into the new copy (`error`): the new copy starts with none and computes its answers again; the old copy's goes with it. The disk refusing a rename within the cache's own directory. |
+| `code_cache_memo_carried` | `INFO` | A rebuild, or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-git-node)), moved the repository's memo of answers into the new copy (`from` and `to` are the copies' numbers), whole and in one rename, with the `bytes` it holds. |
+| `code_cache_memo_uncarried` | `WARN` | A rebuild, or a move into the copy's next directory, could not move the memo into the new copy (`error`): the new copy starts with none and computes its answers again; the old copy's goes with it. The disk refusing a rename within the cache's own directory. |
 | `code_cache_backfill_failed` | `WARN` | A step of the backfill failed for the `repo` (`error`): a page the data nodes could not serve, a run it could not write, or two runs it could not merge — kept as they are, a lookup reading one more run meanwhile. That repository's steps wait `retry_in`, five seconds doubling to five minutes with each of its failures in a row, while every other repository's steps go on; only failures of more than one repository in a row make the backfill as a whole wait, doubling the same way. One now and then is a data node restarting; one repository's, again and again, is rows of it the data nodes cannot serve this node (a rolling upgrade's record deferred everywhere) or a disk refusing its writes; every repository's, while `crewlet.code.cache.provenance.behind` stays up, is the data nodes unreachable from this node, or its disk full. |
 | `code_cache_backfill_unpaced` | `WARN` | The backfill could not count the fleet's live git and data nodes to pace its next page (`error`), so it waits five seconds, doubling to five minutes, and counts again rather than reading on a guess. |
 | `code_cache_round_index_held` | `INFO` | A cold sync of a repository with many packs answered without writing its index first, because the background work in flight left the node's memory no room for it (`estimate` against the `budget`). Slower, never wrong; the background index follows. |

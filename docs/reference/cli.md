@@ -1307,7 +1307,11 @@ checks the copy again. Where everything it found is the copy's **own directory
 out of place** — a file the engine does not write there, a fixed file edited
 or replaced by a link, a pack no row names, a shape the node refuses to run
 git in — the copy is put right **in place**: every pack, the
-multi-pack-index, its bitmap and the commit-graph kept, nothing downloaded.
+multi-pack-index, its bitmap and the commit-graph kept, nothing downloaded —
+but a pack no row names, which leaves as the copy moves into its next
+directory, taking the multi-pack-index and the commit-graph built over it
+along, still with nothing downloaded ([When packs leave a
+copy](../concepts/code-host.md#the-cache-on-a-git-node)).
 A pack missing or damaged, or an index failing its checksum, is **rebuilt**
 into a new copy (every pack found whole linked rather than downloaded again),
 and so is whatever a repair in place leaves. Every git node keeps its own cache, so **verify each** (`-url`

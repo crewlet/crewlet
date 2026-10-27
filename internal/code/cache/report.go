@@ -208,23 +208,25 @@ func (c *Cache) toScrub(inc *incarnation, r heldReport) {
 }
 
 // handOn takes every report held for reader by of inc and hands each to the
-// ordinary rules (toScrub) as though it had just arrived — while inc is still
-// the entry's copy in service and the cache runs; a report about a copy since
-// replaced is dropped, as one arriving about it would be. Called as the
-// reader lets inc go, so a request that ended without asking its repair — it
-// failed past its first byte, failed in a way the host does not repair, or
-// never failed — leaves nothing held. e.mu is held.
+// ordinary rules (toScrub) as though it had just arrived — while inc, or the
+// copy a swap made current in its place (serving), is the entry's copy in
+// service and the cache runs; a report about a copy a rebuild or a purge has
+// since replaced is dropped, as one arriving about it would be (observe).
+// Called as the reader lets inc go, so a request that ended without asking
+// its repair — it failed past its first byte, failed in a way the host does
+// not repair, or never failed — leaves nothing held. e.mu is held.
 func (c *Cache) handOn(e *entry, inc *incarnation, by gitproc.Repairer) {
 	held, ok := inc.held[by]
 	if !ok {
 		return
 	}
 	delete(inc.held, by)
-	if e.dead || e.current != inc || c.isStopped() {
+	at := serving(inc)
+	if e.dead || e.current != at || c.isStopped() {
 		return
 	}
 	for _, r := range held {
-		c.toScrub(inc, r)
+		c.toScrub(at, r)
 	}
 }
 
@@ -515,7 +517,11 @@ func (c *Cache) observe(ran gitproc.Ran) {
 		return
 	}
 	e, inc := c.incarnationAt(ran.Dir)
-	inIncarnation := e != nil
+	inIncarnation, staged := e != nil, false
+	if !inIncarnation {
+		e, inc = c.swapAt(ran.Dir)
+		inIncarnation, staged = e != nil, e != nil
+	}
 	if !inIncarnation {
 		// A scratch or a view: only its alternate's derived parts and a
 		// crash are the cache's; its pack and object parts, and the packs
@@ -533,13 +539,31 @@ func (c *Cache) observe(ran gitproc.Ran) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.current != inc || e.dead {
+	// at is the copy serving the files the run read: inc, or — where a swap
+	// replaced inc under a reader still running — the incarnation the swap
+	// made current, which holds every file it kept as the same inode.
+	at := serving(inc)
+	if e.current != at || e.dead {
 		return
 	}
+	// A REPORT ABOUT FILES A SWAP CARRIES (swap.go) — a run in a copy a swap
+	// replaced, or the round's own index in the staged next one — is the
+	// SCRUB'S EVIDENCE about the copy serving them, every part of it: the
+	// file it names may be one the swap left behind (the multi-pack-index
+	// never crosses one), which a drop on the copy serving would answer with
+	// a whole read of it for nothing, and the scrub holds every file that
+	// copy does hold to its checksum, dropping a derived one that fails.
+	// Dropped as a report about a replaced copy is, a damaged pack both copies
+	// share was found only by the next scrub a day later, though git had named
+	// it — the swap of a repository compacted every few minutes replacing the
+	// copy under nearly every long clone.
+	evidence := staged || at != inc
 	var named, drops derivedSet
 	if derived != 0 {
 		named = c.image.reported(dmg.Drops())
-		drops = named & c.image.dropping(EventReported)
+		if !evidence {
+			drops = named & c.image.dropping(EventReported)
+		}
 		// A DERIVED PART NO DROP REPAIRS — every declaration it names keeps
 		// its files on a report (OnReported) — goes where all damage a drop
 		// does not end goes: the copy's scrub, whose bytes decide, bounded
@@ -551,10 +575,12 @@ func (c *Cache) observe(ran gitproc.Ran) {
 		// Held for its reader only where the run was IN the incarnation:
 		// the host repairs nothing a process in a scratch or a view meets
 		// but the alternate's shape, which no process started to report.
+		// Held on the incarnation the reader holds, a replaced one's too:
+		// its release hands them on to the copy serving (handOn).
 		if held, ok := inc.held[ran.Repairer]; ok && inIncarnation && ran.Repairer != noReader {
 			inc.held[ran.Repairer] = append(held, r)
 		} else {
-			c.toScrub(inc, r)
+			c.toScrub(at, r)
 		}
 	}
 	if drops == 0 {
@@ -601,10 +627,12 @@ func (c *Cache) countReports(parts gitproc.Part, outcome reportOutcome) {
 	}
 }
 
-// incarnationAt is the entry and its CURRENT incarnation when dir is that
-// incarnation's directory (repos/<id>.<n>.git), or nil: the one parse of an
-// incarnation's name, beside newIncarnation's. A retiring incarnation is
-// none — its successor was read whole and checked.
+// incarnationAt is the entry and its incarnation whose directory dir is
+// (repos/<id>.<n>.git) — its CURRENT one, or a retiring one a SWAP replaced,
+// whose files the current one serves as the very inodes it kept (swappedOut)
+// — or nil: the one parse of an incarnation's name, beside newIncarnation's.
+// A retiring incarnation a REBUILD replaced is none: its successor was read
+// whole and checked, and holds none of its files unchecked.
 func (c *Cache) incarnationAt(dir string) (*entry, *incarnation) {
 	if dir == "" || filepath.Dir(dir) != filepath.Join(c.dir, reposDir) {
 		return nil, nil
@@ -621,8 +649,16 @@ func (c *Cache) incarnationAt(dir string) (*entry, *incarnation) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if inc := e.current; inc != nil && inc.n == n && !e.dead {
+	if e.dead {
+		return nil, nil
+	}
+	if inc := e.current; inc != nil && inc.n == n {
 		return e, inc
+	}
+	for _, inc := range e.retiring {
+		if inc.n == n && swappedOut(e, inc) {
+			return e, inc
+		}
 	}
 	return nil, nil
 }
