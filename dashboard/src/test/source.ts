@@ -119,12 +119,12 @@ export function isNode(value: unknown): value is Node {
  * gates are CPU-bound work inside the runner's per-test budget, so a gate that
  * re-parsed the tree was a gate that ran out of time on a loaded machine
  * (measured as the CPU each case spent, from before its first `beforeEach` to
- * after its last `afterEach`, over the 411 cases of the 24 suites that parse,
- * one run each way in a four-core runner slot with nothing else running in
- * it: 41.8 s before, 26.2 s after). The key is the text itself, so a gate
- * parsing its own snippet gets its own tree, and a module that is edited
- * between runs is a new key. No gate writes to a tree it was handed, which is
- * what makes sharing one between the gates of a suite sound.
+ * after its last `afterEach`, over the 411 cases of the 24 suites that parsed
+ * at the time, one run each way in a four-core runner slot with nothing else
+ * running in it: 41.8 s before, 26.2 s after). The key is the text itself, so
+ * a gate parsing its own snippet gets its own tree, and a module that is
+ * edited between runs is a new key. No gate writes to a tree it was handed,
+ * which is what makes sharing one between the gates of a suite sound.
  */
 const parsed: Record<Lang, Map<string, Node>> = { ts: new Map(), tsx: new Map(), dts: new Map() };
 
