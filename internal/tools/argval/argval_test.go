@@ -168,3 +168,23 @@ func TestAWholeNumberIsReadWithinItsRange(t *testing.T) {
 		t.Error("IntPrefix read 1e300 as an int")
 	}
 }
+
+// A CLOSED SET'S MEMBER IS READ TRIMMED AND WITHOUT REGARD TO CASE, as the
+// member the set spells; an exact member wins over a folded one.
+func TestAChoiceIsTheMemberItSpells(t *testing.T) {
+	t.Parallel()
+	set := []string{"body", "comments", "Body"}
+	for in, want := range map[string]struct {
+		member string
+		ok     bool
+	}{
+		"body":     {"body", true},
+		" Body ":   {"Body", true},
+		"COMMENTS": {"comments", true},
+		"bodies":   {"bodies", false},
+	} {
+		if m, ok := argval.Choice(in, set); m != want.member || ok != want.ok {
+			t.Errorf("Choice(%q) = %q, %v; want %q, %v", in, m, ok, want.member, want.ok)
+		}
+	}
+}

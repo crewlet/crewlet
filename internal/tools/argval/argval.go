@@ -262,3 +262,24 @@ func Bool(v any) (bool, bool) {
 	b, ok := v.(bool)
 	return b, ok
 }
+
+// Choice is a string read as one member of a closed set: the member itself,
+// or the member it spells once trimmed and read without regard to case ("
+// Body" is "body"). ok is false for a string no member is. THE ONE RULE for
+// a closed set, which the check of a call reads by and the surface hands a
+// tool already applied, so no tool keeps a normalisation of its own that the
+// check would not know.
+func Choice(s string, set []string) (string, bool) {
+	trimmed := strings.TrimSpace(s)
+	for _, member := range set {
+		if member == trimmed {
+			return member, true
+		}
+	}
+	for _, member := range set {
+		if strings.EqualFold(member, trimmed) {
+			return member, true
+		}
+	}
+	return s, false
+}

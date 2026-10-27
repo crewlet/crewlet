@@ -290,3 +290,42 @@ func TestANoteNeverTouchesTheToolsOutput(t *testing.T) {
 		t.Errorf("rendered for a reader of text as %q", got)
 	}
 }
+
+// seeingTool records the arguments it was handed.
+type seeingTool struct {
+	contractTool
+	saw map[string]any
+}
+
+func (s *seeingTool) Call(_ context.Context, args map[string]any) (tools.Result, error) {
+	s.saw = args
+	return tools.Result{Output: "made"}, nil
+}
+
+// A CLOSED SET IS READ BY ONE RULE (#423 review): trimmed and without regard
+// to case ([argval.Choice]), by the check and by the tool, which the surface
+// hands the member the set spells. So " DONE " is "done" to both: no finding,
+// no note, nothing counted, where the check read it exactly and noted a value
+// the tool had accepted as "not read as sent".
+//
+// Mutation: compare the set exactly in the check, or hand the tool the value
+// as sent, and " DONE " is noted and counted.
+func TestAClosedSetIsReadByOneRule(t *testing.T) {
+	t.Parallel()
+	tool := &seeingTool{contractTool: contractTool{name: "make_thing"}}
+	rec := &countingRecorder{}
+	res, refused, err := tools.Invoke(context.Background(), tools.Invocation{Name: "make_thing", Tool: tool,
+		Args: map[string]any{"title": "t", "status": " DONE ", "labels": []any{"a"}}, Counter: rec})
+	if err != nil || refused || res.Note != "" {
+		t.Fatalf("a case variant of a member answered refused %v, note %q (%v)", refused, res.Note, err)
+	}
+	if tool.saw["status"] != "done" {
+		t.Errorf("the tool was handed status %q, want the member \"done\"", tool.saw["status"])
+	}
+	if rec.count(metrics.ToolArgsOutsideSchema, "make_thing") != 0 {
+		t.Error("a case variant of a member was counted as drift")
+	}
+	if got := findings(`{"title": "t", "status": "doing"}`); len(got) != 1 {
+		t.Errorf("a value no member spells is not a finding: %+v", got)
+	}
+}

@@ -56,7 +56,12 @@ type Invocation struct {
 func Invoke(ctx context.Context, in Invocation) (res DetachedResult, refused bool, err error) {
 	var faults []ArgFault
 	if !in.ThirdParty {
-		faults = CheckArgs(in.Name, in.Tool.Parameters(), in.Args)
+		// A CLOSED SET'S MEMBER IS HANDED TO THE TOOL AS THE SET SPELLS
+		// IT ([Canonical]), the one rule the check reads by too, so a
+		// tool keeps no normalisation of its own.
+		schema := in.Tool.Parameters()
+		in.Args = Canonical(schema, in.Args)
+		faults = CheckArgs(in.Name, schema, in.Args)
 	}
 	if misread(faults) {
 		return DetachedResult{Result: Result{Output: misreadAnswer(in.Name, faults), Failed: true,

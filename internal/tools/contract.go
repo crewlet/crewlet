@@ -215,7 +215,10 @@ func (c *contract) list(schema map[string]any, path string, v []any) {
 // enum holds a string to its schema's closed set.
 func (c *contract) enum(schema map[string]any, path, s string) {
 	set := stringsOf(schema["enum"])
-	if len(set) == 0 || slices.Contains(set, s) {
+	if len(set) == 0 {
+		return
+	}
+	if _, ok := argval.Choice(s, set); ok {
 		return
 	}
 	c.add(path, Outside, "%s is %q, and %s takes one of %s", c.name(path), clipped(s), c.tool,
@@ -480,4 +483,86 @@ func faultLines(faults []ArgFault) string {
 		lines = append(lines, "- "+f.Message)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Canonical is a call's arguments as its tool reads them: every string at a
+// place the schema closes to a set ([argval.Choice]) replaced by the member it
+// spells, so " Body" reaches the tool as "body", and nothing else changed. A
+// copy where anything changes; args itself otherwise.
+func Canonical(schema, args map[string]any) map[string]any {
+	if out, changed := canonical(schema, args); changed {
+		if m, ok := out.(map[string]any); ok {
+			return m
+		}
+	}
+	return args
+}
+
+// canonical is v with every closed-set string as its member, and whether
+// anything changed (v is then left untouched, and a copy answered).
+func canonical(schema map[string]any, v any) (any, bool) {
+	if schema == nil || v == nil {
+		return v, false
+	}
+	switch v := v.(type) {
+	case string:
+		if set := stringsOf(schema["enum"]); len(set) > 0 {
+			if member, ok := argval.Choice(v, set); ok && member != v {
+				return member, true
+			}
+			return v, false
+		}
+		items, _ := schema["items"].(map[string]any)
+		if items == nil || !slices.Contains(typesOf(schema), "array") {
+			return v, false
+		}
+		// ONE STRING STANDING FOR A LIST is canonical element by element,
+		// as the tool reads it ([argval.StringItems]).
+		parts, _ := argval.StringItems(v)
+		if out, changed := canonical(schema, parts); changed {
+			return out, true
+		}
+		return v, false
+	case []any:
+		items, _ := schema["items"].(map[string]any)
+		var out []any
+		for i, e := range v {
+			if c, changed := canonical(items, e); changed {
+				if out == nil {
+					out = slices.Clone(v)
+				}
+				out[i] = c
+			}
+		}
+		return orig(out, v)
+	case map[string]any:
+		props, _ := schema["properties"].(map[string]any)
+		extra, _ := schema["additionalProperties"].(map[string]any)
+		var out map[string]any
+		for key, e := range v {
+			sub, ok := props[key].(map[string]any)
+			if !ok {
+				sub = extra
+			}
+			if c, changed := canonical(sub, e); changed {
+				if out == nil {
+					out = maps.Clone(v)
+				}
+				out[key] = c
+			}
+		}
+		if out == nil {
+			return v, false
+		}
+		return out, true
+	}
+	return v, false
+}
+
+// orig is a list canonical changed, or the original and false.
+func orig(out, v []any) (any, bool) {
+	if out == nil {
+		return v, false
+	}
+	return out, true
 }

@@ -1174,7 +1174,7 @@ func (t *getWorkItem) Parameters() map[string]any {
 					"that explain each, which is what you write back with.",
 				"items": map[string]any{
 					"type": "string",
-					"enum": []any{"body", "comments", "history", "links", "fields"},
+					"enum": stringsToAny(includeParts),
 				},
 			},
 			"comments_cursor": map[string]any{
@@ -1195,6 +1195,10 @@ func (t *getWorkItem) Parameters() map[string]any {
 		"required": []any{"item"},
 	}
 }
+
+// includeParts are the parts `include` names, as its schema closes them and
+// as its reading takes them ([argval.Choice]): one list, both places.
+var includeParts = []string{"body", "comments", "history", "links", "fields"}
 
 // detailWants reads the `include` argument, defaulting to all four.
 //
@@ -1236,7 +1240,10 @@ func detailWants(args map[string]any) (worklet.DetailWants, bool, string) {
 			"history, links, fields."
 	}
 	for _, part := range parts {
-		switch strings.ToLower(part) {
+		// THE ONE RULE for a closed set ([argval.Choice]), which the
+		// check of the call reads `include` by too.
+		member, _ := argval.Choice(part, includeParts)
+		switch member {
 		case "body":
 			body = true
 		case "comments":
