@@ -41,6 +41,7 @@ import type { WriteAccess } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { searchTooLong } from "~/lib/search.ts";
 import { ANSWER_IDLE_MS, answerable, normalizeQuestion } from "./hits.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
 
 /** One document an answer was written from; source [n] is the n-th. */
 export interface AnswerSource {
@@ -75,7 +76,7 @@ export type AnswerState =
   | { kind: "asking" }
   | { kind: "answered"; answer: KnowledgeAnswerReceipt }
   /** The engine said no — the budget, the backend — in its own sentence. */
-  | { kind: "refused"; sentence: string }
+  | { kind: "refused"; sentence: string; remedy: Remedy | null }
   /** Nobody can say whether it was answered; nothing is retried by itself. */
   | { kind: "unknown"; reason: string };
 
@@ -164,7 +165,7 @@ export function useKnowledgeAnswer(term: string, wanted: boolean): AnswerState {
               state = { kind: "unknown", reason: result.reason };
               break;
             case "refused":
-              state = { kind: "refused", sentence: result.sentence };
+              state = { kind: "refused", sentence: result.sentence, remedy: result.remedy };
               break;
           }
           setSettled({ key, state });

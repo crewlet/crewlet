@@ -171,7 +171,10 @@ test("a wait the engine sent is said only through fmtWait", () => {
   const said = sources()
     .filter(([, text]) => /fmtWait\([^)]*retryAfterSeconds/.test(text))
     .map(([path]) => path);
-  expect(said).toEqual(
-    expect.arrayContaining(["app/assistant/chunk/Thread.tsx", "lib/refusal.ts"]),
-  );
+  expect(said).toEqual(expect.arrayContaining(["lib/refusal.ts"]));
+  // THE DRAWER'S REFUSAL counts what is left of the wait (`waitLeft`) and
+  // says it through fmtWait, in the one rule its notice and its box share.
+  const bounce = sources().find(([path]) => path === "app/assistant/chunk/bounce.ts")?.[1] ?? "";
+  expect(bounce).toMatch(/waitLeft\(turn, now\)/);
+  expect(bounce).toMatch(/fmtWait\(left\)/);
 });

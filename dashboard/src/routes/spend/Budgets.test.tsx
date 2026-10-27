@@ -21,6 +21,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Budgets } from "./Budgets.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
+import { arriveAgain } from "~/lib/arrival.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -95,6 +96,14 @@ function answer(extra: Partial<BudgetsAnswer> = {}): BudgetsAnswer {
         ],
       },
     ],
+    assistant: {
+      counted: true,
+      windows: [
+        win("day", { used: 180_000, limit: 200_000 }),
+        win("week", { used: 400_000 }),
+        win("month", { used: 900_000 }),
+      ],
+    },
     ...extra,
   };
 }
@@ -111,8 +120,12 @@ const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "
 
 let budgetAsks = 0;
 
-function mount(budgets: BudgetsAnswer, viewer: Record<string, unknown> = OPERATOR) {
-  location.hash = "#/company/budgets";
+function mount(
+  budgets: BudgetsAnswer,
+  viewer: Record<string, unknown> = OPERATOR,
+  hash = "#/company/budgets",
+) {
+  location.hash = hash;
   budgetAsks = 0;
   const store = new Store();
   store.applyHealth(healthFrame({ applied_epoch: 4 }));
@@ -509,8 +522,9 @@ test("a ceiling of 0 is refused before anything is sent", async () => {
 test("a reader who cannot change the configuration sees why, on every ceiling", async () => {
   mount(answer(), { login: "dee", owner: "dee", grants: [] });
   await settle();
+  // The company's three, each person's assistant's three, and the one seat's.
   const pencils = screen.getAllByRole("button", { name: /token ceiling/ });
-  expect(pencils.length).toBe(6);
+  expect(pencils.length).toBe(9);
   for (const pencil of pencils) expect(pencil.getAttribute("aria-disabled")).toBe("true");
   expect(screen.getAllByText(CONFIG_WRITE_REASONS.no_grant).length).toBeGreaterThan(0);
   cleanup();
@@ -605,4 +619,111 @@ test("a ceiling open in its editor is the assistant's to read and fill in, and s
   });
   expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("3M");
   expect(calls).toEqual([]);
+});
+
+// EACH PERSON'S ASSISTANT CEILING IS RAISED HERE, as the company's is: a merge
+// patch one level down, checked first and recorded under a summary naming
+// whose ceiling moved. It is the ceiling a person's question is refused by,
+// and the remedy of that refusal opens this card.
+test("each person's assistant ceiling is a merge patch of the one window, recorded as theirs", async () => {
+  const calls = stubConfig((call) => {
+    if (call.method === "GET")
+      return json(
+        { name: "Acme", assistant: { llm: ["p"], token_budget: { day: 200_000 } } },
+        200,
+        { ETag: '"r1"' },
+      );
+    if (call.url.includes("dry_run=true")) return valid();
+    return saved();
+  });
+  mount(answer());
+  await settle();
+  await edit(/Change each person's assistant daily token ceiling/, "500k");
+  const save = calls.at(-1)!;
+  expect(save.method).toBe("PATCH");
+  expect(save.url).not.toContain("dry_run");
+  expect(save.body).toEqual({
+    assistant: { token_budget: { day: 500_000 } },
+    _summary: "Raise each person's assistant daily token ceiling from 200k to 500k",
+  });
+});
+
+// A FIGURE ONLY WHERE ONE IS COUNTED. The viewer's own spend is drawn where
+// the engine counts it; a zero nobody measured is not drawn as "0 tokens".
+test("the assistant's row draws the viewer's own spend only where it is counted", async () => {
+  mount(answer());
+  await settle();
+  const card = screen.getByRole("region", { name: "Each person’s assistant" });
+  expect(within(card).getByText("180k")).toBeDefined();
+  expect(within(card).getAllByRole("meter").length).toBe(1);
+  cleanup();
+
+  mount(answer({ assistant: { counted: false, windows: [win("day", { limit: 200_000 })] } }));
+  await settle();
+  const uncounted = screen.getByRole("region", { name: "Each person’s assistant" });
+  expect(within(uncounted).queryByText(/^0$/)).toBeNull();
+  expect(within(uncounted).queryByRole("meter")).toBeNull();
+  expect(
+    within(uncounted).getByRole("button", { name: /each person's assistant daily token ceiling/ }),
+  ).toBeDefined();
+});
+
+// A REMEDY'S ADDRESS OPENS THE CEILING IT NAMES: the card, or the seat's row,
+// marked as the one the reader came for and given focus; and a press on that
+// same address once the reader has moved on brings them back to it.
+//
+// Mutation: drop the section's arrival, or ignore a press on the address
+// already open, and a case fails.
+describe("arriving at a ceiling", () => {
+  const card = (name: string) => screen.getByRole("region", { name });
+
+  test("the assistant's ceiling is marked and focused", async () => {
+    mount(answer(), OPERATOR, "#/company/budgets?section=assistant");
+    await settle();
+    const assistant = card("Each person’s assistant");
+    expect(assistant.classList.contains("is-selected")).toBe(true);
+    expect(card("The company").classList.contains("is-selected")).toBe(false);
+    expect(document.activeElement).toBe(assistant.parentElement);
+  });
+
+  test("a seat's ceiling is its row, marked as current", async () => {
+    mount(answer(), OPERATOR, "#/company/budgets?section=seat:pm");
+    await settle();
+    const marked = document.querySelector('[aria-current="true"]');
+    expect(marked?.closest('[role="row"]')?.textContent).toContain("PM");
+  });
+
+  test("a press on the address already open arrives again", async () => {
+    mount(answer(), OPERATOR, "#/company/budgets?section=company");
+    await settle();
+    const company = card("The company");
+    expect(document.activeElement).toBe(company.parentElement);
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => {
+      arriveAgain();
+    });
+    expect(document.activeElement).toBe(company.parentElement);
+  });
+
+  test("an address arrived at while the screen is open is revealed", async () => {
+    mount(answer());
+    await settle();
+    expect(card("The company").classList.contains("is-selected")).toBe(false);
+    await act(async () => {
+      location.hash = "#/company/budgets?section=company";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await settle();
+    expect(card("The company").classList.contains("is-selected")).toBe(true);
+    expect(document.activeElement).toBe(card("The company").parentElement);
+  });
+
+  test("a section this screen does not draw reveals nothing, and the screen is read as it is", async () => {
+    mount(answer(), OPERATOR, "#/company/budgets?section=seat:ghost");
+    await settle();
+    expect(document.querySelector('[aria-current="true"]')).toBeNull();
+    expect(document.querySelector(".is-selected")).toBeNull();
+    expect(card("The company")).toBeDefined();
+  });
 });

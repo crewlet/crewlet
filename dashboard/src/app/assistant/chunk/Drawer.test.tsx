@@ -70,8 +70,11 @@ afterEach(() => {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-/** The engine, as the drawer meets it: each request recorded and answered. */
-function engine() {
+/**
+ * The engine, as the drawer meets it: each request recorded and answered.
+ * `refusal`, where given, is how it answers the question itself.
+ */
+function engine(refusal?: () => Response | Promise<Response>) {
   const sent: { url: string; init: RequestInit }[] = [];
   vi.stubGlobal(
     "fetch",
@@ -93,6 +96,7 @@ function engine() {
         );
       }
       if (path.endsWith("/turns")) {
+        if (refusal) return refusal();
         return json(
           {
             turn_id: TURN,
@@ -713,4 +717,82 @@ test("a brief is the conversation's first answer: its card, its press and its fo
   expect(brief.textContent).toContain("Decision ENG-133");
   expect(screen.getByRole("button", { name: "Open ENG-133" })).toBeDefined();
   expect(screen.getByRole("button", { name: "What did QA test last?" })).toBeDefined();
+});
+
+// THE NOTICE NEVER PROMISES WHAT THE DRAWER DOES NOT DO. A question the engine
+// turns away unsent goes back in the box, and only then does the notice say so;
+// only the person's own question limit holds the box shut, since a spent budget
+// clears the moment somebody raises the ceiling. The incident: a spent budget
+// said "your question is back in the box below" over an empty box, because the
+// sentence followed the wait and the restore followed one code.
+//
+// Mutation: put the question back for `assistant_busy` alone, or hold the box
+// for every refusal that names a wait, and a case fails.
+test.each([
+  {
+    name: "a spent budget",
+    answer: {
+      error: "budget_exhausted",
+      message: "The token budget for this window is spent.",
+      scope: "person",
+      window: "2026-10-24",
+      remedy: { setting: "assistant_token_budget" },
+    },
+    wait: "35160",
+    title: "Your own assistant budget for this window is spent.",
+    line: "It resets in 9h 46m, or as soon as the ceiling is raised.",
+    held: false,
+  },
+  {
+    name: "the person's question limit",
+    answer: { error: "assistant_busy", message: "Too many questions at once." },
+    wait: "30",
+    title: "Question limit reached.",
+    line: "You can ask again in 30s.",
+    held: true,
+  },
+])("$name puts the question back, says so, and holds the box only for a wait", async (c) => {
+  engine(
+    () =>
+      new Response(JSON.stringify(c.answer), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": c.wait },
+      }),
+  );
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Who spent most this week?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("refused"));
+
+  expect(box.value).toBe("Who spent most this week?");
+  expect(screen.getByText(c.title)).toBeDefined();
+  expect(document.body.textContent).toContain(`${c.line} Your question is back in the box below.`);
+  const send = screen.getByRole("button", { name: /send/i });
+  expect(send.getAttribute("aria-disabled") === "true").toBe(c.held);
+  expect(box.disabled).toBe(c.held);
+});
+
+// THE BOX IS NEVER FILLED OVER WHAT THE READER TYPED SINCE, and then the notice
+// does not claim the question is in it.
+test("a refused question is not put back over a new one, and the notice does not say it is", async () => {
+  let answer: (r: Response) => void = () => {};
+  engine(() => new Promise<Response>((r) => (answer = r)));
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Who spent most this week?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  // TYPED WHILE THE QUESTION WAS ON ITS WAY.
+  fireEvent.change(box, { target: { value: "And last week?" } });
+  await act(async () => {
+    answer(json({ error: "budget_exhausted", remedy: { setting: "company_token_budget" } }, 429));
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("refused"));
+  expect(box.value).toBe("And last week?");
+  expect(screen.getByText("The company's token budget for this window is spent.")).toBeDefined();
+  expect(document.body.textContent).not.toContain("back in the box");
 });

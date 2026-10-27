@@ -5423,7 +5423,9 @@ and is served even while the budget is spent. A company that does not run
 Doclet has no position to key on, so its answers are never cached.
 
 It refuses `invalid` for an empty question, `forbidden` for a caller no seat
-binds or a seat the chart no longer has, `budget_exhausted` as above, and
+binds or a seat the chart no longer has, `budget_exhausted` as above (with
+`detail` in a person's words and `remedy: {"setting": "company_token_budget"}`),
+and
 `unavailable` for a counter it cannot read (nothing is spent), a knowledge base
 and tracker that could not be searched at all, no model configured, or a model
 that failed or wrote nothing — a reply that spent tokens and wrote nothing is
@@ -7206,7 +7208,10 @@ keeps it through its own save.
 **Before anything is spent.** A question is refused, recording nothing, when the
 company's token budget, or the person's own `assistant.token_budget`, has no
 room in a window (`429 budget_exhausted` with the `scope` that is spent, `org`
-or `person`, the window, its `resets_at` and a `Retry-After` until it resets),
+or `person`, the window, its `resets_at`, a `Retry-After` until it resets, and
+the `remedy` naming the ceiling that refused it: `{"setting":
+"company_token_budget"}` or `{"setting": "assistant_token_budget"}`; see
+[ADR-0060](../../adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md)),
 when the person already has two turns running on the node, or has asked twenty
 in a minute across every node of the fleet (`429 assistant_busy` with a
 `Retry-After`; while the fleet's counter cannot be read, the node's own rate of
@@ -8067,6 +8072,17 @@ is what the gate refuses against. Each window's allowance comes back when it
 turns over; there is no route that resets a counter, and room before then is
 made by raising the ceiling.
 
+**`assistant`** is the ceiling every person's Dashboard Assistant questions are
+held to (`assistant.token_budget`): its three windows, each with the `limit`
+every person is held to where one is set. `used`, `refused_at` and `state` in
+it are the CALLER's own spend against that ceiling, and **`counted`** says
+whether they are real: a person's assistant spend is counted on a scope of
+their own only while the company caps it, and a caller who is not a person
+spends nothing through the assistant, so where `counted` is `false` every
+`used` is a zero nobody measured and a client draws no figure. It is here
+because it is what refuses a person's question, and the Budgets screen is
+where that refusal's remedy sends whoever may raise it.
+
 What a seat *spent over a window you choose* is not here: that is the per-agent
 row of the [spend breakdown](#get-tokensbreakdown), a different span that must
 not be divided into a ceiling. The ceiling and the durable counter are the pair
@@ -8101,7 +8117,18 @@ today's ceiling across two restarts".
          "resets_at": "2026-06-30T22:00:00Z", "used": 702311, "state": "ok"}
       ]
     }
-  ]
+  ],
+  "assistant": {
+    "counted": true,
+    "windows": [
+      {"period": "day", "window": "2026-06-08", "starts_at": "2026-06-07T22:00:00Z",
+       "resets_at": "2026-06-08T22:00:00Z", "used": 41200, "limit": 200000, "state": "ok"},
+      {"period": "week", "window": "2026-W24", "starts_at": "2026-06-07T22:00:00Z",
+       "resets_at": "2026-06-14T22:00:00Z", "used": 120400, "state": "ok"},
+      {"period": "month", "window": "2026-06", "starts_at": "2026-05-31T22:00:00Z",
+       "resets_at": "2026-06-30T22:00:00Z", "used": 380900, "state": "ok"}
+    ]
+  }
 }
 ```
 

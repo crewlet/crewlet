@@ -121,6 +121,7 @@ export function sendRefusalOf(err: RestError): SendRefusal {
     sentence: refusalWords(err),
     hint: err.code === "assistant_model_not_ready" && err.hint !== "" ? err.hint : null,
     retryAfterSeconds: typeof retry === "number" && retry > 0 ? Math.ceil(retry) : null,
+    remedy: err.code === "budget_exhausted" ? err.remedy : null,
   };
 }
 
@@ -140,7 +141,11 @@ function refusalWords(err: RestError): string {
       // spent), the one a failed answer would have carried.
       return err.detail || err.sentence;
     case "budget_exhausted":
-      return "The assistant's budget for now is spent. Try again when it resets.";
+      // WHOSE CEILING, by the remedy the engine named: a person's own is
+      // theirs to have raised, and the company's binds everybody.
+      return err.remedy?.setting === "assistant_token_budget"
+        ? "Your own assistant budget for this window is spent."
+        : "The company's token budget for this window is spent.";
     default:
       if (err.unanswered)
         return "The question could not be sent. Check your connection and try again.";
@@ -380,6 +385,7 @@ export async function send(
             sentence: "The question could not be sent.",
             hint: null,
             retryAfterSeconds: null,
+            remedy: null,
           };
     dispatch({ type: "refused", key, refusal });
     // A MODEL THE ENGINE KNOWS IS NOT READY: the drawer's notice is drawn now,

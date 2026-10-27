@@ -43,6 +43,7 @@ import {
   type HomeRange,
   type Waiting,
 } from "./model.ts";
+import { remedyDestination } from "~/lib/remedy.ts";
 
 /**
  * The five figures, in the order the row draws them by default. A board's
@@ -358,11 +359,19 @@ function TokensTile({
       }
       sub={
         week ? (
-          <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
+          week.state === "refusing" && mayConfigure ? (
+            // A SPENT WEEK IS RAISED WHERE ITS CEILING IS, by a reader who
+            // may; the same link table every budget refusal opens through.
+            <a className="t-link" href={href(companyBudget.path, { ...companyBudget.query })}>
+              <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
+            </a>
+          ) : (
+            <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
+          )
         ) : budget === null ? (
           "Weekly budget not reported yet"
         ) : mayConfigure ? (
-          <a className="t-link" href={href(["company", "budgets"])}>
+          <a className="t-link" href={href(companyBudget.path, { ...companyBudget.query })}>
             No weekly budget
           </a>
         ) : (
@@ -381,6 +390,9 @@ function TokensTile({
  * part it introduces, so a line too long for its tile breaks between facts —
  * see `joinParts` in `model.ts`.
  */
+/** Where the company's ceilings are raised: the link table's own destination. */
+const companyBudget = remedyDestination({ setting: "company_token_budget" });
+
 function Parts({ parts }: { parts: readonly string[] }) {
   if (parts.length === 0) return null;
   return (

@@ -116,6 +116,7 @@ import { ATTACH_ACCEPT, ATTACH_HINT, useAttachments } from "./attachments.ts";
 import { prepareAgainQuestion } from "./blocks.tsx";
 import { Home } from "./Home.tsx";
 import { Thread } from "./Thread.tsx";
+import { bouncedOf, locksTheBox, waitLeft } from "./bounce.ts";
 import { openTurn } from "./turn.ts";
 
 export interface DrawerProps {
@@ -230,20 +231,24 @@ export function Drawer({
   const attached = page && page.key !== removed ? page : null;
   const crumb = page?.title ?? "";
 
-  // A QUESTION THE ENGINE TURNED AWAY FOR ITS LIMIT is put back in the box,
-  // so the reader's words are not lost to the refusal.
+  // A QUESTION THE ENGINE TURNED AWAY UNSENT is put back in the box, so the
+  // reader's words are not lost to the refusal (`bounce.ts`, the one rule the
+  // notice and the box's wait read too). Into an EMPTY box only, never over
+  // what the reader typed since; and the notice says the question is back
+  // only where it is, by the key recorded here.
   const last = view.turns.at(-1);
-  const bounced =
-    last?.phase === "refused" && last.refusal?.code === "assistant_busy" ? last : null;
+  const bounced = bouncedOf(view.turns);
+  const [restored, setRestored] = useState<string | null>(null);
   useEffect(() => {
-    if (bounced && draft.read() === "") draft.write(bounced.question);
+    if (!bounced) return;
+    const held = draft.read();
+    if (held === "") draft.write(bounced.question);
+    if (held === "" || held === bounced.question) setRestored(bounced.key);
   }, [bounced, draft]);
+  const inBox = bounced !== null && restored === bounced.key ? bounced.key : null;
 
-  const busyUntil =
-    bounced && bounced.refusal?.retryAfterSeconds
-      ? Date.parse(bounced.askedAt) + bounced.refusal.retryAfterSeconds * 1000
-      : 0;
-  const waitSeconds = Math.max(0, Math.ceil((busyUntil - now) / 1000));
+  const waitSeconds =
+    bounced?.refusal && locksTheBox(bounced.refusal) ? (waitLeft(bounced, now) ?? 0) : 0;
   const stoppable =
     running !== null && running.phase !== "awaiting_approval" && running.phase !== "unconfirmed";
   // STOP SAYS ITS KEY in its tooltip, as the Ask button says its own, for a
@@ -622,6 +627,7 @@ export function Drawer({
                   undo: undoAction,
                 }}
                 retryDisabledReason={disabledReason}
+                inBox={inBox}
                 technical={admin}
                 onRetry={(text, _attachments, mode) => (mode === "brief" ? brief() : ask(text))}
                 onReconnect={reconnect}

@@ -629,6 +629,48 @@ function confirmStepUp() {
 	return confirming;
 }
 //#endregion
+//#region src/contract/remedies.ts
+/**
+* The configurable limits a refusal names as where to change it, as the engine
+* names them (`internal/caveat`'s `Setting`, ADR-0060).
+*
+* A refusal a limit caused (a token budget spent) carries a `remedy` naming
+* one of these, and `lib/remedy.ts` resolves each to the screen and the section
+* that edit it. HELD AGAINST `caveat.Settings` by
+* `internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames`: a setting
+* added there and not here would be a refusal with nothing to open.
+*/
+var LIMIT_SETTINGS = [
+	"company_token_budget",
+	"seat_token_budget",
+	"assistant_token_budget"
+];
+//#endregion
+//#region src/protocol/remedy.ts
+/**
+* A refusal's remedy, read off the wire: where a person changes the limit a
+* refusal was caused by (ADR-0060). The engine sends it beside a budget
+* refusal's words, on a question the assistant refused (`429
+* budget_exhausted`), a turn's error frame, and an act's refusal.
+*
+* READ, NEVER TRUSTED AS TYPED: a setting this build does not know, or a seat
+* remedy naming no seat, reads as no remedy at all, so a refusal from a newer
+* engine draws its words and nothing to open rather than a link to nowhere.
+*/
+/** The remedy `raw` carries, or null where it carries none this build reads. */
+function remedyOf(raw) {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+	const { setting, seat } = raw;
+	const known = LIMIT_SETTINGS.find((s) => s === setting);
+	if (known === void 0) return null;
+	const handle = typeof seat === "string" ? seat.trim() : "";
+	if (known === "seat_token_budget" !== (handle !== "")) return null;
+	return handle === "" ? { setting: known } : {
+		setting: known,
+		seat: handle
+	};
+}
+//#endregion
 //#region src/protocol/rest.ts
 /**
 * The dashboard's one REST transport: every write, and the guarded reads the
@@ -724,6 +766,10 @@ var RestError = class extends Error {
 	/** The grants a refusal on authority named — see [refusedGrants]. */
 	get grants() {
 		return refusedGrants(this.body);
+	}
+	/** Where the limit that caused the refusal is changed, or null ([remedyOf]). */
+	get remedy() {
+		return remedyOf(this.body.remedy);
 	}
 	/**
 	* This refusal in the shape `QueryState` renders from — the one the
@@ -3288,6 +3334,7 @@ function writeFailed(err) {
 		hint: err.hint,
 		grants: err.grants,
 		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null,
+		remedy: err.remedy,
 		lookAgain: LOOK_AGAIN.has(code)
 	};
 }

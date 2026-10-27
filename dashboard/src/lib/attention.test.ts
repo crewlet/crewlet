@@ -24,6 +24,7 @@ import {
 } from "./attention.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { fmtDateTime } from "./format.ts";
 
 const now = Date.parse("2026-01-01T12:00:00Z");
 
@@ -282,8 +283,13 @@ describe("what it surfaces", () => {
       }),
     );
     expect(item?.title).toContain("monthly");
-    expect(item?.detail).toContain("2026-02-01T00:00:00Z");
+    // AS A PERSON READS A MOMENT, never the wire's timestamp.
+    expect(item?.detail).toContain(fmtDateTime("2026-02-01T00:00:00Z"));
+    expect(item?.detail).not.toContain("T00:00:00Z");
     expect(item?.at).toBe("2026-01-01T11:59:00Z");
+    // THE CEILING ITSELF, where it is raised, and no link to what was spent.
+    expect(item?.remedy).toEqual({ setting: "company_token_budget" });
+    expect(item?.path).toBeUndefined();
   });
 
   test("a seat refusing its own ceiling is raised against the seat", () => {
@@ -302,8 +308,9 @@ describe("what it surfaces", () => {
     );
     expect(items[0]?.id).toBe("seat-budget-a");
     expect(items[0]?.detail).toBe(
-      "10 of 100 tokens spent. Raise the limit, or wait until 2026-01-02T00:00:00Z.",
+      `10 of 100 tokens spent. Raise the limit, or wait until ${fmtDateTime("2026-01-02T00:00:00Z")}.`,
     );
+    expect(items[0]?.remedy).toEqual({ setting: "seat_token_budget", seat: "dev-a" });
     // The gate's stamp is the row's age rather than a clause of its sentence.
     expect(items[0]?.at).toBe("2026-01-01T11:59:00Z");
   });
