@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -28,22 +29,44 @@ func declared(t *testing.T, build func() (string, error)) string {
 // [TestEveryIndexServesARegisteredQuery]'s reason: a comment naming a reader is
 // a claim, and the plan is what checks it. The object reads are the ones that
 // matter most — the collector asks which of a batch of keys any file names
-// once per batch of the store's listing, and the audit and the backup page
-// through every named key — and without the key's index each is every file in
-// the company.
+// once per batch of the store's listing, the audit and the backup page
+// through every named key, and the backup asks which of the keys written
+// while it ran the copy names — and without the key's index each is every
+// file in the company.
+//
+// AT EVERY WIDTH THEIR CALLERS BUILD THEM AT, from the callers' own
+// constants: each width is a statement text of its own — n placeholders, a
+// LIMIT of n — which the driver plans on its own, so a question planned at
+// three keys certifies nothing about the five hundred the collector asks, and
+// a driver that traded five hundred seeks for a scan of the table would pass
+// it. A question of a list of keys is planned at its widest, where a planner
+// would first make that trade, and at the one key a short last batch narrows
+// it to, the form a planner may read as a plain equality. The declaration's
+// fourth statement, a backup's page of the records its copy deferred, reads
+// the log's deferred records by their position rather than a file index, so
+// it is not this test's.
 //
 // PLANNED OVER A COMPANY'S FILES ([filePlanStore]) and with no statistics, as
 // a deployment plans them ([seededPlanStore]).
 func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 	t.Parallel()
 	db := filePlanStore(t)
-	key := func(i byte) string {
-		return objstore.KeyAt(filesFrom.Add(time.Duration(i) * time.Hour)).String()
+	key := func(i int) string {
+		return objstore.KeyAt(filesFrom.Add(time.Duration(i) * time.Minute)).String()
 	}
-	for _, c := range []struct {
+	// keys is a question's n keys, one for each of its placeholders.
+	keys := func(n int) []any {
+		out := make([]any, n)
+		for i := range out {
+			out[i] = key(i + 1)
+		}
+		return out
+	}
+	type fileRead struct {
 		name, index, statement string
 		args                   []any
-	}{
+	}
+	reads := []fileRead{
 		{
 			"a project's listing", "tracker_files_project_idx",
 			`SELECT path, content_type, hash, size, version, created_by,
@@ -61,19 +84,34 @@ func TestTheFileIndexesServeTheirQueries(t *testing.T) {
 			[]any{"P01", "", "reports/", "reports0", 201},
 		},
 		{
-			// THE DECLARATION'S OWN STATEMENTS, built exactly as the
-			// collector builds them, over a batch of three — and a page
-			// of the walk the audit and the backup take.
-			"a batch's references", "tracker_files_object_idx",
-			declared(t, func() (string, error) { return FileObjectReferences.ObjectsAmong(3) }),
-			[]any{key(1), key(2), key(3)},
-		},
-		{
+			// A PAGE OF THE WALK the audit and the backup take, whose
+			// LIMIT is always the whole page.
 			"a page of every reference", "tracker_files_object_idx",
-			declared(t, func() (string, error) { return FileObjectReferences.ReferencesAfter(500) }),
+			declared(t, func() (string, error) {
+				return FileObjectReferences.ReferencesAfter(objstore.WalkPage)
+			}),
 			[]any{key(4)},
 		},
-	} {
+	}
+	// THE DECLARATION'S OWN QUESTIONS OF A LIST OF KEYS, built exactly as
+	// their callers build them: the collector's of a batch of its listing,
+	// and the backup's of the keys written while it ran, a walk's page of
+	// them at a time.
+	for _, n := range []int{1, collect.JudgeBatch} {
+		reads = append(reads, fileRead{
+			fmt.Sprintf("the collector's batch of %d", n), "tracker_files_object_idx",
+			declared(t, func() (string, error) { return FileObjectReferences.ObjectsAmong(n) }),
+			keys(n),
+		})
+	}
+	for _, n := range []int{1, objstore.WalkPage} {
+		reads = append(reads, fileRead{
+			fmt.Sprintf("a backup's question of %d", n), "tracker_files_object_idx",
+			declared(t, func() (string, error) { return FileObjectReferences.ReferencesAmong(n) }),
+			keys(n),
+		})
+	}
+	for _, c := range reads {
 		t.Run(c.name, func(t *testing.T) {
 			plan := explain(t, db, c.statement, c.args)
 			if !seeks(plan, c.index) {
