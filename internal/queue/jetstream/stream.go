@@ -88,31 +88,42 @@
 // hold records in flight whether or not an applier is reading and needs a
 // stop the applier has no call for.
 //
-// Every other pull in this package and in internal/learning/memsync is
+// Every other fetch in this package and in internal/learning/memsync is
 // count-bounded and small — one record for a mailbox's first wait, the
 // configured mailbox batch after a record has arrived, 256 for a peek or a
 // memory replay — so the library's per-batch sizing costs them a few
-// kilobytes at most, and only the first of them is issued while idle. The one
-// standing pull that IS the library's, a watch's (below), delivers to a
-// callback subscription that no batch sizes.
+// kilobytes at most, and only the first of them is issued while idle.
+//
+// Three pulls in this package are the library's own STANDING pulls instead,
+// kept asked by the library for as long as their readers live, idle or not.
+// The live feed's ([Queue.SubscribeStream]) and a watch's (below) are each a
+// Consume, which delivers to a callback subscription no batch sizes. A domain
+// group's ([DomainLog.Group], the change feed) is a Messages iterator, whose
+// channel the library sizes by its batch — 500 slots at its default: a few
+// kilobytes of pointers, and up to that many of the group's records held
+// ahead of its reader.
 //
 // # A watch is told which records moved, and never carries them
 //
-// [DomainLog.Watch] is the third way the engine reads a state log, beside an
-// applier's durable consumer and a read by position: a reader that keeps its
-// work in rows — the code host's home node is the first — needs to know only
-// that an object moved, and sooner than its own pass over the rows would find
-// it. So a watch is a consumer of its own that takes each new record's
-// SUBJECT and position and never its body: headers only, from the log's end,
-// acknowledging nothing, one replica in memory on one member. What it may
-// have missed it says it may have missed, and how far on the log that reaches
-// — its consumer lost and replaced at the log's end, a delivery the consumer
-// counted and this node never received, a reconnect — and the caller waits
-// for its copy to reach that position, then reads its rows, which are the
-// record; a nudge only ever shortens a wait. Its pull is the library's own
-// standing pull, which the applier's is not, because a watch acknowledges
-// nothing: what that pull keeps standing ahead of its reader holds nothing
-// back from anybody.
+// A state log is read four ways: by its applier's durable consumer, one a
+// node; by a domain group's consumer, one the fleet shares, where whichever
+// node reaches a record first handles it ([DomainLog.Group], the change
+// feed); by reading one record — by position ([DomainLog.At]) or as its
+// subject's newest ([DomainLog.LastSeq]) — or a range from a position
+// (internal/backup's replay); and by a watch ([DomainLog.Watch]), the newest.
+// A reader that keeps its work in rows — the code host's home node is the
+// first — needs to know only that an object moved, and sooner than its own
+// pass over the rows would find it. So a watch is a consumer of its own that
+// takes each new record's SUBJECT and position and never its body: headers
+// only, from the log's end, acknowledging nothing, one replica in memory on
+// one member. What it may have missed it says it may have missed, and how far
+// on the log that reaches — its consumer lost and replaced at the log's end,
+// a delivery the consumer counted and this node never received, a reconnect —
+// and the caller waits for its copy to reach that position, then reads its
+// rows, which are the record; a nudge only ever shortens a wait. Its pull is
+// the library's own standing pull, which the applier's is not, because a
+// watch acknowledges nothing: what that pull keeps standing ahead of its
+// reader holds nothing back from anybody.
 package jetstream
 
 import (
