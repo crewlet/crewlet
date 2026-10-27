@@ -1580,12 +1580,56 @@ type layerInstaller struct {
 
 // installWait is one repository's place in the installer's backoff: the
 // failures in a row, when the next try may be made (Options.Now's clock), and
-// since when a layer the rows no longer name has stood in for a replacement
-// that could not be placed.
+// every layer of its copy's installed chain the rows no longer named at its
+// last try, each with since when it has stood in for a replacement that could
+// not be placed.
+//
+// A STALE LAYER'S CLOCK IS ITS OWN, keyed by the row it was installed from
+// (sameInstalled), never the repository's: an episode can end where the
+// installer does not see it — a full round placing the replacement itself, a
+// cut, the rows naming the layer again — and a clock kept for the repository
+// outlived it, so the next publication's stale layer was cut at its first
+// failed fetch, by an episode hours over: a root replacement then dropped the
+// copy to own mode, bitmapless and its whole index the maintainer's to write.
+// Keyed by the layer, a clock no layer of the installed chain still answers to
+// is no clock, and each one runs from the try that first saw its layer stale.
 type installWait struct {
-	failures   int
-	retryAt    time.Time
-	stuckSince time.Time
+	failures int
+	retryAt  time.Time
+	stale    []staleLayer
+}
+
+// staleLayer is one installed layer the rows no longer name — the row it was
+// installed from — and since when the installer has seen it so.
+type staleLayer struct {
+	row   code.LayerRow
+	since time.Time
+}
+
+// sameInstalled reports whether a and b are one installed layer: one layer of
+// one chain (sameLayer) installed from the row of one record.
+func sameInstalled(a, b code.LayerRow) bool {
+	return sameLayer(a, b) && a.Added == b.Added
+}
+
+// staleSince is when the oldest of stale has stood in since by w's clocks —
+// each layer of stale w recorded at an earlier try, the rest now — and stale's
+// clocks as w keeps them from now on: one for each layer of stale, and none
+// for a layer no longer stale.
+func (w *installWait) staleSince(stale []code.LayerRow, now time.Time) (time.Time, []staleLayer) {
+	var oldest time.Time
+	clocks := make([]staleLayer, 0, len(stale))
+	for _, row := range stale {
+		since := now
+		if i := slices.IndexFunc(w.stale, func(s staleLayer) bool { return sameInstalled(s.row, row) }); i >= 0 {
+			since = w.stale[i].since
+		}
+		clocks = append(clocks, staleLayer{row: row, since: since})
+		if oldest.IsZero() || since.Before(oldest) {
+			oldest = since
+		}
+	}
+	return oldest, clocks
 }
 
 // installRetryBase is the installer's first wait after a try that failed for
@@ -1791,17 +1835,25 @@ func (c *Cache) installPass(ctx context.Context) (time.Time, *sync.WaitGroup) {
 //     tried again after its wait. A layer the rows no longer name that has
 //     stood in for its replacement for installRetryCap with nothing fetched
 //     is cut.
+//
+// A copy gone, or with nothing due, ends the repository's wait with the try:
+// whatever it waited out — failures in a row, a stale layer's clock — was an
+// episode now over, ended where the installer does not see it (a full round
+// placing the chain, a cut, an eviction), and a wait kept would be the next
+// episode's from its first try.
 func (c *Cache) installRepo(ctx context.Context, id string) {
 	c.mu.Lock()
 	e := c.entries[id]
 	c.mu.Unlock()
 	if e == nil {
+		c.forgetInstall(id)
 		return
 	}
 	e.mu.Lock()
 	inc := e.current
 	if e.dead || !installDue(inc) {
 		e.mu.Unlock()
+		c.forgetInstall(id)
 		return
 	}
 	chain := slices.Clone(inc.chain)
@@ -1811,7 +1863,7 @@ func (c *Cache) installRepo(ctx context.Context, id string) {
 		_, chained := inc.installedPacks[cs]
 		return inc.byChecksum[cs] > 0 || chained
 	})
-	stale := len(inc.installed) > k
+	stale := slices.Clone(inc.installed[k:])
 	gen := inc.chainGen
 	inc.pins++
 	e.mu.Unlock()
@@ -1839,9 +1891,9 @@ func (c *Cache) installRepo(ctx context.Context, id string) {
 	}
 
 	// THE PLACEMENT: what was fetched over what is kept, a stale layer cut
-	// by it — or, with nothing fetched, the stale layer cut alone once it has
-	// stood in for its replacement for installRetryCap.
-	cut := stale && len(fetched) == 0 && c.stuckFor(id, c.now()) >= installRetryCap
+	// by it — or, with nothing fetched, the stale layers cut alone once the
+	// oldest of them has stood in for its replacement for installRetryCap.
+	cut := len(stale) > 0 && len(fetched) == 0 && c.stuckFor(id, stale, c.now()) >= installRetryCap
 	swapFailed := false
 	if len(fetched) > 0 || cut {
 		rows := slices.Clone(kept)
@@ -1856,7 +1908,7 @@ func (c *Cache) installRepo(ctx context.Context, id string) {
 		case placementMade:
 			// Counted by the swap that placed them (swapped).
 			fetched = nil
-			stale = false
+			stale = nil
 		case placementRefused:
 			// The canary refused what it added — every layer the installer
 			// fetches is one its copy does not hold — which is definite: the
@@ -1884,17 +1936,29 @@ func (c *Cache) installRepo(ctx context.Context, id string) {
 	c.settleInstall(id, stop, undecided, swapFailed, stale)
 }
 
-// stuckFor is how long a layer the rows no longer name has stood in for a
-// replacement the installer could not place in id's copy: zero where none
-// has.
-func (c *Cache) stuckFor(id string, now time.Time) time.Duration {
+// stuckFor is how long the oldest of stale — the layers of id's installed
+// chain the rows no longer name — has stood in for a replacement the
+// installer could not place, by the clock each was given at the try that
+// first saw it stale (installWait.staleSince): zero for a layer no try has.
+func (c *Cache) stuckFor(id string, stale []code.LayerRow, now time.Time) time.Duration {
 	in := c.installer
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	if w := in.waits[id]; w != nil && !w.stuckSince.IsZero() {
-		return now.Sub(w.stuckSince)
+	w := in.waits[id]
+	if w == nil || len(stale) == 0 {
+		return 0
 	}
-	return 0
+	since, _ := w.staleSince(stale, now)
+	return now.Sub(since)
+}
+
+// forgetInstall ends id's wait: an install of it that found its copy gone or
+// nothing due, its episode over.
+func (c *Cache) forgetInstall(id string) {
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	delete(in.waits, id)
 }
 
 // settleInstall records how id's install ended: done — its wait forgotten —
@@ -1905,15 +1969,19 @@ func (c *Cache) stuckFor(id string, now time.Time) time.Duration {
 // (undecided, that read's error) — nothing was decided, and taken up again at
 // once the repository would cost a GET, a staging and a failed round at every
 // pass for as long as the head cannot be read. A definite refusal plans again
-// at once, the refused layer now blocking; and a layer the rows no longer name
-// still standing in for its replacement waits until it has stood
-// installRetryCap, when its cut is due.
-func (c *Cache) settleInstall(id string, stop *layerFetch, undecided error, swapFailed, stale bool) {
+// at once, the refused layer now blocking; and the layers the rows no longer
+// name still standing in for their replacement (stale, as installed) wait
+// until the oldest of them has stood installRetryCap, when their cut is due —
+// each by its own clock, kept from the try that first saw it stale, and a
+// clock for a layer no longer stale dropped.
+func (c *Cache) settleInstall(id string, stop *layerFetch, undecided error, swapFailed bool,
+	stale []code.LayerRow) {
+
 	in, now := c.installer, c.now()
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	w := in.waits[id]
-	if stop == nil && !swapFailed && !stale {
+	if stop == nil && !swapFailed && len(stale) == 0 {
 		delete(in.waits, id)
 		return
 	}
@@ -1938,15 +2006,12 @@ func (c *Cache) settleInstall(id string, stop *layerFetch, undecided error, swap
 	default:
 		w.failures, w.retryAt = 0, time.Time{}
 	}
-	if stale {
-		if w.stuckSince.IsZero() {
-			w.stuckSince = now
-		}
-		if at := w.stuckSince.Add(installRetryCap); w.retryAt.IsZero() || at.Before(w.retryAt) {
+	var since time.Time
+	since, w.stale = w.staleSince(stale, now)
+	if len(w.stale) > 0 {
+		if at := since.Add(installRetryCap); w.retryAt.IsZero() || at.Before(w.retryAt) {
 			w.retryAt = at
 		}
-	} else {
-		w.stuckSince = time.Time{}
 	}
 	if !in.queued[id] {
 		in.queued[id] = true

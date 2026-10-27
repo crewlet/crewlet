@@ -53,6 +53,14 @@ func InstallQueued(c *Cache) []string {
 	return slices.Clone(in.queue)
 }
 
+// The installer's backoff: its first wait after a try that failed for a
+// reason that may pass, and the most it waits — how long a stale layer may
+// stand in for its replacement.
+const (
+	InstallRetryBase = installRetryBase
+	InstallRetryCap  = installRetryCap
+)
+
 // InstallWait is when repoID's next try is due by the installer's backoff,
 // and the tries in a row that failed; the zero time where it waits for none.
 func InstallWait(c *Cache, repoID string) (time.Time, int) {
