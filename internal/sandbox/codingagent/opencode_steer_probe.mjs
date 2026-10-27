@@ -14,11 +14,14 @@
 //   {"op":"hold-prompts","name":N}                N's admissions wait for…
 //   {"op":"release-prompts","name":N}             …this
 //   {"op":"cleanup","name":N}                     run the cleanup N's setup returned
+//   {"op":"watch-fetches"}                        report every request as it starts
 //
 // Reports, one JSON object a line on stdout: `setup` (with `ms`, how long the
 // setup took, and `cleanup`, whether it returned one), `subscribed`,
 // `prompt-started` and `prompt` (with the `input` the plugin passed, and `ok`),
-// `cleaned`, and `error`.
+// `cleaned`, `error`, and — once fetches are watched — `fetch` (with `method`,
+// `url` and `ms`, the instant the request began on this process's monotonic
+// clock).
 
 import { createInterface } from "node:readline"
 import { pathToFileURL } from "node:url"
@@ -27,6 +30,7 @@ const report = (fields) => process.stdout.write(JSON.stringify(fields) + "\n")
 
 const plugin = (await import(pathToFileURL(process.argv[2]).href)).default
 const instances = new Map()
+let fetchesWatched = false
 
 // channel is an async iterable of the values pushed into it, ended by signal.
 function channel(signal) {
@@ -137,6 +141,19 @@ const commands = {
   async cleanup({ name }) {
     await instances.get(name).cleanup?.()
     report({ op: "cleaned", name })
+  },
+  // ON THE PLUGIN'S OWN CLOCK: when a request BEGINS is what the plugin's
+  // pacing bounds, and the route only sees it arrive — a first request that
+  // pays for the client's setup and a connection arrives late by that much,
+  // and the gap the route measures to the next one shrinks by as much.
+  "watch-fetches"() {
+    if (fetchesWatched) return
+    fetchesWatched = true
+    const real = globalThis.fetch
+    globalThis.fetch = (input, init) => {
+      report({ op: "fetch", method: init?.method ?? "GET", url: String(input), ms: performance.now() })
+      return real(input, init)
+    }
   },
 }
 

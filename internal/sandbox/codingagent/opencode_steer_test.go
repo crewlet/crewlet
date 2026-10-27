@@ -141,6 +141,8 @@ func (r *notesRoute) letGo(c *notesCall, why string) {
 type probeReport struct {
 	Op      string         `json:"op"`
 	Name    string         `json:"name"`
+	Method  string         `json:"method"`
+	URL     string         `json:"url"`
 	Ms      float64        `json:"ms"`
 	Cleanup bool           `json:"cleanup"`
 	Input   map[string]any `json:"input"`
@@ -268,6 +270,32 @@ func (p *probe) expect(op string) probeReport {
 			p.t.Fatalf("waited 10s for the probe to report %s\n%s", op, p.stderrText())
 		}
 	}
+}
+
+// pollStarts is the instants, on the plugin's own clock, at which its next n
+// polls of the notes route began — reported once [probe] was asked to watch
+// fetches ({"op":"watch-fetches"}), skipping subscriptions.
+func (p *probe) pollStarts(n int) []time.Duration {
+	p.t.Helper()
+	var out []time.Duration
+	deadline := time.After(10 * time.Second)
+	for len(out) < n {
+		select {
+		case r, ok := <-p.reports:
+			switch {
+			case !ok:
+				p.t.Fatalf("the probe ended waiting for poll %d\n%s", len(out)+1, p.stderrText())
+			case r.Op == "subscribed":
+			case r.Op != "fetch":
+				p.t.Fatalf("the probe reported %s (%+v), want the start of a poll\n%s", r.Op, r, p.stderrText())
+			case r.Method == http.MethodGet && strings.Contains(r.URL, "/notes?"):
+				out = append(out, time.Duration(r.Ms*float64(time.Millisecond)))
+			}
+		case <-deadline:
+			p.t.Fatalf("waited 10s for the start of poll %d\n%s", len(out)+1, p.stderrText())
+		}
+	}
+	return out
 }
 
 // quiet fails the case if the probe reports anything but a subscription
@@ -517,6 +545,7 @@ func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 	t.Run("waits a second before polling again after an answer that admitted nothing", func(t *testing.T) {
 		t.Parallel()
 		route, pr := newNotesRoute(t), startProbe(t, node, entry)
+		pr.send(map[string]any{"op": "watch-fetches"})
 		pr.setup("a", route.url(), steerSession)
 		pr.expect("setup")
 		pr.event("a", "session.execution.started", steerSession, nil)
@@ -527,9 +556,15 @@ func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		second := route.next("GET notes", "poll after an empty answer")
 		second.reply(http.StatusOK, `{"notes":[]}`)
 		third := route.next("GET notes", "poll after a second empty answer")
-		for i, gap := range []time.Duration{second.at.Sub(first.at), third.at.Sub(second.at)} {
-			if gap < 900*time.Millisecond {
-				t.Errorf("poll %d came %s after an empty answer that arrived at once, want a second's floor",
+		// MEASURED WHERE THE FLOOR IS KEPT: from one poll's start to the
+		// next's, on the plugin's own clock. The route sees each arrive, and
+		// the first pays for the client's setup and its connection, so the
+		// gap it measures to the second is short by that much — under load,
+		// by more than the tolerance below.
+		starts := pr.pollStarts(3)
+		for i := range 2 {
+			if gap := starts[i+1] - starts[i]; gap < 950*time.Millisecond {
+				t.Errorf("poll %d began %s after an empty answer that arrived at once, want a second's floor",
 					i+2, gap)
 			}
 		}
