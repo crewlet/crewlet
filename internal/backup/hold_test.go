@@ -229,6 +229,91 @@ func TestABackupThatCannotPinTheLogIsRefused(t *testing.T) {
 	}
 }
 
+// A BACKUP IS REFUSED WHERE A DATABASE'S OWN VOLUME HAS NO ROOM FOR THE LOG ITS
+// COPY HOLDS BACK — before it pins the log or copies a byte.
+//
+// A copy holds its file's write-ahead log for its whole run, so the log grows
+// by what the node writes meanwhile, on the volume the node commits to, and a
+// node whose volume fills stops committing for the rest of the copy. Here the
+// replicated estate's last copy was held while its applier wrote beside it, so
+// its handle measured what a copy of it holds back. The backup then finds the
+// estate's volume a byte short of that and is refused, naming the file and the
+// log, with no hold put and nothing in the directory; and with exactly that
+// room it runs, and pins the log as every backup does.
+func TestABackupIsRefusedWhereTheLogItsCopyHoldsBackHasNoRoom(t *testing.T) {
+	t.Parallel()
+	hold := storetest.NewCopyHold()
+	db, estate := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "store.db"),
+		store.Options{WrapDriver: hold.Wrap}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 41)
+	replicated := storetest.ReplicatedDB(t, estate)
+	ctx := t.Context()
+	if err := estate.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			`CREATE TABLE crewlet_copy_held (id INTEGER PRIMARY KEY, pad BLOB NOT NULL)`)
+		return err
+	}); err != nil {
+		t.Fatalf("create the table written beside the copy: %v", err)
+	}
+	storetest.HoldCopy(t, replicated, hold, func() {
+		for i := range 64 {
+			if err := estate.Tx(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `INSERT INTO crewlet_copy_held (id, pad)
+					VALUES (?, zeroblob(4096))`, i)
+				return err
+			}); err != nil {
+				t.Fatalf("write row %d beside the copy: %v", i, err)
+			}
+		}
+	})
+	info, err := os.Stat(replicated.Path())
+	if err != nil {
+		t.Fatalf("measure the replicated estate: %v", err)
+	}
+	holds := replicated.CopyHoldsBack(info.Size())
+	if holds <= 0 {
+		t.Fatalf("the estate measured a copy holding back %d after one held its log "+
+			"under 64 commits", holds)
+	}
+	fleet := memory.NewFleet()
+	held := &watchedHolds{HoldRegister: fleet}
+	s := build(t, backup.Options{
+		Store: db, Estate: backup.HoldsReplicated, NodeID: "node-0", Holds: held, Backups: fleet,
+		Now: func() time.Time { return clock },
+	})
+	live := filepath.Dir(replicated.Path())
+	backup.SetVolumeFree(s, func(dir string) (int64, error) {
+		if dir == live {
+			return holds - 1, nil
+		}
+		return 1 << 40, nil
+	})
+	dir := filepath.Join(t.TempDir(), "b")
+	_, err = s.Take(ctx, dir)
+	if err == nil || !strings.Contains(err.Error(), replicated.Path()) ||
+		!strings.Contains(err.Error(), "write-ahead log") {
+		t.Fatalf("a backup whose estate's volume is a byte short of the log its copy holds "+
+			"back answered %v, want a refusal naming the estate and its log", err)
+	}
+	if len(held.put) != 0 {
+		t.Errorf("a backup refused for room pinned the log %d time(s) first", len(held.put))
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Errorf("a backup refused for room left %d entries in its directory (%v)",
+			len(entries), err)
+	}
+
+	// AND EXACTLY THAT ROOM IS ROOM.
+	backup.SetVolumeFree(s, func(string) (int64, error) { return holds, nil })
+	if _, err := s.Take(ctx, filepath.Join(t.TempDir(), "b2")); err != nil {
+		t.Fatalf("a backup with room for the log its copy holds back was refused: %v", err)
+	}
+	if len(held.put) != 1 {
+		t.Errorf("the backup that ran pinned the log %d time(s), want 1", len(held.put))
+	}
+}
+
 // A LOG TRIMMED PAST THE COPY'S POSITION REFUSES THE MANIFEST.
 //
 // This is the assertion that makes "restorable" checkable. A restore replays

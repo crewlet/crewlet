@@ -132,7 +132,22 @@ What is worth knowing about it:
   or hold two halves of one write. While a copy runs, the store's write-ahead
   log is not checkpointed past its moment, so the `-wal` beside the live file
   grows by whatever the node commits meanwhile and is folded back in by the
-  first checkpoint after the copy ends.
+  first checkpoint after the copy ends. **How much** is the node's write rate
+  times the copy's run, and the run is the file's size over the rate the copy
+  reads it — measured at about 104 MB/s on the engine's own driver, so about
+  seven minutes for the year-five estate of ≈ 44 GB below, over which a node
+  writing 1 MB/s to its log holds back about 420 MB of it, and one writing
+  2.5 MB/s a gibibyte, where [`wal_large`](../reference/alarms.md) fires: it
+  names the copy holding the log and says the copy's end folds it back in.
+  Each copy measures what it held back, and **before it copies anything a
+  backup checks** that each database's own volume has room for what the last
+  copy of that file held back, scaled to the file as it stands, and refuses
+  otherwise, because that log grows on the volume the node commits to and the
+  node would stop committing once it filled. `volume_low` counts the same log
+  in the room it wants beside a second copy. The first copy after the node
+  starts has nothing measured to go on, and nothing foresees a burst of
+  writes past the rate the last copy saw: `wal_large` and `volume_low` name
+  either while it happens.
 - **A node is two databases, and a backup carries both.** The node estate holds
   the audit log, memory, the config revisions and the secret bootstrap; the
   replicated estate holds everything a state log's applier writes. They are
@@ -331,8 +346,9 @@ behind. A directory refused before the copy began (relative, not empty, or one
 the host cannot create or write because of the path itself) wrote nothing,
 answers `400`, and is not recorded. A disk that fails or fills while the
 directory is prepared is the node's failure rather than the path's: it answers
-`500` and is recorded, and so is a refusal that arrives once part of the copy
-is already in the directory. Filter the event log on `source=operator` to see it beside every other
+`500` and is recorded, and so is a backup refused because a database's own
+volume has no room for the log its copy would hold back, and a refusal that
+arrives once part of the copy is already in the directory. Filter the event log on `source=operator` to see it beside every other
 change a person made through the engine; see
 [the runtime audit](../reference/api-endpoints.md#the-runtime-audit-sourceoperator).
 

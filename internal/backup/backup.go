@@ -463,6 +463,10 @@ type Service struct {
 	// running is set while a backup runs, so a second is refused
 	// ([ErrBackupRunning]).
 	running atomic.Bool
+	// volumeFree measures what a volume has free — [store.VolumeFree], which
+	// only a case replaces (export_test.go), since what the machine running
+	// it has free is no condition a case can state.
+	volumeFree func(dir string) (int64, error)
 }
 
 // HoldPurpose names this subsystem in the trim-hold register, so an operator
@@ -530,7 +534,8 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{store: opts.Store, holding: opts.Estate, conn: opts.Conn, api: opts.API, holds: opts.Holds,
 		backups: opts.Backups, nodeID: opts.NodeID, objects: opts.Objects,
-		tables: references.All, ring: opts.Keyring, metrics: opts.Metrics, now: now}, nil
+		tables: references.All, ring: opts.Keyring, metrics: opts.Metrics, now: now,
+		volumeFree: store.VolumeFree}, nil
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -583,6 +588,11 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	// backup.
 	files, err := s.estates()
 	if err != nil {
+		return Manifest{}, err
+	}
+	// ROOM FOR THE LOG EACH COPY HOLDS BACK, before anything is pinned or
+	// copied: see [Service.room].
+	if err := s.room(files); err != nil {
 		return Manifest{}, err
 	}
 
@@ -824,6 +834,56 @@ func (s *Service) estates() (held, error) {
 			"serving: %w", err)
 	}
 	return held{node: s.store, replicated: replicated}, nil
+}
+
+// room refuses a backup a database's own volume has no room for: the
+// write-ahead log its copy will hold back there.
+//
+// A copy holds its file's log for its whole run (store.DB.Copies), so the log
+// grows by what the node writes while the copy runs, on the volume the node
+// commits to — and once that volume is full the node stops committing for the
+// rest of the copy, since nothing ends the hold before the copy does. So each
+// file's own volume must have room for what the last copy of it measured a copy
+// holding back, scaled to the file as it stands ([store.DB.CopyHoldsBack]), and
+// the backup is refused before a byte is pinned or copied otherwise. The copies
+// run one after another, each holding its own file's log alone, so each file
+// is weighed on its own.
+//
+// THE COPIES THEMSELVES ARE NOT COUNTED HERE. They land in the directory the
+// operator named, and a copy that fills it fails there and removes what it
+// wrote, while the log it held grows on the live volume until the copy ends
+// whichever volume the copy lands on. Counted on every live volume, since
+// nothing tells two volumes of one pool apart for certain, the copies would
+// refuse every backup to a disk of its own from a node short of a second
+// copy's room beside its store, which such a backup does not need.
+//
+// The figure is the last copy's: a node that has copied nothing since it
+// started has no measure, and a write burst past the rate the last copy saw is
+// not foreseen. `wal_large` and `volume_low` name both while they happen.
+func (s *Service) room(files held) error {
+	for _, db := range files.all() {
+		info, err := os.Stat(db.Path())
+		if err != nil {
+			return fmt.Errorf("backup: measure %s for the log its copy holds back: %w", db.Path(), err)
+		}
+		holds := db.CopyHoldsBack(info.Size())
+		if holds == 0 {
+			continue
+		}
+		dir := filepath.Dir(db.Path())
+		free, err := s.volumeFree(dir)
+		if err != nil {
+			return fmt.Errorf("backup: %w", err)
+		}
+		if free < holds {
+			return fmt.Errorf("backup: the volume holding %s (%s) has %d bytes free, and its "+
+				"copy holds back about %d bytes of its write-ahead log there while it runs, as "+
+				"the last copy of it measured — the node commits to that volume and would stop "+
+				"once the log filled it; make room on it, or take the backup while the node "+
+				"writes less", db.Path(), dir, free, holds)
+		}
+	}
+	return nil
 }
 
 // storeRefusal classifies a store copy that failed, copied estates into.

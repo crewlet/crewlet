@@ -10,9 +10,10 @@ import (
 // dir is on: statfs's available blocks, never its free ones, which count the
 // reserve only root can reach — and this engine does not run as root.
 //
-// THE MEASURE a judgement of whether a copy has room reads — the donor
-// snapshot's gate — of what the copy writes where it lands and of the log it
-// holds back on the live file's own volume (copies.go).
+// ONE MEASURE for every judgement of whether a copy has room — the donor
+// snapshot's gate and the fleet backup's — of what the copy writes where it
+// lands and of the log it holds back on the live file's own volume
+// (copies.go), so the two weigh one volume alike.
 //
 // BOTH CONVERSIONS ARE LOAD-BEARING ACROSS THE RELEASE MATRIX, whatever a
 // linter on linux says: Statfs_t.Bsize is int64 on linux and uint32 on darwin,

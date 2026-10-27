@@ -15,6 +15,10 @@ func SetPageObserver(s *Service, fn func()) { s.pageRead = fn }
 // copy's appliers deferred, with how many records the read answered.
 func SetDeferredPageObserver(s *Service, fn func(rows int)) { s.deferredRead = fn }
 
+// SetVolumeFree has s read what a volume has free from fn rather than from the
+// volume, so a case can state the room a backup is weighed against.
+func SetVolumeFree(s *Service, fn func(dir string) (int64, error)) { s.volumeFree = fn }
+
 // DeferredPage is how many deferred records one read of a copy takes.
 const DeferredPage = deferredPage
 

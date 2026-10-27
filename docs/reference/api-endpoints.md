@@ -8121,7 +8121,10 @@ Eight refusals, each pointing somewhere different:
   a path the database engine mishandles. The reason is returned in `detail`
   rather than only logged, unlike every other route here, because it is the
   caller's own command to fix. A disk that fails or fills while the directory
-  is prepared is the node's failure, not the path's, and answers `500`.
+  is prepared is the node's failure, not the path's, and answers `500`; so
+  does a node whose database volume has no room for the write-ahead log a
+  copy would hold back there, refused before anything is copied, with the
+  reason in the node's log (see [Backup](../guides/backup.md)).
 - **503 `objects_unreachable`** — the store copy names objects holding the
   company's files that the object store did not answer for. Nothing is wrong
   with this node or the command: check that it reaches the store and take the
