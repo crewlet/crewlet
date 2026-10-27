@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 // ---- validation ------------------------------------------------------------ //
@@ -45,12 +46,20 @@ func (s Shape) column(key string) (Column, bool) {
 // file dataset read and held to its declared columns. A board outside the
 // format is an [*Invalid] carrying every finding, so an author fixes them in
 // one pass; any other error is a file that could not be read.
-func Read(v Version) (*Board, error) {
+//
+// The spec is read as stored ([jsonform.Stored]), so a board accepted
+// before ADR-0059 tightened its keys reads as it did; [Check] is the publish's.
+func Read(v Version) (*Board, error) { return read(v, jsonform.Stored(jsonform.UntilEOF)) }
+
+// Check is [Read] as a publish holds a board whose spec it writes ([Parse]).
+func Check(v Version) (*Board, error) { return read(v, jsonform.Decode) }
+
+func read(v Version, decode jsonform.Reader) (*Board, error) {
 	raw, err := v.Read(EntryPath)
 	if err != nil {
 		return nil, fmt.Errorf("dashspec: read %s: %w", EntryPath, err)
 	}
-	s, err := Parse(raw)
+	s, err := parse(raw, decode)
 	if err != nil {
 		return nil, err
 	}

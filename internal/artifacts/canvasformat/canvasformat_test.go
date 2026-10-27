@@ -89,10 +89,10 @@ func TestACanvasOutsideTheFormatIsRefusedAtItsPlace(t *testing.T) {
 		m    artifacts.Manifest
 		want string
 	}{
-		"not JSON":          {`{"v": 1,`, pages, "is not a canvas"},
-		"two documents":     {wrap(`"boards": {`+board+`}, "order": ["a.html"]`) + "{}", pages, "more than one"},
-		"an unknown field":  {wrap(`"boards": {` + board + `}, "order": ["a.html"], "pages": []`), pages, `unknown field "pages"`},
-		"a fractional side": {wrap(`"boards": {"a.html": {"x": 0, "y": 0, "w": 400.5, "h": 300}}, "order": ["a.html"]`), pages, "the format takes int"},
+		"not JSON":          {`{"v": 1,`, pages, "canvas.json is not JSON"},
+		"two documents":     {wrap(`"boards": {`+board+`}, "order": ["a.html"]`) + "{}", pages, "more after its value"},
+		"an unknown field":  {wrap(`"boards": {` + board + `}, "order": ["a.html"], "pages": []`), pages, "pages is not a key the canvas format carries: the top level of canvas.json takes v, title, boards, order, notes, cover"},
+		"a fractional side": {wrap(`"boards": {"a.html": {"x": 0, "y": 0, "w": 400.5, "h": 300}}, "order": ["a.html"]`), pages, `boards["a.html"].w is the number 400.5, and the format reads a whole number there`},
 		"another version":   {`{"v": 2, "boards": {` + board + `}, "order": ["a.html"]}`, pages, "this build reads 1"},
 		"no boards":         {wrap(`"boards": {}, "order": []`), version("canvas.json"), "at least one board"},
 		"a missing page":    {wrap(`"boards": {"b.html": {"x": 0, "y": 0, "w": 400, "h": 300}}, "order": ["b.html"]`), pages, "b.html is not an HTML page"},

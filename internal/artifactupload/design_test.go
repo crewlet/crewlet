@@ -118,10 +118,10 @@ func TestACanvasOutsideItsFormatIsRefused(t *testing.T) {
 		"a page with no board": {func(f map[string]string) { f["extra.html"] = artboard("Extra") },
 			"extra.html is an HTML page of this version that no board frames"},
 		"not JSON": {func(f map[string]string) { f["canvas.json"] = "{" },
-			"the file is not a canvas"},
+			"canvas.json is not JSON"},
 		"an unknown field": {func(f map[string]string) {
 			f["canvas.json"] = strings.Replace(landingCanvas, `"v": 1,`, `"v": 1, "pages": [],`, 1)
-		}, `unknown field "pages"`},
+		}, "pages is not a key the canvas format carries"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

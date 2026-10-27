@@ -1121,6 +1121,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		Publisher: e.backends.Queue,
 		Turn:      turnIdentity,
 		Sessions:  e.sessions,
+		Metrics:   e.metrics,
 		// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for the
 		// turn's LATER rounds, not for the one being re-entered: whether
 		// that phase was agentic is the state's own answer (see

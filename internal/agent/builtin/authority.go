@@ -504,6 +504,10 @@ type gatedDetached struct {
 	detached tools.Detached
 }
 
+// Unwrap implements [tools.Wrapper], so the surface reads what the gated tool
+// declares (its refusal target) through the gate.
+func (g *gated) Unwrap() tools.Callable { return g.Callable }
+
 func gate(tool tools.Callable, authorize Authorizer) tools.Callable {
 	wrapped := gated{Callable: tool, authorize: authorize}
 	switch held := tool.(type) {

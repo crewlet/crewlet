@@ -18,7 +18,10 @@ import (
 
 // ---- write_artifact_data ------------------------------------------------- //
 
-type writeArtifactData struct{ d dataTools }
+type writeArtifactData struct {
+	artifactTarget
+	d dataTools
+}
 
 var _ tools.SeatCallable = (*writeArtifactData)(nil)
 
@@ -228,7 +231,10 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 
 // ---- set_artifact_schema ------------------------------------------------- //
 
-type setArtifactSchema struct{ d dataTools }
+type setArtifactSchema struct {
+	artifactTarget
+	d dataTools
+}
 
 var _ tools.SeatCallable = (*setArtifactSchema)(nil)
 

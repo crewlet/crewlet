@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -258,6 +259,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// THE PROCESS'S, threaded per turn like the publisher: the epoch is
 		// configuration and the session directory is not.
 		Sessions: in.Sessions,
+		Metrics:  in.Metrics,
 		Caps: runner.Caps{
 			ExecutorRounds:  te.MaxToolRounds,
 			ExecutorCeiling: te.ExecuteMaxToolRoundsCeiling,
@@ -329,6 +331,10 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 type RunnerInput struct {
 	Task         string
 	Conversation string
+
+	// Metrics is the node's recorder, which the turn's surfaces count their
+	// refusal-loop decisions into. Nil counts nothing.
+	Metrics *metrics.Recorder
 
 	// Compact is the epoch's compactor; the runner binds it to the seat.
 	// Nil rewrites nothing, and every reader of it then carries a payload

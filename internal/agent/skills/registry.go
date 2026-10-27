@@ -507,6 +507,16 @@ type Loaded struct {
 	Title     string
 }
 
+// Keys are every key the registry serves, sorted: what a load of a key it
+// does not serve answers with, so a model that guessed a key corrects itself
+// in one step.
+func (r *Registry) Keys() []string {
+	if r == nil {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(r.skills))
+}
+
 // Load renders a skill for loading, or reports that it is not there.
 //
 // The rendered body carries its TITLE and its trigger's subject, because a

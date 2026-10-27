@@ -2414,6 +2414,7 @@ func partlyWritten(failure tools.Result, landed, refusedPart string, call callOu
 // ---- update_work_item -------------------------------------------------- //
 
 type updateWorkItem struct {
+	itemTarget
 	deps WorkDeps
 }
 
@@ -3226,6 +3227,7 @@ func patched(task worklet.Task, patch worklet.TaskPatch) worklet.Task {
 // ---- comment_on_work_item ---------------------------------------------- //
 
 type commentOnWorkItem struct {
+	itemTarget
 	deps WorkDeps
 
 	// pages checks a decision's page evidence — see [evidenceLookup]. Nil

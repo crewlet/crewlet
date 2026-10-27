@@ -41,9 +41,16 @@ type Surface struct {
 	// installed second.
 	guard Guard
 
+	// counter counts the refusal-loop guard's decisions, or nil
+	// ([Surface.WithCounter]).
+	counter Counter
+
 	mu     sync.Mutex
 	active []string
 	called []Call
+	// streaks are the runs of policy refusals the refusal-loop guard is
+	// counting, by tool and target ([Surface.settle]).
+	streaks map[streakKey]int
 	// revision counts the changes to active, so a renderer can tell a
 	// surface that moved from one that did not without rebuilding what it
 	// renders to find out. See [Surface.Revision].
@@ -447,8 +454,11 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 		// call did not happen as far as the ledger is concerned.
 		return toolloop.ToolResult{}, err
 	}
-	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed,
-		Cause: res.Cause})
+	target := TargetOf(e.Tool, args)
+	recorded, run := s.settle(Call{Name: call.Name, Args: args, Output: res.Output,
+		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target)
+	res.Output = recorded.Output
+	s.reportLoop(call.Name, target, run, turn)
 	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure
 	// may still have written part of what it asked for (a gesture stopped
 	// at a step whose outcome is unknown), and a call the log never heard

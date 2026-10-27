@@ -40,7 +40,10 @@ import (
 
 // ---- merge_work_item ---------------------------------------------------- //
 
-type mergeWorkItem struct{ deps WorkDeps }
+type mergeWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*mergeWorkItem)(nil)
 

@@ -2953,6 +2953,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Publisher:    e.backends.Queue,
 		Turn:         turnIdentity,
 		Sessions:     e.sessions,
+		Metrics:      e.metrics,
 		AgentRun:     agentRun,
 		Steer:        box,
 		Markers:      e.markers(),
