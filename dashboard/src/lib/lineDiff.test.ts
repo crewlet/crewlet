@@ -5,7 +5,8 @@
 
 import { describe, expect, test } from "vitest";
 import { collapseDiff, type DiffLine, type DiffSection } from "@crewlethq/ui";
-import { lineOf, modules, parse, walk, type Lang, type Node } from "~/test/source.ts";
+import { kitModule, kitReaches, spelled } from "~/test/kit.ts";
+import { lineOf, modules, parse, stringValue, walk, type Lang, type Node } from "~/test/source.ts";
 import {
   MAX_COMPARE_LINES,
   MAX_EDITS,
@@ -279,26 +280,66 @@ describe("two texts not compared", () => {
   });
 });
 
+/** The design system's line diff, the one name this gate is about. */
+const KIT_DIFF = ["diffLines"];
+
 /**
- * Where a module compares two texts with the design system's `diffLines`: an
- * import of it by name from the package's root or any module of it.
+ * Where a module reaches the design system's `diffLines`, by every way a
+ * module can:
+ *
+ * - an import of it by name, from the package's root or any module of it,
+ *   under whatever local name, or a re-export of it by name;
+ * - a namespace import, a dynamic import or a whole re-export (`export *`) of
+ *   a module the package says hands it on (`test/kit.ts`) — its root,
+ *   `@crewlethq/ui/generated` and `@crewlethq/ui/DiffView` today — each of
+ *   which reaches it under a name this gate cannot follow.
  */
 function kitDiffSites(path: string, text: string, lang: Lang): string[] {
   const line = lineOf(text);
   const out: string[] = [];
+  const at = (node: Node) => `${path}:${line(node.start)}`;
   walk(parse(text, lang), (node: Node) => {
-    // An import is a statement of the module itself, never inside another.
-    if (node.type === "Program") return;
-    if (node.type !== "ImportDeclaration") return false;
-    const source = String((node.source as Node).value);
-    if (source !== "@crewlethq/ui" && !source.startsWith("@crewlethq/ui/")) return false;
-    for (const spec of node.specifiers as Node[]) {
-      if (spec.type !== "ImportSpecifier") continue;
-      const imported = spec.imported as Node;
-      const name = String(imported.type === "Identifier" ? imported.name : imported.value);
-      if (name === "diffLines") out.push(`${path}:${line(spec.start)} imports diffLines`);
+    switch (node.type) {
+      case "ImportDeclaration": {
+        const source = (node.source as Node).value;
+        const module = kitModule(source);
+        if (module === null) return false;
+        for (const spec of node.specifiers as Node[]) {
+          if (spec.type === "ImportSpecifier") {
+            if (spelled(spec.imported as Node) === "diffLines") {
+              out.push(`${at(spec)} imports diffLines`);
+            }
+          } else if (spec.type === "ImportNamespaceSpecifier" && kitReaches(module, KIT_DIFF)) {
+            const local = String((spec.local as Node).name);
+            out.push(`${at(spec)} imports ${String(source)} whole, as ${local}`);
+          }
+        }
+        return false;
+      }
+      case "ImportExpression": {
+        const source = stringValue(node.source as Node);
+        if (kitReaches(kitModule(source), KIT_DIFF)) {
+          out.push(`${at(node)} imports ${String(source)} at run time`);
+        }
+        return;
+      }
+      case "ExportNamedDeclaration": {
+        if (kitModule((node.source as Node | null)?.value) === null) return;
+        for (const spec of node.specifiers as Node[]) {
+          if (spelled(spec.local as Node) === "diffLines") {
+            out.push(`${at(spec)} re-exports diffLines`);
+          }
+        }
+        return false;
+      }
+      case "ExportAllDeclaration": {
+        const source = (node.source as Node).value;
+        if (kitReaches(kitModule(source), KIT_DIFF)) {
+          out.push(`${at(node)} re-exports ${String(source)} whole`);
+        }
+        return false;
+      }
     }
-    return false;
   });
   return out;
 }
@@ -312,15 +353,34 @@ describe("the dashboard's texts", () => {
     expect(sites, "compare two texts with compareLines from lib/lineDiff.ts").toEqual([]);
   });
 
-  test("it can tell — the package's line diff is reported however it is imported", () => {
-    const old = [
+  // EVERY WAY TO IT IS REPORTED: by name from any module of the package, and
+  // through a namespace, a dynamic import or a re-export of a module that
+  // hands it on. The last four lines are not ways to it: this tree's own
+  // line diff, a name the package's diff module exports beside it, and a
+  // module of the package that does not hand it on, imported and re-exported
+  // whole.
+  test("it can tell — the package's line diff is reported however it is reached", () => {
+    const ways = [
       'import { collapseDiff, diffLines } from "@crewlethq/ui";',
       'import { diffLines as compare } from "@crewlethq/ui/DiffView";',
+      'import * as ui from "@crewlethq/ui";',
+      'import * as all from "@crewlethq/ui/generated";',
+      'export const d = async () => (await import("@crewlethq/ui/DiffView")).diffLines;',
+      'export { diffLines as lines } from "@crewlethq/ui";',
+      'export * from "@crewlethq/ui/generated";',
       'import { compareLines } from "~/lib/lineDiff.ts";',
+      'import { splitLines } from "@crewlethq/ui/DiffView";',
+      'import * as buttons from "@crewlethq/ui/Button";',
+      'export * from "@crewlethq/ui/Button";',
     ].join("\n");
-    expect(kitDiffSites("old.ts", old, "ts")).toEqual([
-      "old.ts:1 imports diffLines",
-      "old.ts:2 imports diffLines",
+    expect(kitDiffSites("ways.ts", ways, "ts")).toEqual([
+      "ways.ts:1 imports diffLines",
+      "ways.ts:2 imports diffLines",
+      "ways.ts:3 imports @crewlethq/ui whole, as ui",
+      "ways.ts:4 imports @crewlethq/ui/generated whole, as all",
+      "ways.ts:5 imports @crewlethq/ui/DiffView at run time",
+      "ways.ts:6 re-exports diffLines",
+      "ways.ts:7 re-exports @crewlethq/ui/generated whole",
     ]);
   });
 });

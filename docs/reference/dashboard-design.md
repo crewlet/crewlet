@@ -265,9 +265,12 @@ screens is a lazy chunk.
 `styles/diffs.test.ts` holds the rule in the sheets (no rule naming a diff
 spends a state's, a chart series' or an identity's hue), in the palette (the
 two steps are the rungs either side of the ground, measured off it in every
-state of every theme) and in the tree (nothing imports the package's diffs,
-and no `VersionCompare` is handed the two texts that would make it draw one);
-`components/DiffView.test.tsx` holds what it draws.
+state of every theme) and in the tree (nothing reaches the package's diffs —
+by name, by their own modules, or through a namespace, a dynamic import or a
+re-export of any module that hands them on in the package as installed — and
+no `VersionCompare` is handed the two texts that would make it draw one);
+`lib/lineDiff.test.ts` holds the same of the package's `diffLines`, which
+nothing compares with; `components/DiffView.test.tsx` holds what it draws.
 
 ---
 
