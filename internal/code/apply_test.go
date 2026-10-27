@@ -600,16 +600,17 @@ func (e *estate) seed(id string, pushes, refs, packs int) {
 
 // seedPacks writes n live packs of a repository straight into the estate, the
 // from-th of them first ([idOf], [sumOf]) — each a one-object pack of ten
-// bytes added at the log's first position — and moves the live-pack counters
-// by them, as a push's apply would.
+// bytes added at the log's first position, its content dated from there as a
+// push's is — and moves the live-pack counters by them, as a push's apply
+// would.
 func (e *estate) seedPacks(id string, from, n int) {
 	e.t.Helper()
 	ctx := context.Background()
 	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
 		_, err := store.InsertRows(ctx, tx, e.db.Caps().MaxVariables,
 			`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
-				reverse_bytes, git_checksum, objects, kind, state, added_position) VALUES `,
-			`(?, ?, 'pack', ?, ?, 10, 0, 0, ?, 1, 'push', 'live', 1)`, ``, n,
+				reverse_bytes, git_checksum, objects, kind, state, added_position, content_position) VALUES `,
+			`(?, ?, 'pack', ?, ?, 10, 0, 0, ?, 1, 'push', 'live', 1, 1)`, ``, n,
 			func(i int) []any {
 				p := packOf(idOf(id, from+i))
 				return []any{id, p.PackID, p.Object.String(), string(p.Hash), p.GitChecksum}

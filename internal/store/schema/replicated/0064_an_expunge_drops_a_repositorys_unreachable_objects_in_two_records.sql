@@ -20,8 +20,9 @@
 -- A person may ASK for an expunge — a purge of the repository's unreachable
 -- objects — which records the request and nothing else; the repository's
 -- maintainer serves it with as many begin and commit pairs as its live packs
--- need, and it is served once no live pack of the repository was added at or
--- before it.
+-- need, and it is served once no pack of the repository dates its content
+-- from before it — by what each pack holds, never by when its row was added,
+-- which a rewrite moves past the request without judging anything (0067).
 --
 -- The rows (internal/code's apply_expunge.go writes them all):
 --

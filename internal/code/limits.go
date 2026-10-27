@@ -269,9 +269,9 @@ const (
 	//     at most a tombstone less a pack row a pack, for as many packs as
 	//     this bound has tombstones: nothing for names JSON writes as
 	//     themselves, whose tombstone at MaxRefNameBytes (347 bytes) is
-	//     narrower than any pack row (396 at the narrowest), and 1 171 bytes
-	//     a pack for names JSON spells longest (a tombstone of 1 567), 23 MB
-	//     beside the 170 MB a full repository of 20 000 packs answers whole at
+	//     narrower than any pack row (459 at the narrowest), and 1 108 bytes
+	//     a pack for names JSON spells longest (a tombstone of 1 567), 22 MB
+	//     beside the 171 MB a full repository of 20 000 packs answers whole at
 	//     those names
 	//     (TestADeltaPassesTheWidestFullAnswerOnlyByTombstonesInPlaceOfPacks);
 	//   - a clean-up of a full repository — every live ref deleted at once —

@@ -492,29 +492,44 @@ func TestAnExpungeReplayedFromZeroWritesTheSameRows(t *testing.T) {
 	}
 }
 
-// A PURGE REQUEST IS SERVED ONCE NO LIVE PACK PREDATES IT: the repository holds
-// it open from its record until a commit leaves no live pack of the repository
-// added at or before it — a cycle that rewrites part of what it held keeps it,
-// the cycle that rewrites the rest serves it — and a repository holding no
-// live pack is served at its own record, since no cycle could rewrite
-// anything for it. A request asked while one is open is that one: decided as
-// nothing, and answered with the open one's id and position.
+// openRequest is the purge request repository id holds open, and the position
+// its record landed at: "" and 0 for none.
+func (e *estate) openRequest(id string) (string, int64) {
+	e.t.Helper()
+	return e.str(`SELECT expunge_request FROM code_repos WHERE id = ?`, id),
+		e.num(`SELECT expunge_request_position FROM code_repos WHERE id = ?`, id)
+}
+
+// purgeOver is a purge's begin of repository id at epoch — an expunge serving
+// request, keeping nothing a ref drop left — rewriting retire as [beginOver]
+// does, its scan at the last position e applied: past the request, as a
+// maintainer's scan reads the rows the request is in.
+func (e *estate) purgeOver(id, request string, epoch int64, retire []string, kept, dropping []int64) ExpungeBegin {
+	b := beginOver(id, epoch, retire, kept, dropping)
+	b.RequestID, b.Grace, b.Seen = request, 0, codeAt(e.next-1)
+	return b
+}
+
+// A PURGE REQUEST IS SERVED ONCE NO PACK DATES FROM BEFORE IT: the repository
+// holds it open from its record until a commit leaves no pack of the
+// repository whose content dates from before it — a cycle that rewrites part
+// of what it held keeps it, the cycle that rewrites the rest serves it — and a
+// repository holding no pack is served at its own record, since no cycle could
+// rewrite anything for it. A request asked while one is open is that one:
+// decided as nothing, and answered with the open one's id and position.
 //
 // Mutation: clear a request at any commit, and the first cycle serves it with
 // a pack it never rewrote still live; keep a request for a repository holding
 // no pack, and it is open for ever.
-func TestAPurgeRequestIsServedOnceNoLivePackPredatesIt(t *testing.T) {
+func TestAPurgeRequestIsServedOnceNoPackDatesFromBeforeIt(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
 	e.apply(create(t, "repo-a", "a"))
-	request := func() (string, int64) {
-		return e.str(`SELECT expunge_request FROM code_repos WHERE id = 'repo-a'`),
-			e.num(`SELECT expunge_request_position FROM code_repos WHERE id = 'repo-a'`)
-	}
+	request := func() (string, int64) { return e.openRequest("repo-a") }
 	empty := requestOf("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"))
 	e.mustExpunge(t, ExpungeProposal{Request: &empty})
 	if id, at := request(); id != "" || at != 0 {
-		t.Fatalf("a repository holding no live pack holds request %q at %d, want it served at once", id, at)
+		t.Fatalf("a repository holding no pack holds request %q at %d, want it served at once", id, at)
 	}
 
 	e.seed("repo-a", 0, 0, 3)
@@ -529,21 +544,233 @@ func TestAPurgeRequestIsServedOnceNoLivePackPredatesIt(t *testing.T) {
 		t.Fatalf("a second request answered %+v, want the open one %s at %s", d, asked.RequestID, at)
 	}
 
-	first := beginOver("repo-a", 1, []string{idOf("repo-a", 0), idOf("repo-a", 1)}, []int64{1}, []int64{1})
-	first.RequestID, first.Grace = asked.RequestID, 0
+	first := e.purgeOver("repo-a", asked.RequestID, 1, []string{idOf("repo-a", 0), idOf("repo-a", 1)},
+		[]int64{1}, []int64{1})
 	e.mustExpunge(t, ExpungeProposal{Begin: &first})
 	c := commitOver(first)
 	e.mustExpunge(t, ExpungeProposal{Commit: &c})
 	if id, _ := request(); id != asked.RequestID {
 		t.Fatalf("a cycle that left a pack from before the request live served it (%q)", id)
 	}
-	rest := beginOver("repo-a", 2, []string{idOf("repo-a", 2)}, []int64{1}, nil)
-	rest.RequestID, rest.Grace = asked.RequestID, 0
+	rest := e.purgeOver("repo-a", asked.RequestID, 2, []string{idOf("repo-a", 2)}, []int64{1}, nil)
 	e.mustExpunge(t, ExpungeProposal{Begin: &rest})
 	c = commitOver(rest)
 	e.mustExpunge(t, ExpungeProposal{Commit: &c})
 	if id, pos := request(); id != "" || pos != 0 {
 		t.Fatalf("the cycle that rewrote the rest left request %q at %d open", id, pos)
+	}
+}
+
+// EVERY PACK DATES ITS CONTENT AS A PURGE READS IT ([PackRow.Content]): a
+// push's pack from the push's own position; a compaction's output from the
+// oldest pack it merged; an expunge keeping a grace — its kept and its
+// dropping packs — and that expunge's rescue from the oldest pack each
+// replaced; and a purge's kept and dropping packs, and its rescue, from the
+// purge's scan, never past the begin's own position. A retired row keeps the
+// date its row held, and a snapshot serves the date of every pack.
+//
+// Mutation: date a compaction's output, or an expunge's that keeps a grace,
+// at its own record, and its date passes the content it merged; date a
+// purge's outputs from its oldest input, and nothing it judged reads judged;
+// leave the date out of the retired insert, and the retired row reads 0.
+func TestEveryPackDatesItsContentAsAPurgeReadsIt(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	e.apply(create(t, "repo-a", "a"))
+	content := func(pack string) int64 {
+		return e.num(`SELECT content_position FROM code_packs WHERE repo_id = 'repo-a' AND pack_id = ?`, pack)
+	}
+	retired := func(pack string) int64 {
+		return e.num(`SELECT content_position FROM code_packs_retired WHERE repo_id = 'repo-a' AND pack_id = ?`,
+			pack)
+	}
+	one, two := codeAt(e.next).Packed(), codeAt(e.next+1).Packed()
+	first := e.pushed(t, "repo-a", "push-1", "main", ZeroOID, oid("one"))
+	second := e.pushed(t, "repo-a", "push-2", "main", oid("one"), oid("two"))
+	if content(first) != one || content(second) != two {
+		t.Fatalf("the pushes' packs date from %d and %d, want their own positions %d and %d", content(first),
+			content(second), one, two)
+	}
+
+	cid := statelog.NewOpID(applyClock, "")
+	merged := outputOf(cid, 0, 2, applyClock)
+	e.apply(recordOf(t, Compaction{RepoID: "repo-a", CompactionID: cid, Node: "node-a", Seen: codeAt(e.next - 1),
+		Retire: sorted(first, second), Add: []PackRef{merged}}))
+	if content(merged.PackID) != one || retired(first) != one || retired(second) != two {
+		t.Fatalf("the compaction's output dates from %d and its retired inputs from %d and %d, want %d, and "+
+			"%d and %d as they were", content(merged.PackID), retired(first), retired(second), one, one, two)
+	}
+
+	third := e.pushed(t, "repo-a", "push-3", "main", oid("two"), oid("three"))
+	graced := beginOver("repo-a", 1, sorted(merged.PackID, third), []int64{2}, []int64{1})
+	graced.Seen = codeAt(e.next - 1)
+	e.mustExpunge(t, ExpungeProposal{Begin: &graced})
+	for _, out := range append(slices.Clone(graced.Add), graced.Dropping...) {
+		if got := content(out.PackID); got != one {
+			t.Errorf("pack %s of an expunge keeping a grace dates from %d, want its oldest input's %d",
+				out.PackID, got, one)
+		}
+	}
+	rescued := commitOver(graced, 1)
+	rescued.Seen = codeAt(e.next - 1)
+	e.mustExpunge(t, ExpungeProposal{Commit: &rescued})
+	if got := content(rescued.Add[0].PackID); got != one || retired(graced.Dropping[0].PackID) != one {
+		t.Fatalf("its rescue dates from %d and its retired dropping pack from %d, want both %d", got,
+			retired(graced.Dropping[0].PackID), one)
+	}
+
+	scan := codeAt(e.next - 1)
+	purge := e.purgeOver("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"), 2,
+		sorted(graced.Add[0].PackID, rescued.Add[0].PackID), []int64{2}, []int64{1})
+	e.mustExpunge(t, ExpungeProposal{Begin: &purge})
+	for _, out := range append(slices.Clone(purge.Add), purge.Dropping...) {
+		if got := content(out.PackID); got != scan.Packed() {
+			t.Errorf("pack %s of a purge dates from %d, want its scan's %d", out.PackID, got, scan.Packed())
+		}
+	}
+	purged := commitOver(purge, 1)
+	purged.Seen = codeAt(e.next - 1)
+	e.mustExpunge(t, ExpungeProposal{Commit: &purged})
+	if got := content(purged.Add[0].PackID); got != scan.Packed() {
+		t.Fatalf("a purge's rescue dates from %d, want the purge's scan %d", got, scan.Packed())
+	}
+
+	// A SCAN NO CORRECT LOG CARRIES — past the begin that names it — dates
+	// nothing after the begin.
+	late := e.purgeOver("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"), 3,
+		[]string{purge.Add[0].PackID}, []int64{2}, nil)
+	late.Seen = codeAt(e.next + 100)
+	at := codeAt(e.next)
+	e.apply(expungeRec(t, ExpungeProposal{Begin: &late}))
+	if got := content(late.Add[0].PackID); got != at.Packed() {
+		t.Fatalf("a purge whose scan is past its own record dates its pack from %d, want the record's %d", got,
+			at.Packed())
+	}
+}
+
+// pushed lands one push on repository id moving refs/heads/<ref> from old to
+// new, carrying a pack of its own named for the push, and answers the pack's
+// id.
+func (e *estate) pushed(t *testing.T, id, push, ref, old, new string) string {
+	t.Helper()
+	e.apply(pushOf(t, id, pushEntry(push, move("refs/heads/"+ref, old, new))))
+	return push
+}
+
+// A PURGE REQUEST OUTLIVES A COMPACTION OF ITS PACKS: a compaction decided
+// after the request — one already in flight when the person asked, or the
+// compactor's next pass — merges the packs the request waits on into an
+// output added after it, judging nothing; so a commit of any expunge while
+// the output is live leaves the request open — here one on the maintainer's
+// own schedule over a pack pushed since — and the purge's cycle that rewrites
+// the output serves it.
+//
+// Mutation: judge a request by when each pack's row was added, or date a
+// compaction's output at its own record, and the commit over the pack pushed
+// since serves the request with the merged content live.
+func TestAPurgeRequestOutlivesACompactionOfItsPacks(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	e.apply(create(t, "repo-a", "a"))
+	first := e.pushed(t, "repo-a", "push-1", "main", ZeroOID, oid("one"))
+	second := e.pushed(t, "repo-a", "push-2", "main", oid("one"), oid("two"))
+	asked := requestOf("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"))
+	e.mustExpunge(t, ExpungeProposal{Request: &asked})
+
+	cid := statelog.NewOpID(applyClock, "")
+	merged := outputOf(cid, 0, 2, applyClock)
+	compaction := Compaction{RepoID: "repo-a", CompactionID: cid, Node: "node-a", Seen: codeAt(e.next - 1),
+		Retire: sorted(first, second), Add: []PackRef{merged}}
+	if d, err := compactionDecidedIn(t, e, compaction, applyClock); err != nil || d.refusal != "" {
+		t.Fatalf("the compaction of the packs the request waits on answered %s (%s), %v; want it decided",
+			d.refusal, d.detail, err)
+	}
+	e.apply(recordOf(t, compaction))
+
+	later := e.pushed(t, "repo-a", "push-3", "main", oid("two"), oid("three"))
+	other := beginOver("repo-a", 1, []string{later}, []int64{1}, nil)
+	other.Seen = codeAt(e.next - 1)
+	e.mustExpunge(t, ExpungeProposal{Begin: &other})
+	c := commitOver(other)
+	e.mustExpunge(t, ExpungeProposal{Commit: &c})
+	if id, _ := e.openRequest("repo-a"); id != asked.RequestID {
+		t.Fatalf("a commit served the request (%q) while the compaction's output, holding everything the "+
+			"person asked about, is live", id)
+	}
+
+	purge := e.purgeOver("repo-a", asked.RequestID, 2, []string{merged.PackID}, []int64{1}, []int64{1})
+	e.mustExpunge(t, ExpungeProposal{Begin: &purge})
+	c = commitOver(purge)
+	e.mustExpunge(t, ExpungeProposal{Commit: &c})
+	if id, at := e.openRequest("repo-a"); id != "" || at != 0 {
+		t.Fatalf("the purge's cycle over the compaction's output left request %q at %d open", id, at)
+	}
+}
+
+// A PURGE REQUEST OUTLIVES AN EXPUNGE THAT KEEPS A GRACE: an expunge on the
+// maintainer's own schedule keeps what a ref drop left within PruneGrace — the
+// very objects a purge asks to drop — so its commit serves no request waiting
+// on what it rewrote: neither one asked before it began, whose content its
+// kept pack still holds, nor one asked while it was open, whose content only
+// its dropping packs hold — and then its rescue, cut from them with the
+// grace. The purge's cycle that rewrites what it kept serves each.
+//
+// Mutation: date an expunge's outputs from its scan whatever its grace, and
+// the commit of the one begun after the request serves it; judge a request by
+// when each pack's row was added, and both are served — the first at the
+// commit, the second at its own record, while what it asks about is dropping.
+func TestAPurgeRequestOutlivesAnExpungeThatKeepsAGrace(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []struct {
+		name           string
+		askedFirst     bool
+		kept, dropping []int64
+	}{
+		{"asked before it began", true, []int64{1}, []int64{1}},
+		{"asked while it was open", false, nil, []int64{2}},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			e := openApplyEstate(t)
+			e.apply(create(t, "repo-a", "a"))
+			first := e.pushed(t, "repo-a", "push-1", "main", ZeroOID, oid("one"))
+			second := e.pushed(t, "repo-a", "push-2", "main", oid("one"), oid("two"))
+			asked := requestOf("repo-a", statelog.NewOpID(applyClock, "code_purge_unreachable"))
+			if arm.askedFirst {
+				e.mustExpunge(t, ExpungeProposal{Request: &asked})
+			}
+			// EVERY PACK FROM BEFORE THE REQUEST IS ITS INPUT, so what it
+			// writes is the only content from before the request left.
+			b := beginOver("repo-a", 1, sorted(first, second), arm.kept, arm.dropping)
+			b.Seen = codeAt(e.next - 1)
+			e.mustExpunge(t, ExpungeProposal{Begin: &b})
+			if !arm.askedFirst {
+				e.mustExpunge(t, ExpungeProposal{Request: &asked})
+				if id, _ := e.openRequest("repo-a"); id != asked.RequestID {
+					t.Fatalf("a request asked while dropping packs hold what it asks about was served at once "+
+						"(%q)", id)
+				}
+			}
+			c := commitOver(b, 1)
+			c.Seen = codeAt(e.next - 1)
+			e.mustExpunge(t, ExpungeProposal{Commit: &c})
+			if id, _ := e.openRequest("repo-a"); id != asked.RequestID {
+				t.Fatalf("the commit of an expunge keeping a grace served the request (%q) while what it kept "+
+					"and rescued holds what the person asked about", id)
+			}
+
+			rewrite := []string{c.Add[0].PackID}
+			for _, out := range b.Add {
+				rewrite = append(rewrite, out.PackID)
+			}
+			purge := e.purgeOver("repo-a", asked.RequestID, 2, sorted(rewrite...), []int64{1}, nil)
+			e.mustExpunge(t, ExpungeProposal{Begin: &purge})
+			c = commitOver(purge)
+			e.mustExpunge(t, ExpungeProposal{Commit: &c})
+			if id, at := e.openRequest("repo-a"); id != "" || at != 0 {
+				t.Fatalf("the purge's cycle over what the expunge kept left request %q at %d open", id, at)
+			}
+		})
 	}
 }
 

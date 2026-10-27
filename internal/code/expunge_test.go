@@ -1,6 +1,7 @@
 package code_test
 
 import (
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -210,6 +211,55 @@ func TestAPushCheckedBeforeABeginIsRefusedExpunging(t *testing.T) {
 	if err != nil || got.Answer.Refused != code.RefusalRepoArchived {
 		t.Fatalf("a push to the archived repository checked at another epoch answered %+v, %v; want "+
 			"repo_archived, its status first", got, err)
+	}
+}
+
+// A SNAPSHOT SERVES WHEN EACH PACK'S CONTENT IS FROM ([code.PackRow.Content]),
+// the date a purge's cycle chooses its inputs by and a request is judged
+// served by: a push's pack its own position, and a compaction's output its
+// oldest input's — never the position its row was added at, which the
+// snapshot serves beside it and a rewrite moves past every request it judged
+// nothing for.
+//
+// Mutation: serve a pack's added position as its content's, and the
+// compaction's output reads as newer than what it merged.
+func TestASnapshotServesWhenEachPacksContentIsFrom(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := n.ensure("web", suiteSettings(), t1).RepoID
+	var ids []string
+	var at []statelog.Position
+	for i := range 3 {
+		e := entry(uuid.Must(uuid.NewV7()).String(),
+			set(fmt.Sprintf("refs/heads/b%d", i), code.ZeroOID, oidOf(fmt.Sprint("b", i))))
+		ids = append(ids, e.Pack.PackID)
+		at = append(at, n.push(repo, e).Position)
+	}
+	c, _ := committerOn(t, n, n.pub)
+	merge := compactionOf(n, repo, sorted(ids[0], ids[1]), 2, harnessAt)
+	res, err := c.ProposeCompaction(t.Context(), merge)
+	requireApplied(t, res, err)
+
+	want := map[string][2]statelog.Position{
+		merge.Compaction.Add[0].PackID: {res.Position, at[0]},
+		ids[2]:                         {at[2], at[2]},
+	}
+	served := 0
+	for _, page := range snapshot(t, n.reader, repo, statelog.Position{}) {
+		for _, p := range page.Packs {
+			w, ok := want[p.PackID]
+			if !ok {
+				t.Fatalf("the snapshot serves pack %s, which the repository no longer holds", p.PackID)
+			}
+			if p.Added != w[0] || p.Content != w[1] {
+				t.Errorf("pack %s is served added at %s with its content from %s, want %s and %s", p.PackID,
+					p.Added, p.Content, w[0], w[1])
+			}
+			served++
+		}
+	}
+	if served != len(want) {
+		t.Fatalf("the snapshot served %d packs, want %d", served, len(want))
 	}
 }
 

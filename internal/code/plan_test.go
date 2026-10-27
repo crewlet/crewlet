@@ -477,13 +477,14 @@ func registeredStatements() map[string]statement {
 		"publication due after": {publicationDueAfterSQL, []any{30, 30, "repo-2", MaxSnapshotItems}, []string{"code_repos_unpublished_idx (published_at>=?)"}},
 		// AN EXPUNGE'S: a commit's read of the repository's dropping packs
 		// by the key's prefix; the applies' read of the repository's
-		// expunge and their counters by its key; whether a live pack was
-		// added at or before a request, over the packs' added index from
-		// the repository's start; and the maintainer's listing of the
-		// expunges owed, by id after a cursor.
+		// expunge and their counters by its key; whether a pack of the
+		// repository dates its content from before a request, over the
+		// packs' content index from the repository's start, never reading a
+		// row; and the maintainer's listing of the expunges owed, by id
+		// after a cursor.
 		"dropping packs":       {droppingPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"expunge state":        {expungeStateSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"request pending":      {requestPendingSQL, []any{"repo-1", 25}, []string{"code_packs_added_idx (repo_id=? AND added_position<=?)"}},
+		"request pending":      {requestPendingSQL, []any{"repo-1", 25}, []string{"COVERING INDEX code_packs_content_idx (repo_id=? AND content_position<?)"}},
 		"request":              {requestSQL, []any{"r", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"begin counters":       {beginCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"begin dropped layers": {beginDroppedLayersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},

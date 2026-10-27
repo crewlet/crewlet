@@ -796,11 +796,11 @@ type RetireSweep struct {
 // person's purge. Its record writes the request and nothing else: the
 // repository's maintainer serves it, with no grace for the objects a ref drop
 // left, through as many begins and commits as the repository's live packs
-// need, and it is SERVED — the repository holds it no more — once no live pack
-// of the repository was added at or before it: at its own apply, for a
-// repository holding no live pack, and at a commit's otherwise. A request
-// asked while one is open is that one: decided as nothing, and answered with
-// the open one's id and position.
+// need, and it is SERVED — the repository holds it no more — once no pack of
+// the repository dates its content from before it ([PackRow.Content]): at its
+// own apply, for a repository holding no pack, and at a commit's otherwise. A
+// request asked while one is open is that one: decided as nothing, and
+// answered with the open one's id and position.
 //
 // Every field is in the base format, under the condition [OpExpungeRequest]
 // states.
@@ -847,14 +847,15 @@ type ExpungeBegin struct {
 	// went silent is the same begin, collapsed by the operation ledger.
 	ExpungeID string `json:"expunge_id"`
 	// RequestID is the open request this expunge serves, "" for one on the
-	// maintainer's own schedule. PROVENANCE: a commit serves a request by its
-	// position, never by this.
+	// maintainer's own schedule. PROVENANCE: a commit serves a request by
+	// what each pack holds ([PackRow.Content]), never by this.
 	RequestID string `json:"request_id,omitempty"`
 	// Node is the git node that built it, for whoever reads the log.
 	Node string `json:"node"`
 	// Seen is the code log's position the builder's scan read the
 	// repository's refs and ref drops at — the tips its outputs were cut by.
-	// The committer decides at or past it (the publish's session floor).
+	// The committer decides at or past it (the publish's session floor), and
+	// a purge's outputs date their content from it ([PackRow.Content]).
 	Seen statelog.Position `json:"seen"`
 	// DropEpoch is the repository's drop epoch once the begin applies: the
 	// one its row held when the builder planned, plus one.
@@ -862,7 +863,10 @@ type ExpungeBegin struct {
 	// Grace is how long before the scan a ref drop's object was still kept
 	// reachable: PruneGrace for an expunge on the maintainer's own schedule,
 	// and 0 for one serving a request — a purge drops what a force-push left
-	// at once. PROVENANCE: the decide reads no ref.
+	// at once. The decide reads no ref; the APPLY dates the begin's outputs
+	// by it ([PackRow.Content]): from Seen where it is 0, a purge having
+	// judged everything it kept there, and from the oldest input otherwise,
+	// since what a grace keeps is what a purge still asks to drop.
 	Grace time.Duration `json:"grace"`
 	// Retire are the pack ids the outputs replace, sorted and distinct, each
 	// live when the committer decides — a full pack among them: an expunge is
@@ -890,9 +894,10 @@ type ExpungeBegin struct {
 // the collector for [RetireGrace] — so a reader already on one finishes — and
 // its RESCUE (Add) joins code_packs live: what of the dropping packs a ref
 // reached at the rescue's sync, which a push that landed between the
-// expunge's scan and its begin made reachable again. The repository's open
-// expunge is cleared, and the request it served with it once no live pack of
-// the repository was added at or before the request.
+// expunge's scan and its begin made reachable again, its content dated from
+// the oldest dropping pack it was cut from ([PackRow.Content]). The
+// repository's open expunge is cleared, and its open request with it once no
+// pack of the repository dates its content from before the request.
 //
 // ITS ONE PRECONDITION IS ITS EXPUNGE: still open at its epoch, with exactly
 // the dropping packs the commit retires. No ref and no push is read, so a

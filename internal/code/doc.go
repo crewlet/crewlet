@@ -693,9 +693,12 @@
 //
 // THE APPLY MOVES ROWS, NEVER BYTES: every row of an input leaves code_packs
 // for code_packs_retired, stamped with the record's position and broker
-// instant; each output joins code_packs, a live pack of kind compact; and the
-// repository's counters move by the rows the apply found and wrote, never by
-// the record's lists, so a replay moves nothing. A retired pack keeps its
+// instant; each output joins code_packs, a live pack of kind compact, its
+// content dated from the oldest input's ([PackRow.Content]) — a merge moves
+// content and judges none of it, so a purge requested before it still asks
+// about what it holds; and the repository's counters move by the rows the
+// apply found and wrote, never by the record's lists, so a replay moves
+// nothing. A retired pack keeps its
 // object for [RetireGrace] (the RETIRED PACKS horizon above), so a reader
 // that began on it before the compaction finishes it.
 //
@@ -853,9 +856,18 @@
 //
 // A person may ask for one: a REQUEST ([ExpungeRequest]) records a purge and
 // nothing else, the repository holds it open — a second request while one is
-// open is that one — and it is SERVED, cleared, once no live pack of the
-// repository was added at or before it, at a commit or, for a repository
-// holding no live pack, at once. While an expunge is open, a second begin is
+// open is that one — and it is SERVED, cleared, once no pack of the
+// repository dates its CONTENT from before it, at a commit or, for a
+// repository holding no pack, at once. A pack row names the position its
+// content dates from as a purge reads it ([PackRow.Content], replicated 0067):
+// a push's pack its own; a compaction's outputs, an expunge's that keeps a
+// ref drop's grace and every rescue the oldest of the packs they replace,
+// since moving content judges none of it; and a purge's kept and dropping
+// packs its scan, where it judged them. So a rewrite that judges nothing —
+// a compaction in flight when the person asked, the maintainer's own expunge
+// keeping a grace — never serves a request, or strands one, by adding its
+// outputs after it, and a purge's cycle takes the live packs that date from
+// before the request it serves. While an expunge is open, a second begin is
 // stale and so is a publication (publication.go's rule 6g); a compaction of
 // live packs is decided as ever. The repository's maintainer finds the
 // expunges it owes by the [ReadExpungeDue] listing — the active and archived

@@ -622,7 +622,7 @@ func retiredAbove(ctx context.Context, tx *sql.Tx, repoID string, floor statelog
 // it replaces — and at its widest, a delta passes the full answer of a
 // repository of as many refs and packs only by tombstones carried in place of
 // packs, at most a tombstone less a pack row a pack: nothing for names JSON
-// writes as themselves, 1 171 bytes a pack for names it spells longest
+// writes as themselves, 1 108 bytes a pack for names it spells longest
 // ([MaxTombstonesPerRepo] gives the arithmetic). Weighing each pack as a
 // fraction of the widest ref row would close that, and answer a repository of
 // many packs in full for every delta of ordinary names, whose tombstones are
@@ -840,19 +840,19 @@ func (r *Reader) scanPacks(rows *sql.Rows, out *RepoSnapshot, cur *StateCursor, 
 	asked, served := pg.left(), 0
 	for rows.Next() {
 		var (
-			p            PackRow
-			object, hash string
-			added        int64
+			p              PackRow
+			object, hash   string
+			added, content int64
 		)
 		if err := rows.Scan(&p.PackID, &p.Part, &object, &hash, &p.Size, &p.IndexBytes,
-			&p.ReverseBytes, &p.GitChecksum, &p.Objects, &p.Kind, &p.State, &added); err != nil {
+			&p.ReverseBytes, &p.GitChecksum, &p.Objects, &p.Kind, &p.State, &added, &content); err != nil {
 			return false, fmt.Errorf("code: read a pack: %w", err)
 		}
 		k, err := objstore.ParseKey(object)
 		if err != nil {
 			return false, fmt.Errorf("code: pack %s names %q: %w", p.PackID, object, err)
 		}
-		p.Object, p.Hash, p.Added = k, objstore.Hash(hash), unpacked(added)
+		p.Object, p.Hash, p.Added, p.Content = k, objstore.Hash(hash), unpacked(added), unpacked(content)
 		out.Packs = append(out.Packs, p)
 		served++
 		cur.After = key(p)
@@ -2543,7 +2543,7 @@ const (
 		description, deleted_at, refs, branches, tags, tombstones, live_packs, live_bytes,
 		live_objects, drop_epoch, tombstones_through, retired_through, layers_position, pushes, last_push_at,
 		created_at FROM code_repos WHERE id = ?`
-	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position`
+	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position, content_position`
 	packsFullFirstSQL = `SELECT ` + packColumns + ` FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`
 	packsFullAfterSQL = `SELECT ` + packColumns + ` FROM code_packs INDEXED BY ` + packsKey + `

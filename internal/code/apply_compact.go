@@ -118,8 +118,9 @@ func (a *Applier) applyCompact(ctx context.Context, tx *sql.Tx, at applyContext,
 // A REWRITE'S PACKS, MOVED IN ONE PLACE: a compaction's ([Applier.applyCompact])
 // and an expunge's begin's and commit's (apply_expunge.go) — every record that
 // replaces some of a repository's packs by others — so the rows it retires,
-// the outputs it writes and the counters it moves them by are one reading for
-// every kind of rewrite (ADR-0008).
+// the outputs it writes, the date their content is read at by a purge and the
+// counters it moves them by are one reading for every kind of rewrite
+// (ADR-0008).
 
 // packTally is what a set of pack rows holds.
 type packTally struct {
@@ -135,10 +136,19 @@ func (t *packTally) add(size, objects int64) {
 }
 
 // rewritePlan is what one rewrite's apply will move, read before it moves
-// anything: the rows it retires, and the outputs it writes.
+// anything: the rows it retires, the outputs it writes, and the position every
+// output's content dates from.
 type rewritePlan struct {
 	leaving []namedPack
 	adds    []rewriteOutput
+	// content is the position its outputs' content dates from as a purge
+	// reads it ([PackRow.Content]): the least of the rows it retires, since
+	// moving content judges none of it — a merge's output holds whatever the
+	// oldest of its inputs held — and 0, below every position, where it
+	// retires none: a record whose inputs a later one moved first, whose
+	// outputs then claim nothing about what they hold. A purge's begin dates
+	// its outputs at its scan instead ([Applier.applyExpungeBegin]).
+	content int64
 }
 
 // rewriteOutput is one output a rewrite writes, and the kind and state it is
@@ -163,7 +173,8 @@ type rewritten struct {
 // code_packs whose pack id retire names — those retiring keeps, where it is
 // given — leaves; and of its n outputs, output(i) is the i-th and the kind and
 // state it is written in, each written where code_packs will not hold it once
-// those rows have left. An output code_packs holds already is not written
+// those rows have left, its content dated from the oldest of the leaving rows'
+// ([rewritePlan.content]). An output code_packs holds already is not written
 // again, unless it is also an input — which no writer forms — and is leaving;
 // and a record naming one output twice writes it once.
 func planRewrite(ctx context.Context, tx *sql.Tx, repoID string, retire []string, retiring func(namedPack) bool,
@@ -177,6 +188,9 @@ func planRewrite(ctx context.Context, tx *sql.Tx, repoID string, retire []string
 	gone := make(map[string]bool, len(found))
 	for _, p := range found {
 		if retiring == nil || retiring(p) {
+			if len(plan.leaving) == 0 || p.content < plan.content {
+				plan.content = p.content
+			}
 			plan.leaving = append(plan.leaving, p)
 			gone[p.id] = true
 		}
@@ -211,8 +225,9 @@ func planRewrite(ctx context.Context, tx *sql.Tx, repoID string, retire []string
 func (p rewritePlan) idle() bool { return len(p.leaving) == 0 && len(p.adds) == 0 }
 
 // apply moves what p planned, in repoID's rows: the leaving rows into
-// code_packs_retired, stamped with at's position and broker instant, and out
-// of code_packs; and the outputs into code_packs, added at at's position.
+// code_packs_retired, whole, stamped with at's position and broker instant,
+// and out of code_packs; and the outputs into code_packs, added at at's
+// position, their content dated from p's.
 func (p rewritePlan) apply(ctx context.Context, tx *sql.Tx, at applyContext, repoID string) (rewritten, error) {
 	var moved rewritten
 	for _, l := range p.leaving {
@@ -223,13 +238,14 @@ func (p rewritePlan) apply(ctx context.Context, tx *sql.Tx, at applyContext, rep
 	}
 	retired, err := store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_packs_retired (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, added_position, retired_position, retired_at) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			reverse_bytes, git_checksum, objects, kind, added_position, content_position, retired_position,
+			retired_at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
 		len(p.leaving), func(i int) []any {
 			l := p.leaving[i]
 			return []any{repoID, l.id, l.part, l.object, l.hash, l.size, l.indexBytes, l.reverseBytes,
-				l.checksum, l.objects, string(l.kind), l.added, at.packed, at.at()}
+				l.checksum, l.objects, string(l.kind), l.added, l.content, at.packed, at.at()}
 		})
 	if err != nil {
 		return rewritten{}, fmt.Errorf("retire the packs it replaces: %w", err)
@@ -252,14 +268,14 @@ func (p rewritePlan) apply(ctx context.Context, tx *sql.Tx, at applyContext, rep
 	}
 	added, err := store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, state, added_position) VALUES `,
-		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position) VALUES `,
+		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
 		len(p.adds), func(i int) []any {
 			a := p.adds[i]
 			return []any{repoID, a.out.PackID, a.out.Object.String(), string(a.out.Hash), a.out.Size,
 				a.out.IndexBytes, a.out.ReverseBytes, a.out.GitChecksum, a.out.Objects, string(a.kind),
-				string(a.state), at.packed}
+				string(a.state), at.packed, p.content}
 		})
 	if err != nil {
 		return rewritten{}, fmt.Errorf("write its outputs: %w", err)

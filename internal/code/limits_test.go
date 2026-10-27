@@ -307,7 +307,8 @@ func TestADeltaPassesTheWidestFullAnswerOnlyByTombstonesInPlaceOfPacks(t *testin
 	plainLive := width(code.RefRow{Ref: plain, OID: oidOf("x"), Position: widest})
 	// THE NARROWEST PACK ROW a repository holds — the one a tombstone gains
 	// most by standing in for: one object, in the least bundle of it
-	// PackRef.Check admits, added at the narrowest position.
+	// PackRef.Check admits, added at the narrowest position and its content
+	// dated from there.
 	pack := *suitePack("narrowest")
 	pack.PackID = "0190f3c4-0000-7000-8000-000000000001"
 	if err := pack.Check(); err != nil {
@@ -321,12 +322,12 @@ func TestADeltaPassesTheWidestFullAnswerOnlyByTombstonesInPlaceOfPacks(t *testin
 	packRow := width(code.PackRow{PackID: pack.PackID, Part: "pack", Object: pack.Object,
 		Hash: pack.Hash, Size: pack.Size, IndexBytes: pack.IndexBytes, ReverseBytes: pack.ReverseBytes,
 		GitChecksum: pack.GitChecksum, Objects: pack.Objects, Kind: "push", State: "live",
-		Added: narrowest})
+		Added: narrowest, Content: narrowest})
 
 	// THE FIGURES MaxTombstonesPerRepo's doc states.
-	if tomb != 1_567 || plainTomb != 347 || packRow != 396 {
+	if tomb != 1_567 || plainTomb != 347 || packRow != 459 {
 		t.Errorf("at their widest a tombstone is %d bytes and one of a plain name %d, and the "+
-			"narrowest pack row %d: MaxTombstonesPerRepo states 1 567, 347 and 396", tomb,
+			"narrowest pack row %d: MaxTombstonesPerRepo states 1 567, 347 and 459", tomb,
 			plainTomb, packRow)
 	}
 
@@ -356,9 +357,9 @@ func TestADeltaPassesTheWidestFullAnswerOnlyByTombstonesInPlaceOfPacks(t *testin
 				"bytes, past the %d MaxTombstonesPerRepo states (%d bytes a pack, for %d of them)",
 				packs, full, over, stated, tomb-packRow, stones)
 		}
-		if packs == 20_000 && (megabytes(delta-full) != 23 || megabytes(full) != 170) {
+		if packs == 20_000 && (megabytes(delta-full) != 22 || megabytes(full) != 171) {
 			t.Errorf("with 20 000 packs the widest delta passes the %d-byte widest full answer by %d "+
-				"bytes: MaxTombstonesPerRepo states 23 MB beside 170 MB", full, delta-full)
+				"bytes: MaxTombstonesPerRepo states 22 MB beside 171 MB", full, delta-full)
 		}
 
 		// NAMES JSON WRITES AS THEMSELVES: not a byte.

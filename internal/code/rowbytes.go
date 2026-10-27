@@ -219,7 +219,8 @@ func (r PackRow) encodedBytes() int {
 		field("objects", intBytes(r.Objects), false) +
 		field("kind", stringBytes(string(r.Kind)), false) +
 		field("state", stringBytes(string(r.State)), false) +
-		field("added", positionBytes(r.Added), false)
+		field("added", positionBytes(r.Added), false) +
+		field("content", positionBytes(r.Content), false)
 }
 
 // encodedBytes is the length of the candidate's JSON encoding.

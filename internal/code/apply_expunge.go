@@ -37,6 +37,17 @@ import (
 // layers RECOUNTS published_packs and published_objects from the rows it
 // leaves and moves layers_position, as a publication does, so a cache's next
 // delta serves the chain whole.
+//
+// EVERY OUTPUT DATES ITS CONTENT ([PackRow.Content]) as a purge reads it, so a
+// request is judged by what each pack holds rather than by when its row was
+// added: a begin that keeps what a ref drop left within a grace — the
+// maintainer's own schedule — and a commit's rescue date their packs from the
+// oldest row they retire, as a compaction does ([rewritePlan.content]): moving
+// content judges none of it. A PURGE'S BEGIN, which keeps nothing a ref drop
+// left (its Grace 0), judged what it rewrote at its scan: what it keeps a ref
+// reached there, and what it leaves dropping its commit retires, but for the
+// rescue cut from it — so its kept and its dropping packs date from its Seen,
+// and the rescue from them.
 
 // expungeState is what an expunge's apply reads of the repository's row: its
 // drop epoch, the open expunge, and the purge requested and its record's
@@ -60,10 +71,20 @@ func expungeStateIn(ctx context.Context, tx *sql.Tx, repoID string) (expungeStat
 }
 
 // requestServed reports whether a request whose record landed at requested is
-// SERVED: no live pack of the repository was added at or before it, so every
-// object the repository held when it was asked has been through an expunge's
-// rewrite since — or the repository held no live pack at all. The one rule
-// both a request's own apply and a commit's read.
+// SERVED: no pack of the repository, live or dropping, dates its content from
+// before it ([PackRow.Content]), so every object the repository held when it
+// was asked has been judged by a purge's scan since — kept because a ref
+// reached it, or left dropping and retired — or the repository holds no pack.
+// The one rule both a request's own apply and a commit's read: at a request's
+// apply every pack the repository holds dates from before it, a purge's scan
+// included, so it is served there only by holding none; and a commit leaves no
+// pack dropping (its decide's rule 3), so the packs it judges are all live.
+//
+// BY CONTENT, NEVER BY WHEN A ROW WAS ADDED: every rewrite adds its outputs at
+// its own position, so a compaction of the packs a request waits on, or an
+// expunge keeping a grace, would otherwise make the content the request asked
+// about read as newer than it — a request no cycle could serve, or one served
+// with that content still live.
 func requestServed(ctx context.Context, tx *sql.Tx, repoID string, requested int64) (bool, error) {
 	var pending bool
 	if err := tx.QueryRowContext(ctx, requestPendingSQL, repoID, requested).Scan(&pending); err != nil {
@@ -83,9 +104,9 @@ func notApplied(ctx context.Context, at applyContext, repoID, why string) (int, 
 
 // applyExpungeRequest records a purge request: the repository's open request,
 // and the position its record landed at — unless the request is SERVED at
-// once ([requestServed]): a repository holding no live pack has nothing a
-// cycle could rewrite, and a request no cycle can serve would be open for
-// ever. A repository holding an open request already applies it as nothing.
+// once ([requestServed]): a repository holding no pack has nothing a cycle
+// could rewrite, and a request no cycle can serve would be open for ever. A
+// repository holding an open request already applies it as nothing.
 func (a *Applier) applyExpungeRequest(ctx context.Context, tx *sql.Tx, at applyContext,
 	r ExpungeRequest) (int, error) {
 
@@ -114,9 +135,10 @@ func (a *Applier) applyExpungeRequest(ctx context.Context, tx *sql.Tx, at applyC
 // applyExpungeBegin begins an expunge ([ExpungeBegin]): the rows of the packs
 // it rewrites leave code_packs for code_packs_retired, stamped with the
 // record's position and broker instant; its kept packs join code_packs live
-// (kind expunge) and its dropping packs dropping (kind cruft); the layers it
-// drops leave code_layers with their parts; and the repository's drop epoch
-// and open expunge move to the record's.
+// (kind expunge) and its dropping packs dropping (kind cruft), their content
+// dated from its scan where it is a purge's and from its oldest input
+// otherwise; the layers it drops leave code_layers with their parts; and the
+// repository's drop epoch and open expunge move to the record's.
 func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyContext, b ExpungeBegin) (int,
 	error) {
 
@@ -154,6 +176,13 @@ func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyCon
 		})
 	if err != nil {
 		return 0, fmt.Errorf("code: the begin at %s: %w", at.position, err)
+	}
+	if b.Grace == 0 {
+		// A PURGE'S CYCLE JUDGED WHAT IT REWROTE AT ITS SCAN: its outputs
+		// date from its Seen — never past its own position, which no correct
+		// log's Seen reaches, so no record dates content after the record
+		// that wrote it.
+		plan.content = min(b.Seen.Packed(), at.packed)
 	}
 	moved, err := plan.apply(ctx, tx, at, b.RepoID)
 	if err != nil {
@@ -199,9 +228,11 @@ func (a *Applier) applyExpungeBegin(ctx context.Context, tx *sql.Tx, at applyCon
 // applyExpungeCommit ends the repository's open expunge ([ExpungeCommit]):
 // the rows of its dropping packs leave code_packs for code_packs_retired,
 // stamped with the record's position and broker instant; its rescue joins
-// code_packs live (kind rescue); the open expunge is cleared, and the request
-// it served with it once [requestServed]; and the commit's instant and what it
-// took out of the repository's packs are recorded.
+// code_packs live (kind rescue), its content dated from the oldest dropping
+// pack it was cut from; the open expunge is cleared, and the request with it
+// once [requestServed] — whichever expunge the commit ends, since the rule
+// reads what each pack holds; and the commit's instant and what it took out of
+// the repository's packs are recorded.
 func (a *Applier) applyExpungeCommit(ctx context.Context, tx *sql.Tx, at applyContext, c ExpungeCommit) (int,
 	error) {
 
@@ -266,14 +297,14 @@ func topOf(chain []LayerRow, ids []string) bool {
 }
 
 // The expunge apply's statements, each registered in plan_test.go: the
-// repository's expunge state and its counters by its key; whether a live pack
-// was added at or before a request, one seek of the packs' added index that
-// stops at its first row.
+// repository's expunge state and its counters by its key; whether a pack of
+// the repository dates its content from before a request, one seek of the
+// packs' content index (replicated 0067) that stops at its first row.
 const (
 	expungeStateSQL = `SELECT drop_epoch, expunge_id, expunge_request, expunge_request_position
 		FROM code_repos WHERE id = ?`
-	requestPendingSQL = `SELECT EXISTS (SELECT 1 FROM code_packs INDEXED BY code_packs_added_idx
-		WHERE repo_id = ? AND added_position <= ? AND state = 'live')`
+	requestPendingSQL = `SELECT EXISTS (SELECT 1 FROM code_packs INDEXED BY code_packs_content_idx
+		WHERE repo_id = ? AND content_position < ?)`
 	requestSQL = `UPDATE code_repos SET expunge_request = ?, expunge_request_position = ?, version = ?
 		WHERE id = ?`
 	beginCountersSQL = `UPDATE code_repos SET live_packs = live_packs - ? + ?,

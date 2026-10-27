@@ -212,6 +212,19 @@ type PackRow struct {
 	Kind  PackKind          `json:"kind"`
 	State PackState         `json:"state"`
 	Added statelog.Position `json:"added"`
+	// Content is the position the pack's CONTENT dates from as a purge
+	// reads it: nothing in it reached the repository, or was last judged by
+	// a purge's scan, before it. A push's pack dates from its own position;
+	// a compaction's outputs, an expunge's that keeps what a ref drop left
+	// within a grace and an expunge's rescue from the oldest pack they
+	// replaced, since moving content judges none of it; and a purge's kept
+	// and dropping packs from its scan ([ExpungeBegin.Seen]), where it
+	// judged them. So a purge request is SERVED once no pack of its
+	// repository dates from before it, and a cycle serving one takes the
+	// live packs that do — whenever their rows were added, which a rewrite
+	// moves past the request without judging anything. A read's answer,
+	// never a record's field: no versionedFields row.
+	Content statelog.Position `json:"content"`
 }
 
 // Ref is the PackRef a cache installs and [CheckBundle] reads.
@@ -653,8 +666,9 @@ type ExpungeCandidate struct {
 	Open string `json:"open,omitempty"`
 	// Request is the purge requested and not yet served — its id — and
 	// Requested the position its record landed at: a cycle serving it
-	// rewrites the live packs added at or before that position. "" and zero
-	// for none.
+	// rewrites the live packs whose content dates from before that position
+	// ([PackRow.Content]), whenever their rows were added. "" and zero for
+	// none.
 	Request   string            `json:"request,omitempty"`
 	Requested statelog.Position `json:"requested,omitzero"`
 	// ExpungedAt is the last commit's broker instant, zero for a repository

@@ -56,8 +56,9 @@ import (
 //
 // A REQUEST then meets one rule: a request already open on the repository is
 // its answer — no record, the open one's id and position. A cycle serving a
-// request rewrites the live packs added at or before it, so the open one
-// covers whatever a second one asked while it waits would.
+// request rewrites the live packs whose content dates from before it
+// ([PackRow.Content]), so the open one covers whatever a second one asked
+// while it waits would.
 //
 // A BEGIN:
 //

@@ -512,12 +512,14 @@ func (c *Committer) refusedCompaction(ctx context.Context, comp Compaction, err 
 const partPack = "pack"
 
 // namedPack is one row of code_packs as it is stored — what a rewrite's
-// decide judges an input by and its apply moves into code_packs_retired whole.
+// decide judges an input by and its apply moves into code_packs_retired whole:
+// content is the position its content dates from as a purge reads it
+// ([PackRow.Content]).
 type namedPack struct {
-	id, part, object, hash, checksum               string
-	kind                                           PackKind
-	state                                          PackState
-	size, indexBytes, reverseBytes, objects, added int64
+	id, part, object, hash, checksum                        string
+	kind                                                    PackKind
+	state                                                   PackState
+	size, indexBytes, reverseBytes, objects, added, content int64
 }
 
 // row is the pack as a snapshot serves it, for the rules a [PackRow] answers.
@@ -565,7 +567,7 @@ func namedPackRows(ctx context.Context, tx *sql.Tx, repoID string, ids []string)
 	for rows.Next() {
 		var p namedPack
 		if err := rows.Scan(&p.id, &p.part, &p.object, &p.hash, &p.size, &p.indexBytes, &p.reverseBytes,
-			&p.checksum, &p.objects, &p.kind, &p.state, &p.added); err != nil {
+			&p.checksum, &p.objects, &p.kind, &p.state, &p.added, &p.content); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -692,7 +694,7 @@ func packsLacking(ctx context.Context, tx *sql.Tx, repoID string, ids []string, 
 // find live, each driven from its list over the table's whole key.
 const (
 	namedPacksSQL = `SELECT p.pack_id, p.part, p.object, p.hash, p.size, p.index_bytes, p.reverse_bytes,
-		p.git_checksum, p.objects, p.kind, p.state, p.added_position
+		p.git_checksum, p.objects, p.kind, p.state, p.added_position, p.content_position
 		FROM json_each(?2) AS j CROSS JOIN code_packs AS p INDEXED BY ` + packsKey + `
 		WHERE p.repo_id = ?1 AND p.pack_id = CAST(j.value AS TEXT)`
 	retiredAddedSQL = `SELECT r.pack_id, r.part, r.added_position
