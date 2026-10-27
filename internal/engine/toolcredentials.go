@@ -717,8 +717,11 @@ func (m *credentialMissing) reason() string {
 			varRefs(m.empty), plural(m.empty, "is set to an empty value", "are set to empty values")))
 	}
 	for _, name := range slices.Sorted(maps.Keys(m.unissued)) {
-		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; it is asked for "+
-			"again at the next attempt", name, m.unissued[name]))
+		// NOT "at the next attempt": the issuer holds a refusal for the
+		// restart schedule's wait, and an attempt inside it is handed the
+		// same answer without a request ([github.Issuer.RetryWait]).
+		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; GitHub is asked "+
+			"for it again on the restart schedule", name, m.unissued[name]))
 	}
 	if remedy := m.optionalRemedy(); remedy != "" {
 		parts = append(parts, remedy)

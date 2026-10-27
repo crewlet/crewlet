@@ -91,7 +91,9 @@ type Engine struct {
 	// memory only. ONE for every reader of a seat's token (its tool
 	// servers, its coding runs, the poll that keeps a long run's token
 	// current and the inbound participant lookup), so an installation
-	// costs one mint an hour however many ask. See githubtoken.go.
+	// costs one mint an hour however many ask, and a refusal one request
+	// per wait of the seats' restart schedule ([Engine.seatRetryDelay],
+	// set in [New]). See githubtoken.go.
 	githubIssuer github.Issuer
 	// tokenWaits is what this node's polls have said of the running jobs
 	// whose seat's app issues no token, so each wait is said once per job
@@ -1387,6 +1389,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// with a changed catalogue is refile this engine's registries; BEFORE
 	// equip, which starts the company's shared servers on it.
 	e.mcp = mcp.NewBridge(nil, e.sharedSupervision())
+	// A MINT GITHUB REFUSED IS HELD on the restart schedule the seats' tool
+	// servers retry that same refusal on, BEFORE anything reads a seat's
+	// token: every reader of one installation (the seat's servers, a launch,
+	// each running box's poll and its nudges, the inbound participant lookup)
+	// meets the held refusal within the wait rather than asking GitHub again
+	// on every read. See [github.Issuer].
+	e.githubIssuer.RetryWait = e.seatRetryDelay
 
 	// THE VIEW OF THE FLEET'S DATA NODES, built before the router that asks
 	// it on every request. Building it lists nothing: it runs

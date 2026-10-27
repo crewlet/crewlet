@@ -64,9 +64,15 @@ import (
 //     is, and released when the reconcile records the installation, which
 //     applies a revision and runs every read again.
 //   - GITHUB REFUSED THE MINT, or could not be reached. That is a failure
-//     with a reason, [credentialMissing.unissued], and it is retried: the
-//     seat's children on the restart schedule, and a running box's token
-//     file on the poll that keeps it ([Engine.refreshRunTokens]).
+//     with a reason, [credentialMissing.unissued], and it is retried on the
+//     restart schedule: the process's issuer holds the refusal for the
+//     schedule's wait ([github.Issuer.RetryWait], [Engine.seatRetryDelay]),
+//     so every reader of one installation meets it within the wait and the
+//     first after it asks GitHub again. The seat's children are passed again
+//     on that schedule, and a running box's token file is written by the
+//     first poll after GitHub issues one ([Engine.refreshRunTokens]); a
+//     refusal that lasts, which a person ends at GitHub, costs one request a
+//     wait, never one per poll, per nudge, per launch and per delivery.
 //   - THE GITHUB INTEGRATION IS NOT ENABLED. Nothing issues anything: the
 //     gesture an operator makes after a leak is switching the block off,
 //     and it has to stop every token the engine hands out, so the variable

@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"slices"
 	"strings"
@@ -122,18 +123,58 @@ var ErrNotInstalled = errors.New("github: this agent's app is not created and in
 // MEMORY ONLY. A token is never logged, never written to the store and never
 // put in an error: see the file comment, and [Issuer.Token].
 //
+// A REFUSAL IS HELD TOO, for [Issuer.RetryWait]: GitHub's answer to one
+// installation and scope is the answer every reader asking within the wait is
+// handed, and the first to ask after it asks GitHub again. Without it, a mint
+// GitHub refuses for as long as a person has not acted (an installation that
+// has not approved a permission the seat asks for, or one that is suspended)
+// was asked again by every reader on every read: each running box's poll and
+// the nudges after a submit, every launch, every inbound delivery. Held, one
+// refusing installation costs GitHub one request per wait however many ask,
+// and a refusal is forgotten the moment a mint succeeds.
+//
 // Safe for concurrent use. Two callers that miss at once may both mint; the
 // later token replaces the earlier in the cache and both are valid until
 // they expire, so the race costs a request rather than a correctness
 // property, and a per-key lock would hold every caller of one installation
 // behind GitHub's slowest answer.
 type Issuer struct {
-	// Now is the clock tokens are judged against. Nil takes the wall clock.
+	// Now is the clock tokens and refusals are judged against. Nil takes the
+	// wall clock.
 	Now func() time.Time
 
-	mu   sync.Mutex
-	held map[issueKey]InstallationToken
+	// RetryWait is how long a refused mint is held after the nth refusal in
+	// a row for one installation and scope, counting from one, before GitHub
+	// is asked again. NIL HOLDS NOTHING, and every read asks GitHub, which
+	// suits only an issuer each refusal reaches once; the engine's is held on
+	// the restart schedule its seats' tool servers are retried on.
+	RetryWait func(n int) time.Duration
+
+	mu      sync.Mutex
+	held    map[issueKey]InstallationToken
+	refused map[issueKey]refusal
 }
+
+// refusal is the last mint GitHub refused for one key, and when to ask again.
+type refusal struct {
+	err error
+	// signer is a digest of the private key the refused mint was signed
+	// with. A refusal answers that key alone: an operator who seals a new
+	// key after a revoked one is asking a different question, which is
+	// asked at once rather than after the wait the old key earned.
+	signer [sha256.Size]byte
+	// n counts the refusals in a row, which doubles the wait.
+	n int
+	// at is when GitHub refused, and retry when it is asked again.
+	at, retry time.Time
+}
+
+// refusalForgotten is how long past its wait a refusal no reader has asked
+// about is kept: an hour, the whole life GitHub issues a token for. A key no
+// reader asks about for that long is retried by nobody, so its count of
+// refusals in a row has nothing left to double, and the cache stays bounded by
+// what readers ask for.
+const refusalForgotten = time.Hour
 
 // issueKey is what one token is valid FOR: the app and installation it was
 // minted against, and the scope it was narrowed to. Two seats can share an
@@ -179,6 +220,11 @@ func Issuable(seat SeatApp) bool {
 // token lives, and a fresh one is the best there is; a caller asking for more
 // than an hour is handed the hour.
 //
+// A REFUSAL HELD FOR THE KEY is returned as it was, without a request, until
+// its wait ends (see the type). A held token good for life is returned before
+// that, so a refused renewal for a reader asking a longer life costs nothing
+// to a reader the held token still serves.
+//
 // The error never carries the token, and never carries GitHub's response
 // body, which on the token endpoint is the token.
 func (i *Issuer) Token(
@@ -188,10 +234,12 @@ func (i *Issuer) Token(
 		return InstallationToken{}, ErrNotInstalled
 	}
 	key := keyOf(seat)
+	signer := sha256.Sum256([]byte(seat.Key))
 	now := i.now()
 
 	i.mu.Lock()
 	held, ok := i.held[key]
+	refused, wasRefused := i.refused[key]
 	// SWEPT HERE, on the path every caller takes, so a cache that only
 	// ever grows by an installation replaced or a scope changed is bounded
 	// by what has been asked for within the hour.
@@ -200,13 +248,22 @@ func (i *Issuer) Token(
 			delete(i.held, k)
 		}
 	}
+	for k, r := range i.refused {
+		if now.Sub(r.retry) > refusalForgotten {
+			delete(i.refused, k)
+		}
+	}
 	i.mu.Unlock()
 	if ok && strings.TrimSpace(held.Token) != "" && held.ExpiresAt.After(now.Add(life)) {
 		return held, nil
 	}
+	if wasRefused && refused.signer == signer && now.Before(refused.retry) {
+		return InstallationToken{}, refused.err
+	}
 
 	minted, err := TokenFor(ctx, opts, seat)
 	if err != nil {
+		i.refuse(ctx, key, signer, now, err)
 		return InstallationToken{}, err
 	}
 	i.mu.Lock()
@@ -214,8 +271,38 @@ func (i *Issuer) Token(
 		i.held = map[issueKey]InstallationToken{}
 	}
 	i.held[key] = *minted
+	delete(i.refused, key)
 	i.mu.Unlock()
 	return *minted, nil
+}
+
+// refuse holds err as GitHub's answer for key, signed by signer, for the wait
+// its place in a run of refusals earns. asked is when the caller began.
+//
+// NOT A CALLER'S OWN END: a mint cut short by the caller's context is no
+// answer from GitHub, and holding it would hand the next reader a failure
+// nobody met. And a refusal another caller recorded while this one's request
+// was in flight is the same run of refusals, not the next in it, so it is left
+// as it is rather than doubling the wait for one answer GitHub gave twice.
+func (i *Issuer) refuse(ctx context.Context, key issueKey, signer [sha256.Size]byte, asked time.Time, err error) {
+	if i.RetryWait == nil || ctx.Err() != nil {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	prev, seen := i.refused[key]
+	if seen && prev.at.After(asked) {
+		return
+	}
+	n := 1
+	if seen && prev.signer == signer {
+		n = prev.n + 1
+	}
+	at := i.now()
+	if i.refused == nil {
+		i.refused = map[issueKey]refusal{}
+	}
+	i.refused[key] = refusal{err: err, signer: signer, n: n, at: at, retry: at.Add(i.RetryWait(n))}
 }
 
 // RenewAt is when a holder of token should ask again: the moment it has only

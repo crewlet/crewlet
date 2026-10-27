@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -26,6 +28,7 @@ import (
 type appGitHub struct {
 	mu     sync.Mutex
 	mints  int
+	asks   int
 	refuse bool
 	url    string
 
@@ -43,6 +46,7 @@ func newAppGitHub(t *testing.T) *appGitHub {
 		}
 		g.mu.Lock()
 		defer g.mu.Unlock()
+		g.asks++
 		if g.refuse {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"message":"This installation has been suspended"}`))
@@ -71,6 +75,13 @@ func (g *appGitHub) minted() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.mints
+}
+
+// requests is every request the token endpoint answered, a refusal included.
+func (g *appGitHub) requests() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.asks
 }
 
 // appCompany is a company on GitHub at server, where `builder` holds an app
@@ -312,6 +323,70 @@ func TestATokenGitHubRefusesIsAFailureWithItsReason(t *testing.T) {
 	}
 	if token.unissued(token.name) == "" {
 		t.Error("the resolution does not report the refusal it met")
+	}
+}
+
+// A REFUSAL IS ASKED OF GITHUB ONCE A WAIT, HOWEVER OFTEN A RUNNING BOX IS
+// POLLED.
+//
+// Every agent turn is an executor run in a box, and both of a node's waiters
+// and every nudge after a submit run the refresh, so a refusal that lasts
+// until a person acts at GitHub asked GitHub again every fifteen seconds per
+// running box, and five times within seven seconds of each submit, for the
+// life of the run. The node's issuer holds GitHub's answer for the wait the
+// seat's tool servers retry that refusal on, and every poll inside it meets
+// the held answer.
+//
+// Mutation: drop the issuer's held-refusal return, or the RetryWait New
+// sets, and every poll asks GitHub.
+func TestARefusedMintIsAskedOfGitHubOnceAWaitByEveryPoll(t *testing.T) {
+	t.Parallel()
+	gh := newAppGitHub(t)
+	gh.refuse = true
+	c := appCompany(t, gh.url, true)
+	e := appEngine(t, c)
+	e.mcpRetryBase = time.Hour
+	e.githubIssuer.RetryWait = e.seatRetryDelay
+	const path = ".config/crewlet/github-token"
+	defaults := []sandbox.SetupStep{{
+		Name: "git-auth", Files: map[string]string{path: "${GITHUB_APP_TOKEN_BUILDER}"},
+	}}
+	for i := range 3 {
+		box := sandbox.NewFakeSandbox("box-" + string(rune('a'+i)))
+		run := sandbox.PendingRun{TurnID: "turn-" + string(rune('a'+i)), LaunchID: "job", AgentHandle: "builder"}
+		for range 5 {
+			e.refreshTokenFiles(t.Context(), defaults, run, box)
+		}
+	}
+	if gh.requests() != 1 {
+		t.Errorf("fifteen polls of three running boxes asked GitHub %d times inside one wait, want once", gh.requests())
+	}
+}
+
+// A NODE HOLDS A REFUSED MINT ON ITS SEATS' RESTART SCHEDULE, from its boot:
+// the issuer New builds is the one every reader of a seat's token shares, and
+// one built without a wait would ask GitHub on every read.
+//
+// Mutation: drop the RetryWait New sets and the node holds nothing.
+func TestANodeHoldsARefusedMintOnItsSeatsRestartSchedule(t *testing.T) {
+	t.Parallel()
+	b := testBootstrap(t)
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
+	const base = time.Minute
+	e, err := New(t.Context(), Options{Bootstrap: &b, mcpRetryBase: base})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	if e.githubIssuer.RetryWait == nil {
+		t.Fatal("the node's issuer holds no refusal, so every read asks GitHub")
+	}
+	for n, want := range map[int]time.Duration{1: base, 3: 4 * base, 30: 20 * base} {
+		got := e.githubIssuer.RetryWait(n)
+		if got < want*4/5 || got > want*6/5 {
+			t.Errorf("refusal %d is held %v, want the restart schedule's %v within a fifth", n, got, want)
+		}
 	}
 }
 
