@@ -128,3 +128,36 @@ func TestAResumedRunsRepeatSpeltAnotherWayIsTheSameWrite(t *testing.T) {
 		}
 	})
 }
+
+// A TOOL THE SURFACE ADDS IS SEEDED BY ITS CANONICAL FORM TOO (#423 review):
+// submit_work is no tool of the registry; the resumed surface adds it. Seeded
+// through the registry's snapshot, a bridged submission spelt "Delivered"
+// fell back to the spelling sent, and the same submission after the resume
+// counted it as a different call. Seeded through the surface, it is one.
+//
+// Mutation: seed through the registry's snapshot and the repeat counts 1.
+func TestASeededSubmissionIsReadByTheSurfacesUniverse(t *testing.T) {
+	t.Parallel()
+	calls := turnctx.NewCallLog()
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{agentRun: &recordingLauncher{}, calls: calls})
+	state := execstate.State{Version: execstate.Version, AgentRun: true, Round: 1}
+	submission := func(outcome string) map[string]any {
+		return map[string]any{"outcome": outcome, "summary": "posted the weekly summary",
+			"evidence": "the post is in the channel"}
+	}
+	surface, _, err := r.ReopenAgentRun(context.Background(), state, []runner.BridgedCall{
+		{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: submission(" Delivered "),
+			Result: "recorded"}, Seq: 1},
+	}, runner.Bridged{})
+	if err != nil {
+		t.Fatalf("ReopenAgentRun: %v", err)
+	}
+	again := surface.ArgsOf(runner.SubmitWorkTool, submission("delivered")).Map()
+	if again["outcome"] != "delivered" {
+		t.Fatalf("the surface reads the submission as %v", again)
+	}
+	if n := calls.Ordinal(runner.SubmitWorkTool, again); n != 0 {
+		t.Errorf("the repeated submission counts %d different calls before it, want 0", n)
+	}
+}

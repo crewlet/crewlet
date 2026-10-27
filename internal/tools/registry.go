@@ -573,10 +573,9 @@ func (r *Registry) Snapshot() Snapshot {
 func (s Snapshot) Lookup(name string) (Entry, bool) { e, ok := s.byName[name]; return e, ok }
 
 // ArgsOf is a call to name's arguments in the canonical form its tool reads
-// ([ArgsOf]): the one rule for a call made now through a surface over this
-// snapshot and for a call a resumed run made before it parked, which seeds
-// the run's call log ([turnctx.CallLog.Seed]). A name the snapshot does not
-// hold keeps them as sent; nothing reads them but the ledger's refusal.
+// ([ArgsOf]): the one rule a surface over this snapshot reads a call by
+// ([Surface.ArgsOf]). A name the snapshot does not hold keeps them as sent;
+// nothing reads them but the ledger's refusal.
 func (s Snapshot) ArgsOf(name string, raw map[string]any) toolargs.Args {
 	e, known := s.Lookup(name)
 	if !known {

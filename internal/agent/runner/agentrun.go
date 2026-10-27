@@ -252,7 +252,6 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	}
 	history := state.Iterations
 	called := bridgedLedger(inAdmissionOrder(bridged))
-	seedCalls(r.cfg.Turn.Context.CallLog(), r.cfg.Registry.Snapshot(), history, called)
 
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), true)
 	var surface *tools.Surface
@@ -276,6 +275,9 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 		return nil, nil, err
 	}
 	surface = built
+	// THE RUN'S CALL LOG STARTS FROM WHAT IT ALREADY CALLED, through the
+	// surface it is served ([seedCalls]).
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, called)
 
 	// THE SKILLS IT LOADED, told to the guard the surface was just armed
 	// with, by the guard's own reading of a call — the one rule for which
@@ -328,6 +330,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
+	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED, through
+	// the surface it resumes on ([seedCalls]); see [Runner.Resume].
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, parkedCalls(state), bridged)
 
 	replaySubmission(ctx, submit, bridged)
 
