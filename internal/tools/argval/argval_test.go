@@ -93,6 +93,9 @@ func TestEachReadIsItsHelpers(t *testing.T) {
 		"a decimal literal":   {json.Number("2.5"), read{0, false}, read{2.5, true}},
 		"a hex literal":       {json.Number("0x10"), read{0, false}, read{0.0, false}},
 		"NaN":                 {math.NaN(), read{0, false}, read{0.0, false}},
+		"a long literal":      {json.Number("0." + strings.Repeat("3", 80)), read{0, false}, read{1.0 / 3, true}},
+		"a long text":         {"0." + strings.Repeat("3", 80), read{0, false}, read{0.0, false}},
+		"a tiny exponent":     {json.Number("1e-500"), read{0, false}, read{0.0, false}},
 	} {
 		check := func(fn string, got any, ok bool, want read) {
 			if ok != want.ok || (want.v != nil && got != want.v) {

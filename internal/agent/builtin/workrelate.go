@@ -54,7 +54,10 @@ func parseSetArg(args map[string]any, name string) (setArg, bool, string) {
 	if !held || raw == nil {
 		return setArg{}, false, ""
 	}
-	object, ok := raw.(map[string]any)
+	// NULL IS ABSENT ([argval.Object]), as the check reads it: `{"set":
+	// null}` is a set this call does not state, never an empty one, which
+	// cleared every relation.
+	object, ok := argval.Object(raw)
 	if !ok {
 		return setArg{}, false, fmt.Sprintf("`%s` takes an object saying which "+
 			"shape you mean: {\"set\": [...]} replaces the whole set, and "+

@@ -167,7 +167,7 @@ func spelt(v any) string {
 	case bool:
 		return strconv.FormatBool(v)
 	case float64:
-		return strconv.FormatFloat(v, 'g', -1, 64)
+		return strconv.FormatFloat(v, 'f', -1, 64)
 	}
 	return ""
 }

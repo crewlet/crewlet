@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -96,15 +95,11 @@ func argStringMap(args map[string]any, key string) map[string]string {
 		if k = strings.TrimSpace(k); k == "" || v == nil {
 			continue
 		}
-		switch typed := v.(type) {
-		case string:
-			out[k] = typed
-		case bool:
-			out[k] = strconv.FormatBool(typed)
-		case float64:
-			out[k] = strconv.FormatFloat(typed, 'f', -1, 64)
-		default:
-			out[k] = fmt.Sprint(v)
+		// BY THE CHECK'S OWN READER ([argval.String]), which renders a
+		// number or a boolean as written and reads nothing from an object
+		// or a list (refused at the surface before the tool runs).
+		if s, ok := argval.String(v); ok {
+			out[k] = s
 		}
 	}
 	if len(out) == 0 {

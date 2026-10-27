@@ -402,6 +402,35 @@ func TestASetIsNeverReadAsNoList(t *testing.T) {
 	}
 }
 
+// A NULL SET IS ABSENT (#423 review): the check at the surface reads null as
+// absent, and the tool read `{"set": null}` as the empty set, clearing every
+// relation. Now null is absent to both ([argval.Object]): a set that states
+// nothing is refused as asking for nothing, with nothing written.
+//
+// Mutation: read the object with a bare .(map[string]any) and both edges are
+// cleared.
+func TestANullSetIsAbsent(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	detail := trk.tasks["ENG-1"]
+	detail.Task.Relations = []worklet.Relation{
+		{Kind: worklet.RelationWaitingOn, Other: "id-2"},
+		{Kind: worklet.RelationWaitingOn, Other: "id-3"},
+	}
+	trk.tasks["ENG-1"] = detail
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Dependencies: trk.depends})
+	for _, set := range []map[string]any{{"set": nil}, {"add": nil, "remove": nil}} {
+		got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+			"item": "ENG-1", "waiting_on": set})
+		if !got.Failed || !strings.Contains(got.Output, "adds and removes nothing") {
+			t.Errorf("%v answered %q, want it refused as asking for nothing", set, got.Output)
+		}
+	}
+	if len(trk.depended) != 0 {
+		t.Errorf("a null set wrote %+v", trk.depended)
+	}
+}
+
 // `include` IS READ AS EVERY LIST OF STRINGS IS: "body" is the list of one
 // part, so the description comes back, where read as no list it returned no
 // part at all and answered as though nothing had been asked; a value that is

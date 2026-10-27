@@ -16,6 +16,7 @@ package argval
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
 	"regexp"
@@ -34,9 +35,12 @@ func String(v any) (string, bool) {
 	case nil:
 		return "", true
 	case float64:
-		return fmt.Sprintf("%g", v), true
+		// THE DIGITS, never an exponent: 1000000 is "1000000", where `%g`
+		// wrote "1e+06", which no grammar a string argument feeds reads as
+		// the number the model wrote.
+		return strconv.FormatFloat(v, 'f', -1, 64), true
 	case json.Number:
-		// THE LITERAL, not `%g` of it: this is the spelling the model
+		// THE LITERAL, not a rendering of it: this is the spelling the model
 		// sent, and it is exact where the float rendering is not.
 		return v.String(), true
 	case bool:
@@ -166,25 +170,40 @@ func wholeText(s string) (int, bool) {
 // would also admit and no model means (hex, underscores, "Inf", "NaN").
 var decimalText = regexp.MustCompile(`^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?([0-9]+))?$`)
 
-// maxDecimalText and maxDecimalExponent bound the exact read of a decimal
-// text: long enough for any int64 or float64 spelled out in full, and small
-// enough that a text like "1e999999999" cannot make the read build an
-// enormous number.
+// maxDecimalText and maxDecimalExponent bound the reads of a decimal text.
+//
+//   - THE EXPONENT, for every read: no finite float64 and no int is spelt
+//     with an exponent past 400 in either direction, and "1e-500" is a
+//     number no reader here can hold.
+//   - THE LENGTH, for the exact read ([Whole], through math/big) and for a
+//     number written as a STRING: 64 characters spell any int64 or float64
+//     in full, and the bound keeps a text like "1e999999999" from making the
+//     exact read build an enormous number. A decoded JSON literal
+//     (json.Number) where a number belongs has no length bound: it is read
+//     as the float64 nearest it, by a parse whose cost is linear in its
+//     length, as the decoder itself would have read it.
 const (
 	maxDecimalText     = 64
 	maxDecimalExponent = 400
 )
 
-// decimal is the exact value of a decimal text, or none.
-func decimal(text string) (*big.Rat, bool) {
-	if len(text) > maxDecimalText {
-		return nil, false
-	}
+// decimalSpelt reports a text is a number in decimal notation within the
+// exponent bound.
+func decimalSpelt(text string) bool {
 	m := decimalText.FindStringSubmatch(text)
 	if m == nil {
-		return nil, false
+		return false
 	}
-	if exp, err := strconv.Atoi(m[1]); m[1] != "" && (err != nil || exp > maxDecimalExponent) {
+	if m[1] == "" {
+		return true
+	}
+	exp, err := strconv.Atoi(m[1])
+	return err == nil && exp <= maxDecimalExponent
+}
+
+// decimal is the exact value of a decimal text, or none.
+func decimal(text string) (*big.Rat, bool) {
+	if len(text) > maxDecimalText || !decimalSpelt(text) {
 		return nil, false
 	}
 	return new(big.Rat).SetString(text)
@@ -205,9 +224,9 @@ func inIntRange(v float64) bool {
 func Number(v any) (float64, bool) {
 	switch v := v.(type) {
 	case json.Number:
-		return numberText(v.String())
+		return numberText(v.String(), false)
 	case string:
-		return numberText(v)
+		return numberText(v, true)
 	case float64:
 		return finite(v)
 	case int:
@@ -219,13 +238,21 @@ func Number(v any) (float64, bool) {
 }
 
 // numberText is the float64 nearest the number a decimal text spells, or
-// none for a text that spells no finite number.
-func numberText(s string) (float64, bool) {
-	r, ok := decimal(strings.TrimSpace(s))
-	if !ok {
+// none for a text that spells no finite number. bounded holds the text to
+// [maxDecimalText], which a number written as a string is and a decoded JSON
+// literal is not.
+func numberText(s string, bounded bool) (float64, bool) {
+	text := strings.TrimSpace(s)
+	if (bounded && len(text) > maxDecimalText) || !decimalSpelt(text) {
 		return 0, false
 	}
-	f, _ := r.Float64()
+	// [strconv.ParseFloat] rounds to the nearest float64, as math/big
+	// would, and refuses an overflow (ErrRange) rather than answering an
+	// infinity as a size.
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, false
+	}
 	return finite(f)
 }
 
@@ -248,6 +275,26 @@ func Finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 func List(v any) ([]any, bool) {
 	list, ok := v.([]any)
 	return list, ok
+}
+
+// Object is a value as an object argument reads it: a JSON object, each
+// member that is null left out. NULL IS ABSENT, as the check at the surface
+// reads it and as every other reader here reads it, so `{"set": null}` asks
+// for nothing rather than for an empty set. ok is false for anything else,
+// null included, which the read takes as absent.
+func Object(v any) (map[string]any, bool) {
+	object, ok := v.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	for _, member := range object {
+		if member == nil {
+			out := maps.Clone(object)
+			maps.DeleteFunc(out, func(_ string, m any) bool { return m == nil })
+			return out, true
+		}
+	}
+	return object, true
 }
 
 // Bool is a value as a boolean argument reads it: true or false and nothing
