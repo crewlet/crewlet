@@ -413,22 +413,44 @@ const (
 
 // sizeUnder sums the sizes of the regular files and symbolic links at and
 // under root that rule counts, each as itself — a link is never followed, so
-// a link out of the cache never counts what it points at. A missing root is
-// zero; an entry that cannot be read is handed to skipped and left out. An
-// ended ctx stops the walk and is its error.
-func sizeUnder(ctx context.Context, root string, rule nameRule, skipped func(path string, err error)) (int64, error) {
+// a link out of the cache never counts what it points at. An entry that is
+// there but cannot be read is handed to skipped and left out; an ended ctx
+// stops the walk and is its error. listing is nil but in a test
+// (knobs.measuring): it is told each directory as the walk is about to list
+// it, root first.
+//
+// AN ENTRY THAT IS GONE IS NOTHING TO COUNT, WHEREVER THE WALK MEETS ITS
+// ABSENCE — the root; a directory a listing named, gone when the walk opens
+// it; a file gone when the walk reads its size — and none is handed to
+// skipped. The cache's own directories are written while they are measured:
+// the janitor walks scratch/ while the host moves advertisement views and
+// ended pushes' scratches out of it whole, and a push's receive-pack removes
+// its object quarantine there, so the walk finds gone, at any depth, what a
+// listing named a moment before. What the directory holds is then what the
+// walk counted, and nothing is wrong. Handed to skipped, the absence would be
+// logged as a file that could not be measured, with a disk fault's remedy,
+// at random on any node that pushes — burying the line that means one. Every
+// other error leaves bytes on the disk the walk did not count, and goes to
+// skipped. The boot's walks lose nothing by the rule: nothing of this process
+// writes the directory then, and an entry something else removed holds no
+// bytes either.
+func sizeUnder(ctx context.Context, root string, rule nameRule, skipped func(path string, err error),
+	listing func(dir string)) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if cerr := ctx.Err(); cerr != nil {
 			return cerr
 		}
 		if err != nil {
-			if path != root || !errors.Is(err, fs.ErrNotExist) {
+			if !errors.Is(err, fs.ErrNotExist) {
 				skipped(path, err)
 			}
 			return nil
 		}
 		if d.IsDir() {
+			if listing != nil {
+				listing(path)
+			}
 			return nil
 		}
 		info, err := d.Info()

@@ -151,8 +151,10 @@ func (c *Cache) emptyTrash(ctx context.Context) {
 
 // measureScratch sets what scratch/ holds — a push's scratch repository, an
 // advertisement view — from the disk, the only thing that knows: what a
-// receive-pack writes there is the client's to decide. An entry that cannot
-// be read is logged and left out; an ended ctx keeps the last measure.
+// receive-pack writes there is the client's to decide. An entry there that
+// cannot be read is logged and left out, while one the host removes from
+// under the walk is nothing to count and nothing to log (sizeUnder); an
+// ended ctx keeps the last measure.
 //
 // Only a file whose ONLY NAME is in scratch/ counts. A file there with a
 // second name is one of the cache's own — a view's packed-refs linked from
@@ -163,9 +165,13 @@ func (c *Cache) emptyTrash(ctx context.Context) {
 // cold sync later. The other name is never in trash/: the pass empties trash/
 // before it measures.
 func (c *Cache) measureScratch(ctx context.Context) {
+	var listing func(dir string)
+	if c.knobs != nil {
+		listing = c.knobs.measuring
+	}
 	n, err := sizeUnder(ctx, filepath.Join(c.dir, scratchDir), soleNames, func(path string, err error) {
 		c.log.Warn("code_cache_scratch_unmeasured", "path", path, "error", err)
-	})
+	}, listing)
 	if err == nil {
 		c.scratchBytes.Store(n)
 	}

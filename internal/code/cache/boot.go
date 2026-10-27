@@ -79,7 +79,7 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 	// walk adds what an entry Open moves aside holds: all of it goes back
 	// to the volume once the janitor has removed it.
 	walk := func(name string) error {
-		n, werr := sizeUnder(ctx, filepath.Join(repos, name), allNames, skipped)
+		n, werr := sizeUnder(ctx, filepath.Join(repos, name), allNames, skipped, nil)
 		held += n
 		return werr
 	}
@@ -157,7 +157,7 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 	// does: a file there with a second one is an incarnation's, counted by
 	// its state above, or one in trash/, counted by the walk of trash/.
 	for name, rule := range map[string]nameRule{trashDir: allNames, scratchDir: soleNames, tmpDir: allNames} {
-		n, werr := sizeUnder(ctx, filepath.Join(root, name), rule, skipped)
+		n, werr := sizeUnder(ctx, filepath.Join(root, name), rule, skipped, nil)
 		if werr != nil {
 			return nil, 0, werr
 		}
@@ -177,7 +177,7 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 func measureIncarnation(ctx context.Context, dir string, skipped func(string, error)) (int64, error) {
 	var total int64
 	for _, root := range derivedRoots(DerivedFiles()) {
-		n, err := sizeUnder(ctx, filepath.Join(dir, root), allNames, skipped)
+		n, err := sizeUnder(ctx, filepath.Join(dir, root), allNames, skipped, nil)
 		if err != nil {
 			return 0, err
 		}

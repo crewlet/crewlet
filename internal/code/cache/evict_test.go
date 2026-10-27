@@ -372,3 +372,62 @@ func TestAFileScratchSharesWithTheCacheIsCountedOnce(t *testing.T) {
 		t.Errorf("the total moved from %d to %d with links to the incarnation's own files in scratch/", before, got)
 	}
 }
+
+// AN ENTRY REMOVED WHILE THE JANITOR MEASURES SCRATCH/ IS NOTHING TO COUNT,
+// AND NO FAILURE, wherever the walk meets its absence: the host moves an
+// advertisement view into trash/ the moment its advertisement is written, and
+// a push's receive-pack removes its object quarantine as it ends, while the
+// janitor's walk may have listed either and not yet opened it. scratch/ then
+// holds exactly what the walk counts, so nothing is logged —
+// code_cache_scratch_unmeasured tells an operator the cache counts less than
+// the disk holds, which is untrue of an entry that is gone, and on a node that
+// pushes all day it would come at random and bury the line that is true. A
+// directory still there that the walk cannot read does hold bytes it did not
+// count, and is logged: here one replaced by a file under the walk, the one
+// such failure a case can make whoever runs it.
+func TestAnEntryRemovedUnderTheScratchMeasureIsNothingToCount(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	view := w.path("scratch", "adv-1.git")
+	quarantine := w.path("scratch", "push.git", "objects", "tmp_objdir-incoming-q1w2e3")
+	unreadable := w.path("scratch", "odd.git", "objects")
+	c := w.open(t, func(o *cache.Options) {
+		cache.BeforeMeasuring(o, func(dir string) {
+			var err error
+			switch dir {
+			case view:
+				// scratch/'s listing named it; the host's Remove moves it
+				// whole, as the walk is about to list it.
+				err = os.Rename(view, w.path("trash", "adv-1.git"))
+			case quarantine:
+				// Two levels inside a scratch the walk has entered.
+				err = os.RemoveAll(quarantine)
+			case unreadable:
+				if err = os.Remove(unreadable); err == nil {
+					err = os.WriteFile(unreadable, []byte(strings.Repeat("o", 512)), 0o600)
+				}
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		})
+	})
+	cache.JanitorPass(c)
+	before := cache.Total(c)
+	write(t, filepath.Join(view, "HEAD"), "ref: refs/heads/main\n")
+	write(t, filepath.Join(view, "objects", "info", "alternates"), "/cache/repos/1.1.git/objects\n")
+	write(t, w.path("scratch", "push.git", "objects", "pack", "pack-1.pack"), strings.Repeat("p", 4096))
+	write(t, filepath.Join(quarantine, "pack", "tmp_pack_1"), strings.Repeat("q", 1024))
+	if err := os.MkdirAll(unreadable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cache.JanitorPass(c)
+	if got := cache.Total(c) - before; got != 4096 {
+		t.Errorf("the total grew by %d, want 4096: the push's one pack is all scratch/ still holds", got)
+	}
+	lines := w.logs.lines(t, "code_cache_scratch_unmeasured")
+	if len(lines) != 1 || lines[0]["path"] != unreadable {
+		t.Errorf("code_cache_scratch_unmeasured was logged %d times (%v), want once, for %s alone",
+			len(lines), lines, unreadable)
+	}
+}

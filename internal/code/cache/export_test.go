@@ -82,6 +82,16 @@ func BeforeRemoving(o *Options, f func(path string)) {
 	o.knobs.removing = f
 }
 
+// BeforeMeasuring makes the janitor's measure of scratch/ call f as it is
+// about to list each directory there: scratch/ itself, then each directory a
+// listing under it named.
+func BeforeMeasuring(o *Options, f func(dir string)) {
+	if o.knobs == nil {
+		o.knobs = &knobs{}
+	}
+	o.knobs.measuring = f
+}
+
 // TicksFrom makes the janitor take its ticks from ticks, in place of a
 // ticker of EvictInterval: a tick is delivered by a send, and a channel
 // nothing sends on is a janitor that never ticks.
