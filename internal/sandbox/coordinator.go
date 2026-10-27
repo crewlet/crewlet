@@ -560,6 +560,27 @@ type CoordinatorOptions struct {
 	// finds it.
 	Nudge func(ctx context.Context, n Nudge)
 
+	// Refresh is handed the box a job CONTINUES IN — the turn's kept box,
+	// reattached rather than provisioned ([PriorBox.ContinuesIn]) — after
+	// the row names it and before the job starts, to bring up to date what
+	// the box holds that expires ([RefreshFunc]): the hook the waiters run
+	// on every poll of a running box, and the same one.
+	//
+	// AT THE START AS WELL AS ON THE POLL, because a kept box runs no setup
+	// ([Coordinator.acquire]): its files are what the last poll of the job
+	// before wrote, and no poll reaches a box while it is paused — a job
+	// parked on a person's question for half an hour, or collected for its
+	// reviewer. A token written there can have expired by the time the next
+	// job starts, and a job carried on after an answer acts on it at once
+	// (the answer is often "go ahead and push"), seconds before the first
+	// poll of the new job could rewrite it. A fresh box needs none of it:
+	// its setup has just written every file from the launch's own values.
+	//
+	// It decides nothing about the launch: a refresh that fails is the
+	// implementation's to log, the job starts with what the box holds, and
+	// the poll tries again. Nil refreshes nothing.
+	Refresh RefreshFunc
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -625,7 +646,9 @@ type Coordinator struct {
 	node  string
 	boxes BoxReader
 	nudge func(ctx context.Context, n Nudge)
-	now   func() time.Time
+	// refresh is [CoordinatorOptions.Refresh].
+	refresh RefreshFunc
+	now     func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -766,6 +789,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		node:         opts.Node,
 		boxes:        opts.Boxes,
 		nudge:        opts.Nudge,
+		refresh:      opts.Refresh,
 		now:          opts.Now,
 		runs:         map[string]seatRuns{},
 		moves:        map[string]uint64{},

@@ -2034,6 +2034,12 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		Node:  e.id,
 		Boxes: e.boxReader(),
 		Nudge: e.nudgeRun,
+		// A job continued in its turn's kept box starts on a current GitHub
+		// App token file: the hook both waiters run on every poll, run
+		// once more before the job, since no poll reached the box while it
+		// was paused and no setup rewrites it — see
+		// [sandbox.CoordinatorOptions.Refresh] and githubtoken.go.
+		Refresh: e.refreshRunTokens,
 	})
 	if err != nil {
 		return nil, err

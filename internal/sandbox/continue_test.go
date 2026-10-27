@@ -147,3 +147,93 @@ func TestAnAnsweredQuestionIsRedacted(t *testing.T) {
 		t.Fatalf("a credential reached the carried-on run: %+v", asked)
 	}
 }
+
+// A JOB CONTINUED IN ITS KEPT BOX STARTS ON FILES BROUGHT UP TO DATE. A kept
+// box runs no setup, and no poll reached it while it was paused, so a
+// credential file in it holds what the last poll of the asking job wrote —
+// expired, after a long enough wait for the answer. The job carried on acts on
+// the answer at once ("push it"), so the launch hands the box to the refresh
+// hook the waiters poll with, live again and named by the row, BEFORE the job
+// starts. A fresh box is not handed over: its setup has just written every
+// file from the launch's own values.
+//
+// Mutation: drop the launch's call to the refresh, or move it after the job's
+// start, and this goes red.
+func TestAJobContinuedInItsKeptBoxStartsOnRefreshedFiles(t *testing.T) {
+	t.Parallel()
+	type handed struct {
+		turn, launch, box, named string
+		paused                   bool
+		startedBefore            int
+	}
+	launcherFor := func(rig *coordRig, got *[]handed) *Coordinator {
+		c, err := NewCoordinator(CoordinatorOptions{
+			Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+			Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease),
+			Refresh: func(_ context.Context, m *Manager, run PendingRun, box Sandbox) {
+				if m != rig.manager {
+					t.Error("the refresh was handed a manager other than the launch's")
+				}
+				*got = append(*got, handed{
+					turn: run.TurnID, launch: run.LaunchID, box: box.ID(), named: run.SandboxID,
+					paused:        rig.provider.Box(box.ID()).Paused(),
+					startedBefore: len(rig.runner.Started()),
+				})
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewCoordinator: %v", err)
+		}
+		t.Cleanup(c.Stop)
+		return c
+	}
+
+	t.Run("kept", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		var got []handed
+		launcher := launcherFor(rig, &got)
+		var relaunched LaunchResult
+		run := askAndAnswer(t, rig, false, func(ctx context.Context, _ PendingRun, asked *AskedRun) {
+			res, err := launcher.Launch(ctx, rig.manager, continuing(asked))
+			if err != nil {
+				t.Errorf("relaunch: %v", err)
+			}
+			relaunched = res
+		})
+		if !relaunched.Reused || relaunched.SandboxID != run.SandboxID {
+			t.Fatalf("relaunch = %+v, want it continued in the asking run's box %q", relaunched, run.SandboxID)
+		}
+		job := rig.get("t1").LaunchID
+		want := handed{turn: "t1", launch: job, box: run.SandboxID, named: run.SandboxID, startedBefore: 0}
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("the refresh was handed %+v, want once %+v: the kept box, live, named by the "+
+				"continuing job's row, before that job started", got, want)
+		}
+		if started := rig.runner.Started(); len(started) != 1 {
+			t.Fatalf("%d jobs started, want the continuing one", len(started))
+		}
+	})
+
+	t.Run("fresh", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		var got []handed
+		launcher := launcherFor(rig, &got)
+		var relaunched LaunchResult
+		run := askAndAnswer(t, rig, true, func(ctx context.Context, _ PendingRun, asked *AskedRun) {
+			res, err := launcher.Launch(ctx, rig.manager, continuing(asked))
+			if err != nil {
+				t.Errorf("relaunch: %v", err)
+			}
+			relaunched = res
+		})
+		if relaunched.Reused || relaunched.SandboxID == run.SandboxID {
+			t.Fatalf("relaunch = %+v, want a fresh box", relaunched)
+		}
+		if len(got) != 0 {
+			t.Fatalf("a fresh box, whose setup has just written its files, was handed to the "+
+				"refresh: %+v", got)
+		}
+	})
+}

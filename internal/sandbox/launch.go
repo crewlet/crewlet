@@ -432,6 +432,16 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if prior := opened.Prior; prior.SandboxID != "" && !c.hostsPrior(m, prior) {
 		c.tellHost(ctx, PendingRun{TurnID: req.Turn.TurnID, LaunchID: opened.LaunchID})
 	}
+	// A KEPT BOX'S EXPIRING FILES, brought up to date before the job that
+	// continues in it starts: it ran no setup, so they hold what the last
+	// poll of the job before wrote, which a pause may have outlived — see
+	// [CoordinatorOptions.Refresh]. Handed the row as this launch opened
+	// it, which already names this box, its cell, its CLI and its host: a
+	// kept box is the previous job's, continued only where all four match
+	// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]).
+	if reused && c.refresh != nil {
+		c.refresh(ctx, m, opened, box)
+	}
 
 	// THE ASKING JOB'S SESSION, CONTINUED, only where this job runs in the
 	// box that session lives in; anywhere else the job starts fresh, told

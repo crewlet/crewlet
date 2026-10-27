@@ -1,19 +1,23 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -423,6 +427,126 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 			t.Errorf("the %s waiter's refresh left the token file holding %q", drives, held)
 		}
 	}
+}
+
+// A JOB CARRIED ON IN ITS KEPT BOX STARTS ON A CURRENT TOKEN FILE.
+//
+// A box is paused while its job waits on a person's answer, for up to half an
+// hour, and no poll reaches a paused box: its token file holds what the last
+// poll wrote, which can expire meanwhile. The job carried on in it runs no
+// setup, and acts on the answer at once — "push it" — while the helper reads
+// the file ahead of $GITHUB_TOKEN. So the engine's coordinator hands the kept
+// box to the same refresh the waiters poll with, before the job starts.
+//
+// Through the engine's own coordinator ([Engine.sandboxRuntimeOn]), so a
+// runtime built without the refresh goes red here.
+func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
+	t.Parallel()
+	gh := newAppGitHub(t)
+	c := appCompany(t, gh.url, true)
+	e := appEngine(t, c)
+	e.backends = &Backends{Queue: memory.New()}
+	e.answers = testAnswers()
+	const path = ".config/crewlet/github-token"
+	provider := sandbox.NewFakeProvider()
+	runner := &startReader{FakeRunner: sandbox.NewFakeRunner("claude-code"), path: path}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+		DefaultPlacement: sandbox.Direct,
+		Runners:          map[string]sandbox.Runner{"claude-code": runner},
+		DefaultSetup: []sandbox.SetupStep{{
+			Name: "git-auth", Files: map[string]string{path: "${GITHUB_APP_TOKEN_BUILDER}"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
+	rt, err := e.sandboxRuntimeOn(pending, manager)
+	if err != nil {
+		t.Fatalf("sandboxRuntimeOn: %v", err)
+	}
+	t.Cleanup(rt.coordinator.Stop)
+
+	// THE ASKING JOB, parked on its question in its box, whose token file
+	// holds what the last poll wrote before the pause, since expired; its
+	// turn has taken the answer and is carrying the run on.
+	ctx := t.Context()
+	created, err := provider.Create(ctx, sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	box := provider.Box(created.ID())
+	box.Put(path, "ghs_expired")
+	cell := string(sandbox.Direct)
+	opened, err := pending.BeginLaunch(ctx, sandbox.PendingRun{
+		TurnID: "turn-1", AgentHandle: "builder", Role: "Builder",
+		Placement: cell, CodingAgent: "claude-code", LaunchNode: e.id,
+	}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := pending.AttachSandbox(ctx, "turn-1", sandbox.BoxRef{
+		SandboxID: box.ID(), CommandID: "cmd-0", Placement: cell, Node: e.id,
+		CodingAgent: "claude-code", SessionID: "sess-ask",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	if ok, err := pending.MarkSuspended(ctx, "turn-1", sandbox.Suspension{
+		State: json.RawMessage(`{"version":4,"iteration":1}`), Iteration: 1,
+	}); err != nil || !ok {
+		t.Fatalf("MarkSuspended = %v, %v", ok, err)
+	}
+	if _, ok, err := pending.ClaimForResume(ctx, "turn-1",
+		sandbox.CompletionTail(opened.LaunchID), sandbox.Fence{}); err != nil || !ok {
+		t.Fatalf("ClaimForResume = %v, %v", ok, err)
+	}
+	if err := box.Pause(ctx); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+
+	res, err := rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
+		Turn:     sandbox.TurnRef{TurnID: "turn-1", AgentHandle: "builder", Role: "Builder"},
+		Brief:    "the round's brief, with the question and the answer",
+		Spec:     sandbox.Spec{Placement: sandbox.Direct, CodingAgent: "claude-code"},
+		Continue: &sandbox.Continuation{SessionID: "sess-ask", Brief: "the answer: push it"},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if !res.Reused || res.SandboxID != box.ID() {
+		t.Fatalf("launch = %+v, want the job carried on in the kept box %q", res, box.ID())
+	}
+	read := runner.reads()
+	if len(read) != 1 || !strings.HasPrefix(read[0], "ghs_test_") {
+		t.Fatalf("the carried-on job started with its token file holding %q, want the issued "+
+			"token: its first push would be refused", read)
+	}
+}
+
+// startReader is a coding CLI's runner that reads a box's token file at the
+// moment its job starts, which is what the job's first git call would read.
+type startReader struct {
+	*sandbox.FakeRunner
+	path string
+
+	mu   sync.Mutex
+	read []string
+}
+
+func (r *startReader) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest) (sandbox.RunHandle, error) {
+	held, _ := box.ReadFile(ctx, r.path)
+	r.mu.Lock()
+	r.read = append(r.read, string(held))
+	r.mu.Unlock()
+	return r.FakeRunner.Start(ctx, box, req)
+}
+
+// reads is the token file as each job's start found it, in order.
+func (r *startReader) reads() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.read)
 }
 
 // A RUN LAUNCHED WITHOUT ITS TOKEN IS HANDED THE FILE ONCE THE APP ISSUES ONE,

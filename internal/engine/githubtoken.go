@@ -209,7 +209,8 @@ func githubIssued(c *Company, handle string) string {
 func issuedAtUse(kind integration.Kind) bool { return kind == integration.KindGitHub }
 
 // refreshRunTokens keeps a running box's GitHub App token file current: the
-// completion poll's [sandbox.RefreshFunc].
+// completion poll's [sandbox.RefreshFunc], and the launch's for a job that
+// continues in its turn's kept box.
 //
 // # A run outlives the token it was launched with
 //
@@ -228,6 +229,14 @@ func issuedAtUse(kind integration.Kind) bool { return kind == integration.KindGi
 // ([Engine.sandboxWaiterOptions]): a `direct` or `container` box is polled by
 // its launching node's own waiter and by no other, and an `e2b` box by the
 // fleet's, on the node holding its duty (ADR-0059).
+//
+// AND BEFORE A JOB STARTS IN A KEPT BOX, on the node launching it
+// ([sandbox.CoordinatorOptions.Refresh]). A box is paused while its turn's
+// reviewer reads the job's work, or while the job waits on a person's answer,
+// for up to [sandbox.DefaultPauseTTL], and no poll reaches a paused box; the
+// job that continues in it runs no setup, so its file holds what the last poll
+// wrote, which can have expired. A job carried on after an answer acts on it
+// at once, before its own first poll could write the file again.
 //
 // ASKED OF THE BOX, NOT REMEMBERED. The file is read back and rewritten only
 // where it differs, so the fleet's duty can move between nodes, and the

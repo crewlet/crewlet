@@ -438,7 +438,7 @@ A coding agent's box needs environment wiring beyond the CLI itself: git auth, r
 - `optional_keys` — keys of the step's `env`, and paths of its `files`, whose value may resolve to nothing: such a variable is left out of the run and such a file is not written, where any other reference that resolves to nothing refuses the run (see [Credentials and the run environment](#credentials-and-the-run-environment));
 - `brief` — a paragraph folded into the coding agent's "## Your environment" block, one of its [standing instructions](#what-a-coding-agent-is-told), *telling* it what the step made true (an agent that wastes rounds rediscovering how to authenticate is slower than one that knows).
 
-Steps come **entirely from company config** — the engine ships none of its own, git auth included — applied in order: `providers.sandbox.setup` (engine-wide, every sandbox role) then `role.sandbox.setup` (per-role extras). Setup commands execute **with the run env**, so a recipe can read the engine's per-launch identity facts (`$CREWLET_AGENT_HANDLE`, `$CREWLET_AGENT_EMAIL`) and its own configured tokens at provisioning time. A reused box skips re-apply — its provisioning survives with its disk state.
+Steps come **entirely from company config** — the engine ships none of its own, git auth included — applied in order: `providers.sandbox.setup` (engine-wide, every sandbox role) then `role.sandbox.setup` (per-role extras). Setup commands execute **with the run env**, so a recipe can read the engine's per-launch identity facts (`$CREWLET_AGENT_HANDLE`, `$CREWLET_AGENT_EMAIL`) and its own configured tokens at provisioning time. A reused box skips re-apply — its provisioning survives with its disk state — except for a file holding the seat's GitHub App token, which its launch brings up to date before the job starts ([below](#the-git-auth-recipe)).
 
 Every step has a `name`, unique within its list: it is what a setup failure points at, and because a step's `env` and `files` are credentials, it is also what a config read masks them under and what [sending the read back restores them by](configuration.md#reads-and-export). A document with two steps of one name in the same list is refused on every write; the same name in `providers.sandbox.setup` and in a seat's own `sandbox.setup` is fine. A config read shows a step's `env` and `files` values only when each is exactly one `${VAR}` reference.
 
@@ -514,8 +514,10 @@ process's environment cannot change under it. What can is a file: a setup file
 whose whole body is the seat's `${GITHUB_APP_TOKEN_<HANDLE>}` is rewritten by the
 completion poll every time the token behind it is renewed — the launching
 node's own poll for a `direct` or `container` box, the fleet's for an `e2b`
-one — so the helper above, which reads the file at every git call, always
-offers a token GitHub accepts. A run launched before the seat's app was
+one — and by the launch of a job that continues in its turn's kept box, before
+that job starts: no poll reaches a box while it is paused for the reviewer or
+for a person's answer, and a kept box runs no setup. So the helper above, which
+reads the file at every git call, always offers a token GitHub accepts. A run launched before the seat's app was
 installed starts without the token (said as `sandbox_env_unresolved`) and
 without the file, and the first poll after the app can issue one writes it.
 The file falls back to `$GITHUB_TOKEN` where a seat writes none, which is the

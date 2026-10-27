@@ -204,9 +204,10 @@ type WaiterOptions struct {
 	Refresh RefreshFunc
 }
 
-// RefreshFunc brings one running box's expiring credentials up to date: the
-// files a run was provisioned with that carry a credential issued for a
-// limited time, rewritten when the credential behind them is renewed.
+// RefreshFunc brings one box's expiring credentials up to date for the job
+// running in it, or about to start there: the files a run was provisioned
+// with that carry a credential issued for a limited time, rewritten when the
+// credential behind them is renewed.
 //
 // ON THE POLL, because nothing else reaches a running box and the poll
 // already does, every interval, for as long as the job runs: a coding job is
@@ -216,9 +217,15 @@ type WaiterOptions struct {
 // so what is kept current is a FILE, which a credential helper reads at the
 // moment of use.
 //
+// AND AT THE START OF A JOB IN A KEPT BOX, which no poll reached while it was
+// paused and no setup rewrites: the launch hands it over before the job
+// starts ([CoordinatorOptions.Refresh]). A fresh box needs no refresh; its
+// setup has just written every file.
+//
 // It decides nothing about the run and reports nothing to it: a refresh that
 // fails is the implementation's to log, and the job carries on with what it
-// holds. manager is the manager this poll reached the box through.
+// holds. manager is the manager the poll, or the launch, reached the box
+// through.
 type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box Sandbox)
 
 // Waiter is the completion poll and pause reaper for detached sandbox jobs.
