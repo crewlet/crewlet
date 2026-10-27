@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -43,7 +44,9 @@ import (
 //   - every registered statement is spelled in the source, and every shape
 //     names a builder the walk found — and objstore's, over the
 //     declarations [referenceTables] lists, are each registered for every
-//     declaration the builder admits (holdReferences).
+//     declaration the builder admits, at every width its callers build it
+//     at ([referenceWidths]), as exactly the text it spells there
+//     (holdReferences).
 //
 // # What a plan must do
 //
@@ -68,8 +71,9 @@ import (
 // which no index leads with) — in the judgement's own control, or in a
 // registered constant — and the gate reports the scan; spell a statement over
 // a code table nobody registers, issue one assembled at run time, register a
-// statement the source no longer spells, drop a shape objstore builds, or give
-// scanOK a table nothing scans, and it fails.
+// statement the source no longer spells, drop a shape objstore builds or plan
+// it at a width no caller builds it at, or give scanOK a table nothing scans,
+// and it fails.
 func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
@@ -185,6 +189,43 @@ func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 		}
 		if len(got) != 7 {
 			t.Errorf("the match reported %d findings, want the seven known ones: %q", len(got), got)
+		}
+	}
+
+	// THE REFERENCES' MATCH, ON SHAPES WHOSE VERDICT IS KNOWN: the collector's
+	// question planned at three keys under the name of the five hundred it
+	// asks and a walk's page planned by nothing — each a statement that runs
+	// and that no plan answers for — and a shape at a width no caller builds,
+	// a plan of a statement that never runs.
+	{
+		shapes := planShapes()
+		full := referenceShape("ObjectsAmong", PackReferences.Table, collect.JudgeBatch)
+		narrow := referenceShape("ObjectsAmong", PackReferences.Table, 3)
+		page := referenceShape("ReferencesAfter", PackReferences.Table, objstore.WalkPage)
+		three, err := PackReferences.ObjectsAmong(3)
+		if err != nil {
+			t.Fatalf("objstore builds no question of three keys over %s: %v", PackReferences.Table, err)
+		}
+		mislabelled := shapes[full]
+		mislabelled.sql = three
+		shapes[full], shapes[narrow] = mislabelled, mislabelled
+		delete(shapes, page)
+		declared := readWalk{references: map[string]bool{}}
+		for name := range referenceTables {
+			declared.references[name] = true
+		}
+		got := holdReferences(declared, shapes)
+		for _, want := range []string{
+			fmt.Sprintf("shape %q plans %q, and objstore's ObjectsAmong spells", full, three),
+			fmt.Sprintf("shape %q names %sObjectsAmong, which builds no such statement", narrow, objstoreBuilder),
+			fmt.Sprintf("planShapes registers no shape %q", page),
+		} {
+			if !slices.ContainsFunc(got, func(f string) bool { return strings.Contains(f, want) }) {
+				t.Errorf("the references' match reported no finding saying %q; found %q", want, got)
+			}
+		}
+		if len(got) != 3 {
+			t.Errorf("the references' match reported %d findings, want the three known ones: %q", len(got), got)
 		}
 	}
 
@@ -432,9 +473,11 @@ const objstoreBuilder = "objstore.ReferenceTable."
 
 // holdReferences holds the object store's builders over this package's
 // declarations to the shapes: referenceTables to the declarations the source
-// makes and referenceBuilders to objstore.ReferenceTable's statement builders,
-// both ways, and every statement a builder admits over a declaration — its
-// standing refuses the rest — to a shape of it.
+// makes, referenceBuilders to objstore.ReferenceTable's statement builders
+// and referenceWidths to referenceBuilders, each both ways, and every
+// statement a builder admits over a declaration — its standing refuses the
+// rest — to a shape of it at each width its callers build it at, planning
+// exactly the text the builder spells there.
 func holdReferences(walk readWalk, shapes map[string]shape) []string {
 	var out []string
 	report := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
@@ -460,32 +503,47 @@ func holdReferences(walk readWalk, shapes map[string]shape) []string {
 		if !slices.Contains(builders, method) {
 			report("referenceBuilders lists %s, which is no statement builder of objstore.ReferenceTable", method)
 		}
+		if len(referenceWidths[method]) == 0 {
+			report("referenceWidths names no width objstore's %s is built at: list every width its "+
+				"callers build it at, from their own constants", method)
+		}
+	}
+	for _, method := range slices.Sorted(maps.Keys(referenceWidths)) {
+		if _, ok := referenceBuilders[method]; !ok {
+			report("referenceWidths lists %s, which referenceBuilders does not", method)
+		}
 	}
 	admitted := map[string]bool{}
 	for _, method := range slices.Sorted(maps.Keys(referenceBuilders)) {
 		for _, name := range slices.Sorted(maps.Keys(referenceTables)) {
 			table := referenceTables[name]
-			key := method + " " + table.Table
-			_, refused := referenceBuilders[method](table, 1)
-			sh, has := shapes[key]
-			switch {
-			case refused == nil && !has:
-				report("objstore builds %s over %s (%s), and planShapes registers no shape %q of it",
-					method, name, table.Table, key)
-			case refused == nil && sh.builder != objstoreBuilder+method:
-				report("shape %q names %s, and objstore's %s builds it", key, sh.builder, method)
-			case refused != nil && has:
-				report("planShapes registers %q, which objstore refuses to build: %v", key, refused)
-			}
-			if refused == nil {
-				admitted[key] = true
+			for _, width := range referenceWidths[method] {
+				key := referenceShape(method, table.Table, width)
+				text, refused := referenceBuilders[method](table, width)
+				sh, has := shapes[key]
+				switch {
+				case refused == nil && !has:
+					report("objstore builds %s over %s (%s) at %d, and planShapes registers no shape %q of it",
+						method, name, table.Table, width, key)
+				case refused == nil && sh.builder != objstoreBuilder+method:
+					report("shape %q names %s, and objstore's %s builds it", key, sh.builder, method)
+				case refused == nil && sh.sql != text:
+					report("shape %q plans %q, and objstore's %s spells %q at %d: plan the statement its "+
+						"callers run", key, sh.sql, method, text, width)
+				case refused != nil && has:
+					report("planShapes registers %q, which objstore refuses to build: %v", key, refused)
+				}
+				if refused == nil {
+					admitted[key] = true
+				}
 			}
 		}
 	}
 	for _, key := range slices.Sorted(maps.Keys(shapes)) {
 		if sh := shapes[key]; strings.HasPrefix(sh.builder, objstoreBuilder) && !admitted[key] {
 			report("shape %q names %s, which builds no such statement over a declaration "+
-				"referenceTables lists", key, sh.builder)
+				"referenceTables lists at a width referenceWidths names — a statement planned at a "+
+				"width no caller builds certifies a statement nothing runs", key, sh.builder)
 		}
 	}
 	return out

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -32,12 +34,12 @@ import (
 // and the live packs and its replacement of the chain's top, the compactor's
 // and the publisher's due listings, the trim's listing of who was evicted from
 // the log, and every statement the object store builds over code_packs,
-// code_packs_retired and code_layer_parts ([planShapes]) — and holds each to
-// the EXACT seek it names: the index and
-// every column of it the statement bounds. Seeking an index is not enough — a
-// lookup of one ref that sought repo_id alone read every ref its repository
-// holds (planner.go). The statements are the package's own constants: there
-// is no copy here to drift from what runs, and
+// code_packs_retired and code_layer_parts, at every width its callers build
+// it at ([planShapes]) — and holds each to the EXACT seek it names: the index
+// and every column of it the statement bounds. Seeking an index is not
+// enough — a lookup of one ref that sought repo_id alone read every ref its
+// repository holds (planner.go). The statements are the package's own
+// constants: there is no copy here to drift from what runs, and
 // TestEveryCodeReadSeeksANamedIndex holds the set to the package's source and
 // refuses a plan that reads any table by a scan, so this holds only what that
 // one cannot — which index, which columns, in which order. An index no
@@ -488,6 +490,41 @@ var referenceTables = map[string]objstore.ReferenceTable{
 	"LayerReferences":       LayerReferences,
 }
 
+// referenceWidths is every width each of objstore's statement builders is
+// built at, by the builder's name: the widest, from its callers' own
+// constant, and for a question of a list of keys the one key a short last
+// batch narrows it to. The read gate holds the list to [referenceBuilders]
+// both ways.
+//
+// EACH WIDTH IS A STATEMENT TEXT OF ITS OWN — n placeholders, a LIMIT of n —
+// which the driver plans on its own, so a shape planned at a width no caller
+// builds certifies a statement nothing runs. Between a list's two ends the
+// plan is a seek of the key's index a key apiece, a cost that grows with the
+// list while a scan's does not, so the widest is where a planner would first
+// trade the seeks for a scan of the table; and one key is the form the
+// planner may read as a plain equality.
+var referenceWidths = map[string][]int{
+	// The collector's question of a batch of the keys a listing named
+	// (collect's Referenced): a full batch, and the short last one.
+	"ObjectsAmong": {1, collect.JudgeBatch},
+	// A page of a walk — the audit's, a backup's, a store move's — whose
+	// LIMIT is always the whole page.
+	"ReferencesAfter": {objstore.WalkPage},
+	// A backup's question of the keys the records past its copy name, a
+	// walk's page of them at a time: a full page, and the short last one.
+	"ReferencesAmong": {1, objstore.WalkPage},
+	// A backup's page of the records its copy's appliers deferred: the page
+	// the framework walks the same table in, which the backup takes as its
+	// own.
+	"DeferredRecordsAfter": {statelog.ReprocessPage},
+}
+
+// referenceShape names the shape of objstore's builder over a table at a
+// width.
+func referenceShape(builder, table string, width int) string {
+	return fmt.Sprintf("%s %s at %d", builder, table, width)
+}
+
 // planShapes is every statement a builder assembles at run time, by name:
 // the statements no constant here spells whole, registered by what the
 // builder spells. Today they are objstore's, built over this package's
@@ -498,40 +535,48 @@ var referenceTables = map[string]objstore.ReferenceTable{
 // that log deferred; and of the derived one a store move's walk. A retired
 // declaration's standing refuses the rest of them, and a derived one's the
 // backup's two. One shape for each builder each declaration's standing
-// admits, keyed "<builder> <table>".
-//
-// AT A FEW KEYS AND A PAGE OF A HUNDRED, not at the callers' widths (the
-// collector's batch and a walk's page of 500 keys, a backup's deferred page
-// of statelog.ReprocessPage): the driver plans each of these statements
-// alike at every width measured — 1, 3, 500 and 1 000 — so a short argument
-// list asks the planner the callers' question.
+// admits, at each width its callers build it at ([referenceWidths]), keyed
+// by [referenceShape].
 func planShapes() map[string]shape {
 	out := map[string]shape{}
-	reference := func(builder string, table objstore.ReferenceTable, n int, args []any, seeks ...string) {
-		sql, err := referenceBuilders[builder](table, n)
-		if err != nil {
-			panic(fmt.Sprintf("objstore builds no %s over %s: %v", builder, table.Table, err))
+	reference := func(builder string, table objstore.ReferenceTable, args func(width int) []any,
+		seeks ...string) {
+		for _, width := range referenceWidths[builder] {
+			text, err := referenceBuilders[builder](table, width)
+			if err != nil {
+				panic(fmt.Sprintf("objstore builds no %s over %s at %d: %v", builder, table.Table, width, err))
+			}
+			out[referenceShape(builder, table.Table, width)] = shape{statement{text, args(width), seeks},
+				objstoreBuilder + builder}
 		}
-		out[builder+" "+table.Table] = shape{statement{sql, args, seeks}, "objstore.ReferenceTable." + builder}
 	}
-	keys := []any{"k1", "k2", "k3"}
-	reference("ObjectsAmong", PackReferences, 3, keys, "code_packs_object_idx (object=?)")
-	reference("ReferencesAfter", PackReferences, 100, []any{""}, "code_packs_object_idx (object>?)")
-	reference("ReferencesAmong", PackReferences, 3, keys, "code_packs_object_idx (object=?)")
+	// A KEY FOR EACH PLACEHOLDER of a question of a list of keys.
+	keys := func(width int) []any {
+		among := make([]any, width)
+		for i := range among {
+			among[i] = fmt.Sprintf("repo-1-object-%06d", i)
+		}
+		return among
+	}
+	// A PAGE'S ONE ARGUMENT, where the page before ended, whatever its LIMIT.
+	after := func(from any) func(int) []any { return func(int) []any { return []any{from} } }
+	reference("ObjectsAmong", PackReferences, keys, "code_packs_object_idx (object=?)")
+	reference("ReferencesAfter", PackReferences, after(""), "code_packs_object_idx (object>?)")
+	reference("ReferencesAmong", PackReferences, keys, "code_packs_object_idx (object=?)")
 	// A PAGE OF THE DEFERRED RECORDS, a seek of the table's INTEGER PRIMARY
 	// KEY — which the driver prints as rowid=? whatever the comparison: its
 	// `position > ?` here and a `rowid = ?` print alike.
-	reference("DeferredRecordsAfter", PackReferences, 100, []any{0},
+	reference("DeferredRecordsAfter", PackReferences, after(0),
 		"SEARCH code_log_deferred USING INTEGER PRIMARY KEY (rowid=?)")
 	// THE COLLECTOR'S ONE QUESTION OF THE RETIRED TABLE — the audit's and a
 	// backup's walk, and a backup's question, are refused for a retired
 	// declaration, so this is all the object store asks of it.
-	reference("ObjectsAmong", RetiredPackReferences, 3, keys, "code_packs_retired_object_idx (object=?)")
+	reference("ObjectsAmong", RetiredPackReferences, keys, "code_packs_retired_object_idx (object=?)")
 	// THE DERIVED TABLE'S TWO: the collector's question, and a store move's
 	// walk — the one pass that walks a derived table, which the audit and a
 	// backup never do.
-	reference("ObjectsAmong", LayerReferences, 3, keys, "code_layer_parts_object_idx (object=?)")
-	reference("ReferencesAfter", LayerReferences, 100, []any{""}, "code_layer_parts_object_idx (object>?)")
+	reference("ObjectsAmong", LayerReferences, keys, "code_layer_parts_object_idx (object=?)")
+	reference("ReferencesAfter", LayerReferences, after(""), "code_layer_parts_object_idx (object>?)")
 	return out
 }
 

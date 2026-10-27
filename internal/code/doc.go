@@ -338,7 +338,10 @@
 // each to a statement plan_test.go registers by its exact text, whose plan it
 // judges; a function that assembles a statement at run time registers the
 // statements it can build as shapes (planShapes), objstore's builders over
-// [PackReferences] and [RetiredPackReferences] among them; and
+// [PackReferences], [RetiredPackReferences] and [LayerReferences] among them,
+// each at every width its callers build it at — the collector's batch of
+// keys, a walk's page, a backup's — since each width is a statement the
+// driver plans on its own; and
 // TestEveryCodeIndexServesARegisteredQuery holds every registered statement to
 // the index and the columns it seeks, and every index to a statement whose
 // plan uses it — or, while the commit that issues its read has not landed, to
