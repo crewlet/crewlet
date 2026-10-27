@@ -162,6 +162,11 @@ func (p *budgetPool) deadlines(command string) []time.Duration {
 // ends it through its context, unready, and never through a deadline of its
 // own cut to that instant, which would answer it too large.
 //
+// Every read here hides the copy's memo (memoless): a page the memo holds is
+// answered with no git at all, so the comparison asked a second time would be
+// the first one's page, whatever its count's process would have met — and
+// what this case holds is what each process of a read's own git is given.
+//
 // Mutations: give every process the whole budget — the count's deadline ten
 // seconds, red; charge the checks — the merge base's under ten, red; cut a
 // run's deadline to its asker's attempt — the listing's under ten, red.
@@ -172,10 +177,12 @@ func TestAReadsOwnGitHasOneBudgetItsProcessesShare(t *testing.T) {
 	second := x.commit(map[string]string{"f": "2\n"}, "two")
 	repo := x.repo(codetest.RepoName)
 	node := x.f.Nodes()[0]
+	unkept := memoless{node.Cache()}
 
 	shared := &budgetPool{Pool: node.Pool(),
 		took: map[string]time.Duration{"cat-file": 3 * time.Second, "merge-base": 6 * time.Second}}
-	if _, err := x.server(0, query.Options{Git: shared}).Read(t.Context(), compareQ(repo, first, second)); err != nil {
+	s := x.server(0, query.Options{Git: shared, Cache: unkept})
+	if _, err := s.Read(t.Context(), compareQ(repo, first, second)); err != nil {
 		t.Fatalf("a comparison = %v", err)
 	}
 	if got := shared.deadlines("cat-file"); len(got) != 1 || got[0] != gitproc.ReadDeadline {
@@ -196,7 +203,7 @@ func TestAReadsOwnGitHasOneBudgetItsProcessesShare(t *testing.T) {
 	}
 
 	spent := &budgetPool{Pool: node.Pool(), ends: "rev-list"}
-	_, err := x.server(0, query.Options{Git: spent}).Read(t.Context(), compareQ(repo, first, second))
+	_, err := x.server(0, query.Options{Git: spent, Cache: unkept}).Read(t.Context(), compareQ(repo, first, second))
 	if !errors.Is(err, code.ErrSliceTooLarge) || !errorHas(err, "compare commits closer together") {
 		t.Errorf("a comparison whose count ran out the budget = %v, want it too large, naming the narrowing", err)
 	}
@@ -207,7 +214,8 @@ func TestAReadsOwnGitHasOneBudgetItsProcessesShare(t *testing.T) {
 	listing := &budgetPool{Pool: node.Pool()}
 	ctx, cancel := code.AnswerBy(t.Context(), time.Now().Add(code.ReplyMargin+5*time.Second))
 	defer cancel()
-	if _, err := x.server(0, query.Options{Git: listing}).Read(ctx, treeQ(repo, code.TreeQuery{Rev: second})); err != nil {
+	s = x.server(0, query.Options{Git: listing, Cache: unkept})
+	if _, err := s.Read(ctx, treeQ(repo, code.TreeQuery{Rev: second})); err != nil {
 		t.Fatalf("a listing five seconds from its answer's due instant = %v", err)
 	}
 	if got := listing.deadlines("ls-tree"); len(got) != 1 || got[0] != gitproc.ReadDeadline {
