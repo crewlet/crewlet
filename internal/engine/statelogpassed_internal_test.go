@@ -259,7 +259,14 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 	if err != nil || res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write: %+v, %v", res, err)
 	}
+	stance := running.runner.Stance()
 	rows := copyEstate(t, back)
+	// THE RUNNER'S STANCE ACROSS THE COPY is what tells apart the two ways the
+	// copy can miss the write below: a stance that moved is an estate rejoined
+	// or reloaded under the case, and one that did not is a copy read at a
+	// view older than the write — which store.DB.Backup holds a view of its
+	// own to rule out.
+	moved := running.runner.Stance() != stance
 	// THE DONOR STANDS WHERE THE COPY DOES — on the copy's own checkpoint row,
 	// never the live runner's read after the copy, which may already have
 	// moved past the rows copied: the donor's artefact would then name that
@@ -269,8 +276,8 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 	copied := copiedCheckpoint(t, rows, running.spec.Name)
 	if copied.Seq != res.Position.Seq {
 		t.Fatalf("the copy's checkpoint is at %d, want the write's own %d — a copy "+
-			"taken after a write answered applied did not hold it",
-			copied.Seq, res.Position.Seq)
+			"taken after a write answered applied did not hold it (the runner's "+
+			"stance moved across the copy: %t)", copied.Seq, res.Position.Seq, moved)
 	}
 	stats, err := running.log.Stats(t.Context())
 	if err != nil {
