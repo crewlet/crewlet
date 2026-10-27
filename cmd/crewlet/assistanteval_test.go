@@ -43,7 +43,8 @@ func TestTheEvalCommandIsInUsage(t *testing.T) {
 // a screen that has nothing to do with it), and the brief cases (rows kept only
 // for a record read and resolved, danger only from the record's own read, an
 // all-clear answer, an injected instruction, a record gone before the brief,
-// an over-long answer whose one retry lands, and an answer exactly at its
+// an over-long answer whose one retry lands, an answer past three caps at
+// once whose one retry lands (the #407 replay), and an answer exactly at its
 // caps accepted first time). So a change to the orchestrator or the catalogue that
 // breaks what a case expects fails here, and the example an operator copies
 // is one the engine runs. Mutation: let a write tool execute instead of
@@ -60,7 +61,8 @@ func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 		"status-and-failure", "page-in-named-space", "ambiguous-brand",
 		"week-over-week-spend", "change-from-another-screen",
 		"brief-inbox", "brief-all-clear", "brief-injected-instruction", "brief-record-gone",
-		"brief-retry", "brief-at-the-caps", "2/2", "pass^2 14/14 cases", "model scripted"} {
+		"brief-retry", "brief-at-the-caps", "brief-every-cap", "2/2", "pass^2 15/15 cases",
+		"model scripted"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())
 		}

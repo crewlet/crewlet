@@ -474,3 +474,29 @@ func (f fakeEvidence) PageID(_ context.Context, ref string) (string, bool, error
 	id, ok := f.pages[ref]
 	return id, ok, nil
 }
+
+// EVERY FAULT OF A DECISION IN ONE REFUSAL (ADR-0059): an asker writes a
+// refused decision again once, and a refusal naming one fault of several
+// spent that attempt on the next.
+//
+// Mutation: return from Validate at its first fault and only the question is
+// named.
+func TestEveryFaultOfADecisionIsNamedAtOnce(t *testing.T) {
+	t.Parallel()
+	d := decisionFixture()
+	d.Question = ""
+	d.Options[0].ID = "Ship"
+	d.Options[1].Label = ""
+	d.Recommended = "nope"
+	d.Role = "boss"
+	err := d.Validate()
+	if !errors.Is(err, worklet.ErrInvalid) {
+		t.Fatalf("Validate = %v, want an invalid refusal", err)
+	}
+	for _, want := range []string{"decision.question is empty", "decision.options[0].id",
+		"decision.options[1].label is empty", "decision.recommended is \"nope\"", "decision.role is \"boss\""} {
+		if !strings.Contains(worklet.Sentence(err), want) {
+			t.Errorf("the refusal %q does not name %q", worklet.Sentence(err), want)
+		}
+	}
+}

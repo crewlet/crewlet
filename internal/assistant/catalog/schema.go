@@ -99,15 +99,6 @@ func (s *schema) JSON() map[string]any {
 	return out
 }
 
-// check reports what is wrong with v as this schema reads it: the first
-// problem [schema.problems] finds.
-func (s *schema) check(path string, v any) error {
-	if found := s.problems(path, v); len(found) > 0 {
-		return found[0]
-	}
-	return nil
-}
-
 // problems is EVERYTHING wrong with v as this schema reads it, in a stable
 // order (an object's members by name, then the ones it lacks), so a caller
 // that lets its model write a call again can name every fault at once rather

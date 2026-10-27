@@ -123,5 +123,6 @@ const (
 	AssistantStreamsActive      = "crewlet.assistant.streams.active"
 	AssistantBriefs             = "crewlet.assistant.briefs"
 	ToolPolicyRefusalLoops      = "crewlet.tools.policy_refusal_loops"
+	ToolArgsOutsideSchema       = "crewlet.tools.args_outside_schema"
 	AssistantBriefRowsDropped   = "crewlet.assistant.brief.rows_dropped"
 )

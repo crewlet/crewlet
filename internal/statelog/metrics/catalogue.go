@@ -828,6 +828,15 @@ func Catalogue() []Instrument {
 				"contract the model cannot see or cannot meet.",
 		},
 		{
+			Name: ToolArgsOutsideSchema, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool"},
+			Shows: "Calls a first-party tool answered successfully although their arguments " +
+				"were outside the schema it advertises (an argument it does not take, a value " +
+				"outside its closed set or its bounds), by `tool`. The model was told on the " +
+				"answer. A tool that keeps climbing here is one whose schema and reading " +
+				"disagree, and the drift a later refusal at the surface would have to fix first.",
+		},
+		{
 			Name: AssistantBriefRowsDropped, Kind: KindCounter, Unit: UnitCount,
 			Shows: "Records a brief cited (a row, or its recommendation's press) that the " +
 				"engine left out because the record was not in what its turn read, or " +

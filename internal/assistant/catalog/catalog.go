@@ -329,7 +329,8 @@ func withScope(text, scope string) string {
 // Check reports what is wrong with a call's arguments, wrapping
 // [ErrInvalidArguments]: an argument the schema does not declare, an
 // identity argument ([IdentityArguments]), a missing required one, or a value
-// of the wrong kind or out of its range.
+// of the wrong kind or out of its range. EVERY ONE at once (ADR-0059), so a
+// model told its call was refused fixes them all in one attempt.
 func (t Tool) Check(args map[string]any) error {
 	if t.schema == nil {
 		return fmt.Errorf("%w: %s declares no schema", ErrInvalidArguments, t.Name)
@@ -337,8 +338,8 @@ func (t Tool) Check(args map[string]any) error {
 	if args == nil {
 		args = map[string]any{}
 	}
-	if err := t.schema.check(t.Name, args); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	if found := t.schema.problems(t.Name, args); len(found) > 0 {
+		return refusedFor(found)
 	}
 	return nil
 }

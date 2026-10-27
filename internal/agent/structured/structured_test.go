@@ -266,7 +266,8 @@ func TestAFieldThePayloadDoesNotHaveIsRefusedByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call returned a Go error: %v", err)
 	}
-	if !res.Failed || !strings.Contains(res.Output, `"not"`) {
+	if !res.Failed || !strings.Contains(res.Output, "not is not a key") ||
+		!strings.Contains(res.Output, "takes decision, note, id") {
 		t.Fatalf("output = %q, want the misspelt field refused by name", res.Output)
 	}
 	if _, ok := tl.Value(); ok {
@@ -284,7 +285,7 @@ func TestAFieldThePayloadDoesNotHaveIsRefusedByName(t *testing.T) {
 	err = structured.Remarshal(map[string]any{"tasks": []any{
 		map[string]any{"id": "b", "afer": []any{"a"}},
 	}}, &plan)
-	if err == nil || !strings.Contains(err.Error(), `"afer"`) {
+	if err == nil || !strings.Contains(err.Error(), "tasks[0].afer is not a key") {
 		t.Errorf("a nested misspelt field answered %v, want it refused by name", err)
 	}
 }
@@ -301,5 +302,35 @@ func TestArgumentsThatCannotBeReEncodedFailTheSubmission(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "could not be re-encoded") {
 		t.Errorf("output = %s", res.Output)
+	}
+}
+
+// EVERY FAULT OF A SUBMISSION IN ONE REFUSAL (ADR-0059): a misspelt field and
+// a value of the wrong type come back together, each by its path, where
+// encoding/json named only the first, so a model learned one per attempt.
+//
+// Mutation: answer encoding/json's own error and only the first is named.
+func TestEveryFaultOfASubmissionIsNamedAtOnce(t *testing.T) {
+	t.Parallel()
+	var plan struct {
+		ID    string   `json:"id"`
+		After []string `json:"after"`
+		Count int      `json:"count"`
+	}
+	err := structured.Remarshal(map[string]any{"id": 7.0, "afer": []any{"a"}, "count": "x"}, &plan)
+	if err == nil {
+		t.Fatal("a submission with three faults was accepted")
+	}
+	for _, want := range []string{"id is a number, and the format reads a string there",
+		"afer is not a key", "count is a string, and the format reads a whole number there"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+	// AND ACCEPTANCE IS UNCHANGED: a key in another case is what encoding/json
+	// read, and still is.
+	if err := structured.Remarshal(map[string]any{"ID": "x", "after": []any{"a"}}, &plan); err != nil ||
+		plan.ID != "x" {
+		t.Errorf("a key in another case is refused now: %v", err)
 	}
 }

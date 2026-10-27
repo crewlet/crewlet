@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/jsonform`
-- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`
+- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`, `internal/tools/argval.TestEachReadIsItsHelpers`, `internal/tools.TestEachLossyValueIsAMisreadAtItsPath`, `internal/tools.TestEachLosslessValueIsNoFinding`, `internal/tools.TestOutsideAndUnknownAreNamedAndLeftToTheTool`, `internal/tools.TestAMisreadIsRefusedBeforeTheToolRuns`, `internal/tools.TestTheToolsAnswerCarriesEveryFinding`, `internal/agent/builtin.TestEveryBuiltinSchemaIsOneTheCheckKeeps`, `internal/agent/builtin.TestNoArgumentIsReadAsTextAgainstItsType`, `internal/agent/structured.TestEveryFaultOfASubmissionIsNamedAtOnce`, `internal/worklet.TestEveryFaultOfADecisionIsNamedAtOnce`, `internal/assistant/catalog.TestEveryAssistantToolNamesEveryFaultAtOnce`, `internal/assistant/wire.TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`
 - **Measured:** GP-38 (brand kit): 14 refusals, rounds 11 to 24 and beyond, more than eight minutes of one turn, 12 distinct structural faults learned one per attempt. The brief (#407): 4 of 4 briefs ended `brief_invalid` at 7 steps. Replayed after this change: the GP-38 version gets all 14 of its findings in one refusal and its fixed version lands on the next attempt; a kit written from the format reference lands on the first.
 - **Cost-when-tried:** the brief fix (#407) repaired one tool: its caps went into its schema and its validator started naming every fault. Two days later the brand kit failed the same way through a different tool, because nothing had changed for any other tool.
 - **Tag-status:** unreleased
@@ -66,6 +66,69 @@ the branch; the run is logged (`tool_policy_refusal_loop`) and counted
 is a phase's: a resumed phase counts again. The call still runs: never a
 silent cap.
 
+**Every first-party tool's call is held to the schema it advertises, at the
+tool surface.** `tools.CheckArgs` checks the call against the tool's
+`Parameters`, every finding in one pass with its path and the shape read
+there, and `tools.Surface` acts on three kinds of finding. Third-party MCP
+servers hold their own schemas and are not checked.
+
+- **A misread is refused before the tool runs.** A misread is a value the
+  tool's own read would change without saying so, which writes wrong data
+  that a note after the write cannot undo:
+  - a non-boolean where a boolean belongs (`"true"` was read as false);
+  - an object or a list where a string belongs (read as `""`);
+  - a fraction where a whole number belongs (2.5 was truncated to 2);
+  - trailing text after an integer (`"5 days"` was read as 5);
+  - a non-finite number;
+  - anything the read replaced with its default;
+  - a value of the wrong kind where a list or an object belongs.
+- **Outside the schema, the tool decides.** A missing required argument, a
+  value outside an enum, a number past its bound or a list too long is left
+  to the tool, and its answer carries every finding: a refusal lists them
+  all, so one retry answers them.
+- **An unknown argument is noted, never refused here.** Every tool ignored an
+  unknown argument before this check existed. A call the tool answered
+  successfully while outside its schema (an unknown argument, a value the
+  tool tolerated) is answered with a note naming each one, logged
+  (`tool_args_outside_schema`) and counted
+  (`crewlet.tools.args_outside_schema`). That count is the drift signal for a
+  later decision, per tool, to refuse at the surface.
+- **The lossless leniencies stay accepted, exactly as the tools read them.**
+  They are not findings at all:
+  - a number or a boolean where a string belongs;
+  - one string, or a comma-separated one, where a list of strings belongs;
+  - a numeric string where a number belongs.
+
+**One reading of an argument, shared.** The tools' helpers (`argString`,
+`argStrings`, `argInt`, `argIntValue`, `argFloat`, `argFloatValue`,
+`argBool`) moved unchanged into `internal/tools/argval`. The helpers and the
+check both call it, so the surface and the tool read one value one way. The
+inventory the rule was set from covered the 51 builtins registered for a
+seat:
+
+| Reading | Call sites | What it did with a lossy value | Now |
+|---|---|---|---|
+| `argString` | 212 | a number or boolean rendered; an object or list read as `""` | the object or list is a misread |
+| `argBool` | 20 | anything but true or false read as false | a misread |
+| `argInt` | 24 | 2.5 truncated, `"5 days"` read as 5, junk read as the fallback | a misread |
+| `argIntValue` | 9 | refused a fraction or junk itself | a misread, refused before it runs |
+| `argFloat` | 2 | junk read as 0 | a misread |
+| `argFloatValue` | 7 | refused non-finite values and junk itself | a misread, refused before it runs |
+| `argStrings` | 15 | one string or a comma-separated one split; anything else read as no list | the split is kept; anything else is a misread |
+| an unknown argument | every tool | ignored | noted, logged and counted |
+
+Two drift tests hold the advertised schemas to what the check and the tools
+read:
+- every builtin's schema uses only the keywords and types the check
+  implements;
+- no argument a schema declares as a number, a boolean or a list is read by
+  any tool as free text.
+
+The structured submissions (`structured.Remarshal`), a work item's
+`decision`, the assistant catalogue's `Tool.Check` and a page action's
+`ActionArgs.Check` keep exactly what they accepted, and now name every fault
+of a refused call at once.
+
 ## The class, and why a per-tool patch recurs
 
 Both incidents are one failure with six causes, and each cause lives in a
@@ -108,18 +171,19 @@ passes.
 | A dashboard's `dashboard.json` | `get_artifact_format`, generated | yes, here; an engine argument or a calc operand is read by its own reader, which names its own fault |
 | A page (`html`) | the design contract in `skill:artifacts` | yes, the linter already listed every finding |
 | `answer_brief` | the catalogue schema, which is also its validator (#407) | yes (#407) |
-| Other assistant catalogue tools | the catalogue schema, which is also its validator | no: `Tool.Check` answers the first problem; the next change |
-| `submit_work`, `submit_review`, a worker's submit (`structured.Remarshal`) | the hand-written schema, held to its struct by a walk | no: `DisallowUnknownFields`; the next change |
-| A `decision` on a work item (`comment_on_work_item`, `create_work_item`) | the tool's schema | no: `DisallowUnknownFields`, then the first rule; the next change |
-| `create_work_item`, `update_work_item`, `write_work_catalogue`, `set_artifact_schema`, `write_artifact_data` and the other first-party seat tools | a hand-written JSON schema nothing enforces | no: each tool answers its first fault; the next change checks every first-party tool's input against the schema it advertises, at the surface, in one pass |
+| Other assistant catalogue tools, and a page action's arguments | the catalogue schema, which is also its validator | yes: `Tool.Check` and `ActionArgs.Check` name every problem |
+| `submit_work`, `submit_review`, a worker's submit (`structured.Remarshal`) | the hand-written schema, held to its struct by a walk, and checked at the surface | yes: accepted as before, every fault named |
+| A `decision` on a work item (`comment_on_work_item`, `create_work_item`) | the tool's schema, checked at the surface | yes: every rule's fault and every missing reference named |
+| `create_work_item`, `update_work_item`, `write_work_catalogue`, `set_artifact_schema`, `write_artifact_data` and the other first-party seat tools | the advertised schema, checked at the surface | yes: a misread refused before the tool runs; every other finding on its answer |
 | Configuration written through a tool (an assistant proposal) | the route's own check (ADR-0055) | yes, the config validator collects every problem |
 
 ## What this does not decide
 
-The next change in this series decides how every first-party tool's arguments
-are checked against the schema it advertises; this record decides that the
-contract and the validator share one source and that every fault comes back
-at once, and lands that for the closed artifact formats. It does not decide a
+Refusing an unknown argument, or any finding the tool tolerates, before the
+tool runs is a later decision per tool, made when that tool's
+`crewlet.tools.args_outside_schema` count reads zero; this record decides
+that the contract and the validator share one source, that every fault comes
+back at once, and that a misread is refused before it is written. It does not decide a
 turn's round budget, which the loop guard leaves alone: the guard speaks to
 the model, and the round cap still ends the run.
 

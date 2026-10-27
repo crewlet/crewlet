@@ -446,6 +446,25 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 	// one for a seat at all. An outer answer wins — see
 	// [turnctx.WithPrincipal] — so a surface reached through somebody's
 	// own credential still acts as them.
+	// THE CALL IS HELD TO THE SCHEMA ITS TOOL ADVERTISES (ADR-0059), every
+	// first-party one: a third-party MCP server holds its own. A value the
+	// tool would misread is refused here, before anything runs; every other
+	// finding rides on the tool's own answer below.
+	var faults []ArgFault
+	if _, fromMCP := e.FromMCP(); !fromMCP {
+		faults = CheckArgs(call.Name, e.Tool.Parameters(), args)
+	}
+	target := TargetOf(e.Tool, args)
+	if misread(faults) {
+		recorded, run := s.settle(Call{Name: call.Name, Args: args, Output: misreadAnswer(call.Name, faults),
+			Failed: true, Cause: RefusalInvalid}, e.Annotations, target)
+		s.reportLoop(call.Name, target, run, turn)
+		span.SetAttributes(
+			attribute.Bool("crewlet.tool_failed", true),
+			attribute.String("crewlet.tool_outcome", "refused_by_contract"))
+		return toolloop.ToolResult{Output: recorded.Output, Failed: true, Cause: RefusalInvalid}, nil
+	}
+
 	res, err := s.invoke(turnctx.WithPrincipal(ctx, turn), turn, e.Tool, args)
 	if err != nil {
 		tracing.Fail(span, err)
@@ -454,7 +473,7 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 		// call did not happen as far as the ledger is concerned.
 		return toolloop.ToolResult{}, err
 	}
-	target := TargetOf(e.Tool, args)
+	res.Result = s.withFaults(call.Name, res.Result, faults, turn)
 	recorded, run := s.settle(Call{Name: call.Name, Args: args, Output: res.Output,
 		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target)
 	res.Output = recorded.Output

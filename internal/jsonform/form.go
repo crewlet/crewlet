@@ -85,6 +85,12 @@ func Of[T any]() *Form {
 	return of(reflect.TypeFor[T](), map[reflect.Type]*Form{})
 }
 
+// OfType is [Of] for a type known only when the program runs (a structured
+// tool's submission, decoded into whatever the caller hands it).
+func OfType(t reflect.Type) *Form {
+	return of(t, map[reflect.Type]*Form{})
+}
+
 var (
 	jsonUnmarshaler = reflect.TypeFor[json.Unmarshaler]()
 	textUnmarshaler = reflect.TypeFor[encoding.TextUnmarshaler]()

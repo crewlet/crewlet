@@ -25,12 +25,14 @@
 package structured
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/jsonform"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -135,10 +137,20 @@ func Remarshal(args map[string]any, into any) error {
 	if err != nil {
 		return fmt.Errorf("arguments could not be re-encoded: %w", err)
 	}
-	dec := json.NewDecoder(bytes.NewReader(blob))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(into); err != nil {
-		return fmt.Errorf("arguments do not match the schema: %w", err)
+	// ACCEPTED EXACTLY AS BEFORE, every fault named (ADR-0059): what
+	// encoding/json with DisallowUnknownFields takes is what a submission
+	// is, and when it refuses, the walk names every fault in the one
+	// answer, so the model fixes them all in one attempt rather than one
+	// per attempt.
+	form := jsonform.OfType(reflect.TypeOf(into).Elem())
+	d := jsonform.Stored(jsonform.UntilEOF)(blob, form,
+		jsonform.Subject{File: "the submission", Format: "the submission"}, into)
+	if len(d.Faults) == 0 {
+		return nil
 	}
-	return nil
+	reasons := make([]string, len(d.Faults))
+	for i, f := range d.Faults {
+		reasons[i] = f.Message
+	}
+	return fmt.Errorf("arguments do not match the schema: %s", strings.Join(reasons, "; "))
 }
