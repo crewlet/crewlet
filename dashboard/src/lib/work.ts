@@ -591,9 +591,15 @@ export function axisName(axis: string): string {
 }
 
 /** The orderings a list may ask for. */
+/** The engine's manual order, the one a drag changes and a project's default. */
+export const MANUAL_ORDER = "rank";
+
+/** The most recently touched first: the company-wide list's default. */
+export const RECENT_ORDER = "-updated";
+
 export const SORTS: { value: string; label: string }[] = [
-  { value: "rank", label: "Manual order" },
-  { value: "-updated", label: "Recently updated" },
+  { value: MANUAL_ORDER, label: "Manual order" },
+  { value: RECENT_ORDER, label: "Recently updated" },
   { value: "due", label: "Due soonest" },
   { value: "-priority", label: "Most important" },
   { value: "-created", label: "Newest" },
@@ -613,7 +619,7 @@ export const SORTS: { value: string; label: string }[] = [
  * place a card in an order nobody is looking at.
  */
 export function manualOrder(sort: string, project: string): boolean {
-  return sort === "rank" || (sort === "" && project !== "");
+  return sort === MANUAL_ORDER || (sort === "" && project !== "");
 }
 
 // ---------------------------------------------------------------------------

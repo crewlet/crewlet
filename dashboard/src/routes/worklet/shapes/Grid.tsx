@@ -642,9 +642,23 @@ export function WorkGrid({
   foot,
   seats,
   more,
+  sort,
+  defaultSort,
+  onSort,
 }: {
   /** Which column set, and which `cols=` key. */
   shape: GridShape;
+  /**
+   * THE READER'S ORDER, as the screen resolved it: the address's `sort=`, with
+   * an explicit "default order" spelled as the container's own. The screen
+   * resolves it because a saved view's order sits behind the address, which
+   * the grid cannot see.
+   */
+  sort: string;
+  /** The order with nothing chosen: the running view's own, else the container's. */
+  defaultSort: string;
+  /** A head pressed; `''` is the default, which the screen writes as no key. */
+  onSort: (sort: string) => void;
   rows: WorkSummary[];
   groups: WorkGroup[];
   axis: string;
@@ -770,6 +784,9 @@ export function WorkGrid({
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.
       serverSorted
+      sort={sort}
+      defaultSort={defaultSort}
+      onSortChange={onSort}
       // AND THE COLUMN SET IS THE SHAPE'S, which is the one key the two shapes
       // may not share — see the header.
       colsName={shape}

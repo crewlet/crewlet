@@ -635,6 +635,8 @@ export function Runs() {
                 key: "task",
                 header: "Task",
                 floor: "10rem",
+                // A RUN WITH NO TASK RECORDED (or one withheld) sorts last.
+                sortValue: (r) => r.task_description || null,
                 cell: (r) =>
                   r.task_description ? (
                     <TableTextCell>{r.task_description}</TableTextCell>

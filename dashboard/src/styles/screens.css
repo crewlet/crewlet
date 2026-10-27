@@ -4952,19 +4952,6 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 0;
   min-width: 0;
 }
-/* THREE PARTS, THREE REGISTERS: the field is what it is about, the verb is the
-   relation, and the value is the answer — so the value is the only one at full
-   ink. A chip set in one register reads as a label rather than as a sentence. */
-.work-chip-field {
-  color: var(--color-text-secondary);
-}
-.work-chip-verb {
-  color: var(--color-text-tertiary);
-}
-.work-chip-value {
-  color: var(--color-text-primary);
-  font-weight: var(--font-weight-medium);
-}
 
 /* ---- The two menus: Filter and Display ---------------------------------- */
 

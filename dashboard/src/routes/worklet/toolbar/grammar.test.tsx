@@ -296,12 +296,14 @@ const ARRANGEMENT: Record<
     },
     writes: "group_by2=priority",
   },
+  // A LIST SORTS AT ITS COLUMN HEADS: the head writes the same key the
+  // picker does (see `toolbar/WorkBar.tsx`).
   sort: {
     at: "#/worklet",
     press: async () => {
-      pick(await screen.findByRole("combobox", { name: "Sort" }), "Recently updated");
+      fireEvent.click(await screen.findByRole("button", { name: "Title" }));
     },
-    writes: "sort=-updated",
+    writes: "sort=title",
   },
   "cols.": {
     at: "#/worklet",
@@ -399,7 +401,7 @@ test("the scope is the bar's own switch, with no chip and no row in the Filter m
   pick(screen.getByRole("combobox", { name: "Which work" }), /^Closed/);
   await waitFor(() => expect(location.hash).toContain("scope=closed"));
   // NO CHIP FOR IT, on a list where it is the only thing that moved.
-  expect(document.querySelector(".work-chip-field")).toBeNull();
+  expect(document.querySelector(".crewlet-filter-pill__field")).toBeNull();
   // AND NO SECOND CONTROL FOR IT in the menu that owns the narrowings.
   fireEvent.click(screen.getByRole("button", { name: "Filter" }));
   await screen.findByText("status=");
@@ -432,7 +434,7 @@ test("the saved view is an option in the strip rather than a chip or a menu row"
   mountList();
   fireEvent.click(await screen.findByRole("radio", { name: "Arranged" }));
   await waitFor(() => expect(location.hash).toContain("view=arranged"));
-  expect(document.querySelector(".work-chip-field")).toBeNull();
+  expect(document.querySelector(".crewlet-filter-pill__field")).toBeNull();
 });
 
 // AND THE CALENDAR'S WINDOW IS THAT SHAPE'S OWN AXIS, stepped in its own
@@ -443,5 +445,5 @@ test("the month is the calendar's own control", async () => {
   await listAt("#/worklet?shape=calendar");
   fireEvent.click(screen.getByRole("button", { name: "The month after" }));
   await waitFor(() => expect(location.hash).toContain("month="));
-  expect(document.querySelector(".work-chip-field")).toBeNull();
+  expect(document.querySelector(".crewlet-filter-pill__field")).toBeNull();
 });

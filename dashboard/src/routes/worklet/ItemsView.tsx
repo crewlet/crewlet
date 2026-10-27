@@ -136,7 +136,9 @@ import {
   listParam,
   loadedOf,
   manualOrder,
+  MANUAL_ORDER,
   monthOrNow,
+  RECENT_ORDER,
   seededScope,
   shapeOf,
   shownRows,
@@ -432,6 +434,14 @@ export function ItemsView({
   const axis = effectiveArrangement(groupBy, viewOwn.group_by);
   const axis2 = effectiveArrangement(groupBy2, viewOwn.group_by2);
   const order = effectiveArrangement(sort, viewOwn.sort);
+  // THE ORDERS A GRID'S HEADS DRAW AND STEP FROM. The container's own default
+  // is the engine's (the manual order inside a project, the most recently
+  // touched across the company), and the grid's default is the running view's
+  // order where it has one: a press that steps back to the default takes the
+  // reader back to the view as it was saved.
+  const containerOrder = project ? MANUAL_ORDER : RECENT_ORDER;
+  const gridDefaultOrder =
+    typeof viewOwn.sort === "string" && viewOwn.sort ? viewOwn.sort : containerOrder;
   // TURNING ONE OFF IS A VALUE, not the absence of one — but only where there
   // is something to override. Written unconditionally, an ordinary ungrouped
   // list would carry `group_by=none` on its address for no reason.
@@ -884,6 +894,8 @@ export function ItemsView({
             viewShape={savedShape}
             groupBy={axis}
             groupBy2={axis2}
+            sort={order}
+            onSort={(next) => setSort(next || off(viewOwn.sort))}
             cols={cols}
             hidden={[...hidden].map((key) => ({ key, label: laneLabel(key) }))}
             onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
@@ -1061,6 +1073,11 @@ export function ItemsView({
                 foot={foot}
                 seats={seats}
                 more={pageMore}
+                sort={sort === EXPLICIT_NONE ? containerOrder : sort}
+                defaultSort={gridDefaultOrder}
+                // BACK TO THE DEFAULT IS NO KEY, so the view's own order
+                // (or the container's) applies again.
+                onSort={setSort}
               />
             )}
             {!nothingShown && shape === "timeline" && (

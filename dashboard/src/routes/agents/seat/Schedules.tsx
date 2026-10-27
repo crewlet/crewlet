@@ -115,6 +115,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
           {
             key: "task",
             header: "Task",
+            sortValue: (row) => row.task,
             cell: (row) => <TableTextCell>{row.task}</TableTextCell>,
           },
         ]}

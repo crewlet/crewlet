@@ -774,6 +774,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 key: "task",
                 header: "Task",
                 floor: "8rem",
+                sortValue: (s) => s.task,
                 cell: (s) => <TableTextCell>{s.task}</TableTextCell>,
               },
               {
