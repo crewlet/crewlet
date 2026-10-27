@@ -253,7 +253,9 @@ func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 // turn's first request about a repository happens in one place; every tool
 // reads all its arguments first ([repoArg], [revArg]), so a malformed call is
 // refused before it costs a read. The memo decides nothing about access: the
-// node answering every later read judges the grant again.
+// node answering every later read judges the grant again. And it holds only
+// while it is true: a later read that answers the name with another id
+// ([CodeDeps.sameRepo]), or the id gone ([CodeDeps.failed]), forgets it.
 func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
 	name string) (code.RepoRef, *tools.Result) {
 
@@ -288,12 +290,35 @@ func (d CodeDeps) sameRepo(turn *turnctx.Turn, tool string, asker code.Principal
 	if answered.ID == "" || answered.ID == repo.ID {
 		return nil
 	}
-	turn.LookedUp().Forget(codeRepoKey{asker: asker, name: repo.Name})
+	forget(turn, asker, repo)
 	r := refused(tools.RefusalStaleVersion, fmt.Sprintf("%s: the name %q names another repository "+
 		"than it did when this turn first read it — it was deleted and declared again — so nothing "+
 		"was read. Make the same call again: it reads the repository the name names now.", tool,
 		repo.Name))
 	return &r
+}
+
+// failed explains a read about repo — the repository the turn resolved — that
+// did not answer ([codeFailure]), and where the read answered the repository
+// GONE (code.ErrRepoNotFound) forgets the turn's resolution of its name first,
+// as [CodeDeps.sameRepo] does for a name that answers another id: the
+// resolution is no longer true, whichever read found it out — one by name, or
+// one by the id the turn resolved, which no read by name ever re-checks. A name
+// purged and declared again names a repository of another id, so the next call
+// naming it resolves it afresh rather than asking again, for the rest of the
+// turn, about an id nothing serves.
+func (d CodeDeps) failed(ctx context.Context, turn *turnctx.Turn, tool string, asker code.Principal,
+	repo code.RepoRef, err error) tools.Result {
+
+	if errors.Is(err, code.ErrRepoNotFound) {
+		forget(turn, asker, repo)
+	}
+	return codeFailure(ctx, tool, repo.Name, err)
+}
+
+// forget drops the turn's resolution of repo's name, as asker asked it.
+func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
+	turn.LookedUp().Forget(codeRepoKey{asker: asker, name: repo.Name})
 }
 
 // resolveRef is a NAME as a ref of repo: ONE code.resolve_ref at the seat's
@@ -309,7 +334,7 @@ func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool strin
 	answer, err := d.Code.ResolveRef(ctx, code.RefQuery{Repo: repo.Name, Ref: name, Fresh: seatRead,
 		Asker: asker})
 	if err != nil {
-		r := codeFailure(ctx, tool, repo.Name, err)
+		r := d.failed(ctx, turn, tool, asker, repo, err)
 		return code.RefAnswer{}, &r
 	}
 	if r := d.sameRepo(turn, tool, asker, repo, answer.Repo); r != nil {
@@ -429,17 +454,20 @@ func furthestOnLog(a, b statelog.Position) statelog.Position {
 	return a
 }
 
-// gitRead asks q of the repository's home git node, refused here first where
-// the query is one no git node would take — so a malformed argument costs no
-// round trip and is told in the domain's own words.
-func (d CodeDeps) gitRead(ctx context.Context, tool, repo string, q code.GitQuery) (code.GitAnswer, *tools.Result) {
+// gitRead asks q of repo's home git node, refused here first where the query is
+// one no git node would take — so a malformed argument costs no round trip and
+// is told in the domain's own words. A git node that answers the repository
+// gone ends the turn's resolution of its name ([CodeDeps.failed]).
+func (d CodeDeps) gitRead(ctx context.Context, turn *turnctx.Turn, tool string, repo code.RepoRef,
+	q code.GitQuery) (code.GitAnswer, *tools.Result) {
+
 	if err := q.Validate(); err != nil {
-		r := codeFailure(ctx, tool, repo, err)
+		r := codeFailure(ctx, tool, repo.Name, err)
 		return code.GitAnswer{}, &r
 	}
 	answer, err := d.Code.GitRead(ctx, q)
 	if err != nil {
-		r := codeFailure(ctx, tool, repo, err)
+		r := d.failed(ctx, turn, tool, q.Asker, repo, err)
 		return code.GitAnswer{}, &r
 	}
 	return answer, nil
@@ -827,7 +855,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	answer, err := t.deps.Code.Read(ctx, q)
 	if err != nil {
-		return codeFailure(ctx, t.Name(), repo.Name, err), nil
+		return t.deps.failed(ctx, turn, t.Name(), asker, repo, err), nil
 	}
 	out := codeRepoAnswer{Repo: repo.Name, Position: answer.Position}
 	if d := answer.Repo; d != nil {
@@ -1036,7 +1064,7 @@ func (t *codeRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		q.Kind, q.Blob = code.GitBlob, &code.BlobQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
 			StartLine: start, EndLine: end}
 	}
-	page, refusal := t.deps.gitRead(ctx, t.Name(), repo.Name, q)
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, q)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1150,7 +1178,7 @@ func (t *codeDiff) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	diff := &code.DiffQuery{Base: base.oid, Head: head.oid, Paths: paths, File: argString(args, "file"),
 		FileB64: argString(args, "file_b64"), Renames: renames}
-	page, refusal := t.deps.gitRead(ctx, t.Name(), repo.Name, code.GitQuery{Kind: code.GitDiff,
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitDiff,
 		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(base, head),
 		Cursor: strings.TrimSpace(argString(args, "cursor")), Diff: diff})
 	if refusal != nil {
@@ -1248,7 +1276,7 @@ func (t *codeCompare) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	page, refusal := t.deps.gitRead(ctx, t.Name(), repo.Name, code.GitQuery{Kind: code.GitCompare,
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitCompare,
 		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(base, head),
 		Compare: &code.CompareQuery{Base: base.oid, Head: head.oid}})
 	if refusal != nil {
@@ -1335,7 +1363,7 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	resolved := resolvedRev{oid: tip.OID, ref: &tip}
-	page, refusal := t.deps.gitRead(ctx, t.Name(), repo.Name, code.GitQuery{Kind: code.GitLandedIn,
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), repo, code.GitQuery{Kind: code.GitLandedIn,
 		RepoID: repo.ID, Asker: asker, Fresh: t.deps.gitFresh(commit, resolved),
 		LandedIn: &code.LandedInQuery{Commit: commit.oid, Target: tip.Ref, TargetOID: tip.OID,
 			At: tip.Position}})

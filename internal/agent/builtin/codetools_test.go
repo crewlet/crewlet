@@ -72,7 +72,8 @@ type codeHost struct {
 	at      statelog.Position
 
 	// replaced, set, is the repository every read BY NAME after the first
-	// names: a name deleted and declared again between two reads.
+	// names: a name deleted and declared again between two reads — and a
+	// read by object id of any other repository is answered gone.
 	replaced *code.RepoRef
 	readErr  error
 	gitErr   error
@@ -181,6 +182,12 @@ func (h *codeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, 
 	h.gits = append(h.gits, q)
 	if h.gitErr != nil {
 		return code.GitAnswer{}, h.gitErr
+	}
+	if h.replaced != nil && q.RepoID != h.replaced.ID {
+		// THE ID THE NAME NAMED BEFORE, purged: what a git node answers a
+		// read of it.
+		return code.GitAnswer{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound,
+			code.RepoGone{ID: q.RepoID, Name: h.detail.Name, Purged: true}.Detail())
 	}
 	if h.git != nil {
 		return h.git(q), nil
@@ -551,37 +558,60 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	}
 }
 
-// A NAME THAT NAMES ANOTHER REPOSITORY MID-TURN IS RESOLVED AGAIN: a ref read by
-// name that answers another repository than the one the turn resolved — the
-// name deleted and declared again between the two — reads nothing and is
-// refused stale, and the turn forgets its resolution, so the same call made
-// again reads the repository the name names now.
+// A NAME THAT NAMES ANOTHER REPOSITORY MID-TURN IS RESOLVED AGAIN, whichever
+// read finds it out — the name deleted and declared again since the turn
+// resolved it. A ref read by NAME that answers another repository reads nothing
+// and is refused stale; a read by COMMIT ID of the repository the turn resolved,
+// which its git node answers gone, is refused not found. Either way the turn
+// forgets its resolution, so the same call made again reads the repository the
+// name names now, rather than asking again about an id nothing serves.
 //
-// Mutation: sameRepo ignoring the id, or refusing without forgetting → red.
+// Mutation: sameRepo ignoring the id or refusing without forgetting (by name),
+// or a read by id answered gone leaving the turn's resolution in place (by
+// commit id) → red.
 func TestANameReplacedMidTurnIsResolvedAgain(t *testing.T) {
 	t.Parallel()
-	host := newCodeHost()
-	reborn := host.detail.RepoRef
-	reborn.ID = "0192f6c1-6a7e-7c1b-9d4e-000000000002"
-	reg := codeRegistry(t, builtin.CodeDeps{Code: host})
-	turn := codeTurn(t)
-	callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
+	for _, c := range []struct {
+		name string
+		args map[string]any
+		want tools.Refusal
+		// asked is how many git reads the refused call makes: none for a
+		// ref that already names another repository, one of the old id for
+		// a read by commit id.
+		asked int
+	}{
+		{"a read by name", map[string]any{"repo": "site", "rev": "main"}, tools.RefusalStaleVersion, 0},
+		{"a read by commit id", map[string]any{"repo": "site", "rev": mainOID}, tools.RefusalNotFound, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host := newCodeHost()
+			reborn := host.detail.RepoRef
+			reborn.ID = "0192f6c1-6a7e-7c1b-9d4e-000000000002"
+			reg := codeRegistry(t, builtin.CodeDeps{Code: host})
+			turn := codeTurn(t)
+			callCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site"})
 
-	host.mu.Lock()
-	host.replaced = &reborn
-	host.mu.Unlock()
-	got := refusedCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main"})
-	if tools.RefusalOf(got) != tools.RefusalStaleVersion {
-		t.Fatalf("a ref of a replaced repository answered %+v, want refused stale", got)
-	}
-	if _, _, gits := host.asked(); len(gits) != 0 {
-		t.Fatalf("a read of a replaced repository reached a git node: %+v", gits)
-	}
-	callCode(t, reg, turn, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": "main"})
-	reads, _, gits := host.asked()
-	if readsOf(reads, code.ReadRepo) != 2 || len(gits) != 1 || gits[0].RepoID != reborn.ID {
-		t.Errorf("the call made again read the repository %d times and asked %+v, want it resolved again "+
-			"and read by %s", readsOf(reads, code.ReadRepo), gits, reborn.ID)
+			host.mu.Lock()
+			host.replaced = &reborn
+			host.mu.Unlock()
+			got := refusedCode(t, reg, turn, builtin.CodeReadTool, c.args)
+			if tools.RefusalOf(got) != c.want {
+				t.Fatalf("a read of a replaced repository answered %+v, want refused %s", got, c.want)
+			}
+			reads, _, gits := host.asked()
+			if len(gits) != c.asked || (c.asked > 0 && gits[0].RepoID != siteID) {
+				t.Fatalf("the refused read asked the git nodes %+v, want %d reads of %s", gits, c.asked, siteID)
+			}
+			resolved := readsOf(reads, code.ReadRepo)
+			callCode(t, reg, turn, builtin.CodeReadTool, c.args)
+			reads, _, gits = host.asked()
+			if readsOf(reads, code.ReadRepo) != resolved+1 || len(gits) != c.asked+1 ||
+				gits[len(gits)-1].RepoID != reborn.ID {
+				t.Errorf("the call made again read the repository %d more times and asked %+v, want it "+
+					"resolved again and read by %s", readsOf(reads, code.ReadRepo)-resolved, gits, reborn.ID)
+			}
+		})
 	}
 }
 

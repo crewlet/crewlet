@@ -36,10 +36,11 @@ import "sync"
 // up.
 //
 // A consumer that finds an entry no longer true — the name now names another
-// object — FORGETS it, so the next call looks up again; it never replaces it
-// with what another read said in passing, because an entry is what the ONE
-// lookup seam answered, and whatever that seam does beside its read must then
-// be done again for the object the name now names.
+// object, or the object it named is gone — FORGETS it, whichever of its reads
+// finds that out, so the next call looks up again; it never replaces it with
+// what another read said in passing, because an entry is what the ONE lookup
+// seam answered, and whatever that seam does beside its read must then be done
+// again for the object the name now names.
 //
 // NIL HOLDS NOTHING: every method is safe on a nil Lookups, which answers
 // every Load as a miss — a turn built without one, a tool exercised directly,

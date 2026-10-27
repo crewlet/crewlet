@@ -350,11 +350,12 @@ the same object on every node, so a read by one is asked of the repository's
 [home git node](../concepts/code-host.md#the-home-git-node) with no level of
 its own — only a floor its copy is first brought to: this node's own pushes,
 and where the call's refs were resolved. A turn reads each repository it names
-once, at its first call naming it, and resolves a ref each time a call names
-one — so a seat that resolves a branch with `code_resolve` once and passes the
-commit id on pays one barrier for the repository and one for the branch,
-however many files it then reads. The operator surface has no turn, and reads
-the repository once a call.
+once, at its first call naming it — and again only after a read finds the name
+no longer names what it did: another repository declared under it, or the one
+it named gone — and resolves a ref each time a call names one — so a seat that
+resolves a branch with `code_resolve` once and passes the commit id on pays one
+barrier for the repository and one for the branch, however many files it then
+reads. The operator surface has no turn, and reads the repository once a call.
 
 **Who may read** is decided per repository, by the node that answers, from its
 own chart: a person and a credential bound to no seat read every repository,
