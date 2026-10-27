@@ -440,18 +440,18 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 		span.SetAttributes(attribute.String("crewlet.tool_server", server))
 	}
 
+	_, fromMCP := e.FromMCP()
+	target := TargetOf(e.Tool, args)
+	// THROUGH [Invoke], which holds a first-party call to the schema its
+	// tool advertises (ADR-0059): a value the tool would misread is refused
+	// before anything runs, and every other finding rides on the answer.
+	//
 	// THE ACTING SEAT IS ATTACHED HERE, which is the one frame every seat
 	// tool call goes through: the authority decision reads the principal
 	// off the context on every call, and until this line nothing produced
 	// one for a seat at all. An outer answer wins — see
 	// [turnctx.WithPrincipal] — so a surface reached through somebody's
 	// own credential still acts as them.
-	//
-	// THROUGH [Invoke], which holds a first-party call to the schema its
-	// tool advertises (ADR-0059): a value the tool would misread is refused
-	// before anything runs, and every other finding rides on the answer.
-	_, fromMCP := e.FromMCP()
-	target := TargetOf(e.Tool, args)
 	res, refusedByContract, err := Invoke(turnctx.WithPrincipal(ctx, turn), Invocation{
 		Name: call.Name, Tool: e.Tool, Args: args, AsSeat: true, Turn: turn,
 		ThirdParty: fromMCP, Where: s.Phase(), Counter: s.counter,

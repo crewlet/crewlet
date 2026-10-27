@@ -69,17 +69,25 @@ func TestEachReadIsItsHelpers(t *testing.T) {
 		number read
 	}
 	for name, c := range map[string]numCase{
-		"a whole number": {3.0, read{3, true}, read{3, true}, read{3.0, true}, read{3.0, true}},
-		"a fraction":     {2.5, read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
-		"an exact big":   {big, read{9007199254740993, true}, read{nil, true}, read{nil, true}, read{nil, true}},
-		"digits":         {" 42 ", read{42, true}, read{42, true}, read{42.0, true}, read{42.0, true}},
-		"a prefix":       {"5 days", read{5, true}, read{0, false}, read{0.0, false}, read{0.0, false}},
-		"a decimal text": {"2.5", read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
-		"NaN text":       {"NaN", read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
-		"infinity":       {math.Inf(1), read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
-		"a boolean":      {true, read{0, false}, read{0, false}, read{0.0, false}, read{0.0, false}},
-		"an int":         {7, read{7, true}, read{7, true}, read{7.0, true}, read{7.0, true}},
-		"an int64":       {int64(7), read{7, true}, read{7, true}, read{0.0, false}, read{7.0, true}},
+		"a whole number":      {3.0, read{3, true}, read{3, true}, read{3.0, true}, read{3.0, true}},
+		"a fraction":          {2.5, read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
+		"an exact big":        {big, read{9007199254740993, true}, read{nil, true}, read{nil, true}, read{nil, true}},
+		"digits":              {" 42 ", read{42, true}, read{42, true}, read{42.0, true}, read{42.0, true}},
+		"a prefix":            {"5 days", read{5, true}, read{0, false}, read{0.0, false}, read{0.0, false}},
+		"a decimal text":      {"2.5", read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
+		"NaN text":            {"NaN", read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
+		"infinity":            {math.Inf(1), read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
+		"a boolean":           {true, read{0, false}, read{0, false}, read{0.0, false}, read{0.0, false}},
+		"an int":              {7, read{7, true}, read{7, true}, read{7.0, true}, read{7.0, true}},
+		"an int64":            {int64(7), read{7, true}, read{7, true}, read{0.0, false}, read{7.0, true}},
+		"a negative text":     {"-3", read{-3, true}, read{-3, true}, read{-3.0, true}, read{-3.0, true}},
+		"a signed text":       {"+5", read{5, true}, read{5, true}, read{5.0, true}, read{5.0, true}},
+		"a hex text":          {"0x10", read{0, true}, read{0, false}, read{0.0, false}, read{0.0, false}},
+		"an empty text":       {"", read{0, false}, read{0, false}, read{0.0, false}, read{0.0, false}},
+		"an exponent text":    {"1e3", read{1, true}, read{1000, true}, read{1000.0, true}, read{1000.0, true}},
+		"a negative fraction": {-2.5, read{-2, true}, read{0, false}, read{-2.5, true}, read{-2.5, true}},
+		"a decimal literal":   {json.Number("2.5"), read{2, true}, read{0, false}, read{2.5, true}, read{2.5, true}},
+		"NaN":                 {math.NaN(), read{0, false}, read{0, false}, read{nil, true}, read{nil, false}},
 	} {
 		check := func(fn string, got any, ok bool, want read) {
 			if ok != want.ok || (want.v != nil && got != want.v) {

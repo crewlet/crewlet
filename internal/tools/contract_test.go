@@ -329,3 +329,16 @@ func TestAClosedSetIsReadByOneRule(t *testing.T) {
 		t.Errorf("a value no member spells is not a finding: %+v", got)
 	}
 }
+
+// A FINDING IS A NAMED VALUE a reader off the wire can judge.
+func TestAFindingIsANamedValue(t *testing.T) {
+	t.Parallel()
+	for _, f := range tools.Findings {
+		if !f.Valid() || string(f) == "" {
+			t.Errorf("%q is not a valid finding", f)
+		}
+	}
+	if tools.Finding("misreed").Valid() || tools.Finding("").Valid() {
+		t.Error("a name this build does not have is valid")
+	}
+}

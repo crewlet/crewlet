@@ -38,18 +38,26 @@ import (
 // one where a list of strings belongs, a numeric string where a number
 // belongs. They are not findings at all.
 
-// Finding is what an [ArgFault] is.
-type Finding uint8
+// Finding is what an [ArgFault] is: a named string, so a value off the wire
+// is one a reader can branch on and [Finding.Valid] can judge.
+type Finding string
 
-// The findings, in the order a call's answer lists them.
+// The findings, in the order a call's answer lists them ([Findings]).
 const (
 	// Misread: the tool would read the value as something else.
-	Misread Finding = iota + 1
+	Misread Finding = "misread"
 	// Outside: the schema refuses it, and the tool decides.
-	Outside
+	Outside Finding = "outside"
 	// Unknown: a key the schema does not declare.
-	Unknown
+	Unknown Finding = "unknown"
 )
+
+// Findings are every finding this build names, in the order an answer lists
+// them.
+var Findings = []Finding{Misread, Outside, Unknown}
+
+// Valid reports whether f is a finding this build names.
+func (f Finding) Valid() bool { return slices.Contains(Findings, f) }
 
 // ArgFault is one way a call's arguments are outside its tool's schema: the
 // argument's path (`limit`, `ops[2].if_version`), the kind of finding, and a
@@ -469,7 +477,7 @@ func misreadAnswer(tool string, faults []ArgFault) string {
 func faultLines(faults []ArgFault) string {
 	sorted := slices.Clone(faults)
 	slices.SortStableFunc(sorted, func(a, b ArgFault) int {
-		if c := cmp.Compare(a.Finding, b.Finding); c != 0 {
+		if c := cmp.Compare(slices.Index(Findings, a.Finding), slices.Index(Findings, b.Finding)); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.Path, b.Path)
