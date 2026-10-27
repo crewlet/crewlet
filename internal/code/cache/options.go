@@ -151,6 +151,10 @@ type knobs struct {
 	// of its repositories' waits to end — told when, on Options.Now's clock —
 	// in place of a timer: a case moves its clock and wakes it.
 	installWake func(at time.Time) <-chan time.Time
+	// installSettling, when set, runs as an installer's task has ended its
+	// try of the repository id and is about to settle it: a case holds the
+	// task there to land a kick of the repository while it runs.
+	installSettling func(id string)
 	// chainLines, when set, is what a written multi-pack-index chain file
 	// lists in place of the ids installed: a case writes one in another
 	// order, a chain over the wrong base, for the canary to meet (M16).

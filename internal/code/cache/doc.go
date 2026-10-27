@@ -1038,10 +1038,12 @@
 // packs. A DELTA never downloads a layer: it records the chain the snapshot
 // served and hands what the copy lacks to the INSTALLER, the goroutine Start
 // begins, which fetches behind the serving on at most a round's share of the
-// node's downloads and places under the repository's write lock. THE CHAIN
-// HOLDS ITS PACKS: a pack an installed layer names stays in the copy, its row
-// retired or not, until a placement replaces the layer, and a stale layer
-// whose replacement cannot be placed is cut after installRetryCap. A
+// node's downloads and places under the repository's write lock, holding each
+// repository once — due in order, or waiting by when its backoff ends — so a
+// pass costs what it takes up, never what it holds. THE CHAIN HOLDS ITS
+// PACKS: a pack an installed layer names stays in the copy, its row retired
+// or not, until a placement replaces the layer, and a stale layer whose
+// replacement cannot be placed is cut after installRetryCap of its own. A
 // PLACEMENT is a swap on a copy a reader may hold (swap.go's layer step) and
 // in place on one nobody does, and before either is visible a CANARY reads
 // once through the chain's bitmap — a layer over the wrong base passes every

@@ -2,6 +2,7 @@ package cache
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -1529,8 +1530,19 @@ func (c *Cache) Layers(s Synced) []code.LayerRow {
 // layers a delta named and the copy does not hold — behind the serving, since
 // no reader waits on a layer.
 //
-//   - ITS QUEUE is repositories in the order they were kicked — by a round
-//     whose chain moved, by an adoption, by its own retry — each once.
+//   - IT HOLDS EACH REPOSITORY ONCE, in one of three places: DUE a try, in
+//     the order it became so — kicked by a round whose chain moved or by an
+//     adoption, or its wait ended — WAITING out a backoff, the earliest end
+//     first, or RUNNING. A pass moves every wait that has ended among the due
+//     and takes up the due while a task is free, so it costs what it moves
+//     and takes up, never what the installer holds: a burst of publications
+//     over thousands of repositories, or a store's outage, holds thousands,
+//     and a pass runs at every kick — every task's end and every round of a
+//     repository held, one waiting out its backoff included — under the lock
+//     every round's kick and every full round's install waits on. A walk of
+//     every repository held at every pass drained 10 000 in about Q²/32
+//     steps, three million, and took ten thousand more in hand at every kick
+//     of one waiting.
 //   - IT FETCHES AT MOST FetchConcurrency PARTS AT ONCE ACROSS THE
 //     REPOSITORIES it installs, taking the next from the queue whenever one
 //     ends, through the node's fetch slots (NodeFetches): half the node's
@@ -1565,17 +1577,110 @@ type layerInstaller struct {
 	kicks chan struct{}
 
 	mu sync.Mutex
-	// queue is the repositories waiting, in the order they were kicked, and
-	// queued the same as a set; running is the ones being installed now, and
-	// waits each one's backoff. adopted is the layers the repositories'
-	// maintainer handed this node (AdoptLayer), by repository and layer id,
-	// staged in tmp/ until a placement takes them or the janitor discards
-	// them.
-	queue   []string
-	queued  map[string]bool
-	running map[string]bool
-	waits   map[string]*installWait
+	// repos is every repository the installer holds, each with its place and
+	// its backoff: due is the DUE in order, waiting the WAITING by when each
+	// one's wait ends, and running counts the RUNNING. adopted is the layers
+	// the repositories' maintainer handed this node (AdoptLayer), by
+	// repository and layer id, staged in tmp/ until a placement takes them or
+	// the janitor discards them.
+	repos   map[string]*installEntry
+	due     installQueue
+	waiting installWaits
+	running int
 	adopted map[string]map[string]*stagedLayer
+	// handled counts the repositories passes have taken in hand — moved among
+	// the due, or taken up — what the suite holds a pass's cost to.
+	handled uint64
+}
+
+// installPlace is where a repository the installer holds is.
+type installPlace uint8
+
+const (
+	// placeDue: among the due, taken up in order while a task is free.
+	placeDue installPlace = iota + 1
+	// placeWaiting: among the waiting until its backoff ends.
+	placeWaiting
+	// placeRunning: a task is installing it.
+	placeRunning
+)
+
+// installEntry is one repository the installer holds: its place, its index
+// among the waiting while it waits (-1 elsewhere), whether a kick came while a
+// task ran it — which holds it once more as the task ends, fresh as the
+// freshest such kick said — and its backoff.
+type installEntry struct {
+	id                string
+	place             installPlace
+	index             int
+	again, againFresh bool
+	wait              installWait
+}
+
+// installQueue is the due, in the order they became so: a slice taken from
+// its head, what was taken dropped once it is half the slice, so a repository
+// costs O(1) to queue and to take up, and the slice is never more than twice
+// what it holds.
+type installQueue struct {
+	entries []*installEntry
+	head    int
+}
+
+func (q *installQueue) push(e *installEntry) { q.entries = append(q.entries, e) }
+
+// pop takes the first of the due, or nil when none is.
+func (q *installQueue) pop() *installEntry {
+	if q.head == len(q.entries) {
+		return nil
+	}
+	e := q.entries[q.head]
+	q.entries[q.head] = nil
+	q.head++
+	if q.head*2 >= len(q.entries) {
+		n := copy(q.entries, q.entries[q.head:])
+		clear(q.entries[n:])
+		q.entries, q.head = q.entries[:n], 0
+	}
+	return e
+}
+
+// installWaits is the waiting, the earliest end first: a heap
+// (container/heap) on when each one's wait ends, each entry knowing its index,
+// so a pass takes what is due and a fresh kick lifts one out in O(log n).
+type installWaits []*installEntry
+
+func (h installWaits) Len() int           { return len(h) }
+func (h installWaits) Less(i, j int) bool { return h[i].wait.retryAt.Before(h[j].wait.retryAt) }
+
+func (h installWaits) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index, h[j].index = i, j
+}
+
+func (h *installWaits) Push(x any) {
+	e := x.(*installEntry)
+	e.index = len(*h)
+	*h = append(*h, e)
+}
+
+func (h *installWaits) Pop() any {
+	old := *h
+	e := old[len(old)-1]
+	old[len(old)-1] = nil
+	*h, e.index = old[:len(old)-1], -1
+	return e
+}
+
+// hold puts e among the due, or among the waiting while its backoff holds at
+// now; in.mu is held.
+func (in *layerInstaller) hold(e *installEntry, now time.Time) {
+	if now.Before(e.wait.retryAt) {
+		e.place = placeWaiting
+		heap.Push(&in.waiting, e)
+		return
+	}
+	e.place = placeDue
+	in.due.push(e)
 }
 
 // installWait is one repository's place in the installer's backoff: the
@@ -1669,25 +1774,33 @@ func installWindow(n int) time.Duration {
 func newLayerInstaller(share int) *layerInstaller {
 	return &layerInstaller{
 		share: semaphore.NewWeighted(int64(share)), tasks: share, kicks: make(chan struct{}, 1),
-		queued: map[string]bool{}, running: map[string]bool{}, waits: map[string]*installWait{},
-		adopted: map[string]map[string]*stagedLayer{},
+		repos: map[string]*installEntry{}, adopted: map[string]map[string]*stagedLayer{},
 	}
 }
 
-// kickInstall queues id for the installer and wakes it; fresh says a round
+// kickInstall holds id for the installer and wakes it: due at once where it
+// held none of it, as it was where it holds it — waiting out its backoff, or
+// due — and once more as its task ends where one runs it. fresh says a round
 // of the repository served its chain, which ends its wait (a new chain is a
-// new try). Its lock is a leaf: called with an entry's mu held or not.
+// new try): a waiting one is due at once, and a running one's next try
+// waits for nothing. O(log n) at most, never a walk of what the installer
+// holds. Its lock is a leaf: called with an entry's mu held or not.
 func (c *Cache) kickInstall(id string, fresh bool) {
 	in := c.installer
 	in.mu.Lock()
-	if fresh {
-		if w := in.waits[id]; w != nil {
-			w.failures, w.retryAt = 0, time.Time{}
+	switch e := in.repos[id]; {
+	case e == nil:
+		e = &installEntry{id: id, index: -1}
+		in.repos[id] = e
+		in.hold(e, time.Time{})
+	case e.place == placeRunning:
+		e.again, e.againFresh = true, e.againFresh || fresh
+	case fresh:
+		e.wait.failures, e.wait.retryAt = 0, time.Time{}
+		if e.place == placeWaiting {
+			heap.Remove(&in.waiting, e.index)
+			in.hold(e, time.Time{})
 		}
-	}
-	if !in.queued[id] {
-		in.queued[id] = true
-		in.queue = append(in.queue, id)
 	}
 	in.mu.Unlock()
 	select {
@@ -1718,9 +1831,8 @@ func installDue(inc *incarnation) bool {
 
 // runInstaller is the installer's loop, started by Start: a pass at every
 // kick and whenever the earliest wait ends, until ctx ends or the cache
-// stops. Each pass starts a task for every repository queued and not waiting,
-// while fewer than its tasks run, and waits for none of them — each
-// kicks it as it ends.
+// stops. Each pass takes up the due in order while fewer than its tasks run,
+// and waits for none of them — each kicks it as it ends.
 func (c *Cache) runInstaller(ctx context.Context) {
 	// Every task's fetches and placement end with Start's ctx or the cache's
 	// lifetime, whichever ends first: Stop waits for the tasks (enter).
@@ -1738,7 +1850,7 @@ func (c *Cache) runInstaller(ctx context.Context) {
 		case <-c.installer.kicks:
 		default:
 		}
-		next, _ := c.installPass(ctx)
+		next, _, _ := c.installPass(ctx)
 		c.leave()
 		var wake <-chan time.Time
 		switch {
@@ -1760,59 +1872,78 @@ func (c *Cache) runInstaller(ctx context.Context) {
 	}
 }
 
-// installPass starts a task (installRepo) for every queued repository whose
-// wait has passed, in queue order, while fewer than its tasks run, and
-// answers when the earliest wait still holding one back ends — zero when none
-// does — and the tasks it started, which end as they finish. The tasks run on
-// goroutines of their own, registered as the cache's work (enter), so Stop
-// waits for them; the loop waits for none.
-func (c *Cache) installPass(ctx context.Context) (time.Time, *sync.WaitGroup) {
+// installPass moves every repository whose wait has ended among the due, then
+// starts a task (installRepo, then settleInstall) for each of the due in
+// order while fewer than its tasks run, and answers when the earliest wait
+// still holding one back ends — zero when none does — the repositories it
+// took up, and the tasks it started, which end as they finish. It takes in
+// hand only what it moves and takes up. The tasks run on goroutines of their
+// own, registered as the cache's work (enter), so Stop waits for them; the
+// loop waits for none.
+func (c *Cache) installPass(ctx context.Context) (next time.Time, started []string, tasks *sync.WaitGroup) {
 	in, now := c.installer, c.now()
-	var next time.Time
-	var tasks sync.WaitGroup
+	tasks = &sync.WaitGroup{}
 	in.mu.Lock()
-	var start []string
-	rest := in.queue[:0]
-	for _, id := range in.queue {
-		w := in.waits[id]
-		switch {
-		case in.running[id] || len(in.running)+len(start) >= in.tasks:
-			rest = append(rest, id)
-		case w != nil && now.Before(w.retryAt):
-			rest = append(rest, id)
-			if next.IsZero() || w.retryAt.Before(next) {
-				next = w.retryAt
-			}
-		default:
-			start = append(start, id)
-			delete(in.queued, id)
-		}
+	for len(in.waiting) > 0 && !now.Before(in.waiting[0].wait.retryAt) {
+		e := heap.Pop(&in.waiting).(*installEntry)
+		e.place = placeDue
+		in.due.push(e)
+		in.handled++
 	}
-	in.queue = rest
-	for _, id := range start {
-		in.running[id] = true
+	for in.running < in.tasks {
+		e := in.due.pop()
+		if e == nil {
+			break
+		}
+		in.handled++
+		e.place = placeRunning
+		in.running++
+		started = append(started, e.id)
+	}
+	if len(in.waiting) > 0 {
+		next = in.waiting[0].wait.retryAt
 	}
 	in.mu.Unlock()
-	for _, id := range start {
+	for _, id := range started {
 		if !c.enter() {
-			in.mu.Lock()
-			delete(in.running, id)
-			in.mu.Unlock()
+			// The cache is stopping: the try is let go, nothing of it begun.
+			c.settleInstall(id, installEnd{forget: true})
 			continue
 		}
 		tasks.Go(func() {
 			defer c.leave()
-			c.installRepo(ctx, id)
-			in.mu.Lock()
-			delete(in.running, id)
-			in.mu.Unlock()
+			end := c.installRepo(ctx, id)
+			if c.knobs != nil && c.knobs.installSettling != nil {
+				c.knobs.installSettling(id)
+			}
+			c.settleInstall(id, end)
 			select {
 			case in.kicks <- struct{}{}:
 			default:
 			}
 		})
 	}
-	return next, &tasks
+	return next, started, tasks
+}
+
+// installEnd is how one try of a repository ended, as its task settles it
+// (settleInstall).
+type installEnd struct {
+	// forget: the copy was gone or had nothing due, an episode over — the
+	// repository's wait ends with the try.
+	forget bool
+	// moved: the placement found the copy or its chain moved since the plan
+	// — due again at once, its wait as it was.
+	moved bool
+	// stop is the fetch that stopped the chain, nil where none did;
+	// undecided the read at the log's head that failed where a missing part
+	// could not be decided; swapFailed a placement this node's disk failed;
+	// and stale the layers of the installed chain the rows no longer name
+	// still standing in, as installed.
+	stop       *layerFetch
+	undecided  error
+	swapFailed bool
+	stale      []code.LayerRow
 }
 
 // installRepo is one repository's install, in four steps:
@@ -1836,25 +1967,24 @@ func (c *Cache) installPass(ctx context.Context) (time.Time, *sync.WaitGroup) {
 //     stood in for its replacement for installRetryCap with nothing fetched
 //     is cut.
 //
-// A copy gone, or with nothing due, ends the repository's wait with the try:
-// whatever it waited out — failures in a row, a stale layer's clock — was an
-// episode now over, ended where the installer does not see it (a full round
-// placing the chain, a cut, an eviction), and a wait kept would be the next
-// episode's from its first try.
-func (c *Cache) installRepo(ctx context.Context, id string) {
+// It answers how the try ended, for its task to settle. A copy gone, or with
+// nothing due, ends the repository's wait with the try: whatever it waited
+// out — failures in a row, a stale layer's clock — was an episode now over,
+// ended where the installer does not see it (a full round placing the chain,
+// a cut, an eviction), and a wait kept would be the next episode's from its
+// first try.
+func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 	c.mu.Lock()
 	e := c.entries[id]
 	c.mu.Unlock()
 	if e == nil {
-		c.forgetInstall(id)
-		return
+		return installEnd{forget: true}
 	}
 	e.mu.Lock()
 	inc := e.current
 	if e.dead || !installDue(inc) {
 		e.mu.Unlock()
-		c.forgetInstall(id)
-		return
+		return installEnd{forget: true}
 	}
 	chain := slices.Clone(inc.chain)
 	k := prefixOf(inc.installed, EventLayersMoved, eventDetail{want: chain})
@@ -1903,8 +2033,7 @@ func (c *Cache) installRepo(ctx context.Context, id string) {
 		switch c.placeBySwap(ctx, e, inc, gen, rows, fetched) {
 		case placementMoved:
 			// Planned over a copy or a chain no longer there: planned again.
-			c.kickInstall(id, false)
-			return
+			return installEnd{moved: true}
 		case placementMade:
 			// Counted by the swap that placed them (swapped).
 			fetched = nil
@@ -1929,11 +2058,11 @@ func (c *Cache) installRepo(ctx context.Context, id string) {
 	// again behind its wait — a failure that may pass (a miss the log's head
 	// could not decide among them), a placement that did not, or a stale
 	// layer still standing in for a replacement — or nothing.
-	var undecided error
+	end := installEnd{stop: stop, swapFailed: swapFailed, stale: stale}
 	if stop != nil && stop.outcome != layerFailed {
-		undecided = c.refuseFailed(ctx, e, *stop)
+		end.undecided = c.refuseFailed(ctx, e, *stop)
 	}
-	c.settleInstall(id, stop, undecided, swapFailed, stale)
+	return end
 }
 
 // stuckFor is how long the oldest of stale — the layers of id's installed
@@ -1944,53 +2073,69 @@ func (c *Cache) stuckFor(id string, stale []code.LayerRow, now time.Time) time.D
 	in := c.installer
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	w := in.waits[id]
-	if w == nil || len(stale) == 0 {
+	e := in.repos[id]
+	if e == nil || len(stale) == 0 {
 		return 0
 	}
-	since, _ := w.staleSince(stale, now)
+	since, _ := e.wait.staleSince(stale, now)
 	return now.Sub(since)
 }
 
-// forgetInstall ends id's wait: an install of it that found its copy gone or
-// nothing due, its episode over.
-func (c *Cache) forgetInstall(id string) {
-	in := c.installer
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	delete(in.waits, id)
-}
-
-// settleInstall records how id's install ended: done — its wait forgotten —
-// or queued again behind a wait. A try that failed for a reason that may pass
-// waits installWindow of its failures in a row: the store or this node's disk
-// failing (stop's outcome failed), a swap that did not complete, or a part the
-// store does not hold while the read at the log's head that decides it failed
-// (undecided, that read's error) — nothing was decided, and taken up again at
-// once the repository would cost a GET, a staging and a failed round at every
-// pass for as long as the head cannot be read. A definite refusal plans again
-// at once, the refused layer now blocking; and the layers the rows no longer
-// name still standing in for their replacement (stale, as installed) wait
-// until the oldest of them has stood installRetryCap, when their cut is due —
-// each by its own clock, kept from the try that first saw it stale, and a
-// clock for a layer no longer stale dropped.
-func (c *Cache) settleInstall(id string, stop *layerFetch, undecided error, swapFailed bool,
-	stale []code.LayerRow) {
-
+// settleInstall records how id's try ended (end), its task done: the
+// repository let go — its wait forgotten — or held once more, among the due or
+// behind a wait; held once more at once, whatever else, where a kick came
+// while the task ran (again), its wait ended where that kick was fresh.
+//
+//   - Planned over a copy or a chain that moved (end.moved): due again, its
+//     wait as it was.
+//   - The copy gone or nothing due (end.forget), or done — nothing stopped
+//     it, no swap failed, no stale layer left — let go.
+//   - A try that failed for a reason that may pass waits installWindow of its
+//     failures in a row: the store or this node's disk failing (the stop's
+//     outcome failed), a swap that did not complete, or a part the store does
+//     not hold while the read at the log's head that decides it failed
+//     (end.undecided, that read's error) — nothing was decided, and taken up
+//     again at once the repository would cost a GET, a staging and a failed
+//     round at every pass for as long as the head cannot be read.
+//   - A definite refusal is due again at once, the refused layer now blocking.
+//   - The layers the rows no longer name still standing in for their
+//     replacement (end.stale, as installed) wait until the oldest of them has
+//     stood installRetryCap, when their cut is due — each by its own clock,
+//     kept from the try that first saw it stale, and a clock for a layer no
+//     longer stale dropped.
+func (c *Cache) settleInstall(id string, end installEnd) {
 	in, now := c.installer, c.now()
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	w := in.waits[id]
-	if stop == nil && !swapFailed && len(stale) == 0 {
-		delete(in.waits, id)
-		return
-	}
-	if w == nil {
-		w = &installWait{}
-		in.waits[id] = w
-	}
+	e := in.repos[id]
+	in.running--
+	w := &e.wait
+	stop, stale := end.stop, end.stale
 	switch {
-	case swapFailed || undecided != nil || (stop != nil && stop.outcome == layerFailed):
+	case end.moved:
+	case end.forget || (stop == nil && !end.swapFailed && len(stale) == 0):
+		*w = installWait{}
+		if !e.again {
+			delete(in.repos, id)
+			return
+		}
+	default:
+		c.settleWait(id, w, end, now)
+	}
+	if e.againFresh {
+		w.failures, w.retryAt = 0, time.Time{}
+	}
+	e.again, e.againFresh = false, false
+	in.hold(e, now)
+}
+
+// settleWait is the wait a try that did not end the repository's install
+// leaves w with (settleInstall's last three cases); the installer's mu is
+// held.
+func (c *Cache) settleWait(id string, w *installWait, end installEnd, now time.Time) {
+	stop, undecided, stale := end.stop, end.undecided, end.stale
+	switch {
+	case end.swapFailed || undecided != nil || (stop != nil && stop.outcome == layerFailed):
 		w.failures++
 		w.retryAt = now.Add(installWindow(w.failures))
 		if stop != nil {
@@ -2012,10 +2157,6 @@ func (c *Cache) settleInstall(id string, stop *layerFetch, undecided error, swap
 		if at := since.Add(installRetryCap); w.retryAt.IsZero() || at.Before(w.retryAt) {
 			w.retryAt = at
 		}
-	}
-	if !in.queued[id] {
-		in.queued[id] = true
-		in.queue = append(in.queue, id)
 	}
 }
 

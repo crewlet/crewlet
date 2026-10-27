@@ -2,6 +2,7 @@ package cache_test
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -257,6 +258,135 @@ func TestAStaleLayersWaitIsItsOwnEpisodes(t *testing.T) {
 				"an install that ends with nothing due forgets its wait", at, failures)
 		}
 	})
+}
+
+// AN INSTALLER PASS COSTS WHAT IT TAKES UP, NOT WHAT THE INSTALLER HOLDS: a
+// node catching up after a restore, or after a burst of publications, holds
+// thousands of repositories — due a try, or waiting out the backoff a store's
+// outage gave them — and a pass runs at every kick: every task's end, and every
+// round of a repository the installer holds, one waiting included. Draining
+// 10 000 repositories due a try takes each in hand once, to start it; kicking
+// a thousand of those waiting takes none of them in hand while their waits
+// hold; and once the waits end each is taken in hand twice — moved among the
+// due, then started — never once a pass for every repository held: about Q²/32
+// at Q held and sixteen tasks a pass, some six million at 10 000, all of it
+// under the lock every round's kick, every task's end and every full round's
+// install waits on.
+//
+// Mutation: walk every repository held at every pass (installPass scanning
+// the whole queue, as it did) — draining takes millions in hand.
+func TestAnInstallPassCostsWhatItTakesUp(t *testing.T) {
+	t.Parallel()
+	clk := newClock()
+	c := newWorld(t).open(t, clk.on)
+	const held = 10_000
+	for i := range held {
+		cache.HoldInstallUntil(c, fmt.Sprintf("waiting-%05d", i), clk.Now().Add(time.Hour))
+		cache.KickInstall(c, fmt.Sprintf("due-%05d", i), false)
+	}
+	drain := func() int {
+		took := 0
+		for {
+			n := len(cache.InstallPass(c))
+			if n == 0 {
+				return took
+			}
+			took += n
+		}
+	}
+
+	before := cache.InstallHandled(c)
+	if took := drain(); took != held {
+		t.Fatalf("the passes took up %d repositories, want the %d due", took, held)
+	}
+	if got := cache.InstallHandled(c) - before; got != held {
+		t.Errorf("draining %d repositories due a try took %d in hand, want each once", held, got)
+	}
+
+	before = cache.InstallHandled(c)
+	for i := range 1000 {
+		cache.KickInstall(c, fmt.Sprintf("waiting-%05d", i), false)
+		cache.InstallPass(c)
+	}
+	if got := cache.InstallHandled(c) - before; got != 0 {
+		t.Errorf("a thousand kicks of repositories waiting out their backoff, a pass each, took %d in hand, "+
+			"want none while their waits hold", got)
+	}
+
+	clk.Add(time.Hour)
+	before = cache.InstallHandled(c)
+	if took := drain(); took != held {
+		t.Fatalf("once their waits ended the passes took up %d repositories, want the %d waiting", took, held)
+	}
+	if got := cache.InstallHandled(c) - before; got != 2*held {
+		t.Errorf("draining %d repositories whose waits ended took %d in hand, want each twice: moved among "+
+			"the due, then started", held, got)
+	}
+}
+
+// A KICK WHILE A TASK RUNS THE REPOSITORY HOLDS IT ONCE MORE: a round that
+// brings new rows while the installer is trying the repository — between the
+// try's end and its settling — is not lost to a task already done with the
+// rows before them. The repository is held once more as the task ends, its
+// wait ended where the round served the chain, and the next pass installs
+// what the round brought: after a try that placed the chain it had ("done"),
+// and after one the store failed ("failed").
+//
+// Mutations: let a kick of a running repository say nothing (kickInstall's
+// running case dropped) — "done" lets the repository go and the new chain
+// waits for its next round; let a fresh kick of a running repository end no
+// wait (settleInstall's againFresh dropped) — "failed" holds the new chain
+// for the old one's failure.
+func TestAKickWhileATaskRunsTheRepositoryHoldsItOnceMore(t *testing.T) {
+	t.Parallel()
+	for _, failed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "done", true: "failed"}[failed], func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			repo := w.repo(t, 1)
+			p := w.pushN(t, repo, 3)
+			settling, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			c := w.open(t, newClock().on, cache.InstallSettlingWith(func(string) {
+				once.Do(func() {
+					close(settling)
+					<-release
+				})
+			}))
+			w.sync(t, c, repo).Release()
+			b := w.newChainBuild(t, p[:2], p[2:])
+			root := b.layer(t, p[:2], false)
+			top := b.layer(t, p[2:], false)
+			answer := func() {}
+			if failed {
+				answer = w.refuseParts(root)
+			}
+			w.log.publish(repo, []code.LayerRef{root}, nil)
+			w.sync(t, c, repo).Release()
+
+			pass := make(chan []string, 1)
+			go func() { pass <- cache.InstallPass(c) }()
+			select {
+			case <-settling:
+			case <-time.After(hangDetector):
+				t.Fatalf("the installer's task did not end its try within %v", hangDetector)
+			}
+			// The try has ended and is not settled yet: the store answers,
+			// and the maintainer's next publication arrives through a delta.
+			answer()
+			chain := []code.LayerRef{root, top}
+			w.log.publish(repo, chain, nil)
+			w.sync(t, c, repo).Release()
+			close(release)
+			<-pass
+
+			cache.InstallPass(c)
+			if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(chain)) {
+				t.Errorf("the pass after the task's end left the copy holding %v, want the chain the round "+
+					"brought while the task ran, %v", got, layerIDs(chain))
+			}
+		})
+	}
 }
 
 // THE INSTALLER WAITS OUT A STORE THAT FAILS: each try of a repository the

@@ -45,12 +45,22 @@ func Refused(c *Cache, repoID string) map[string]string {
 // ChainedRepos is the running total crewlet.code.cache.chained reports.
 func ChainedRepos(c *Cache) int64 { return c.chainedRepos.Load() }
 
-// InstallQueued is the repositories the installer holds queued, in order.
+// InstallQueued is the repositories the installer holds queued: the due in
+// order, then the waiting by when each one's wait ends.
 func InstallQueued(c *Cache) []string {
 	in := c.installer
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	return slices.Clone(in.queue)
+	var out []string
+	for _, e := range in.due.entries[in.due.head:] {
+		out = append(out, e.id)
+	}
+	waiting := slices.Clone(in.waiting)
+	slices.SortStableFunc(waiting, func(a, b *installEntry) int { return a.wait.retryAt.Compare(b.wait.retryAt) })
+	for _, e := range waiting {
+		out = append(out, e.id)
+	}
+	return out
 }
 
 // The installer's backoff: its first wait after a try that failed for a
@@ -67,10 +77,35 @@ func InstallWait(c *Cache, repoID string) (time.Time, int) {
 	in := c.installer
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	if w := in.waits[repoID]; w != nil {
-		return w.retryAt, w.failures
+	if e := in.repos[repoID]; e != nil {
+		return e.wait.retryAt, e.wait.failures
 	}
 	return time.Time{}, 0
+}
+
+// KickInstall queues repoID for the installer as a round of it does; fresh
+// as a round that served its chain does, which ends its wait.
+func KickInstall(c *Cache, repoID string, fresh bool) { c.kickInstall(repoID, fresh) }
+
+// HoldInstallUntil queues repoID, which the installer does not hold yet,
+// behind a wait that ends at at, as a try that failed for a reason that may
+// pass leaves it.
+func HoldInstallUntil(c *Cache, repoID string, at time.Time) {
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	e := &installEntry{id: repoID, index: -1, wait: installWait{failures: 1, retryAt: at}}
+	in.repos[repoID] = e
+	in.hold(e, c.now())
+}
+
+// InstallHandled is how many queued repositories the installer's passes have
+// taken in hand so far: what a pass's cost is held to.
+func InstallHandled(c *Cache) uint64 {
+	in := c.installer
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.handled
 }
 
 // InstallPass runs one pass of the installer synchronously, as work of the
@@ -80,14 +115,10 @@ func InstallPass(c *Cache) []string {
 	if !c.enter() {
 		return nil
 	}
-	queued := InstallQueued(c)
-	_, tasks := c.installPass(c.life)
+	_, started, tasks := c.installPass(c.life)
 	c.leave()
 	tasks.Wait()
-	in := c.installer
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	return slices.DeleteFunc(queued, func(id string) bool { return in.queued[id] })
+	return started
 }
 
 // ChainLinesWith makes every multi-pack-index chain file c writes list what f
@@ -108,6 +139,17 @@ func InstallWakesWith(o *Options, f func(at time.Time) <-chan time.Time) {
 		o.knobs = &knobs{}
 	}
 	o.knobs.installWake = f
+}
+
+// InstallSettlingWith makes every installer's task call f with its repository
+// once its try has ended, before the try is settled.
+func InstallSettlingWith(f func(id string)) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.installSettling = f
+	}
 }
 
 // PrefixOf is how many layers of installed the cut a change ev makes keeps
