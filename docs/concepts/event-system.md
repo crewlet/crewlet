@@ -894,26 +894,30 @@ Org-wide announcements, department coordination, and team discussions happen in 
 
 Private 1:1 conversations between agents, for tight-loop / mechanical sync that should *not* show up on the team's chat or issue tracker. One question, one answer, then the channel closes.
 
-An agent opens one with the `a2a_ask` tool and ends its turn. The brief travels **on the wake event** in the target's inbox, so it reaches whichever node owns that seat; the answering agent's **final response is the reply**, delivered back on the same channel and waking the asker. There is no `send_a2a_message` tool and no channel lifecycle for a model to manage — replying is just answering.
+An agent opens one with the `a2a_ask` tool and ends its turn. The brief travels **on the wake event** in the target's inbox, so it reaches whichever node owns that seat. The reply is the engine's to send, delivered back on the same channel and waking the asker, and it sends one **only from a turn that ends without parking**: a turn stopped at the delegation depth cap, or broken or stopped at or before its executor's launch, whose reply tells the asker it could not answer. A turn that launches its executor parks on the run, and the segment that resumes and ends it sends no reply, so the asker hears nothing back on the channel ([Turn Engine](turn-engine.md#who-is-waiting-and-how-they-get-an-answer)). There is no `send_a2a_message` tool and no channel lifecycle for a model to manage.
 
 ```mermaid
 sequenceDiagram
     participant A as Agent A (asks)
     participant Q as Inbox topics
-    participant B as Agent B (answers)
+    participant B as Agent B (asked)
     A->>Q: a2a_ask → open channel, publish brief
     Q->>B: a2a_request (brief on the event)
-    B->>B: turn runs
-    B->>Q: final response → reply, close channel
-    Q->>A: a2a_message (the answer)
-    A->>A: turn runs, acts on the answer
+    alt B's turn ends without parking
+        B->>Q: the engine's reply (could not answer), close channel
+        Q->>A: a2a_message (the answer)
+        A->>A: turn runs, acts on the answer
+    else B's turn launches its executor and parks
+        B->>B: the run's collection resumes and ends the turn, with no reply
+        Note over Q: the channel stays open until the idle sweep closes it
+    end
 ```
 
 Both hops are ordinary inbox deliveries: durable, ordered per conversation, routed to the seat's owner, and covered by the [completion ledger](seat-ownership.md#the-completion-ledger) so a redelivery does not run the turn twice. Channel state — the two participants, open or closed, the message count — lives in the [coordination store](coordination.md)'s `channels` slot, because the two parties are usually on different nodes and the node that authorizes the *answer* is the one that owns the answering seat, never the one that opened the channel. A single node uses the in-process coordination twin, which is a real implementation of the same certified contract rather than a fallback.
 
-A channel is closed by the answering turn. One whose answer never came — a crashed turn, a node that died between the wake and the reply — is closed by the [maintenance duty](seat-ownership.md#singleton-duties) after **1 hour** idle (three times the longest a turn can legitimately still be running), and the record is deleted seven days after that. Neither is configurable, and neither is a bucket age: the coordination store expires its other slots on a clock, but a clock cannot tell an *open* channel from a closed one, so it would reap the authorization record of an ask still waiting for its answer. Closed records outlive the conversation on purpose: *closed* is the answer to "why did my reply bounce", while a vanished record is indistinguishable from a typo'd channel id.
+A channel the engine answered is closed by the answering turn, right after its reply. Every other one — an ask whose turn parked on its executor's run, a crashed turn, a node that died between the wake and the reply — is closed by the [maintenance duty](seat-ownership.md#singleton-duties) after **1 hour** idle, and the record is deleted seven days after that. Neither is configurable, and neither is a bucket age: the coordination store expires its other slots on a clock, but a clock cannot tell an *open* channel from a closed one, so it would reap the authorization record of an ask still waiting for its answer. Closed records outlive the conversation on purpose: *closed* is the answer to "why did my reply bounce", while a vanished record is indistinguishable from a typo'd channel id.
 
-Either way the close publishes `a2a_channel_closed` naming both participants, the message count and how long the channel was open — including on the sweep path, which is where it matters most, since a channel only reaches the sweep because a turn did not finish. The duration is the difference between the record's own `opened_at` and `closed_at`, not between two nodes' clocks: a channel is opened on one node and closed on another as a matter of course, and the difference of two machines' opinions of the time is skew rather than a duration.
+Either way the close publishes `a2a_channel_closed` naming both participants, the message count and how long the channel was open — including on the sweep path, which is where it matters most, since a channel only reaches the sweep because no turn answered it. The duration is the difference between the record's own `opened_at` and `closed_at`, not between two nodes' clocks: a channel is opened on one node and closed on another as a matter of course, and the difference of two machines' opinions of the time is skew rather than a duration.
 
 The two paths differ in exactly two fields, and the difference is the whole signal. A close by the answering turn names that seat in `closed_by` and that run in `turn_id` / `work_key`, so it is drawn on the turn's own page. A close by the sweep names **neither** — there is no participant and no turn behind it — which is what the dashboard renders as *system closed A2A channel*, and what keeps a swept close off every turn page rather than attaching it to an arbitrary one.
 
