@@ -78,11 +78,12 @@ import (
 // largest layer stops when its caller does and holds a git node's read lane a
 // piece at a time, as the cache's own check of the files it keeps does.
 //
-// THE BYTES ARE CUT IN ONE PLACE (layerSpans): [StoreLayer] uploads the three
+// THE BYTES ARE CUT IN ONE PLACE (layerPart): [StoreLayer] uploads the three
 // files back to back as [LayerPartBytes] parts, every part at once, and
 // [FetchLayerPart] lays a part read back through the store's verified read
-// where it came from — the same cut both ways, so a part is laid back exactly
-// where it was taken from.
+// where it came from — the same cut both ways, a part's start in the layer and
+// its runs in the files alike, so a part is laid back exactly where it was
+// taken from.
 
 // LayerContentType is the content type a published layer's part is stored
 // under: not a git file — a part is a cut of the layer's three files back to
@@ -1042,11 +1043,30 @@ type layerSpan struct {
 	offset, bytes int64
 }
 
+// partCut is where one part of a layer lies: its first byte in the layer, its
+// bytes, and the runs of the three files they are.
+type partCut struct {
+	start, size int64
+	spans       []layerSpan
+}
+
+// layerPart is where part i of a layer whose three files are sections bytes
+// lies: every part LayerPartBytes from the layer's first byte, the last
+// holding what remains, and a part past the layer's end no byte and no run.
+// THE ONE CUT (ADR-0008), its start with it: [StoreLayer] reads each part's
+// bytes by it and [FetchLayerPart] writes them back by it, so a part is laid
+// back exactly where it was taken from — the place in the layer it starts at
+// as much as the runs it is — and no caller computes either of its own.
+func layerPart(sections [3]int64, i int) partCut {
+	start := int64(i) * LayerPartBytes
+	size := max(0, min(LayerPartBytes, sections[0]+sections[1]+sections[2]-start))
+	return partCut{start: start, size: size, spans: layerSpans(sections, start, size)}
+}
+
 // layerSpans is where the size bytes of a layer that begin at the layer's
 // byte start lie in its three files, whose sizes are sections: the runs in
-// byte order, none empty, none past the layer's end. THE ONE CUT (ADR-0008):
-// [StoreLayer] reads a part's bytes by it and [FetchLayerPart] writes them
-// back by it, so a part is laid back exactly where it was taken from.
+// byte order, none empty, none past the layer's end — the runs of a part
+// (layerPart).
 func layerSpans(sections [3]int64, start, size int64) []layerSpan {
 	var out []layerSpan
 	var base int64 // where the current file begins in the layer
@@ -1133,15 +1153,14 @@ func StoreLayer(ctx context.Context, p Putter, paths [3]string, sections [3]int6
 	parts := make([]LayerPart, (total+LayerPartBytes-1)/LayerPartBytes)
 	g, gctx := errgroup.WithContext(ctx)
 	for i := range parts {
-		start := int64(i) * LayerPartBytes
-		size := min(LayerPartBytes, total-start)
+		cut := layerPart(sections, i)
 		g.Go(func() error {
-			obj, err := storePart(gctx, p, files, layerSpans(sections, start, size), start, size, hit)
+			obj, err := storePart(gctx, p, files, cut, hit)
 			if err != nil {
-				return fmt.Errorf("code: store part %d of the layer, its bytes %d to %d: %w", i, start, start+size,
-					err)
+				return fmt.Errorf("code: store part %d of the layer, its bytes %d to %d: %w", i, cut.start,
+					cut.start+cut.size, err)
 			}
-			parts[i] = LayerPart{Object: obj.Key, Hash: obj.Hash, Size: size}
+			parts[i] = LayerPart{Object: obj.Key, Hash: obj.Hash, Size: cut.size}
 			return nil
 		})
 	}
@@ -1151,23 +1170,23 @@ func StoreLayer(ctx context.Context, p Putter, paths [3]string, sections [3]int6
 	return parts, nil
 }
 
-// storePart uploads the size bytes of a layer that begin at start — the runs
-// spans cuts them into, read from files — under UploadDeadline(size), and
+// storePart uploads the bytes of the part of a layer cut says — the runs it
+// cuts them into, read from files — under UploadDeadline of its size, and
 // answers the stored object, which holds exactly those bytes.
-func storePart(ctx context.Context, p Putter, files [3]*os.File, spans []layerSpan, start, size int64,
+func storePart(ctx context.Context, p Putter, files [3]*os.File, cut partCut,
 	hit func(ctx context.Context, offset int64) error) (objstore.Object, error) {
 
-	ctx, cancel := context.WithTimeout(ctx, UploadDeadline(size))
+	ctx, cancel := context.WithTimeout(ctx, UploadDeadline(cut.size))
 	defer cancel()
-	runs := make([]io.Reader, len(spans))
-	for k, s := range spans {
+	runs := make([]io.Reader, len(cut.spans))
+	for k, s := range cut.spans {
 		runs[k] = io.NewSectionReader(files[s.section], s.offset, s.bytes)
 	}
 	in := io.MultiReader(runs...)
 	if hit != nil {
-		in = &hitReader{ctx: ctx, hit: hit, r: in, at: start}
+		in = &hitReader{ctx: ctx, hit: hit, r: in, at: cut.start}
 	}
-	obj, err := p.Put(ctx, in, size, objstore.PutMeta{ContentType: LayerContentType})
+	obj, err := p.Put(ctx, in, cut.size, objstore.PutMeta{ContentType: LayerContentType})
 	if err != nil {
 		return objstore.Object{}, err
 	}
@@ -1176,10 +1195,10 @@ func storePart(ctx context.Context, p Putter, files [3]*os.File, spans []layerSp
 		// would be refused on every node.
 		return objstore.Object{}, fmt.Errorf("the store answered an object no row can name: %w", err)
 	}
-	if obj.Size != size {
+	if obj.Size != cut.size {
 		// A file shortened under the upload: the part would be named by
 		// bytes that are not the layer's.
-		return objstore.Object{}, fmt.Errorf("the store took %d bytes of the part's %d", obj.Size, size)
+		return objstore.Object{}, fmt.Errorf("the store took %d bytes of the part's %d", obj.Size, cut.size)
 	}
 	return obj, nil
 }
@@ -1226,8 +1245,11 @@ func FetchLayerPart(ctx context.Context, r LayerReader, row LayerRef, i int, fil
 	case len(buf) == 0:
 		return fmt.Errorf("code: fetch part %d of layer %s: no buffer to copy it through", i, row.LayerID)
 	}
-	part := row.Parts[i]
-	spans := layerSpans(row.Sections(), int64(i)*LayerPartBytes, part.Size)
+	// The part's place by the one cut StoreLayer made it by; its size is the
+	// row's part's, which row.Check holds to that cut (every part but the
+	// last LayerPartBytes, the parts summing to the sections).
+	part, cut := row.Parts[i], layerPart(row.Sections(), i)
+	spans := cut.spans
 	for _, s := range spans {
 		if files[s.section] == nil {
 			return fmt.Errorf("code: fetch part %d of layer %s: it holds bytes of the %s, and no file was handed "+

@@ -694,32 +694,37 @@ func TestALayersCheckIsHashedAPieceASlotAndStopsWithItsCaller(t *testing.T) {
 	}
 }
 
-// THE CUT IS ONE RULE BOTH WAYS: a part of a layer lies where its bytes lie in
-// the three files back to back, at the shipped LayerPartBytes — the multi-pack
-// -index, then its bitmap, then the commit-graph layer, a part ending inside
-// one file and the next beginning there — and every byte of every file is in
-// exactly one part.
+// THE CUT IS ONE RULE BOTH WAYS: part i of a layer begins i parts of the
+// shipped LayerPartBytes into it, holds a whole part but the last, which holds
+// what remains, and lies where those bytes lie in the three files back to
+// back — the multi-pack-index, then its bitmap, then the commit-graph layer, a
+// part ending inside one file and the next beginning there — so every byte of
+// every file is in exactly one part, and a part past the layer's end is none.
+// StoreLayer and FetchLayerPart both take a part's start, size and runs from
+// this one cut, by its index.
 //
-// Mutation: a run's offset counted from the layer's start rather than its
-// file's — red.
+// Mutations: a run's offset counted from the layer's start rather than its
+// file's — red; every part's start the layer's first byte — red.
 func TestALayerIsCutTheSameWayBothWays(t *testing.T) {
 	t.Parallel()
 	const p = code.LayerPartBytes
 	sections := [3]int64{p + 100, p - 50, 1000}
-	want := [][][3]int64{
-		{{0, 0, p}},
-		{{0, p, 100}, {1, 0, p - 100}},
-		{{1, p - 100, 50}, {2, 0, 1000}},
+	want := []struct {
+		start, size int64
+		runs        [][3]int64
+	}{
+		{0, p, [][3]int64{{0, 0, p}}},
+		{p, p, [][3]int64{{0, p, 100}, {1, 0, p - 100}}},
+		{2 * p, 1050, [][3]int64{{1, p - 100, 50}, {2, 0, 1000}}},
 	}
-	total := sections[0] + sections[1] + sections[2]
 	var covered [3]int64
-	for i := range want {
-		start := int64(i) * p
-		got := code.LayerCut(sections, start, min(p, total-start))
-		if !slices.Equal(got, want[i]) {
-			t.Errorf("part %d is cut %v, want %v", i, got, want[i])
+	for i, w := range want {
+		start, size, runs := code.LayerCut(sections, i)
+		if start != w.start || size != w.size || !slices.Equal(runs, w.runs) {
+			t.Errorf("part %d is cut at %d, %d bytes, as %v; want at %d, %d bytes, as %v", i, start, size, runs,
+				w.start, w.size, w.runs)
 		}
-		for _, run := range got {
+		for _, run := range runs {
 			if run[1] != covered[run[0]] {
 				t.Errorf("part %d's run in file %d begins at %d, where the parts before it ended at %d", i,
 					run[0], run[1], covered[run[0]])
@@ -730,11 +735,12 @@ func TestALayerIsCutTheSameWayBothWays(t *testing.T) {
 	if covered != sections {
 		t.Errorf("the parts cover %v of the files' %v", covered, sections)
 	}
-	if got := code.LayerCut([3]int64{10, 5, 0}, 0, 15); !slices.Equal(got, [][3]int64{{0, 0, 10}, {1, 0, 5}}) {
-		t.Errorf("a layer of no commit-graph layer is cut %v", got)
+	if start, size, runs := code.LayerCut([3]int64{10, 5, 0}, 0); start != 0 || size != 15 ||
+		!slices.Equal(runs, [][3]int64{{0, 0, 10}, {1, 0, 5}}) {
+		t.Errorf("a layer of no commit-graph layer is cut at %d, %d bytes, as %v", start, size, runs)
 	}
-	if got := code.LayerCut(sections, total, p); got != nil {
-		t.Errorf("past the layer's end the cut is %v, want nothing", got)
+	if _, size, runs := code.LayerCut(sections, len(want)); size != 0 || runs != nil {
+		t.Errorf("past the layer's end the cut is %d bytes, as %v; want nothing", size, runs)
 	}
 }
 
