@@ -666,10 +666,10 @@ func TestAnEndingExpiresWaitingNotesOnceUnderStableIDs(t *testing.T) {
 }
 
 // A LAUNCHED TURN'S LATE NOTE IS FILED ON ITS RECORD. The launch hands the
-// first segment's box over once the run is going, so a note that read "no
-// record" a moment before and was scattered to the node that held the box is
-// filed on the run's record by that node — answered as the record answers it,
-// never `closed` for a turn that is running.
+// first segment's box over once the run's record exists, so a note that read
+// "no record" a moment before and was scattered to the node that held the box
+// is filed on the run's record by that node — answered as the record answers
+// it, never `closed` for a turn that is running.
 //
 // Mutation: drop the hand-over from the launch, and the segment's end closes
 // the box as an ended turn's.
@@ -686,5 +686,83 @@ func TestALaunchedTurnsLateNoteIsFiledOnItsRecord(t *testing.T) {
 	row := c.rig.row(t, "run-1")
 	if len(row.Steer.Notes) != 1 || row.Steer.Notes[0].ID != "req-late" || !row.Steer.Notes[0].Waiting() {
 		t.Errorf("the run's record holds %+v, want the late note waiting", row.Steer.Notes)
+	}
+}
+
+// launchWindow is a run store that lets a case act inside a launch: before the
+// write that opens the run's record, and when the launch first attaches a box —
+// after the store has named the job and before the launch returns.
+type launchWindow struct {
+	sandbox.PendingStore
+	mu       sync.Mutex
+	begin    func(ctx context.Context, turnID string)
+	attached func(ctx context.Context, turnID string)
+}
+
+func (w *launchWindow) BeginLaunch(ctx context.Context, run sandbox.PendingRun, fence sandbox.Fence) (sandbox.PendingRun, error) {
+	w.mu.Lock()
+	hook := w.begin
+	w.begin = nil
+	w.mu.Unlock()
+	if hook != nil {
+		hook(ctx, run.TurnID)
+	}
+	return w.PendingStore.BeginLaunch(ctx, run, fence)
+}
+
+func (w *launchWindow) AttachSandbox(ctx context.Context, turnID string, box sandbox.BoxRef, fence sandbox.Fence) error {
+	w.mu.Lock()
+	hook := w.attached
+	w.attached = nil
+	w.mu.Unlock()
+	if hook != nil {
+		hook(ctx, turnID)
+	}
+	return w.PendingStore.AttachSandbox(ctx, turnID, box, fence)
+}
+
+// A NOTE THE BOX HELD AT THE LAUNCH IS READ BEFORE ONE FILED ON THE RECORD
+// DURING IT. A note that reached the first segment's box after its brief was
+// taken — it read "no record" and was scattered to the box — was sent before
+// any note a person files on the record once the launch has written one. So it
+// goes to the record the moment there is one, ahead of them: every reader of a
+// run's notes takes in the record's order, and where two notes disagree the
+// later word is the one a model is told to keep. Handed over once the launch
+// had returned — its box made, its CLI started — it was filed behind every
+// note filed on the record in that window, and read after them.
+//
+// Mutation: hand the box over after the launch returns, as it was, and the
+// note filed during the launch is first.
+func TestANoteTheBoxHeldAtTheLaunchIsReadBeforeOneFiledDuringIt(t *testing.T) {
+	t.Parallel()
+	model := &reviewWatch{}
+	e, _ := indicatingWith(t, notify.StatusAlways, model)
+	steerable(t, e)
+	store := &launchWindow{PendingStore: sandbox.NewCoordStore(e.backends.Fleet)}
+	store.begin = func(ctx context.Context, turnID string) {
+		status, _, _, err := e.steers.offer(ctx, turnID, steer.Note{
+			ID: "use-postgres", Text: "use postgres", By: "founder", ByKind: iam.ActorHuman})
+		if err != nil || status != steer.StatusAccepted {
+			t.Errorf("the note to the box before the record answered (%s, %v)", status, err)
+		}
+	}
+	store.attached = func(ctx context.Context, turnID string) {
+		filed, err := e.RunSteers().File(ctx, turnID, steer.Note{
+			ID: "use-sqlite", Text: "actually, sqlite", By: "founder", ByKind: iam.ActorHuman})
+		if err != nil || filed.Status != steer.StatusAccepted {
+			t.Errorf("the note filed on the record during the launch answered (%+v, %v)", filed, err)
+		}
+	}
+	rig := rigRunsOn(t, e, store, modelPlayer(t, model.run))
+	parkOnARun(t, e, rig, "run-1")
+
+	notes := slices.Clone(rig.row(t, "run-1").Steer.Notes)
+	slices.SortFunc(notes, func(a, b sandbox.RunNote) int { return a.Seq - b.Seq })
+	var order []string
+	for _, n := range notes {
+		order = append(order, n.ID)
+	}
+	if want := []string{"use-postgres", "use-sqlite"}; !slices.Equal(order, want) {
+		t.Errorf("the record holds the notes in the order %v, want them as they were sent, %v", order, want)
 	}
 }

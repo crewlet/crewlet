@@ -523,6 +523,44 @@ func TestAFailedLaunchExpiresItsBoxNotes(t *testing.T) {
 	}
 }
 
+// A LAUNCH THAT FAILS AFTER THE HAND-OVER LOSES NO NOTE. The box is handed to
+// the run's record the moment the launch has written one, and the launch can
+// still fail after that — its box not made, its CLI not started — and give its
+// brief's notes back. The handed box keeps them, the segment's close reports
+// them expired with the turn, and the turn stays handed: a late note is still
+// filed on the record, never answered closed by a box that took it back.
+//
+// Mutation: hand the box over by closing it, and the brief's notes a failed
+// launch gives back are dropped with no record of what became of them.
+func TestALaunchThatFailsAfterTheHandOverExpiresItsBriefsNotes(t *testing.T) {
+	t.Parallel()
+	d, store, _ := handingDesk(t)
+	launchedRun(t, store, d.runs, "run-1")
+	box := steer.New()
+	d.register("run-1", steerSeat{agent: sweAgent, handle: "swe"}, box, nil)
+	box.Offer(steer.Note{ID: "briefed", Text: "use staging", By: "founder"})
+	brief := box.Brief(t.Context())
+	d.handOff(t.Context(), "run-1")
+	// The launch fails after the hand-over, and the runner gives the brief's
+	// notes back ([runner.SteerSource.Return]).
+	box.Return(t.Context(), brief)
+	expired := d.close("run-1")
+	if len(expired) != 1 || expired[0].ID != "briefed" {
+		t.Fatalf("the segment's close returned %+v, want the brief's note the failed launch gave back",
+			expired)
+	}
+	if again := d.close("run-1"); len(again) != 0 {
+		t.Errorf("a second close returned %+v", again)
+	}
+	status, _, _, err := d.offer(t.Context(), "run-1", steer.Note{ID: "late", Text: "x", By: "founder"})
+	if err != nil || status != steer.StatusAccepted {
+		t.Errorf("a late note after the close answered (%s, %v), want it filed on the record", status, err)
+	}
+	if all, _ := recordedNotes(t, store, "run-1"); !slices.Contains(all, "late") {
+		t.Errorf("the late note is not on the record: %v", all)
+	}
+}
+
 // A RESUMED SEGMENT THAT ENDS THE TURN IS REMEMBERED CLOSED: the run's record
 // goes with the run, so a note that reaches this node after it is answered
 // `closed` by the scatter — never by nobody, which the person reads as a lost

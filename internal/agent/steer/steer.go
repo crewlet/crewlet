@@ -265,7 +265,7 @@ func Record(turn Turn, note Note, read *Reading) types.AgentTurnSteered {
 
 // Box holds the notes offered to ONE turn segment and not yet read by it: the
 // turn's first, until it launches its coding run and hands what it still holds
-// to the run's record.
+// to the run's record ([Box.HandOver]).
 //
 // Safe for concurrent use: an offer arrives on a broker goroutine while the
 // turn's loop drains on its own.
@@ -277,6 +277,10 @@ type Box struct {
 	// bounds. Counted apart from seen, which a note with no id never joins.
 	taken  int
 	closed bool
+	// handed is a box whose notes went to its turn's run record
+	// ([Box.HandOver]): it takes no new note, and still takes back what a
+	// reader returns until it closes.
+	handed bool
 	now    func() time.Time
 }
 
@@ -314,7 +318,7 @@ func (b *Box) Offer(n Note) Status {
 // is full would wait for a read that changes nothing.
 func (b *Box) statusLocked() Status {
 	switch {
-	case b.closed:
+	case b.closed || b.handed:
 		return StatusClosed
 	case b.taken >= MaxTurnNotes:
 		return StatusSpent
@@ -366,6 +370,31 @@ func (b *Box) Return(_ context.Context, notes []Note) {
 		return
 	}
 	b.pending = append(slices.Clone(notes), b.pending...)
+}
+
+// HandOver ends the box's intake and answers every note it holds unread, for the
+// caller to file where the turn's notes wait from here — its coding run's
+// record, the moment the launch has written one. A new note is answered closed
+// from here, which tells its caller to file it there too.
+//
+// THE BOX STILL TAKES BACK WHAT A READER RETURNS ([Box.Return]), because the
+// launch that handed it over can still fail: its brief's notes come back here,
+// and the box's Close reports them expired with the turn — closed instead, the
+// box dropped them, and nothing ever said what became of them. Idempotent, and
+// nothing on a closed box.
+func (b *Box) HandOver() []Note {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || b.handed {
+		return nil
+	}
+	b.handed = true
+	out := b.pending
+	b.pending = nil
+	return out
 }
 
 // Waiting reports a note waiting to be read, without taking it — what ends a

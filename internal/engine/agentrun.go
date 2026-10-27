@@ -296,6 +296,14 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		SteerSeat:  e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
 		BriefNotes: brief,
 		Opened: func(launch string) (sandbox.Opening, error) {
+			// THE BOX'S NOTES GO TO THE RECORD THE MOMENT THERE IS ONE —
+			// before any box or CLI exists, and before a note a person files
+			// there directly can land ahead of them: from here a note to the
+			// turn waits on the record, whichever node it reaches. A launch
+			// that fails from here ends the record and expires what waits on
+			// it; one refused before it hands nothing over, and the box keeps
+			// its notes ([steerDesk.handOff]).
+			e.steers.handOff(ctx, l.turn.RunID)
 			opening, openErr := e.openBridge(ctx, session, ledger, inbox, launch)
 			opened = openErr == nil
 			return opening, openErr
@@ -334,12 +342,6 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		}
 		return runner.Launched{}, err
 	}
-	// THE BOX'S NOTES GO TO THE RECORD NOW THAT THERE IS ONE: from here a
-	// note to the turn waits there, whichever node it reaches. Only once the
-	// run is going: a launch refused on any way out above leaves no record
-	// the notes could wait on — one it opened is ended with it — and the box
-	// keeps them.
-	e.steers.handOff(ctx, l.turn.RunID)
 	return runner.Launched{LaunchID: result.LaunchID}, nil
 }
 

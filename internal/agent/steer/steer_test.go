@@ -233,6 +233,50 @@ func TestReturnedNotesAreReadFirstAndStayOneNote(t *testing.T) {
 	}
 }
 
+// A HANDED-OVER BOX TAKES NO NEW NOTE AND KEEPS WHAT A FAILED LAUNCH GIVES
+// BACK. The hand-over answers what the box held, for the caller to file on the
+// run's record; a new note is answered closed from then, which sends it there
+// too, and a retry of one the box took is still accepted. But the launch that
+// handed the box over can still fail, and its brief's notes come back: kept,
+// read by whatever reads next, and reported expired by the box's close — never
+// dropped as a closed box would.
+//
+// Mutation: hand over by closing the box, and the brief's notes a failed launch
+// returns are lost.
+func TestAHandedOverBoxKeepsWhatAFailedLaunchGivesBack(t *testing.T) {
+	t.Parallel()
+	b := steer.New()
+	b.Offer(note("briefed"))
+	b.Offer(note("late"))
+	brief := b.Brief(t.Context())
+	b.Offer(note("after-brief"))
+	handed := b.HandOver()
+	if len(handed) != 1 || handed[0].ID != "after-brief" {
+		t.Fatalf("the hand-over answered %+v, want the note the brief did not take", handed)
+	}
+	if got := b.Offer(note("new")); got != steer.StatusClosed {
+		t.Errorf("a new note after the hand-over answered %s, want closed", got)
+	}
+	if got := b.Offer(note("late")); got != steer.StatusAccepted {
+		t.Errorf("a retry of a note the box took answered %s, want accepted", got)
+	}
+	if again := b.HandOver(); len(again) != 0 {
+		t.Errorf("a second hand-over answered %+v", again)
+	}
+	b.Return(t.Context(), brief)
+	if !b.Waiting() {
+		t.Fatal("the box dropped the notes a failed launch gave back")
+	}
+	expired := b.Close()
+	ids := make([]string, 0, len(expired))
+	for _, n := range expired {
+		ids = append(ids, n.ID)
+	}
+	if !slices.Equal(ids, []string{"briefed", "late"}) {
+		t.Errorf("the close reported %v expired, want the brief's notes the failed launch gave back", ids)
+	}
+}
+
 // A TURN'S NOTES ARE COUNTED, NOT ITS WAITING ONES: reading every note does not
 // make room for an eleventh.
 func TestATurnTakesAtMostItsNotes(t *testing.T) {

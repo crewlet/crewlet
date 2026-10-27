@@ -32,13 +32,20 @@ import (
 // Once the turn's coding run has launched, its notes wait on the run's record
 // in the coordination store, which every node reads (runsteer.go): the asking
 // node files a note there itself, and asks nobody. The launch HANDS THE BOX OVER
-// ([steerDesk.handOff]): the box is closed, every note it held and nobody read
-// is filed on the record, and the turn's entry here is kept as HANDED — so a
-// note that read "no record" a moment before the launch wrote one, and was
-// scattered here, is filed on the record by this node and answered as the
-// record answers it, and a probe is answered with the turn's seat. An offer is
-// never answered `closed` for a turn that is running: one that met the box as it
-// was being handed over finds the handed entry and is filed on the record.
+// ([steerDesk.handOff]) THE MOMENT THE RECORD EXISTS — as the store names the
+// job, before any box or CLI does ([sandbox.LaunchRequest.Opened]) — so a note
+// the box held is on the record ahead of any a person files there directly
+// once it exists: every reader takes in the record's order, and a note is the
+// later word. The box takes no new note from then ([steer.Box.HandOver]), every
+// note it held and nobody read is filed on the record, and the turn's entry
+// here is kept as HANDED — so a note that read "no record" a moment before the
+// launch wrote one, and was scattered here, is filed on the record by this node
+// and answered as the record answers it, and a probe is answered with the
+// turn's seat. An offer is never answered `closed` for a turn that is running:
+// one that met the box as it was being handed over finds the handed entry and
+// is filed on the record. The handed box is kept for the segment's close: a
+// launch that fails after the hand-over gives its brief's notes back to it,
+// and the close reports them expired with the turn.
 //
 // # A turn that ended is still answered for a while
 //
@@ -127,10 +134,12 @@ type steerTurn struct {
 }
 
 // endedTurn is a turn the desk remembers: its seat, and whether its box was
-// handed to its run's record rather than closed with the turn.
+// handed to its run's record rather than closed with the turn — and, until the
+// segment that held it closes it, the handed box itself.
 type endedTurn struct {
 	steerSeat
 	handed bool
+	box    *steer.Box
 }
 
 // newSteerDesk builds this node's desk over the fleet keyring every state-log
@@ -179,14 +188,21 @@ func (d *steerDesk) rememberLocked(runID string, t endedTurn) {
 }
 
 // close ends a first segment's box and remembers the turn, returning the notes
-// it took and never read. A turn whose box was handed to its run's record is
-// not here any more, and returns nothing.
+// it took and never read. A turn whose box was handed to its run's record stays
+// remembered as handed, and its box is closed here — holding only what a launch
+// that failed after the hand-over gave back.
 func (d *steerDesk) close(runID string) []steer.Note {
 	d.mu.Lock()
 	t, ok := d.open[runID]
 	if !ok {
+		var handed *steer.Box
+		if ended, remembered := d.closed[runID]; remembered && ended.handed {
+			handed = ended.box
+			ended.box = nil
+			d.closed[runID] = ended
+		}
 		d.mu.Unlock()
-		return nil
+		return handed.Close()
 	}
 	delete(d.open, runID)
 	d.rememberLocked(runID, endedTurn{steerSeat: t.steerSeat})
@@ -212,16 +228,16 @@ func (d *steerDesk) remember(runID string, seat steerSeat) {
 	d.rememberLocked(runID, endedTurn{steerSeat: seat})
 }
 
-// handOff hands a first segment's box to its turn's run record, once the run
-// has launched: the turn is remembered as HANDED, the box closed, and every
-// note it took and nobody read filed on the record — one the record refuses
-// recorded expired. Nothing to hand over is not an error: a segment that
-// resumed the turn files no box.
+// handOff hands a first segment's box to its turn's run record, the moment the
+// launch has written one: the turn is remembered as HANDED, the box's intake
+// ended ([steer.Box.HandOver]), and every note it took and nobody read filed on
+// the record — one the record refuses recorded expired. Nothing to hand over is
+// not an error: a segment that resumed the turn files no box.
 //
-// HANDED BEFORE THE BOX CLOSES, under the desk's lock: an offer that found the
-// box open and was answered `closed` by it looks again and finds the turn
-// handed ([steerDesk.offer]), so no offer racing the launch is told the turn
-// has ended.
+// HANDED BEFORE THE BOX'S INTAKE ENDS, under the desk's lock: an offer that
+// found the box open and was answered `closed` by it looks again and finds the
+// turn handed ([steerDesk.offer]), so no offer racing the launch is told the
+// turn has ended.
 func (d *steerDesk) handOff(ctx context.Context, runID string) {
 	if d == nil || d.runs == nil {
 		return
@@ -233,9 +249,9 @@ func (d *steerDesk) handOff(ctx context.Context, runID string) {
 		return
 	}
 	delete(d.open, runID)
-	d.rememberLocked(runID, endedTurn{steerSeat: t.steerSeat, handed: true})
+	d.rememberLocked(runID, endedTurn{steerSeat: t.steerSeat, handed: true, box: t.box})
 	d.mu.Unlock()
-	unread := t.box.Close()
+	unread := t.box.HandOver()
 	var refused []steer.Note
 	for _, n := range unread {
 		filed, err := d.runs.File(ctx, runID, n)

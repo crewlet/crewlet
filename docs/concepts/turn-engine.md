@@ -747,11 +747,16 @@ yet:
   person's authority is decided on; a reader opens both before using either
   ([ADR-0059](https://github.com/crewlet/crewlet/blob/main/adr/0059-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
 
-The launch **hands the box over**: every note it held and nobody read is filed
-on the record in the write that opens the run, or carried in the run's brief.
-A note that read "no record" a moment before the launch wrote one is scattered
-to the node that held the box, which files it on the record — so a note to a
-turn that is running is never answered `closed`.
+The launch **hands the box over** the moment it has written the record — as
+the store names the run's job, before any box or CLI exists: every note the box
+held and the brief did not carry is filed on the record then, ahead of any note
+a person files there directly once the record exists, so the record holds a
+turn's notes in the order they were sent and every reader takes them in that
+order. A note that read "no record" a moment before the launch wrote one is
+scattered to the node that held the box, which files it on the record — so a
+note to a turn that is running is never answered `closed`. A launch that fails
+after the hand-over gives its brief's notes back to the box, which reports them
+expired with the turn.
 
 ```mermaid
 sequenceDiagram
@@ -761,7 +766,7 @@ sequenceDiagram
     participant B as The run's tool bridge
     participant R as The review
     Note over N: the turn launches its coding run
-    N->>C: the launch writes the record, the seat anchor, and the box's notes
+    N->>C: the launch writes the record and the seat anchor, then files the box's notes
     P->>C: steer_turn{turn_id, note} — filed sealed, by the asking node
     C-->>P: accepted → outcome "pending", reads "next_step"
     B->>C: the run's CLI takes the note between its steps (Claude Code after a tool batch or at its finish, OpenCode at its next step)
