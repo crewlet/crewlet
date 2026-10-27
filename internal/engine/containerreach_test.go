@@ -18,8 +18,9 @@ import (
 // side to say why. The advisory names the field to change, and stays quiet
 // wherever the bind does answer or is not the one a box dials: another OS, a
 // wider bind, a public listener that is the one boxes dial, a node without
-// the ingress role, which serves its probes alone, or a company with no
-// container cell.
+// the ingress role, which serves its probes alone, a node without the seats
+// role, which starts no box on its host for its bind to cut off, or a company
+// with no container cell.
 func TestALoopbackBindOnLinuxWarnsAContainerCompany(t *testing.T) {
 	t.Parallel()
 	container := sandboxCompany(t, "container")
@@ -45,6 +46,8 @@ func TestALoopbackBindOnLinuxWarnsAContainerCompany(t *testing.T) {
 		{"no listener at all", config.API{Host: "127.0.0.1"}, nil, "linux", container, ""},
 		{"a node without the ingress role, which serves its probes alone",
 			config.API{Host: "127.0.0.1", Port: 8000}, []string{"data", "seats"}, "linux", container, ""},
+		{"an ingress node that runs no seats, so starts no box on its host",
+			config.API{Host: "127.0.0.1", Port: 8000}, []string{"data", "ingress"}, "linux", container, ""},
 		{"a node with the ingress role among others", config.API{Host: "127.0.0.1", Port: 8000},
 			[]string{"data", "ingress", "seats"}, "linux", container, "api.host"},
 		{"no container cell", config.API{Host: "127.0.0.1", Port: 8000}, nil, "linux", direct, ""},
