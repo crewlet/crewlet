@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/modelnote"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -287,6 +288,10 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		// the phrasing written for a person, or in its code's own
 		// sentence where nobody has written one.
 		Fail(w, result.Cause, result.PersonRefusal, key, About(name, args))
+		// AND THE MODEL'S, to the one reader that can act on it: an
+		// assistant's model executing what its person approved hears the
+		// tool's sentence in process, never on the answer above.
+		modelnote.Tell(r.Context(), result.Output)
 		return
 	}
 	answer := receiptOf(name, result)
