@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -134,6 +135,25 @@ func TestABriefIsReReadWholeByTheNextTurn(t *testing.T) {
 		"2 hours", "Answer ENG-4."} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the brief's summary %q does not carry %q", got, want)
+		}
+	}
+}
+
+// THE BRIEF'S PROMPT STATES EVERY CAP IN PLAIN WORDS, from the constants the
+// engine checks, so a model meets each before it writes. Mutation: drop a cap
+// from the prompt and this fails.
+func TestTheBriefPromptStatesEveryCap(t *testing.T) {
+	t.Parallel()
+	for _, want := range []string{
+		fmt.Sprintf("one line of at most %d characters", wire.BriefSummaryMaxRunes),
+		fmt.Sprintf("at most %d things", wire.BriefMaxNeeds),
+		fmt.Sprintf("one line of at most %d characters", wire.BriefTextMaxRunes),
+		fmt.Sprintf("up to %d short questions", wire.BriefMaxFollowUps),
+		fmt.Sprintf("each at most %d characters", wire.BriefQuestionMaxRunes),
+		"fix everything it names",
+	} {
+		if !strings.Contains(briefRules, want) {
+			t.Errorf("the brief's prompt does not say %q", want)
 		}
 	}
 }

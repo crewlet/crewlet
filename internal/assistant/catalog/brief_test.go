@@ -2,6 +2,8 @@ package catalog_test
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
@@ -72,6 +74,107 @@ func TestEveryCitableRecordIsReadAgainBeforeItIsDrawn(t *testing.T) {
 		_, probe, err := catalog.Open(args)
 		if err != nil || probe == nil {
 			t.Errorf("%s opens with no read of the record (%v)", kind, err)
+		}
+	}
+}
+
+// EVERY CAP IS HANDED TO THE MODEL BEFORE IT WRITES, as the bound it is held
+// to: each line's maxLength is its cap in characters and its description
+// says so, and each list's maxItems is its cap. The live failure was a schema
+// that advertised four times the cap in bytes, so a model that respected it
+// wrote a 366 character summary into a 200 character line.
+//
+// Mutation: hand the model a bytes bound, or drop a cap from a description,
+// and this fails.
+func TestEveryBriefCapIsInTheSchemaTheModelReads(t *testing.T) {
+	t.Parallel()
+	params := catalog.BriefTool().Parameters
+	props := params["properties"].(map[string]any)
+	need := props["needs"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	step := props["recommended"].(map[string]any)["properties"].(map[string]any)
+	lines := map[string]struct {
+		schema map[string]any
+		max    int
+	}{
+		"summary":              {props["summary"].(map[string]any), wire.BriefSummaryMaxRunes},
+		"needs.text":           {need["text"].(map[string]any), wire.BriefTextMaxRunes},
+		"needs.detail":         {need["detail"].(map[string]any), wire.BriefTextMaxRunes},
+		"needs.question":       {need["question"].(map[string]any), wire.BriefQuestionMaxRunes},
+		"recommended.text":     {step["text"].(map[string]any), wire.BriefTextMaxRunes},
+		"recommended.question": {step["question"].(map[string]any), wire.BriefQuestionMaxRunes},
+		"follow_ups": {props["follow_ups"].(map[string]any)["items"].(map[string]any),
+			wire.BriefQuestionMaxRunes},
+	}
+	for name, l := range lines {
+		if got := l.schema["maxLength"]; got != l.max {
+			t.Errorf("%s: maxLength = %v, want %d characters", name, got, l.max)
+		}
+		desc, _ := l.schema["description"].(string)
+		if want := fmt.Sprintf("at most %d characters", l.max); !strings.Contains(desc, want) {
+			t.Errorf("%s: description %q does not say %q", name, desc, want)
+		}
+	}
+	for name, max := range map[string]int{"needs": wire.BriefMaxNeeds,
+		"follow_ups": wire.BriefMaxFollowUps} {
+		list := props[name].(map[string]any)
+		if list["maxItems"] != max {
+			t.Errorf("%s: maxItems = %v, want %d", name, list["maxItems"], max)
+		}
+		if desc, _ := list["description"].(string); !strings.Contains(desc,
+			fmt.Sprintf("at most %d", max)) {
+			t.Errorf("%s: description %q does not state its cap", name, desc)
+		}
+	}
+}
+
+// A LINE IS COUNTED IN CHARACTERS, as the model counts it: a summary of 200
+// two-byte characters is taken, and one of 201 is refused.
+//
+// Mutation: count bytes and the 200 character summary is refused.
+func TestABriefLineIsCountedInCharacters(t *testing.T) {
+	t.Parallel()
+	call := func(summary string) map[string]any {
+		return map[string]any{"summary": summary, "needs": []any{}, "follow_ups": []any{}}
+	}
+	if _, err := catalog.ParseBrief(call(strings.Repeat("é", wire.BriefSummaryMaxRunes))); err != nil {
+		t.Errorf("a summary at its cap was refused: %v", err)
+	}
+	_, err := catalog.ParseBrief(call(strings.Repeat("é", wire.BriefSummaryMaxRunes+1)))
+	if !errors.Is(err, catalog.ErrInvalidArguments) ||
+		!strings.Contains(err.Error(), "201 characters and the most it takes is 200") {
+		t.Errorf("a summary over its cap answered %v", err)
+	}
+}
+
+// A REFUSAL NAMES EVERY FAULT, the schema's and the brief's own, in one
+// error: the model may write a refused brief again only once.
+//
+// Mutation: return at the first fault and the later ones go unnamed.
+func TestABriefRefusalNamesEveryFault(t *testing.T) {
+	t.Parallel()
+	_, err := catalog.ParseBrief(map[string]any{
+		"summary": strings.Repeat("s", 366),
+		"needs": []any{map[string]any{"ref_kind": "task", "ref_id": "ENG-1",
+			"text": strings.Repeat("t", 130), "tone": "warning", "action": "open"}},
+		"follow_ups": []any{strings.Repeat("q", 170)},
+	})
+	if !errors.Is(err, catalog.ErrInvalidArguments) {
+		t.Fatalf("answered %v, want ErrInvalidArguments", err)
+	}
+	for _, want := range []string{"summary is 366 characters", "needs[0].text is 130 characters",
+		"follow_ups[0] is 170 characters"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+	_, err = catalog.ParseBrief(map[string]any{"summary": "s", "follow_ups": []any{},
+		"needs": []any{map[string]any{"ref_kind": "task", "ref_id": "ENG-1", "text": "t",
+			"tone": "warning", "action": "ask"}},
+		"recommended": map[string]any{"text": "Do it", "action": "open"}})
+	for _, want := range []string{"needs[0] asks and names no question",
+		"recommended opens a record and names no ref_kind"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
 		}
 	}
 }
