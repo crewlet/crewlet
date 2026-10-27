@@ -365,8 +365,8 @@ sixteenth more has been kept.
 
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A person's push of one commit
-leaves a push row of about 395 bytes, kept 181 days, and its pack's row of
-about 377, kept as long as the repository is; a forced update or a deletion
+leaves a push row of about 415 bytes, kept 181 days, and its pack's row of
+about 357, kept as long as the repository is; a forced update or a deletion
 leaves a row more, naming the object it left, kept 14 days, and longer while
 the repository's pushes fill their records with such updates
 ([ref drops](code-host.md#retention-and-history)); the code log, which keeps only
@@ -375,8 +375,8 @@ own and about 760 for each of a burst group commit holds together. So:
 
 | Pushes a day | Push rows at the 181-day horizon | Pack rows added a year | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 215 MB | about 410 MB | about 28 MB |
-| 250 000 — a company of thousands of seats | about 45 million, 17.9 GB | about 34.4 GB | 1.3 to 2.4 GB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 225 MB | about 391 MB | about 28 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 18.8 GB | about 32.6 GB | 1.3 to 2.4 GB |
 
 These rows come on top of what the tracker, the knowledge base and the rest of
 the estate hold: [the storage forecast](../guides/retention.md#the-storage-forecast)

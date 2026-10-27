@@ -189,33 +189,38 @@
 // adds no stream, since one log has one leader.
 //
 // THE PUSH'S TWO ROWS (BenchmarkPushHistoryBytes, the same figure every
-// count; restated from one count of one iteration once a row named its way
-// and a seat's run), measured as the replicated estate's growth after a
+// count; restated from one count of one iteration once each row was weighed
+// by its own table), measured as the replicated estate's growth after a
 // truncating checkpoint over records whose refs existed before, so a ref's
-// own row is rewritten in place and never counted. A figure is whole pages
+// own row is rewritten in place and never counted — EACH ROW BY THE PAGES
+// ITS OWN TABLE'S B-TREES GREW BY, never by the file's growth with a pack
+// less its growth without one, which counted the push row's pack columns,
+// kept 181 days, as the pack row's, kept for good. A figure is whole pages
 // over the rows that filled them, so a row a few bytes wider moves it only
 // where it fits fewer rows a page. They have two lifetimes:
 //
 //   - its code_pushes row, which the push-history horizon keeps for the 181
-//     days of usage.History: 395.3 bytes with its index entries for a
+//     days of usage.History: 414.7 bytes with its index entries for a
 //     person's push of one commit — one command on a ref named in 40 bytes,
-//     one introduced id (4 000 records) — 490.5 for the same commit pushed
-//     by a seat and built by the engine, its row naming the seat and the run
-//     behind it at a run's usual sizes (a UUID turn id, the work item
-//     `native ENG-1234`, a seventeen-byte model id; 4 000 records), and
-//     420 045 for the widest a push can leave ([MaxCommandsPerPush] commands
-//     on refs of [MaxRefNameBytes], [MaxIntroduced] ids; 100 records);
-//   - its pack's code_packs row, 376.8 bytes more with its index entries
-//     (772.1 with both; 847.9 for the seat's push, and 420 454 at the
-//     widest), which lives as long as the pack does — until the repository
-//     is purged, since nothing in this release compacts a repository's
-//     packs.
+//     one introduced id and its pack named (4 000 records; 395.3 for a push
+//     that carries no pack, a deletion or a ref moved to a commit the
+//     repository holds) — 490.5 for the same commit pushed by a seat and
+//     built by the engine, its row naming the seat and the run behind it at
+//     a run's usual sizes (a UUID turn id, the work item `native ENG-1234`, a
+//     seventeen-byte model id; 4 000 records, as many a page with its pack
+//     named as without), and 419 963 for the widest a push can leave
+//     ([MaxCommandsPerPush] commands on refs of [MaxRefNameBytes],
+//     [MaxIntroduced] ids; 100 records);
+//   - its pack's code_packs row, 357.4 bytes with its index entries, which
+//     lives as long as the pack does — until the repository is purged, since
+//     nothing in this release compacts a repository's packs.
 //
-// So every data node, holding the whole estate, holds 395.3 bytes for each
-// push of the last 181 days and 376.8 for each push ANY repository not yet
-// purged has ever taken: a deployment of 3 000 pushes a day carries about
-// 215 MB of push rows at the horizon and grows by about 410 MB of pack rows
-// a year for as long as its repositories live. A forced update or a deletion
+// So every data node, holding the whole estate, holds 414.7 bytes for each
+// push of the last 181 days and 357.4 for each push ANY repository not yet
+// purged has ever taken — the estate's whole growth a push of one commit,
+// 772.1 — and a deployment of 3 000 pushes a day carries about 225 MB of
+// push rows at the horizon and grows by about 391 MB of pack rows a year for
+// as long as its repositories live. A forced update or a deletion
 // leaves one row more, its ref drop, a commit id and a ref without the
 // history row's commands, kept [PruneGrace] — two weeks of such commands,
 // against the history's half year of every push — and longer while the

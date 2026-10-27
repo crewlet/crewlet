@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // quiet keeps a benchmark's output to its figures: every estate a benchmark
@@ -735,20 +734,32 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 }
 
 // BenchmarkPushHistoryBytes is what ONE PUSH LEAVES ON EVERY DATA NODE'S DISK:
-// the growth of the replicated estate's file over records each landing one
-// push, divided by the pushes. Two rows with two lifetimes, so two arms:
+// the replicated estate's growth over records each landing one push, divided
+// by the pushes — the whole file's (bytes/row), and each of the push's two
+// rows' by the pages its own table's b-trees grew by (the estate's
+// [pageTally]), since the two have two lifetimes:
 //
-//   - pack=no is the push's code_pushes row and its index entries alone,
-//     which the push-history horizon keeps usage.History (181 days);
-//   - pack=yes is that and its pack's code_packs row with its index entries,
-//     which live as long as the pack does — until the repository is purged
-//     (until compaction retires it, once there is a compaction) — so the
-//     difference between the two arms is what each push adds for good.
+//   - code_pushes-bytes/row is the push's code_pushes row and its index
+//     entries, which the push-history horizon keeps usage.History (181
+//     days) — the id and size of the push's pack among its columns, where it
+//     carries one;
+//   - code_packs-bytes/row is its pack's code_packs row and its index
+//     entries, which live as long as the pack does — until the repository is
+//     purged (until compaction retires it, once a compactor runs).
 //
-// What a deployment's push history costs a data node is the first figure
-// times its pushes a day times 181, plus the second's share times every push
-// its repositories' packs still hold; every data node holds both, since every
-// one holds the whole estate.
+// BY THE TABLES, never by the file's growth with a pack less its growth
+// without one: that difference counts the push row's pack columns, kept 181
+// days, as the pack row's, kept for good, and moves with how many rows of each
+// shape fit a page, so one pack row weighed differently beside a person's push
+// and beside a seat's. What a deployment's push history costs a data node is
+// the first figure times its pushes a day times 181, plus the second times
+// every push whose pack its repositories still hold; every data node holds
+// both, since every one holds the whole estate.
+//
+// Two arms by the pack — pack=yes, a push carrying objects, and pack=no, one
+// carrying none (a deletion, or a ref moved to a commit the repository
+// holds), whose row names no pack and which leaves no pack row — and three by
+// the push:
 //
 //   - push=typical: one command moving a ref named in 40 bytes, one
 //     introduced commit id — a person's push of a commit, received by git;
@@ -762,10 +773,11 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 //
 // Every push moves refs that exist before the file is measured, so a ref's
 // row is rewritten in place and never counted: a ref lives as long as it is
-// kept, not as long as the history. The file is measured after a truncating
-// checkpoint, so what is counted is the database and not a sidecar's frames.
-// bytes/row is the growth over the records' pushes; doc.go's measured section
-// records both arms.
+// kept, not as long as the history. Every other row a push writes is
+// rewritten in place as well — its repository's counters — and the tables
+// beside the two growing past [inPlaceShare] of what the push rows grow by
+// fails the benchmark, as a third row each push leaves that nothing here
+// prices. doc.go's measured section records the arms.
 func BenchmarkPushHistoryBytes(b *testing.B) {
 	quiet(b)
 	const typicalRef = "refs/heads/feature/push-history-measured"
@@ -794,7 +806,7 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 	} {
 		for _, pack := range []string{"no", "yes"} {
 			b.Run("push="+shape.name+"/pack="+pack, func(b *testing.B) {
-				var perRow float64
+				var perRow, pushRow, packRow float64
 				for b.Loop() {
 					b.StopTimer()
 					e := openApplyEstate(b)
@@ -807,7 +819,7 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 						cmds[c] = move(shape.ref(c), ZeroOID, oid(fmt.Sprint("tip-0-", c)))
 					}
 					e.apply(pushOf(b, repo, pushEntry("history-0", cmds...)))
-					before := e.fileBytes(b)
+					before := e.tally(b)
 					b.StartTimer()
 					for r := 1; r <= shape.records; r++ {
 						for c := range cmds {
@@ -835,32 +847,48 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 					if got := e.num(`SELECT COUNT(*) FROM code_pushes WHERE repo_id = ?`, repo); got != int64(shape.records+1) {
 						b.Fatalf("the estate holds %d push rows, want %d", got, shape.records+1)
 					}
-					perRow = float64(e.fileBytes(b)-before) / float64(shape.records)
+					after := e.tally(b)
+					per := func(pages int64) float64 {
+						return float64(pages*after.pageBytes) / float64(shape.records)
+					}
+					perRow = per(after.pages - before.pages)
+					pushRow = per(after.tables["code_pushes"] - before.tables["code_pushes"])
+					packRow = per(after.tables["code_packs"] - before.tables["code_packs"])
+					var elsewhere int64
+					var grown []string
+					for table, pages := range after.tables {
+						if grew := pages - before.tables[table]; grew > 0 && table != "code_pushes" &&
+							table != "code_packs" {
+							elsewhere += grew
+							grown = append(grown, fmt.Sprintf("%s by %d", table, grew))
+						}
+					}
+					pushes := after.tables["code_pushes"] - before.tables["code_pushes"]
+					if elsewhere*inPlaceShare > pushes {
+						slices.Sort(grown)
+						b.Fatalf("over %d pushes the push rows grew by %d pages and the tables a push rewrites "+
+							"in place by %d (%s), past a %dth of them: a row each push leaves beside its two, "+
+							"whose lifetime nothing here prices — measure it with theirs", shape.records, pushes,
+							elsewhere, strings.Join(grown, ", "), inPlaceShare)
+					}
 					b.StartTimer()
 				}
 				b.ReportMetric(perRow, "bytes/row")
+				b.ReportMetric(pushRow, "code_pushes-bytes/row")
+				b.ReportMetric(packRow, "code_packs-bytes/row")
 			})
 		}
 	}
 }
 
-// fileBytes is the size of the estate's file once a truncating checkpoint has
-// folded every committed page into it — the database itself, never a
-// sidecar's frames.
-func (e *estate) fileBytes(b *testing.B) int64 {
-	b.Helper()
-	db := storetest.ReplicatedDB(b, e.db)
-	var busy, frames, folded sql.NullInt64
-	if err := db.SQL().QueryRowContext(b.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`).
-		Scan(&busy, &frames, &folded); err != nil {
-		b.Fatalf("checkpoint the estate: %v", err)
-	}
-	if busy.Int64 != 0 {
-		b.Fatalf("the estate's checkpoint was busy: %d of %d frames folded", folded.Int64, frames.Int64)
-	}
-	info, err := os.Stat(db.Path())
-	if err != nil {
-		b.Fatal(err)
-	}
-	return info.Size()
-}
+// inPlaceShare is how small, against what the push rows grow by over a
+// history benchmark's records, the growth of every table a push only rewrites
+// in place — its refs, its repository's counters — must stay: a HUNDREDTH.
+// Such a table grows at all only as a rewrite splits a page or a rewritten
+// row's numbers widen: code_refs by two pages over the widest arm's hundred
+// records of a thousand refs each, a fiftieth of a percent of its push rows'
+// 10 253, and nothing else at all. A third row each push left would be a few
+// percent of a push row at the least (a 30-byte counter row is seven percent
+// of one), and under a hundredth no figure these rows forecast moves past its
+// rounding.
+const inPlaceShare = 100
