@@ -11,7 +11,7 @@ import (
 //
 // ONE KEY AND ONE WRITER, because the act route answers a person with the
 // caveats' PERSON words and removes this key from the receipt it hands back
-// (ADR-0059): a second spelling, or a list nested under a half of the answer,
+// (ADR-0060): a second spelling, or a list nested under a half of the answer,
 // is model advice that would reach a person's screen through the receipt.
 const WarningsKey = "warnings"
 

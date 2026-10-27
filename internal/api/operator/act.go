@@ -115,7 +115,7 @@ var ActTransportCodes = []httpjson.Code{
 // answer, verbatim but for its `warnings`, and Caveats is what those warnings
 // say, in a person's words.
 //
-// # Caveats, never the receipt's warnings (ADR-0059)
+// # Caveats, never the receipt's warnings (ADR-0060)
 //
 // The tools are shared: a seat's model calls them too, and a tool's answer
 // carries its caveats under `warnings` in the MODEL'S words, naming the tool

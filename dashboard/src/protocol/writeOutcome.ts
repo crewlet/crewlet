@@ -37,7 +37,7 @@ export type CaveatAction = (typeof CAVEAT_ACTIONS)[number];
  * One thing a landed write says beside its outcome, in a PERSON'S words: the
  * engine answers each caveat's person phrasing here and takes the model's
  * (`warnings`, which name tools and arguments) off the receipt, so nothing a
- * screen draws from an answer is advice written for a model (ADR-0059).
+ * screen draws from an answer is advice written for a model (ADR-0060).
  */
 export interface Caveat {
   /** The engine's stable code for the kind of caveat. */

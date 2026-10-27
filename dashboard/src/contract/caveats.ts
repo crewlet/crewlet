@@ -1,6 +1,6 @@
 /**
  * What a caveat on a landed write asks of the person who reads it, as the
- * engine names it (`internal/caveat`, ADR-0059).
+ * engine names it (`internal/caveat`, ADR-0060).
  *
  * `none` is something to know: shown, and gone by itself. `required` is
  * something somebody has to act on: shown until it is dismissed. The engine

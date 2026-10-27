@@ -138,7 +138,7 @@ export interface CaveatToast {
  * THE ENGINE'S WORDS FOR A PERSON, and never the receipt's `warnings`: those
  * are written for a model and name tools and arguments ("Use ask: ana"), and
  * the engine answers every caveat's person phrasing in `caveats` instead
- * (ADR-0059). A toast that read the receipt showed a person advice only a
+ * (ADR-0060). A toast that read the receipt showed a person advice only a
  * model could follow, and kept it on screen until they closed it.
  *
  * STICKY ONLY WHEN SOMEBODY MUST ACT. The engine states per caveat whether it

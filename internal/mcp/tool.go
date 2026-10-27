@@ -59,7 +59,7 @@ type Result struct {
 	// NEVER RENDERED, for Cause's reason: Output already carries each
 	// caveat's MODEL phrasing under `warnings`, written from these same
 	// values, so a model reads nothing here it has not read there. It exists
-	// for the caller that answers a PERSON (the act route, ADR-0059), which
+	// for the caller that answers a PERSON (the act route, ADR-0060), which
 	// must answer the person's phrasing and never the model's, and could
 	// only otherwise read the model's out of Output.
 	Caveats []caveat.Caveat

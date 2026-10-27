@@ -1,4 +1,4 @@
-# ADR-0059: A caveat is worded for each reader, and a person is never shown a model's
+# ADR-0060: A caveat is worded for each reader, and a person is never shown a model's
 
 - **Status:** accepted
 - **Authority:** `internal/caveat`

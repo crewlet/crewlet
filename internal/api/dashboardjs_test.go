@@ -1260,7 +1260,7 @@ const (
 	// has open reported to the assistant, took it to 4574.6 KiB. 4575 KiB,
 	// which still refuses a doubled baseline. Reading a landed write's
 	// caveats in a person's words off the act answer, each with whether the
-	// person must act, so the toast stays only when they must (ADR-0059),
+	// person must act, so the toast stays only when they must (ADR-0060),
 	// took it to 4576.5 KiB. 4577 KiB, which still refuses a doubled
 	// baseline.
 	treeBudget = 4<<20 + 481<<10

@@ -14,7 +14,7 @@ import (
 
 // ONE WRITER OF A TOOL'S WARNINGS. A tool's answer carries its caveats in the
 // model's words under [builtin.WarningsKey], and the act route takes that key
-// off the receipt it answers a person with (ADR-0059). A tool that wrote the
+// off the receipt it answers a person with (ADR-0060). A tool that wrote the
 // key itself (a nested `warnings` under one half of its answer, a list of
 // sentences that never became caveats) would hand a model's advice to a
 // person's screen, or a person's surface nothing at all: the incident behind

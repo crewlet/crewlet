@@ -5710,7 +5710,7 @@ to add, and each entry is written for a **person**:
 The same tool called by an agent answers the same caveats under `warnings`,
 in words for a model that name the tool and argument it would use next. This
 route answers people, so it answers `caveats` and takes `warnings` off the
-receipt (ADR-0059).
+receipt (ADR-0060).
 
 A tool that appends more than one record — an item filed or edited together
 with a dependency, a page saved and renamed in one call, a project's tags and

@@ -317,7 +317,7 @@ person is told it in the words of the screen, and is never shown advice that
 names an argument they have no control for. Each caveat also says whether
 somebody has to act on it, which is what decides whether its toast stays
 until dismissed or goes by itself
-([ADR-0059](../../adr/0059-a-caveat-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md),
+([ADR-0060](../../adr/0060-a-caveat-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md),
 [What it answers](../reference/api-endpoints.md#what-it-answers)).
 
 **The binding lives in the directory**, not on the token and not in the

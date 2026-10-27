@@ -4,7 +4,7 @@
 // project's default assignee left the chart, a timestamp stored as the day it
 // falls on, a comment that wakes somebody without asking them anything.
 //
-// # Two readers, two phrasings, one value (ADR-0059)
+// # Two readers, two phrasings, one value (ADR-0060)
 //
 // The builtin tools are shared: a seat's model calls them over its MCP
 // session, and a person calls the very same tools through the dashboard
