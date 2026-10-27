@@ -67,17 +67,18 @@ import (
 //     with a reason, [credentialMissing.unissued], and it is retried: the
 //     seat's children on the restart schedule, and a running box's token
 //     file on the poll that keeps it ([Engine.refreshRunTokens]).
-//
-// In neither story is an executor run refused: it starts without the value,
-// said as its launch's `sandbox_env_unresolved`, because a seat's every turn
-// is one and a seat refused its turn for a token would do no work at all,
-// GitHub's or anyone else's. A token FILE it was launched without is the
-// poll's to write once the token can be issued, and the poll says the wait
-// once per run rather than on every pass.
 //   - THE GITHUB INTEGRATION IS NOT ENABLED. Nothing issues anything: the
 //     gesture an operator makes after a leak is switching the block off,
 //     and it has to stop every token the engine hands out, so the variable
 //     is one nothing sets, and is reported as such.
+//
+// In none of the three is an executor run refused: it starts without the
+// value, said as its launch's `sandbox_env_unresolved`, because a seat's every
+// turn is one and a seat refused its turn for a token would do no work at all,
+// GitHub's or anyone else's. A token FILE it was launched without is the
+// poll's to write once the token can be issued — the app installed, the mint
+// answered, the integration switched back on — and the poll says the wait
+// once per job rather than on every pass.
 
 // seatToken answers one seat's own GitHub App token, issued at its first
 // lookup.
