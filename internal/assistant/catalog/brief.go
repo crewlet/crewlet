@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
@@ -145,19 +144,23 @@ type BriefDraftNeed struct {
 	Question string
 }
 
-// ParseBrief checks an [AnswerBriefTool] call and reads it into a draft: the
-// schema, then what a schema cannot say (an ask names its question, every
-// line a plain line within its bound). An error names EVERY field at fault,
-// not the first: the model writes a refused brief again once, and a refusal
-// that named one fault of several would spend that attempt on the next.
+// ParseBrief checks an [AnswerBriefTool] call and reads it into a draft. An
+// error names EVERY field at fault, in ONE PASS (ADR-0059): the schema's
+// findings (a type, a closed set, a cap in characters, a member missing or
+// unknown) and, beside them, what a schema cannot say about every member
+// that is there to read (a line that is empty or breaks, an ask with no
+// question or an open with one, a record cited by two rows). The model writes
+// a refused brief again once, and a refusal that named one group of faults
+// would spend that attempt on the other.
+//
+// THE TWO GROUPS DO NOT OVERLAP: a member the schema found missing or of the
+// wrong type is not read again here, and the length of a line is the
+// schema's alone, so no fault is named twice.
 func ParseBrief(args map[string]any) (BriefDraft, error) {
 	if args == nil {
 		args = map[string]any{}
 	}
-	if found := BriefTool().schema.problems(AnswerBriefTool, args); len(found) > 0 {
-		return BriefDraft{}, refusedFor(found)
-	}
-	var found []error
+	found := BriefTool().schema.problems(AnswerBriefTool, args)
 	note := func(errs ...error) {
 		for _, err := range errs {
 			if err != nil {
@@ -165,35 +168,50 @@ func ParseBrief(args map[string]any) (BriefDraft, error) {
 			}
 		}
 	}
+	note(briefLine("about", args["about"], true), briefLine("context", args["context"], false))
+	cited := map[wire.ResourceRef]int{}
+	for i, raw := range list(args["needs"]) {
+		n := asObject(raw)
+		path := fmt.Sprintf("needs[%d]", i)
+		note(refID(path, n["ref_id"]), briefLine(path+".do", n["do"], true),
+			briefLine(path+".why", n["why"], false),
+			briefLine(path+".question", n["question"], false),
+			briefAction(path, n["action"], n["question"]))
+		kind, kindOK := n["ref_kind"].(string)
+		id, idOK := n["ref_id"].(string)
+		if !kindOK || !idOK {
+			continue
+		}
+		ref := wire.ResourceRef{Kind: wire.ResourceKind(kind), ID: strings.TrimSpace(id)}
+		if first, seen := cited[ref]; seen {
+			note(fmt.Errorf("%s cites %s %s, which needs[%d] already cites: one row per "+
+				"record", path, kind, ref.ID, first))
+			continue
+		}
+		cited[ref] = i
+	}
+	for i, q := range list(args["follow_ups"]) {
+		note(briefLine(fmt.Sprintf("follow_ups[%d]", i), q, true))
+	}
+	if len(found) > 0 {
+		return BriefDraft{}, refusedFor(found)
+	}
 	a := Args(args)
 	d := BriefDraft{About: strings.TrimSpace(a.String("about")),
 		Context: strings.TrimSpace(a.String("context"))}
-	note(briefLine("about", d.About, wire.BriefAboutMaxRunes, true),
-		briefLine("context", d.Context, wire.BriefContextMaxRunes, false))
-	for i, raw := range list(args["needs"]) {
+	for _, raw := range list(args["needs"]) {
 		n := Args(asObject(raw))
-		path := fmt.Sprintf("needs[%d]", i)
-		need := BriefDraftNeed{
+		d.Needs = append(d.Needs, BriefDraftNeed{
 			Ref: wire.ResourceRef{Kind: wire.ResourceKind(n.String("ref_kind")),
 				ID: strings.TrimSpace(n.String("ref_id"))},
 			Text: strings.TrimSpace(n.String("do")), Detail: strings.TrimSpace(n.String("why")),
 			Tone: wire.BriefTone(n.String("tone")), Action: n.String("action"),
 			Question: strings.TrimSpace(n.String("question")),
-		}
-		note(refID(path, need.Ref.ID),
-			briefLine(path+".do", need.Text, wire.BriefTextMaxRunes, true),
-			briefLine(path+".why", need.Detail, wire.BriefDetailMaxRunes, false),
-			briefAction(path, need.Action, need.Question))
-		d.Needs = append(d.Needs, need)
+		})
 	}
-	for i, raw := range list(args["follow_ups"]) {
+	for _, raw := range list(args["follow_ups"]) {
 		q, _ := raw.(string)
-		q = strings.TrimSpace(q)
-		note(briefLine(fmt.Sprintf("follow_ups[%d]", i), q, wire.BriefQuestionMaxRunes, true))
-		d.FollowUps = append(d.FollowUps, q)
-	}
-	if len(found) > 0 {
-		return BriefDraft{}, refusedFor(found)
+		d.FollowUps = append(d.FollowUps, strings.TrimSpace(q))
 	}
 	return d, nil
 }
@@ -207,37 +225,52 @@ func refusedFor(found []error) error {
 	return fmt.Errorf("%w: %s", ErrInvalidArguments, strings.Join(reasons, "; "))
 }
 
-// briefLine holds one of a brief's lines to one plain line of at most max
-// characters, and to a word at least where it is required.
-func briefLine(path, s string, max int, required bool) error {
+// briefLine holds one of a brief's lines, as written, to one plain line, and
+// to a word at least where it is required. A member that is not there or is
+// not a string is the schema's to name, and so is its length in characters.
+func briefLine(path string, v any, required bool) error {
+	s, ok := v.(string)
+	if !ok {
+		return nil
+	}
+	s = strings.TrimSpace(s)
 	switch {
 	case required && s == "":
 		return fmt.Errorf("%s is empty", path)
-	case utf8.RuneCountInString(s) > max:
-		return fmt.Errorf("%s is %d characters and the most it takes is %d", path,
-			utf8.RuneCountInString(s), max)
 	case strings.ContainsAny(s, "\r\n"):
 		return fmt.Errorf("%s is more than one line", path)
 	}
 	return nil
 }
 
-// briefAction holds an action to what it needs: an ask its question, and an
-// open none.
-func briefAction(path, action, question string) error {
-	switch {
-	case action == BriefActionAsk && question == "":
-		return fmt.Errorf("%s asks and names no question", path)
-	case action == BriefActionOpen && question != "":
-		return fmt.Errorf("%s names a question and its action is open, not ask", path)
+// briefAction holds an action, as written, to what it needs: an ask its
+// question, and an open none. An action outside the closed set is the
+// schema's to name.
+func briefAction(path string, action, question any) error {
+	asked, _ := question.(string)
+	asked = strings.TrimSpace(asked)
+	switch action {
+	case BriefActionAsk:
+		if asked == "" {
+			return fmt.Errorf("%s asks and names no question", path)
+		}
+	case BriefActionOpen:
+		if asked != "" {
+			return fmt.Errorf("%s names a question and its action is open, not ask", path)
+		}
 	}
-	return briefLine(path+".question", question, wire.BriefQuestionMaxRunes, false)
+	return nil
 }
 
-// refID holds a cited record's id to one line: never empty, never a line
-// break. A seat may be cited by its name, which has spaces in it.
-func refID(path, id string) error {
-	if id == "" || strings.ContainsAny(id, "\r\n\t") {
+// refID holds a cited record's id, as written, to one line: never empty,
+// never a line break. A seat may be cited by its name, which has spaces in
+// it. A missing id is the schema's to name.
+func refID(path string, v any) error {
+	id, ok := v.(string)
+	if !ok {
+		return nil
+	}
+	if id = strings.TrimSpace(id); id == "" || strings.ContainsAny(id, "\r\n\t") {
 		return fmt.Errorf("%s names no record id, or one over more than one line", path)
 	}
 	return nil

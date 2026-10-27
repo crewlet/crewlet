@@ -2,8 +2,8 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant/wire`
-- **Enforced-by:** `internal/assistant/wire.TestTheVerdictIsTheNumberOfRows`, `internal/assistant/wire.TestABriefIsHeldToItsShape`, `internal/assistant/catalog.TestTheBriefSchemaAsksForAVerdictItCanCount`, `internal/assistant/catalog.TestABriefCallIsReadStrictly`, `internal/assistant/catalog.TestEveryBriefCapIsInTheSchemaTheModelReads`, `internal/assistant.TestTheBriefPromptStatesEveryCap`, `internal/assistant.TestABriefIsReReadWholeByTheNextTurn`, `internal/assistantdomain.TestACardInAnEarlierShapeIsReadAsANotice`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`
-- **Measured:** a dogfood company's Inbox brief of one decision (prompt `assistant.brief.v2`), read back from its transcript: about 800 characters drawn, a head that said "2 need you" over one thing that needed the reader and one fact tagged `neutral`, a recommendation that repeated the first row and its button, and three follow-ups. The v2 caps allowed about 1,500 characters (a 200 character summary, three rows of 120 plus 120, a recommendation of 120, three follow-ups of 160). The v3 caps allow about 650: an about line of 90, three rows of 80 plus 60, a context line of 100, two follow-ups of 80.
+- **Enforced-by:** `internal/assistant/wire.TestTheVerdictIsTheNumberOfRows`, `internal/assistant/wire.TestEveryCapTogetherKeepsTheBriefInItsBudget`, `internal/assistant/catalog.TestABriefsSchemaAndItsOwnFaultsComeBackInOnePass`, `internal/assistant/catalog.TestARecordIsCitedByOneRow`, `internal/assistant/wire.TestABriefIsHeldToItsShape`, `internal/assistant/catalog.TestTheBriefSchemaAsksForAVerdictItCanCount`, `internal/assistant/catalog.TestABriefCallIsReadStrictly`, `internal/assistant/catalog.TestEveryBriefCapIsInTheSchemaTheModelReads`, `internal/assistant.TestTheBriefPromptStatesEveryCap`, `internal/assistant.TestABriefIsReReadWholeByTheNextTurn`, `internal/assistantdomain.TestACardInAnEarlierShapeIsReadAsANotice`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`
+- **Measured:** a dogfood company's Inbox brief of one decision (prompt `assistant.brief.v2`), read back from its transcript: about 800 characters drawn, a head that said "2 need you" over one thing that needed the reader and one fact tagged `neutral`, a recommendation that repeated the first row and its button, and three follow-ups. The v2 caps allowed 1,520 characters (a 200 character summary, three rows of 120 plus 120, a recommendation of 120, three follow-ups of 160). The v3 caps allow 770 (`wire.BriefBudgetRunes`): an about line of 90, three rows of 80 plus 60, a context line of 100, two follow-ups of 80; a brief with nothing to do is the about line alone.
 - **Cost-when-tried:** v2 asked for concision in words ("numbers and names, no filler") and left the shape open to say everything twice. The model followed the words and filled the shape: a summary of counts, a row for a fact to know, and the first row again as the recommendation. The person asked for "what's up in the page, do I need to do anything about it", and the card made them read every row to find out.
 - **Tag-status:** unreleased
 
@@ -31,13 +31,15 @@ separate recommendation to repeat it.
 
 **Concision is the shape, not a request.** Every line has a cap in characters
 in the tool's schema, the prompt and the wire's validator, from one set of
-constants, and every list a `maxItems` (three needs, two follow-ups).
+constants, and every list a `maxItems` (three needs, two follow-ups). The caps
+add up to a stated budget, `wire.BriefBudgetRunes`, which a test holds them
+to, so a cap raised is a budget raised on purpose.
 
 **A stored card in a shape today's contract refuses reads as a notice.** Every
 card is validated before it is recorded and never rewritten, so a card of a
 kind this build draws that fails today's `wire.Card.Validate` was written to
 an earlier contract of an unreleased surface. `assistantdomain`'s one card
-reader serves it as `EarlierShapeNotice` (the transcript, the card read and
+reader serves it as `UnshownCardNotice` (the transcript, the card read and
 the model's history alike), and asking again writes it in today's shape. A
 kind this build does not know is a newer peer's and passes through, as the
 dashboard already draws one it cannot.

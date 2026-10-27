@@ -243,13 +243,16 @@ func (s *surface) answerBrief(ctx context.Context, tool catalog.Tool,
 // context, each row kept only for a record this turn read that the person may
 // open, its tone held to the facts that read carried, and every action built
 // by the engine. The verdict is the rows that survive: a row dropped here is
-// one the card does not count.
+// one the card does not count, and so is a second row about a record a kept
+// row already cites (two spellings of one seat, its handle and its name,
+// resolve to one record here, after the draft's own check could see them).
 func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire.BriefCard, error) {
 	card := &wire.BriefCard{About: d.About, Needs: []wire.BriefNeed{}, Context: d.Context,
 		FollowUps: append([]string{}, d.FollowUps...), AsOf: s.t.svc.now().UTC()}
 	if page := s.t.page; page != nil {
 		card.Scope = wire.BriefScope{Screen: page.Screen, Title: page.Title, Record: page.Selection}
 	}
+	kept := map[wire.ResourceRef]bool{}
 	for _, n := range d.Needs {
 		record, err := s.resolved(ctx, n.Ref)
 		if err != nil {
@@ -258,6 +261,13 @@ func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire
 		if record == nil {
 			continue
 		}
+		if kept[record.ref] {
+			s.t.svc.log.InfoContext(ctx, "assistant_brief_row_dropped", "turn", s.t.id,
+				"kind", string(record.ref.Kind), "reason", "duplicate")
+			s.t.svc.metrics.Add(metrics.AssistantBriefRowsDropped, 1, nil)
+			continue
+		}
+		kept[record.ref] = true
 		need := wire.BriefNeed{Ref: record.ref, Text: n.Text, Detail: n.Detail,
 			Tone: toneOf(n.Tone, record.urgent)}
 		switch n.Action {

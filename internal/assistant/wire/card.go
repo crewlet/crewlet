@@ -507,10 +507,10 @@ type BriefAction struct {
 // The bounds on a brief, in characters: each line one glance in a 420 pixel
 // drawer (about 60 characters a line at the card's size), so the about line
 // and a row's instruction are at most two lines, a row's reason and every
-// question one or two, and the whole brief at its caps about 650 characters
-// where the shape before it allowed about 1,500. Three rows is a short list
-// the reader takes in at once; two follow-ups are the next questions, not a
-// menu.
+// question one or two. Three rows is a short list the reader takes in at
+// once; two follow-ups are the next questions, not a menu. Together they draw
+// at most [BriefBudgetRunes] characters of the model's words, where the shape
+// before them allowed 1,520.
 const (
 	BriefMaxNeeds         = 3
 	BriefMaxFollowUps     = 2
@@ -521,6 +521,14 @@ const (
 	BriefQuestionMaxRunes = 80
 	briefLabelMaxRunes    = 40
 )
+
+// BriefBudgetRunes is the most characters of the model's words a brief
+// draws, every cap at once: the about line, three rows of an instruction and
+// a reason, the context line and two follow-ups (90 + 3 × (80 + 60) + 100 +
+// 2 × 80). An ask's question is not counted: it is asked, never drawn. A cap
+// raised past this budget is a brief made longer, and a test refuses it until
+// the budget is raised on purpose.
+const BriefBudgetRunes = 770
 
 // Validate reports what is wrong with a brief: its bounds, every closed set,
 // and that each row carries the one action its kind needs.
@@ -552,8 +560,12 @@ func (b *BriefCard) Validate() error {
 			return err
 		}
 	}
+	cited := map[ResourceRef]bool{}
 	for i, n := range b.Needs {
 		switch {
+		case cited[n.Ref]:
+			return fmt.Errorf("%w: brief need %d cites %s %s, which an earlier need cites",
+				ErrInvalid, i, n.Ref.Kind, n.Ref.ID)
 		case n.Text == "" || !briefText(n.Text, BriefTextMaxRunes):
 			return fmt.Errorf("%w: brief need %d is not one line of 1 to %d characters",
 				ErrInvalid, i, BriefTextMaxRunes)
@@ -572,6 +584,7 @@ func (b *BriefCard) Validate() error {
 		if err := n.Action.validate(); err != nil {
 			return fmt.Errorf("%w (brief need %d)", err, i)
 		}
+		cited[n.Ref] = true
 	}
 	for i, q := range b.FollowUps {
 		if q == "" || !briefText(q, BriefQuestionMaxRunes) {

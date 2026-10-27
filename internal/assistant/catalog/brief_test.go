@@ -253,3 +253,62 @@ func TestABriefRefusalNamesEveryFault(t *testing.T) {
 		}
 	}
 }
+
+// THE SCHEMA'S FAULTS AND THE BRIEF'S OWN COME BACK IN ONE REFUSAL (ADR-0059):
+// an about line past its cap is the schema's to name, an ask with no
+// question and a record cited twice are the brief's, and a call carrying all
+// three is told all three at once, each once. The live shape: a model told
+// only of its about line fixed it, and its one retry was refused for the ask
+// it had not been told of.
+//
+// Mutation: return the schema's findings before the brief's own checks run,
+// or let the brief's checks name a line's length again, and this fails.
+func TestABriefsSchemaAndItsOwnFaultsComeBackInOnePass(t *testing.T) {
+	t.Parallel()
+	row := func(id, action string) map[string]any {
+		return map[string]any{"ref_kind": "task", "ref_id": id, "do": "Answer " + id,
+			"tone": "warning", "action": action}
+	}
+	_, err := catalog.ParseBrief(map[string]any{
+		"about": strings.Repeat("a", 200),
+		"needs": []any{row("ENG-1", "ask"), row("ENG-1", "open")},
+	})
+	if !errors.Is(err, catalog.ErrInvalidArguments) {
+		t.Fatalf("answered %v, want ErrInvalidArguments", err)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("about is 200 characters and the most it takes is %d", wire.BriefAboutMaxRunes),
+		"needs[0] asks and names no question",
+		"needs[1] cites task ENG-1, which needs[0] already cites",
+	} {
+		if n := strings.Count(err.Error(), want); n != 1 {
+			t.Errorf("the refusal names %q %d times, want once: %v", want, n, err)
+		}
+	}
+	if n := strings.Count(err.Error(), "about is"); n != 1 {
+		t.Errorf("the about line is named %d times, want once: %v", n, err)
+	}
+}
+
+// A RECORD IS CITED BY ONE ROW: two rows about one record would be counted
+// twice in the verdict and share one row's identity on the card. The same id
+// under another kind is another record.
+//
+// Mutation: drop the duplicate check and the second row is accepted.
+func TestARecordIsCitedByOneRow(t *testing.T) {
+	t.Parallel()
+	row := func(kind, id string) map[string]any {
+		return map[string]any{"ref_kind": kind, "ref_id": id, "do": "Open " + id,
+			"tone": "warning", "action": "open"}
+	}
+	if _, err := catalog.ParseBrief(map[string]any{"about": "s",
+		"needs": []any{row("task", "ENG"), row("project", "ENG")}}); err != nil {
+		t.Errorf("a task and a project sharing a key were refused: %v", err)
+	}
+	_, err := catalog.ParseBrief(map[string]any{"about": "s",
+		"needs": []any{row("task", "ENG-1"), row("task", " ENG-1 ")}})
+	if !errors.Is(err, catalog.ErrInvalidArguments) ||
+		!strings.Contains(err.Error(), "needs[1] cites task ENG-1, which needs[0] already cites") {
+		t.Errorf("a record cited twice answered %v", err)
+	}
+}
