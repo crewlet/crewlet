@@ -801,8 +801,10 @@ sequenceDiagram
   recorded on the record by the write that hands it over, so a note is never
   handed to a model twice. **Claude Code** takes them through hooks the run is
   started with: once every tool call of a batch the main agent made has its
-  result (`tool_batch`) — the model reads the note after those results — and
-  as the run is about to finish (`finish`), when a note continues the turn and
+  result (`tool_batch`) — the model reads the note after those results, as
+  context the CLI adds of its own: a system message after them, or on some
+  models a reminder at the end of the last one — and as the run is about to
+  finish (`finish`), when a note continues the turn and
   the run's result is the answer given after it. A subagent's batch takes
   nothing, because a note handed to a delegated loop binds that piece of work
   alone; the note waits for the main agent's next step. **OpenCode** takes

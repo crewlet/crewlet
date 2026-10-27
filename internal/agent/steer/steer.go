@@ -25,7 +25,12 @@
 // engine sends it either way at a point where every call has its answer, so a
 // note never sits between a call and its result — which a provider rejects
 // outright, and which would make a model read the note as the tool's output.
-// Never inside a tool's result either, which any tool's output could imitate.
+// The ENGINE never folds a note into a tool's result either, which any tool's
+// output could imitate; where a CLI then places a hook's context is the CLI's
+// own — Claude Code, on some models, appends it to the end of the batch's last
+// tool result as a reminder of its own — so the run's standing instruction
+// tells the model a note by the heading the CLI puts on it and by the note's
+// own, and never by where it sits (internal/sandbox/codingagent, steer.go).
 // After the fence, because a turn this node no longer holds, or one a person
 // stopped, must not be told anything more. And the ENGINE never edits a system
 // prompt mid-turn: the system prompt is the frozen prefix a provider caches on,
