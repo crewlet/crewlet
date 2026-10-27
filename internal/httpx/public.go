@@ -87,8 +87,8 @@ type Resolver interface {
 // public. The zero Rule asked no network anything, and refuses every address.
 type Rule struct {
 	// nat64 are the network-specific NAT64 prefixes the network's resolver
-	// named. The well-known prefix counts on every network, and is not among
-	// them.
+	// named where they count ([honoured]). The well-known prefix counts on
+	// every network, and is not among them.
 	nat64 []netip.Prefix
 
 	// discovered is set by DiscoverRule alone, which is what keeps the zero

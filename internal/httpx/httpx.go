@@ -75,10 +75,19 @@
 // where a translator delivers it, and by nothing else: the well-known prefix
 // (64:ff9b::/96) on every network, and the network-specific ones the node's
 // own resolver names when asked for ipv4only.arpa (RFC 7050), discovered for
-// every dial. Discovery is the one thing the rule takes on the resolver's
-// word. A host's own DNS records decide nothing, since every address they give
-// is judged; which prefixes the network translates through, only the network
-// can say. public.go holds the blocks and the reason for each.
+// every dial. A host's own DNS records decide nothing, since every address
+// they give is judged; which prefixes the network translates through, only
+// the network can say. Its resolver's word is taken only where it cannot
+// widen the rule into a network that is not on the internet: a prefix it
+// names counts inside the allowlist, where judging an address by what it
+// carries can only refuse more, or inside 64:ff9b:1::/48, the block RFC 8215
+// reserves for a network's own translation prefix, and is ignored anywhere
+// else. So a DNS64 network translates through 64:ff9b::/96, a prefix in
+// 64:ff9b:1::/48 or one in its own global unicast space, or a dialer reaches
+// the host through a proxy its caller trusts (the CDN fetch dials an https
+// proxy the process is configured with as itself): through a translator on a
+// unique-local prefix, the rule reaches no host that has only an IPv4
+// address. public.go holds the blocks and the reason for each.
 package httpx
 
 import (

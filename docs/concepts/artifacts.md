@@ -455,8 +455,15 @@ sequenceDiagram
   translation prefix is judged by the IPv4 address it carries; the node learns
   the network's own prefixes by asking its resolver for `ipv4only.arpa`
   (RFC 7050) each time it connects, so a resolver that fails that lookup,
-  rather than answering it has no record, fails the copy. Any other remote
-  script a page states is refused. What the linter cannot read is a script the
+  rather than answering it has no record, fails the copy. A prefix the
+  resolver names counts only in global unicast or in `64:ff9b:1::/48`, the
+  block RFC 8215 reserves for a network's own translation prefix, so no
+  answer can open a network that is not on the internet to the fetch. A
+  translator on the well-known `64:ff9b::/96`, in `64:ff9b:1::/48` or in the
+  network's own global unicast space reaches a CDN that has only IPv4
+  addresses; one on a unique-local prefix does not, and such a network sets
+  `HTTPS_PROXY` to a proxy that reaches the CDN, which the node dials as
+  itself. Any other remote script a page states is refused. What the linter cannot read is a script the
   page's own script builds at run time:
   `'strict-dynamic'` trusts it from any host, so a page whose author means to
   can send what a viewer may read to another site. Only an `editor` publishes,

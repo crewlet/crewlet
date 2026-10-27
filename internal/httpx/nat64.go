@@ -15,6 +15,12 @@ import (
 // one routes it, and nowhere else does it lead.
 var wellKnownNAT64 = netip.MustParsePrefix("64:ff9b::/96")
 
+// localUseNAT64 is the block RFC 8215 sets aside for a network's own NAT64
+// prefixes, so that a network need not take one from its unique-local space.
+// A prefix the network names inside it counts ([honoured]); where nothing
+// names one, the allowlist refuses the block whole.
+var localUseNAT64 = netip.MustParsePrefix("64:ff9b:1::/48")
+
 // nat64Lengths are the prefix lengths RFC 6052 section 2.2 defines an IPv4
 // address's position for. No other length is a NAT64 prefix, so discovery
 // finds no other.
@@ -46,6 +52,11 @@ var wellKnownIPv4Only = [...]netip.Addr{
 // which prefixes are translated, and a resolver that cannot answer this
 // cannot be relied on for the host's own answer either.
 //
+// A PREFIX COUNTS ONLY WHERE THE ANSWER CANNOT WIDEN THE RULE ([honoured]).
+// Every answer is read first, so RFC 7050's reading of an ambiguous answer
+// sees all of them, and a prefix that does not count is then dropped: the
+// addresses under it are judged as on a network that names none.
+//
 // It is asked for every dial rather than kept: one AAAA lookup beside the
 // host's own, against a dial that is about to fetch a file or a repository,
 // is cheaper than a cache whose lifetime would have to track the network's.
@@ -56,7 +67,57 @@ func discoverNAT64(ctx context.Context, r Resolver) ([]netip.Prefix, error) {
 			"before an address is judged: it names the NAT64 prefixes this network translates through "+
 			"(RFC 7050): %w", ipv4onlyArpa, err)
 	}
-	return synthesizedPrefixes(answers), nil
+	named := synthesizedPrefixes(answers)
+	return slices.DeleteFunc(named, func(p netip.Prefix) bool { return !honoured(p) }), nil
+}
+
+// honoured reports whether a NAT64 prefix the network's resolver named is one
+// the rule takes its word for: one lying where that word cannot widen the rule
+// into a network that is not on the internet.
+//
+// THE RESOLVER IS NOT TRUSTED WITH WHERE A PREFIX LIES. An address under a
+// prefix that counts is judged by the 32 bits it carries and by nothing else,
+// so a resolver that answered ipv4only.arpa falsely (a poisoned cache, a rogue
+// resolver a DHCP lease handed out) would otherwise choose which addresses
+// those are. Naming a unique-local prefix, it would have the rule call public
+// an internal host whose low 32 bits read as a public IPv4 address, and the
+// rule exists to keep a dial out of exactly that space. So a prefix counts in
+// two places alone, wholly inside one of them:
+//   - global unicast outside the blocks the allowlist refuses there. Every
+//     address of such a prefix is public by the allowlist already, and judging
+//     one by the address it carries can only refuse it, so a false answer
+//     there makes the rule stricter, never wider. The whole prefix is held
+//     clear of those blocks, not its first address alone: a block added
+//     there later may be smaller than a prefix, and lie inside one.
+//   - RFC 8215's local-use block, 64:ff9b:1::/48, and no wider: it is
+//     reserved for translation and nothing else, so that a network's own
+//     prefix need not be unique-local.
+//
+// A prefix named anywhere else is ignored, and the allowlist refuses every
+// address under it. The well-known prefix needs no naming ([wellKnownNAT64]).
+// The cost falls on a DNS64 network whose translator uses a unique-local or
+// other non-global prefix: through it, the rule reaches no host that has only
+// an IPv4 address. Such a network translates through the well-known prefix, a
+// prefix in 64:ff9b:1::/48 or one in its own global unicast space, or its
+// dialer reaches the host through a proxy its caller trusts.
+func honoured(p netip.Prefix) bool {
+	if within(p, localUseNAT64) {
+		return true
+	}
+	if !within(p, global6) {
+		return false
+	}
+	for _, b := range notGlobal6 {
+		if b.Overlaps(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// within reports whether every address of p is in block.
+func within(p, block netip.Prefix) bool {
+	return p.Bits() >= block.Bits() && block.Contains(p.Addr())
 }
 
 // noRecord reports whether err is a lookup that found no record of the type

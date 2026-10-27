@@ -292,8 +292,9 @@ func TestAGloballyReachableBlockIsPublic(t *testing.T) {
 // returned to IANA in 2006: global unicast that names nobody's network).
 // Where such a prefix is not named the allowlist judges the same addresses
 // and calls the one carrying 10.0.0.5 public, which is why discovery is part
-// of the rule. The last row's prefix is in RFC 8215's local-use block, which
-// the allowlist refuses whole where nothing names a prefix in it.
+// of the rule. The last two rows' prefixes are in RFC 8215's local-use block,
+// the block itself and a /96 in it, which the allowlist refuses whole where
+// nothing names a prefix in it.
 func TestANAT64AddressIsJudgedByTheIPv4AddressItCarries(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -332,6 +333,8 @@ func TestANAT64AddressIsJudgedByTheIPv4AddressItCarries(t *testing.T) {
 			"3ffe:64:64:64:68:1000:100:0", "3ffe:64:64:64:a:0:500:0", true},
 		{"3ffe:64:64:96::/96", [2]string{"3ffe:64:64:96::c000:aa", "3ffe:64:64:96::c000:ab"},
 			"3ffe:64:64:96::6810:1", "3ffe:64:64:96::a00:5", true},
+		{"64:ff9b:1::/48", [2]string{"64:ff9b:1:c000:0:aa00::", "64:ff9b:1:c000:0:ab00::"},
+			"64:ff9b:1:6810:0:100::", "64:ff9b:1:a00:0:500::", false},
 		{"64:ff9b:1::/96", [2]string{"64:ff9b:1::c000:aa", "64:ff9b:1::c000:ab"},
 			"64:ff9b:1::6810:1", "64:ff9b:1::a00:5", false},
 	} {
@@ -359,6 +362,53 @@ func TestANAT64AddressIsJudgedByTheIPv4AddressItCarries(t *testing.T) {
 	}
 	if addr := netip.MustParseAddr("3ffe:64:64:64:68:1000:100:0"); !publicOn(t, both, addr) {
 		t.Errorf("%s, carrying 104.16.0.1 under the /64 alone, is judged not public", addr)
+	}
+}
+
+// A PREFIX THE NETWORK'S RESOLVER NAMES COUNTS ONLY WHERE ITS WORD CANNOT
+// WIDEN THE RULE: inside the allowlist, where judging an address by what it
+// carries can only refuse more, or inside RFC 8215's local-use block and no
+// wider than it (TestANAT64AddressIsJudgedByTheIPv4AddressItCarries holds
+// both). Named anywhere else, a prefix is ignored, and an address under it
+// stays refused although the IPv4 address it carries is public: a resolver
+// answering ipv4only.arpa falsely cannot open a network that is not on the
+// internet to a dial. Each row is a prefix a DNS64 resolver could claim, with
+// an address under it carrying a public IPv4 address (1.1.1.1 where the
+// address lies inside the local-use block, which a /40 is wider than).
+func TestAPrefixTheResolverNamesCountsOnlyWhereItCannotWidenTheRule(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		prefix      string
+		synthesized [2]string // what a DNS64 resolver answers ipv4only.arpa with under prefix
+		public      string    // a public IPv4 address under prefix
+		where       string
+	}{
+		{"fd00:64::/96", [2]string{"fd00:64::c000:aa", "fd00:64::c000:ab"},
+			"fd00:64::6810:1", "unique local (RFC 4193)"},
+		{"fd00:0:0:64::/64", [2]string{"fd00::64:c0:0:aa00:0", "fd00::64:c0:0:ab00:0"},
+			"fd00::64:68:1000:100:0", "unique local, read past the u octet"},
+		{"fe80::/96", [2]string{"fe80::c000:aa", "fe80::c000:ab"},
+			"fe80::6810:1", "link-local (RFC 4291)"},
+		{"::/96", [2]string{"::c000:aa", "::c000:ab"},
+			"::6810:1", "IPv4-compatible, deprecated (RFC 4291)"},
+		{"64:ff9b:2::/96", [2]string{"64:ff9b:2::c000:aa", "64:ff9b:2::c000:ab"},
+			"64:ff9b:2::6810:1", "beside the local-use block, outside it"},
+		{"64:ff9b::/40", [2]string{"64:ff9b:c0:0:aa::", "64:ff9b:c0:0:ab::"},
+			"64:ff9b:1:101:1::", "wider than the local-use block, which holds the address"},
+		{"2001:db8:64::/96", [2]string{"2001:db8:64::c000:aa", "2001:db8:64::c000:ab"},
+			"2001:db8:64::6810:1", "documentation (RFC 3849), inside 2000::/3"},
+		{"3fff:64::/96", [2]string{"3fff:64::c000:aa", "3fff:64::c000:ab"},
+			"3fff:64::6810:1", "documentation (RFC 9637), inside 2000::/3"},
+		{"2001:0:64::/96", [2]string{"2001:0:64::c000:aa", "2001:0:64::c000:ab"},
+			"2001:0:64::6810:1", "Teredo's IETF protocol assignments (RFC 2928), inside 2000::/3"},
+		{"2002:64::/96", [2]string{"2002:64::c000:aa", "2002:64::c000:ab"},
+			"2002:64::6810:1", "6to4 (RFC 3056), inside 2000::/3"},
+	} {
+		named := dns64(c.synthesized[0], c.synthesized[1])
+		if addr := netip.MustParseAddr(c.public); publicOn(t, named, addr) {
+			t.Errorf("%s, carrying a public IPv4 address under %s (%s), which the network's resolver names, "+
+				"is judged public", addr, c.prefix, c.where)
+		}
 	}
 }
 
