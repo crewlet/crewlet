@@ -86,3 +86,47 @@ func TestAMissingLayerTheHeadCannotDecideWaits(t *testing.T) {
 		t.Errorf("once the head answers, the layer the store lost is refused %q, want missing", got)
 	}
 }
+
+// A LAYER INSTALL THAT FAILED IS COUNTED: a try of a layer the store failed to
+// answer — a full round's, which answers without the layer and leaves it to
+// the installer, and the installer's, which waits and tries again — is
+// crewlet.code.cache.layers{outcome=failed}, once a try, beside its
+// code_layer_install_failed line: the count an operator reads an object store
+// failing the installer by.
+//
+// Mutation: count no failed try (the countLayers of settleInstall's and
+// roundLayerFailed's failure dropped) — the counter stays at zero.
+func TestAFailedLayerInstallIsCounted(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 2)
+	chain := w.buildChain(t, p)
+	part := chain[0].Parts[0].Object
+	slowDown := errors.New("SlowDown: please reduce your request rate")
+	w.objects.mu.Lock()
+	w.objects.fail = func(k objstore.Key) error {
+		if k == part {
+			return slowDown
+		}
+		return nil
+	}
+	w.objects.mu.Unlock()
+	w.log.publish(repo, chain, nil)
+	c := w.open(t, newClock().on)
+
+	w.sync(t, c, repo).Release()
+	if got := cache.Installed(c, repo); len(got) != 0 {
+		t.Fatalf("the cold round installed %v from a store refusing the layer's part", layerIDs(got))
+	}
+	if got := w.layerCount("failed"); got != 1 {
+		t.Errorf("after the full round's failed fetch crewlet.code.cache.layers{outcome=failed} = %d, want 1", got)
+	}
+	cache.InstallPass(c)
+	if got := w.layerCount("failed"); got != 2 {
+		t.Errorf("after the installer's failed try crewlet.code.cache.layers{outcome=failed} = %d, want 2", got)
+	}
+	if got := len(w.logs.lines(t, "code_layer_install_failed")); got != 2 {
+		t.Errorf("code_layer_install_failed logged %d times, want once a failed try", got)
+	}
+}

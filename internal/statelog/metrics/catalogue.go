@@ -1078,8 +1078,11 @@ func Catalogue() []Instrument {
 				"placement whose one bitmapped read through it failed — a " +
 				"layer over the wrong base. `newer_git`: written by a git " +
 				"newer than this node's, which it would not read. `failed`: " +
-				"the store failing to answer or this node's disk failing a " +
-				"write, tried again a minute later, doubling to thirty. A " +
+				"a try the store failed to answer, this node's disk failed a " +
+				"write of, or whose missing part the log's head could not be " +
+				"read about — by a full sync, which leaves the layer to the " +
+				"installer, or by the installer, which tries again a minute " +
+				"later, doubling to thirty: counted once a try. A " +
 				"refused layer, and every one above it, is never installed " +
 				"while the rows name it: the copy serves from the layers " +
 				"below it, or in its own mode, correctly and slower, until " +

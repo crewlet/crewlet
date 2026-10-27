@@ -141,8 +141,9 @@ const (
 	// layerNewerGit: written by a git newer than this node's, which it would
 	// not read.
 	layerNewerGit layerOutcome = "newer_git"
-	// layerFailed: the store failing to answer, or this node's disk failing a
-	// write: tried again.
+	// layerFailed: the store failing to answer, this node's disk failing a
+	// write, or a missing part the log's head could not be read about: tried
+	// again, and counted once a try.
 	layerFailed layerOutcome = "failed"
 )
 
@@ -673,8 +674,9 @@ func (c *Cache) placeChain(ctx context.Context, e *entry, inc *incarnation, p ch
 // answered it (placeChain): refused at once where its bytes are not its row's,
 // and otherwise the installer's — which the round's end kicks, since the copy
 // then wants it (installDue) — where a part the store does not hold is asked
-// of the log's head, and anything else tried again behind its wait. Logged
-// code_layer_install_failed either way.
+// of the log's head, and anything else tried again behind its wait, counted
+// failed as the installer's tries are. Logged code_layer_install_failed either
+// way.
 func (c *Cache) roundLayerFailed(e *entry, inc *incarnation, f layerFetch) {
 	if f.err == nil {
 		return
@@ -682,10 +684,13 @@ func (c *Cache) roundLayerFailed(e *entry, inc *incarnation, f layerFetch) {
 	c.log.Warn("code_layer_install_failed", "repo", e.id, "layer", f.row.Layer.LayerID, "seq", f.row.Seq,
 		"outcome", string(f.outcome), "error", f.err)
 	c.observeInstall(f.outcome, f.took)
-	if f.outcome == layerCorrupt {
+	switch f.outcome {
+	case layerCorrupt:
 		e.mu.Lock()
 		c.refuse(e, inc, f.row, layerCorrupt, f.err.Error())
 		e.mu.Unlock()
+	case layerFailed:
+		c.countLayers(layerFailed, 1)
 	}
 }
 
@@ -1857,7 +1862,14 @@ func (c *Cache) installRepo(ctx context.Context, id string) {
 			// fetches is one its copy does not hold — which is definite: the
 			// next plan stops below it.
 		default:
+			// This node's disk failing the swap's writes (logged
+			// code_cache_swap_failed by it): every layer it was to place
+			// failed, and is tried again behind the wait.
 			swapFailed = true
+			for _, st := range fetched {
+				c.observeInstall(layerFailed, time.Since(st.began))
+			}
+			c.countLayers(layerFailed, len(fetched))
 		}
 	}
 
@@ -1919,6 +1931,7 @@ func (c *Cache) settleInstall(id string, stop *layerFetch, undecided error, swap
 				err = fmt.Errorf("%w; and the log's head, which decides whether the rows still name the layer, "+
 					"could not be read: %w", stop.err, undecided)
 			}
+			c.countLayers(layerFailed, 1)
 			c.log.Warn("code_layer_install_failed", "repo", id, "layer", stop.row.Layer.LayerID, "seq", stop.row.Seq,
 				"outcome", string(stop.outcome), "error", err, "retry_in", installWindow(w.failures))
 		}
