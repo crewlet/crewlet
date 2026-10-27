@@ -57,6 +57,7 @@ import {
   type CardHandlers,
 } from "./blocks.tsx";
 import { SentAttachments } from "./files.tsx";
+import { Answer } from "./reads.tsx";
 import { changedNothing } from "./pageActions.ts";
 import { isOpen, proposalOf, type ConversationView, type TurnView } from "./turn.ts";
 
@@ -221,12 +222,18 @@ function Turn({
         <DeepRunBlock key={run.step.step_id} run={run} now={now} technical={technical} />
       ))}
       {turn.replies.map((reply) => (
-        <Stack key={reply.id} gap={3}>
-          <ReplyProse text={reply.text} dimmed={turn.phase === "stopped"} />
-          {cardsOf(reply.id).map(card)}
-        </Stack>
+        <Answer
+          key={reply.id}
+          text={reply.text}
+          dimmed={turn.phase === "stopped"}
+          cards={cardsOf(reply.id)}
+          card={card}
+          on={on}
+        />
       ))}
-      {loose.map(card)}
+      {loose.length > 0 ? (
+        <Answer text="" dimmed={false} cards={loose} card={card} on={on} />
+      ) : null}
       {receipts.map((a) => (
         <ActionReceipt
           key={a.action_id}

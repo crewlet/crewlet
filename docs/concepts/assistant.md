@@ -85,14 +85,19 @@ spend by agent"). A step never names the engine's tools; an administrator also
 sees each step's request (its method and path) beside it. A refusal is said in
 plain words too: the assistant is handed the engine's exact reason and says
 what to change.
-Tables can be downloaded as CSV or XLSX from the card, from the snapshot you
-were shown.
+What a step read is not drawn as a card beside the answer. The first time
+the answer names a record it read (a task by its key, such as GOP-11, or an
+agent, a team, a project or a page by its name), that mention is a chip: press
+it for a peek with the record's facts, its body and the list under it, and
+**Open** to go to its page. A record it read and never named is on one
+**Also read** line under the answer, with a chip of its own. A table's peek
+holds its rows, and it can be downloaded as CSV or XLSX from there, from the
+snapshot you were shown.
 
-A read of a part of the engine that has no card of its own is drawn from the
+A read of a part of the engine that has no record of its own is drawn from the
 answer's own shape and named for what it read, never for the request: a list
-is a table ("Agents"), and one record is a card of its values and the lists it
-holds ("Seat · engineer", or the company's configuration with its roles and
-units).
+is a table ("Agents"), and one record is its values and the lists it holds
+("Seat · engineer", or the company's configuration with its roles and units).
 
 ## What it can do
 
@@ -107,10 +112,10 @@ units).
 
 **Answer in words.** Every part of a question is answered with the facts it
 asks for (who is doing what, why a turn failed, which tasks are due), and the
-tables and cards beside the answer support it rather than replace it. Each
-card's title says what its read was narrowed to ("Spend by agent, last 14
-days", "Tasks, urgent, due in the next 7 days"), and a read made twice in one
-answer is drawn once.
+records and tables it read support it rather than replace it. Each table's
+title says what its read was narrowed to ("Spend by agent, last 14 days",
+"Tasks, urgent, due in the next 7 days"), and a record read twice in one
+answer is one chip.
 
 **Use the names you use.** Ask about "the QA Engineer", "the Company space" or
 "the Marketing project": the assistant resolves a seat, unit, project or space

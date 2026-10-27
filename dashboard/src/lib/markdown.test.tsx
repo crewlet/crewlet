@@ -881,3 +881,38 @@ describe("a link's label", () => {
     expect(links[0]!.textContent).toBe("see https://example.com/a");
   });
 });
+
+describe("prose", () => {
+  // THE CALLER SEES ONLY THE WORDS A READER READS, in reading order, with a
+  // key unique to the render: never a code span, a code block, a link's label
+  // or an image's alt text. Mutation: pass `prose` into a link's label and
+  // "label" reaches it.
+  const seen = (source: string, options: RenderOptions = {}) => {
+    const runs: string[] = [];
+    const keys = new Set<string>();
+    const nodes = renderMarkdown(source, {
+      ...options,
+      prose: (text, key) => {
+        runs.push(text);
+        keys.add(key);
+        return text.toUpperCase();
+      },
+    });
+    const { container } = render(<div>{nodes}</div>);
+    return { runs, keys, text: container.textContent ?? "" };
+  };
+
+  it("hands over each run of prose, in order, and draws what it returns", () => {
+    const { runs, keys, text } = seen("one **two** three\n\n- four");
+    expect(runs).toEqual(["one ", "two", " three", "four"]);
+    expect(keys.size).toBe(runs.length);
+    expect(text).toBe("ONE TWO THREEFOUR");
+  });
+
+  it("never hands over code, a code block or a link's label", () => {
+    const anchor = seen("a `code` [label](https://example.com) b\n\n```\nblock\n```");
+    expect(anchor.runs).toEqual(["a ", " ", " b"]);
+    const inert = seen("[label](https://example.com) c", { links: "inert" });
+    expect(inert.runs).toEqual([" c"]);
+  });
+});
