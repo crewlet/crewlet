@@ -607,21 +607,35 @@ describe("the pane", () => {
 
   test("a run answered in words stays in place with what was written under it", async () => {
     location.hash = "#/inbox?row=run%3Aturn-7";
+    const run = {
+      turn_id: "turn-7",
+      launch_id: "q1",
+      agent_handle: "cto",
+      status: "awaiting_clarification",
+      question: "May I delete the fixtures directory?",
+      audience_handles: ["jane"],
+      started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+      updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    };
+    // THE ENGINE'S ANSWER AND ITS RECORD: pending, then recorded on the run.
+    actAnswers = {
+      answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+    };
     mount({
       answers: {
         decisions: decisionsOf({
           kind: "run",
           at: new Date(Date.now() - 5 * 60_000).toISOString(),
-          run: {
-            turn_id: "turn-7",
-            agent_handle: "cto",
-            status: "awaiting_clarification",
-            question: "May I delete the fixtures directory?",
-            audience_handles: ["jane"],
-            started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
-            updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
-          },
+          run,
         }),
+        sandbox_runs: () =>
+          Promise.resolve({
+            runs: [
+              posted.some((p) => p.tool === "answer_run")
+                ? { ...run, status: "answered", answer_ids: ["a1"] }
+                : run,
+            ],
+          }),
       },
     });
     await settle();
@@ -629,6 +643,7 @@ describe("the pane", () => {
       target: { value: "Yes, but keep the golden files." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+    await settle();
     await settle();
     const row = within(screen.getByRole("region", { name: /^Needs you/ })).getByRole("button", {
       name: /Answered$/,
@@ -877,7 +892,11 @@ describe("the pane", () => {
           sandbox_runs: () =>
             Promise.resolve({
               runs: [
-                posted.some((p) => p.tool === "answer_run") ? { ...parked, ...after } : parked,
+                ...(!posted.some((p) => p.tool === "answer_run")
+                  ? [parked]
+                  : after.gone
+                    ? []
+                    : [{ ...parked, ...after }]),
                 ...others,
               ],
             }),
@@ -897,6 +916,12 @@ describe("the pane", () => {
       await answerRun({});
       expect(outcome()).toBe("Sent “Yes, delete it.”. Waiting for CTO’s run to take it.");
       expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
+    });
+
+    test("says the run ended, not that it was answered, when its record goes away", async () => {
+      await answerRun({ gone: true });
+      expect(outcome()).toBe("Sent “Yes, delete it.”. CTO’s run has ended.");
       expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
     });
 
@@ -932,7 +957,7 @@ describe("the pane", () => {
         {
           refused: 409,
           body: {
-            error: "not_running",
+            error: "already_answered",
             tool: "answer_run",
             detail: "This question was already answered by @miles, so your answer was not used.",
           },

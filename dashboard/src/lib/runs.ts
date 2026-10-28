@@ -39,8 +39,11 @@ export interface GivenAnswer {
  *
  *  - `recorded`: the run is answered with this answer, and its resume waits
  *    for the seat;
- *  - `taken`: the run was resumed with it, or its record is gone (the run took
- *    it and ended);
+ *  - `taken`: the run was resumed with it, or its record is gone after it was
+ *    seen recorded or taken (the run took it and finished);
+ *  - `ended`: the record is gone and was never seen holding this answer: the
+ *    run ended (finished, was cancelled or was reaped) and whether it took the
+ *    answer first is not something the record can say any more;
  *  - `superseded`: another answer was recorded first, so this one was not used;
  *  - `declined`: the question let this very answer go, and the run waits on it
  *    again, so the person must answer again;
@@ -51,14 +54,20 @@ export interface GivenAnswer {
  * A record that was never read (`undefined` with `loaded` false) is `sent`:
  * nothing is known yet, and nothing is claimed.
  */
-export type AnswerFate = "sent" | "recorded" | "taken" | "superseded" | "declined" | "overtaken";
+export type AnswerFate =
+  "sent" | "recorded" | "taken" | "ended" | "superseded" | "declined" | "overtaken";
 
 export function answerFate(
   given: GivenAnswer,
   run: Pick<SandboxRun, "status" | "launch_id" | "declined_answers" | "answer_ids"> | undefined,
   loaded: boolean,
+  /** Whether this answer was already seen recorded on the run, or taken. */
+  seenTaken = false,
 ): AnswerFate {
-  if (!run) return loaded ? "taken" : "sent";
+  if (!run) {
+    if (!loaded) return "sent";
+    return seenTaken ? "taken" : "ended";
+  }
   if (given.answerId && run.declined_answers?.includes(given.answerId)) return "declined";
   const recorded = run.answer_ids ?? [];
   const ours = given.answerId !== "" && recorded.includes(given.answerId);

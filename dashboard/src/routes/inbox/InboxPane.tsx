@@ -683,7 +683,11 @@ function RunPane({
   const [refusedAnswered, setRefusedAnswered] = useState(false);
   const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
   const record = runs.data?.runs.find((r) => r.turn_id === run.turn_id);
-  const fate = given ? answerFate(given, record, runs.data !== undefined) : null;
+  // WHETHER THIS ANSWER WAS SEEN ON THE RUN, so a record that then goes away
+  // is read as the run finishing with it rather than as the run ending.
+  const seenTaken = useRef(false);
+  const fate = given ? answerFate(given, record, runs.data !== undefined, seenTaken.current) : null;
+  if (fate === "recorded" || fate === "taken") seenTaken.current = true;
   const question = run.question ?? "";
   // A QUESTION THIS READER CAN'T SEE IS NOT ASKED OF THEM: the answer form
   // asked for an answer to a question it never showed.
@@ -710,6 +714,11 @@ function RunPane({
     }
     if (fate === "taken") {
       onSettled("Answered", answer);
+      return;
+    }
+    if (fate === "ended") {
+      // NEITHER ANSWERED NOR REFUSED: the run is over, and that is all the
+      // record says. Kept open, as sent, with the run's end said beside it.
       return;
     }
     // NOT USED, so the person is told so and why, never left looking at
@@ -744,7 +753,7 @@ function RunPane({
       { turn_id: run.turn_id, answer },
       { done: `Sent your answer to ${frame.name}’s coding run` },
     );
-    const answeredFirst = result?.kind === "refused" && result.code === "not_running";
+    const answeredFirst = result?.kind === "refused" && result.code === "already_answered";
     setRefusedAnswered(answeredFirst);
     // A REFUSAL RAISES NO READ FLOOR, so the record is asked again for who
     // answered and when.
@@ -752,6 +761,7 @@ function RunPane({
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       const receipt = (result.receipt ?? {}) as { launch_id?: unknown; answer_id?: unknown };
       setUnused(null);
+      seenTaken.current = false;
       setGiven({
         text: answer,
         launchId: typeof receipt.launch_id === "string" ? receipt.launch_id : (run.launch_id ?? ""),
@@ -784,6 +794,10 @@ function RunPane({
             <>
               Answer recorded: <strong>{`“${given.text}”`}</strong>.{" "}
               {busyOn ? busyLine(busyOn, frame.name) : `${frame.name}’s run picks it up next.`}
+            </>
+          ) : fate === "ended" ? (
+            <>
+              Sent <strong>{`“${given.text}”`}</strong>. {frame.name}’s run has ended.
             </>
           ) : (
             <>

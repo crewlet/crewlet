@@ -78,7 +78,10 @@ test("an answer's fate is the run record's, not the press's", () => {
   );
   expect(answerFate(given, run({ status: "resumed" }), true)).toBe("taken");
   expect(answerFate(given, run({ status: "running" }), true)).toBe("taken");
-  expect(answerFate(given, undefined, true)).toBe("taken");
+  // GONE, never seen holding the answer: the run ended, and the record cannot
+  // say whether it took the answer first.
+  expect(answerFate(given, undefined, true)).toBe("ended");
+  expect(answerFate(given, undefined, true, true)).toBe("taken");
   expect(answerFate(given, undefined, false)).toBe("sent");
   expect(answerFate(given, run({ declined_answers: ["a1"] }), true)).toBe("declined");
   expect(answerFate(given, run({ launch_id: "q2" }), true)).toBe("overtaken");
