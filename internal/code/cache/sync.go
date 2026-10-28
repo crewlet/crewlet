@@ -1724,7 +1724,9 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 // files the incarnation holds where the rows no longer place them (placeOf):
 // a pack no row names any more, and one its rows MOVED — out of objects/pack
 // into the dropping view, or back — whose files at its old place go while its
-// new place is installed. e.mu is held.
+// new place is installed; each by EventPackRetired, but a dropping pack no row
+// names any more, which an expunge's commit took out of the repository
+// (EventPackExpunged). e.mu is held.
 //
 // THE CHAIN HOLDS ITS PACKS (layers.go): a pack an installed layer names
 // stays in objects/pack, its row retired or not, until the placement of the
@@ -1766,11 +1768,11 @@ func applyDelta(inc *incarnation, snap snapshot) {
 		}
 		deleteLive(inc, r.PackID)
 	}
-	leave := func(key leaveKey) {
+	leave := func(key leaveKey, ev Event) {
 		if inc.leaving == nil {
 			inc.leaving = map[leaveKey]Event{}
 		}
-		inc.leaving[key] = EventPackRetired
+		inc.leaving[key] = ev
 	}
 	begun := snap.repo.DropEpoch > inc.dropEpoch
 	for cs, from := range was {
@@ -1781,12 +1783,21 @@ func applyDelta(inc *incarnation, snap snapshot) {
 		if _, chained := inc.installedPacks[cs]; chained && from == placeLive && !begun {
 			continue
 		}
-		leave(leaveKey{from, cs})
+		// A RETIREMENT keeps every object that leaves: a compaction's or a
+		// begin's inputs, whose objects the packs they add hold, and a pack
+		// whose files only move, out of objects/pack into the view or back. A
+		// dropping pack no row names any more is AN EXPUNGE'S COMMIT taking
+		// what it held out of the repository (EventPackExpunged).
+		ev := EventPackRetired
+		if from == placeDropping && now == placeNone {
+			ev = EventPackExpunged
+		}
+		leave(leaveKey{from, cs}, ev)
 	}
 	if begun {
 		for cs := range inc.installedPacks {
 			if placeOf(inc, cs) != placeLive {
-				leave(leaveKey{placeLive, cs})
+				leave(leaveKey{placeLive, cs}, EventPackRetired)
 			}
 		}
 	}

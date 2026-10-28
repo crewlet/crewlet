@@ -257,7 +257,8 @@
 // the file and git subcommand that run it, and its argument list), the files
 // it owns and the files a write of it holds only while it runs, its check, the
 // part a damage report names it by, what it promises a reader, and what each
-// change to its inputs — a pack added, a pack a compaction retired, a pack
+// change to its inputs — a pack added, a pack a compaction retired, a
+// dropping pack an expunge's commit took out of the repository, a pack
 // removed with no retirement, the refs rewritten, its own files reported
 // damaged, the installed published chain moving — does to it. There are six:
 // the INSTALLED CHAIN's two halves (below, "The installed chain": the
@@ -276,7 +277,11 @@
 // packs or the refs keeps. A retirement keeps the commit-graph too (X04): a
 // compaction merges packs and drops no commit, so the graph over them names
 // every commit the outputs hold, where a pack removed with no retirement may
-// have taken commits with it. Their files live inside the incarnation, so
+// have taken commits with it — and so does AN EXPUNGE'S COMMIT, the one
+// retirement that drops the graph, and the memo with it: the commits it took
+// out are gone from the repository, over which a graph still naming one has
+// git walk as though they were there, and the memo's answers may hold what
+// it purged (below, "The dropping view"). Their files live inside the incarnation, so
 // the budget counts them and they leave with the repository; a rebuild writes
 // the first two again over its packs, links the index's runs and moves the
 // memo's tree whole, and a swap links every one the events of what leaves it
@@ -982,8 +987,10 @@
 // packed-refs and each derived file the events of what leaves keep — a
 // retirement keeps the commit-graph (X04: a merge drops no commit), a pack no
 // retirement accounts for drops it, and both drop the multi-pack-index over
-// the packs that left — renamed into repos/ whole under the next number, and
-// made current, the memo's tree moved into it whole as it is (carryMemo, as a
+// the packs that left; an expunge's commit drops the graph and the memo and
+// keeps the index, which never covered the packs it takes out — renamed into
+// repos/ whole under the next number, and made current, the memo's tree moved
+// into it whole as it is where nothing leaving drops it (carryMemo, as a
 // rebuild's); the old one retires, whole for its readers until the last lets
 // go. It costs links — three a live pack, one each for HEAD, config and
 // packed-refs — and the memo's one rename, and no download and no git
@@ -1102,6 +1109,19 @@
 // then every serving read reads it through the view, and a push that builds on
 // it is refused by its own connectivity check, its scratch reading nothing of
 // the view.
+//
+// THE COMMIT TAKES THE VIEW OUT, and with it what the expunge purged: a
+// dropping pack no row names any more leaves the copy as EventPackExpunged —
+// a delta's retired row whose live entry was dropping, and a full round's
+// stray in the view, whatever accounts for it — by the swap where a reader may
+// hold the copy, which then holds no view. It is the one change that DROPS THE
+// COMMIT-GRAPH where a retirement keeps it (X04's one drop): the begin's own
+// retirement keeps it, every commit then still in the copy, while after the
+// commit a graph naming one it took out has git 2.56 answer `rev-list -1 <it>`
+// and walk through it as though it were there (measured). The MEMO goes with
+// it — an answer may quote what was purged — and the node's TIP over an
+// installed chain, which may name a commit taken out; the index and the
+// published layers stay, neither covering nor naming the view.
 //
 // # The installed chain
 //

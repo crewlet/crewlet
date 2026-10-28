@@ -558,8 +558,9 @@ type incarnation struct {
 	// longer where they are, by where they are (their place) and the checksum
 	// they are named by — or, for a file of a pack directory named like a
 	// pack's whose name carries no checksum, by its name — each with the
-	// event that took it out: EventPackRetired, or EventPackRemoved for a
-	// stray no retirement accounts for. A pack whose files MOVE — out of
+	// event that took it out: EventPackRetired, EventPackExpunged for a
+	// dropping pack no row names any more, or EventPackRemoved for a stray no
+	// retirement accounts for. A pack whose files MOVE — out of
 	// objects/pack into the dropping view, or back — leaves the place it was
 	// in. Non-empty only between a round's apply and its swap, and after a
 	// swap that failed, which the repository's next round tries again.

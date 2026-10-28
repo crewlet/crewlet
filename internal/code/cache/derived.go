@@ -54,12 +54,12 @@ import (
 //   - what it promises a reader (Freshness), and what each change to its
 //     inputs does to it (On): a pack added, a pack removed, the refs
 //     rewritten, its own files reported damaged, the log under it gone back,
-//     a pack a compaction retired, or the installed chain moving — every one
-//     of them read by dropFor, the one removal of a derived file, at the one
-//     place each change is made, and a retired pack's and the chain's by the
-//     swap too, which links into the next incarnation only what they keep
-//     (swap.go) — and for the installed chain a CUT to a prefix of itself
-//     (Prefix), never a drop;
+//     a pack a compaction retired, a dropping pack an expunge's commit took
+//     out, or the installed chain moving — every one of them read by dropFor,
+//     the one removal of a derived file, at the one place each change is
+//     made, and a pack's leaving and the chain's by the swap too, which links
+//     into the next incarnation only what they keep (swap.go) — and for the
+//     installed chain a CUT to a prefix of itself (Prefix), never a drop;
 //   - which part of a repository a damage report names it by (Part, in
 //     gitproc's vocabulary: gitproc.Damage.Drops), so a report reaches the
 //     declarations it names and no others.
@@ -345,8 +345,26 @@ const (
 	// built over the packs' NAMES or OFFSETS meets a pack gone; one built
 	// over their COMMITS or OBJECT IDS meets nothing that left. Made by the
 	// round whose answer names the retirement (swap.go): a delta's retired
-	// phase, or a full answer's retirements above its caller's position.
+	// phase, or a full answer's retirements above its caller's position. An
+	// expunge's BEGIN retires its inputs as this event too: every object of
+	// them is in the packs it adds, kept or dropping, which the same round
+	// installs.
 	EventPackRetired Event = "pack-retired"
+	// EventPackExpunged is a pack file taken out of the incarnation's
+	// DROPPING VIEW because no row names it any more: an EXPUNGE'S COMMIT
+	// retired it (code.ExpungeCommit) — a pack its begin left dropping
+	// (code.PackDropping), holding what no ref reached — and what it held
+	// left the repository, the one change that takes objects out of it (the
+	// package doc's "The dropping view"). A declaration built over the
+	// copy's COMMITS or its ANSWERS meets objects gone — a commit-graph
+	// naming a commit no pack holds, over which git answers a walk as though
+	// the commit were there; a memo's answer about content the expunge
+	// purged — where one built over objects/pack alone, the multi-pack-index
+	// and the published layers, which neither cover nor name the view, meets
+	// nothing that left. Made by the round that takes the pack out: a delta's
+	// retired phase naming a row its live set held dropping, or a full
+	// round's stray in the view no row names.
+	EventPackExpunged Event = "pack-expunged"
 	// EventLayersMoved is the incarnation's installed published chain changing
 	// (layers.go): a layer placed, or the chain cut back to a prefix of
 	// itself. git reads a non-incremental multi-pack-index in preference to a
@@ -368,7 +386,7 @@ const (
 
 // Events is every Event a declaration answers, in the order it states them.
 var Events = []Event{EventPackAdded, EventPackRemoved, EventRefsMoved, EventReported, EventHistoryGone,
-	EventPackRetired, EventLayersMoved}
+	EventPackRetired, EventPackExpunged, EventLayersMoved}
 
 // Valid reports whether e is one of Events.
 func (e Event) Valid() bool { return slices.Contains(Events, e) }
@@ -606,7 +624,8 @@ type Derived struct {
 	Part      gitproc.Part
 	Freshness Freshness
 	// What each Event does to it.
-	OnPackAdded, OnPackRemoved, OnRefsMoved, OnReported, OnHistoryGone, OnPackRetired, OnLayersMoved Change
+	OnPackAdded, OnPackRemoved, OnRefsMoved, OnReported, OnHistoryGone, OnPackRetired, OnPackExpunged,
+	OnLayersMoved Change
 	// Seed is what a rebuild does with its files.
 	Seed SeedRule
 }
@@ -626,6 +645,8 @@ func (d Derived) On(e Event) Change {
 		return d.OnHistoryGone
 	case EventPackRetired:
 		return d.OnPackRetired
+	case EventPackExpunged:
+		return d.OnPackExpunged
 	case EventLayersMoved:
 		return d.OnLayersMoved
 	}
@@ -744,11 +765,12 @@ const (
 // object ids alone, so no pack added or removed and no ref moved changes an
 // entry, while a log gone back drops it whole — the memo cannot tell which
 // entries read what, and no answer outlives the history it was computed from
-// on this host; and kept by a rebuild, which repairs packs and not answers
-// (memo.go). Of its memory a declaration states, NONE IS AN ENTRY'S: what the
-// cache holds of a copy's memo is its cohorts and their bytes, 16 bytes a
-// cohort and some seventeen cohorts at the most, however many answers they
-// hold — the order of use is the cohorts', on the disk.
+// on this host — and so does an expunge's commit, whose answers may hold the
+// content it purged; and kept by a rebuild, which repairs packs and not
+// answers (memo.go). Of its memory a declaration states, NONE IS AN ENTRY'S:
+// what the cache holds of a copy's memo is its cohorts and their bytes, 16
+// bytes a cohort and some seventeen cohorts at the most, however many answers
+// they hold — the order of use is the cohorts', on the disk.
 //
 // The INSTALLED CHAIN (layers.go) is git's files placed by the cache's own
 // code: each layer's .midx, .bitmap and commit-graph layer as its maintainer's
@@ -776,7 +798,9 @@ const (
 // over exactly the layers beneath it, so it goes with any layer that goes,
 // with any chain placed and with any pack removed (commits may go with it);
 // a retirement that keeps the whole chain keeps it (X04: a merge drops no
-// commit, and the tip names commits by id). A rebuild writes it again.
+// commit, and the tip names commits by id) — but an expunge's commit, which
+// keeps every layer (none names a dropping pack) and takes the commits it
+// expunged, which the tip may name. A rebuild writes it again.
 func DerivedFiles() []Derived {
 	maintained := func(c Covers) time.Duration { return gitproc.PackWorkDeadline(c.DiskBytes) }
 	return []Derived{{
@@ -808,9 +832,12 @@ func DerivedFiles() []Derived {
 		// every lookup that reaches it. The chain MOVING drops it: it is OWN
 		// mode's index, which git reads in preference to a chain and whose
 		// non-incremental write deletes every layer and the chain file, so it
-		// goes before a chain is placed (layers.go).
+		// goes before a chain is placed (layers.go). An expunge's commit KEEPS
+		// it: the packs it takes out lie in the dropping view, which no index
+		// covers — the round's is written over objects/pack's packs, the
+		// maintainer's over the pack directory git writes it in.
 		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop, OnHistoryGone: Keep,
-		OnPackRetired: Drop, OnLayersMoved: Drop,
+		OnPackRetired: Drop, OnPackExpunged: Keep, OnLayersMoved: Drop,
 		Seed: SeedNone,
 	}, {
 		Name:   DerivedGraph,
@@ -829,9 +856,15 @@ func DerivedFiles() []Derived {
 		// gone back — may take commits with it, and drops it. The chain
 		// MOVING drops it as it does the index: git loads a commit-graph that
 		// is no split one before the chain, and a whole write over a chain
-		// unlinks commit-graph-chain and expires its every layer.
+		// unlinks commit-graph-chain and expires its every layer. An EXPUNGE'S
+		// COMMIT DROPS IT, the one retirement that does (X04's one drop): the
+		// packs it takes out hold commits no ref reached, which leave the
+		// repository, and over a graph still naming one git answers a walk —
+		// `rev-list -1 <it>`, `log --format=%H` — as though the commit were
+		// there, and the connectivity check fails (measured on 2.56.0). Its
+		// begin keeps it, every commit then still in the copy.
 		OnPackAdded: Keep, OnPackRemoved: Drop, OnRefsMoved: Keep, OnReported: Drop, OnHistoryGone: Keep,
-		OnPackRetired: Keep, OnLayersMoved: Drop,
+		OnPackRetired: Keep, OnPackExpunged: Drop, OnLayersMoved: Drop,
 		Seed: SeedNone,
 	}, {
 		Name:   DerivedProvenance,
@@ -852,9 +885,9 @@ func DerivedFiles() []Derived {
 		// incarnation moves — a pack a compaction retired included; a report
 		// names no file of it, since no git process reads one; and a log gone
 		// back makes every position it records another record's. No layer
-		// moves a push row either.
+		// moves a push row either, and nor does an expunge.
 		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
-		OnPackRetired: Keep, OnLayersMoved: Keep,
+		OnPackRetired: Keep, OnPackExpunged: Keep, OnLayersMoved: Keep,
 		Seed: SeedLink,
 	}, {
 		Name:   DerivedMemo,
@@ -873,9 +906,12 @@ func DerivedFiles() []Derived {
 		// names no file of it, since no git process reads one; and a restored
 		// or recreated log is another history, which the memo cannot tell entry
 		// by entry — so it goes whole, and is computed again on demand. No
-		// layer moves an object either.
+		// layer moves an object either. An expunge's commit drops it whole: an
+		// answer may hold the content it purged — a file's lines, a diff — which
+		// no read serves once the commit has applied, and the memo cannot tell
+		// which entries read what.
 		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
-		OnPackRetired: Keep, OnLayersMoved: Keep,
+		OnPackRetired: Keep, OnPackExpunged: Drop, OnLayersMoved: Keep,
 		// A rebuild repairs packs, not answers, and a compaction's swap keeps
 		// every object: the whole tree moves into the new incarnation as it is
 		// promoted, one rename whatever it holds, where every read holds an
@@ -902,9 +938,12 @@ func DerivedFiles() []Derived {
 		// the prefix the rows still name. A pack added changes no layer (it
 		// stays outside the chain until the next publication), nor do the
 		// refs. A report keeps it (the scrub decides), and a log gone back
-		// reaches it as the chain moving.
+		// reaches it as the chain moving. An expunge's commit cuts it where a
+		// layer names a pack it takes out, which none does — nothing is
+		// published while an expunge is open (code's publication rule) — so it
+		// keeps every layer.
 		OnPackAdded: Keep, OnPackRemoved: Prefix, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Keep,
-		OnPackRetired: Prefix, OnLayersMoved: Prefix,
+		OnPackRetired: Prefix, OnPackExpunged: Prefix, OnLayersMoved: Prefix,
 		Seed: SeedLink,
 	}, {
 		Name:   DerivedGraphLayers,
@@ -937,9 +976,13 @@ func DerivedFiles() []Derived {
 		// node's tip goes with every cut, every placement and every pack
 		// removed, and stays across a retirement that keeps the whole chain
 		// (layers.go's tipGoes); the refs moving keep it, since it covers the
-		// commits it covers whatever the refs name next.
+		// commits it covers whatever the refs name next. An expunge's commit
+		// keeps every published layer, as the multi-pack-index chain's
+		// declaration does, and takes the tip (tipGoes), which may name a
+		// commit it expunged: in chain mode the tip is the node's own graph,
+		// and goes where own mode's commit-graph does.
 		OnPackAdded: Keep, OnPackRemoved: Prefix, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Keep,
-		OnPackRetired: Prefix, OnLayersMoved: Prefix,
+		OnPackRetired: Prefix, OnPackExpunged: Prefix, OnLayersMoved: Prefix,
 		// The published graph layers only, with their layers (rebuild.go's
 		// seedLayers): no row names the node's tip, so a rebuild writes it
 		// again over its new copy's tail, at once.

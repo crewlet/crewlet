@@ -972,7 +972,14 @@ other pack, and `crewlet.code.cache.dropping.bytes` shows how much of the
 node's cache they hold: nothing but while an expunge is open on a repository
 the node holds, and held up for long by one that began and does not end.
 `crewlet code verify` names a dropping pack found among the live ones, or a
-live one among the dropping, as a stray, and its repair puts each back.
+live one among the dropping, as a stray, and its repair puts each back. When
+the expunge ends, the dropping packs leave the copy as a compaction's packs
+do, by its next directory, and they are the one thing whose leaving takes the
+commit-graph with them: the commits in them are gone from the repository, and
+git walks a graph that still names one as though it were there. The answers
+the copy keeps for seats' reads go too, since one may quote what was purged,
+and so does a node's tip over a published chain; the multi-pack index and the
+published layers stay, never having covered the dropping packs.
 
 **What the cache writes beside the packs.** Six kinds of file in a
 repository's cache are derived on the git nodes rather than named by the
@@ -992,6 +999,11 @@ never holds it ([When packs leave a copy](#the-cache-on-a-git-node)) — so no
 git process reads an index that names a pack that is gone; the one exception
 is the commit-graph when a compaction retires the pack, since a merge drops no
 commit and the graph names only commits the repository still holds. An
+expunge is the other way round: the packs it drops lie beside the others,
+where no index or layer looks, so those stay, while the commits it takes out
+leave the repository, so the commit-graph goes — a graph still naming one has
+git walk through it as though it were there — and the answers of seats' reads
+go with it, since one may quote what was purged. An
 installed chain is cut rather than dropped, below the first layer naming a
 pack that leaves — and a pack an installed layer names stays while the layer
 does, so it is the chain moving that takes one out. The installed layers are
@@ -1031,14 +1043,14 @@ The tip stays when a compaction retires a pack and the chain beneath it stays
 whole, and goes with every other change to the chain or the packs below,
 written again at once.
 
-| Declared file | Its files, in the repository's directory | Written by | When a compaction retires a pack | When any other pack leaves |
-|---|---|---|---|---|
-| `midx`, the multi-pack index | `objects/pack/multi-pack-index`, `objects/pack/multi-pack-index-<checksum>.bitmap`, `objects/pack/multi-pack-index-<checksum>.rev` | a sync, before it answers: `index`; the background indexing: `bitmap`, `index` | dropped first | dropped first |
-| `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | kept | dropped first |
-| `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept |
-| `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | kept |
-| `layers`, the installed published multi-pack-index chain — each layer's index and bitmap, and the chain file the node writes from the rows | `objects/pack/multi-pack-index.d/multi-pack-index-chain`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.midx`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.bitmap` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | cut first, below the layer that names it |
-| `graph-layers`, the installed published commit-graph layers, one a layer, the node's tip over them, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer`; the background indexing: `tip-graph` | cut first, below the layer that names it | cut first, below the layer that names it |
+| Declared file | Its files, in the repository's directory | Written by | When a compaction retires a pack | When an expunge drops a pack | When any other pack leaves |
+|---|---|---|---|---|---|
+| `midx`, the multi-pack index | `objects/pack/multi-pack-index`, `objects/pack/multi-pack-index-<checksum>.bitmap`, `objects/pack/multi-pack-index-<checksum>.rev` | a sync, before it answers: `index`; the background indexing: `bitmap`, `index` | dropped first | kept | dropped first |
+| `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | kept | dropped first | dropped first |
+| `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept | kept |
+| `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | dropped first | kept |
+| `layers`, the installed published multi-pack-index chain — each layer's index and bitmap, and the chain file the node writes from the rows | `objects/pack/multi-pack-index.d/multi-pack-index-chain`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.midx`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.bitmap` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | kept, no layer naming a pack an expunge drops | cut first, below the layer that names it |
+| `graph-layers`, the installed published commit-graph layers, one a layer, the node's tip over them, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer`; the background indexing: `tip-graph` | cut first, below the layer that names it | kept, but for the node's tip, dropped first | cut first, below the layer that names it |
 
 **Memory.** Every git process a node runs over a whole repository holds memory
 in proportion to the repository's objects, measured on git 2.43 over a source

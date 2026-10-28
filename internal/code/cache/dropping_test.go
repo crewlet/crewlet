@@ -189,6 +189,90 @@ func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 	}
 }
 
+// ONLY AN EXPUNGE DROPS THE COMMIT-GRAPH (X04): a compaction's retirement
+// keeps it — a merge drops no commit — and so does an expunge's BEGIN, every
+// object of its inputs being in the packs it adds; its COMMIT drops it, the
+// one retirement that does, since the commits it takes out leave the
+// repository and git walks a graph still naming one as though it were there —
+// and the memo with it, whose answers may quote what was purged. Whichever
+// round takes the dropping pack out: a delta's, whose swap links neither into
+// the copy it promotes, and a boot's first, full, over a copy whose node was
+// down while the commit landed, which drops both in place.
+//
+// Mutations: declare the commit-graph kept on an expunge (OnPackExpunged
+// Keep), and a fresh `git log` over the dropped commit answers it from the
+// graph; declare the memo kept, and its answer outlives the purge; take a
+// full round's dropping stray for a retirement, and the boot keeps both.
+func TestOnlyAnExpungeDropsTheCommitGraph(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []struct {
+		name string
+		// down: the node stops before the commit lands, so the round that
+		// takes the dropping pack out is its next boot's first.
+		down bool
+	}{{"a delta's swap", false}, {"a boot's full round", true}} {
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			clk := newClock()
+			repo := w.repo(t, 1)
+			base, first := w.push(t, repo, "refs/heads/main", nil)
+			gone, second := w.push(t, repo, "refs/heads/gone", nil)
+			w.client.Run(t, w.repos[repo].work, "reset", "--hard", base)
+			_, third := w.push(t, repo, "refs/heads/main", nil)
+			c := w.open(t, clk.on)
+			w.sync(t, c, repo)
+			// THE GRAPH NAMES THE COMMIT THE EXPUNGE DROPS: written while a
+			// ref still reached it.
+			clk.Add(cache.MidxDebounce)
+			if ran := cache.MaintainerPass(c); len(ran) != 1 {
+				t.Fatalf("the maintainer ran %v, want the repository", ran)
+			}
+			w.log.write(repo, nil, map[string]string{"refs/heads/gone": ""})
+			graphed := func(s cache.Synced) bool {
+				return statOK(t, filepath.Join(s.Dir, "objects", "info", "commit-graph"))
+			}
+
+			merged := w.compacted(t, repo, first, third)
+			if s := w.sync(t, c, repo); !graphed(s) {
+				t.Fatal("a compaction's swap dropped the commit-graph: a merge drops no commit (X04)")
+			}
+			w.expungeBegin(t, repo, []string{gone}, merged, second)
+			s := w.sync(t, c, repo)
+			if !graphed(s) {
+				t.Fatal("an expunge's begin dropped the commit-graph: every commit of its inputs is still in the copy")
+			}
+			answer := memoKeys("expunged", 1)
+			memoize(t, c, s, answer)
+			if cache.MemoEntryFile(s, answer[0]) == "" {
+				t.Fatal("the memo placed no answer: the case needs one to see it go")
+			}
+
+			if arm.down {
+				c.Stop(t.Context())
+			}
+			w.log.expungeCommit(repo)
+			if arm.down {
+				c = w.open(t, clk.on)
+			}
+			s = w.sync(t, c, repo)
+			if graphed(s) {
+				t.Error("the copy holds a commit-graph after the expunge's commit took a commit out of the repository")
+			}
+			if path := cache.MemoEntryFile(s, answer[0]); path != "" {
+				t.Errorf("the memo still answers from %s after the expunge's commit", path)
+			}
+			res, err := w.pool.Run(t.Context(), gitproc.Cmd{Dir: s.Dir, Dropping: s.Dropping,
+				Args:  []string{"log", "--format=%H", "-1", gone},
+				Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
+			if err == nil {
+				t.Errorf("a fresh git log over the expunged commit %s answered %q: a graph still names it", gone,
+					strings.TrimSpace(string(res.Stdout)))
+			}
+		})
+	}
+}
+
 // expungeBegin writes an expunge's begin on repo over inputs, its live packs,
 // as the code domain's apply of one writes it (fakeLog.expungeBegin), with the
 // packs a maintainer's rewrite of them writes: KEPT, one pack of every object

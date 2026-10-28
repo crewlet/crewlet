@@ -68,13 +68,16 @@ import (
 // round, a delta's added rows set and its retired rows taken out, an adopted
 // pack set. A pack's files leave once no live row names their checksum
 // (incarnation.leaving), each with the event that took it out — a
-// retirement, or a stray no retirement accounts for (a log gone back or
+// retirement, an expunge's commit taking a dropping pack out of the
+// repository, or a stray no retirement accounts for (a log gone back or
 // recreated, a full answer that served no retirements) — and every derived
 // file whose declaration DROPS on one of those events is simply not linked
 // into the next incarnation, which never holds it, so the drop precedes the
 // change the moment any reader can see it (dropFor's order rule). A merge
 // drops no commit, so a retirement keeps the commit-graph (X04): the next
-// incarnation holds the very same inode; a stray drops it.
+// incarnation holds the very same inode; a stray drops it, and so does an
+// expunge, whose commits are gone from the repository — the memo with it, its
+// answers perhaps about what was purged.
 //
 // WHAT CARRIES OVER. A linked file is the same inode, its bytes those this
 // process wrote, checked or scrubbed, so the promote carries every per-file
@@ -1147,7 +1150,8 @@ func (s *swapping) rename() error {
 // inc left counting only the files it holds alone — the leaving packs' and the
 // derived files a retirement drops. Then the memo's tree MOVES into next
 // whole, one rename however many answers it holds (carryMemo), as a rebuild's
-// promote moves it: between the two locked steps, since the memo's lock is
+// promote moves it — where no event of what leaves drops it, as an expunge's
+// commit does: between the two locked steps, since the memo's lock is
 // taken before e.mu, and before inc is retired, since an inc nobody holds goes
 // into trash/ at its retirement, its tree with it. Then, under e.mu again,
 // every field is carried by its class (swapFields), next is made current, and
@@ -1181,11 +1185,16 @@ func (s *swapping) promote() {
 		}
 	})
 	e.mu.Unlock()
-	// THE MEMO, served from inc until here and from next from here on. None
-	// moves from a memo shut — a round that dropped it with its history
-	// leaves it shut over the packs that history left (apply) — and next
-	// then opens a memo of its own.
-	c.carryMemo(e, inc, next)
+	// THE MEMO, served from inc until here and from next from here on —
+	// unless an event of what leaves drops it (s.keep): an expunge's commit,
+	// one of whose answers may quote what it purged, leaves the tree with inc
+	// to go with it, as a swap leaves every file a dropping declaration owns.
+	// None moves from a memo shut either — a round that dropped it with its
+	// history leaves it shut over the packs that history left (apply). Either
+	// way next opens a memo of its own.
+	if s.keep&c.image.set(DerivedMemo) != 0 {
+		c.carryMemo(e, inc, next)
+	}
 	e.mu.Lock()
 	if _, moved := next.derived[DerivedMemo]; moved {
 		s.carried |= c.image.set(DerivedMemo)
@@ -1222,15 +1231,15 @@ func (s *swapping) promote() {
 // installed chain (layers.go), and otherwise by what became of the
 // commit-graph — kept, where the next incarnation linked it; dropped, where
 // the copy held one, its own or its chain's graph layers, and the next holds
-// none — a stray no retirement accounts for took it, or the chain was cut
-// whole — which the maintainer writes again at once; none, where the copy
-// held none to keep, its graph not yet written or past what the node's
-// memory holds, so nothing was lost and nothing is written again. Counted as
-// dropped, a node too small for a large repository's graph counted every
-// compaction of it among the drops that say whole reads cannot see their
-// retirements. The packs dropped are every pack the old incarnation held
-// that the next does not: what was leaving, and the packs a chain the
-// placement replaced held alone, whose rows had gone.
+// none — a stray no retirement accounts for or an expunge took it, or the
+// chain was cut whole — which the maintainer writes again at once; none,
+// where the copy held none to keep, its graph not yet written or past what
+// the node's memory holds, so nothing was lost and nothing is written again.
+// Counted as dropped, a node too small for a large repository's graph
+// counted every compaction of it among the drops that say whole reads cannot
+// see their retirements. The packs dropped are every pack the old
+// incarnation held that the next does not: what was leaving, and the packs a
+// chain the placement replaced held alone, whose rows had gone.
 func (c *Cache) swapped(s *swapping, next *incarnation, took time.Duration) {
 	graph := swapGraphNone
 	switch rel := c.image.mainRel(DerivedGraph); {
@@ -1273,11 +1282,12 @@ func (c *Cache) link(oldname, newname string) error {
 	return os.Link(oldname, newname)
 }
 
-// leavingRetired reports whether a compaction's retirement took out any of
-// leaving: what a state's LeavingSince is written for.
+// leavingRetired reports whether a retirement took out any of leaving — a
+// compaction's, or an expunge's, whose commit retires the packs it takes out
+// into code_packs_retired too: what a state's LeavingSince is written for.
 func leavingRetired(leaving map[leaveKey]Event) bool {
 	for _, ev := range leaving {
-		if ev == EventPackRetired {
+		if ev == EventPackRetired || ev == EventPackExpunged {
 			return true
 		}
 	}

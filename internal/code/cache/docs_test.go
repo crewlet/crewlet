@@ -20,7 +20,8 @@ import (
 // row per declaration of cache.DerivedFiles and none other, in both
 // directions, each row spelling what its declaration says: its owned files as
 // the declaration's patterns read, its writes' triggers and steps in the
-// declaration's order, what a compaction's retirement does (OnPackRetired)
+// declaration's order, what a compaction's retirement does (OnPackRetired),
+// what an expunge's commit taking a dropping pack out does (OnPackExpunged)
 // and what any other pack leaving does (OnPackRemoved). A part that adds a
 // declaration cannot land it without the page, and a row whose declaration
 // went fails here.
@@ -29,7 +30,8 @@ import (
 // cache does not declare; drop `.bitmap` from midx's Owns, and the row's files
 // are not what the declaration owns; declare the graph dropped on a
 // retirement, and its row says it is kept; keep the installed chain whole when
-// a pack it names leaves, and its row says it is cut.
+// a pack it names leaves, and its row says it is cut; keep the memo on an
+// expunge, and its row says it is dropped.
 func TestTheConceptPageNamesEveryDerivedFile(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
@@ -57,19 +59,22 @@ func TestTheConceptPageNamesEveryDerivedFile(t *testing.T) {
 		if want := derivedWritesCell(t, d); row[2] != want {
 			t.Errorf("%s: %s is written by %q, want its declared writes, %q", path, d.Name, row[2], want)
 		}
-		if want := packLeavingCell(t, d.Name, "OnPackRetired", d.OnPackRetired); row[3] != want {
+		if want := packLeavingCell(t, d, cache.EventPackRetired, d.OnPackRetired); row[3] != want {
 			t.Errorf("%s: when a compaction retires a pack, %s is %q, want %q", path, d.Name, row[3], want)
 		}
-		if want := packLeavingCell(t, d.Name, "OnPackRemoved", d.OnPackRemoved); row[4] != want {
-			t.Errorf("%s: when any other pack leaves, %s is %q, want %q", path, d.Name, row[4], want)
+		if want := packLeavingCell(t, d, cache.EventPackExpunged, d.OnPackExpunged); row[4] != want {
+			t.Errorf("%s: when an expunge drops a pack, %s is %q, want %q", path, d.Name, row[4], want)
+		}
+		if want := packLeavingCell(t, d, cache.EventPackRemoved, d.OnPackRemoved); row[5] != want {
+			t.Errorf("%s: when any other pack leaves, %s is %q, want %q", path, d.Name, row[5], want)
 		}
 	}
 }
 
 // derivedTable is the rows of page's table "What the cache writes beside the
 // packs", each keyed by the declaration name its first cell opens with, as
-// its five cells trimmed.
-func derivedTable(t *testing.T, page string) map[string][5]string {
+// its six cells trimmed.
+func derivedTable(t *testing.T, page string) map[string][6]string {
 	t.Helper()
 	const title = "**What the cache writes beside the packs.**"
 	start := strings.Index(page, title)
@@ -77,7 +82,7 @@ func derivedTable(t *testing.T, page string) map[string][5]string {
 		t.Fatalf("the concept page has no paragraph %s", title)
 	}
 	lead := regexp.MustCompile("^`([^`]+)`")
-	rows := map[string][5]string{}
+	rows := map[string][6]string{}
 	inTable := false
 	for _, line := range strings.Split(page[start:], "\n") {
 		if !strings.HasPrefix(line, "|") {
@@ -94,10 +99,10 @@ func derivedTable(t *testing.T, page string) map[string][5]string {
 			continue
 		}
 		cells := strings.Split(strings.Trim(line, "|"), "|")
-		if len(cells) != 5 {
-			t.Fatalf("the table's row %q has %d cells, want 5", line, len(cells))
+		if len(cells) != 6 {
+			t.Fatalf("the table's row %q has %d cells, want 6", line, len(cells))
 		}
-		var row [5]string
+		var row [6]string
 		for i, c := range cells {
 			row[i] = strings.TrimSpace(c)
 		}
@@ -176,18 +181,26 @@ func derivedWritesCell(t *testing.T, d cache.Derived) string {
 	return strings.Join(out, "; ")
 }
 
-// packLeavingCell is what a pack leaving does to the declaration name, as its
-// field (OnPackRetired or OnPackRemoved) says it, in the page's words.
-func packLeavingCell(t *testing.T, name cache.DerivedName, field string, does cache.Change) string {
+// packLeavingCell is what a pack leaving by ev does to the declaration d, as
+// its answer to ev says it, in the page's words. An expunge's commit takes out
+// packs no layer names, so the chain it cuts below one keeps every layer, and
+// takes the node's tip alone (tipGoes) from the declaration the tip is a
+// write of.
+func packLeavingCell(t *testing.T, d cache.Derived, ev cache.Event, does cache.Change) string {
 	t.Helper()
-	switch does {
-	case cache.Drop:
+	switch {
+	case does == cache.Drop:
 		return "dropped first"
-	case cache.Keep:
+	case does == cache.Keep:
 		return "kept"
-	case cache.Prefix:
+	case does == cache.Prefix && ev == cache.EventPackExpunged &&
+		slices.ContainsFunc(d.Writes, func(w cache.Write) bool { return w.Step == cache.StepTipGraph }):
+		return "kept, but for the node's tip, dropped first"
+	case does == cache.Prefix && ev == cache.EventPackExpunged:
+		return "kept, no layer naming a pack an expunge drops"
+	case does == cache.Prefix:
 		return "cut first, below the layer that names it"
 	}
-	t.Fatalf("%s's %s is %q, which the page has no words for", name, field, does)
+	t.Fatalf("%s's answer to %s is %q, which the page has no words for", d.Name, ev, does)
 	return ""
 }

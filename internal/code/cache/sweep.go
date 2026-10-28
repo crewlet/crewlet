@@ -803,12 +803,14 @@ func (t *trashing) dirs(inc string) []string {
 // (EventPackRetired) where the snapshot's retired phase names its checksum
 // and the log under the incarnation is the history it was read from (history
 // false), or where its rows still place the pack in the other directory, its
-// objects staying in the copy; and otherwise a pack REMOVED
+// objects staying in the copy; AN EXPUNGE (EventPackExpunged) for a pack of
+// the dropping view no row names, however that came about, since nothing
+// else takes one out of the view; and otherwise a pack REMOVED
 // (EventPackRemoved): a log gone back or recreated, or a full answer that
 // served no retirements, which leaves no stray accounted for. A stray's
 // leaving is what a declaration built over the packs answers (On): an index
-// is dropped by either, the commit-graph only by a removal — a merge drops no
-// commit (X04).
+// is dropped by a retirement and a removal, the commit-graph by a removal and
+// an expunge but never a retirement — a merge drops no commit (X04).
 //
 // HOW THEY LEAVE turns on who may hold the incarnation. One NOBODY HOLDS and
 // that is not converged — a boot's first round, a rebuild's product before it
@@ -816,12 +818,13 @@ func (t *trashing) dirs(inc string) []string {
 // at once before an incarnation's first round, and nothing can pin it while
 // this round holds its write lock — has its strays answered for sweepPacks to
 // move once the new refs are in, and every derived file built over the packs
-// is dropped NOW, first, by the strongest event among them (dropFor): an
-// index naming a missing pack fails every read of the repository, and the
-// round's own index is then written over exactly the snapshot's packs. A
-// dropping view the snapshot places no pack in goes whole with its strays,
-// so a push's scratch leaning on the copy is spared the paranoia a view asks
-// of it (gitproc.Cmd.Dropping). Any OTHER — converged, so atOnce may hand it
+// is dropped NOW, first, by each event among them over its own packs
+// (dropFor): an index naming a missing pack fails every read of the
+// repository, and the round's own index is then written over exactly the
+// snapshot's packs. A dropping view the snapshot places no pack in goes
+// whole with its strays, so a push's scratch leaning on the copy is spared
+// the paranoia a view asks of it (gitproc.Cmd.Dropping). Any OTHER —
+// converged, so atOnce may hand it
 // to a reader while this round runs, or pinned — keeps every file a reader
 // may open, and its strays are answered as leaving, by where they are and
 // their checksum: the round's end swaps the incarnation for the next
@@ -922,8 +925,16 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 		key, ev := leaveKey{s.place, s.name}, EventPackRemoved
 		if m := packFileName.FindStringSubmatch(s.name); m != nil {
 			key.name = m[1]
-			if places[key.name] != placeNone ||
-				!history && (retired[key.name] || known[key] == EventPackRetired) {
+			switch {
+			case s.place == placeDropping && places[key.name] == placeNone:
+				// A DROPPING PACK NO ROW NAMES left the repository whatever
+				// accounts for it — an expunge's commit, or a log gone back
+				// past the begin that made it — since nothing else takes a
+				// pack out of the view: what it held may be gone from every
+				// copy, and a graph or an answer about it with it.
+				ev = EventPackExpunged
+			case places[key.name] != placeNone ||
+				!history && (retired[key.name] || known[key] == EventPackRetired):
 				ev = EventPackRetired
 			}
 		}
@@ -934,16 +945,24 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	if held {
 		return nil, leaving, now.moved, nil
 	}
-	ev := EventPackRetired
-	gone := map[string]bool{}
+	// IN PLACE, EACH EVENT ITS OWN DROP, over the packs it took out: a
+	// retirement's keeps the graph and the memo, an expunge's drops them, and
+	// a pack removed with no retirement drops the graph and the index — so
+	// what any of them drops goes, and the chain is cut below the lowest
+	// layer naming any of their packs (prefixOf, the one cut).
+	byEvent := map[Event]map[string]bool{}
 	for key, v := range leaving {
-		if v == EventPackRemoved {
-			ev = EventPackRemoved
+		if byEvent[v] == nil {
+			byEvent[v] = map[string]bool{}
 		}
-		gone[key.name] = true
+		byEvent[v][key.name] = true
 	}
-	if _, err := c.dropFor(e, inc, ev, eventDetail{packs: gone}); err != nil {
-		return nil, nil, true, err
+	for _, ev := range Events {
+		if gone, ok := byEvent[ev]; ok {
+			if _, err := c.dropFor(e, inc, ev, eventDetail{packs: gone}); err != nil {
+				return nil, nil, true, err
+			}
+		}
 	}
 	var rels []string
 	for _, s := range strays {

@@ -355,14 +355,17 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 // chain goes with every one of those changes but a retirement that keeps the
 // whole chain beneath it (tipGoes): a retirement drops no commit (X04), where
 // a pack removed may take commits the tip names and a cut or a chain moved is
-// a base it was not written over.
+// a base it was not written over — and an expunge's commit keeps every layer,
+// none naming a pack of the dropping view, and takes the tip, which may name
+// a commit it took out (what it does to own mode's files is
+// TestOnlyAnExpungeDropsTheCommitGraph's).
 //
 // Mutations: declare the multi-pack-index dropped on a pack added, and the
 // first delta takes it; declare the graph dropped on a retirement
 // (OnPackRetired), and the compaction's swap leaves it behind; let prefixOf
 // keep a layer above one a removed pack cuts, and the Prefix table's cut is
-// past it; let tipGoes keep the tip over a removed tail pack, or take it on a
-// retired one, and the table's tip column says so.
+// past it; let tipGoes keep the tip over a removed tail pack or an expunged
+// one, or take it on a retired one, and the table's tip column says so.
 func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	t.Parallel()
 	// THE PREFIX TABLE: a three-layer chain — packs a and b under layer 1, c
@@ -387,6 +390,10 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 		{"a removed pack in the root", cache.EventPackRemoved, []string{"b"}, nil, nil, 0, false},
 		{"a retired tail pack", cache.EventPackRetired, []string{"e"}, nil, nil, 3, true},
 		{"a removed tail pack", cache.EventPackRemoved, []string{"e"}, nil, nil, 3, false},
+		// An expunge's commit takes out packs of the dropping view, which no
+		// layer names: every layer stays, and the tip goes, since it may name a
+		// commit taken out.
+		{"an expunged dropping pack", cache.EventPackExpunged, []string{"x"}, nil, nil, 3, false},
 		{"the rows' chain as it is", cache.EventLayersMoved, nil, chain, nil, 3, false},
 		{"the rows' chain without its top", cache.EventLayersMoved, nil, chain[:2], nil, 2, false},
 		{"the rows' chain moved at layer 2", cache.EventLayersMoved, nil, moved, nil, 1, false},

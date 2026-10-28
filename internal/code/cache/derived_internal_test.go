@@ -208,6 +208,7 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 			}
 		}, "Owns"},
 		{"nothing said of a log gone back", func(d *Derived) { d.OnHistoryGone = "" }, "On(history-gone)"},
+		{"nothing said of an expunge", func(d *Derived) { d.OnPackExpunged = "" }, "On(pack-expunged)"},
 		{"no seed rule", func(d *Derived) { d.Seed = "" }, "Seed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

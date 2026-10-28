@@ -462,7 +462,8 @@ func dropTip(inc *incarnation) {
 // keeping k of installed's layers, takes the node's tip with it — every one
 // but a retirement that keeps the whole chain beneath it: a layer cut is a
 // base gone, the chain moving is a base the tip was not written over, a pack
-// removed may take commits the tip names, and a file found failing is cut
+// removed may take commits the tip names, an expunge's commit takes the
+// commits it expunged out of the repository, and a file found failing is cut
 // with the tip above it, where a retirement merges packs and drops no commit,
 // and the tip names commits by id (X04).
 func tipGoes(installed []code.LayerRow, k int, ev Event) bool {
