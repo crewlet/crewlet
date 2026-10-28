@@ -1,10 +1,10 @@
-# ADR-0063: A model at its limit parks the seats it holds, and a seat says one steady thing
+# ADR-0064: A model at its limit parks the seats it holds, and a seat says one steady thing
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestASpentModelParksTheSeatUntilItsResetAndThenDeliversOnce`, `internal/engine.TestAProbeThatMeetsTheLimitParksTheSeatAgain`, `internal/engine.TestASpentHeadWithAFailingFallbackIsNotParked`, `internal/engine.TestNewModelsReleaseTheParkAtOnce`, `internal/providers/llm/chain.TestAChainIsLimitedOnlyWhenEveryMemberIs`, `internal/providers/llm/cliagent.TestClaudeCodesLimitIsReadFromItsStatusWithTheReset`, `internal/providers/llm/cliagent.TestAClockResetIsTheNearestOccurrenceInItsZone`, `internal/providers/llm/cliagent.TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered`, `internal/providers/llm/cliagent.TestTheLimitReportHoldsUntilAnAnswerOrTheNamedReset`, `internal/api/livestate.TestAParkedSeatReadsStoppedThroughEveryProbe`, `internal/api/livestate.TestAnExhaustedChainIsAFailedTurnNotAStop`, `internal/config.TestEveryBuiltInCLIHasAProductName`, the dashboard's `Inbox.test.tsx` ("a burst of live pushes"), `providerLimit.test.ts` and `store.test.ts`
+- **Enforced-by:** `internal/engine.TestASpentModelParksTheSeatUntilItsResetAndThenDeliversOnce`, `internal/engine.TestAProbeThatMeetsTheLimitParksTheSeatAgain`, `internal/engine.TestASpentHeadWithAFailingFallbackIsNotParked`, `internal/engine.TestNewModelsReleaseTheParkAtOnce`, `internal/providers/llm/chain.TestAChainIsLimitedOnlyWhenEveryMemberIs`, `internal/providers/llm/cliagent.TestClaudeCodesLimitIsReadFromItsStatusWithTheReset`, `internal/providers/llm/cliagent.TestAClockResetIsTheNearestOccurrenceInItsZone`, `internal/providers/llm/cliagent.TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered`, `internal/providers/llm/cliagent.TestTheLimitReportHoldsUntilAnAnswerOrTheNamedReset`, `internal/api/livestate.TestAParkedSeatReadsStoppedThroughEveryProbe`, `internal/api/livestate.TestAnExhaustedChainIsAFailedTurnNotAStop`, `internal/config.TestEveryBuiltInCLIHasAProductName`, `internal/agent/turn.TestAResumeAnswersOnlyForWhatThisAttemptWrote`, `internal/agent/runner.TestAResumedRecordMarksTheParkedRoundsCallsAsInherited`, `internal/engine.TestARetriedResumeWaitsForALimitItsModelsKnow`, `internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames`, the dashboard's `LimitRemedy.test.tsx`, `Inbox.test.tsx` ("a burst of live pushes"), `providerLimit.test.ts` and `store.test.ts`
 - **Measured:** a five-seat company on one Claude Code subscription, 2026-10-27, from 16:16 local when the five-hour window ran out until its 16:30 reset: 60 to 93 `batch_handler_failed` a minute, one partition failing 64 times in eight minutes, and every failed turn also failing a prefetch, a reflection and a compaction call. A forty-second sample of the dashboard socket carried 1207 frames (thirty a second), of which 529 were seat pushes (thirteen a second) and 64 were turns started and failed; each seat moved between working, idle with a failed turn and stopped about once a second. With the park, the storm test runs one refused turn where it ran 25.
-- **Cost-when-tried:** the limit was classified as a server failure (Claude Code had reworded it, and nothing read its 429), so nothing sat the entry out; the dispatcher NAKed every refused turn on a backoff of one second doubling to thirty, per partition, with new notifications joining each; and the seat state read `stopped`/`provider` from the last turn's `llm_unavailable` until the next turn began a few tens of milliseconds later. The Inbox drew each seat as a "stopped" row or a "last turn failed" row under two ids, so every flip removed one row and inserted another, which moved every row below it. Two coding runs resumed into the limit were abandoned with their results.
+- **Cost-when-tried:** the limit was classified as a server failure (Claude Code had reworded it, and nothing read its 429), so nothing sat the entry out; the dispatcher NAKed every refused turn on a backoff of one second doubling to thirty, per partition, with new notifications joining each; and the seat state read `stopped`/`provider` from the last turn's `llm_unavailable` until the next turn began a few tens of milliseconds later. The Inbox drew each seat as a "stopped" row or a "last turn failed" row under two ids, so every flip removed one row and inserted another, which moved every row below it. Two coding runs resumed into the limit were abandoned with their results: the abandon rule read the writes the attempt that parked had made as the resume's own.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -54,6 +54,21 @@ chain), and naming the fallback would hand every reader that map. A seat's own c
 keeps one id whether it is stopped or its last turn failed. The store keeps a
 row a push leaves as it was and tells nobody of a push that moved nothing, and
 the Inbox keeps the rows it drew while they say the same thing.
+
+**A resume answers for what its own attempt wrote.** A resumed phase's record
+opens with the calls the round that parked made before it suspended
+(`turn.Work.Inherited`), so the record stays whole for the delivery check and
+the ledger, while `turn.Result.Acted` (what `turn.Abandon` reads) counts only
+the calls this attempt made. A resume that broke before a new round (a usage
+limit, a runner it could not build) is reverted and retried, never abandoned;
+one that wrote again and then broke is abandoned as before. A retried resume
+also waits for a limit its models already know (`waitProvider`, beside
+`waitBudget` in the resume's admission) rather than running a turn to meet it.
+
+**The way out is the remedy #427 introduced.** The condition carries the
+`model_providers` remedy (a `caveat.Setting`), which the dashboard's link table
+resolves to Settings › Models, behind the same admin gate as that screen; a
+reader without Admin is told an admin can change the company's models.
 
 ## Why not the alternatives
 
