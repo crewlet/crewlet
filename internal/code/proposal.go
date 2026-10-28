@@ -330,9 +330,17 @@ func (p Proposal) ValidateUnstored() error {
 	return p.Validate()
 }
 
+// ValidPushID reports whether id is a push's id as the receiving node mints
+// one ([Proposal.PushID]): a UUIDv7 in its canonical lowercase spelling — the
+// grammar a proposal is held to, and the one a read naming a push is.
+func ValidPushID(id string) bool {
+	u, err := uuid.Parse(id)
+	return err == nil && u.Version() == 7 && u.String() == id
+}
+
 // validFields is every rule of [Proposal.Validate] but the record budget.
 func (p Proposal) validFields() error {
-	if id, err := uuid.Parse(p.PushID); err != nil || id.Version() != 7 || id.String() != p.PushID {
+	if !ValidPushID(p.PushID) {
 		return fmt.Errorf("%w: push_id: %q is not a UUIDv7 in its canonical lowercase spelling",
 			ErrInvalidProposal, p.PushID)
 	}

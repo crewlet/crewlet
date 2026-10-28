@@ -51,6 +51,24 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 			t.Fatal(err)
 		}
 		check("push", push, push.encodedBytes(len(commands)))
+		brief := push.brief()
+		check("push in brief", brief, brief.encodedBytes(brief.commandsBytes()))
+		// AND ONE CUT, its omitted commands counted: fill draws at most
+		// five commands, which a brief row carries whole.
+		push.Omitted = CommandCounts{}
+		push.Commands = make([]Command, BriefCommands+1+rng.IntN(3*BriefCommands))
+		for i := range push.Commands {
+			fill(rng, reflect.ValueOf(&push.Commands[i]).Elem())
+			push.Commands[i].Result = CommandResults()[rng.IntN(len(CommandResults()))]
+			if rng.IntN(3) == 0 {
+				push.Commands[i].Old = ZeroOID
+			}
+		}
+		cut := push.brief()
+		if cut.Omitted == (CommandCounts{}) {
+			t.Fatalf("a push of %d commands read in brief omits none", len(push.Commands))
+		}
+		check("push in brief, cut", cut, cut.encodedBytes(cut.commandsBytes()))
 
 		var introduced IntroducedRow
 		fill(rng, reflect.ValueOf(&introduced).Elem())

@@ -1235,6 +1235,17 @@ const (
 	MaxRefsPerPage   = 1_000
 )
 
+// BriefCommands is how many of a push's commands a row of its history read
+// IN BRIEF carries ([ReadQuery.Brief]): FIVE, the lines a screen gives one
+// push before its row stands taller than the one-line rows around it. A push
+// of a branch or a handful of them — a person's, a seat's, an engine write's,
+// which is one ref — is whole in five, with nothing left out; a mirror's or
+// an import's push of up to MaxCommandsPerPush refs is five lines and the
+// count of the rest ([PushRow.Omitted]) — 140 to 190 kilobytes of commands
+// fewer on a row a poll sends again every minute, before its introduced ids —
+// and the whole of it one read of the push away ([ReadQuery.Push]).
+const BriefCommands = 5
+
 // Read answers a person's, a seat's or a surface's read — a listing of
 // repositories, one repository in detail, one repository's push history or
 // its refs — and the engine's own reads, at the level it is asked for
@@ -1329,8 +1340,8 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 // principal can be, a repository that cannot be one, a limit past its bound —
 // refused naming it, never clamped — or a field outside the kind that reads
 // it: a status filter outside a listing of repositories, a prefix outside a
-// refs listing, a range outside an `introduced` read, a floor of live packs
-// outside a `compaction_due` read.
+// refs listing, a brief or one push outside a push history, a range outside
+// an `introduced` read, a floor of live packs outside a `compaction_due` read.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, ReadKinds())
@@ -1364,6 +1375,15 @@ func (q ReadQuery) validate() error {
 	case q.Prefix != "" && !validRefPrefix(q.Prefix):
 		return fmt.Errorf("%w: prefix: %q is not refs/heads/ or refs/tags/ or a directory of refs under "+
 			"either, ending in /", ErrInvalid, q.Prefix)
+	case q.Brief && q.Kind != ReadPushes:
+		return fmt.Errorf("%w: brief: only a push history is read in brief", ErrInvalid)
+	case q.Push != "" && q.Kind != ReadPushes:
+		return fmt.Errorf("%w: push: only a push history is narrowed to one push", ErrInvalid)
+	case q.Push != "" && !ValidPushID(q.Push):
+		return fmt.Errorf("%w: push: %q is not a push's id, a UUIDv7 in its canonical lowercase spelling",
+			ErrInvalid, q.Push)
+	case q.Push != "" && (q.Cursor != "" || q.Limit != 0 || q.Brief):
+		return fmt.Errorf("%w: push: one push is read whole, never paged, cut or read in brief", ErrInvalid)
 	}
 	if q.Kind != ReadRepos {
 		if !ValidName(q.Repo) {
@@ -1412,6 +1432,10 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("introduced.repo_id", "an introduced read names its repository by id")
 	case q.Repo != "" || len(q.Status) > 0 || q.Prefix != "":
 		return refused("repo", "an introduced read names its repository in its range and filters nothing")
+	case q.Brief:
+		return refused("brief", "an introduced read condenses every push in its range its own way")
+	case q.Push != "":
+		return refused("push", "an introduced read names its pushes by its range alone")
 	case q.MinPacks != 0:
 		return refused("min_packs", "only a compaction_due read names a floor of live packs")
 	case !onLog(in.After) || !onLog(in.Through) || !onLog(in.Before):
@@ -1452,6 +1476,7 @@ func (q ReadQuery) validateCompactionDue() error {
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"limit", q.Limit != 0},
+		{"brief", q.Brief}, {"push", q.Push != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1482,7 +1507,7 @@ func (q ReadQuery) validatePublicationDue() error {
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0},
-		{"limit", q.Limit != 0},
+		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1509,7 +1534,7 @@ func (q ReadQuery) validateExpungeDue() error {
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0},
-		{"limit", q.Limit != 0},
+		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
@@ -1754,6 +1779,20 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if err = mayReadIn(ctx, tx, id, q.Asker, q.CeilingSeat, chart); err != nil {
 		return err
 	}
+	if q.Push != "" {
+		// ONE PUSH, WHOLE, by its key — and only one this repository's
+		// history holds: another repository's push, or one past
+		// PushHistory, is no row of this history, which is an answer with
+		// none.
+		row, found, err := pushIn(ctx, tx, q.Push)
+		if err != nil {
+			return fmt.Errorf("code: read %s's push %s: %w", q.Repo, q.Push, err)
+		}
+		if found && row.RepoID == id {
+			out.Pushes = []PushRow{row}
+		}
+		return nil
+	}
 	limit := limitOr(q.Limit, defaultPushLimit)
 	var rows *sql.Rows
 	if q.Cursor == "" {
@@ -1775,8 +1814,20 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if err != nil {
 			return fmt.Errorf("code: read %s's pushes: %w", q.Repo, err)
 		}
+		// A ROW IN BRIEF IS CHARGED THE ROW IT READ — every command and
+		// every introduced id, read and decoded whole to be cut and counted —
+		// or what it sends where that is the larger: a page held to what it
+		// sends alone would read a run of maximal pushes for a few hundred
+		// bytes each, and so without bound, the rule a condensed page keeps
+		// ([scanIntroduced]). So a brief page READS what a whole one does
+		// and sends a fraction of it.
+		charge := row.encodedBytes(commands)
+		if q.Brief {
+			row = row.brief()
+			charge = max(charge, row.encodedBytes(row.commandsBytes()))
+		}
 		out.Pushes = append(out.Pushes, row)
-		if pg.add(row.encodedBytes(commands)) {
+		if pg.add(charge) {
 			out.Next = pushCursor(row.Position, row.PushID)
 			break
 		}

@@ -396,6 +396,60 @@ func (s RepoSummary) encodedBytes() int {
 	return n
 }
 
+// encodedBytes is the length of the command's JSON encoding.
+func (c Command) encodedBytes() int {
+	n := 2 + field("ref", stringBytes(c.Ref), true) + field("old", stringBytes(c.Old), false) +
+		field("new", stringBytes(c.New), false)
+	if c.Forced {
+		n += field("forced", trueBytes, false)
+	}
+	n += field("result", stringBytes(string(c.Result)), false)
+	if c.Reason != "" {
+		n += field("reason", stringBytes(string(c.Reason)), false)
+	}
+	if c.Detail != "" {
+		n += field("detail", stringBytes(c.Detail), false)
+	}
+	return n
+}
+
+// commandsBytes is the length of the row's commands encoded as the list they
+// are, for a row whose commands are not the column they were read from: a
+// row read in brief, whose list may be cut.
+func (row PushRow) commandsBytes() int {
+	if row.Commands == nil {
+		return len("null")
+	}
+	n := 2
+	for i, c := range row.Commands {
+		if i > 0 {
+			n++
+		}
+		n += c.encodedBytes()
+	}
+	return n
+}
+
+// encodedBytes is the length of the counts' JSON encoding: every count is
+// omitted at zero.
+func (n CommandCounts) encodedBytes() int {
+	size, first := 2, true
+	for _, c := range []struct {
+		key   string
+		count int
+	}{
+		{"created", n.Created}, {"moved", n.Moved}, {"forced", n.Forced}, {"deleted", n.Deleted},
+		{"unchanged", n.Unchanged}, {"refused", n.Refused},
+	} {
+		if c.count == 0 {
+			continue
+		}
+		size += field(c.key, intBytes(int64(c.count)), first)
+		first = false
+	}
+	return size
+}
+
 // encodedBytes is the length of the push row's JSON encoding, given the
 // length of its commands' encoding — which a row read from the store has
 // already, as the column it was decoded from: the stored commands ARE
@@ -422,6 +476,9 @@ func (row PushRow) encodedBytes(commands int) int {
 		n += field("atomic", trueBytes, false)
 	}
 	n += field("commands", commands, false)
+	if row.Omitted != (CommandCounts{}) {
+		n += field("omitted", row.Omitted.encodedBytes(), false)
+	}
 	if row.PackID != "" {
 		n += field("pack_id", stringBytes(row.PackID), false)
 	}

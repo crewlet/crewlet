@@ -163,12 +163,25 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	if err != nil {
 		return code.ReadQuery{}, err
 	}
-	q := code.ReadQuery{Asker: asker, Kind: kind, Cursor: p.String("cursor"), Fresh: fresh}
+	q := code.ReadQuery{Asker: asker, Kind: kind, Cursor: p.String("cursor"), Push: p.String("push"),
+		Fresh: fresh}
 	// THE REPOSITORY IS THE PATH'S, and only the reads of one take it: a
 	// listing named no repository on its route, and a `name` beside it is
 	// read as nothing, as the route always read it.
 	if kind != code.ReadRepos {
 		q.Repo = p.String("name")
+	}
+	// A HISTORY IN BRIEF ([code.ReadQuery.Brief]) is asked as `true`, and
+	// anything else but `false` is refused rather than read as a whole
+	// history: a page a screen polls is several hundred kilobytes heavier
+	// read whole. `brief` and `push` on a read that is no push history are
+	// the reader's to refuse, naming them.
+	switch brief := strings.TrimSpace(p.String("brief")); brief {
+	case "", "false":
+	case "true":
+		q.Brief = true
+	default:
+		return code.ReadQuery{}, badParams("brief", brief, []string{"true", "false"})
 	}
 	for v := range strings.SplitSeq(p.String("status"), ",") {
 		if v = strings.TrimSpace(v); v == "" {

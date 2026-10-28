@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1052,6 +1054,237 @@ func TestAPushRowNamingNoWayIsRefused(t *testing.T) {
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
 			!strings.Contains(err.Error(), "p-forgot") {
 			t.Errorf("%s of a push row naming no way: %v, want ErrInvalid naming the push", name, err)
+		}
+	}
+}
+
+// A HISTORY READ IN BRIEF SHOWS A PUSH'S REFUSALS FIRST AND COUNTS WHAT IT
+// LEAVES OUT. A push of more commands than a screen gives it lines is cut to
+// BriefCommands — every refused one ahead of the rest, each part in the order
+// the client sent it — and every command left out is counted by what became
+// of it, so the listed commands and the counts are the whole push; its
+// introduced ids are counted and not listed. A push that fits is listed whole
+// and omits nothing, and the same history read whole lists every command and
+// every id, as one push read by its id does.
+//
+// Mutations: cut in the order the client sent (the second refusal is left
+// out), count every command rather than those left out, or keep the
+// introduced ids — each fails below.
+func TestAHistoryInBriefShowsRefusalsFirstAndCountsTheRest(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := seededRepo(t, n, "app")
+	// EXACTLY BriefCommands, which fit.
+	seed := entry(uuid.Must(uuid.NewV7()).String(),
+		set("refs/heads/main", code.ZeroOID, oidOf("M1")), set("refs/heads/old", code.ZeroOID, oidOf("O")),
+		set("refs/heads/topic", code.ZeroOID, oidOf("T1")), set("refs/heads/dev", code.ZeroOID, oidOf("D1")),
+		set("refs/heads/same", code.ZeroOID, oidOf("S")))
+	n.push(id, seed)
+
+	refused := func(ref, old, new string, why code.Refusal) code.Command {
+		return code.Command{Ref: ref, Old: old, New: new, Result: code.ResultNG, Reason: why}
+	}
+	tag := func(name string) code.Command { return set("refs/tags/"+name, code.ZeroOID, oidOf(name)) }
+	forced := set("refs/heads/topic", oidOf("T1"), oidOf("T2"))
+	forced.Forced = true
+	sent := []code.Command{
+		tag("t00"), tag("t01"),
+		refused("refs/heads/main", oidOf("M1"), oidOf("X"), code.RefusalProtectedForce),
+		tag("t03"), tag("t04"),
+		set("refs/heads/old", oidOf("O"), code.ZeroOID),
+		tag("t06"),
+		{Ref: "refs/heads/same", Old: oidOf("S"), New: oidOf("S"), Result: code.ResultNoop},
+		refused("refs/tags/v0", oidOf("V0"), oidOf("V1"), code.RefusalTagMoved),
+		forced,
+		tag("t10"),
+		set("refs/heads/dev", oidOf("D1"), oidOf("D2")),
+	}
+	big := entry(uuid.Must(uuid.NewV7()).String(), sent...)
+	big.Introduced, big.IntroducedCount = []string{oidOf("c1"), oidOf("c2")}, 2
+	n.push(id, big)
+
+	read := func(q code.ReadQuery) map[string]code.PushRow {
+		t.Helper()
+		q.Asker, q.Kind, q.Repo, q.Fresh = asker, code.ReadPushes, "app", stale
+		answer, err := n.reader.Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("Read(pushes %+v): %v", q, err)
+		}
+		rows := map[string]code.PushRow{}
+		for _, r := range answer.Pushes {
+			rows[r.PushID] = r
+		}
+		return rows
+	}
+
+	brief := read(code.ReadQuery{Brief: true})
+	cut := brief[big.PushID]
+	want := []code.Command{sent[2], sent[8], sent[0], sent[1], sent[3]}
+	if !slices.Equal(cut.Commands, want) {
+		t.Errorf("the push in brief lists %+v,\nwant its refusals first, then the first it sent: %+v",
+			cut.Commands, want)
+	}
+	wantOmitted := code.CommandCounts{Created: 3, Moved: 1, Forced: 1, Deleted: 1, Unchanged: 1}
+	if cut.Omitted != wantOmitted {
+		t.Errorf("the push in brief omits %+v, want what it leaves out: %+v", cut.Omitted, wantOmitted)
+	}
+	if cut.Introduced != nil || cut.IntroducedCount != 2 {
+		t.Errorf("the push in brief introduces %v (%d), want none listed and 2 counted", cut.Introduced,
+			cut.IntroducedCount)
+	}
+	if fits := brief[seed.PushID]; !slices.Equal(fits.Commands, seed.Commands) ||
+		fits.Omitted != (code.CommandCounts{}) {
+		t.Errorf("a push of %d commands in brief lists %+v omitting %+v, want it whole",
+			len(seed.Commands), fits.Commands, fits.Omitted)
+	}
+
+	whole := read(code.ReadQuery{})[big.PushID]
+	if !slices.Equal(whole.Commands, sent) || whole.Omitted != (code.CommandCounts{}) ||
+		!slices.Equal(whole.Introduced, big.Introduced) {
+		t.Errorf("the push read whole lists %d commands omitting %+v and introduces %v, want all %d and %v",
+			len(whole.Commands), whole.Omitted, whole.Introduced, len(sent), big.Introduced)
+	}
+	one := read(code.ReadQuery{Push: big.PushID})
+	if got, ok := one[big.PushID]; len(one) != 1 || !ok || !slices.Equal(got.Commands, sent) ||
+		!slices.Equal(got.Introduced, big.Introduced) {
+		t.Errorf("the push read by its id answered %+v, want it alone and whole", one)
+	}
+}
+
+// ONE PUSH IS READ FROM ITS OWN REPOSITORY'S HISTORY ONLY. A read of one
+// repository's history narrowed to a push of another answers no row: the
+// asker was judged on the repository the read names, and a push of another
+// is that one's contents — which the asker may not read at all. A push nobody
+// made answers none either, as a listing narrowed to it holds none.
+//
+// Mutation: answer the push whatever repository its row names, and the read
+// of app answers lib's push.
+func TestOnePushIsReadFromItsOwnRepositorysHistoryOnly(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	app, lib := seededRepo(t, n, "app"), seededRepo(t, n, "lib")
+	ours := entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/main", code.ZeroOID, oidOf("ours")))
+	theirs := entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/main", code.ZeroOID, oidOf("theirs")))
+	n.push(app, ours)
+	n.push(lib, theirs)
+	for push, want := range map[string]int{
+		ours.PushID: 1, theirs.PushID: 0, uuid.Must(uuid.NewV7()).String(): 0,
+	} {
+		answer, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadPushes,
+			Repo: "app", Push: push, Fresh: stale})
+		if err != nil {
+			t.Fatalf("Read(app's push %s): %v", push, err)
+		}
+		if len(answer.Pushes) != want || answer.Next != "" ||
+			(want == 1 && answer.Pushes[0].PushID != push) {
+			t.Errorf("app's history narrowed to push %s answered %+v, want %d row", push, answer.Pushes, want)
+		}
+	}
+}
+
+// ONLY A PUSH HISTORY IS READ IN BRIEF OR NARROWED TO ONE PUSH, and a push is
+// named by the id its receiving node minted: either field on another kind is
+// refused naming it, as one push beside a cursor, a limit or a brief — which
+// page or cut a listing it is not — and an id that no push can carry.
+func TestOnlyAPushHistoryIsReadInBriefOrNarrowedToOnePush(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := seededRepo(t, n, "app")
+	push := uuid.Must(uuid.NewV7()).String()
+	history := func(edit func(*code.ReadQuery)) code.ReadQuery {
+		q := code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app", Fresh: stale}
+		edit(&q)
+		return q
+	}
+	for _, c := range []struct {
+		name, field string
+		q           code.ReadQuery
+	}{
+		{"a listing in brief", "brief", code.ReadQuery{Asker: asker, Kind: code.ReadRepos, Brief: true,
+			Fresh: stale}},
+		{"a repository narrowed to a push", "push", code.ReadQuery{Asker: asker, Kind: code.ReadRepo,
+			Repo: "app", Push: push, Fresh: stale}},
+		{"refs in brief", "brief", code.ReadQuery{Asker: asker, Kind: code.ReadRefs, Repo: "app", Brief: true,
+			Fresh: stale}},
+		{"an introduced read in brief", "brief", code.ReadQuery{Kind: code.ReadIntroduced, Brief: true,
+			Introduced: &code.IntroducedQuery{RepoID: id}}},
+		{"an introduced read narrowed to a push", "push", code.ReadQuery{Kind: code.ReadIntroduced,
+			Push: push, Introduced: &code.IntroducedQuery{RepoID: id}}},
+		{"a compaction listing narrowed to a push", "push", code.ReadQuery{Kind: code.ReadCompactionDue,
+			MinPacks: 1, Push: push, Fresh: stale}},
+		{"a publication listing in brief", "brief", code.ReadQuery{Kind: code.ReadPublicationDue,
+			Brief: true, Fresh: stale}},
+		{"an expunge listing narrowed to a push", "push", code.ReadQuery{Kind: code.ReadExpungeDue,
+			Push: push, Fresh: stale}},
+		{"a push named by no push's id", "push", history(func(q *code.ReadQuery) { q.Push = "p-1" })},
+		{"a push's id in capitals", "push", history(func(q *code.ReadQuery) {
+			q.Push = strings.ToUpper(push)
+		})},
+		{"one push after a cursor", "push", history(func(q *code.ReadQuery) { q.Push, q.Cursor = push, "1/x" })},
+		{"one push with a limit", "push", history(func(q *code.ReadQuery) { q.Push, q.Limit = push, 1 })},
+		{"one push in brief", "push", history(func(q *code.ReadQuery) { q.Push, q.Brief = push, true })},
+	} {
+		// REFUSED NAMING THE FIELD, so a case refused for anything else
+		// certifies nothing.
+		if _, err := n.reader.Read(t.Context(), c.q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), ": "+c.field+":") {
+			t.Errorf("%s: %v, want ErrInvalid naming %s", c.name, err, c.field)
+		}
+	}
+	// AND THE SAME FIELDS ON A PUSH HISTORY ARE READ.
+	for _, q := range []code.ReadQuery{
+		history(func(q *code.ReadQuery) { q.Brief = true }),
+		history(func(q *code.ReadQuery) { q.Push = push }),
+	} {
+		if _, err := n.reader.Read(t.Context(), q); err != nil {
+			t.Errorf("Read(pushes, brief %t, push %q): %v", q.Brief, q.Push, err)
+		}
+	}
+}
+
+// A PAGE IN BRIEF READS WHAT A WHOLE PAGE READS. Its rows are read and
+// decoded whole to be cut and counted, so each is charged the row it read, or
+// the brief one where that is the larger: charged only what it sends, a page
+// of imports would read a few hundred bytes' worth each, and so without bound
+// — here every push the history holds, against a budget a whole page fills
+// at its third.
+//
+// Mutation: charge a row in brief what it sends, and the brief page holds
+// every push.
+func TestAPageInBriefReadsWhatAWholePageReads(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := seededRepo(t, n, "app")
+	const pushes, refs = 12, 60
+	for p := range pushes {
+		var cmds []code.Command
+		for c := range refs {
+			cmds = append(cmds, set(fmt.Sprintf("refs/tags/r%02d-%03d", p, c), code.ZeroOID,
+				oidOf(fmt.Sprint(p, "/", c))))
+		}
+		n.push(id, entry(uuid.Must(uuid.NewV7()).String(), cmds...))
+	}
+	whole, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadPushes, Repo: "app",
+		Fresh: stale})
+	if err != nil {
+		t.Fatalf("Read(pushes): %v", err)
+	}
+	row, err := json.Marshal(whole.Pushes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// TWO AND A HALF WHOLE ROWS' WORTH: full at the third, whatever a row's
+	// position adds to its length.
+	code.SetPageLimits(n.reader, code.MaxSnapshotItems, 5*len(row)/2)
+	for _, brief := range []bool{false, true} {
+		answer, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadPushes,
+			Repo: "app", Brief: brief, Fresh: stale})
+		if err != nil {
+			t.Fatalf("Read(pushes, brief %t): %v", brief, err)
+		}
+		if len(answer.Pushes) != 3 || answer.Next == "" {
+			t.Errorf("a page (brief %t) under a budget of two and a half whole rows holds %d of %d pushes, "+
+				"next %q; want three and a cursor", brief, len(answer.Pushes), pushes, answer.Next)
 		}
 	}
 }

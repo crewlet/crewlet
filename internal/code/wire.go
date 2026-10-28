@@ -328,16 +328,94 @@ type PushRow struct {
 	// Via is how the push's pack was built, and Run, for a seat's push, the
 	// turn, the work item and the model behind it — each stamped by the
 	// engine from the call that made the push, never read from a commit.
-	Via             PushVia       `json:"via"`
-	Run             RunProvenance `json:"run,omitzero"`
-	Node            string        `json:"node,omitempty"`
-	Atomic          bool          `json:"atomic,omitempty"`
-	Commands        []Command     `json:"commands"`
+	Via      PushVia       `json:"via"`
+	Run      RunProvenance `json:"run,omitzero"`
+	Node     string        `json:"node,omitempty"`
+	Atomic   bool          `json:"atomic,omitempty"`
+	Commands []Command     `json:"commands"`
+	// Omitted is the commands a row read IN BRIEF ([ReadQuery.Brief]) leaves
+	// out of Commands, counted by what became of each — so Commands and
+	// Omitted together are every command the push carried, and a reader says
+	// what it was not shown without asking for it. Absent wherever nothing
+	// is left out: a row read whole, and a brief row of a push of at most
+	// [BriefCommands] commands.
+	Omitted         CommandCounts `json:"omitted,omitzero"`
 	PackID          string        `json:"pack_id,omitempty"`
 	PackBytes       int64         `json:"pack_bytes,omitempty"`
 	Introduced      []string      `json:"introduced,omitempty"`
 	IntroducedCount int           `json:"introduced_count,omitempty"`
 	ReceivedAt      time.Time     `json:"received_at"`
+}
+
+// CommandCounts is commands of a push counted by what became of each, in the
+// words a reader is told them in: a ref made, moved, moved by force or
+// removed; asked for the value it already had; or refused. Every command is
+// exactly one, decided in that order ([CommandCounts.add]) — a refusal is a
+// refusal whatever it asked, and an unchanged ref moved nowhere — the order
+// the dashboard's commandWord says one command in. Each count is omitted at
+// zero.
+type CommandCounts struct {
+	Created   int `json:"created,omitempty"`
+	Moved     int `json:"moved,omitempty"`
+	Forced    int `json:"forced,omitempty"`
+	Deleted   int `json:"deleted,omitempty"`
+	Unchanged int `json:"unchanged,omitempty"`
+	Refused   int `json:"refused,omitempty"`
+}
+
+// add counts one command by what became of it.
+func (n *CommandCounts) add(c Command) {
+	switch {
+	case c.Result == ResultNG:
+		n.Refused++
+	case c.Result == ResultNoop:
+		n.Unchanged++
+	case c.Old == ZeroOID:
+		n.Created++
+	case c.New == ZeroOID:
+		n.Deleted++
+	case c.Forced:
+		n.Forced++
+	default:
+		n.Moved++
+	}
+}
+
+// brief is a push row as a history read IN BRIEF serves it
+// ([ReadQuery.Brief]): its introduced commits counted and not listed, and, of
+// a push of more than BriefCommands commands, BriefCommands of them — its
+// refused ones first, each with its reason, then the rest, each part in the
+// order the client sent it — with every command left out counted in Omitted.
+//
+// THE REFUSALS FIRST because what did not happen is what a reader of a push
+// has to act on: a push of a thousand tags with one refused, cut in the order
+// it was sent, would show five that landed and hide the one that did not.
+func (row PushRow) brief() PushRow {
+	row.Introduced = nil
+	if len(row.Commands) <= BriefCommands {
+		return row
+	}
+	refusals := 0
+	for _, c := range row.Commands {
+		if c.Result == ResultNG {
+			refusals++
+		}
+	}
+	keepRefused := min(refusals, BriefCommands)
+	refused := make([]Command, 0, BriefCommands)
+	rest := make([]Command, 0, BriefCommands-keepRefused)
+	for _, c := range row.Commands {
+		switch {
+		case c.Result == ResultNG && len(refused) < keepRefused:
+			refused = append(refused, c)
+		case c.Result != ResultNG && len(rest) < BriefCommands-keepRefused:
+			rest = append(rest, c)
+		default:
+			row.Omitted.add(c)
+		}
+	}
+	row.Commands = append(refused, rest...)
+	return row
 }
 
 // PushVia is how a push's pack was built: STAMPED by whoever built it, carried
@@ -623,6 +701,39 @@ type ReadQuery struct {
 	// (the default) or "refs/tags/", or a deeper prefix ending in "/" — a
 	// seat's own namespace.
 	Prefix string `json:"prefix,omitempty"`
+	// Brief asks a push history for its rows IN BRIEF: the commits each push
+	// introduced counted and not listed, and the commands of a push of more
+	// than [BriefCommands] cut to that many — its refused ones first, each
+	// with its reason, then the rest in the order its client sent them — with
+	// every command left out counted by what became of it
+	// ([PushRow.Omitted]). A screen draws a push a few lines tall, and an
+	// import's or a mirror's push of up to MaxCommandsPerPush refs, with its
+	// introduced ids, is 140 to 460 kilobytes of row a listing never shows,
+	// sent again on every poll of the page; [ReadQuery.Push] reads one push
+	// whole. Pushes only, refused on every other kind.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row: a build that predates it decodes and ignores it,
+	// and answers the rows whole — a heavier answer, never a wrong one: a
+	// whole row's commands are every one it carried, and it omits none.
+	Brief bool `json:"brief,omitempty"`
+	// Push narrows a push history to ONE push, by its id, read whole: every
+	// command it carried and every commit it introduced. A push the
+	// repository's history does not hold — another repository's, or one past
+	// PushHistory — is an answer with no row, as a listing narrowed to it
+	// holds none. Pushes only, and refused beside a cursor, a limit or Brief,
+	// which page or cut a listing it is not.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row — and one a build that predates it would decode and
+	// ignore, answering the history's first page in its place. AS A STATED
+	// CONDITION, as [ReadQuery.CeilingSeat]'s: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release serves a code read. Were a build without it
+	// ever to run first, a read of one push would move to a kind of its own,
+	// which such a build refuses as a kind it does not know, rather than ride
+	// a field it ignores.
+	Push string `json:"push,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`

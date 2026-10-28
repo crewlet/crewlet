@@ -612,6 +612,7 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		{"/code/repos?status=gone", http.StatusBadRequest, "bad_params", "", `"gone"`, "", false},
 		{"/code/repos?limit=-1", http.StatusBadRequest, "bad_params", "", "limit", "", false},
 		{"/code/repos?limit=ten", http.StatusBadRequest, "bad_params", "", "limit", "", false},
+		{"/code/repos/site/pushes?brief=yes", http.StatusBadRequest, "bad_params", "", "brief", "", false},
 	} {
 		before := len(reads.queries())
 		rec := ask(t, a, http.MethodGet, tc.path, true)
@@ -635,7 +636,8 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 	}
 
 	// AND WHAT IS ASKED IS WHAT ARRIVES: the kind, the repository, the
-	// filter, the page and the level, through the one grammar.
+	// filter, the page, a history in brief or one push of it, and the level,
+	// through the one grammar.
 	for _, tc := range []struct {
 		path string
 		want code.ReadQuery
@@ -648,6 +650,11 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
 		{"/code/repos/site/pushes?limit=0", code.ReadQuery{Kind: code.ReadPushes, Repo: "site",
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
+		{"/code/repos/site/pushes?brief=true", code.ReadQuery{Kind: code.ReadPushes, Repo: "site",
+			Brief: true, Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
+		{"/code/repos/site/pushes?push=0192f4c8-0000-7000-8000-000000000001&brief=false",
+			code.ReadQuery{Kind: code.ReadPushes, Repo: "site", Push: "0192f4c8-0000-7000-8000-000000000001",
+				Fresh: statelog.Freshness{Level: statelog.ReadStale}}},
 	} {
 		before := len(reads.queries())
 		if rec := ask(t, a, http.MethodGet, tc.path, true); rec.Code != http.StatusOK {
@@ -661,7 +668,8 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		}
 		got := asked[len(asked)-1]
 		if got.Kind != tc.want.Kind || got.Repo != tc.want.Repo || !slices.Equal(got.Status, tc.want.Status) ||
-			got.Limit != tc.want.Limit || got.Cursor != tc.want.Cursor || !reflect.DeepEqual(got.Fresh, tc.want.Fresh) {
+			got.Limit != tc.want.Limit || got.Cursor != tc.want.Cursor || got.Brief != tc.want.Brief ||
+			got.Push != tc.want.Push || !reflect.DeepEqual(got.Fresh, tc.want.Fresh) {
 			t.Errorf("GET %s asked %+v, want %+v", tc.path, got, tc.want)
 		}
 		// A token the directory binds to no seat asks as itself, under
