@@ -126,7 +126,7 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	// pause closes its own: the hold is taken and recorded under the lock
 	// ([seatParks.take]), and the basis is read again after that.
 	if err := e.budgetParks.take(ctx, e, budgetParkSpec, seat, handle, m.basis, r.Window.End,
-		"the window turned over"); err != nil {
+		"the window turned over", nil); err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
 	// THE PARK IS THE GATE SAYING NO, and it is recorded as the window's

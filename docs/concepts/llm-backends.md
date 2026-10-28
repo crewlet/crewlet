@@ -678,8 +678,10 @@ sentence, until the window ends:
   never more than **an hour** away, so a plan you raised or a login you renewed
   has the entry back within the hour even when the vendor's window runs for
   days. Claude Code names a time of day and its zone, which is read as the
-  occurrence of that time nearest the report: "resets 2am" at 11 pm is three
-  hours away, not twenty-one hours ago;
+  next occurrence of that time: "resets 2am" at 11 pm is three hours away, and
+  "resets 5am" at 4 pm is tomorrow's, thirteen hours away. One that passed less
+  than five minutes ago is the window turning over as the report was read, and
+  reads as no instant;
 - otherwise after a window that grows with each probe the limit refuses again:
   **1, 2, 5, then 15 minutes**, and back to the first step once a call through
   the entry answers. A limit that lifts in a minute costs a minute, and one that
@@ -688,27 +690,30 @@ sentence, until the window ends:
   the window ends, before the first of them answers); every call queued behind
   them is refused as soon as one reports the plan still spent.
 
-**What the vendor said is held, not the window.** The limit report stands from
-the first refusal until a call through the entry answers, or until the reset it
-named has passed, so the seats and the dashboard read one steady fact ("limit
-reached, resumes at 4:30 PM", or "resume time unknown") rather than one that
-blinks at every probe.
-
 **A seat whose whole chain is limited is parked, not retried.** When every
 entry of the chain a turn ran on refused for a rate limit, the engine holds the
 seat's inbox until the first entry is tried again (`seat_provider_parked`), the
 way a spent token window parks it: the delivery keeps its place at the head of
-the inbox, a message that arrives meanwhile waits behind it, and when the park
-lifts each is delivered once, in order. The turn that runs then is the probe: a
-limit that still holds parks the seat again until the next instant, and one
-that has lifted answers. Throughout, the seat reads `stopped` with the reason
-`provider`, and the dashboard's Inbox draws one condition for the entry ("Claude
-Code subscription limit reached. Agents resume at 4:30 PM.") rather than a row
-per seat. A seat whose chain has an entry that still answers is never parked: it
+the inbox, and a message that arrives meanwhile waits behind it. When the first
+entry is tried again the engine **probes** the chain with one short call of its
+own, outside any delivery (charged to the seat and recorded as the background
+stage's `provider_probe`): a limit that still holds arms the park again for the
+next instant and touches nothing on the inbox, however long the limit lasts,
+and an answer lifts the park (`seat_provider_released`), after which each
+message is delivered once, in order. The held mail is never the probe, because
+every hand-back of a message spends one of its deliveries. Throughout, the seat
+reads `stopped` with the reason `provider`, and the dashboard's Inbox draws one
+condition for the kind of limit ("Claude Code subscription limit reached.
+Agents resume at 4:30 PM.") rather than a row per seat. The condition reaches
+every reader of the dashboard, so it names no entry: which entries are spent and
+which carries a seat is on **Settings › Models**, for an admin. A seat whose chain has an entry that still answers is never parked: it
 runs on that entry, and the condition says so. A chain whose head is limited and
 whose fallback failed for another reason is retried as any failed turn is,
 because nothing says that failure lasts. An apply that changes the company's
 models releases every park at once: the new entries have sat nothing out.
+A coding run's completion, or a person's answer to one, that arrives while the
+seat's models are at a limit they reported waits for it rather than resuming
+into it, and resumes once the park lifts or the first entry is tried again.
 
 The sit-out is the entry's own, on the node that heard the sentence: every other
 node learns the same thing from its own calls, once per window. A later sit-out

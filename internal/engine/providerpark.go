@@ -3,12 +3,14 @@ package engine
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -40,17 +42,35 @@ import (
 //     nothing more is delivered to it, and the delivery is DEFERRED, which
 //     keeps its place at the head of the inbox;
 //   - an alarm is armed for the instant the first member is tried again
-//     ([chain.Limit.RetryAt]), which lifts the hold for a probe: the mail is
-//     delivered again in order, once, and a turn that meets the same limit
-//     parks the seat again until the next instant;
+//     ([chain.Limit.RetryAt]), which PROBES the chain: one short call through
+//     the members that refused, outside any delivery;
 //   - and `seat_provider_parked` says so, with when the vendors said the
 //     limit lifts, so every screen draws one steady condition rather than a
 //     seat that blinks.
 //
-// A PROBE PUBLISHES NOTHING when it lifts the hold. The seat is still limited
-// as far as anybody knows until a call through its chain answers, which the
-// seat's own phase completing says; a release event at each probe would make
-// the seat blink at every probe instead of at every second.
+// THE PROBE IS NOT THE HELD MAIL. It used to be: the alarm lifted the hold,
+// the head of the inbox ran a turn into the limit, and that turn parked the
+// seat again by deferring its delivery. A deferral spends one of the
+// message's deliveries, so a limit that outlasted the backend's hourly retry
+// (a weekly plan, a day's quota) walked the held message to the dead-letter
+// boundary one probe at a time: 24 probes, a day, for a limit named 40 hours
+// out, and about five and a half hours for one whose reset nobody named. So
+// the alarm asks the models itself ([Engine.probeProviderPark]), and the
+// answer decides:
+//
+//   - the call answers, or fails for a reason that is not a limit: the hold
+//     is lifted, `seat_provider_released` says why, and the mail is delivered
+//     again in order, once, the held head first, having spent only the one
+//     delivery its park did;
+//   - every member refuses for a limit again: the alarm is armed for the new
+//     instant, `seat_provider_parked` is published again with what the
+//     vendors now say, and the inbox is not touched.
+//
+// The probe is spend like any other auxiliary call, charged and recorded
+// through the seam under the background stage (`provider_probe`), and asks
+// the members on the seat's own CLI home ([llm.WithSeat]). Members still
+// sitting out refuse without a process being started, so a probe costs one
+// short call to the member whose window is over.
 //
 // ONLY A CHAIN THAT IS LIMITED THROUGHOUT. A seat whose head is spent and whose
 // fallback failed for a reason nothing says will last keeps the ordinary
@@ -61,6 +81,12 @@ import (
 // released by an apply that installs another ([Engine.reconcileProviderParks]):
 // the redelivery asks the new entries, and a limit that still holds parks the
 // seat again at the cost of one delivery.
+//
+// A RELEASE IS ALSO A SIGNAL to the resumes waiting on the same condition
+// ([waitProvider]): a coding run's completion or a person's answer refused
+// because the models were limited is re-checked the moment a park lifts, on
+// any seat, since the entries are the node's and not the seat's, rather than
+// at its own clock or the waiter's next announcement.
 //
 // WHO HAS TO AGREE ON IT: this node alone, like the budget park. A restart, or
 // the seat moving to a peer, asks the models again on the first delivery.
@@ -77,15 +103,27 @@ var providerParkSpec = parkSpec{
 }
 
 // providerBasis is what a provider park was decided under: the registry whose
-// entries refused. A park whose registry is no longer current was decided by
+// entries refused, and the keys of the chain that refused, in its order, which
+// the probe asks. A park whose registry is no longer current was decided by
 // entries that no longer serve the seat.
 type providerBasis struct {
 	models *phase.Registry
+	keys   []string
 }
 
 // providerParks is every seat inbox this node holds because every model of the
 // seat's chain is limited, by the seat's id.
 type providerParks = seatParks[providerBasis]
+
+// providerParking is one seat's provider park.
+type providerParking = seatParking[providerBasis]
+
+// providerProbe is the probe's whole request: a text function whose answer is
+// read for nothing but whether it came, so it is as short as a call can be.
+var providerProbe = llm.Request{Messages: []llm.Message{
+	{Role: llm.RoleSystem, Content: "Reply with the single word: ok"},
+	{Role: llm.RoleUser, Content: "ok"},
+}}
 
 // providerPark is the dispatcher's provider stage: it parks handle's seat
 // until limit's first member is tried again, reporting the deferral reason.
@@ -102,19 +140,16 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 		return "", false, err
 	}
 	c := e.Company()
-	var basis providerBasis
+	basis := providerBasis{keys: slices.Clone(limit.Keys)}
 	if c != nil {
 		basis.models = c.Models
 	}
 	if err := e.providerParks.take(ctx, e, providerParkSpec, seat, handle, basis, limit.RetryAt,
-		"its models are tried again"); err != nil {
+		"its models are tried again", e.probeProviderPark); err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its models' limit: %w", handle, err)
 	}
 
-	resets := "unknown"
-	if !limit.ResetsAt.IsZero() {
-		resets = rfc3339(limit.ResetsAt)
-	}
+	resets := resetsOf(limit)
 	reason := fmt.Sprintf("provider limit: %s, tried again %s, resets %s",
 		strings.Join(limit.Keys, " -> "), rfc3339(limit.RetryAt), resets)
 	log.InfoContext(ctx, "seat_provider_parked", "seat", handle,
@@ -130,6 +165,80 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 		e.releaseProviderPark(ctx, seat, "the seat's models changed while it parked")
 	}
 	return reason, true, nil
+}
+
+// probeProviderPark is a provider park's alarm: one call through the chain that
+// refused, outside any delivery, and the park settled on what it answers (see
+// the file's doc). ctx ends if the park is released, given up or stopped while
+// the call is out, and whoever did that has already settled it.
+func (e *Engine) probeProviderPark(ctx context.Context, seat uuid.UUID, parking *providerParking) {
+	// SETTLED ON A CONTEXT THE PARK DOES NOT END: the release cancels the
+	// call's context before it lifts the hold.
+	settle := context.WithoutCancel(ctx)
+	c := e.Company()
+	if c == nil || c.Models != parking.basis.models {
+		// The apply that installed other models releases this park itself
+		// ([Engine.reconcileProviderParks]); one that raced the alarm here
+		// is released the same way.
+		e.releaseProviderParking(settle, seat, parking, "the seat's models changed")
+		return
+	}
+	err := e.probeModels(ctx, c, parking.handle, parking.basis.keys)
+	if ctx.Err() != nil {
+		return
+	}
+	if limit, limited := chain.Limited(err); limited {
+		if !e.providerParks.rearm(settle, e, providerParkSpec, seat, parking, limit.RetryAt,
+			"its models are tried again") {
+			return
+		}
+		log.InfoContext(settle, "seat_provider_park_renewed", "seat", parking.handle,
+			"providers", strings.Join(limit.Keys, ","), "retry_at", rfc3339(limit.RetryAt),
+			"resets_at", resetsOf(limit), "said", limit.Said,
+			"detail", "the probe met the limit again; this seat's mail stays on its inbox, "+
+				"untouched, until its models are tried again")
+		e.publishProviderPark(settle, parking.handle, providerParked(limit))
+		return
+	}
+	why := "its models answered"
+	if err != nil {
+		why = "its models no longer report a usage limit"
+		log.InfoContext(settle, "seat_provider_probe_failed", "seat", parking.handle,
+			"error", err.Error(),
+			"detail", "the probe failed for a reason that is not a usage limit, so the park "+
+				"is lifted and the seat's mail meets the failure on the ordinary retry")
+	}
+	e.releaseProviderParking(settle, seat, parking, why)
+}
+
+// probeModels makes the probe's one call through the members of c's registry
+// keys names, in order, charged and recorded through the auxiliary seam and on
+// handle's own CLI home. A key the registry no longer has is an error that is
+// not a limit, which lifts the park.
+func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, keys []string) error {
+	members := make([]chain.Member, 0, len(keys))
+	for _, key := range keys {
+		provider, ok := c.Models.Provider(key)
+		if !ok {
+			return fmt.Errorf("engine: provider %q is no longer configured", key)
+		}
+		members = append(members, chain.Member{Key: key, Provider: provider})
+	}
+	seam, ok := e.seamFor(c)
+	if !ok {
+		return fmt.Errorf("engine: the company has no models to probe")
+	}
+	members, err := seam.recordedMembers(e.seatRole(handle), members,
+		auxspend.Use{Stage: types.AuxStageBackground, Purpose: types.AuxProviderProbe})
+	if err != nil {
+		return err
+	}
+	probe, err := chain.New(members, chain.Options{})
+	if err != nil {
+		return err
+	}
+	_, err = probe.Complete(llm.WithSeat(ctx, handle), providerProbe)
+	return err
 }
 
 // providerRefusing reports whether every model of handle's executor chain is
@@ -163,8 +272,21 @@ func (e *Engine) providerRefusing(ctx context.Context, handle string) (string, t
 	if !limited || retry.IsZero() {
 		return "", time.Time{}, false
 	}
+	return limitReason(keys, retry), retry, true
+}
+
+// limitReason is a resume's refusal for a chain at its limit.
+func limitReason(keys []string, retry time.Time) string {
 	return fmt.Sprintf("provider limit: %s, tried again %s", strings.Join(keys, " -> "),
-		rfc3339(retry)), retry, true
+		rfc3339(retry))
+}
+
+// resetsOf is when limit's vendors said it lifts, for a log line.
+func resetsOf(limit chain.Limit) string {
+	if limit.ResetsAt.IsZero() {
+		return "unknown"
+	}
+	return rfc3339(limit.ResetsAt)
 }
 
 // providerParked is the event a park publishes, its seat fields filled by
@@ -181,16 +303,23 @@ func providerParked(limit chain.Limit) types.SeatProviderParked {
 	return parked
 }
 
-// releaseProviderPark lifts the provider hold from one seat's inbox for a
-// reason other than its probe, and says so.
+// releaseProviderPark lifts the provider hold from one seat's inbox, whatever
+// record holds it; see [Engine.releaseProviderParking].
 func (e *Engine) releaseProviderPark(ctx context.Context, seat uuid.UUID, why string) {
-	parking := e.providerParks.parking(seat)
-	if parking == nil {
+	if parking := e.providerParks.parking(seat); parking != nil {
+		e.releaseProviderParking(ctx, seat, parking, why)
+	}
+}
+
+// releaseProviderParking lifts the hold parking took, if it is still the
+// seat's park, says so, and signals the resumes waiting on a limit (see the
+// file's doc).
+func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, parking *providerParking, why string) {
+	if !e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why) {
 		return
 	}
-	if e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why) {
-		e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
-	}
+	e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
+	e.readmitResumes(waitProvider)
 }
 
 // reconcileProviderParks releases every park decided under models next does

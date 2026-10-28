@@ -123,6 +123,27 @@ func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member
 	if err != nil {
 		return member, err
 	}
+	return s.recorded(role, member, use), nil
+}
+
+// recordedMembers wraps members of the seat's own chains, so every completion
+// made through them is charged and recorded under use, for a caller that asks a
+// chain rather than the auxiliary head: the provider park's probe, which asks
+// the very members that refused (providerpark.go). An attribution the record
+// cannot be filed under is refused, as [auxiliarySeam.Auxiliary] refuses it.
+func (s auxiliarySeam) recordedMembers(role *org.Role, members []chain.Member, use auxspend.Use) ([]chain.Member, error) {
+	if err := use.Validate(); err != nil {
+		return nil, err
+	}
+	out := make([]chain.Member, 0, len(members))
+	for _, m := range members {
+		out = append(out, s.recorded(role, m, use))
+	}
+	return out, nil
+}
+
+// recorded is member with its provider wrapped to charge and record under use.
+func (s auxiliarySeam) recorded(role *org.Role, member chain.Member, use auxspend.Use) chain.Member {
 	var meter spendRecorder
 	switch {
 	case use.Budget != nil:
@@ -138,7 +159,7 @@ func (s auxiliarySeam) Auxiliary(role *org.Role, use auxspend.Use) (chain.Member
 		inner: member.Provider, key: member.Key, use: use, seat: s.seatOf(role, use.Stage),
 		meter: meter, ledger: s.ledger, zone: s.zone, now: s.now,
 	}
-	return member, nil
+	return member
 }
 
 // seatOf is whose spend a call is, as its record names it.
@@ -332,13 +353,23 @@ func (e *Engine) auxiliaryCharge(c *Company) func(*org.Role, types.AuxStage) spe
 // model through — or nil for a company with no models, which every caller
 // reads as a company whose auxiliary work waits for a provider.
 func (e *Engine) auxiliaryFor(c *Company) auxiliaryModels {
-	if c == nil || c.Models == nil {
+	seam, ok := e.seamFor(c)
+	if !ok {
 		return nil
+	}
+	return seam
+}
+
+// seamFor is the epoch's auxiliary seam as its concrete type, and false for a
+// company with no models.
+func (e *Engine) seamFor(c *Company) (auxiliarySeam, bool) {
+	if c == nil || c.Models == nil {
+		return auxiliarySeam{}, false
 	}
 	return auxiliarySeam{
 		heads: c.Models, org: c.Org, zone: basisOf(c, nil).zone, ledger: e.auxSpend,
 		charge: e.auxiliaryCharge(c), now: e.now,
-	}
+	}, true
 }
 
 // compactorFor is the compactor this epoch rewrites over-budget text with: the

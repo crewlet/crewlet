@@ -87,8 +87,9 @@ type parkRig struct {
 	// handed counts deliveries the dispatcher was handed.
 	handed int
 	// worked is every trigger a turn was run on, in the order the turns
-	// ran.
+	// ran, and left the deliveries each had left as its turn ran.
 	worked []uuid.UUID
+	left   []int
 	turnFn func() (turn.Result, error)
 }
 
@@ -144,11 +145,13 @@ func newParkRig(t *testing.T, dayCeiling string) *parkRig {
 			r.noted++
 			r.mu.Unlock()
 		},
-		Turn: func(_ context.Context, req Request) (turn.Result, error) {
+		Turn: func(ctx context.Context, req Request) (turn.Result, error) {
 			r.mu.Lock()
 			r.ran++
 			for _, ev := range req.Events {
 				r.worked = append(r.worked, ev.ID)
+				left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
+				r.left = append(r.left, left)
 			}
 			fn := r.turnFn
 			r.mu.Unlock()

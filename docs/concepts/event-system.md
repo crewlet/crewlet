@@ -417,15 +417,18 @@ provider_fallback          # the chain moved to its next provider. One per
                            # the limit is called on a screen
 seat_provider_parked       # every member of the seat's chain refused for a
                            # rate limit, so the seat is parked until the
-                           # first is tried again (`retry_at`). Carries the
-                           # chain's keys, `resets_at` where every vendor
-                           # named one, the head's sentence, its `cli` and
-                           # whether it signs in on a `subscription`. The seat
-                           # reads `stopped`/`provider` until a call through
-                           # its chain answers
-seat_provider_released     # a provider park lifted for a reason other than
-                           # its probe: the seat's chain changed, or the
-                           # node gave the seat up
+                           # first is tried again (`retry_at`), and again
+                           # each time the engine's probe meets the limit.
+                           # Carries the chain's keys, `resets_at` where
+                           # every vendor named one, the head's sentence, its
+                           # `cli` and whether it signs in on a
+                           # `subscription`. The seat reads
+                           # `stopped`/`provider` until a call through its
+                           # chain answers
+seat_provider_released     # a provider park lifted: the probe was answered
+                           # (or failed for a reason that is not a limit),
+                           # the seat's chain changed, or the node gave the
+                           # seat up
 subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
 prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # plus a token approximation: the system and user

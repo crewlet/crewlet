@@ -132,10 +132,11 @@ func (e ProviderFallback) SummaryFor(actor string) string {
 // order, until the first member is tried again, rather than being redelivered
 // into the same refusal every second (internal/engine/providerpark.go).
 //
-// Published at each park, which a probe that meets the same limit renews, so
-// it is a statement of the seat's condition rather than of a change: a reader
-// holds the latest, and a renewal with the same instants changes nothing it
-// draws. The condition ends when a call through the seat's chain answers.
+// Published at each park, and again each time the engine's probe (a call
+// outside any turn) meets the same limit, so it is a statement of the seat's
+// condition rather than of a change: a reader holds the latest, and a renewal
+// with the same instants changes nothing it draws. The condition ends when a
+// call through the seat's chain answers.
 type SeatProviderParked struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -144,7 +145,7 @@ type SeatProviderParked struct {
 	// ProviderKeys are the providers.llm keys of the chain, in its order,
 	// every one of which refused.
 	ProviderKeys []string `json:"provider_keys"`
-	// RetryAt is when the park lifts for a probe: the earliest instant a
+	// RetryAt is when the park probes the chain: the earliest instant a
 	// member is tried again.
 	RetryAt time.Time `json:"retry_at"`
 	// ResetsAt is when the vendors said the limit lifts, where every member
@@ -177,10 +178,10 @@ func (e SeatProviderParked) SummaryFor(actor string) string {
 		e.ResetsAt.UTC().Format(time.RFC3339))
 }
 
-// SeatProviderReleased records that a seat's provider park was lifted for a
-// reason other than its probe: the seat's chain changed under it, or the node
-// gave the seat up. A probe's release publishes nothing, because the seat is
-// still limited as far as anybody knows until a call answers.
+// SeatProviderReleased records that a seat's provider park was lifted: its
+// probe was answered (or failed for a reason that is not a limit), the seat's
+// chain changed under it, or the node gave the seat up. A probe that meets the
+// limit again lifts nothing, and publishes a [SeatProviderParked] instead.
 type SeatProviderReleased struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`

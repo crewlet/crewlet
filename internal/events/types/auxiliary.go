@@ -71,7 +71,8 @@ const (
 	AuxStageReflection AuxStage = "reflection"
 
 	// AuxStageBackground is spent on no turn: the episode compaction,
-	// skill clustering and skill promotion passes.
+	// skill clustering and skill promotion passes, and the provider park's
+	// probe.
 	AuxStageBackground AuxStage = "background"
 
 	// AuxStageOperator is spent for a PERSON: a question answered from the
@@ -119,6 +120,10 @@ const (
 	AuxSkillClustering AuxPurpose = "skill_clustering"
 	// AuxSkillPromotion promotes sibling skills to a unit's skill.
 	AuxSkillPromotion AuxPurpose = "skill_promotion"
+	// AuxProviderProbe asks a parked seat's models whether their usage
+	// limit has lifted: one short call when the first of them is tried
+	// again, outside any delivery (internal/engine/providerpark.go).
+	AuxProviderProbe AuxPurpose = "provider_probe"
 
 	// AuxAnswerKnowledge answers a person's question from the company's
 	// pages and work items.
@@ -166,7 +171,7 @@ func AuxCondenseKinds() []string { return slices.Clone(auxCondenseKinds) }
 var auxPurposes = []AuxPurpose{
 	AuxMemoryFilter, AuxKnowledgeQuery, AuxEpisodeSummary,
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
-	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion,
+	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion, AuxProviderProbe,
 	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle, AuxAssistantDeepWork,
 	AuxAssistantBrief,
 }

@@ -8729,7 +8729,7 @@ Notes:
   purpose: `memory_filter`, `knowledge_query`, `episode_summary`,
   `persist_decider`, `counterparty_profiler`, `skill_synthesizer`,
   `skill_refiner`, `episode_compaction`, `skill_clustering`,
-  `skill_promotion`, `answer_knowledge`, and `condense_<kind>` for each kind of
+  `skill_promotion`, `provider_probe`, `answer_knowledge`, and `condense_<kind>` for each kind of
   text a compaction rewrites. Its rows sum to that phase.
 - `calls` is PROVIDER CALLS on every bucket: a phase's model rounds, an
   auxiliary record's coalesced calls. It counted records once, which made a

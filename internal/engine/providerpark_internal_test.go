@@ -70,7 +70,8 @@ func (m *limitedModel) asked() int {
 }
 
 // limitedRig is a park rig whose every turn asks one chain of the members
-// given, and records the park events the engine publishes.
+// given, which are also the company's models (so the park's probe asks the
+// same entries), and records the park events the engine publishes.
 type limitedRig struct {
 	*parkRig
 	mu     sync.Mutex
@@ -85,6 +86,15 @@ func newLimitedRig(t *testing.T, members ...chain.Member) *limitedRig {
 	if err != nil {
 		t.Fatalf("chain.New: %v", err)
 	}
+	entries := make([]phase.Entry, 0, len(members))
+	for _, m := range members {
+		entries = append(entries, phase.Entry{Key: m.Key, Provider: m.Provider})
+	}
+	reg, err := phase.NewRegistry(entries)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	r.e.Company().Models = reg
 	r.parkRig.mu.Lock()
 	r.turnFn = func() (turn.Result, error) {
 		_, err := models.Complete(context.Background(), llm.Request{})
@@ -124,6 +134,21 @@ func (r *limitedRig) workedIDs() []uuid.UUID {
 	r.parkRig.mu.Lock()
 	defer r.parkRig.mu.Unlock()
 	return slices.Clone(r.worked)
+}
+
+// deliveriesLeft is what each turn's delivery had left as the turn ran, in
+// the order the turns ran.
+func (r *limitedRig) deliveriesLeft() []int {
+	r.parkRig.mu.Lock()
+	defer r.parkRig.mu.Unlock()
+	return slices.Clone(r.left)
+}
+
+// at moves the rig's clock.
+func (r *limitedRig) at(now time.Time) {
+	r.parkRig.mu.Lock()
+	r.now = now
+	r.parkRig.mu.Unlock()
 }
 
 func (r *limitedRig) parks() []types.SeatProviderParked {
@@ -187,11 +212,9 @@ func TestASpentModelParksTheSeatUntilItsResetAndThenDeliversOnce(t *testing.T) {
 		t.Fatalf("the model was asked %d times during the park, want once", got)
 	}
 
-	// The reset: the alarm lifts the hold, and both deliveries run, once
-	// each, the parked one first.
-	r.parkRig.mu.Lock()
-	r.now = reset.Add(time.Second)
-	r.parkRig.mu.Unlock()
+	// The reset: the alarm's probe is answered, the hold is lifted, and both
+	// deliveries run, once each, the parked one first.
+	r.at(reset.Add(time.Second))
 	alarms[0].fire()
 	if h := r.holds(); slices.Contains(h, pauseReasonProvider) {
 		t.Errorf("the provider hold outlived the reset: %v", h)
@@ -201,17 +224,22 @@ func TestASpentModelParksTheSeatUntilItsResetAndThenDeliversOnce(t *testing.T) {
 		t.Fatalf("turns ran on %v, want the refused delivery, then it again and the "+
 			"notification after it, once each: %v", got, want)
 	}
-	if got := model.asked(); got != 3 {
-		t.Errorf("the model was asked %d times, want the refusal and one call per delivery", got)
+	if got := model.asked(); got != 4 {
+		t.Errorf("the model was asked %d times, want the refusal, the probe and one call per "+
+			"delivery", got)
 	}
-	if got := len(r.releases()); got != 0 {
-		t.Errorf("a probe published %d releases, want none: the seat is limited until a call answers", got)
+	if got := r.releases(); len(got) != 1 || got[0].Reason != "its models answered" {
+		t.Errorf("releases published = %+v, want one saying the models answered", got)
 	}
 }
 
-// A PROBE THAT MEETS THE LIMIT AGAIN PARKS THE SEAT AGAIN, until the instant
-// the refusal names, and nothing in between reaches the model.
-func TestAProbeThatMeetsTheLimitParksTheSeatAgain(t *testing.T) {
+// A PROBE THAT MEETS THE LIMIT AGAIN ARMS THE PARK AGAIN, until the instant
+// the refusal names, and touches nothing on the inbox: no turn runs, and the
+// park says what the vendors now say.
+//
+// Mutation: lift the hold at the alarm, as the park used to, and the held
+// delivery runs a turn into the limit.
+func TestAProbeThatMeetsTheLimitArmsTheParkAgain(t *testing.T) {
 	t.Parallel()
 	reset := parkedAt.Add(3 * time.Hour)
 	probe := parkedAt.Add(time.Hour)
@@ -225,18 +253,78 @@ func TestAProbeThatMeetsTheLimitParksTheSeatAgain(t *testing.T) {
 		t.Fatalf("alarms = %+v, want one for the probe an hour away", alarms)
 	}
 	r.renew(t)
-	r.parkRig.mu.Lock()
-	r.now = probe
-	r.parkRig.mu.Unlock()
+	r.at(probe)
 	alarms[0].fire()
-	if got := r.runs(); got != 2 {
-		t.Fatalf("%d turns ran, want the refusal and the probe", got)
+	if got := r.runs(); got != 1 {
+		t.Fatalf("%d turns ran, want only the one the limit refused: the probe is not a turn", got)
+	}
+	if got := model.asked(); got != 2 {
+		t.Errorf("the model was asked %d times, want the refusal and the probe", got)
 	}
 	if !slices.Contains(r.holds(), pauseReasonProvider) {
-		t.Fatalf("holds = %v, want the seat parked again after the probe", r.holds())
+		t.Fatalf("holds = %v, want the seat still parked after the probe", r.holds())
+	}
+	if next := r.alarms.live(); len(next) != 1 || next[0].wait != time.Hour {
+		t.Fatalf("alarms = %+v, want one armed for the next try, an hour on", next)
 	}
 	if got := r.parks(); len(got) != 2 || got[1].ResetsAt == nil || !got[1].ResetsAt.Equal(reset) {
-		t.Errorf("parks = %+v, want the probe's park naming the same reset", got)
+		t.Errorf("parks = %+v, want the probe's renewal naming the same reset", got)
+	}
+	if got := r.releases(); len(got) != 0 {
+		t.Errorf("releases = %+v, want none while the limit holds", got)
+	}
+}
+
+// A LIMIT THAT OUTLASTS EVERY PROBE COSTS THE HELD MAIL NOTHING: a 40-hour
+// limit the backend tries again hourly is probed forty times, and the held
+// delivery runs once, when it lifts, with every delivery its park left it.
+//
+// The defect this closes: each probe used to be the held delivery's own turn,
+// parked again by a deferral that spent one of its deliveries, so the message
+// was dead-lettered about a day into the limit, after 24 probes.
+//
+// Mutation: lift the hold at each alarm (the old probe), and the held delivery
+// runs a turn per probe, each spending a delivery.
+func TestAFortyHourLimitDeliversTheHeldMailOnceWithItsDeliveriesIntact(t *testing.T) {
+	t.Parallel()
+	reset := parkedAt.Add(40 * time.Hour)
+	model := &limitedModel{reset: reset, retry: parkedAt.Add(time.Hour)}
+	r := newLimitedRig(t, chain.Member{Key: "default", Provider: model})
+	model.now = r.clock
+
+	held := r.send(t)
+	r.renew(t)
+	probes := 0
+	for now := parkedAt.Add(time.Hour); now.Before(reset); now = now.Add(time.Hour) {
+		alarms := r.alarms.live()
+		if len(alarms) != 1 {
+			t.Fatalf("at %v, alarms = %d, want the one park's", now, len(alarms))
+		}
+		r.at(now)
+		alarms[0].fire()
+		probes++
+		if got := r.runs(); got != 1 {
+			t.Fatalf("after %d probes, %d turns ran, want only the one the limit refused", probes, got)
+		}
+	}
+	r.at(reset.Add(time.Second))
+	alarms := r.alarms.live()
+	if len(alarms) != 1 {
+		t.Fatalf("at the reset, alarms = %d, want the park's", len(alarms))
+	}
+	alarms[0].fire()
+
+	if got := r.workedIDs(); !slices.Equal(got, []uuid.UUID{held, held}) {
+		t.Fatalf("turns ran on %v, want the refused delivery and then it once more", got)
+	}
+	if got := model.asked(); got != 1+probes+1+1 {
+		t.Errorf("the model was asked %d times, want the refusal, %d probes, the probe that "+
+			"answered and the delivery's turn", got, probes)
+	}
+	left := r.deliveriesLeft()
+	if len(left) != 2 || left[1] != left[0]-1 {
+		t.Fatalf("deliveries left per turn = %v, want the redelivery one short of the first: "+
+			"the park's deferral is the only one spent", left)
 	}
 }
 
@@ -333,7 +421,7 @@ func (m knownLimit) Unready(context.Context) error {
 }
 
 // A RETRIED RESUME WAITS FOR A LIMIT THE MODELS ALREADY KNOW, until the first
-// is tried again, rather than running a turn to meet it: the admission's
+// is tried again, rather than running a turn to meet it: the turn gate's
 // provider condition, beside the budget's. A chain whose entries know of no
 // limit is not refused, and the resume finds out by running.
 //
