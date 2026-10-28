@@ -43,6 +43,10 @@ type agentLauncher struct {
 	turn    *turnctx.Turn
 	seat    *org.Role
 	company *Company
+	// ask is the colleague's question the turn answers, nil for none,
+	// which the run's record carries to the frame that ends the turn
+	// ([sandbox.ColleagueAsk]).
+	ask *sandbox.ColleagueAsk
 }
 
 var _ runner.AgentLauncher = (*agentLauncher)(nil)
@@ -571,7 +575,9 @@ func bridgeServer(endpoint string) map[string]sandbox.MCPServer {
 // than the concrete type: assigning a nil *agentLauncher into
 // runner.Config.Launcher would hand the runner a launcher that dereferences
 // nothing on its first launch.
-func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn) runner.AgentLauncher {
+func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
+	ask *sandbox.ColleagueAsk,
+) runner.AgentLauncher {
 	if t == nil || company == nil || company.Models == nil {
 		return nil
 	}
@@ -579,7 +585,7 @@ func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn) r
 	if seat == nil {
 		return nil
 	}
-	return &agentLauncher{engine: e, turn: t, seat: seat, company: company}
+	return &agentLauncher{engine: e, turn: t, seat: seat, company: company, ask: ask}
 }
 
 // agentPlacement is the cell an executor entry runs in: its own `run_in`, then
@@ -608,5 +614,5 @@ func maxTurnsFor(settings *org.RoleSandbox) *int {
 // runTurnRef is what the run's durable row records about the turn that
 // launched it. See [sandboxTurnRef].
 func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
-	return sandboxTurnRef(ctx, l.turn, l.seat.Name)
+	return sandboxTurnRef(ctx, l.turn, l.seat.Name, l.ask)
 }

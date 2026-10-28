@@ -186,6 +186,12 @@ func (e *Engine) closeStoppedTurn(ctx context.Context, run sandbox.PendingRun) e
 	e.closeStopped(ctx, tel, stop, at)
 	e.observe(ctx, tel.stamp(turnStoppedEvent(run.AgentHandle, tel.role, tel.agentID,
 		run.TurnID, run.WorkKey, stop.pause, tel.trace)))
+	// AND THE COLLEAGUE WHOSE ASK THE TURN TOOK UP, told it was stopped: this
+	// close is the turn's end, and the frame that saw the ask answered
+	// nothing for a turn that parked (a2a.go). Best effort, never this
+	// step's error — the turn is closed — and a repeat of the step after a
+	// crash finds the channel its first attempt closed.
+	e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, stop)
 	return nil
 }
 

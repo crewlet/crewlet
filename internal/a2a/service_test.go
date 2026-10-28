@@ -373,7 +373,8 @@ func TestAReplyInheritsTheAsksTrace(t *testing.T) {
 
 	rec.sent = nil
 	if err := svc.Reply(context.Background(), a2a.Answer{
-		ChannelID: id, Sender: "bob", Content: "yes", CausedBy: ask,
+		ChannelID: id, Sender: "bob", Content: "yes",
+		AskTrace: events.TraceContext{TraceID: ask.TraceID, SpanID: ask.SpanID},
 	}); err != nil {
 		t.Fatalf("Reply: %v", err)
 	}

@@ -357,6 +357,33 @@ type RecordedEnding struct {
 	Reclaim bool `json:"reclaim,omitempty"`
 }
 
+// ColleagueAsk is the A2A question a colleague put to the seat whose turn
+// launched a run: what the engine replies to, on the channel the ask opened,
+// once that turn ends ([PendingRun.ColleagueAsk]).
+//
+// ON THE ROW because the frame that ends a parked turn is never the one that
+// saw the ask: the turn parks on its executor's run at the launch, and the
+// segment that ends it is resumed off the seat's control topic — on whichever
+// node holds the seat when the run is collected, possibly days later — or
+// closed by a person's stop of the run, with no trigger left to read the ask
+// from. Without it every ask an agent seat took up went unanswered, its channel
+// closed by the idle sweep an hour later.
+//
+// ONLY WHAT THE REPLY NEEDS: the channel it goes to, the question it echoes,
+// the chain the ask carried, and the ask's trace, which the reply's wake
+// continues. Not the depth, which is the turn's own
+// ([PendingRun.DelegationDepth]): a reply carries it unchanged. A section with
+// no Extra of its own, so a field a later build needs beside these is a key of
+// its own at the top of the record (wirekeys.go).
+type ColleagueAsk struct {
+	ChannelID    string   `json:"channel_id"`
+	Question     string   `json:"question,omitempty"`
+	Chain        []string `json:"chain,omitempty"`
+	TraceID      string   `json:"trace_id,omitempty"`
+	SpanID       string   `json:"span_id,omitempty"`
+	ParentSpanID string   `json:"parent_span_id,omitempty"`
+}
+
 // RunStop is who ENDED a run by pausing its seat with a stop
 // ([Coordinator.StopSeat]), and what the ending read of the run before it
 // reclaimed the box — recorded on the run's row ([PendingRun.Stop]).
@@ -945,6 +972,13 @@ type PendingRun struct {
 	// A row without it resolves "requester" to the fallback, which is what
 	// a run whose requester nobody recorded is.
 	Requester string `json:"requester,omitempty"`
+
+	// ColleagueAsk is the colleague's A2A question the run's turn answers,
+	// nil for a turn no ask woke — see [ColleagueAsk].
+	//
+	// THE TURN'S, kept by every relaunch's reset as the identity fields are:
+	// a reviewer's send-back is the same turn answering the same ask.
+	ColleagueAsk *ColleagueAsk `json:"colleague_ask,omitempty"`
 
 	// TraceID and SpanID are the trace the run started under, so the
 	// follow-up turn nests beneath it rather than appearing as unrelated

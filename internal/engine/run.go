@@ -3066,11 +3066,15 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	reply := ReplyFor(req.Events)
 	turnIdentity := tel.runnerTurn(company, req.Depth, req.DelegationChain,
 		task, reply, e.WithheldContacts())
+	// The colleague's ask this turn answers, if one woke it: answered from
+	// this frame where the turn ends here, and from its run's record where
+	// it parks on the run its executor launches (a2a.go).
+	ask := colleagueAskOf(askOf(req.Events))
 	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
 	// through until it launches its coding run, which hands what the box
 	// still holds to the run's record (steer.go).
-	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context)
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask)
 	box := steer.New()
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
@@ -3237,10 +3241,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		}
 	}
 	// AND, if a colleague asked for this turn, the answer they are waiting
-	// for. Here because this is the one frame holding both the result and
-	// the trigger; after the completion event because the reply wakes
-	// another seat and the record of this turn should exist first.
-	e.answerColleague(ctx, company, req, res)
+	// for, where the turn ended here: a turn that parked is answered by the
+	// frame that ends it, off its run's record. After the completion event
+	// because the reply wakes another seat and the record of this turn
+	// should exist first.
+	e.answerColleague(ctx, company, answeringOf(req), ask, res, err)
 	return res, err
 }
 

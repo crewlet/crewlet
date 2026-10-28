@@ -148,7 +148,7 @@ func TestEverySeatGetsALauncherOverItsPinnedCompanyAndNoneGetsATypedNil(t *testi
 	t.Parallel()
 	c, _ := executorCompany(t)
 	e := &Engine{}
-	got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"})
+	got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"}, nil)
 	launcher, ok := got.(*agentLauncher)
 	if !ok || launcher == nil {
 		t.Fatalf("an agent seat got %T, want a launcher", got)
@@ -159,11 +159,11 @@ func TestEverySeatGetsALauncherOverItsPinnedCompanyAndNoneGetsATypedNil(t *testi
 	for name, company := range map[string]*Company{
 		"no models": {Org: c.Org, Config: c.Config},
 	} {
-		if got := e.agentRunFor(company, "swe", &turnctx.Turn{RunID: "t1"}); got != nil {
+		if got := e.agentRunFor(company, "swe", &turnctx.Turn{RunID: "t1"}, nil); got != nil {
 			t.Errorf("%s: got %T, want a nil interface", name, got)
 		}
 	}
-	if got := e.agentRunFor(c, "nobody", &turnctx.Turn{RunID: "t1"}); got != nil {
+	if got := e.agentRunFor(c, "nobody", &turnctx.Turn{RunID: "t1"}, nil); got != nil {
 		t.Errorf("a handle no seat holds got %T, want a nil interface", got)
 	}
 }

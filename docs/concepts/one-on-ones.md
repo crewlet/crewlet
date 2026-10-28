@@ -22,21 +22,20 @@ provides is a schedule and a [playbook](#the-11-playbook).
 
 A 1:1 is mechanically just a private agent-to-agent exchange, which
 `a2a_ask` already provides: the ask wakes the other participant for a fresh
-turn, and either side can open another channel to go a round deeper (see
-[A2A](event-system.md#ephemeral-a2a-channels-internala2a)). The engine sends
-an answer back over the channel only from a turn that ends without parking on
-its executor's run, and an agent seat's turn parks on every executor launch:
-an agent manager's turn that takes up the review launches its executor, so
-nothing it concludes comes back to the report on the channel. A 1:1 tool
-wrapping `a2a.Service` would be a thin alias of the kind the project
+turn, that turn's answer wakes the asker back, and either side can open
+another channel to go a round deeper (see
+[A2A](event-system.md#ephemeral-a2a-channels-internala2a)). The manager's turn
+launches its executor and parks on the run like any agent seat's, and the
+answer is sent when that turn ends, from the segment that collects the run. A
+1:1 tool wrapping `a2a.Service` would be a thin alias of the kind the project
 deliberately avoids (the same reason there are no engine-side
 `slack_message` or `jira_comment` wrappers over third-party MCP tools); it
 would carry a different description and nothing else.
 
 **One exchange is one channel.** Ask, answer, closed — the reply is the
-engine's to send, never a tool's, so there is no tool for a model to remember
-to call, and a channel nobody answered is closed by the idle sweep rather than
-left open waiting for a second round that never comes. A
+engine's to send when the answering turn ends, never a tool's, so there is no
+tool for a model to remember to call and no channel left open waiting for a
+second round that never comes. A
 deeper conversation is a follow-up `a2a_ask`, which is another exchange, and
 the [delegation-depth cap](turn-engine.md#runtime-invariants) (default 3) bounds how
 many of them a single 1:1 can run before the engine stops it — a real ceiling
@@ -85,7 +84,7 @@ units:
           use query_episodes to recall what you shipped and where you got
           stuck, and put the whole review in the one brief — what you shipped,
           where you are blocked, and the specific feedback you want — because
-          a 1:1 is one ask. Note the action items you
+          your manager answers it in one reply. Note the action items you
           agree on. Follow the "Manager 1:1" playbook page in the team
           knowledge base.
     roles:
@@ -95,7 +94,7 @@ units:
 
 **The manager does not loop.** The engine does the fan-out (that is what
 `each` *is*), so there is no long O(N) manager turn opening N channels under
-one timeout. Each report initiates its own 1:1; the manager takes up each
+one timeout. Each report initiates its own 1:1; the manager answers each
 channel's ask in a turn of its own as it is woken (A2A wakes are per-channel,
 so each 1:1 is an independent, bounded unit). This is also the natural model — a 1:1 belongs to
 the *employee* ("my weekly 1:1 with my manager"), so scheduling it per

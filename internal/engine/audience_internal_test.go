@@ -175,7 +175,7 @@ func TestTheRequesterIsWhoseWakeStartedTheTurn(t *testing.T) {
 // paths share — the park that resolves "requester" reads nothing else.
 func TestALaunchedRunRecordsWhoWokeItsTurn(t *testing.T) {
 	t.Parallel()
-	ref := sandboxTurnRef(t.Context(), &turnctx.Turn{RunID: "run-1", Requester: "ada"}, "SWE")
+	ref := sandboxTurnRef(t.Context(), &turnctx.Turn{RunID: "run-1", Requester: "ada"}, "SWE", nil)
 	if ref.Requester != "ada" {
 		t.Fatalf("the run's turn reference names requester %q, want ada", ref.Requester)
 	}

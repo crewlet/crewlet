@@ -52,6 +52,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"WorkItemSurvivesParkAndResume", testWorkItemSurvivesParkAndResume},
 		{"AParkedRunRecordsWhoItsAudienceIs", testAParkedRunRecordsWhoItsAudienceIs},
 		{"ARequesterSurvivesTheLaunchThatRecordsIt", testARequesterSurvivesTheLaunchThatRecordsIt},
+		{"AColleaguesAskSurvivesEveryWriteOfItsTurn", testAColleaguesAskSurvivesEveryWriteOfItsTurn},
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
 		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
 		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
@@ -2935,6 +2936,39 @@ func testARequesterSurvivesTheLaunchThatRecordsIt(t *testing.T, s sandbox.Pendin
 	if got := mustGet(t, s, "t1"); got.Requester != "ada" {
 		t.Errorf("the park left requester %q, want ada", got.Requester)
 	}
+}
+
+func testAColleaguesAskSurvivesEveryWriteOfItsTurn(t *testing.T, s sandbox.PendingStore) {
+	// THE ASK THE TURN ANSWERS is written by the turn's first launch and read
+	// by the frame that ends the turn — a resume, or a stop's close — so
+	// every write between the two hands it on, a relaunch's reset included:
+	// a reviewer's send-back is the same turn answering the same ask, and
+	// the relaunch's own row states none.
+	want := sandbox.ColleagueAsk{
+		ChannelID: "a2a-1", Question: "which branch?", Chain: []string{"ceo"},
+		TraceID: "tr-ask", SpanID: "sp-ask", ParentSpanID: "pp-ask",
+	}
+	r := run("t1")
+	asked := want
+	r.ColleagueAsk = &asked
+	mustLaunched(t, s, r)
+	check := func(step string, got sandbox.PendingRun) {
+		t.Helper()
+		if got.ColleagueAsk == nil || got.ColleagueAsk.ChannelID != want.ChannelID ||
+			got.ColleagueAsk.Question != want.Question || len(got.ColleagueAsk.Chain) != 1 ||
+			got.ColleagueAsk.Chain[0] != "ceo" || got.ColleagueAsk.TraceID != want.TraceID ||
+			got.ColleagueAsk.SpanID != want.SpanID || got.ColleagueAsk.ParentSpanID != want.ParentSpanID {
+			t.Fatalf("%s left ask %+v, want %+v", step, got.ColleagueAsk, want)
+		}
+	}
+	check("the launch", mustGet(t, s, "t1"))
+	check("the claim", mustClaim(t, s, "t1"))
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "q", AskedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	check("the park", mustGet(t, s, "t1"))
+	mustBeginLaunch(t, s, run("t1"))
+	check("a relaunch", mustGet(t, s, "t1"))
 }
 
 // audienceQuorum is a key no build has declared: the stand-in for whatever a

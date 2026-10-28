@@ -116,6 +116,12 @@ type TurnRef struct {
 	// "requester" is put to. See [PendingRun.Requester].
 	Requester string
 
+	// ColleagueAsk is the colleague's A2A question the turn answers, nil
+	// for a turn no ask woke — written onto the row, because the segment
+	// that ends a parked turn has no trigger to read it from. See
+	// [PendingRun.ColleagueAsk].
+	ColleagueAsk *ColleagueAsk
+
 	// Deadline is when the turn's wall-clock cap ends, zero for none —
 	// written onto the row so the poll can end a run that outlasts it. See
 	// [PendingRun.Deadline].
@@ -408,6 +414,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// Who asked, for the park that resolves a question's audience:
 		// that frame sees no trigger.
 		Requester: req.Turn.Requester,
+		// And the colleague's ask the turn answers, for the segment that
+		// ends it: that frame sees no trigger either.
+		ColleagueAsk: req.Turn.ColleagueAsk,
 		// The turn's cap, for the poll — see [PendingRun.Deadline].
 		Deadline: req.Turn.Deadline,
 		// Whose host a local box is on — see [PendingRun.LaunchNode]. This

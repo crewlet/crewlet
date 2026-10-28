@@ -232,10 +232,15 @@ type Answer struct {
 	// echo is the only way that context survives the round trip.
 	Question string
 
-	// CausedBy is the ask this answers. Its trace context is copied onto
+	// AskTrace is the trace context of the ask this answers, copied onto
 	// the reply so the whole exchange — the ask, the answering turn's
 	// phases, the reply, and the turn it wakes — reads as ONE trace.
-	CausedBy *events.Event
+	//
+	// THE CONTEXT, NOT THE ASK'S EVENT: the turn that answers can end days
+	// after its trigger, in a segment resumed off its coding run's record on
+	// whichever node then holds the seat, which carries the ask's trace and
+	// never the event itself.
+	AskTrace events.TraceContext
 
 	DelegationDepth int
 	DelegationChain []string
@@ -287,17 +292,12 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	wake := events.New(types.A2AMessage{
 		ChannelID: ans.ChannelID, Sender: ans.Sender,
 		SenderRole: ans.SenderRole, Question: ans.Question, Content: ans.Content,
-	}, events.TraceContext{})
+	}, ans.AskTrace)
 	wake.Timestamp = now
 	wake.Source = ans.Sender
 	wake.DelegationDepth = ans.DelegationDepth
 	wake.DelegationChain = appendChain(ans.DelegationChain, ans.Sender)
 	wake.ParentTurnID = ans.TurnID
-	if ans.CausedBy != nil {
-		wake.TraceID = ans.CausedBy.TraceID
-		wake.SpanID = ans.CausedBy.SpanID
-		wake.ParentSpanID = ans.CausedBy.ParentSpanID
-	}
 	seat, addressable := s.inbox(recipient)
 	if !addressable {
 		// A counterparty who has been removed or turned into a human seat

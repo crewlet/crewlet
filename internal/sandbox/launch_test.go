@@ -351,6 +351,35 @@ func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	}
 }
 
+// THE ROW CARRIES THE COLLEAGUE'S ASK THE TURN ANSWERS: the frame that ends a
+// parked turn sees no trigger, and the ask on the row is what it replies to.
+//
+// Mutation: leave the launch's ask off the row, and the row carries none.
+func TestTheRowCarriesTheColleaguesAskTheTurnAnswers(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.Turn.ColleagueAsk = &ColleagueAsk{ChannelID: "a2a-1", Question: "which branch?",
+		Chain: []string{"ceo"}, TraceID: "tr-ask", SpanID: "sp-ask"}
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	got := rig.get("t1").ColleagueAsk
+	if got == nil || got.ChannelID != "a2a-1" || got.Question != "which branch?" ||
+		len(got.Chain) != 1 || got.TraceID != "tr-ask" || got.SpanID != "sp-ask" {
+		t.Fatalf("the row carries ask %+v, want the launch's", got)
+	}
+	if again := launchReq("t2"); again.Turn.ColleagueAsk != nil {
+		t.Fatal("the fixture's turn carries an ask of its own")
+	}
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t2")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t2").ColleagueAsk; got != nil {
+		t.Fatalf("a turn no ask woke carries ask %+v", *got)
+	}
+}
+
 // A LAUNCH NAMES ITS RUNNER, and one that names none is refused before its row
 // exists: the runner is the CLI of the entry whose login and model the run
 // carries, and a box running some default CLI could read neither.

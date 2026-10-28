@@ -1096,6 +1096,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
 	e.endSegment(ctx, tel, spend, res, err, charge)
+	// THE COLLEAGUE WHOSE ASK THE TURN TOOK UP IS ANSWERED BY THE SEGMENT
+	// THAT ENDS IT — this one, wherever it ends the turn below — off the ask
+	// its launch wrote onto the run's record: the dispatch frame that saw
+	// the ask answers nothing for a turn that parked (a2a.go). After the
+	// completion above, as on that frame, and only on a way out that ends
+	// the turn: a retry, a hold and a park again leave it to a later segment.
+	answer := func(res turn.Result, err error) {
+		e.answerColleague(ctx, company, answeringRun(in.Run), in.Run.ColleagueAsk, res, err)
+	}
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
 		// stop after the run's completion was claimed, or while its
@@ -1113,6 +1122,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			role, agentID := seatIdentity(company, in.Turn.Handle())
 			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 				in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
+			answer(res, err)
 			return fmt.Errorf("%w (a person stopped the resumed turn): %w",
 				sandbox.ErrResumeAbandoned, err)
 		}
@@ -1148,7 +1158,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			//
 			// The indicator comes down with it: the run is settled,
 			// the box reclaimed and the record deleted, so nothing is
-			// coming back for this turn.
+			// coming back for this turn — and the colleague is told it
+			// could not be answered.
+			answer(res, err)
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
 		}
 		// Reverted, so the turn is not over — and BOTH KINDS OF RESUME COME
@@ -1188,11 +1200,18 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			role, agentID := seatIdentity(company, in.Turn.Handle())
 			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 				in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
+			// Not parked after all: the run it relaunched is ended, and so
+			// is the turn.
+			res.Suspended = false
+			answer(res, parkErr)
 			return fmt.Errorf("%w (a person stopped the run the resumed turn relaunched): %w",
 				sandbox.ErrResumeAbandoned, parkErr)
 		}
 		working = stillWorking(parked, parkErr)
 	}
+	// A SEGMENT THAT PARKED AGAIN answers nothing here: answerColleague
+	// leaves a suspended result to the segment that ends the turn.
+	answer(res, nil)
 	e.recordResume(ctx, in, res)
 	return nil
 }
@@ -1250,7 +1269,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
 		// whichever member of the pinned chain can take it then.
-		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
+		Launcher: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context, in.Run.ColleagueAsk),
 		Budget:   tel.budget.budget(),
 		// NO ROUND-CAP JUDGE: the only engine loop a resumed segment runs is
 		// the reviewer's, whose budget is one submission and its correctives
@@ -1656,7 +1675,9 @@ func (e *Engine) launchFence(handle string) (sandbox.Fence, bool) {
 // minted no telemetry token for any launch (it refuses to scope one to an
 // empty trace, which is the one property that scoping has), and describeResume
 // filed every resumed turn under no trace at all.
-func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.TurnRef {
+func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
+	ask *sandbox.ColleagueAsk,
+) sandbox.TurnRef {
 	runTrace := tracing.TraceOf(ctx)
 	return sandbox.TurnRef{
 		// The id is derived from the turn's PINNED organization, like every
@@ -1693,6 +1714,9 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// AND WHEN THE TURN'S CAP ENDS, for the poll to end a run that
 		// outlasts it — see [sandbox.PendingRun.Deadline].
 		Deadline: t.Deadline,
+		// AND THE COLLEAGUE'S ASK the turn answers, for the frame that ends
+		// it — see [sandbox.PendingRun.ColleagueAsk].
+		ColleagueAsk: ask,
 	}
 }
 
