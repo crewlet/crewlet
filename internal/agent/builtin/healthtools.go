@@ -62,9 +62,11 @@ import (
 // one-repository form resolves the name as the code tools do, refused
 // `not_permitted` where the seat may not read it, and the hottest repositories
 // a git node names are held to the same grant — a seat's answer leaves out
-// every repository its grant does not read and says how many it left out
-// (`withheld`). A person reads every repository, so a person's answer leaves
-// nothing out.
+// every repository its grant does not read and says how many of those it left
+// out above the list's cut (`withheld`), judging them hottest first and only
+// as far as the cut, so what it reads is bounded by the answer and not by the
+// fleet ([codeStatus.hottest]). A person reads every repository, so a person's
+// answer leaves nothing out.
 //
 // # And, in a turn somebody woke, theirs too
 //
@@ -325,8 +327,10 @@ func nodeHealthOf(profile placement.NodeProfile, lease coord.Lease, now time.Tim
 // code_status answer names run — and exist — at once: each is the code tools'
 // one read of a repository at the seat's level, and the code log's barrier is
 // single-flighted per node (internal/statelog), so a batch in flight shares one
-// round. EIGHT, so a fleet of three git nodes, forty repositories named on
-// each, is judged in some fifteen of those rounds, while more in flight would
+// round, and the judgement goes a wave of them at a time ([codeStatus.hottest]).
+// EIGHT, so the forty repositories at most a hot list keeps — twenty of each
+// window — are judged in five waves where the seat reads them all, a wave more
+// for every eight it may not read above the cut, while more in flight would
 // only queue behind the estate answerer's slots every other caller shares.
 const codeStatusJudges = 8
 
@@ -367,8 +371,10 @@ func (t *codeStatus) Call(ctx context.Context, args map[string]any) (tools.Resul
 type codeStatusFleet struct {
 	Nodes []gitNodeStatus `json:"nodes"`
 	Hot   []hotOnNode     `json:"hot"`
-	// Withheld is how many repositories the answer leaves out because the
-	// caller's grant does not read them — a seat's only.
+	// Withheld is how many repositories hotter than the list's cut the answer
+	// leaves out because the caller's grant does not read them — a seat's
+	// only, and never one below the cut, which is not in the list whoever
+	// reads it ([codeStatus.hottest]).
 	Withheld int               `json:"withheld,omitempty"`
 	Coverage eventfan.Coverage `json:"coverage"`
 }
@@ -433,22 +439,14 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	slices.SortFunc(answer.Nodes, func(a, b gitNodeStatus) int { return cmp.Compare(a.Node, b.Node) })
-	readable, withheld, failure := t.judge(ctx, turn, c, entries)
+	hot, withheld, failure := t.hottest(ctx, turn, c, entries)
 	if failure != nil {
 		return *failure, nil
 	}
 	answer.Withheld = withheld
-	var kept []cache.RepoHeat
-	var keptPairs []hotOnNode
-	for i, e := range entries {
-		if readable[e.ID] {
-			kept = append(kept, e)
-			keptPairs = append(keptPairs, pairs[i])
-		}
-	}
-	answer.Hot = make([]hotOnNode, 0, len(kept))
-	for _, i := range cache.Hottest(kept, cache.HotRepos) {
-		answer.Hot = append(answer.Hot, keptPairs[i])
+	answer.Hot = make([]hotOnNode, 0, len(hot))
+	for _, i := range hot {
+		answer.Hot = append(answer.Hot, pairs[i])
 	}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, t.Name(), answer,
 		"Name one repository with `repo` to read it alone.")
@@ -485,20 +483,113 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 		"Ask again: one repository's state on every git node does not outgrow an answer.")
 }
 
-// judge is which of the repositories entries name the caller may read, and how
-// many it may not.
+// hottest is the fleet's hot list as the caller is answered it — which of
+// entries [cache.Hottest] keeps once every repository the caller may not read
+// is left out, as indices into entries in the list's order — and how many
+// repositories ranked above the list's cut it left out for that.
 //
 // AN OPERATOR READS EVERY REPOSITORY (ADR-0081: a person maintains every one,
-// and a token reads every one), so a person's answer is judged without a read
-// — and a person's call is no deputy, so it reads for nobody else either.
-// A SEAT is held to its own grant, through the code tools' one resolution of a
-// name ([CodeDeps.repo]'s read, at the seat's level, judged by the node that
+// and a token reads every one), so a person's list is cut without a read — and
+// a person's call is no deputy, so it reads for nobody else either. A SEAT is
+// held to its own grant, through the code tools' one resolution of a name
+// ([CodeDeps.repo]'s read, at the seat's level, judged by the node that
 // answers) — and, in a turn a colleague seat woke, to that seat's too, judged
 // by the same node on the same read: a repository either may not read, one the
 // name no longer names, or one the name names under another id — renamed since
 // the git node counted it — is left out, never shown on a guess. A read that
 // could not be made fails the call, unavailable, rather than leaving out what
 // it could not judge ([unjudged]).
+//
+// # Hottest first, and only to the cut
+//
+// The list keeps at most cache.HotRepos of each window however large the
+// fleet, and repository homes are spread over the git nodes by rendezvous, so
+// the nodes' own lists are mostly disjoint and the fleet names some 2 ×
+// HotRepos repositories for every git node. Judging each of them was a
+// linearizable read apiece — a barrier on the code log for every wave of reads
+// — growing with the git nodes rather than with the answer: a hundred and
+// twenty reads on three of them, four hundred on ten, for a list of forty. So
+// the list is cut as though every repository nobody has judged yet were
+// readable; the repositories it keeps that nobody has judged are judged in a
+// wave ([codeStatus.judgeWave]), hottest first; and it is cut again without
+// those found unreadable, until every repository it keeps has been judged
+// readable. What it keeps then is exactly what judging every repository would
+// have kept: a repository the cut passes over trails at least HotRepos
+// readable ones in each window, so no verdict on it could bring it in. The
+// reads are bounded by the answer — its own repositories, and those ranked
+// above them that the caller may not read — and so is `withheld`, which counts
+// those: a repository below the cut is not in the list whether or not the
+// caller may read it.
+func (t *codeStatus) hottest(ctx context.Context, turn *turnctx.Turn, c codeCaller,
+	entries []cache.RepoHeat) ([]int, int, *tools.Result) {
+
+	if c.asker.Kind != code.PrincipalAgent {
+		return cache.Hottest(entries, cache.HotRepos), 0, nil
+	}
+	names := map[string]string{} // id -> the name a node counted it by
+	for _, e := range entries {
+		if names[e.ID] == "" {
+			names[e.ID] = e.Name
+		}
+	}
+	readable := map[string]bool{} // id -> the verdict, for every repository judged
+	for {
+		var open []int // the entries not yet found unreadable
+		for i, e := range entries {
+			if ok, judged := readable[e.ID]; ok || !judged {
+				open = append(open, i)
+			}
+		}
+		candidates := make([]cache.RepoHeat, len(open))
+		for k, i := range open {
+			candidates[k] = entries[i]
+		}
+		kept := cache.Hottest(candidates, cache.HotRepos)
+		var wave []string
+		leftOut := false // a repository was left out unread this pass
+		for _, k := range kept {
+			id := candidates[k].ID
+			if _, judged := readable[id]; judged || slices.Contains(wave, id) {
+				continue
+			}
+			if name := names[id]; name == "" || !code.ValidName(name) {
+				// NO NODE NAMED IT BY A NAME THE CODE HOST RESOLVES, so
+				// nothing could judge it readable: left out unread.
+				readable[id], leftOut = false, true
+				continue
+			}
+			if len(wave) < codeStatusJudges {
+				wave = append(wave, id)
+			}
+		}
+		switch {
+		case len(wave) > 0:
+			verdicts, failure := t.judgeWave(ctx, turn, c, wave, names)
+			if failure != nil {
+				return nil, 0, failure
+			}
+			maps.Copy(readable, verdicts)
+		case !leftOut:
+			// EVERY REPOSITORY THE LIST KEEPS IS JUDGED READABLE: it is the
+			// answer.
+			out := make([]int, len(kept))
+			for j, k := range kept {
+				out[j] = open[k]
+			}
+			withheld := 0
+			for _, ok := range readable {
+				if !ok {
+					withheld++
+				}
+			}
+			return out, withheld, nil
+		}
+	}
+}
+
+// judgeWave is whether c may read each repository of wave, by the name a git
+// node counted it by ([codeStatus.readable]): every read of the wave at once,
+// the wave being at most codeStatusJudges long.
 //
 // THE FIRST READ THAT FAILS ENDS THE JUDGEMENT. A failure answers the whole
 // call, so a read still in flight or not yet started could change nothing but
@@ -507,36 +598,18 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 // starts once it has, and at most codeStatusJudges of them run — and exist —
 // at once. Left to run on, they were the incident's cost: with the code log
 // out of quorum a linearizable read fails only once its barrier's budget is
-// spent (statelog.DefaultBarrierBudget, five seconds), so a call naming forty
-// repositories on each of three git nodes held its seat for some fifteen of
-// those budgets, every one of them appending another barrier to the log that
-// was failing them, at the moment an alarm's wake sends every granted seat to
-// look.
-func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller,
-	entries []cache.RepoHeat) (map[string]bool, int, *tools.Result) {
+// spent (statelog.DefaultBarrierBudget, five seconds), so each wave of reads
+// still started held the caller for another such budget and appended another
+// barrier to the log that was failing them, at the moment an alarm's wake
+// sends every granted seat to look.
+func (t *codeStatus) judgeWave(ctx context.Context, turn *turnctx.Turn, c codeCaller, wave []string,
+	names map[string]string) (map[string]bool, *tools.Result) {
 
-	readable := make(map[string]bool, len(entries))
-	if c.asker.Kind != code.PrincipalAgent {
-		for _, e := range entries {
-			readable[e.ID] = true
-		}
-		return readable, 0, nil
-	}
-	names := map[string]string{} // id -> the name a node counted it by
-	for _, e := range entries {
-		if names[e.ID] == "" {
-			names[e.ID] = e.Name
-		}
-	}
-	ids := slices.Sorted(maps.Keys(names))
+	verdicts := make(map[string]bool, len(wave))
 	var mu sync.Mutex
 	group, judging := errgroup.WithContext(ctx)
 	group.SetLimit(codeStatusJudges)
-	for _, id := range ids {
-		name := names[id]
-		if name == "" || !code.ValidName(name) {
-			continue
-		}
+	for _, id := range wave {
 		if judging.Err() != nil {
 			// A READ FAILED, or the call was abandoned: nothing read now
 			// changes the answer.
@@ -547,29 +620,21 @@ func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller
 			if err := judging.Err(); err != nil {
 				return err
 			}
-			ok, err := t.readable(judging, c, lookedUpRepo(turn, c.asker, name), id, name)
+			ok, err := t.readable(judging, c, lookedUpRepo(turn, c.asker, names[id]), id, names[id])
 			if err != nil {
 				return err
 			}
-			if ok {
-				mu.Lock()
-				readable[id] = true
-				mu.Unlock()
-			}
+			mu.Lock()
+			verdicts[id] = ok
+			mu.Unlock()
 			return nil
 		})
 	}
 	if err := group.Wait(); err != nil {
 		r := unjudged(ctx, t.Name(), err)
-		return nil, 0, &r
+		return nil, &r
 	}
-	withheld := 0
-	for _, id := range ids {
-		if !readable[id] {
-			withheld++
-		}
-	}
-	return readable, withheld, nil
+	return verdicts, nil
 }
 
 // unjudged is code_status's answer when a grant read its hot list needed could

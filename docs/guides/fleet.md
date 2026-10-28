@@ -933,9 +933,13 @@ leads — a lead who could give a seat of theirs the administrator's view would
 read it through that seat's trail. The grant opens the deployment's view and
 never a repository: `code_status` holds a seat to its own
 [repository grant](../concepts/code-host.md), so its answer leaves out every
-repository the seat may not read and says how many (`withheld`), and a
-repository named with `repo` that the seat may not read is refused, as the
-code tools refuse it. Those repository reads are code reads, so in a turn
+repository the seat may not read and says how many of those were hotter than
+the list's cut (`withheld`), and a repository named with `repo` that the seat
+may not read is refused, as the code tools refuse it. Each repository is a
+read of the code host's rows, so the list is judged hottest first and only as
+far as its cut: a seat's call reads the twenty of each window it is answered
+and the hotter ones it may not read, however many git nodes the fleet has,
+and the first read that fails answers the call `unavailable` at once. Those repository reads are code reads, so in a turn
 somebody woke they are made for them too, as every code read is
 ([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)):
 in a colleague seat's turn the answer also leaves out what the colleague may

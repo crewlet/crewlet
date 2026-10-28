@@ -542,10 +542,10 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 
 // manyHotRepos is a report of nodes git nodes naming per repositories each,
 // every repository on one node alone, as repository homes spread them: the
-// fleet's r-th hottest is "repo-<r>", its id the r-th smallest, its use in
-// both windows falling with r, and the git nodes take them in turn, so each
-// node's list is its own hottest first. And every repository it names, by
-// name, for a code host that resolves them all.
+// fleet's r-th is "repo-<r>" with the r-th smallest id, the hour's use falling
+// with r and the day's rising — so the hottest of the hour is the first and
+// the hottest of the day the last — and the git nodes take them in turn. And
+// every repository it names, by name, for a code host that resolves them all.
 func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]code.RepoRef) {
 	report := builtin.CodeStatusReport{Statuses: make([]host.CodeStatus, nodes)}
 	repos := map[string]code.RepoRef{}
@@ -553,11 +553,10 @@ func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]code.Rep
 	for r := range total {
 		ref := code.RepoRef{ID: fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", r), Name: fmt.Sprintf("repo-%03d", r)}
 		repos[ref.Name] = ref
-		use := cache.Use{Fetches: int64(total - r)}
 		s := &report.Statuses[r%nodes]
 		s.Node = fmt.Sprintf("git-%d", r%nodes)
 		s.Hot = append(s.Hot, host.RepoStatus{RepoHeat: cache.RepoHeat{ID: ref.ID, Name: ref.Name,
-			Hour: use, Day: use}})
+			Hour: cache.Use{Fetches: int64(total - r)}, Day: cache.Use{Fetches: int64(r + 1)}}})
 	}
 	return report, repos
 }
@@ -655,6 +654,78 @@ func TestACodeStatusJudgementEndsAtItsFirstFailedRead(t *testing.T) {
 				got, builtin.CodeStatusJudges)
 		}
 	})
+}
+
+// A CODE STATUS ANSWER COSTS THE READS IT ANSWERS, NOT THE FLEET'S.
+//
+// A seat's hot list keeps at most cache.HotRepos of each window, and judging
+// every repository the git nodes name made a grant read apiece — a barrier on
+// the code log a wave — that grew with the git nodes and not with the list. So
+// ten git nodes naming forty repositories each, four hundred in all, are
+// judged hottest first and only to the list's cut: the seat is answered
+// exactly the list a judgement of every repository answers — the twenty
+// hottest of the hour and of the day that it may read — having read only the
+// repositories that list keeps and the ones above its cut it may not read, and
+// is told how many of those it left out: never one below the cut, which is not
+// in the list whoever reads it.
+//
+// Mutation: judge every repository the nodes name, and the reads count the
+// fleet and the cut's withheld count takes in repo-200; stop judging after the
+// first wave, and a repository the seat may not read is listed on a guess.
+func TestACodeStatusAnswerCostsTheReadsItAnswers(t *testing.T) {
+	t.Parallel()
+	report, repos := manyHotRepos(10, 2*cache.HotRepos)
+	refused := map[string]bool{}
+	for _, name := range []string{"repo-000", "repo-001", "repo-002", "repo-003", "repo-004",
+		"repo-010", "repo-390", "repo-200"} {
+		refused[name] = true
+	}
+	// EVERY ONE BUT repo-200 is above the cut in one window or the other:
+	// repo-200 trails nearly two hundred repositories the seat reads in each.
+	const above = 7
+	grants := &grantHost{repos: repos, refused: refused}
+	_, chart := healthChart(t)
+	tool := healthTools(builtin.HealthDeps{Status: &statusAsker{report: report},
+		Code: healthCode(grants, chart)}, chart)[builtin.CodeStatusTool]
+	answer := healthAnswer(t, callTool(asSeat("sre"), t, tool, nil))
+
+	// WHAT A JUDGEMENT OF EVERY REPOSITORY ANSWERS: the one rule's cut of
+	// every entry the seat may read.
+	var readable []cache.RepoHeat
+	var nodeOf []string
+	for _, s := range report.Statuses {
+		for _, r := range s.Hot {
+			if !refused[r.Name] {
+				readable = append(readable, r.RepoHeat)
+				nodeOf = append(nodeOf, s.Node)
+			}
+		}
+	}
+	var want []string
+	for _, i := range cache.Hottest(readable, cache.HotRepos) {
+		want = append(want, nodeOf[i]+"/"+readable[i].Name)
+	}
+	var got []string
+	for _, h := range answer["hot"].([]any) {
+		row := h.(map[string]any)
+		got = append(got, row["node"].(string)+"/"+row["name"].(string))
+	}
+	if len(want) != 2*cache.HotRepos {
+		t.Fatalf("the premise: the list of what the seat reads keeps %d, want both windows' %d",
+			len(want), 2*cache.HotRepos)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the seat's hot list = %v, want what judging every repository answers: %v", got, want)
+	}
+	if got := answer["withheld"]; got != float64(above) {
+		t.Errorf("the answer withheld %v, want %d — the repositories above the cut the seat may not read",
+			got, above)
+	}
+	if grants.reads > len(want)+above {
+		t.Errorf("the call made %d grant reads for a list of %d, want at most %d: the list's own and the "+
+			"%d above its cut — never the %d repositories the fleet names", grants.reads, len(want),
+			len(want)+above, above, len(repos))
+	}
 }
 
 // THE HEALTH TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
