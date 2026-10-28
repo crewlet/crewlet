@@ -325,10 +325,10 @@ func (s *E2BSandbox) StartBackground(ctx context.Context, cmd string, opts ExecO
 	return strconv.Itoa(res.PID), nil
 }
 
-// JobRunning implements [Sandbox]: the handle is a pid inside the VM, so
-// `kill -0` there answers it.
-func (s *E2BSandbox) JobRunning(ctx context.Context, commandID string) (bool, error) {
-	return probeByKill(ctx, s, commandID)
+// Job implements [Sandbox]: the handle is a pid inside the VM, so `kill -0`
+// there answers it, and the VM outlives the engine ([remoteJob]).
+func (s *E2BSandbox) Job(ctx context.Context, commandID string) (JobState, error) {
+	return remoteJob(ctx, s, commandID)
 }
 
 // WriteFile implements [Sandbox].

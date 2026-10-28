@@ -297,6 +297,13 @@ type Resume struct {
 	// then empty, and Bridged holds the calls the run made before it asked.
 	Asked *Asked
 
+	// Lost is set when the run's job was LOST with the host it ran on rather
+	// than ended: the turn carries the round on rather than collecting it —
+	// see [Lost] — unless the round's calls already hold its submission.
+	// Answer is then the job's own account of itself, marked cut off, and
+	// Bridged holds the round's calls so far.
+	Lost *Lost
+
 	// Steered is every note the turn had read when the run was collected,
 	// and where, in the order read — off the run's record, which every read
 	// is written on: a brief's, the run's own and a reviewer's. The

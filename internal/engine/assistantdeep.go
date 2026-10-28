@@ -403,7 +403,7 @@ func (d *assistantDeep) watch(ctx context.Context, box sandbox.Sandbox, runner s
 				return assistant.DeepEndTokens
 			}
 		}
-		if done, err := runner.Poll(ctx, box, handle); err == nil && done {
+		if state, err := runner.Poll(ctx, box, handle); err == nil && state.Over() {
 			return assistant.DeepEndFinished
 		}
 		select {

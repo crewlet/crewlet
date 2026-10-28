@@ -272,17 +272,6 @@ const (
 	// that broke after its turn began is not announced under this or any
 	// reason: that turn published its own failed completion.
 	SandboxFailureResumeBroken = "resume_broken"
-
-	// SandboxFailureLaunchNodeGone is a run whose box was on the host of a
-	// node that left the fleet and did not come back: a `direct` or
-	// `container` box is a process tree or a container on the node that
-	// launched it, which alone can poll, collect and reclaim it, and that
-	// node's presence lapsed and stayed lapsed for the box timeout
-	// (`providers.sandbox.default_timeout_seconds`, the bound a remote box
-	// gets without its engine's keepalive). Never a node that is merely
-	// restarting inside that bound: its own waiter picks the run up again
-	// when it is back. Whatever the run pushed is on its branch.
-	SandboxFailureLaunchNodeGone = "launch_node_gone"
 )
 
 // EventType is the "sandbox_run_failed" wire type.

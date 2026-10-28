@@ -198,6 +198,11 @@ func (l boxLayout) runFile() string { return filepath.Join(l.records(), runRecor
 // envFile is the container runtime's --env-file. See containerBox.envArgs.
 func (l boxLayout) envFile() string { return filepath.Join(l.records(), envRecord) }
 
+// witnessFile records the engine process that last saw the box's job running,
+// which is how a job its engine's restart killed is told from one that ended
+// ([jobEnd]).
+func (l boxLayout) witnessFile() string { return filepath.Join(l.records(), witnessRecord) }
+
 // The records' names in the box's records ([boxLayout.openRecords]), each the
 // last element of the path its method above names.
 const (
@@ -206,6 +211,7 @@ const (
 	credentialsRecord = "credentials.json"
 	runRecord         = "run.json"
 	envRecord         = "env"
+	witnessRecord     = "witness"
 )
 
 // seededCredential is one login file a box was seeded with, as the box's

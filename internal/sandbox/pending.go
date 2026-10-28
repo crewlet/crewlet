@@ -1133,21 +1133,28 @@ type PendingRun struct {
 	// fleet's waiter's, whoever launched it.
 	LaunchNode string `json:"launch_node,omitempty"`
 
-	// LaunchNodeGone is when the fleet's waiter found the node that launched
-	// this RUNNING job's local box gone for good: its presence lapsed and
-	// stayed lapsed for the box timeout ([Waiter.goneAfter]). Zero for every
-	// other run.
+	// Lost is the verdict that this RUNNING job was lost with the host it
+	// ran on before anything could see it end ([JobLoss]): killed with its
+	// engine by a restart, its box gone from its host, or its launch node
+	// gone from the fleet for good. Nil for every other run.
 	//
 	// A VERDICT, RECORDED, because the one who reaches it is not the one who
-	// acts on it: the fleet's waiter measures the absence, and the seat's
-	// holder ends the run through the decided-ending protocol, as
-	// [types.SandboxFailureLaunchNodeGone], from the completion the waiter
-	// announces for it — which waits on the seat's control topic for the
-	// seat's next holder where no node holds it, and is announced again on
-	// every pass until a claim takes it. On the row rather than in that
-	// announcement, so a completion anybody could put on the broker cannot
-	// end a run. Cleared by a relaunch: a new job is on a node that is here.
-	LaunchNodeGone time.Time `json:"launch_node_gone,omitzero"`
+	// acts on it: the waiter that drives the job's box finds the loss, and
+	// the seat's holder carries the job's round on from the completion the
+	// waiter announces for it ([Coordinator.carryOnLost]) — which waits on
+	// the seat's control topic for the seat's next holder where no node
+	// holds it, and is announced again on every pass until a claim takes it.
+	// On the row rather than in that announcement, so a completion anybody
+	// could put on the broker cannot have a run's round started again.
+	// Cleared by a relaunch: the verdict was about the job before it.
+	Lost *JobLoss `json:"lost,omitempty"`
+
+	// RoundLosses is how many jobs of the current round were lost before
+	// this one ([PendingRun.Lost]) — each carried on by the next. Kept by a
+	// relaunch that carries the round on ([PendingRun.Continues]), counting
+	// the job it follows where that one was lost, and zero on a new round.
+	// What bounds how often one round is started again ([MaxRoundLosses]).
+	RoundLosses int `json:"round_losses,omitempty"`
 
 	// HeldFor and HeldUntil hold back the resume of a job whose collection
 	// the turn could not carry on: its seat's conditions refused it — the
@@ -1171,11 +1178,12 @@ type PendingRun struct {
 
 	// Continues is TRANSIENT, an instruction to [PendingStore.BeginLaunch]:
 	// the job it opens CONTINUES the one before it, which parked on a
-	// person's question ([LaunchRequest.Continue]), so the reset keeps the
-	// bridged calls that job made. They are the same round's calls — the run
-	// asked partway through it — and the collection that closes the round
-	// rebuilds it from that log, its submission and its deliveries included.
-	// Every other relaunch is a new round, whose log starts empty.
+	// person's question or was lost with its host ([LaunchRequest.Continue]),
+	// so the reset keeps the bridged calls that job made. They are the same
+	// round's calls — the run asked, or was cut off, partway through it — and
+	// the collection that closes the round rebuilds it from that log, its
+	// submission and its deliveries included. Every other relaunch is a new
+	// round, whose log starts empty.
 	Continues bool `json:"-"`
 
 	// Steer is the notes a person sent the run's turn from the run's launch
@@ -1553,17 +1561,18 @@ type PendingStore interface {
 	// is destroyed. One statement, no window.
 	ExpirePause(ctx context.Context, turnID string) (bool, error)
 
-	// MarkLaunchNodeGone records on a RUNNING job the fleet's verdict that
-	// the node its local box is on is gone ([PendingRun.LaunchNodeGone]),
-	// reporting whether the row carries that verdict for the job now —
-	// written by this call or by an earlier one.
+	// MarkLost records on a RUNNING job the verdict that it was lost with
+	// the host it ran on ([PendingRun.Lost]), reporting whether the row
+	// carries a verdict for the job now — written by this call or by an
+	// earlier one, which stands.
 	//
-	// PINNED TO THE JOB the caller judged (launch) and to the node it found
-	// gone (node): a relaunch, a claim of its completion, a park or an
-	// ending moved the row on, and a verdict about a job the row no longer
-	// holds — or a box on another node — is a verdict about nothing. False
-	// with no error is that, and so is a row that is gone.
-	MarkLaunchNodeGone(ctx context.Context, turnID, launch, node string, at time.Time) (bool, error)
+	// PINNED TO THE JOB the caller judged (launch) and, for a box on one
+	// node's host, to that node (loss.Node): a relaunch, a claim of its
+	// completion, a park or an ending moved the row on, and a verdict about
+	// a job the row no longer holds — or a box on another node — is a
+	// verdict about nothing. False with no error is that, and so is a row
+	// that is gone. A zero loss.At is the store's clock.
+	MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error)
 
 	// AttachSandbox records the box and the command a run is using. An
 	// attach naming a command records the job STARTED on the job's record

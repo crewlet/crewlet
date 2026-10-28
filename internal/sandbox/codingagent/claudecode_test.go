@@ -319,11 +319,11 @@ func waitRun(t *testing.T, runner *codingagent.Runner, box sandbox.Sandbox, req 
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		done, err := runner.Poll(t.Context(), box, handle)
+		state, err := runner.Poll(t.Context(), box, handle)
 		if err != nil {
 			t.Fatalf("Poll: %v", err)
 		}
-		if done {
+		if state.Over() {
 			return
 		}
 		if time.Now().After(deadline) {

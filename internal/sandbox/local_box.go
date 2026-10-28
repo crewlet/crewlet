@@ -331,8 +331,11 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 // the pid has to be usable for three different things and only a direct spawn
 // gives all three: it leads its own session ([procgroup.Detach]), so one signal
 // reaches the tree, no terminal's Ctrl-C reaches it, and it survives the
-// engine; and the engine holds it unreaped, so its identity can be read before
-// the pid could belong to anybody else.
+// engine's process — though not what usually replaces one, a container or a
+// systemd control group stopped whole or a host rebooted, which the box's
+// witness tells apart from a crash (local_witness.go); and the engine holds it
+// unreaped, so its identity can be read before the pid could belong to
+// anybody else.
 //
 // The Wait goroutine is the fourth, and it is the one with no POSIX
 // equivalent: Go will not reap a child until something calls Wait on it, and
@@ -389,39 +392,53 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 		return "", localErrorf("local sandbox %s could not record its job's process group: %v", b.layout.id, err)
 	}
 	go reap(proc)
+	// THIS PROCESS SAW IT START, and is its witness until another process
+	// of this engine finds it running ([witnessJob]).
+	witnessJob(b.layout)
 	localLog.Info("local_sandbox_job_started", "sandbox_id", b.layout.id, "pid", pid)
 	return strconv.Itoa(pid), nil
 }
 
-// JobRunning implements [Sandbox] for a job on the engine host.
+// Job implements [Sandbox] for a job on the engine host.
 //
 // The handle is a HOST pid, so it is only this job while the box's record
 // says so and the kernel's record of that pid still carries the start time the
 // box recorded. A zombie has exited, so it is not running even before its
-// parent reaps it. A handle that is not the recorded job is not running: the
-// record is rewritten by every StartBackground, so a handle it no longer names
-// belongs to a job this box has already replaced.
+// parent reaps it. A handle that is not the recorded job ENDED: the record is
+// rewritten by every StartBackground, so a handle it no longer names belongs
+// to a job this box has already replaced.
 //
 // The process, not its group, because the question is whether the WRAPPER is
 // alive: a wrapper that died without writing its marker is a run that is
 // over, even while an orphaned member of its group lingers on.
-func (b *directBox) JobRunning(ctx context.Context, commandID string) (bool, error) {
+//
+// A JOB THAT IS NOT RUNNING ENDED OR WAS LOST, and the box's witness says
+// which ([jobEnd]); a job found running makes this process its witness.
+func (b *directBox) Job(ctx context.Context, commandID string) (JobState, error) {
 	pid, err := strconv.Atoi(commandID)
 	if err != nil || pid <= 1 {
-		return false, localErrorf("local sandbox %s: job handle %q is not a process id", b.layout.id, commandID)
+		return "", localErrorf("local sandbox %s: job handle %q is not a process id", b.layout.id, commandID)
 	}
 	leader, found, err := readJobRecord(b.layout)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if !found || leader.PID != pid {
-		return false, nil
+		return JobEnded, nil
 	}
 	proc, found, err := procgroup.Inspect(pid)
 	if err != nil {
-		return false, fmt.Errorf("local sandbox %s: reading the kernel's record of job %d: %w", b.layout.id, pid, err)
+		return "", fmt.Errorf("local sandbox %s: reading the kernel's record of job %d: %w", b.layout.id, pid, err)
 	}
-	return found && !proc.Zombie && proc.Start == leader.Start, nil
+	if found && !proc.Zombie && proc.Start == leader.Start {
+		witnessJob(b.layout)
+		return JobRunning, nil
+	}
+	state, err := jobEnd(b.layout)
+	if err != nil {
+		return "", fmt.Errorf("local sandbox %s: %w", b.layout.id, err)
+	}
+	return state, nil
 }
 
 // reap waits on a detached job so it does not linger as a zombie once it
@@ -785,15 +802,85 @@ func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts Exe
 		return "", localErrorf("container sandbox %s could not start a background job: %s",
 			b.layout.id, detail)
 	}
+	// THIS PROCESS SAW IT START, as for a direct box ([witnessJob]).
+	witnessJob(b.layout)
 	localLog.Info("local_sandbox_job_started",
 		"sandbox_id", b.layout.id, "pid", pid, "container", b.container)
 	return pid, nil
 }
 
-// JobRunning implements [Sandbox]: the handle is a pid inside the container,
-// whose --init reaps a finished job, so `kill -0` there answers it.
-func (b *containerBox) JobRunning(ctx context.Context, commandID string) (bool, error) {
-	return probeByKill(ctx, b, commandID)
+// Job implements [Sandbox]: the handle is a pid inside the container, whose
+// --init reaps a finished job, so `kill -0` there answers it — once the
+// runtime has said the container is up.
+//
+// THE RUNTIME IS ASKED FIRST, because an exec answers two questions with one
+// exit status: a `kill -0` that found no job and a runtime that could not run
+// the exec at all — no daemon, a socket not yet there after a reboot — both
+// exit non-zero. Read as the job's answer, a daemon that was briefly away
+// ended a job that was still running; and since an engine that has just
+// restarted is no witness to it ([jobEnd]), that job was taken for one its
+// host's restart had killed, and its round started again beside it. The
+// listing tells the two apart: a runtime that answers it can say whether the
+// container is there and up, and one that does not is the error that is no
+// answer at all.
+//
+// A container that is gone or stopped ran its job down with it — a host that
+// rebooted, a daemon restarted without live-restore — so its job is not
+// running, and the box's witness says whether it ended or was lost. A PAUSED
+// container takes no exec, so its job cannot be asked about: an error, which
+// [Local.Attach] keeps the poll from ever reaching.
+func (b *containerBox) Job(ctx context.Context, commandID string) (JobState, error) {
+	state, err := b.state(ctx)
+	if err != nil {
+		return "", err
+	}
+	switch state {
+	case "paused":
+		return "", localErrorf("container sandbox %s is paused, and a paused container's job "+
+			"cannot be asked about without unpausing it", b.layout.id)
+	case "running":
+		running, probeErr := probeByKill(ctx, b, commandID)
+		if probeErr != nil {
+			return "", probeErr
+		}
+		if running {
+			witnessJob(b.layout)
+			return JobRunning, nil
+		}
+	}
+	ended, err := jobEnd(b.layout)
+	if err != nil {
+		return "", fmt.Errorf("container sandbox %s: %w", b.layout.id, err)
+	}
+	return ended, nil
+}
+
+// state is the container's state as its runtime lists it — "running",
+// "paused", "exited" and so on, lower-cased — and "" where the runtime lists no
+// container of this box's name. An error is a runtime that did not answer,
+// which says nothing about the container.
+//
+// A LISTING, NOT AN INSPECTION: `inspect` of a container that is not there
+// fails as a runtime that is not there does, while a listing the runtime
+// answers is a full answer, absence included. Filtered by the box's name and
+// read for that exact name, since the filter matches by substring.
+func (b *containerBox) state(ctx context.Context) (string, error) {
+	res, err := runHost(ctx, b.cli.command(0, "ps", "-a",
+		"--filter", "name="+b.container, "--format", "{{.Names}}\t{{.State}}"))
+	if err != nil {
+		return "", localErrorf("container sandbox %s: listing its container: %v", b.layout.id, err)
+	}
+	if res.ExitCode != 0 {
+		return "", localErrorf("container sandbox %s: listing its container failed with exit %d: %s",
+			b.layout.id, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	for line := range strings.SplitSeq(res.Stdout, "\n") {
+		name, state, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if strings.TrimSpace(name) == b.container {
+			return strings.ToLower(strings.TrimSpace(state)), nil
+		}
+	}
+	return "", nil
 }
 
 // trailingPID is the last numeric line of output — the backgrounded job's pid.

@@ -428,10 +428,10 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
 
-	// Two failures, but no time has passed: giving up is TERMINAL — the
-	// completion fires, collect cannot reconnect either, and the run is
-	// settled failed — so a burst of probes must not be able to spend the
-	// window on its own.
+	// Two failures, but no time has passed: giving up is TERMINAL for the
+	// job — the completion fires, and a box that is gone has its job lost
+	// and its round started again — so a burst of probes must not be able to
+	// spend the window on its own.
 	for i := range MinConnectFailures + 2 {
 		if fired := rig.tick(); fired != 0 {
 			t.Fatalf("gave up on probe %d with no time elapsed", i+1)

@@ -184,20 +184,21 @@ type LaunchRequest struct {
 	ProviderKey string
 
 	// Continue is set when this job CONTINUES the job before it, which
-	// parked on a person's question that has now been answered — and so is
-	// the same round of the turn, carried on rather than begun again. Nil
-	// for every other launch.
+	// parked on a person's question that has now been answered, or was lost
+	// with its host ([PendingRun.Lost]) — and so is the same round of the
+	// turn, carried on rather than begun again. Nil for every other launch.
 	//
 	// The job continues the asking job's own CLI session where it runs in
 	// that job's box — the session lives there — with Continue.Brief, the
 	// answer, as its next prompt ([RunRequest.Resume]). Where it
 	// does not — the box was reclaimed while the question waited, or this
-	// launch runs another CLI or cell — it starts fresh with Brief, which
-	// then carries the question, the answer and the pushed branch; the
-	// decision is the launch's, made once it knows which box it has
-	// ([Coordinator.acquire]). And either way the row keeps the round's
-	// bridged calls: the ones made before the question are this round's
-	// too ([PendingRun.Continues]).
+	// launch runs another CLI or cell, or the job before it was lost, whose
+	// session names none — it starts fresh with Brief, which then carries
+	// the question and the answer, or how the job before it was cut off, and
+	// where its work is; the decision is the launch's, made once it knows
+	// which box it has ([Coordinator.acquire]). And either way the row keeps
+	// the round's bridged calls: the ones made before the question, or the
+	// loss, are this round's too ([PendingRun.Continues]).
 	Continue *Continuation
 
 	// Fence is the launching turn's own seat fence — its seat still held
@@ -293,12 +294,12 @@ type Opening struct {
 	Steer SteerWiring
 }
 
-// Continuation is how a job continues the asking job before it — see
+// Continuation is how a job continues the job before it — see
 // [LaunchRequest.Continue].
 type Continuation struct {
 	// SessionID is the asking job's CLI session ([PendingRun.SessionID]).
-	// Empty where its CLI named none, which continues nothing: the job
-	// starts fresh with the launch's Brief.
+	// Empty where its CLI named none, or the job before was lost, which
+	// continues nothing: the job starts fresh with the launch's Brief.
 	SessionID string
 	// Brief is the prompt the continued session is given: the answer, and
 	// what to do with it.

@@ -61,9 +61,9 @@ func TestADeadJobWithAStreamPastTheCapIsDone(t *testing.T) {
 	b.Put(paths(b).Result(), pastTheCap(b, `{"type":"text","part":{"text":"still going"}}`))
 	b.ExecFunc = alive(false)
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want the dead job found done whatever its stream's size", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobEnded {
+		t.Fatalf("Poll = %v, %v; want the dead job found ended whatever its stream's size", state, err)
 	}
 }
 
@@ -90,8 +90,8 @@ func TestAStreamsEndNeverEndsARun(t *testing.T) {
 			`{"type":"result","subtype":"success","result":"Fixed it."}`,
 		}, "\n"))
 		b.ExecFunc = alive(true)
-		if done, err := runner.Poll(t.Context(), b, handle); done || err != nil {
-			t.Errorf("%s: Poll = %v, %v; want a live wrapper still running", name, done, err)
+		if state, err := runner.Poll(t.Context(), b, handle); state != sandbox.JobRunning || err != nil {
+			t.Errorf("%s: Poll = %v, %v; want a live wrapper still running", name, state, err)
 		}
 	}
 }
@@ -107,12 +107,14 @@ func TestAReadThatFailsNeverSkipsTheLivenessProbe(t *testing.T) {
 	b.ReadErr = func(string) error { return errBoxUnreadable }
 
 	b.ExecFunc = alive(false)
-	if done, err := runner.Poll(t.Context(), b, handle); !done || err != nil {
-		t.Errorf("a dead job behind an unreadable box polled %v, %v; want done", done, err)
+	if state, err := runner.Poll(t.Context(), b, handle); state != sandbox.JobEnded || err != nil {
+		t.Errorf("a dead job behind an unreadable box polled %v, %v; want ended", state, err)
 	}
 	b.ExecFunc = alive(true)
-	if done, err := runner.Poll(t.Context(), b, handle); done || !errors.Is(err, errBoxUnreadable) {
-		t.Errorf("a live job behind an unreadable box polled %v, %v; want not done and the read's error", done, err)
+	if state, err := runner.Poll(t.Context(), b, handle); state != sandbox.JobRunning ||
+		!errors.Is(err, errBoxUnreadable) {
+		t.Errorf("a live job behind an unreadable box polled %v, %v; want running and the read's error",
+			state, err)
 	}
 }
 
@@ -135,8 +137,8 @@ func TestACLIThatExitsIsNotPolledThroughItsOutput(t *testing.T) {
 			return nil
 		}
 		b.ExecFunc = alive(true)
-		if done, err := runner.Poll(t.Context(), b, handle); done || err != nil {
-			t.Errorf("%s: Poll = %v, %v; want only the marker and the probe asked", name, done, err)
+		if state, err := runner.Poll(t.Context(), b, handle); state != sandbox.JobRunning || err != nil {
+			t.Errorf("%s: Poll = %v, %v; want only the marker and the probe asked", name, state, err)
 		}
 	}
 }

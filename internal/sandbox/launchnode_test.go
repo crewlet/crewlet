@@ -216,19 +216,27 @@ func (r *roster) set(node string, present bool) {
 	r.present[node] = present
 }
 
-// A LAUNCH NODE GONE FOR THE BOX TIMEOUT HAS ITS RUNNING JOB ENDED as lost:
-// its box went with it, and nothing else can poll, collect or reclaim it, so
-// the seat would wait behind the run for ever. The verdict is recorded on the
-// row and the completion announced, for the seat's holder to end it — and
-// announced again on the next pass, as a finished job's is, until a claim
-// takes it.
+// lostAt is when a row's job was found lost, zero for one that was not.
+func lostAt(run PendingRun) time.Time {
+	if run.Lost == nil {
+		return time.Time{}
+	}
+	return run.Lost.At
+}
+
+// A LAUNCH NODE GONE FOR THE BOX TIMEOUT HAS ITS RUNNING JOB LOST: its box went
+// with it, and nothing else can poll, collect or reclaim it, so the seat would
+// wait behind the run for ever. The verdict is recorded on the row as the
+// node's loss and the completion announced, for the seat's holder to carry the
+// job's round on — and announced again on the next pass, as a finished job's
+// is, until a claim takes it.
 //
 // NEVER AT ONE INSTANT'S ABSENCE: a node that drains gives up its presence at
 // the drain's first step, and is merely restarting.
 //
-// Mutation: decide on absence alone, without the box timeout, and the run is
-// ended at the first pass that finds its node away.
-func TestALaunchNodeGoneForTheBoxTimeoutHasItsRunEnded(t *testing.T) {
+// Mutation: decide on absence alone, without the box timeout, and the job is
+// lost at the first pass that finds its node away.
+func TestALaunchNodeGoneForTheBoxTimeoutHasItsJobLost(t *testing.T) {
 	t.Parallel()
 	rig := newHostRig(t)
 	run := rig.launchIn("t-gone", Direct, "node-a")
@@ -239,17 +247,18 @@ func TestALaunchNodeGoneForTheBoxTimeoutHasItsRunEnded(t *testing.T) {
 	tickOnce(t, w)
 	rig.now = rig.now.Add(DefaultBoxTimeout - time.Second)
 	tickOnce(t, w)
-	if got := rig.get("t-gone"); !got.LaunchNodeGone.IsZero() || len(rig.announced()) != 0 {
+	if got := rig.get("t-gone"); got.Lost != nil || len(rig.announced()) != 0 {
 		t.Fatalf("a node away for less than the box timeout had its run judged gone (%v, %v)",
-			got.LaunchNodeGone, rig.announced())
+			lostAt(got), rig.announced())
 	}
 
 	rig.now = rig.now.Add(time.Second)
 	tickOnce(t, w)
 	got := rig.get("t-gone")
-	if !got.LaunchNodeGone.Equal(rig.now) || got.LaunchID != run.LaunchID {
-		t.Fatalf("the row records the verdict %v on job %s; want %v on %s",
-			got.LaunchNodeGone, got.LaunchID, rig.now, run.LaunchID)
+	if !lostAt(got).Equal(rig.now) || got.LaunchID != run.LaunchID ||
+		got.Lost.Cause != LossLaunchNodeGone || got.Lost.Node != "node-a" {
+		t.Fatalf("the row records the verdict %+v on job %s; want node-a's loss at %v on %s",
+			got.Lost, got.LaunchID, rig.now, run.LaunchID)
 	}
 	if got := rig.announced(); !slices.Equal(got, []string{"t-gone"}) {
 		t.Fatalf("completions announced for %v; want the gone run's", got)
@@ -286,9 +295,9 @@ func TestALaunchNodeBackWithinTheBoxTimeoutKeepsItsRuns(t *testing.T) {
 	tickOnce(t, w)
 	rig.now = rig.now.Add(DefaultBoxTimeout / 2)
 	tickOnce(t, w)
-	if got := rig.get("t-back"); !got.LaunchNodeGone.IsZero() {
+	if got := rig.get("t-back"); got.Lost != nil {
 		t.Errorf("a node that came back within the box timeout had its run judged gone at %v",
-			got.LaunchNodeGone)
+			lostAt(got))
 	}
 }
 
@@ -336,15 +345,15 @@ func TestAnAbsenceIsTimedWithinOneStintOfTheDuty(t *testing.T) {
 			rig.now = rig.now.Add(DefaultBoxTimeout + time.Second)
 			duty.set(true, nil)
 			tickOnce(t, w)
-			if got := rig.get("t-stint"); !got.LaunchNodeGone.IsZero() || len(rig.announced()) != 0 {
+			if got := rig.get("t-stint"); got.Lost != nil || len(rig.announced()) != 0 {
 				t.Fatalf("a node found away on the first pass back on the duty was judged gone at %v",
-					got.LaunchNodeGone)
+					lostAt(got))
 			}
 
 			// AND WATCHED WHOLE WITHIN THE STINT, the verdict still comes.
 			rig.now = rig.now.Add(DefaultBoxTimeout)
 			tickOnce(t, w)
-			if got := rig.get("t-stint"); got.LaunchNodeGone.IsZero() {
+			if got := rig.get("t-stint"); got.Lost == nil {
 				t.Fatal("a node away for the box timeout within one stint was not judged gone")
 			}
 		})
@@ -386,8 +395,8 @@ func TestARosterThatCannotAnswerDecidesNothing(t *testing.T) {
 	tickOnce(t, w)
 	rig.now = rig.now.Add(2 * DefaultBoxTimeout)
 	tickOnce(t, w)
-	if got := rig.get("t-unknown"); !got.LaunchNodeGone.IsZero() || len(rig.announced()) != 0 {
-		t.Errorf("an unanswered roster ended the run (%v, %v)", got.LaunchNodeGone, rig.announced())
+	if got := rig.get("t-unknown"); got.Lost != nil || len(rig.announced()) != 0 {
+		t.Errorf("an unanswered roster ended the run (%v, %v)", lostAt(got), rig.announced())
 	}
 }
 
@@ -574,10 +583,13 @@ func TestASubmittedRunIsPolledAtOnceAndAgainWhileItExits(t *testing.T) {
 	var polls sync.WaitGroup
 	polls.Add(1)
 	var once sync.Once
-	rig.runner.PollFunc = func(context.Context, Sandbox) (bool, error) {
+	rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
 		first := false
 		once.Do(func() { first = true; polls.Done() })
-		return !first, nil
+		if first {
+			return JobRunning, nil
+		}
+		return JobEnded, nil
 	}
 	w := rig.startedWaiter(DrivesLocal, "node-a")
 	w.Nudge(Nudge{TurnID: "t-submitted", LaunchID: run.LaunchID, Why: NudgeSubmitted})

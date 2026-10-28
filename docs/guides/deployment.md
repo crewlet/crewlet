@@ -1169,6 +1169,33 @@ Both communicate through the stream, and through the coordination KV on the
 same broker — never with each other. Both accept `-debug` for verbose
 logging.
 
+### A restart and the coding runs on its host
+
+A seat's executor in a `direct` cell is a process tree of the node's own host,
+detached into a session of its own so that it outlives the engine's process —
+and it does, when only that process dies. What usually replaces an engine takes
+more than the process: a container restart takes every process in the
+container, a systemd unit stopped or restarted kills every process in its
+control group (the default `KillMode=control-group`), and a host reboot takes a
+`container` box's job as well. So a run's job does not survive a deploy of the
+node it runs on, and none of these needs a setting of its own to be safe: the
+node finds the job **lost** when it is back — its box records the engine
+process that last saw the job running, and that process is gone too — and the
+run's round is **carried on** in a fresh run rather than its truncated output
+judged as a result. Where the box's directory survived the restart
+(`providers.sandbox.local.state_dir` on a disk that outlives the process), the
+fresh run continues in it, its working tree as the lost job left it, changes
+it had not committed included; where it did not — a pod recreated with its
+scratch volume — the fresh run starts in a new box from whatever the lost job
+pushed. Either way what the lost job did through the seat's tools stands, and
+a round is carried on after at most two lost jobs (see
+[Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
+
+What a deploy costs a run is therefore the work it had not committed, or not
+pushed where its box does not survive, and the restart of the run that
+carries it on. Keep `state_dir` on a volume that outlives the engine's
+container where a run's working tree is worth keeping across a deploy.
+
 ### Probes
 
 Every node with an `api.port` answers `/health` and `/ready` on it, whatever

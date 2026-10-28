@@ -35,9 +35,9 @@ func TestAPlayedJobRunsOnceWhenPolledAndFinishesWithItsPlay(t *testing.T) {
 	if n := played.Load(); n != 0 {
 		t.Fatalf("the job was played %d times by its start, want none until it is polled", n)
 	}
-	done, err := runner.Poll(t.Context(), box, handle)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want the played job done", done, err)
+	state, err := runner.Poll(t.Context(), box, handle)
+	if err != nil || state != JobEnded {
+		t.Fatalf("Poll = %v, %v; want the played job ended", state, err)
 	}
 	for range 2 {
 		result, err := runner.Collect(t.Context(), box, handle)
@@ -90,9 +90,9 @@ func TestAPlayedRunnerEndsAJobItDidNotStart(t *testing.T) {
 	}
 	box := NewFakeSandbox("box-1")
 	stranger := RunHandle{CommandID: "cmd-from-another-process"}
-	done, err := runner.Poll(t.Context(), box, stranger)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want the stranger's job reported over", done, err)
+	state, err := runner.Poll(t.Context(), box, stranger)
+	if err != nil || state != JobEnded {
+		t.Fatalf("Poll = %v, %v; want the stranger's job reported ended", state, err)
 	}
 	result, err := runner.Collect(t.Context(), box, stranger)
 	if err != nil {

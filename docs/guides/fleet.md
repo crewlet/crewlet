@@ -630,8 +630,9 @@ to get right, which the engine cannot check for you:
   that one too. A `direct` or `container` box is on the host of the node
   that launched it and is polled, collected and reclaimed there, whoever
   holds the duty or the seat afterwards; a node that leaves for good has
-  its runs ended as `launch_node_gone` once it has been away for
-  `default_timeout_seconds` (see
+  its runs' jobs lost with it (`launch_node_gone`) once it has been away for
+  `default_timeout_seconds`, and their rounds carried on in fresh boxes by
+  the seats' next holders (see
   [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 - `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must point at an address the
   *sandbox* can reach, which means an ingress node. It is explicit

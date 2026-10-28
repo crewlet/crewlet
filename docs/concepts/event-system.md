@@ -278,7 +278,7 @@ sandbox_run_started        # names the providers.llm entry the launch picked
                            # and its model (provider_key, model)
 sandbox_clarification_requested
 sandbox_run_completed
-sandbox_run_failed         # a run lost, once: published under an id and an
+sandbox_run_failed         # a run failed, once: published under an id and an
                            # instant its ending recorded on the run's row, so
                            # the node that finishes an ending another decided
                            # repeats the same event (the store keys on it)

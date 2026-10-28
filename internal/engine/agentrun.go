@@ -315,7 +315,9 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Label: l.turn.Task,
 		// A RUN CARRIED ON WITH A PERSON'S ANSWER, continued in its own
 		// session where the launch runs it in the asking run's box — see
-		// [runner.Asked].
+		// [runner.Asked] — or a ROUND CARRIED ON after its job was lost with
+		// its host, in a session of its own ([runner.Lost]). Either keeps the
+		// round's calls on the row.
 		Continue:    sandboxContinuation(req.Continue),
 		SteerSeat:   e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
 		BriefNotes:  brief,

@@ -748,6 +748,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Engine:        req.Engine,
 		Ended:         req.Ended,
 		Asked:         req.Asked,
+		Lost:          req.Lost,
 	})
 }
 
@@ -874,6 +875,10 @@ type resumeInput struct {
 	// Asked is the question a person's answer resumes the run from, which
 	// the turn carries the run on with — see [sandbox.ResumeRequest.Asked].
 	Asked *sandbox.AskedRun
+
+	// Lost is the loss a lost job's round is carried on from — see
+	// [sandbox.ResumeRequest.Lost].
+	Lost *sandbox.LostRun
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -1037,8 +1042,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// the only record of what the phase did — its submission included.
 		Bridged: bridgedCalls(in.Run.BridgeCalls),
 		// AND A PERSON'S ANSWER, which carries the run on rather than
-		// reporting it — see [runner.Asked].
+		// reporting it — see [runner.Asked] — or the loss of its job with its
+		// host, which carries its round on ([runner.Lost]).
 		Asked: runnerAsked(in.Asked),
+		Lost:  runnerLost(in.Lost),
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on — the briefs', the run's own and earlier reviews'.
 		Steered: e.runSteers.carried(in.Run),
@@ -1319,6 +1326,15 @@ func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
 	}
+}
+
+// runnerLost is the coordinator's account of a lost job in the runner's terms,
+// nil for a resume no loss drove.
+func runnerLost(lost *sandbox.LostRun) *runner.Lost {
+	if lost == nil {
+		return nil
+	}
+	return &runner.Lost{Why: lost.Why, BoxKept: lost.BoxKept, Losses: lost.Losses, Limit: lost.Limit}
 }
 
 // noteRunEnded sits out the entry a collected run launched on, where the run

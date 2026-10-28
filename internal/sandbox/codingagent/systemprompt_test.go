@@ -178,11 +178,11 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	deadline := time.Now().Add(20 * time.Second)
-	for done := false; !done; {
-		if done, err = runner.Poll(t.Context(), box, handle); err != nil {
+	for state := sandbox.JobRunning; !state.Over(); {
+		if state, err = runner.Poll(t.Context(), box, handle); err != nil {
 			t.Fatalf("Poll: %v", err)
 		}
-		if !done && time.Now().After(deadline) {
+		if !state.Over() && time.Now().After(deadline) {
 			t.Fatal("the run never finished")
 		}
 		time.Sleep(20 * time.Millisecond)

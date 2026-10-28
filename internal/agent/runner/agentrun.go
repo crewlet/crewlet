@@ -139,11 +139,13 @@ type AgentRunRequest struct {
 	OnFallback func(chain.Fallback)
 
 	// Continue is set when this launch CARRIES ON a run that parked on a
-	// person's question, now answered — the same round, relaunched: the
-	// asking run's CLI session, and the prompt that continues it, which the
-	// launch uses where it runs in the asking run's box. Brief is then what
-	// a fresh run is told instead, the question and the answer included —
-	// see [Asked]. Nil for every other launch.
+	// person's question, now answered, or whose job was lost with its host —
+	// the same round, relaunched: the asking run's CLI session, and the
+	// prompt that continues it, which the launch uses where it runs in the
+	// asking run's box (a lost job's session is never continued, and names
+	// none). Brief is then what a fresh run is told instead, the question and
+	// the answer, or how the run before it was cut off, included — see
+	// [Asked] and [Lost]. Nil for every other launch.
 	Continue *Continuation
 
 	// Fence is the turn's own fence ([Config.Fence]), which the launch asks
@@ -274,10 +276,14 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 }
 
 // continueAgentRun carries on a run that parked on a person's question, now
-// answered ([Asked]): the SAME round, relaunched rather than collected — in
-// the asking run's box, continuing its own conversation, where that box is
-// still there, and as a fresh run told the question and the answer where it is
-// not. The launch decides which, once it knows which box it has.
+// answered ([Asked]), or whose job was lost with its host ([Lost]): the SAME
+// round, relaunched rather than collected — in the run's box, continuing the
+// asking run's own conversation, where that box is still there, and as a fresh
+// run told what happened where it is not, or where the conversation was cut
+// off. The launch decides which, once it knows which box it has.
+//
+// A ROUND THAT MAY NOT BE CARRIED ON AGAIN ([Lost.Limit]) is not relaunched:
+// its phase is closed here as failed, saying why, and the turn ends with it.
 //
 // THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the asking run's —
 // the tools its launch had active, the skills the turn had loaded, and what
@@ -291,16 +297,16 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 // published when it first launched, and its completion is the collection that
 // finally closes it — unless this relaunch is refused, which closes it here.
 func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteration,
-	state execstate.State, asked *Asked, logged []ledger.Call,
+	state execstate.State, carry carried, logged []ledger.Call,
 ) (turn.Work, turn.Surface, error) {
 	began := time.Now()
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	var surface *tools.Surface
-	// A SUBMISSION CITES THE ASKING RUN'S CALLS TOO: the relaunched run is
+	// A SUBMISSION CITES THE CARRIED RUN'S CALLS TOO: the relaunched run is
 	// the same round, and the collection judges its submission against
 	// every call the round made ([Runner.resumeAgentRun]) — so the check it
 	// gets as it submits reads them as well, or a delivery made before the
-	// question would be refused here and accepted there.
+	// question, or before the loss, would be refused here and accepted there.
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
 			func() []ledger.Call {
@@ -315,11 +321,27 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	}
 	surface = built
 	// THE TURN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED, the
-	// asking run's calls included, through the surface the relaunched run
+	// carried run's calls included, through the surface the relaunched run
 	// is served ([seedCalls]), and BEFORE the launch: the relaunched run's
 	// bridged calls are admitted against this log from its first one.
 	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, logged)
 	r.observeLoads(surface, logged)
+
+	emit := r.emitter()
+	caps := roundCaps{max: runRound, ceiling: runRound}
+	if refused := carry.refusal(); refused != nil {
+		// THE ROUND ENDS HERE, and its phase with it: it was opened when the
+		// round first launched, and nothing else will close it now.
+		refusedErr := fmt.Errorf("runner: %s: %w", phase.Execute, refused)
+		emit.completed(ctx, phaseRecord{
+			Phase: phase.Execute, Iteration: state.Round,
+			Available: surface.Active(),
+			Elapsed:   time.Duration(state.LaunchMS)*time.Millisecond + time.Since(began),
+			StartedAt: began.UTC(), Caps: caps,
+			Failed: true, Err: refusedErr,
+		})
+		return turn.Work{Calls: logged}, describe(surface), refusedErr
+	}
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
 	// a fresh run's after every note the turn read, as any brief does; the
@@ -331,20 +353,19 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
-	emit := r.emitter()
-	caps := roundCaps{max: runRound, ceiling: runRound}
-	continued := asked.Continuation()
+	continued := carry.continuation()
 	if rendered := renderedNotes(fresh); len(rendered) > 0 {
 		continued += "\n\n" + strings.Join(rendered, "\n\n")
 	}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System: system.Text,
-		// A FRESH RUN'S BRIEF is the round's own, and what the run before it
-		// asked and was told: it remembers neither.
-		Brief: user.Text + "\n\n" + asked.Reseed(),
+		// A FRESH RUN'S BRIEF is the round's own, and what became of the run
+		// before it — what it asked and was told, or how it was cut off: it
+		// remembers neither.
+		Brief: user.Text + "\n\n" + carry.reseed(),
 		Notes: fresh,
 		Continue: &Continuation{
-			SessionID: asked.SessionID, Brief: continued,
+			SessionID: carry.session(), Brief: continued,
 		},
 		Surface:    surface,
 		Spend:      bridged,
@@ -354,7 +375,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	})
 	if err != nil {
 		r.steerReturn(ctx, launched, fresh)
-		err = fmt.Errorf("runner: %s: carrying on the run with its answer: %w", phase.Execute, err)
+		err = fmt.Errorf("runner: %s: %s: %w", phase.Execute, carry.what(), err)
 		emit.completed(ctx, phaseRecord{
 			Phase: phase.Execute, Iteration: state.Round, System: system, User: user,
 			Available: surface.Active(),
@@ -371,8 +392,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	}
 	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
 		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began))
-	// THE ROUND'S CALLS SO FAR, the run's before it asked: they happened,
-	// and a turn that parks again has acted by them.
+	// THE ROUND'S CALLS SO FAR, the run's before it asked or was cut off:
+	// they happened, and a turn that parks again has acted by them.
 	return turn.Work{Calls: logged, Suspended: true}, describe(surface), nil
 }
 

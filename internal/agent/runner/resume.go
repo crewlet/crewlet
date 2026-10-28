@@ -34,14 +34,22 @@ func (r *Runner) Suspended() (Suspension, bool) {
 	return *r.suspension, true
 }
 
-// Resume collects the executor run the turn parked on: what it submitted, the
-// calls it made over the bridge, the branches and pull requests it delivered.
+// Resume re-enters the turn the executor's run parked it on, in one of three
+// ways, each read off what drove it.
 //
-// THE SAME TURN CONTINUES. The round the run was launched in is collected
-// rather than launched again — a resumed turn that started over would pay for
-// the run twice — and the surface and skill-guard state are REPLAYED from the
-// state rather than rebuilt from the plan, because the run's calls were made
-// against the surface it was given, activations included.
+// A COMPLETION COLLECTS THE RUN: what it submitted, the calls it made over the
+// bridge, the branches and pull requests it delivered. The round the run was
+// launched in is collected rather than launched again — a resumed turn that
+// started over would pay for the run twice — and the surface and skill-guard
+// state are REPLAYED from the state rather than rebuilt from the plan, because
+// the run's calls were made against the surface it was given, activations
+// included ([Runner.resumeAgentRun]).
+//
+// A PERSON'S ANSWER CARRIES THE RUN ON ([Asked]), and so does the LOSS OF ITS
+// JOB with the host it ran on ([Lost]): the same round, relaunched with what
+// the run did so far, never collected ([Runner.continueAgentRun]). A lost job
+// whose round's calls already hold its submission is the one exception: it
+// finished its work and was lost on its way out, so the round is collected.
 func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if r.cfg.Resume == nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no parked state")
@@ -61,11 +69,25 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	bridged := inAdmissionOrder(r.cfg.Resume.Bridged)
 
 	// A PERSON'S ANSWER CARRIES THE RUN ON; it is never the run's report.
-	// See [Asked].
+	// See [Asked]. And so does a job lost with its host, unless the round it
+	// was lost in was already submitted. See [Lost].
+	logged := bridgedLedger(bridged)
 	if asked := r.cfg.Resume.Asked; asked != nil {
-		return r.continueAgentRun(ctx, history, state, asked, bridgedLedger(bridged))
+		return r.continueAgentRun(ctx, history, state, asked, logged)
+	}
+	if lost := r.cfg.Resume.Lost; lost != nil && !submitted(logged) {
+		return r.continueAgentRun(ctx, history, state, lost, logged)
 	}
 	return r.resumeAgentRun(ctx, history, state, r.cfg.Resume.Answer, bridged)
+}
+
+// submitted reports whether a round's calls hold a submission its run made:
+// a `submit_work` the bridge did not refuse, which the round's collection
+// replays as its outcome ([replaySubmission]).
+func submitted(calls []ledger.Call) bool {
+	return slices.ContainsFunc(calls, func(call ledger.Call) bool {
+		return call.Name == SubmitWorkTool && !call.Failed
+	})
 }
 
 // seedCalls records into a resumed run's log every call the turn made before

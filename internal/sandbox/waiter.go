@@ -36,7 +36,9 @@ const DefaultPollInterval = 15 * time.Second
 // a run is long — it means a genuine infra failure: the provider reclaimed the
 // box, a network partition, or the engine was down long enough that the
 // keepalive lapsed and the orphan was reaped. Firing lets the coordinator free
-// the seat and mark the run failed instead of polling a dead box forever.
+// the seat instead of polling a dead box forever: a box its backend says is
+// GONE took its job with it, and its round is carried on ([LossBoxGone]); one
+// that is only unreachable is collected, retried, and settled FAILED.
 //
 // A DURATION, NOT A TICK COUNT, and that is the fix rather than the style. It
 // was four consecutive failures, with the rationale written as "four ticks
@@ -44,10 +46,11 @@ const DefaultPollInterval = 15 * time.Second
 // whatever interval the waiter was built with, so a deployment that polls
 // faster shrank the window with it: at the 100 ms cadence the e2e suite drives
 // this code at, four failures is 0.4 s, and a box that is briefly slow rather
-// than gone is declared dead. What follows is not a retry — the completion
-// fires, `collect` cannot reconnect either, and the coordinator settles the
-// run FAILED and tears the turn down. Giving up is terminal, so the window has
-// to be measured in the unit its own reasoning uses.
+// than gone is declared dead. What follows is not a retry of the poll — the
+// completion fires, and the job is either recorded lost and its round started
+// again, or its collection cannot reconnect either and the coordinator settles
+// the run FAILED and tears the turn down. Giving up is terminal for the job,
+// so the window has to be measured in the unit its own reasoning uses.
 const ConnectGiveUp = 60 * time.Second
 
 // MinConnectFailures is how many consecutive failures must have happened
@@ -239,8 +242,9 @@ type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box
 // THIS POLL IS THE COMPLETION SIGNAL. A periodic tick reconnects to each still-
 // running box by id and asks the runner whether its background command has
 // finished — covering a clean finish (its done marker), a job whose process
-// group died before it could write one, and a box that vanished, so a
-// detached run never hangs forever. Nothing from inside the box replaces it:
+// group died before it could write one, a job lost with the engine that last
+// saw it running, and a box that vanished, so a detached run never hangs
+// forever. Nothing from inside the box replaces it:
 // only the poll can see a job that died before reaching its last step, and the
 // tick doubles as the box keepalive, so it must run at this cadence regardless.
 // What the bridge sees of a run only BRINGS IT FORWARD: a run that submits its
@@ -732,11 +736,18 @@ func (w *Waiter) taskDeadline(duty time.Time) time.Time {
 // duplicate announcement is harmless — the coordinator claims once — so it
 // takes the pass's context, not the task's.
 func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run PendingRun) bool {
-	switch w.pollOne(taskCtx, manager, run) {
-	case pollDone, pollGone:
-		// gone → the box vanished; fire anyway so the coordinator frees
-		// the seat and marks the run failed (collect will fail to
-		// reconnect) instead of hanging.
+	state := w.pollOne(taskCtx, manager, run)
+	// A LOSS IS RECORDED BEFORE IT IS ANNOUNCED, as the fleet's verdict on a
+	// gone launch node is ([Waiter.endGone]): the completion only routes it to
+	// the seat's holder, which carries the round on from what the row says.
+	if cause := lossOf(state); cause != "" && !w.lose(ctx, manager, run, cause) {
+		return false
+	}
+	switch state {
+	case pollDone, pollGone, pollLostJob, pollLostBox:
+		// UNREACHED FOR THE GIVE-UP WINDOW, the completion goes out anyway,
+		// so the coordinator frees the seat and settles the run (its
+		// collection fails to reach the box too) instead of it hanging.
 		if err := w.publishCompletion(ctx, run); err != nil {
 			log.WarnContext(ctx, "sandbox_completion_publish_failed",
 				"turn_id", run.TurnID, "error", err.Error())
@@ -904,8 +915,21 @@ type pollState int
 const (
 	pollRunning pollState = iota // not yet, or a transient error — retry next pass
 	pollDone                     // the job finished
-	pollGone                     // the box has vanished and can never complete
+	pollGone                     // the box could not be reached for the give-up window
+	pollLostJob                  // the job went with the engine that last saw it running
+	pollLostBox                  // the box is gone from where it ran, its job with it
 )
+
+// lossOf is the loss a poll state found, "" for a state that is no loss.
+func lossOf(state pollState) LossCause {
+	switch state {
+	case pollLostJob:
+		return LossEngineRestarted
+	case pollLostBox:
+		return LossBoxGone
+	}
+	return ""
+}
 
 // pollOne reconnects and asks the runner whether the job has finished.
 func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) pollState {
@@ -942,10 +966,18 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 			"attempts", streak.attempts,
 			"unreachable_for_s", w.now().Sub(streak.since).Seconds(),
 			"error", err.Error())
-		if giveUp {
-			return pollGone
+		switch {
+		case !giveUp:
+			return pollRunning
+		case errors.Is(err, ErrBoxGone):
+			// GONE, NOT UNREACHED: its provider or its host says the box
+			// no longer exists, and its job went with it — a box root that
+			// did not outlive its node's restart, a VM reclaimed while the
+			// engine was away past the box timeout. What it did is not
+			// there to read, and its round is carried on ([JobLoss]).
+			return pollLostBox
 		}
-		return pollRunning
+		return pollGone
 	}
 	w.succeed(run.TurnID)
 
@@ -969,14 +1001,19 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 			"turn_id", run.TurnID, "coding_agent", run.CodingAgent, "error", err.Error())
 		return pollGone
 	}
-	done, err := runner.Poll(ctx, box, run.Handle())
+	state, err := runner.Poll(ctx, box, run.Handle())
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_poll_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 		return pollRunning
 	}
-	if done {
+	switch state {
+	case JobEnded:
 		return pollDone
+	case JobLost:
+		// KILLED WITH ITS ENGINE, not ended: see [JobState]. What it left
+		// is not its result, and its round is carried on ([JobLoss]).
+		return pollLostJob
 	}
 	if run.PastDeadline(w.now()) {
 		// THE TURN'S CAP HAS PASSED, and the run is ended as if it had

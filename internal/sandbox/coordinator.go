@@ -167,6 +167,22 @@ type ResumeRequest struct {
 	// incomplete and the executor never saw the reply.
 	Asked *AskedRun
 
+	// Lost is set when the job a completion announced was LOST with the host
+	// it ran on rather than ended ([PendingRun.Lost]): what was lost, and how
+	// often the round has been. Nil for every other resume.
+	//
+	// THE TURN CARRIES THE ROUND ON, as it does a question's: the job was cut
+	// off mid-step, so what it left is no account of the round, and the
+	// resumed turn relaunches its executor for the same round — in the lost
+	// job's box where that is still there and this node may continue in it,
+	// else in a fresh one — told that a run before it was cut off and where
+	// to look for what it left. Except where the round's calls already hold
+	// its submission: the job had finished its work and was lost on its way
+	// out, so the round is collected, and Answer is the job's account of
+	// itself, marked cut off. And past [LostRun.Limit] losses the round is not
+	// carried on again, and the turn's executor phase ends saying why.
+	Lost *LostRun
+
 	// Success is whether the sandbox run itself succeeded, for the resumed
 	// phase's own record.
 	Success bool
@@ -1195,16 +1211,11 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 		return nil
 	}
 
-	if !run.LaunchNodeGone.IsZero() {
-		// THE FLEET FOUND ITS BOX'S HOST GONE ([PendingRun.LaunchNodeGone]),
-		// and this completion is the waiter's announcement of that: there
-		// is no box to read, anywhere. Ended through the one ending, as a
-		// loss that says why.
-		c.settleFailed(ctx, run, types.SandboxFailureLaunchNodeGone, fmt.Sprintf(
-			"the coding run's box was on the host of node %s, which left the fleet and did not "+
-				"come back within the box timeout, so its result is lost; the work it pushed, if "+
-				"any, is on its branch", run.LaunchNode))
-		return nil
+	if run.Lost != nil {
+		// THE JOB WAS LOST WITH ITS HOST ([PendingRun.Lost]), and this
+		// completion is the waiter's announcement of that: what it left is
+		// no result, and its round is carried on.
+		return c.carryOnLost(adm, run, trigger)
 	}
 
 	result, ended, err := c.collect(ctx, run)
@@ -1292,8 +1303,10 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 // box that answered, and its next failure starts a run of its own.
 //
 // A BOX THAT IS GONE ([ErrBoxGone]) is settled at once: no attempt can read a
-// box its provider reclaimed, and by the time the poll gives a vanished box up
-// it has already waited out that same window.
+// box its provider reclaimed. It went between the poll that found its job over
+// and this collection — a poll that finds a RUNNING job's box gone has already
+// waited out that same window, and records the job lost so that its round is
+// carried on instead ([LossBoxGone]).
 //
 // A COLLECTION THIS NODE ITSELF CANCELLED is handed back WITHOUT being
 // counted. A drain, a restart and a seat moving to another node all end the
@@ -1338,7 +1351,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		since = now
 	}
 	gone := errors.Is(cause, ErrBoxGone)
-	if gone || (attempts >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp) {
+	if c.collectGivenUp(run, cause, now) {
 		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
 			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
 			"box_gone", gone, "error", cause.Error())
@@ -1389,6 +1402,9 @@ type runOutcome struct {
 	// Asked is the question a person's answer resumes the run from — see
 	// [ResumeRequest.Asked].
 	Asked *AskedRun
+	// Lost is the loss a lost job's round is carried on from — see
+	// [ResumeRequest.Lost].
+	Lost *LostRun
 }
 
 // parkedEngineSpend is what the engine spent on a parked job outside every
@@ -1506,8 +1522,8 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	}
 	ended := false
 	if read == BoxReadCollect && run.PastDeadline(c.now()) {
-		done, pollErr := runner.Poll(ctx, box, run.Handle())
-		ended = pollErr == nil && !done
+		state, pollErr := runner.Poll(ctx, box, run.Handle())
+		ended = pollErr == nil && state == JobRunning
 	}
 	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
@@ -1724,6 +1740,11 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		// ([Coordinator.StopSeat]), and a record marked failed would list
 		// it with the runs that broke. Who stopped it is the note.
 		rec.Notes = "stopped by " + run.Stop.By + " before it finished"
+	case run.Lost != nil && !result.NeedsInput:
+		// LOST, NOT FAILED: its host cut it off mid-step ([JobLoss]), which
+		// says nothing about the run, and its round is carried on. What
+		// happened is the note.
+		rec.Notes = lostNote(*run.Lost)
 	case result.NeedsInput:
 		// STOPPED, NOT FAILED: the run is parked on a question and will
 		// be resumed by its answer. The question is the note a reader
@@ -2456,7 +2477,8 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
 		CacheReadTokens: outcome.CacheReadTokens, CacheWriteTokens: outcome.CacheWriteTokens,
-		Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Begin: begin,
+		Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Lost: outcome.Lost,
+		Begin: begin,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) && !began.Load() {
 			// BROKEN BEFORE ITS TURN BEGAN — a panic re-entering the

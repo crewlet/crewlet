@@ -217,9 +217,9 @@ func TestARunningJobIsNotDone(t *testing.T) {
 	// The wrapper answers the liveness probe.
 	b.ExecFunc = alive(true)
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || done {
-		t.Fatalf("Poll = %v, %v; want a running job", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobRunning {
+		t.Fatalf("Poll = %v, %v; want a running job", state, err)
 	}
 }
 
@@ -231,9 +231,9 @@ func TestTheDoneMarkerEndsTheRun(t *testing.T) {
 	b.ExecFunc = alive(true)
 	b.Put(paths(b).Done(), "0")
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want done", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobEnded {
+		t.Fatalf("Poll = %v, %v; want ended", state, err)
 	}
 }
 
@@ -247,9 +247,9 @@ func TestAnEmptyMarkerIsNotACompletion(t *testing.T) {
 	b.ExecFunc = alive(true)
 	b.Put(paths(b).Done(), "")
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || done {
-		t.Fatalf("Poll = %v, %v; an empty marker is indistinguishable from none", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobRunning {
+		t.Fatalf("Poll = %v, %v; an empty marker is indistinguishable from none", state, err)
 	}
 }
 
@@ -262,9 +262,62 @@ func TestADeadWrapperWithNoMarkerEndsTheRun(t *testing.T) {
 	handle := start(t, runner, b)
 	b.ExecFunc = alive(false)
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want the dead job reaped", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobEnded {
+		t.Fatalf("Poll = %v, %v; want the dead job ended and collected", state, err)
+	}
+}
+
+// lostBox is a box that says its job was lost with the engine that last saw it
+// running, as a local box does once its engine's restart killed it — writing
+// the done marker as the box is asked, where marked says to: a wrapper that
+// finished between the poll's first read and the box's answer.
+type lostBox struct {
+	*sandbox.FakeSandbox
+	marker string
+}
+
+func (b *lostBox) Job(context.Context, string) (sandbox.JobState, error) {
+	if b.marker != "" {
+		b.Put(paths(b).Done(), b.marker)
+	}
+	return sandbox.JobLost, nil
+}
+
+// A JOB ITS BOX SAYS WAS LOST IS LOST, NOT ENDED: it went with the engine that
+// last saw it running, mid-step, and what it left is no result — so the poll
+// says so, and the waiter has its round carried on rather than collected.
+//
+// Mutation: answer every job that is not running as ended, and a job its
+// engine's restart killed is collected as the round's result.
+func TestAJobItsBoxSaysWasLostIsLost(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := &lostBox{FakeSandbox: box(t, runner)}
+	handle := start(t, runner, b.FakeSandbox)
+
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobLost {
+		t.Fatalf("Poll = %v, %v; want the job lost", state, err)
+	}
+}
+
+// A JOB THAT WROTE ITS MARKER AS IT WAS ASKED ABOUT FINISHED: the wrapper
+// writes the marker and exits, and one that did both between the poll's read
+// and the box's answer is a job that ended, whatever the box then says of its
+// process.
+//
+// Mutation: drop the second read of the marker, and a run that finished is
+// started again.
+func TestALostJobWhoseMarkerIsThereAfterAllEnded(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := &lostBox{FakeSandbox: box(t, runner), marker: "0"}
+	handle := start(t, runner, b.FakeSandbox)
+
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobEnded {
+		t.Fatalf("Poll = %v, %v; want the job that wrote its marker ended", state, err)
 	}
 }
 
@@ -278,7 +331,7 @@ func TestAnAliveWrapperKeepsWaitingHoweverLong(t *testing.T) {
 	b.ExecFunc = alive(true)
 
 	for range 100 {
-		if done, _ := runner.Poll(t.Context(), b, handle); done {
+		if state, _ := runner.Poll(t.Context(), b, handle); state.Over() {
 			t.Fatal("a live job was declared finished")
 		}
 	}
@@ -294,9 +347,9 @@ func TestAnUnreadableLivenessProbeIsNotACompletion(t *testing.T) {
 	b.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		return sandbox.ExecResult{}, context.DeadlineExceeded
 	}
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || done {
-		t.Fatalf("Poll = %v, %v; want the next tick to ask again", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobRunning {
+		t.Fatalf("Poll = %v, %v; want the next tick to ask again", state, err)
 	}
 }
 

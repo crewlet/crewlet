@@ -380,11 +380,11 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		done, err := runner.Poll(t.Context(), box, handle)
+		state, err := runner.Poll(t.Context(), box, handle)
 		if err != nil {
 			t.Fatalf("Poll: %v", err)
 		}
-		if done {
+		if state.Over() {
 			break
 		}
 		if time.Now().After(deadline) {

@@ -56,7 +56,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
 		{"ARelaunchsBoxMovesTheRowToItsCell", testARelaunchsBoxMovesTheRowToItsCell},
 		{"EveryLaunchRecordsTheNodeThatLaunchedIt", testEveryLaunchRecordsTheNodeThatLaunchedIt},
-		{"AGoneLaunchNodeIsRecordedOnlyOnTheJobItWasJudgedOn", testAGoneLaunchNodeIsRecordedOnlyOnTheJobItWasJudgedOn},
+		{"ALossIsRecordedOnlyOnTheJobItWasJudgedOn", testALossIsRecordedOnlyOnTheJobItWasJudgedOn},
+		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
@@ -438,17 +439,18 @@ func testEveryLaunchRecordsTheNodeThatLaunchedIt(t *testing.T, s sandbox.Pending
 	}
 }
 
-// A GONE LAUNCH NODE IS RECORDED ONLY ON THE JOB IT WAS JUDGED ON: running, the
-// same launch and the same node. A verdict that landed on a relaunch — a new
-// job on a node that is here — or on a run whose completion is already being
-// collected would end work nothing found lost. Recorded once, it stands, and a
-// relaunch clears it.
-func testAGoneLaunchNodeIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.PendingStore) {
+// A LOSS IS RECORDED ONLY ON THE JOB IT WAS JUDGED ON: running, the same
+// launch, and — for a box on one node's host — that node. A verdict that landed
+// on a relaunch, or on a run whose completion is already being collected, would
+// have a round started again that nothing found lost. Recorded once, it stands
+// at its first instant and cause, and a relaunch clears it.
+func testALossIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
-	first := run("t-gone")
+	first := run("t-lost")
 	first.LaunchNode = "node-a"
 	launch := mustLaunched(t, s, first)
 	at := base.Add(time.Hour)
+	lost := sandbox.JobLoss{Cause: sandbox.LossEngineRestarted, Node: "node-a", At: at}
 
 	for _, refused := range []struct {
 		name, launch, node string
@@ -456,39 +458,52 @@ func testAGoneLaunchNodeIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sand
 		{"another job", "not-" + launch, "node-a"},
 		{"another node", launch, "node-b"},
 		{"no job", "", "node-a"},
-		{"no node", launch, ""},
 	} {
-		marked, err := s.MarkLaunchNodeGone(ctx, "t-gone", refused.launch, refused.node, at)
+		loss := lost
+		loss.Node = refused.node
+		marked, err := s.MarkLost(ctx, "t-lost", refused.launch, loss)
 		if err != nil || marked {
 			t.Errorf("a verdict on %s: marked=%v err=%v; want refused", refused.name, marked, err)
 		}
 	}
-	if got := mustGet(t, s, "t-gone"); !got.LaunchNodeGone.IsZero() {
-		t.Fatalf("a refused verdict landed: %v", got.LaunchNodeGone)
+	if got := mustGet(t, s, "t-lost"); got.Lost != nil {
+		t.Fatalf("a refused verdict landed: %+v", *got.Lost)
 	}
 
-	marked, err := s.MarkLaunchNodeGone(ctx, "t-gone", launch, "node-a", at)
+	marked, err := s.MarkLost(ctx, "t-lost", launch, lost)
 	if err != nil || !marked {
 		t.Fatalf("the verdict on the job it was judged on: marked=%v err=%v", marked, err)
 	}
-	if got := mustGet(t, s, "t-gone"); !got.LaunchNodeGone.Equal(at) {
-		t.Fatalf("the row records the verdict at %v, want %v", got.LaunchNodeGone, at)
+	if got := mustGet(t, s, "t-lost"); got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossEngineRestarted || got.Lost.Node != "node-a" {
+		t.Fatalf("the row records the verdict %+v, want %+v", got.Lost, lost)
 	}
-	// It STANDS: asked again, the row still carries it, at its first instant.
-	again, err := s.MarkLaunchNodeGone(ctx, "t-gone", launch, "node-a", at.Add(time.Minute))
-	if err != nil || !again {
-		t.Errorf("a second verdict on the same job: marked=%v err=%v; want the verdict standing", again, err)
+	// It STANDS: asked again, the row still carries the first, at its first
+	// instant and with its own cause.
+	again := sandbox.JobLoss{Cause: sandbox.LossBoxGone, Node: "node-a", At: at.Add(time.Minute)}
+	if marked, err := s.MarkLost(ctx, "t-lost", launch, again); err != nil || !marked {
+		t.Errorf("a second verdict on the same job: marked=%v err=%v; want the verdict standing", marked, err)
 	}
-	if got := mustGet(t, s, "t-gone"); !got.LaunchNodeGone.Equal(at) {
-		t.Errorf("a second verdict moved the first to %v", got.LaunchNodeGone)
+	if got := mustGet(t, s, "t-lost"); got.Lost == nil || !got.Lost.At.Equal(at) ||
+		got.Lost.Cause != sandbox.LossEngineRestarted {
+		t.Errorf("a second verdict moved the first to %+v", got.Lost)
 	}
 
-	// A RELAUNCH is a job on a node that is here.
-	next := run("t-gone")
+	// A RELAUNCH is a job nothing has judged.
+	next := run("t-lost")
 	next.LaunchNode = "node-b"
 	mustBeginLaunch(t, s, next)
-	if got := mustGet(t, s, "t-gone"); !got.LaunchNodeGone.IsZero() {
-		t.Errorf("the relaunch kept the previous job's verdict: %v", got.LaunchNodeGone)
+	if got := mustGet(t, s, "t-lost"); got.Lost != nil {
+		t.Errorf("the relaunch kept the previous job's verdict: %+v", *got.Lost)
+	}
+
+	// A BOX EVERY NODE REACHES is judged by no node in particular.
+	remote := run("t-remote")
+	remote.LaunchNode = "node-a"
+	remoteLaunch := mustLaunched(t, s, remote)
+	if marked, err := s.MarkLost(ctx, "t-remote", remoteLaunch,
+		sandbox.JobLoss{Cause: sandbox.LossBoxGone, At: at}); err != nil || !marked {
+		t.Errorf("a verdict on a box no node holds: marked=%v err=%v; want recorded", marked, err)
 	}
 
 	// A JOB NO LONGER RUNNING — its completion claimed — takes none.
@@ -496,12 +511,61 @@ func testAGoneLaunchNodeIsRecordedOnlyOnTheJobItWasJudgedOn(t *testing.T, s sand
 	claimedRun.LaunchNode = "node-a"
 	claimedLaunch := mustLaunched(t, s, claimedRun)
 	mustClaim(t, s, "t-claimed")
-	if marked, err := s.MarkLaunchNodeGone(ctx, "t-claimed", claimedLaunch, "node-a", at); err != nil || marked {
+	if marked, err := s.MarkLost(ctx, "t-claimed", claimedLaunch, lost); err != nil || marked {
 		t.Errorf("a verdict on a claimed job: marked=%v err=%v; want refused", marked, err)
 	}
 	// Nor does a run with no record.
-	if marked, err := s.MarkLaunchNodeGone(ctx, "t-none", "l", "node-a", at); err != nil || marked {
+	if marked, err := s.MarkLost(ctx, "t-none", "l", lost); err != nil || marked {
 		t.Errorf("a verdict on no run: marked=%v err=%v; want refused", marked, err)
+	}
+}
+
+// A ROUND COUNTS ITS LOST JOBS ACROSS THE RELAUNCHES THAT CARRY IT ON — each
+// one counted by the relaunch that follows it — and a new round starts from
+// none. The count is what stops a run that keeps taking its host down from
+// being started again for ever; one that a relaunch forgot would never stop it,
+// and one that outlived its round would end the next round early.
+func testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	lose := func(launch string) {
+		t.Helper()
+		loss := sandbox.JobLoss{Cause: sandbox.LossEngineRestarted, Node: "node-a", At: base}
+		if marked, err := s.MarkLost(ctx, "t-round", launch, loss); err != nil || !marked {
+			t.Fatalf("mark lost: marked=%v err=%v", marked, err)
+		}
+	}
+	carryOn := func() string {
+		t.Helper()
+		next := run("t-round")
+		next.LaunchNode = "node-a"
+		next.Continues = true
+		return mustLaunched(t, s, next)
+	}
+
+	first := run("t-round")
+	first.LaunchNode = "node-a"
+	lose(mustLaunched(t, s, first))
+	second := carryOn()
+	if got := mustGet(t, s, "t-round"); got.RoundLosses != 1 {
+		t.Fatalf("after one lost job carried on, the round counts %d losses, want 1", got.RoundLosses)
+	}
+	lose(second)
+	carryOn()
+	if got := mustGet(t, s, "t-round"); got.RoundLosses != 2 {
+		t.Fatalf("after two lost jobs carried on, the round counts %d losses, want 2", got.RoundLosses)
+	}
+	// A JOB OF THE ROUND THAT WAS NOT LOST — one that asked and is carried
+	// on with its answer — adds nothing.
+	carryOn()
+	if got := mustGet(t, s, "t-round"); got.RoundLosses != 2 {
+		t.Errorf("a carried-on job that was not lost moved the count to %d, want 2", got.RoundLosses)
+	}
+	// A NEW ROUND has lost nothing.
+	fresh := run("t-round")
+	fresh.LaunchNode = "node-a"
+	mustLaunched(t, s, fresh)
+	if got := mustGet(t, s, "t-round"); got.RoundLosses != 0 {
+		t.Errorf("a new round starts at %d losses, want 0", got.RoundLosses)
 	}
 }
 

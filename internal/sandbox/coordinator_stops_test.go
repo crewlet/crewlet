@@ -811,12 +811,11 @@ func (s *refusingStore) ExpirePause(ctx context.Context, turnID string) (bool, e
 	return s.inner.ExpirePause(ctx, turnID)
 }
 
-func (s *refusingStore) MarkLaunchNodeGone(ctx context.Context, turnID, launch, node string,
-	at time.Time) (bool, error) {
-	if s.called("MarkLaunchNodeGone") {
+func (s *refusingStore) MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error) {
+	if s.called("MarkLost") {
 		return false, errRefusedCall
 	}
-	return s.inner.MarkLaunchNodeGone(ctx, turnID, launch, node, at)
+	return s.inner.MarkLost(ctx, turnID, launch, loss)
 }
 
 func (s *refusingStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {

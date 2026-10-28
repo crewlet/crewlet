@@ -1168,7 +1168,7 @@ One `turn_id` moves through four stages, and the records say which it is in:
 | **context** | `agent_turn_started` published, no phase open yet — the prefetch is reading its thread and knowledge |
 | **phases** | an `agent_phase_started` open, `agent_turn_progress` frames streaming |
 | **parked** | the newest `agent_turn_completed` / `turn_completed` carries `suspended: true` — the segment ended on its executor's detached run, and the same `turn_id` completes again when the run is collected |
-| **done** | a completion **without** `suspended`, or a `sandbox_run_failed` for the run a parked turn was waiting on: nothing resumes a turn whose run was lost |
+| **done** | a completion **without** `suspended`, or a `sandbox_run_failed` for the run a parked turn was waiting on: nothing resumes a turn whose run failed (a run whose job was lost with its host resumes its turn, to carry the round on) |
 
 A reader that took any completion for the end listed a parked turn as finished,
 with its first segment's duration. The turns list (`GET /turns`) reads the
