@@ -352,7 +352,7 @@ describe("what it surfaces", () => {
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
-              message: "provider unreachable",
+              detail: "provider unreachable",
               phase: "execute",
               turn_id: "t1",
               at: "2026-01-01T11:59:00Z",
@@ -482,7 +482,7 @@ describe("ordering", () => {
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
-              message: "provider unreachable",
+              detail: "provider unreachable",
               phase: "execute",
               turn_id: "t1",
               at: "2026-01-01T11:59:00Z",
@@ -605,7 +605,7 @@ describe("a model at its usage limit", () => {
   };
   const failed = {
     kind: "rate_limit",
-    message: "llm chain exhausted after 1 providers (default)",
+    detail: "llm chain exhausted after 1 providers (default)",
     phase: "execute",
     turn_id: "t1",
     at: "2026-01-01T11:59:30Z",

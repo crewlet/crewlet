@@ -409,7 +409,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         // began, which is what orders it among the rest and what its row's
         // age says.
         ...(agent.paused?.at ? { at: agent.paused.at } : {}),
-        ...(agent.last_error?.message ? { technical: agent.last_error.message } : {}),
+        ...(agent.last_error?.detail ? { technical: agent.last_error.detail } : {}),
         who,
       });
       continue;
@@ -428,7 +428,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         // THE KIND IN PLAIN WORDS, never the machine code or the engine's
         // raw message, which rides along as `technical`.
         detail: failureWords(agent.last_error.kind).sentence,
-        ...(agent.last_error.message ? { technical: agent.last_error.message } : {}),
+        ...(agent.last_error.detail ? { technical: agent.last_error.detail } : {}),
         path: seatPath,
         at: agent.last_error.at,
         who,

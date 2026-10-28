@@ -779,7 +779,7 @@ test("a fault stop is one banner in plain words, the engine's message behind a d
         stopped_reason: "provider",
         last_error: {
           kind: "server",
-          message: "llm chain exhausted after 1 providers (default)",
+          detail: "llm chain exhausted after 1 providers (default)",
           phase: "execute",
           turn_id: "t1",
           at: "2026-09-21T09:00:00Z",

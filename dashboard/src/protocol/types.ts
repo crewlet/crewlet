@@ -205,8 +205,13 @@ export interface TraceAnswer {
 
 /** Why a seat stopped. One shape for every kind of stop. */
 export interface ErrorInfo {
+  /** The classifier's kind, which a screen words for a person
+   *  (`failureWords`). */
   kind: string;
-  message: string;
+  /** The failure in its own words: sent only to an admin, since it names
+   *  the company's model entries and carries what a vendor or a tool wrote
+   *  (`livestate.Reach.Config`). */
+  detail?: string;
   phase: string;
   turn_id: string;
   at: string;

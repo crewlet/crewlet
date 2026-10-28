@@ -1102,7 +1102,7 @@ describe("a burst of live pushes", () => {
   function failed(n: number) {
     return {
       kind: "rate_limit",
-      message: "llm chain exhausted after 1 providers (default)",
+      detail: "llm chain exhausted after 1 providers (default)",
       phase: "execute",
       turn_id: `t-${n}`,
       at: new Date(Date.now() - 60_000 + n).toISOString(),

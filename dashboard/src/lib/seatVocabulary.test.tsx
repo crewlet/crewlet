@@ -49,7 +49,7 @@ const FAILED_TURN: AgentRow = {
   activity: "idle",
   last_error: {
     kind: "server",
-    message: "llm chain exhausted after 1 providers (default)",
+    detail: "llm chain exhausted after 1 providers (default)",
     phase: "execute",
     turn_id: "t1",
     at: "2026-01-01T11:30:00Z",
