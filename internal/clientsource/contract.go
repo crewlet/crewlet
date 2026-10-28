@@ -275,8 +275,6 @@ var contract = []Entry{
 	{"MAX_ARTIFACT_ROOMS", ReadScalar, "internal/api/stream.TestTheDashboardJoinsNoMoreRoomsThanTheEngineHolds"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
-	{"DELEGATE_TOOL", ReadScalar, "internal/agent/subagent.TestTheDashboardCountsWorkersOnTheCallTheEngineMakes"},
-	{"DELEGATE_TASKS", ReadScalar, "internal/agent/subagent.TestTheDashboardCountsWorkersOnTheCallTheEngineMakes"},
 
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},

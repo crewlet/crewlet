@@ -150,7 +150,7 @@ before it, and the sentence beside it says what they are doing.
 
 | Status (pill tone) | `activity` | Label |
 |---|---|---|
-| `working` (`info`) | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), the workers ("3 workers on ENG-405" — the tasks of the `delegate` call the seat is waiting on, read off its call in flight, the one record that exists while they run), or a parked run ("Coding run on ENG-9") |
+| `working` (`info`) | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), or a parked run ("Coding run on ENG-9") — which is what it says for as long as the run works, workers it delegated to included: a seat's workers run under its executor's run, whose calls the engine does not stream |
 | `needs` (`warning`) | `needs`: a coding run it launched waits on a question only a person can answer | "Needs you", "Needs you · run parked" |
 | `stopped` (`danger`) | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | "Paused by Jane Founder · 12m" (the pauser by the name the chart gives their handle; a token nobody bound, by its own name), "Not placed on any node", "Stopped · budget", "Stopped · provider" |
 | **none** — a neutral pill | `idle`, no row from the engine yet, or a human seat | "Idle · last turn 24m ago", "No state from the engine yet" |
@@ -3106,7 +3106,7 @@ state's own ground ("SWE is on turn 3 · coding run · for 2m",
 with a pulse that is static under reduced motion) linking to the live trace.
 The words after the turn are the task card's strip's own, from one derivation
 — the round counted from one, as the stepper counts it, and the phase named
-("reading context", "reviewing", "3 workers running", "coding run") — so the
+("reading context", "reviewing", "coding run") — so the
 card, the row and the seat's profile never name different rounds of one turn.
 The composer is last: a comment, a reply, or **Ask…** — a question put to one
 seat, optionally with two to six options, the one recommended and whether the
