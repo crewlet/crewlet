@@ -8,7 +8,8 @@
  * grant on it: a person reads every repository (ADR-0058), and a seat what its
  * place in the chart relates it to. A page is what the engine SCANNED, not
  * what it kept, so it can be shorter than its limit — or empty with a cursor —
- * and the list pages until no cursor comes back. The order is the engine's,
+ * and the list pages until no cursor comes back, its first page held still
+ * from the press of Load more (`lib/usePaged.ts`). The order is the engine's,
  * by name, and the grid draws it as given: a head that sorted the pages
  * loaded would answer a different question under the same arrow.
  *
@@ -52,14 +53,15 @@ import { fmtBytes, fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { indexOrg, unitByKey, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
-import { usePaged } from "~/lib/usePaged.ts";
+import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeRepoSummary, CodeReposAnswer } from "~/protocol/index.ts";
 import { pushesHref } from "./paths.ts";
 
 /**
- * How often the listing is read again while it is open: a MINUTE, the
- * cadence a directory nothing pushes is polled at here (Work's Projects). A
+ * How often the listing's first page is read again while it is open and
+ * nothing past it is loaded: a MINUTE, the cadence a directory nothing pushes
+ * is polled at here (Work's Projects). A
  * repository's own rows move at an activation and its counts at every push,
  * and the code log has no push to the dashboard, so another person's push
  * reaches the open listing by this read or not at all.
@@ -80,10 +82,18 @@ export function Repositories() {
   // entry rather than adding one.
   const [status, setStatus] = useParam("status", "", "filter");
   const params = useMemo(() => (status ? { status } : {}), [status]);
-  const first = useCodeQuery("code_repos", params, { pollMs: REPOS_POLL_MS });
+  // THE FIRST PAGE IS HELD from the press of Load more (`lib/usePaged.ts`):
+  // the cursor is the last name it scanned, and a repository declared,
+  // restored or moved into the filter while it was read again would push that
+  // name out of both pages.
+  const hold = usePageHold<CodeReposAnswer>(params);
+  const first = useCodeQuery("code_repos", params, {
+    pollMs: REPOS_POLL_MS,
+    hold: hold.holding,
+  });
   const paged = usePaged(
+    hold,
     first,
-    params,
     (cursor) => codeRest.query("code_repos", { ...params, cursor }),
     (answer: CodeReposAnswer) => answer.repos ?? [],
     (repo: CodeRepoSummary) => repo.id,
@@ -148,7 +158,13 @@ export function Repositories() {
           rowHref={(r) => pushesHref(r.name)}
           onLoadMore={paged.more ? paged.older : undefined}
           loadedNote={
-            paged.more ? `${plural(rows.length, "repository", "repositories")} loaded` : undefined
+            paged.more || paged.held
+              ? `${plural(rows.length, "repository", "repositories")} loaded${
+                  // SAID ONLY ONCE IT IS TRUE: until then the first page is
+                  // read again every minute.
+                  paged.held ? ", paused while more are loaded" : ""
+                }`
+              : undefined
           }
           aria-label="Repositories"
           columns={[

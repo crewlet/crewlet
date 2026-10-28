@@ -1789,6 +1789,42 @@ test("the turns list says it holds a page, and loads the one before it", async (
   expect(within(card).queryByRole("button", { name: "Load older turns" })).toBeNull();
 });
 
+// THE NEWEST PAGE IS HELD from the press of "Load older turns": its cursor was
+// minted from its last turn, and read again under turns that ended since it
+// would push its last ones out of both pages. So a poll tick and a reconnect
+// ask nothing of it, and the card says the list is paused. Mutation: ask the
+// turns without the pager's hold, and the tick asks the newest page again.
+test("after Load older turns, neither a poll tick nor a reconnect asks the newest page", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const { store } = mount("#/company/org/seats/swe?tab=turns", {
+      answers: {
+        turns: (p: Record<string, unknown>) =>
+          p.before
+            ? { turns: [turnRow(50)], next: null }
+            : { turns: Array.from({ length: 50 }, (_, i) => turnRow(i)), next: "t-49" },
+      },
+    });
+    await settle();
+    const card = screen
+      .getByRole("heading", { name: "Turns" })
+      .closest(".crewlet-card") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
+    await settle();
+    expect(within(card).getByText("did thing 50")).toBeTruthy();
+    const newest = () => askedFor("turns").filter((a) => !a.params.before).length;
+    const before = newest();
+    await act(async () => void vi.advanceTimersByTime(5 * 20_000));
+    act(() => store.setConnected(false));
+    act(() => store.setConnected(true));
+    await settle();
+    expect(newest()).toBe(before);
+    expect(within(card).getByText("Paused while you page back.")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 // A KEYLESS ITEM IS NAMED SHORT, whole on its title: `native:<uuid>` took the
 // whole cell on a phone and laid the summary out one letter per line.
 test("a turn's keyless work item is named by its kind and the head of its id", async () => {

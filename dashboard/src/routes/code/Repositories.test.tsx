@@ -8,7 +8,7 @@
  * an empty company is told where a repository is declared.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -18,12 +18,14 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { Repositories } from "./Repositories.tsx";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   location.hash = "";
 });
 
@@ -104,8 +106,41 @@ function mount(ui: ReactElement, hash = "#/code/repos") {
       </SessionReading>
     </ClientContext.Provider>,
   );
-  return { onSocket };
+  return { onSocket, store };
 }
+
+/**
+ * The engine's listing over `declared()`, by name, two to a page: a page's
+ * cursor is the last name it scanned, as `code_repos` mints one, so a page
+ * asked after a repository lands continues from that name.
+ */
+function byName(declared: () => readonly string[]) {
+  return (url: URL) => {
+    if (url.pathname !== "/query/code_repos") return null;
+    const after = url.searchParams.get("cursor") ?? "";
+    const names = declared().filter((name) => name > after);
+    const page = names.slice(0, 2);
+    return json({
+      repos: page.map((name) => repo(name)),
+      ...(names.length > page.length ? { next: page.at(-1) } : {}),
+      position: POSITION,
+      level: "stale",
+    });
+  };
+}
+
+/** The listing's first pages asked: no cursor named. */
+const firstPages = (asked: URL[]) =>
+  asked.filter((u) => u.pathname === "/query/code_repos" && !u.searchParams.has("cursor"));
+
+/** The names the grid lists, in its order, each once. */
+const listed = () => [
+  ...new Set(
+    within(screen.getByRole("table", { name: "Repositories" }))
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href")?.split("repo=")[1]),
+  ),
+];
 
 // THE ENGINE'S LISTING, OVER REST, never one of the socket's slots — and each
 // row says what the listing knows and opens the repository's pushes.
@@ -203,4 +238,52 @@ test("a company with no repository is told where one is declared", async () => {
   const open = await screen.findByRole("link", { name: "Open the configuration" });
   expect(open.getAttribute("href")).toBe("#/settings/config");
   await waitFor(() => expect(screen.queryByRole("table")).toBeNull());
+});
+
+// THE FIRST PAGE IS HELD from the press of Load more. Its cursor is the last
+// name it scanned, and read again under a repository that entered its range —
+// declared by an activation, restored, or moved into the filtered state — it
+// pushes that name out of both pages. The case found in review: a1 and a2,
+// then a3; a0 is declared, and a minute on a2 was gone until a reload.
+// Mutation: ask the listing without the pager's hold, and a2 is not listed.
+test("a repository declared after Load more pushes none out of the listing", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let declared = ["a1", "a2", "a3"];
+  const asked = stubFetch(byName(() => declared));
+  const { store } = mount(<Repositories />);
+  fireEvent.click(await screen.findByRole("button", { name: /load more/i }));
+  expect(await screen.findByText("a3")).toBeTruthy();
+  expect(listed()).toEqual(["a1", "a2", "a3"]);
+
+  declared = ["a0", "a1", "a2", "a3"];
+  await act(async () => void vi.advanceTimersByTime(3 * 60_000));
+  act(() => store.setConnected(true));
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+  await afterMicrotasks();
+  expect(firstPages(asked)).toHaveLength(1);
+  expect(listed()).toEqual(["a1", "a2", "a3"]);
+});
+
+// A FILTER LEFT AND COME BACK TO starts the listing again: what the first
+// reading held is discarded, never hidden under its question, where it came
+// back under a first page read since. Mutation: hide the held pages by
+// question instead, and the old a3 is drawn under a fresh first page.
+test("a filter left and come back to lists from its first page, nothing held", async () => {
+  let declared = ["a1", "a2", "a3"];
+  const asked = stubFetch(byName(() => declared));
+  mount(<Repositories />);
+  fireEvent.click(await screen.findByRole("button", { name: /load more/i }));
+  expect(await screen.findByText("a3")).toBeTruthy();
+
+  act(() => void (location.hash = "#/code/repos?status=archived"));
+  await waitFor(() =>
+    expect(asked.some((u) => u.searchParams.get("status") === "archived")).toBe(true),
+  );
+  declared = ["a0", "a1", "a2", "a3"];
+  act(() => void (location.hash = "#/code/repos"));
+  expect(await screen.findByText("a0")).toBeTruthy();
+  await afterMicrotasks();
+  expect(listed()).toEqual(["a0", "a1"]);
+  expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
 });

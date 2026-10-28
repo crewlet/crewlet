@@ -1123,6 +1123,56 @@ test("older comments are reachable", async () => {
   expect(screen.getByText("the very first word")).toBeTruthy();
 });
 
+// EACH HISTORY'S NEWEST PAGE IS HELD from the press of "Earlier activity":
+// read again under newer comments, it would push its last ones out of both
+// pages, so a poll tick and a reconnect ask nothing of it and the feed says it
+// is paused. Mutation: ask the comments without the pager's hold, and the
+// tick asks the newest page again.
+test("after Earlier activity, neither a poll tick nor a reconnect asks a newest page", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const comment = (id: string, at: string, body: string) => ({
+      id,
+      task: "t-1",
+      author: "ada",
+      author_kind: "agent",
+      body,
+      created_at: at,
+    });
+    const { store } = mount(<WorkItemPage id="ENG-42" />, {
+      answers: {
+        work_comments: (params: Record<string, unknown>) =>
+          Promise.resolve({
+            item: "t-1",
+            key: "ENG-42",
+            title: "x",
+            ...(params.cursor === "c-50"
+              ? { comments: [comment("c-1", "2031-04-01T09:00:00Z", "the very first word")] }
+              : {
+                  comments: [comment("c-51", "2031-04-12T09:00:00Z", "the newest word")],
+                  next_cursor: "c-50",
+                }),
+          }),
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Earlier activity" }));
+    await settle();
+    expect(screen.getByText("the very first word")).toBeTruthy();
+    const newest = () =>
+      asked.filter((a) => a.kind === "work_comments" && a.params.cursor === undefined).length;
+    const before = newest();
+    await act(async () => void vi.advanceTimersByTime(5 * 30_000));
+    act(() => store.setConnected(false));
+    act(() => store.setConnected(true));
+    await settle();
+    expect(newest()).toBe(before);
+    expect(screen.getByText("Paused while you page back.")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 // THE FOUR ANSWERS OF "WHO THIS REACHED" KEEP THEIR SENTENCES: reached nobody,
 // no such change here, beyond the retention window, and cannot say — four
 // different facts, which a tracker that listed recipients would draw as one

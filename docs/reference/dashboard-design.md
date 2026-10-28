@@ -1929,10 +1929,20 @@ sends them toward fewer and newer rows. So a log that fills its page offers
 **Load older**, holds the pages it has, and discards all of them together when
 the window or a server-side facet changes — pages fetched under the previous
 question are rows the engine would never have answered for this one, and the
-cursor walks that question's history. While a reader is paging back the first
-page is held still: the cursor was minted from its last row, so re-reading it
-under a poll pushes that row out and the changes between two pages belong to
-neither, which is a silent hole in the middle of a log.
+cursor walks that question's history. Discarded, never hidden under the old
+question: hidden, they came back when the reader returned to it, under a first
+page read since. From the press of Load older the first page is held still —
+no poll, no reconnect and no return of the tab reads it — because the cursor
+was minted from its last row: re-reading it under newer rows pushes that row
+out and the changes between two pages belong to neither, which is a silent
+hole in the middle of a log. The reader's own write still reads it again, so
+the screen they acted on shows the act, and the pages held are then read again
+from it, in order, and swapped in together; a read again that fails lets the
+hold go and the first page is live again. Once it is true the screen says so —
+"Paused while you page back." One pager does all of it, `lib/usePaged.ts`, and
+a list paged by a cursor in another order holds the same way, since its first
+page read again pushes rows out alike: Code's Repositories, by name, is paused
+while more are loaded.
 
 **A date is a band, not a wider cell.** A row's time column is sized for a wall
 clock, which is right for every row in a log but the first of each day — and
@@ -6898,8 +6908,10 @@ section mounts.
 - **Repositories** is the engine's listing, `code_repos`, by name and a page
   at a time. A page is what the engine SCANNED, not what it kept, so one can
   be short, or empty with a cursor, and the grid pages with Load more until no
-  cursor comes back; the order is the engine's and no head re-sorts the pages
-  held. A row says its state where it is not active (archived, deleted, being
+  cursor comes back, its first page held still from the press
+  ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)); the
+  order is the engine's and no head re-sorts the pages held. A row says its
+  state where it is not active (archived, deleted, being
   purged), who owns it (a unit by its name, a seat by its badge), which seats
   read it, its default branch and the commit it stands at, its last push, its
   pushes, its size and how many protection rules it carries. `status=` is the
@@ -6919,7 +6931,7 @@ section mounts.
   brought, a seat's turn and work item as the engine stamped them, how it was
   built (a client's `git push`, or a commit the engine built from a tool's
   call) and its pack. It is a log, so it reaches its older rows by fetching
-  them and holds its first page still while the reader pages back
+  them and holds its first page still from the press of Load older
   ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)). It
   draws no axis: the engine counts no series of pushes, and one folded from
   the pages held would be true of those pages alone.

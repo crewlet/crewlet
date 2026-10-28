@@ -98,14 +98,17 @@ import {
 } from "~/lib/work.ts";
 import type {
   AgentRow,
+  WorkActivityAnswer,
   WorkActivityRecord,
   WorkComment,
+  WorkCommentsAnswer,
   WorkItem,
   WorkItemTurn,
+  WorkItemTurnsAnswer,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
 import { ACTIVITY_TABS, timeline, type ActivityTab, type Entry, type Source } from "./timeline.ts";
-import { usePaged } from "~/lib/usePaged.ts";
+import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 
 /** How often the newest page of each history is asked again: nothing pushes them. */
 const ACTIVITY_POLL_MS = 30_000;
@@ -181,10 +184,19 @@ export function Activity({
   // BY ITS ID, which names this task and no other: a key two tasks hold
   // reads the history, the comments and the turns of whichever claimed it
   // first.
+  // EACH HISTORY'S NEWEST PAGE IS HELD from the press of "Earlier activity"
+  // (`lib/usePaged.ts`): read again under a newer row, it would push its last
+  // ones out of both its pages. A comment posted here still asks it again,
+  // and the pages held are read again from it.
   const changesAsked = { task: item.id, limit: CHANGES_PAGE };
+  const changesHold = usePageHold<WorkActivityAnswer>(changesAsked);
   const changes = usePaged(
-    useQuery("work_activity", changesAsked, { pollMs: ACTIVITY_POLL_MS, enabled: tracker }),
-    changesAsked,
+    changesHold,
+    useQuery("work_activity", changesAsked, {
+      pollMs: ACTIVITY_POLL_MS,
+      enabled: tracker,
+      hold: changesHold.holding,
+    }),
     (cursor) =>
       socket.query(
         "work_activity",
@@ -195,9 +207,14 @@ export function Activity({
     nextCursor,
   );
   const commentsAsked = { item: item.id, limit: COMMENTS_PAGE };
+  const commentsHold = usePageHold<WorkCommentsAnswer>(commentsAsked);
   const comments = usePaged(
-    useQuery("work_comments", commentsAsked, { pollMs: ACTIVITY_POLL_MS, enabled: tracker }),
-    commentsAsked,
+    commentsHold,
+    useQuery("work_comments", commentsAsked, {
+      pollMs: ACTIVITY_POLL_MS,
+      enabled: tracker,
+      hold: commentsHold.holding,
+    }),
     (cursor) =>
       socket.query(
         "work_comments",
@@ -208,9 +225,14 @@ export function Activity({
     nextCursor,
   );
   const turnsAsked = { id: item.id, limit: TURNS_PAGE };
+  const turnsHold = usePageHold<WorkItemTurnsAnswer>(turnsAsked);
   const turns = usePaged(
-    useQuery("work_item_turns", turnsAsked, { pollMs: ACTIVITY_POLL_MS, enabled: tracker }),
-    turnsAsked,
+    turnsHold,
+    useQuery("work_item_turns", turnsAsked, {
+      pollMs: ACTIVITY_POLL_MS,
+      enabled: tracker,
+      hold: turnsHold.holding,
+    }),
     (cursor) =>
       socket.query(
         "work_item_turns",
@@ -272,6 +294,7 @@ export function Activity({
     shown.some((source) => paged[source].loading && paged[source].items.length === 0);
   const failed = shown.map((source) => paged[source]).filter((read) => read.error !== null);
   const paging = shown.some((source) => paged[source].paging);
+  const held = shown.some((source) => paged[source].held);
   const pageError = shown.map((source) => paged[source].pageError).find(Boolean) ?? null;
   const runningHere = live && !asked && (tab === "all" || tab === "turns") ? live : null;
 
@@ -320,23 +343,28 @@ export function Activity({
       {failed.map((read, i) => (
         <QueryState key={i} error={read.error} refusal={read.refusal} loading={false} />
       ))}
-      {drawn.earlier.length > 0 && (
+      {(drawn.earlier.length > 0 || held) && (
         <div className="task-earlier">
           {/* A CONTROL THAT LOOKS LIKE ONE: the chevron says which way the
               page goes, and without it a ghost button's label at the feed's
               own weight read as a heading over the entries below it. */}
-          <Button
-            size="small"
-            variant="ghost"
-            leadingIcon={<ChevronUpGlyph size="sm" />}
-            loading={paging}
-            onClick={() => {
-              for (const source of drawn.earlier) paged[source].older();
-            }}
-          >
-            Earlier activity
-          </Button>
+          {drawn.earlier.length > 0 && (
+            <Button
+              size="small"
+              variant="ghost"
+              leadingIcon={<ChevronUpGlyph size="sm" />}
+              loading={paging}
+              onClick={() => {
+                for (const source of drawn.earlier) paged[source].older();
+              }}
+            >
+              Earlier activity
+            </Button>
+          )}
           {pageError && <QueryState error={pageError} refusal={null} loading={false} />}
+          {/* SAID ONLY ONCE IT IS TRUE: until then each history's newest page
+              is read again every thirty seconds. */}
+          {held && <span className="t-caption">Paused while you page back.</span>}
         </div>
       )}
       {loading ? (

@@ -111,7 +111,18 @@ function mount(hash: string) {
       </SessionReading>
     </ClientContext.Provider>,
   );
+  return { store };
 }
+
+/** The tab's socket comes back after a drop, as the loader hears it. */
+function reconnect(store: Store) {
+  act(() => store.setConnected(true));
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+}
+
+/** A newest page of the history: no cursor named. */
+const newest = (asked: URL[]) => histories(asked).filter((u) => !u.searchParams.has("cursor"));
 
 // NO HISTORY UNTIL A REPOSITORY IS NAMED: the engine keeps one per
 // repository, so the section asks for one and offers the repositories.
@@ -207,8 +218,9 @@ test("a repository nobody declared is said with the engine's sentence", async ()
 
 // A LOG REACHES ITS OLDER ROWS BY FETCHING THEM, and while it holds an older
 // page its first page is held still: re-read under newer pushes, the pushes
-// between the two pages would belong to neither. Mutation: keep polling the
-// first page while paging back, and the history is asked again below.
+// between the two pages would belong to neither — so neither a poll tick nor
+// a reconnect asks it. Mutation: ask the history without the pager's hold, and
+// the newest page is asked again below.
 test("Load older asks the next page by its cursor, and the first page is then held still", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const asked = stubFetch((url) =>
@@ -216,7 +228,7 @@ test("Load older asks the next page by its cursor, and the first page is then he
       ? json({ pushes: [push("p1")], position: POSITION, level: "stale" })
       : json({ pushes: [push("p2")], next: "c1", position: POSITION, level: "stale" }),
   );
-  mount("#/code/pushes?repo=web");
+  const { store } = mount("#/code/pushes?repo=web");
   await screen.findByRole("table", { name: "Pushes to web" });
   // POLLED WHILE NOTHING OLDER IS HELD: a minute on, the newest page again.
   await act(async () => void vi.advanceTimersByTime(60_000));
@@ -226,8 +238,65 @@ test("Load older asks the next page by its cursor, and the first page is then he
   fireEvent.click(screen.getByRole("button", { name: "Load older" }));
   await screen.findByText("That is every push the repository keeps.");
   expect(histories(asked).at(-1)!.searchParams.get("cursor")).toBe("c1");
+  expect(screen.getByText("Paused while you page back.")).toBeTruthy();
   const before = histories(asked).length;
   await act(async () => void vi.advanceTimersByTime(5 * 60_000));
+  reconnect(store);
   await afterMicrotasks();
   expect(histories(asked)).toHaveLength(before);
+});
+
+// HELD FROM THE PRESS, not from the answer: a tick landing while the older
+// page is on its way would read the first page again under the cursor that
+// page is asked from. Mutation: hold only once an older page is held, and the
+// tick asks the newest page.
+test("a poll tick while the older page is on its way asks nothing of the first", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const asked = stubFetch((url) =>
+    url.searchParams.get("cursor") === "c1"
+      ? (new Promise<Response>(() => {}) as unknown as Response)
+      : json({ pushes: [push("p2")], next: "c1", position: POSITION, level: "stale" }),
+  );
+  mount("#/code/pushes?repo=web");
+  await screen.findByRole("table", { name: "Pushes to web" });
+  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+  await afterMicrotasks();
+  expect(histories(asked).at(-1)!.searchParams.get("cursor")).toBe("c1");
+  await act(async () => void vi.advanceTimersByTime(3 * 60_000));
+  await afterMicrotasks();
+  expect(newest(asked)).toHaveLength(1);
+});
+
+// ANOTHER REPOSITORY AND BACK starts the history again: what was held for the
+// first is discarded, never hidden under its name, where it came back under a
+// first page read since and the pushes between the two vanished. Mutation:
+// keep the pages and hide them by repository, and p1 is drawn again.
+test("leaving a repository's history and coming back starts it from its newest page", async () => {
+  let landed = 4;
+  const asked = stubFetch((url) => {
+    if (url.searchParams.get("name") === "api") {
+      return json({ pushes: [push("q1")], position: POSITION, level: "stale" });
+    }
+    if (url.searchParams.get("cursor") === "c3") {
+      return json({ pushes: [push("p2"), push("p1")], position: POSITION, level: "stale" });
+    }
+    const top = Array.from({ length: 2 }, (_, i) => push(`p${landed - i}`));
+    return json({ pushes: top, next: `c${landed - 1}`, position: POSITION, level: "stale" });
+  });
+  mount("#/code/pushes?repo=web");
+  await screen.findByRole("table", { name: "Pushes to web" });
+  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+  await screen.findByText("That is every push the repository keeps.");
+  expect(screen.getByText("4 pushes listed")).toBeTruthy();
+
+  act(() => void (location.hash = "#/code/pushes?repo=api"));
+  await screen.findByRole("table", { name: "Pushes to api" });
+  landed = 6;
+  act(() => void (location.hash = "#/code/pushes?repo=web"));
+  await screen.findByRole("table", { name: "Pushes to web" });
+  await afterMicrotasks();
+  expect(screen.getByText("2 pushes listed")).toBeTruthy();
+  expect(screen.queryByText("Paused while you page back.")).toBeNull();
+  expect(screen.getByRole("button", { name: "Load older" })).toBeTruthy();
+  expect(histories(asked).filter((u) => u.searchParams.get("cursor") === "c3")).toHaveLength(1);
 });

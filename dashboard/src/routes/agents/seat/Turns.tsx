@@ -13,7 +13,8 @@
  * # The list is paged, and its count is what is loaded
  *
  * A page is fifty turns over the whole thirty days the event store keeps,
- * and "Load older" follows the engine's cursor back past it. The header
+ * and "Load older" follows the engine's cursor back past it, holding the
+ * newest page still from the press (`lib/usePaged.ts`). The header
  * counts the rows loaded — "50+" while an older page exists — because the
  * read counts nothing: it was `.length` of the first page under "the newest
  * 50 this seat took", which a seat with twelve turns contradicted and a seat
@@ -64,7 +65,7 @@ import { useSettled } from "~/lib/settled.ts";
 import { phaseColor, spentOnly } from "~/lib/spend.ts";
 import { useClient, useConnection, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { MAX_TURN_DAYS, openState, runningNow, UNSETTLED } from "~/lib/turns.ts";
-import { usePaged } from "~/lib/usePaged.ts";
+import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { AgentRow, EventRecord, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
@@ -110,15 +111,19 @@ export function Turns({
   // EVERY DAY THE STORE KEEPS: named, because the read's default is a week,
   // and a seat's record is the whole of what can still be read.
   const asked = { seat: handle, days: MAX_TURN_DAYS, limit: TURN_PAGE };
+  // THE NEWEST PAGE IS HELD from the press of "Load older turns"
+  // (`lib/usePaged.ts`): read again under turns that ended since, it would
+  // push its last ones out of both pages.
+  const hold = usePageHold<TurnsAnswer>(asked);
   const list = usePaged(
+    hold,
     useQuery(
       "turns",
       asked,
       // TWENTY SECONDS, the cadence `routes/live/Turns.tsx` gives the same
       // question — a store aggregate with no push behind it.
-      { enabled: handle !== "", pollMs: 20_000 },
+      { enabled: handle !== "", pollMs: 20_000, hold: hold.holding },
     ),
-    asked,
     (before) => socket.query("turns", withFloor("turns", JSON.stringify({ ...asked, before }))),
     pickTurns,
     turnRowId,
@@ -400,15 +405,19 @@ export function Turns({
         </QueryState>
         {/* OLDER TURNS ARE FETCHED, from the cursor the engine answered —
             never reached by a wider page. */}
-        {(list.more || list.paging || list.pageError) && (
+        {(list.more || list.paging || list.pageError || list.held) && (
           <footer className="panel-foot">
             {list.pageError ? (
               <QueryState error={list.pageError} refusal={null} loading={false} />
-            ) : (
+            ) : list.more || list.paging ? (
               <Button size="small" variant="secondary" onClick={list.older} disabled={list.paging}>
                 {list.paging ? "Loading…" : "Load older turns"}
               </Button>
-            )}
+            ) : null}
+            <span className="spacer" />
+            {/* SAID ONLY ONCE IT IS TRUE: until then the newest page is read
+                again every twenty seconds. */}
+            {list.held && <span>Paused while you page back.</span>}
           </footer>
         )}
       </Card>

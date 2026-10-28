@@ -81,6 +81,13 @@ export interface CodeQueryOptions {
   refetchOnFocus?: boolean;
   /** Ask again when the socket reconnects. Default true. */
   refetchOnReconnect?: boolean;
+  /**
+   * Hold the answer still: nothing asks the question again on its own — no
+   * poll, no reconnect, no return of the tab — and turning it on or off asks
+   * nothing; a change of the question, a write from this tab and `refetch()`
+   * still ask. `useQuery`'s option of the same name, for the same pager.
+   */
+  hold?: boolean;
 }
 
 /**
@@ -174,7 +181,7 @@ export function useCodeQuery<K extends CodeQueryName>(
   params?: CodeParams,
   options: CodeQueryOptions = {},
 ): QueryResult<CodeQueryMap[K]> {
-  const { enabled = true, pollMs, refetchOnFocus, refetchOnReconnect } = options;
+  const { enabled = true, pollMs, refetchOnFocus, refetchOnReconnect, hold = false } = options;
   // THE QUESTION IS THE KEY — its kind and its parameters, never the floor
   // (see the file's doc). The parameters are a fresh literal on every render,
   // so their serialisation is what is compared.
@@ -206,7 +213,13 @@ export function useCodeQuery<K extends CodeQueryName>(
       tagged.current = answer.etag ? { key: asking, etag: answer.etag, body } : null;
       return body;
     },
-    { pollMs, refetchOnFocus, refetchOnReconnect },
+    // A HOLD IS THE LOADER'S OWN RE-READS TURNED OFF: `useRest` keeps each in
+    // an effect of its own that reads nothing when its option changes, so
+    // turning them off and on again asks nothing, and the poll's first tick
+    // after the hold is a whole interval on.
+    hold
+      ? { pollMs: undefined, refetchOnFocus: false, refetchOnReconnect: false }
+      : { pollMs, refetchOnFocus, refetchOnReconnect },
   );
   const { reload } = result;
 

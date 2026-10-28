@@ -17,11 +17,12 @@
  *
  * A page boundary is not a window, so a history that fills its page offers
  * Load older and holds the pages it has, discarding them together when the
- * repository changes. And while the reader is paging back the first page is
- * HELD STILL — no poll, no read on the tab's return or the socket's — because
- * the cursor was minted from its last row: read again under newer pushes, it
+ * repository changes. And from the press of Load older the first page is HELD
+ * STILL — no poll, no read on the tab's return or the socket's — because the
+ * cursor was minted from its last row: read again under newer pushes, it
  * would push that row out, and the pushes between the two pages would belong
- * to neither.
+ * to neither. The pager is the one every paged history shares
+ * (`lib/usePaged.ts`).
  *
  * # What a row says is what the engine stamped
  *
@@ -31,7 +32,7 @@
  * what a commit says about itself.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Button,
   Callout,
@@ -54,24 +55,28 @@ import { commandWord, isRepoName, refName, shortOID } from "~/lib/code.ts";
 import { fmtBytes, fmtCount, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
-import { queryErrorCode } from "~/protocol/index.ts";
+import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 import type {
   CodePushCommand,
   CodePushRow,
   CodePushesAnswer,
   CodeRepoSummary,
 } from "~/protocol/index.ts";
-import type { QueryErrorCode } from "~/contract/errors.ts";
 import { REPO_PARAM } from "./paths.ts";
 
 /**
- * How often the newest page is read again while nobody is paging back: a
+ * How often the newest page is read again while nothing older is held: a
  * MINUTE, the cadence this dashboard reads the other change log nothing
  * pushes to it at (Work's History). The code log has no push to the
  * dashboard, so another person's push reaches the open history by this read
  * or not at all.
  */
 const PUSHES_POLL_MS = 60_000;
+
+/** A history page's pushes, each push's id, and the cursor to the page after. */
+const pushesOf = (a: CodePushesAnswer) => a.pushes ?? [];
+const pushIdOf = (p: CodePushRow) => p.push_id;
+const pushesAfter = (a: CodePushesAnswer) => a.next ?? "";
 
 /** Every way a push's commit and pack came to be, in words (`code.PushVias`). */
 const VIA_WORDS: Readonly<Record<string, string>> = {
@@ -91,58 +96,26 @@ export function Pushes() {
   // Load more away.
   const choices = useCodeQuery("code_repos");
   const params = useMemo(() => ({ name: repo }), [repo]);
-
-  // THE OLDER PAGES, keyed on the question they continue: another repository
-  // is another history, and its first page must not be followed by the
-  // previous one's second.
-  const question = JSON.stringify(params);
-  const [older, setOlder] = useState<{ for: string; pages: CodePushesAnswer[] }>({
-    for: "",
-    pages: [],
-  });
-  const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<QueryErrorCode | null>(null);
-  const pages = older.for === question ? older.pages : [];
-  // HELD STILL WHILE PAGING BACK: see the file's doc.
-  const still = pages.length > 0;
+  // ANOTHER REPOSITORY IS ANOTHER HISTORY: its first page is never followed by
+  // the last one's second, and the first page is held still from the press of
+  // Load older (see the file's doc).
+  const hold = usePageHold<CodePushesAnswer>(params);
   const first = useCodeQuery("code_pushes", params, {
     enabled: named,
-    pollMs: still ? undefined : PUSHES_POLL_MS,
-    refetchOnReconnect: !still,
+    pollMs: PUSHES_POLL_MS,
+    hold: hold.holding,
   });
-  const last = pages.at(-1) ?? first.data;
-  const more = !!last?.next;
-
-  const loadOlder = useCallback(async () => {
-    if (!last?.next || paging) return;
-    setPaging(true);
-    setPageError(null);
-    try {
-      const page = await codeRest.query("code_pushes", { ...params, cursor: last.next });
-      setOlder((prev) => ({
-        for: question,
-        pages: [...(prev.for === question ? prev.pages : []), page],
-      }));
-    } catch (err) {
-      setPageError(queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed");
-    } finally {
-      setPaging(false);
-    }
-  }, [last, paging, params, question]);
-
-  const rows = useMemo(() => {
-    // ONE ROW PER PUSH across pages, by its id.
-    const seen = new Set<string>();
-    const out: CodePushRow[] = [];
-    for (const answer of [first.data, ...pages]) {
-      for (const push of answer?.pushes ?? []) {
-        if (seen.has(push.push_id)) continue;
-        seen.add(push.push_id);
-        out.push(push);
-      }
-    }
-    return out;
-  }, [first.data, pages]);
+  const paged = usePaged(
+    hold,
+    first,
+    (cursor) => codeRest.query("code_pushes", { ...params, cursor }),
+    pushesOf,
+    pushIdOf,
+    pushesAfter,
+  );
+  // ONE ROW PER PUSH across pages, by its id.
+  const rows = paged.items;
+  const more = paged.more;
 
   return (
     <>
@@ -265,17 +238,17 @@ export function Pushes() {
               ]}
             />
           </QueryState>
-          {(rows.length > 0 || more || pageError) && (
+          {(rows.length > 0 || more || paged.pageError) && (
             <div className="row gap-2">
-              {pageError ? (
-                <QueryState error={pageError} refusal={null} loading={false} />
+              {paged.pageError ? (
+                <QueryState error={paged.pageError} refusal={null} loading={false} />
               ) : more ? (
                 <Button
                   size="small"
                   variant="secondary"
-                  onClick={() => void loadOlder()}
-                  disabled={paging}
-                  loading={paging}
+                  onClick={paged.older}
+                  disabled={paged.paging}
+                  loading={paged.paging}
                 >
                   Load older
                 </Button>
@@ -285,6 +258,9 @@ export function Pushes() {
               {rows.length > 0 && (
                 <span className="t-caption">{plural(rows.length, "push", "pushes")} listed</span>
               )}
+              {/* SAID ONLY ONCE IT IS TRUE: until then the first page is read
+                  again every minute. */}
+              {paged.held && <span className="t-caption">Paused while you page back.</span>}
             </div>
           )}
         </>
