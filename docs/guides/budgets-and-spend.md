@@ -76,15 +76,21 @@ the company's before the seat's — so a window that a coding run, a background
 pass or a person's answers filled says when it last turned work away rather
 than reading as one that has refused nothing.
 
-Both ceilings are part of the company document. The **company's**
-`token_budget` and a **seat's** are written through
+A third ceiling holds each **person's** Dashboard Assistant questions:
+`assistant.token_budget`, the same three windows, charged per person on top of
+the company's (see [the assistant's budgets](assistant.md#budgets-and-limits)).
+
+Every ceiling is part of the company document. The **company's**
+`token_budget`, a **seat's** and **each person's assistant's** are written through
 [`/config`](configure-via-api.md) (`admin`) — a seat's on its own with
 `PUT /config/roles/{handle}` — and every node enforces them once it has applied
 that epoch. The write is a revision recorded with a summary such as "Raise the
 company's daily token ceiling from 2M to 5M". A seat ceiling the company's own
 ceiling makes unable to refuse a turn — a seat's day at or above the company's
 day, say — is reported as a warning at the seat's ceiling by `crewlet validate` and on
-every `/config` write's answer. See
+every `/config` write's answer. A refusal one of them caused names it (its
+`remedy`), so the dashboard offers whoever may raise it the way to that
+ceiling on Company › Budgets, and tells anybody else who can. See
 [Dashboard design § Company › Budgets](../reference/dashboard-design.md#company--budgets-raised-in-place).
 
 ## The spend rollup, and why it has two sources

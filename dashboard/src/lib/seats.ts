@@ -1466,7 +1466,7 @@ export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = A
     case "unplaced":
       return "not placed on any node";
     case "budget":
-      return "its token budget is spent until the window resets";
+      return "its token budget is spent until the window resets or the ceiling is raised";
     case "provider":
       return "its model provider is unreachable";
     default:

@@ -454,14 +454,17 @@ func decodeTyped(t typedError) (reflect.Value, bool) {
 }
 
 // saidFromPeer rebuilds a refusal's person phrasing a peer carried as
-// `{"Words": "<sentence>"}`, or reports false for one with no words.
+// `{"Words": {"person": "<sentence>", "remedy": {...}}}`, or reports false for
+// one with no words or words it cannot read, which leave the refusal its
+// code's own sentence, as every field of a typed error this router cannot
+// decode does.
 func saidFromPeer(t typedError) (reflect.Value, bool) {
-	var person string
-	if raw, ok := t.Fields["Words"]; !ok || json.Unmarshal(raw, &person) != nil {
+	raw, ok := t.Fields["Words"]
+	if !ok {
 		return reflect.Value{}, false
 	}
-	said := caveat.SaidFromPeer(person)
-	if said == nil {
+	said, err := caveat.SaidFromPeer(raw)
+	if err != nil || said == nil {
 		return reflect.Value{}, false
 	}
 	return reflect.ValueOf(said), true

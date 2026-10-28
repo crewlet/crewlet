@@ -16,6 +16,7 @@ import type { BudgetWindow, BudgetsAnswer, OrgProjection } from "~/protocol/inde
 import { managedSentence } from "~/protocol/configAnswer.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { healthFrame } from "~/test/health.ts";
+import { ADMIN_RAISES } from "~/lib/remedy.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -52,6 +53,7 @@ const BUDGETS: BudgetsAnswer = {
   near_fraction: 0.9,
   org: { windows: [day({ limit: 5_000_000, used: 5_000_000 })] },
   seats: [{ agent_id: "a", role: "DevRel", handle: "devrel", windows: [day()] }],
+  assistant: { counted: false, windows: [day({ used: 0, limit: 100_000, state: "ok" })] },
 };
 
 /** An administrator, who holds every grant. */
@@ -129,7 +131,11 @@ test("it raises the seat's own ceiling when the seat's window is the one refusin
 
 // A LEAD RAISES THE SEATS THEY LEAD, and never the company's ceiling: a
 // seat's ceiling is no credential, and the engine admits a lead's write of a
-// seat inside the units they lead.
+// seat inside the units they lead. Where the ceiling is not theirs they are
+// told why, and offered no button that is locked for them.
+//
+// Mutation: draw the button for a reader the gate refuses, and the second
+// half finds one.
 test("a lead raises a seat they lead, and is told the company's ceiling is not theirs", async () => {
   const pm = { ...ADMIN, login: "pm.person", grants: [], handle: "pm", owner: "pm" };
   mount(day(), true, pm);
@@ -140,15 +146,27 @@ test("a lead raises a seat they lead, and is told the company's ceiling is not t
 
   mount(undefined, true, pm);
   await settle();
-  expect(screen.getByRole("button", { name: "Raise budget" }).getAttribute("title")).toBe(
-    "You lead Management and Developer Relations, and this is outside them: changing it takes Admin access.",
-  );
+  expect(screen.queryByRole("button", { name: "Raise budget" })).toBeNull();
+  expect(
+    screen.getByText(
+      "You lead Management and Developer Relations, and this is outside them: changing it takes Admin access.",
+    ),
+  ).toBeTruthy();
+});
+
+// A READER WHO CAN RAISE NO CEILING IS TOLD WHO CAN, never handed a button
+// locked for them: the stopped seat's row reads as a fact with a person to ask.
+test("a reader without Admin is told an admin can raise it, with no button", async () => {
+  mount(day(), true, { ...ADMIN, login: "dee", grants: [], handle: "", owner: "dee" });
+  await settle();
+  expect(screen.queryByRole("button", { name: "Raise budget" })).toBeNull();
+  expect(screen.getByText(ADMIN_RAISES)).toBeTruthy();
 });
 
 // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030): every credential
-// but its writers is refused a raise — an administrator holding every grant,
-// and a lead inside what they lead — so the control is held with the sentence
-// naming who manages it rather than offering a save the engine refuses.
+// but its writers is refused a raise (an administrator holding every grant,
+// and a lead inside what they lead), so the row says who manages it rather
+// than offering a save the engine refuses, or a button locked for them.
 //
 // Mutation: drop the managed check on the lead path, and the lead's raise is
 // offered.
@@ -161,9 +179,8 @@ test("on a managed document a raise is held for everybody but its writers", asyn
   ]) {
     mount(day(), true, viewer);
     await settle();
-    expect(screen.getByRole("button", { name: "Raise budget" }).getAttribute("title")).toBe(
-      managedSentence(["gitops"]),
-    );
+    expect(screen.queryByRole("button", { name: "Raise budget" })).toBeNull();
+    expect(screen.getByText(managedSentence(["gitops"]))).toBeTruthy();
     cleanup();
   }
 });

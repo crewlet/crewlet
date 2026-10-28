@@ -50,6 +50,7 @@ import { ASSISTANT_ACTION_CONTEXT_INVALIDATE } from "~/contract/assistant.ts";
 import type { AssistantNarrowFrame } from "~/protocol/assistantWire.ts";
 import type { StreamState } from "~/protocol/assistant.ts";
 import type { ActionLocal } from "./pageActions.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
 
 /** The page a message was sent with, as its chip shows it. */
 export type PageChip = NonNullable<AssistantPageContextEvent["page"]>;
@@ -107,6 +108,8 @@ export interface SendRefusal {
   hint: string | null;
   /** Seconds the engine said to wait, where it said. */
   retryAfterSeconds: number | null;
+  /** Where the limit that refused it is raised, for a refusal a limit caused (a spent budget). */
+  remedy: Remedy | null;
 }
 
 /** A proposal's state as the drawer holds it, with what the person's gesture added. */

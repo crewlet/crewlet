@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
@@ -23,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -275,19 +277,49 @@ func TestAnotherProtocolVersionIsRefused(t *testing.T) {
 	}
 }
 
-// A QUESTION THE BUDGET REFUSES IS A 429 NAMING WHEN THE WINDOW RESETS.
+// A QUESTION THE BUDGET REFUSES IS A 429 NAMING WHEN THE WINDOW RESETS, AND
+// WHICH CEILING TO RAISE: the company's, or the one every person's assistant
+// spend is held to, as its `remedy` (ADR-0060). The drawer opens that ceiling,
+// so a remedy naming the wrong one sends the person to change a setting that
+// does not refuse them.
+//
+// Mutation: drop the remedy from the route's detail and both cases fail.
 func TestABudgetRefusalIsATooManyRequestsWithItsReset(t *testing.T) {
 	t.Parallel()
-	o := readTurn(t)
-	o.Budget = evals.Budget{M: assistanttest.FullMeter{
-		ResetsAt: evals.Epoch.Add(2 * time.Hour)}}
-	s := newSite(t, o)
-	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
-		s.rig.Conversation.String()+"/turns", wire.TurnRequest{ProtocolVersion: wire.ProtocolVersion,
-		Input: wire.TurnInput{Text: "Hi"}}, map[string]string{"Idempotency-Key": opKey})
-	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "7200" ||
-		!strings.Contains(rec.Body.String(), `"budget_exhausted"`) {
-		t.Fatalf("a refused budget = %d %q %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	for _, c := range []struct {
+		scope   string
+		setting caveat.Setting
+	}{
+		{"", caveat.SettingCompanyTokenBudget},
+		{assistant.PersonBudgetScope, caveat.SettingAssistantTokenBudget},
+	} {
+		t.Run(string(c.setting), func(t *testing.T) {
+			t.Parallel()
+			o := readTurn(t)
+			o.Budget = evals.Budget{M: assistanttest.FullMeter{
+				ResetsAt: evals.Epoch.Add(2 * time.Hour), Scope: c.scope}}
+			s := newSite(t, o)
+			rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
+				s.rig.Conversation.String()+"/turns", wire.TurnRequest{
+				ProtocolVersion: wire.ProtocolVersion, Input: wire.TurnInput{Text: "Hi"}},
+				map[string]string{"Idempotency-Key": opKey})
+			if rec.Code != http.StatusTooManyRequests ||
+				rec.Header().Get("Retry-After") != "7200" ||
+				!strings.Contains(rec.Body.String(), `"budget_exhausted"`) {
+				t.Fatalf("a refused budget = %d %q %s", rec.Code,
+					rec.Header().Get("Retry-After"), rec.Body)
+			}
+			var answer struct {
+				Remedy caveat.Remedy `json:"remedy"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
+				t.Fatal(err)
+			}
+			if answer.Remedy != (caveat.Remedy{Setting: c.setting}) {
+				t.Errorf("a refused budget named the remedy %+v, want %s: %s",
+					answer.Remedy, c.setting, rec.Body)
+			}
+		})
 	}
 }
 

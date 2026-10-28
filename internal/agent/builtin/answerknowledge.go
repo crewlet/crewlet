@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -389,7 +390,10 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"be read, so no answer was written and nothing was spent. Try again shortly."), nil
 	}
 	if refusing {
-		return refused(tools.RefusalBudgetExhausted, budgetSentence(refusal)), nil
+		// THE COMPANY'S CEILING, the one this gate reads, named to a person
+		// as where it is raised (ADR-0060's remedy).
+		return toPerson(refused(tools.RefusalBudgetExhausted, budgetSentence(refusal)),
+			caveat.TokenBudgetSpent(caveat.CompanyTokenBudget())), nil
 	}
 
 	sources, excerpts, searched := t.retrieve(ctx, question, company, role, reach)

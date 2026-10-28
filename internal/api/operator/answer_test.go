@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -186,8 +187,9 @@ func TestAnAnswerIsAnActNotARead(t *testing.T) {
 
 // A SPENT COMPANY BUDGET IS A 409, and nothing is asked of the model: the
 // caller's next move is to wait for the window or raise its ceiling, never to
-// retry now. The code's own sentence says so; the tool's sentence, which names
-// the window for a model, is not the answer's (ADR-0060).
+// retry now. The person reads the catalog's words for it and the remedy naming
+// the company's ceiling, which the dashboard opens; the tool's sentence, which
+// names the window for a model, is not the answer's (ADR-0060).
 func TestASpentBudgetAnswersBudgetExhausted(t *testing.T) {
 	t.Parallel()
 	model, budget := &countedModel{}, &companyWindows{spent: true}
@@ -198,8 +200,15 @@ func TestASpentBudgetAnswersBudgetExhausted(t *testing.T) {
 		t.Fatalf("a spent budget answered %d %v, want 409 budget_exhausted in its "+
 			"code's own words", status, answer)
 	}
-	if detail, has := answer["detail"]; has {
-		t.Errorf("a spent budget answered the tool's sentence: %v", detail)
+	want := caveat.TokenBudgetSpent(caveat.CompanyTokenBudget())
+	if answer["detail"] != want.Person() {
+		t.Errorf("a spent budget answered %v, want the person's words %q",
+			answer["detail"], want.Person())
+	}
+	if remedy, _ := answer["remedy"].(map[string]any); remedy["setting"] !=
+		string(caveat.SettingCompanyTokenBudget) || len(remedy) != 1 {
+		t.Errorf("a spent budget answered the remedy %v, want the company's ceiling",
+			answer["remedy"])
 	}
 	if model.asked() != 0 {
 		t.Errorf("the model was asked %d times past a spent budget", model.asked())

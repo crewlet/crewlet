@@ -70,7 +70,7 @@ type Assistant struct {
 
 	// TokenBudget is each PERSON's ceiling per calendar window, in the shape
 	// a seat's budget takes, charged on top of the company's own.
-	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Each person's assistant token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies."`
+	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Each person's assistant token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."`
 
 	// DeepWork is the assistant's escalation into a coding CLI's own
 	// harness for a task that needs research, scripts, files or many steps
