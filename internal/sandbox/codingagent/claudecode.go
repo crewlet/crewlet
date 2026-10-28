@@ -153,8 +153,9 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 	}
 	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps
 	// — only where its launch wired it to them ([ClaudeCode.WriteConfig]), and
-	// only on a release that reads what they answer: the gate below decides,
-	// and hands the flag in as the script's own arguments.
+	// only on a release that reads what they answer — AND ITS SYSTEM TEXT,
+	// told of notes only where they are read: the gate below decides both,
+	// and hands the flags in as the script's own arguments.
 	if req.Steer.Set() {
 		parts = append(parts, `"$@"`)
 	}
@@ -165,7 +166,7 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 	if req.Resume != "" {
 		parts = append(parts, "--resume", shellQuote(req.Resume))
 	}
-	if req.System != "" {
+	if req.System != "" && !req.Steer.Set() {
 		parts = append(parts, "--append-system-prompt-file", shellQuote(paths.System()))
 	}
 	// VERBATIM, because the only entry that reaches this runner is a
@@ -195,7 +196,12 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 	// ONE SCRIPT, so the wrapper's redirections — the brief on stdin, the
 	// stream, the error file — reach the gate and the CLI alike, and `exec`
 	// leaves the CLI where the script was.
-	return "sh -c " + shellQuote(claudeNotesGate(paths.ClaudeSettings())+"exec "+cmd)
+	plain := ""
+	if req.System != "" {
+		plain = paths.System()
+	}
+	return "sh -c " + shellQuote(claudeNotesGate(paths.ClaudeSettings(), paths.ClaudeNotesSystem(), plain)+
+		"exec "+cmd)
 }
 
 // claudeNotesFloor is the oldest Claude Code release a run is started with its
@@ -215,29 +221,41 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 const claudeNotesFloor = "2.1.163"
 
 // claudeNotesGate is the start of a run's script wired to its notes: it reads
-// the box's `claude --version` and sets the script's arguments to
-// `--settings <path>` on a release at or after [claudeNotesFloor], and to
-// nothing on an older one, which the run's error stream says. A version it
-// cannot read is taken for a current release: every release prints
-// `MAJOR.MINOR.PATCH (Claude Code)`, so one that prints anything else is newer
-// than this script, and a CLI that is not there fails at the run itself.
+// the box's `claude --version` and sets the script's arguments. On a release at
+// or after [claudeNotesFloor] they are `--settings <settings>` and the run's
+// standing instructions told of notes (`--append-system-prompt-file <notes>`,
+// [Paths.ClaudeNotesSystem]); on an older one, which the run's error stream
+// says, the standing instructions alone (plain, [Paths.System]) — nothing for a
+// run that has none. A version it cannot read is taken for a current release:
+// every release prints `MAJOR.MINOR.PATCH (Claude Code)`, so one that prints
+// anything else is newer than this script, and a CLI that is not there fails at
+// the run itself.
+//
+// THE SYSTEM TEXT IS CHOSEN WITH THE HOOKS, because only this script knows
+// whether a note can reach the run: told of notes, a run started without the
+// hooks that read them would be told of a channel that never opens.
 //
 // POSIX parameter expansion, case and test alone, which every box's sh has
 // (dash, bash, busybox ash): no awk, no sort -V. The version is cut at its first
 // character that is neither a digit nor a dot, so each of its three parts is
 // digits or nothing, and a part that is nothing reads as the floor.
-func claudeNotesGate(settings string) string {
+func claudeNotesGate(settings, notes, plain string) string {
 	major, minor, patch := floorParts(claudeNotesFloor)
+	older := "set --; "
+	if plain != "" {
+		older = "set -- --append-system-prompt-file " + shellQuote(plain) + "; "
+	}
 	return "set --; " +
 		`v=$(claude --version < /dev/null 2> /dev/null); v=${v%%[!0-9.]*}; ` +
 		`a=${v%%.*}; r=${v#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}; ` +
 		`case "$a.$b.$c" in [0-9]*.[0-9]*.[0-9]*) ;; *) a=` + major + ` b=` + minor + ` c=` + patch + `;; esac; ` +
 		`if [ "$a" -gt ` + major + ` ] || { [ "$a" -eq ` + major + ` ] && { [ "$b" -gt ` + minor + ` ] || ` +
 		`{ [ "$b" -eq ` + minor + ` ] && [ "$c" -ge ` + patch + ` ]; }; }; }; then ` +
-		`set -- --settings ` + shellQuote(settings) + `; ` +
-		`else echo "crewlet: this box runs Claude Code $v, older than ` + claudeNotesFloor + `, the oldest ` +
+		`set -- --settings ` + shellQuote(settings) + ` --append-system-prompt-file ` + shellQuote(notes) + `; ` +
+		`else ` + older +
+		`echo "crewlet: this box runs Claude Code $v, older than ` + claudeNotesFloor + `, the oldest ` +
 		`that reads a note at the run's finish; the run starts without the hooks that read its notes, ` +
-		`and they wait for its review" >&2; fi; `
+		`is not told of them, and they wait for its review" >&2; fi; `
 }
 
 // floorParts is a MAJOR.MINOR.PATCH version's three numbers, as text.
@@ -253,10 +271,15 @@ func floorParts(version string) (major, minor, patch string) {
 // ([sandbox.RunRequest.Steer]), which every seat's executor run is, and the
 // assistant's deep work is not.
 //
+// A RUN WIRED TO ITS NOTES HAS ITS SYSTEM TEXT TWICE: as it stands
+// ([Paths.System]), and told of notes ([Paths.ClaudeNotesSystem]) — which of the
+// two it is started with is its box's to decide, by its CLI's release
+// ([claudeNotesGate]).
+//
 // The settings file is written afresh, at the mode a box writes every file with
 // (0600 on a local box): the run's artefacts are cleared before it starts
 // ([Runner.ClearArtifacts]), so a previous run's wider file is never kept.
-func (ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
 	if req.System != "" {
 		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
 			return "", fmt.Errorf("codingagent: writing the system prompt: %w", err)
@@ -269,6 +292,10 @@ func (ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		}
 		if err := box.WriteFile(ctx, paths.ClaudeSettings(), settings); err != nil {
 			return "", fmt.Errorf("codingagent: writing Claude Code's settings: %w", err)
+		}
+		told := withNoteInstruction(req.System, c.NoteInstruction())
+		if err := box.WriteFile(ctx, paths.ClaudeNotesSystem(), []byte(told)); err != nil {
+			return "", fmt.Errorf("codingagent: writing the system prompt told of notes: %w", err)
 		}
 	}
 	if len(req.MCPServers) == 0 {

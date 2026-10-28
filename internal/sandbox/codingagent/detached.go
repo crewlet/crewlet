@@ -130,8 +130,10 @@ type CLI interface {
 
 	// Command builds the headless invocation. The brief and the system text
 	// are already final — the report instruction is appended to the system
-	// text by the base — and a CLI given system text puts it on the channel
-	// that adds to its own system prompt, never in the prompt it runs.
+	// text by the base — but for the instruction about notes, which a CLI
+	// that reads them adds where a note can reach its run ([noteReader]); and
+	// a CLI given system text puts it on the channel that adds to its own
+	// system prompt, never in the prompt it runs.
 	Command(req sandbox.RunRequest, paths Paths, configPath string) string
 
 	// Output is where the CLI's stdout lands and how its result is read
@@ -164,7 +166,8 @@ type resumer interface{ Resumes() bool }
 // and tells its model so: NoteInstruction is the standing instruction about
 // notes its runs are given ([ClaudeCodeSteerInstruction],
 // [OpenCodeSteerInstruction]) — the CLI's own, because where a note appears in
-// what the model reads is the CLI's to decide.
+// what the model reads is the CLI's to decide, and the CLI adds it to its run's
+// system text itself ([withNoteInstruction]), on the run its notes can reach.
 //
 // OPTIONAL, as [resumer] is, because a CLI is taught to read notes in its own
 // way — hooks, a plugin — and one not taught yet must not be claimed to: the
@@ -309,7 +312,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	p := PathsFor(box)
 	out := r.cli.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System(),
-		p.ClaudeSettings(), p.OpenCodeConfig()}
+		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -359,12 +362,10 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, err
 	}
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
-	// system text from.
-	notes := ""
-	if req.Steer.Set() {
-		notes = r.noteInstruction()
-	}
-	req.System = finalSystem(req.System, paths, notes)
+	// system text from — all but the instruction about notes, which a CLI
+	// that reads them adds itself, where a note can reach its run
+	// ([noteReader]).
+	req.System = finalSystem(req.System, paths)
 	configPath, err := r.cli.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -426,27 +427,36 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 }
 
 // finalSystem appends the report instruction, addressed at THIS box, to the
-// run's standing instructions — and, for a run whose CLI takes a person's notes
-// between its steps, notes: its CLI's instruction about what a note is and
-// where it appears ([noteReader]), "" for every other run.
+// run's standing instructions.
 //
 // Composed here rather than at the launch because the findings path is a
 // property of the box the run lands in, which the caller does not know when it
-// builds the request — and whether the CLI reads notes is the runner's to know.
-// On the system side, because neither is part of the task: each is how every
-// such run works, whatever it was asked. The note instruction only where a note
-// can arrive: told to a run whose CLI takes none, or a run wired to none, it
-// would describe a channel that never opens.
-func finalSystem(system string, paths Paths, notes string) string {
-	parts := make([]string, 0, 3)
+// builds the request. On the system side, because it is not part of the task:
+// it is how every run works, whatever it was asked.
+func finalSystem(system string, paths Paths) string {
+	parts := make([]string, 0, 2)
 	if system = strings.TrimSpace(system); system != "" {
 		parts = append(parts, system)
 	}
 	parts = append(parts, strings.TrimSpace(FindingsInstruction(paths.Findings())))
-	if notes != "" {
-		parts = append(parts, notes)
-	}
 	return strings.Join(parts, "\n\n")
+}
+
+// withNoteInstruction is a run's final system text with its CLI's instruction
+// about notes after it ([noteReader]) — what a CLI that reads notes hands a run
+// wired to them, as the last of its standing instructions.
+//
+// THE CLI'S TO ADD, AND ONLY WHERE A NOTE CAN ARRIVE: told to a run whose CLI
+// takes none, a run wired to none, or a run started without what reads them, it
+// would describe a channel that never opens. Which of those a run is can be
+// known only where it starts — a Claude Code run's box decides from its CLI's
+// release ([claudeNotesGate]) — so the runner, which composes everything else,
+// leaves this to the CLI.
+func withNoteInstruction(system, instruction string) string {
+	if system == "" {
+		return instruction
+	}
+	return system + "\n\n" + instruction
 }
 
 // withShimPath prepends the box's shim directory to PATH for one command.

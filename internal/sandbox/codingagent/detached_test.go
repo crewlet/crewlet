@@ -45,7 +45,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	for _, path := range []string{
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.Ask(), p.MCPConfig(), p.Findings(), p.BinDir(), p.AskShim(),
-		p.Brief(), p.System(), p.ClaudeSettings(),
+		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -182,7 +182,7 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask(),
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
-		p.Brief(), p.System(), p.ClaudeSettings(), p.OpenCodeConfig(),
+		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(),
 	} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)

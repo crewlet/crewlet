@@ -356,22 +356,24 @@ func after(argv []string, flag string) string {
 	return ""
 }
 
-// A CLAUDE CODE OLDER THAN ITS NOTE FLOOR STARTS WITHOUT THE HOOKS. From 2.1.118
-// a release runs a settings file's mcp_tool hooks, and before 2.1.163 it drops
-// what a Stop hook answers: a note taken as the run finishes would be recorded
-// read, and published delivered, by a run that never saw it. So a run wired to
-// its notes reads the box's version first and names its settings only on
-// 2.1.163 or later, saying why on its error stream where it does not — its
-// notes then wait for the review, and its collection says it never asked. A
-// version it cannot read is taken for a current release. Under every sh a box
-// may run the script with.
+// A CLAUDE CODE OLDER THAN ITS NOTE FLOOR STARTS WITHOUT THE HOOKS, AND IS NOT
+// TOLD OF NOTES. From 2.1.118 a release runs a settings file's mcp_tool hooks,
+// and before 2.1.163 it drops what a Stop hook answers: a note taken as the run
+// finishes would be recorded read, and published delivered, by a run that never
+// saw it. So a run wired to its notes reads the box's version first and names
+// its settings, and the standing instructions told of notes, only on 2.1.163 or
+// later; an older release is handed the standing instructions alone, and the
+// run's error stream says why — its notes then wait for the review, and its
+// collection says it never asked. A version it cannot read is taken for a
+// current release. Under every sh a box may run the script with.
 //
-// Mutation: name the settings whatever the version, or compare the patch alone,
-// and this goes red.
+// Mutation: name the settings whatever the version, compare the patch alone, or
+// hand an older release the instructions told of notes, and this goes red.
 func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 	t.Parallel()
 	p := codingagent.Paths{Home: "/box"}
-	script := scriptOf(t, claude().Command(sandbox.RunRequest{Brief: "x", Steer: steerWiring}, p, ""))
+	script := scriptOf(t, claude().Command(sandbox.RunRequest{Brief: "x", System: "be careful",
+		Steer: steerWiring}, p, ""))
 	standIn := `#!/bin/sh
 if [ "$1" = --version ]; then printf '%s' "$FAKE_VERSION"; exit 0; fi
 for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
@@ -430,6 +432,17 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 				if said := strings.Contains(stderr.String(), "older than 2.1.163"); said == tc.settings {
 					t.Errorf("on %q the run's error stream said it ran without its hooks: %v, want %v\n%s",
 						tc.version, said, !tc.settings, stderr.String())
+				}
+				// ONE SYSTEM TEXT, the one the hooks decide: told of notes
+				// where they are read, as it stands where they are not.
+				want := p.System()
+				if tc.settings {
+					want = p.ClaudeNotesSystem()
+				}
+				if n := strings.Count(strings.Join(args, "\n"), "--append-system-prompt-file"); n != 1 ||
+					after(args, "--append-system-prompt-file") != want {
+					t.Errorf("on %q the CLI was handed %d system texts, %q, want %q alone (argv %q)",
+						tc.version, n, after(args, "--append-system-prompt-file"), want, args)
 				}
 			})
 		}

@@ -558,7 +558,7 @@ func jsonStringify(s string) string {
 // wrote none would not run on the vendor's defaults or on a previous run's
 // file — the clear removed that ([Runner.ClearArtifacts]) — but not at all: the
 // script refuses to start a server it has no configuration for.
-func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
 	if req.System != "" || len(req.MCPServers) > 0 || req.Steer.Set() {
 		if err := openCodeReferable(paths.WorkDir()); err != nil {
 			return "", fmt.Errorf("codingagent: this box's home %q cannot be named in an OpenCode "+
@@ -660,8 +660,16 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 	// And this file is rewritten on every run, so a reused box never carries
 	// a previous run's entry. ABSOLUTE, because a relative entry is matched
 	// by walking up from the working directory.
-	if req.System != "" {
-		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
+	//
+	// TOLD OF NOTES on a run wired to them ([withNoteInstruction]): the
+	// plugin that reads them is named by this same configuration, which the
+	// run's server is started with.
+	system := req.System
+	if req.Steer.Set() {
+		system = withNoteInstruction(system, o.NoteInstruction())
+	}
+	if system != "" {
+		if err := box.WriteFile(ctx, paths.System(), []byte(system)); err != nil {
 			return "", fmt.Errorf("codingagent: writing the system prompt: %w", err)
 		}
 		cfg["instructions"] = []string{paths.System()}

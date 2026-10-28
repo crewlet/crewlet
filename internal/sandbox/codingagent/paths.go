@@ -81,6 +81,14 @@ func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 // it from under a run and a commit cannot carry it into a repository.
 func (p Paths) System() string { return p.WorkDir() + "/system.md" }
 
+// ClaudeNotesSystem is where a Claude Code run wired to its turn's notes has
+// its standing instructions written a second time, with its CLI's instruction
+// about notes after them ([ClaudeCodeSteerInstruction]): the text the run's
+// script names in place of [Paths.System] on a release whose note hooks it
+// starts ([claudeNotesGate]), so the instruction reaches a run its notes can
+// reach and no other. Beside it, and a file for the reason it is.
+func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.md" }
+
 // CredentialDocument is where a box keeps the login a CLI holds in a database
 // of its own: the CLI's own export of it, which the engine seeds a local box
 // with and writes back from when the box closes ([CredentialDocument]).

@@ -229,37 +229,66 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 // CLI takes them between its steps, after the report instruction — and to no
 // other. Told to a run its launch gave nothing to ask for (the assistant's deep
 // work), or to one whose CLI takes none, it would describe a channel that never
-// opens; told another CLI's, it would describe the wrong carrier.
+// opens; told another CLI's, it would describe the wrong carrier. The CLI adds
+// it, never the runner: a Claude Code run wired to its notes has its standing
+// instructions as they stand, for a release its box starts without the hooks,
+// and a second time told of notes, for one it starts with them
+// ([codingagent.Paths.ClaudeNotesSystem]); an OpenCode run's one file is told.
 //
-// Mutation: append the instruction whenever Steer is set and the unreading row
-// goes red; drop the reader's check and so does it; give every CLI Claude
-// Code's and the OpenCode rows do.
+// Mutation: append the instruction in the runner, or whenever Steer is set, and
+// the unreading row goes red; tell Claude Code's plain text of notes and its
+// rows do; give every CLI Claude Code's and the OpenCode rows do.
 func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 	t.Parallel()
+	claudeTold := func(p codingagent.Paths) string { return p.ClaudeNotesSystem() }
+	plain := func(p codingagent.Paths) string { return p.System() }
 	for name, tc := range map[string]struct {
 		runner *codingagent.Runner
 		steer  sandbox.SteerWiring
-		want   string
+		// told is the file the run is started with where its notes reach it.
+		told func(codingagent.Paths) string
+		want string
 	}{
-		"claude code, wired to its notes": {codingagent.NewClaudeCode(), steerWiring, codingagent.ClaudeCodeSteerInstruction},
-		"claude code, wired to none":      {codingagent.NewClaudeCode(), sandbox.SteerWiring{}, ""},
-		"a CLI that reads no notes":       {codingagent.New(unreading{codingagent.ClaudeCode{}}), steerWiring, ""},
-		"opencode, wired to its notes":    {codingagent.NewOpenCode(), steerWiring, codingagent.OpenCodeSteerInstruction},
-		"opencode, wired to none":         {codingagent.NewOpenCode(), sandbox.SteerWiring{}, ""},
+		"claude code, wired to its notes": {codingagent.NewClaudeCode(), steerWiring, claudeTold,
+			codingagent.ClaudeCodeSteerInstruction},
+		"claude code, wired to none":   {codingagent.NewClaudeCode(), sandbox.SteerWiring{}, plain, ""},
+		"a CLI that reads no notes":    {codingagent.New(unreading{codingagent.ClaudeCode{}}), steerWiring, plain, ""},
+		"opencode, wired to its notes": {codingagent.NewOpenCode(), steerWiring, plain, codingagent.OpenCodeSteerInstruction},
+		"opencode, wired to none":      {codingagent.NewOpenCode(), sandbox.SteerWiring{}, plain, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			b, system, _ := systemOfRun(t, tc.runner, sandbox.RunRequest{
 				System: seatSystem, Brief: "fix the flake", Steer: tc.steer,
 			})
+			told := system
+			if file := tc.told(paths(b)); file != paths(b).System() {
+				raw, err := b.ReadFile(t.Context(), file)
+				if err != nil {
+					t.Fatalf("read the system text told of notes: %v", err)
+				}
+				told = string(raw)
+				// THE SAME TEXT, told of notes after it: an older release
+				// is handed everything else the run is.
+				if want := system + "\n\n" + tc.want; told != want {
+					t.Errorf("the text told of notes is not the standing instructions and the note "+
+						"instruction after them:\n%s", told)
+				}
+				for _, instruction := range []string{codingagent.ClaudeCodeSteerInstruction,
+					codingagent.OpenCodeSteerInstruction} {
+					if strings.Contains(system, instruction) {
+						t.Errorf("the text a run started without its hooks reads is told of notes:\n%s", system)
+					}
+				}
+			}
 			for _, instruction := range []string{codingagent.ClaudeCodeSteerInstruction,
 				codingagent.OpenCodeSteerInstruction} {
-				at := strings.Index(system, instruction)
+				at := strings.Index(told, instruction)
 				if got, want := at >= 0, instruction == tc.want; got != want {
-					t.Fatalf("the instruction %.60q… is given: %v, want %v:\n%s", instruction, got, want, system)
+					t.Fatalf("the instruction %.60q… is given: %v, want %v:\n%s", instruction, got, want, told)
 				}
-				if at >= 0 && at < strings.Index(system, paths(b).Findings()) {
-					t.Errorf("the note instruction precedes the report instruction:\n%s", system)
+				if at >= 0 && at < strings.Index(told, paths(b).Findings()) {
+					t.Errorf("the note instruction precedes the report instruction:\n%s", told)
 				}
 			}
 		})
@@ -267,7 +296,8 @@ func TestTheStandingInstructionIsGivenExactlyWhenARunReadsNotes(t *testing.T) {
 }
 
 // unreading is a CLI that takes no notes: Claude Code's with its
-// NoteInstruction hidden, as a CLI not taught to would be.
+// NoteInstruction hidden, as a CLI not taught to would be — so a runner that
+// added an instruction of its own would show in its standing instructions.
 type unreading struct{ codingagent.CLI }
 
 // THE INSTRUCTION QUOTES THE HEADING EVERY NOTE OPENS WITH, whichever CLI's it

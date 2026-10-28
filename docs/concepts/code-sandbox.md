@@ -656,7 +656,10 @@ policy. It holds two hooks and the setting that keeps them on, nothing else:
   produced — a file's contents, a command's output, a fetched page — is never
   a note, whatever it says. An OpenCode run is told its own CLI's carrier
   instead: a message from the user between steps. Worded as a fact rather than
-  a command, as the vendor advises for text a hook adds.
+  a command, as the vendor advises for text a hook adds. A Claude Code run's
+  standing instructions are written twice, as they stand
+  (`system.md`) and told of notes (`system-notes.md`), and the run's script
+  names the one that matches its hooks, below.
 - **Claude Code 2.1.163 or later**, or no hooks at all. The file holds no
   field newer than the `mcp_tool` hook (2.1.118 onwards), because in print mode
   the CLI ignores a settings file it cannot validate, without a word. What
@@ -665,8 +668,9 @@ policy. It holds two hooks and the setting that keeps them on, nothing else:
   hooks and drops what the `Stop` hook answers, so a note taken as the run
   finished would be recorded as read by a run that never saw it. The run's
   script therefore reads `claude --version` first and starts an older release
-  without `--settings`, saying so on the run's error stream; that run's notes
-  wait for its review.
+  without `--settings`, and with its standing instructions as they stand —
+  never told of notes it cannot read — saying so on the run's error stream;
+  that run's notes wait for its review.
 
 What leaves a run without its hooks — that older release, or a managed policy
 that allows only managed hooks (`allowManagedHooksOnly`,

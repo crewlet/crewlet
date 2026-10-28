@@ -1099,7 +1099,8 @@ batch of the main agent's tool calls and as the run is about to finish. The
 wrapper unsets `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since
 either switches those hooks off. Measured on Claude Code 2.1.263 and 2.1.310;
 it needs 2.1.163 or later, and the run's script starts an older release without
-`--settings`. See [Claude Code's hooks](code-sandbox.md#claude-codes-hooks).
+`--settings` and without telling it of notes. See [Claude Code's
+hooks](code-sandbox.md#claude-codes-hooks).
 
 **A person's notes reach an OpenCode run at its next step.** The run's
 configuration names a plugin the engine writes into the box beside it, which
