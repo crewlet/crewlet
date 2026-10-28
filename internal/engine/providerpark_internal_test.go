@@ -474,6 +474,66 @@ roles:
     handle: qa
 `
 
+// probeRig is an engine over the in-memory queue with threeSeatDoc's company,
+// its one entry the model given, its park alarms fired by the case, and its
+// clock moved by the case: what a provider park's probe is driven over, with
+// no dispatcher in front of it.
+type probeRig struct {
+	e      *Engine
+	q      *memory.Queue
+	alarms *fakeAlarms
+
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newProbeRig(t *testing.T, model llm.Provider) *probeRig {
+	t.Helper()
+	q := memory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	r := &probeRig{q: q, alarms: &fakeAlarms{}, now: parkedAt}
+	c := companyFor(t, threeSeatDoc)
+	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: model}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = reg
+	r.e = &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, clock: r.clock}
+	r.e.epoch.current.Store(c)
+	r.e.providerParks.after = r.alarms.after
+	return r
+}
+
+func (r *probeRig) clock() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.now
+}
+
+func (r *probeRig) at(now time.Time) {
+	r.mu.Lock()
+	r.now = now
+	r.mu.Unlock()
+}
+
+// park parks handle on the entry's limit, tried again at retry.
+func (r *probeRig) park(t *testing.T, handle string, retry time.Time) {
+	t.Helper()
+	refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: retry,
+		Err: errors.New("You've hit your 5-hour limit")}
+	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+		Failures: []error{refusal}, Err: refusal})
+	if !limited {
+		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+	}
+	if _, parked, err := r.e.providerPark(t.Context(), handle, limit); err != nil || !parked {
+		t.Fatalf("providerPark(%s) = %v, %v", handle, parked, err)
+	}
+}
+
 // ONE PROBE PER LIMITED CHAIN, HOWEVER MANY SEATS IT HOLDS. Three seats parked
 // on one spent entry for 40 hours are probed once an hour, not three times,
 // and the answer that ends the limit releases all three: the limit is the
@@ -483,28 +543,11 @@ roles:
 // tick asks the model three times.
 func TestSeatsOnOneLimitedEntryShareOneProbe(t *testing.T) {
 	t.Parallel()
-	q := memory.New()
-	if err := q.Start(t.Context()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	now := parkedAt
-	var mu sync.Mutex
-	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
-	at := func(t time.Time) { mu.Lock(); now = t; mu.Unlock() }
-
 	reset := parkedAt.Add(40 * time.Hour)
-	model := &limitedModel{reset: reset, retry: parkedAt.Add(time.Hour), now: clock}
-	c := companyFor(t, threeSeatDoc)
-	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: model}})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	c.Models = reg
-	alarms := &fakeAlarms{}
-	e := &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, clock: clock}
-	e.epoch.current.Store(c)
-	e.providerParks.after = alarms.after
+	model := &limitedModel{reset: reset, retry: parkedAt.Add(time.Hour)}
+	r := newProbeRig(t, model)
+	model.now = r.clock
+	e, q, alarms, at := r.e, r.q, r.alarms, r.at
 	var released atomic.Int32
 	if err := q.Subscribe(t.Context(), topics.Event("seat_provider_released"), "test-released",
 		func(context.Context, *events.Event) queue.Result { released.Add(1); return queue.Ack() }); err != nil {
@@ -565,4 +608,150 @@ func TestSeatsOnOneLimitedEntryShareOneProbe(t *testing.T) {
 	if live := alarms.live(); len(live) != 0 {
 		t.Errorf("%d alarms left armed after the limit lifted, want none", len(live))
 	}
+}
+
+// heldCall is a model whose calls the case scripts: the first `limited` calls
+// refuse for a limit at once, and every later one is held until its context
+// ends (or the case does), lingering a moment after, so a case can see who
+// waited for it. started is told of each held call, and ended counts them.
+type heldCall struct {
+	limited int
+	linger  time.Duration
+	done    <-chan struct{}
+	started chan struct{}
+	calls   atomic.Int32
+	ended   atomic.Int32
+}
+
+func newHeldCall(t *testing.T, limited int) *heldCall {
+	return &heldCall{limited: limited, done: t.Context().Done(), started: make(chan struct{}, 4)}
+}
+
+func (*heldCall) Model() string { return "opus" }
+
+func (m *heldCall) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	if int(m.calls.Add(1)) <= m.limited {
+		return nil, &llm.Error{Kind: llm.KindRateLimit, Key: "default",
+			RetryAt: parkedAt.Add(time.Hour), Err: errors.New("You've hit your 5-hour limit")}
+	}
+	m.started <- struct{}{}
+	select {
+	case <-ctx.Done():
+	case <-m.done:
+	}
+	time.Sleep(m.linger)
+	m.ended.Add(1)
+	return nil, ctx.Err()
+}
+
+// awaitSignal fails the case unless ch is told within a few seconds.
+func awaitSignal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// onItsOwn runs fire on a goroutine of its own, as a timer does, and closes the
+// channel it returns once fire has returned.
+func onItsOwn(fire func()) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fire()
+	}()
+	return done
+}
+
+// THE LAST SEAT OUT ENDS THE PROBE'S CALL, AND THE CALL RELEASES NOTHING. A
+// seat given up while its probe's call is out leaves the probe; as the last
+// seat on it, it retires the probe, and the call is ended rather than left to
+// run to its own timeout, its answer settling a park nobody holds.
+//
+// Mutation: leave the call running when its last seat leaves, and it is never
+// ended.
+func TestTheLastSeatOutEndsTheProbesCall(t *testing.T) {
+	t.Parallel()
+	model := newHeldCall(t, 0)
+	r := newProbeRig(t, model)
+	var probeReleases atomic.Int32
+	r.q.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+		if p, ok := events.DataAs[*types.SeatProviderReleased](ev); ok && p != nil &&
+			strings.Contains(p.Reason, "models") {
+			probeReleases.Add(1)
+		}
+	})
+	r.park(t, "lead", parkedAt.Add(time.Hour))
+	call := onItsOwn(r.alarms.live()[0].fire)
+	awaitSignal(t, model.started, "the probe's call to start")
+
+	r.e.forgetProviderPark(t.Context(), seatOf("lead"))
+	awaitSignal(t, call, "the probe's call to be ended by the last seat leaving")
+	if got := model.ended.Load(); got != 1 {
+		t.Errorf("%d calls ended, want the probe's", got)
+	}
+	if got := probeReleases.Load(); got != 0 {
+		t.Errorf("the ended call released %d parks, want none: its seat had left", got)
+	}
+}
+
+// A STOPPING NODE ENDS A PROBE'S CALL AND WAITS FOR IT, so no call this node
+// made outlives its teardown.
+//
+// Mutation: return from the stop without waiting, and the call is still
+// running when it does.
+func TestAStopWaitsForAProbesCall(t *testing.T) {
+	t.Parallel()
+	model := newHeldCall(t, 0)
+	model.linger = 200 * time.Millisecond
+	r := newProbeRig(t, model)
+	r.park(t, "lead", parkedAt.Add(time.Hour))
+	onItsOwn(r.alarms.live()[0].fire)
+	awaitSignal(t, model.started, "the probe's call to start")
+
+	r.e.stopProviderParks()
+	if got := model.ended.Load(); got != 1 {
+		t.Fatalf("the stop returned with %d of the probe's call ended, want it waited for", got)
+	}
+}
+
+// A NEWER CALL OF A PROBE IS NOT FORGOTTEN BY AN OLDER ONE ENDING. A limit
+// that holds re-arms the probe before its call has returned, and an alarm for
+// an instant already past fires at once, so the next call can be out before the
+// one that armed it has cleaned up. That cleanup clears its own call, never
+// the newer one, so the last seat leaving still ends the newer call.
+//
+// Mutation: clear the probe's call unconditionally when a call ends, and the
+// newer one is never ended.
+func TestAnOlderProbeCallLeavesTheNewerOnesCancel(t *testing.T) {
+	t.Parallel()
+	model := newHeldCall(t, 1)
+	r := newProbeRig(t, model)
+	var renewing atomic.Bool
+	var newer <-chan struct{}
+	r.q.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+		// THE OLDER CALL'S RENEWAL is published after it re-armed the probe
+		// and before its cleanup: the newer call starts here, in between.
+		if _, ok := events.DataAs[*types.SeatProviderParked](ev); !ok || !renewing.CompareAndSwap(true, false) {
+			return
+		}
+		live := r.alarms.live()
+		if len(live) != 1 {
+			t.Errorf("%d alarms armed by the renewal, want one", len(live))
+			return
+		}
+		newer = onItsOwn(live[0].fire)
+		awaitSignal(t, model.started, "the newer call to start")
+	})
+	r.park(t, "lead", parkedAt.Add(time.Hour))
+	renewing.Store(true)
+	r.alarms.live()[0].fire()
+	if newer == nil {
+		t.Fatal("the older call's renewal never started a newer call")
+	}
+
+	r.e.forgetProviderPark(t.Context(), seatOf("lead"))
+	awaitSignal(t, newer, "the newer call to be ended by the last seat leaving")
 }

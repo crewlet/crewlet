@@ -39,13 +39,28 @@ type fakeAlarms struct {
 	armed []*fakeAlarm
 }
 
+// fakeAlarm is one armed alarm. A FIRED ALARM IS SPENT, as a timer that
+// fired is: live() stops counting it, so an alarm the code under test fails
+// to arm again after one fires is seen missing rather than counted twice.
 type fakeAlarm struct {
+	mu      *sync.Mutex
 	wait    time.Duration
-	fire    func()
+	fn      func()
 	stopped bool
 }
 
+// fire runs the alarm, spent first, as a timer's goroutine runs after the
+// timer has fired.
+func (a *fakeAlarm) fire() {
+	a.mu.Lock()
+	a.stopped = true
+	a.mu.Unlock()
+	a.fn()
+}
+
 func (a *fakeAlarm) Stop() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	was := !a.stopped
 	a.stopped = true
 	return was
@@ -54,7 +69,7 @@ func (a *fakeAlarm) Stop() bool {
 func (f *fakeAlarms) after(d time.Duration, fn func()) alarm {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	a := &fakeAlarm{wait: d, fire: fn}
+	a := &fakeAlarm{mu: &f.mu, wait: d, fn: fn}
 	f.armed = append(f.armed, a)
 	return a
 }
