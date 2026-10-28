@@ -1309,8 +1309,14 @@ const (
 	// recorded while its seat is busy and on what, answered, or not used and
 	// why) off the run's own record, drawn with uilet 0.74.0's pending tone
 	// while it is on its way, took it to 4610.7 KiB. 4611 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 515<<10
+	// refuses a doubled baseline. Drawing what prose names with its mark
+	// (the recogniser, the link hosts and project keys the frame reads, and
+	// uilet 0.75.0's InlineRef with every vendor's mark) took it to
+	// 4624.2 KiB, all of it in the lazy chunks that render Markdown: the
+	// flattening moved out of the renderer (`lib/markdownText.ts`), so the
+	// first load fell to 349.1 KiB. 4625 KiB, which still refuses a doubled
+	// baseline.
+	treeBudget = 4<<20 + 529<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
