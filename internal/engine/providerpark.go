@@ -135,6 +135,7 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 func providerParked(limit chain.Limit) types.SeatProviderParked {
 	parked := types.SeatProviderParked{
 		ProviderKeys: limit.Keys, RetryAt: limit.RetryAt.UTC(), Said: limit.Said,
+		CLI: limit.Agent, Subscription: limit.Subscription,
 	}
 	if !limit.ResetsAt.IsZero() {
 		resets := limit.ResetsAt.UTC()

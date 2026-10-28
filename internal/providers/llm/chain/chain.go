@@ -286,6 +286,10 @@ type Limit struct {
 	ResetsAt time.Time
 	// Said is the head member's own sentence, for whoever is shown why.
 	Said string
+	// Agent and Subscription are the head member's CLI and whether it signs
+	// in on a plan ([llm.Error.Agent]): what the limit is called.
+	Agent        string
+	Subscription bool
 }
 
 // Limited reports whether err is a chain whose every member refused for a rate
@@ -320,6 +324,10 @@ func Limited(err error) (Limit, bool) {
 		}
 		if i == 0 {
 			limit.Said = saidOf(failure)
+			var head *llm.Error
+			if errors.As(failure, &head) {
+				limit.Agent, limit.Subscription = head.Agent, head.Subscription
+			}
 		}
 	}
 	if unnamed {

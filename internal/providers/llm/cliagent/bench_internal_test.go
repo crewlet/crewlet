@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -60,8 +61,15 @@ func spentProvider(t *testing.T, reset time.Duration) (*Provider, *testClock) {
 func TestASpentPlanSitsTheEntryOutUntilItsReset(t *testing.T) {
 	t.Parallel()
 	p, clock := spentProvider(t, 37*time.Minute)
-	if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindRateLimit {
-		t.Fatalf("the spent plan answered %v, want a rate limit", err)
+	_, first := ask(t, p, llm.Request{})
+	if llm.KindOf(first) != llm.KindRateLimit {
+		t.Fatalf("the spent plan answered %v, want a rate limit", first)
+	}
+	// WHAT THE LIMIT IS OF, for whoever tells a person: the entry's CLI and
+	// that it signs in on a plan.
+	var failure *llm.Error
+	if !errors.As(first, &failure) || failure.Agent != "custom" || !failure.Subscription {
+		t.Errorf("the limit names %+v, want the entry's CLI on a subscription", failure)
 	}
 	p.profile.Binary = "/nonexistent/crewlet-no-cli"
 

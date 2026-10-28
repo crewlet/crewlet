@@ -1137,7 +1137,7 @@ func (p *Provider) fail(kind llm.ErrorKind, err error) error { return p.failure(
 // it.
 func (p *Provider) failure(kind llm.ErrorKind, err error) *llm.Error {
 	return &llm.Error{Kind: kind, Provider: providerName + "/" + p.agent, Model: p.model,
-		Key: p.key, Err: err}
+		Key: p.key, Agent: p.agent, Subscription: p.AuthMode() == AuthSubscription, Err: err}
 }
 
 // firstLine is the first non-empty line across the given texts, for a failure

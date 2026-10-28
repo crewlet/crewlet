@@ -12,6 +12,7 @@ func parkedEnv(when, idv string) *livestate.Envelope {
 		"agent_id": "Lead", "provider_keys": []any{"default"},
 		"retry_at": "2026-10-27T23:30:00Z", "resets_at": "2026-10-27T23:30:00Z",
 		"said": "You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)",
+		"cli":  "claude-code", "subscription": true,
 	}, at(when), id(idv))
 }
 
@@ -31,7 +32,8 @@ func TestAParkedSeatReadsStoppedThroughEveryProbe(t *testing.T) {
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedProvider)
 	first := overlayOf(t, s, "Lead").ProviderLimit
 	if first == nil || !first.Parked || first.ResetsAt == nil ||
-		*first.ResetsAt != "2026-10-27T23:30:00Z" || first.ProviderKey != "default" {
+		*first.ResetsAt != "2026-10-27T23:30:00Z" || first.ProviderKey != "default" ||
+		first.CLI != "claude-code" || !first.Subscription {
 		t.Fatalf("provider limit = %+v, want the parked limit naming its reset", first)
 	}
 
@@ -75,12 +77,12 @@ func TestASeatOnItsFallbackSaysSoWithoutStopping(t *testing.T) {
 	s.Apply(env("agent_phase_started", call, at("2026-10-27T23:16:00Z"), id("ps")))
 	s.Apply(env("provider_fallback", with(call, map[string]any{
 		"from_provider_key": "plan", "to_provider_key": "key", "error_kind": "rate_limit",
-		"resets_at": "2026-10-27T23:30:00Z",
+		"resets_at": "2026-10-27T23:30:00Z", "from_cli": "claude-code", "from_subscription": true,
 	}), at("2026-10-27T23:16:01Z"), id("fb")))
 	wantState(t, s, "Lead", livestate.ActivityWorking, "")
 	got := overlayOf(t, s, "Lead").ProviderLimit
 	if got == nil || got.Parked || got.ProviderKey != "plan" || got.RunningOn == nil ||
-		*got.RunningOn != "key" {
+		*got.RunningOn != "key" || got.CLI != "claude-code" || !got.Subscription {
 		t.Fatalf("provider limit = %+v, want plan limited and the seat running on key", got)
 	}
 

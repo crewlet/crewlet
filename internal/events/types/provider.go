@@ -97,6 +97,12 @@ type ProviderFallback struct {
 	// screen showing a seat carried onto its fallback says the head is
 	// back at. Absent otherwise.
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// FromCLI and FromSubscription are, for a `rate_limit` hand-off, the
+	// CLI FromProviderKey drives and whether it signs in on a plan: what the
+	// limit is called where a person reads it ("Claude Code subscription
+	// limit reached"), without the entry's configuration. Absent otherwise.
+	FromCLI          string `json:"from_cli,omitempty"`
+	FromSubscription bool   `json:"from_subscription,omitempty"`
 }
 
 // EventType is the "provider_fallback" wire type.
@@ -147,6 +153,10 @@ type SeatProviderParked struct {
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
 	// Said is the head member's own sentence.
 	Said string `json:"said,omitempty"`
+	// CLI and Subscription are the head member's CLI (`claude-code`) and
+	// whether it signs in on a plan: what the limit is called.
+	CLI          string `json:"cli,omitempty"`
+	Subscription bool   `json:"subscription,omitempty"`
 }
 
 // EventType is the "seat_provider_parked" wire type.

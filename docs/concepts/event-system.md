@@ -412,12 +412,15 @@ provider_fallback          # the chain moved to its next provider. One per
                            # `to_provider_key` is empty on the last member,
                            # where the next event is llm_unavailable.
                            # A `rate_limit` hand-off carries `resets_at`
-                           # where the vendor named when the limit lifts
+                           # where the vendor named when the limit lifts,
+                           # and `from_cli` and `from_subscription`: what
+                           # the limit is called on a screen
 seat_provider_parked       # every member of the seat's chain refused for a
                            # rate limit, so the seat is parked until the
                            # first is tried again (`retry_at`). Carries the
                            # chain's keys, `resets_at` where every vendor
-                           # named one, and the head's sentence. The seat
+                           # named one, the head's sentence, its `cli` and
+                           # whether it signs in on a `subscription`. The seat
                            # reads `stopped`/`provider` until a call through
                            # its chain answers
 seat_provider_released     # a provider park lifted for a reason other than

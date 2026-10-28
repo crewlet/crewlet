@@ -53,6 +53,12 @@ type ProviderLimit struct {
 	Since string `json:"since"`
 	// Said is the vendor's own sentence, where the report carried it.
 	Said string `json:"said,omitempty"`
+	// CLI is the CLI the limited entry drives (`claude-code`), and
+	// Subscription whether it signs in on a plan: what the limit is called
+	// where a person reads it, without the entry's configuration, which only
+	// an admin reads. CLI is empty where the report did not say.
+	CLI          string `json:"cli"`
+	Subscription bool   `json:"subscription"`
 }
 
 func (p *ProviderLimit) clone() *ProviderLimit {
@@ -83,7 +89,8 @@ func sameLimit(a, b *ProviderLimit) bool {
 	return a.ProviderKey == b.ProviderKey && slices.Equal(a.ProviderKeys, b.ProviderKeys) &&
 		a.Parked == b.Parked && samePtr(a.RunningOn, b.RunningOn) &&
 		samePtr(a.ResetsAt, b.ResetsAt) && samePtr(a.RetryAt, b.RetryAt) &&
-		a.Since == b.Since && a.Said == b.Said
+		a.Since == b.Since && a.Said == b.Said && a.CLI == b.CLI &&
+		a.Subscription == b.Subscription
 }
 
 func samePtr(a, b *string) bool {
@@ -131,6 +138,7 @@ func (s *LiveState) nextLimit(was *ProviderLimit, env Envelope, payload map[stri
 			ProviderKey: head, ProviderKeys: keys, Parked: true,
 			ResetsAt: optional(str(payload, "resets_at")), RetryAt: optional(str(payload, "retry_at")),
 			Since: since, Said: str(payload, "said"),
+			CLI: str(payload, "cli"), Subscription: flag(payload, "subscription"),
 		}, true
 
 	case "provider_fallback":
@@ -150,6 +158,7 @@ func (s *LiveState) nextLimit(was *ProviderLimit, env Envelope, payload map[stri
 		return &ProviderLimit{
 			ProviderKey: from, ProviderKeys: []string{from}, RunningOn: optional(to),
 			ResetsAt: optional(str(payload, "resets_at")), Since: since,
+			CLI: str(payload, "from_cli"), Subscription: flag(payload, "from_subscription"),
 		}, true
 
 	case "agent_phase_completed":

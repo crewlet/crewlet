@@ -784,9 +784,17 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 	// WHEN THE HEAD IS BACK, where its vendor said: what a screen showing
 	// the seat carried onto its fallback names.
 	var resets *time.Time
-	if _, at, limited := llm.LimitedUntil(f.Err); limited && !at.IsZero() {
-		utc := at.UTC()
-		resets = &utc
+	var fromCLI string
+	var fromSubscription bool
+	if _, at, limited := llm.LimitedUntil(f.Err); limited {
+		if !at.IsZero() {
+			utc := at.UTC()
+			resets = &utc
+		}
+		var failure *llm.Error
+		if errors.As(f.Err, &failure) {
+			fromCLI, fromSubscription = failure.Agent, failure.Subscription
+		}
 	}
 	e.publish(ctx, events.New(types.ProviderFallback{
 		Agent:     e.turn.AgentID,
@@ -802,6 +810,9 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		ToProviderKey:   f.To,
 		ErrorKind:       f.Kind.String(),
 		ResetsAt:        resets,
+
+		FromCLI:          fromCLI,
+		FromSubscription: fromSubscription,
 	}, e.traceFor(ctx)))
 }
 

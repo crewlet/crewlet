@@ -426,7 +426,14 @@ type Error struct {
 	// It is the fact a person is told ("resumes at 4:30 PM"), and may lie
 	// past RetryAt, which a backend caps so that a raised plan is noticed.
 	ResetsAt time.Time
-	Err      error
+	// Agent is the CLI the entry drives (`claude-code`), and Subscription
+	// whether that CLI signs in on a plan rather than a metered key: what
+	// a person is told a limit is OF ("Claude Code subscription limit
+	// reached"), without the entry's configuration, which only an admin
+	// reads. Empty and false for a backend that is not a CLI's.
+	Agent        string
+	Subscription bool
+	Err          error
 }
 
 // Limit is a provider entry's standing limit report: what its vendor said,
