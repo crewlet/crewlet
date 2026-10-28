@@ -307,12 +307,7 @@ func installClaude(t *testing.T, box sandbox.Sandbox, body string) {
 	t.Helper()
 	p := codingagent.PathsFor(box)
 	version := `[ "$1" = --version ] && { echo '2.1.310 (Claude Code)'; exit 0; }` + "\n"
-	if err := box.WriteFile(t.Context(), p.BinDir()+"/claude", []byte("#!/bin/sh\n"+version+body+"\n")); err != nil {
-		t.Fatalf("write the stand-in: %v", err)
-	}
-	if _, err := box.Exec(t.Context(), "chmod +x '"+p.BinDir()+"/claude'", sandbox.ExecOptions{}); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
+	writeBoxStandIn(t, box, p.BinDir()+"/claude", "#!/bin/sh\n"+version+body+"\n")
 }
 
 // waitRun starts req on a real box and waits for it to finish.
@@ -400,9 +395,7 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 				if err := os.MkdirAll(bin, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(standIn), 0o700); err != nil { //nolint:gosec // the stand-in must run
-					t.Fatal(err)
-				}
+				writeStandIn(t, filepath.Join(bin, "claude"), standIn)
 				argv := sh.argv
 				if len(argv) == 0 {
 					argv = []string{"sh"}

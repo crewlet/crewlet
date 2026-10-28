@@ -184,9 +184,7 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fakeOpenCode), 0o700); err != nil { //nolint:gosec // the fake must run
-		t.Fatal(err)
-	}
+	writeStandIn(t, filepath.Join(bin, "opencode"), fakeOpenCode)
 	paths := codingagent.Paths{Home: home}
 	if !o.unconfigured {
 		if err := os.WriteFile(paths.OpenCodeConfig(), []byte(scriptConfig), 0o600); err != nil {

@@ -171,12 +171,7 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	fake := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" + argv + "'\n" +
 		"cat > '" + stdin + "'\n" +
 		`echo '{"type":"result","subtype":"success","is_error":false,"result":"done"}'` + "\n"
-	if err = box.WriteFile(t.Context(), p.BinDir()+"/claude", []byte(fake)); err != nil {
-		t.Fatalf("write the stand-in: %v", err)
-	}
-	if _, err = box.Exec(t.Context(), "chmod +x '"+p.BinDir()+"/claude'", sandbox.ExecOptions{}); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
+	writeBoxStandIn(t, box, p.BinDir()+"/claude", fake)
 
 	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{System: seatSystem, Brief: "fix the flake"})
 	if err != nil {
