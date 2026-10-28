@@ -1001,12 +1001,20 @@ twenty-nine days after that work began**, when it is rebased like any other
 attempt (above): every attempt at the resume is judged against its own clock,
 and a resumed half whose earlier half was rebased inherits that instant rather
 than taking one of its own (see
-[Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). The resume also starts from what the run
-already called — the rounds before the suspension, the parked round's own calls
-and whatever the executor's run called over the bridge — so the counts in its
-ids continue rather than start again. A delegated worker counts from the run's
-calls and its own, never a sibling's, and the run counts every worker's calls
-once their wave is done.
+[Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). Every segment that
+carries the executor's run on starts from what the turn already called — its
+collection once the run reports, its relaunch after a person
+[answers the run's question](code-sandbox.md#mid-run-clarification-crewlet-ask),
+and the session a node
+[re-opens](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
+for a run still going when it takes the seat over — so the counts in its ids
+continue rather than start again. What it starts from is the rounds the turn
+closed before the run and every call the run made over the tool bridge, each
+read by its canonical arguments, the form every later call is counted in: a
+first-party tool's value from a fixed set is read as its schema spells it, so a
+repeat the model spelt `Draft` after `draft` is the same call, not a new one. A
+delegated worker counts from the run's calls and its own, never a sibling's, and
+the run counts every worker's calls once their wave is done.
 
 Where that shows on the screens:
 
