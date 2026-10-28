@@ -374,11 +374,7 @@ const InboxItem = memo(function InboxItem({
       leading={<Badge row={row} who={who} />}
       // A ROW IS A LINK ALREADY, so what it says is drawn with its marks and
       // swatches and never a link of its own (`renderTokens`).
-      excerpt={
-        words.excerpt === undefined
-          ? undefined
-          : renderTokens(words.excerpt, "excerpt", "text", true)
-      }
+      excerpt={words.excerpt === undefined ? undefined : renderTokens(words.excerpt, "excerpt")}
       outcome={said ? <AnswerLine words={said} /> : undefined}
       outcomeIcon={said ? <AnswerMark words={said} /> : undefined}
       outcomeTone="success"

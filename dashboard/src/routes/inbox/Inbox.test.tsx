@@ -658,6 +658,76 @@ describe("the pane", () => {
     expect(pane.textContent).not.toContain("Sign in to GitHub");
   });
 
+  // EVERY PART OF AN ASK IS ONE MESSAGE, each by its own opt-in (`scoped`):
+  // the question, the context, the reasoning, the recommendation, each option
+  // and its detail, in the pane, the Inbox row and the answered pane. Each
+  // part below holds a bare number and another part holds the repository, so
+  // a part that stops opting in reads its own words alone and loses its mark.
+  //
+  // Mutation: drop `scoped` at any one of those sites and its case fails.
+  describe("an ask's parts read the ask's whole message", () => {
+    const HOSTS = { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] };
+    const marked = (el: Element | null | undefined) =>
+      el?.querySelectorAll("[data-vendor]").length ?? 0;
+
+    test("the context, the reasoning, the recommendation and the options", async () => {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      const ask = askItem({
+        ...DECISION,
+        question: "Ship gophrase/backend?",
+        options: [
+          { id: "hold", label: "Take #14", detail: "after #15" },
+          { id: "ship", label: "Ship anyway" },
+        ],
+        recommended: "hold",
+        rationale: "#13 is safer.",
+      });
+      ask.ask.body = "After #12.";
+      mount({ answers: { decisions: decisionsOf(ask), link_hosts: HOSTS } });
+      await settle();
+      const pane = document.querySelector(".crewlet-reading-pane")!;
+      const hrefs = [...pane.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+      // THE CONTEXT and THE REASONING, whose links are checked and built.
+      expect(hrefs).toContain("https://github.com/gophrase/backend/issues/12");
+      expect(hrefs).toContain("https://github.com/gophrase/backend/issues/13");
+      // THE RECOMMENDATION, named in the reasoning's title.
+      expect(marked(pane.querySelector(".crewlet-reading-pane__reasoning strong"))).toBe(1);
+      // THE OPTION AND ITS DETAIL, each its own render.
+      const take = screen.getByRole("button", { name: /^Take/ });
+      expect(marked(take)).toBe(2);
+    });
+
+    test("the question, in the pane, in its Inbox row and once answered", async () => {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      const ask = askItem({ ...DECISION, question: "Apply #11?" });
+      ask.ask.body = "Assigned in gophrase/backend.";
+      mount({ answers: { decisions: decisionsOf(ask), link_hosts: HOSTS } });
+      await settle();
+      expect(marked(document.querySelector(".crewlet-reading-pane__title"))).toBe(1);
+      const list = screen.getByRole("navigation", { name: "Inbox" });
+      expect(marked(list)).toBeGreaterThanOrEqual(1);
+    });
+
+    test("the question of an answered ask", async () => {
+      const answered = answeredItem();
+      answered.ask = {
+        ...answered.ask,
+        decision: { ...DECISION, question: "Apply #11?" } as never,
+      };
+      answered.ask.body = "Assigned in gophrase/backend.";
+      location.hash = "#/inbox?row=ask%3Ac-20";
+      mount({
+        answers: {
+          decisions: decisionsOf(),
+          answered_decisions: { handle: "jane", items: [answered] },
+          link_hosts: HOSTS,
+        },
+      });
+      await settle();
+      expect(marked(document.querySelector(".crewlet-reading-pane__title"))).toBe(1);
+    });
+  });
+
   // A REPLY IS ITS OWN MESSAGE: the ask's repository places the ask's numbers,
   // never a reply's.
   test("a reply's bare number is placed by the reply's own words", async () => {
