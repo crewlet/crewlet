@@ -274,7 +274,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	}
 	// AND THE RUN'S NOTE INBOX, which its session serves to its CLI between
 	// steps, bound to the job with the ledger once the job has a name.
-	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round, agent.Agent())
+	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round)
 	if inbox != nil {
 		session.Steer = inbox
 	}

@@ -163,7 +163,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	// AND THE RUN'S NOTE INBOX, built from its record alone — its turn, its
 	// job and its round — so a note to the turn reaches the run between its
 	// steps here as it did on the node that launched it (runsteer.go).
-	inbox := e.runSteers.inbox(identityOfRun(run), state.Round, run.CodingAgent)
+	inbox := e.runSteers.inbox(identityOfRun(run), state.Round)
 	if inbox != nil {
 		session.Steer = inbox
 	}

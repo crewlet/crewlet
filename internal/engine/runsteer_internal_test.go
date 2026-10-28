@@ -91,7 +91,7 @@ func boundInbox(t *testing.T, runs *runSteers, store sandbox.PendingStore, turnI
 	if err != nil || !found {
 		t.Fatalf("Get %s = %v, %v", turnID, found, err)
 	}
-	inbox := runs.inbox(identityOfRun(run), 1, "claude-code")
+	inbox := runs.inbox(identityOfRun(run), 1)
 	inbox.Bind(t.Context(), launch)
 	t.Cleanup(inbox.Close)
 	return inbox

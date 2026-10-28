@@ -445,7 +445,7 @@ func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 
 	// BEFORE THE RESTART the run reads one note at a batch.
 	c.file(t, "run-1", "req-before", "use the staging database")
-	before := c.e.runSteers.inbox(identityOfRun(row), 1, row.CodingAgent)
+	before := c.e.runSteers.inbox(identityOfRun(row), 1)
 	before.Bind(t.Context(), row.LaunchID)
 	if got := before.Take(t.Context(), mcpbridge.SteerEventFinish); !strings.Contains(got, "staging") {
 		t.Fatalf("the run did not read its first note before the restart: %q", got)

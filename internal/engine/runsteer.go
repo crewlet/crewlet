@@ -673,7 +673,6 @@ type runInbox struct {
 	steers *runSteers
 	ident  runIdentity
 	round  int
-	agent  string
 
 	mu     sync.Mutex
 	launch string
@@ -684,13 +683,18 @@ type runInbox struct {
 
 var _ mcpbridge.SteerInbox = (*runInbox)(nil)
 
-// inbox is the inbox of a run identified by ident, for the turn iteration round,
-// whose CLI is agent; it serves nothing until it is bound to the run's job.
-func (s *runSteers) inbox(ident runIdentity, round int, agent string) *runInbox {
+// inbox is the inbox of a run identified by ident, for the turn iteration round;
+// it serves nothing until it is bound to the run's job.
+//
+// ONE INBOX WHATEVER THE RUN'S CLI: Claude Code's hooks take notes through
+// [runInbox.Take] and OpenCode's plugin through [runInbox.Wait] and
+// [runInbox.Read], and each reaches only the half its own CLI calls, so the
+// inbox has nothing to tell apart.
+func (s *runSteers) inbox(ident runIdentity, round int) *runInbox {
 	if s == nil {
 		return nil
 	}
-	return &runInbox{steers: s, ident: ident, round: round, agent: agent}
+	return &runInbox{steers: s, ident: ident, round: round}
 }
 
 // Bind starts serving the inbox for the job launch: its view of the run's
