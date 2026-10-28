@@ -428,27 +428,19 @@ export interface Paused {
  * A seat's models at their usage limit (`livestate.ProviderLimit`): ONE steady
  * condition for as long as the limit lasts, moved only by what says it began
  * or ended, never by the turns and probes in between.
+ *
+ * It reaches every reader, so it names no `providers.llm` entry: which are
+ * spent and which carries a seat is the company's configuration, an admin's to
+ * read on Settings, Models.
  */
 export interface ProviderLimit {
-  /** The `providers.llm` key of the limited entry: the chain's head for a
-   *  parked seat, the member it fell from for one on its fallback. */
-  provider_key: string;
-  /** Every key of a parked seat's chain, each of which refused; the one
-   *  limited entry otherwise. */
-  provider_keys: string[];
   /** Whether the seat waits for the limit (every model refused) rather than
-   *  running on a fallback. */
+   *  running on a fallback, which is not named. */
   parked: boolean;
-  /** The fallback carrying the seat meanwhile; null for a parked seat. */
-  running_on: string | null;
   /** When the vendor said the limit lifts, in UTC; null where unknown. */
   resets_at: string | null;
-  /** When a parked seat's models are tried again, in UTC; null otherwise. */
-  retry_at: string | null;
   /** When the condition began, in UTC. */
   since: string;
-  /** The vendor's own sentence, where the report carried it. */
-  said?: string;
   /** The CLI the limited entry drives (`claude-code`), a key of
    *  `CLI_PRODUCTS`; empty where the report did not say. */
   cli: string;

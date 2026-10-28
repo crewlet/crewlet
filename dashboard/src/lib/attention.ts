@@ -106,19 +106,9 @@ export function watchedIn(where: Where): string {
   );
 }
 
-/**
- * The conditions a PERSON decides: the Inbox's "Needs you" rows beside
- * the asks and runs, and what Home counts as needing a look.
- *
- * A SEAT REFUSING ON ITS OWN BUDGET IS LEFT OUT, because the seat the engine
- * stopped for it is already a decision row of its own
- * (`components/DecisionRow.tsx`'s `seatConditionsOf`) that names the window
- * and offers the two ways out; listing the refusal as well would be the one
- * stop twice.
- */
-/** The one seat an entry's limit holds, where it holds one, as a row's `who`. */
+/** The one seat a limit holds, where it holds one, as a row's `who`. */
 function whoOfLimit(limit: EntryLimit): { who?: string } {
-  const seats = [...limit.parked, ...limit.carried.map((c) => c.row)];
+  const seats = [...limit.parked, ...limit.carried];
   const only = seats.length === 1 ? seats[0] : undefined;
   return only ? { who: String(only.handle ?? only.id) } : {};
 }
@@ -129,6 +119,16 @@ export function seatStateId(agentID: string): string {
   return `seat-state-${agentID}`;
 }
 
+/**
+ * The conditions a PERSON decides: the Inbox's "Needs you" rows beside
+ * the asks and runs, and what Home counts as needing a look.
+ *
+ * A SEAT REFUSING ON ITS OWN BUDGET IS LEFT OUT, because the seat the engine
+ * stopped for it is already a decision row of its own
+ * (`components/DecisionRow.tsx`'s `seatConditionsOf`) that names the window
+ * and offers the two ways out; listing the refusal as well would be the one
+ * stop twice.
+ */
 export function conditionsToDecide(queue: readonly Attention[]): Attention[] {
   return queue.filter((a) => WHERE_OF[a.subject] === "seat" && !a.id.startsWith("seat-budget-"));
 }
@@ -353,9 +353,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
   }
 
   // --- models at their usage limit ------------------------------------------
-  // ONE ROW PER ENTRY, keyed by it, for as long as the limit lasts: what the
-  // seats it holds up are waiting for, and until when (providerLimit.ts). The
-  // seats themselves draw no row of their own for it below.
+  // ONE ROW PER KIND OF LIMIT, keyed by it, for as long as the limit lasts:
+  // what the seats it holds up are waiting for, and until when
+  // (providerLimit.ts). The seats themselves draw no row of their own for it
+  // below.
   for (const limit of entryLimits(agents)) {
     out.push({
       id: `provider-limit-${limit.key}`,
@@ -364,7 +365,6 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "clock",
       title: limitTitle(limit),
       detail: limitDetail(limit, now),
-      ...(limit.said ? { technical: limit.said } : {}),
       // THE COMPANY'S MODELS, where a fallback is given or a plan changed,
       // behind the same gate as the screen it opens (lib/remedy.ts).
       remedy: { setting: "model_providers" },

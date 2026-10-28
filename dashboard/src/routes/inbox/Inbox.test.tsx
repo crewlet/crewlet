@@ -1093,14 +1093,9 @@ describe("what was answered", () => {
 // between stopped and failed is one row whose words change.
 describe("a burst of live pushes", () => {
   const limit = {
-    provider_key: "default",
-    provider_keys: ["default"],
     parked: true,
-    running_on: null,
     resets_at: "2026-10-27T23:30:00Z",
-    retry_at: "2026-10-27T23:30:00Z",
     since: "2026-10-27T23:16:00Z",
-    said: "You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)",
     cli: "claude-code",
     subscription: true,
   };

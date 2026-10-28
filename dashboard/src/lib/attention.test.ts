@@ -597,14 +597,9 @@ describe("a stopped seat's row", () => {
 // on the id drew as one row leaving and another arriving.
 describe("a model at its usage limit", () => {
   const limit = {
-    provider_key: "default",
-    provider_keys: ["default"],
     parked: true,
-    running_on: null,
     resets_at: "2026-01-01T12:30:00Z",
-    retry_at: "2026-01-01T12:30:00Z",
     since: "2026-01-01T11:59:00Z",
-    said: "You've hit your 5-hour limit",
     cli: "claude-code",
     subscription: true,
   };
@@ -642,9 +637,8 @@ describe("a model at its usage limit", () => {
       }),
     );
     const decide = conditionsToDecide(items);
-    expect(decide.map((i) => i.id)).toEqual(["provider-limit-default"]);
+    expect(decide.map((i) => i.id)).toEqual(["provider-limit-claude-code-plan"]);
     expect(decide[0]?.title).toBe("Claude Code subscription limit reached");
-    expect(decide[0]?.technical).toBe("You've hit your 5-hour limit");
     expect(decide[0]?.remedy).toEqual({ setting: "model_providers" });
   });
 
