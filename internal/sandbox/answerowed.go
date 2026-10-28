@@ -562,7 +562,19 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		return
 	}
 	defer adm.release()
-	ctx = adm.ctx
+	c.resumeOwedAdmitted(adm, run, answer, fence)
+}
+
+// resumeOwedAdmitted is an owed answer's claim and resume, under the admission
+// [Coordinator.attemptOwed] took for it, and the settling of what they leave.
+//
+// IT TAKES THE ADMISSION, NOT A CONTEXT, and runs under the admission's own,
+// for the reason [Coordinator.resumeAndSettle] does: the claim belongs to the
+// admitted turn, so the drain's cut that ends the turn ends the claim with it,
+// and a frame handed only a context could pass the caller's, which the
+// admission never covered.
+func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *RecordedAnswer, fence Fence) {
+	ctx := adm.ctx
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
 	if err != nil {
 		// THE CLAIM MAY HAVE LANDED, and one that did is a claim nothing on

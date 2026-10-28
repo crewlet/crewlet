@@ -944,7 +944,19 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
 	}
 	defer adm.release()
-	ctx = adm.ctx
+	return c.completeAdmitted(adm, ev, trigger, fence)
+}
+
+// completeAdmitted is a completion's claim, collection and resume, under the
+// admission [Coordinator.OnCompleted] took for it.
+//
+// IT TAKES THE ADMISSION, NOT A CONTEXT, for the reason
+// [Coordinator.resumeOwedAdmitted] gives: everything from the claim on belongs
+// to the admitted turn and runs under the admission's own context.
+func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunCompleted,
+	trigger *events.Event, fence Fence,
+) error {
+	ctx := adm.ctx
 	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
