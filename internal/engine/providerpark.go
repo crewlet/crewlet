@@ -166,7 +166,15 @@ type limitProbe struct {
 	until time.Time
 	seats map[uuid.UUID]string
 	alarm alarm
-	// cancel ends the call the probe is making, nil when none is.
+	// call is the call the probe is making, nil when none is.
+	call *probeCall
+}
+
+// probeCall is one call of a probe: its own, so the call that ends clears
+// only itself. A limit that still holds re-arms the alarm before its call has
+// returned, and an alarm armed for an instant already past fires at once, so
+// a newer call can be under way when an older one's deferred cleanup runs.
+type probeCall struct {
 	cancel context.CancelFunc
 }
 
@@ -246,7 +254,7 @@ func (e *Engine) joinLimitProbe(ctx context.Context, basis providerBasis, seat u
 		p.probes[key] = probe
 	}
 	probe.seats[seat] = handle
-	if probe.cancel == nil && (probe.alarm == nil || retry.Before(probe.until)) {
+	if probe.call == nil && (probe.alarm == nil || retry.Before(probe.until)) {
 		probe.until = retry
 		e.armLimitProbeLocked(ctx, key, probe)
 	}
@@ -277,7 +285,8 @@ func (e *Engine) fireLimitProbe(ctx context.Context, key probeKey, probe *limitP
 		return
 	}
 	asking, cancel := context.WithCancel(ctx)
-	probe.cancel = cancel
+	call := &probeCall{cancel: cancel}
+	probe.call = call
 	// THE PARKED SEAT THAT SORTS FIRST runs the call, on its CLI home and
 	// its counter: a stable choice, so one probe after another runs as
 	// the same seat while the set is the same.
@@ -287,7 +296,9 @@ func (e *Engine) fireLimitProbe(ctx context.Context, key probeKey, probe *limitP
 	p.mu.Unlock()
 	defer func() {
 		p.mu.Lock()
-		probe.cancel = nil
+		if probe.call == call {
+			probe.call = nil
+		}
 		p.mu.Unlock()
 		cancel()
 		p.asking.Done()
@@ -391,8 +402,8 @@ func (e *Engine) leaveLimitProbe(seat uuid.UUID, basis providerBasis) {
 		probe.alarm.Stop()
 		probe.alarm = nil
 	}
-	if probe.cancel != nil {
-		probe.cancel()
+	if probe.call != nil {
+		probe.call.cancel()
 	}
 }
 
@@ -548,8 +559,8 @@ func (e *Engine) stopProviderParks() {
 			probe.alarm.Stop()
 			probe.alarm = nil
 		}
-		if probe.cancel != nil {
-			probe.cancel()
+		if probe.call != nil {
+			probe.call.cancel()
 		}
 	}
 	p.mu.Unlock()
