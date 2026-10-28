@@ -2325,8 +2325,9 @@ func declinedCopy(declined []string, delivery string) bool {
 func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now time.Time,
 ) (AnswerWords, RecordedAnswer) {
 	words := AnswerWords{
-		// Redacted HERE, as a chat reply is: it is spliced into a phase
-		// record verbatim.
+		// Redacted HERE, as a chat reply is: it is sealed onto the run's
+		// row and handed as it is to the run's coding CLI, whose box and
+		// session keep it.
 		Text: redact.Secrets(given.Answer), Via: types.AnswerViaOperator,
 		By: given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
 	}
@@ -4428,7 +4429,8 @@ func runReport(result Result) string {
 
 // AskedRun is what a person's answer resumes a parked run with — see
 // [ResumeRequest.Asked]. Redacted, as everything a resume hands the turn is:
-// the turn publishes it and hands it to the run.
+// the turn hands it as it is to the run it carries on, whose box and CLI
+// session keep it.
 type AskedRun struct {
 	// Question is what the run asked and Answer the reply; By is who gave
 	// it, where the route knows — an answer by turn names the person, while

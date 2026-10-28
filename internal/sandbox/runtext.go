@@ -238,13 +238,15 @@ func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
 // announcement, a field of the run's coordination row — read and written whole
 // on every status flip and every listing of active runs for as long as it
 // waits — the banner a person answers it from, the operator's `answer_run`
-// reply, and the resumed executor's answer text, which re-sends it on every
-// later round of the turn. 16 KiB is about four thousand tokens: a page of
-// prose, room for a question, its context and its options with plenty to
-// spare. A question longer than a page is the report put in the wrong place —
-// the report has 256 KiB of its own — and the shim's own route already stops
-// near 128 KiB, the most one argument can carry. Past it the question is
-// condensed by the seat's auxiliary model, never cut.
+// reply, and, once answered, the prompt of the run that carries the work on:
+// the asking run's next message in its own CLI session, or a fresh run's
+// brief, which that run's CLI re-sends with every request it makes from then
+// on. 16 KiB is about four thousand tokens: a page of prose, room for a
+// question, its context and its options with plenty to spare. A question
+// longer than a page is the report put in the wrong place — the report has
+// 256 KiB of its own — and the shim's own route already stops near 128 KiB,
+// the most one argument can carry. Past it the question is condensed by the
+// seat's auxiliary model, never cut.
 const MaxQuestionBytes = 16 << 10
 
 // MaxDeliveredRefBytes bounds the branches and pull requests a run's record
@@ -266,9 +268,10 @@ const MaxDeliveredRefBytes = 16 << 10
 //
 // SIZED TO WHERE IT TRAVELS AND TO WHAT A BRANCH IS. It rides the run's
 // coordination row beside the question ([MaxQuestionBytes]) — read and written
-// whole on every status flip and every listing of active runs — and the
-// answer's text, which the resumed executor re-sends on every later round of
-// the turn. Git keeps a branch as a path under refs/heads, every part of which
+// whole on every status flip and every listing of active runs — and, where the
+// asking run's own session cannot be continued, the brief of the fresh run that
+// carries the work on from it, which that run's CLI re-sends with every request
+// it makes. Git keeps a branch as a path under refs/heads, every part of which
 // a filesystem holds to 255 bytes, and a work-in-progress branch is a few
 // parts at most: 1 KiB is four parts at their longest, past any name a person
 // or an agent gives one, and a sixteenth of the question it is parked beside.

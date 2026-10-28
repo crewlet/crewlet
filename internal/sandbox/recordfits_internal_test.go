@@ -13,8 +13,8 @@ import (
 
 // A QUESTION PAST ITS BOUND IS CONDENSED, as the question it is: it travels on
 // the run's record, its coordination row, the park's announcement, a person's
-// banner and the resumed executor's every later round, and a run's ask file
-// was read whole up to 32 MiB.
+// banner and every later request of the run its answer carries on, and a run's
+// ask file was read whole up to 32 MiB.
 func TestAQuestionPastItsBoundIsCondensedAsAQuestion(t *testing.T) {
 	t.Parallel()
 	condenser := &fakeCondenser{answer: func(part RunPart, _ string, _ int) (string, error) {
