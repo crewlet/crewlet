@@ -725,3 +725,110 @@ func TestTheDetailNamesTheTaskItIsFiledUnder(t *testing.T) {
 		t.Errorf("a top-level task names a parent %+v", top.Parent)
 	}
 }
+
+// A THREAD'S CURSOR SAYS WHETHER THAT THREAD GOES BACK, NOT THE TASK.
+//
+// A pane drawing one question's replies used to page the task's whole thread
+// and keep the replies, so a task with more than a page of comments offered
+// "earlier" replies to a question nobody had replied to. Narrowed by
+// [worklet.CommentThread], an unanswered ask on a busy task is one empty page
+// with no cursor, and its replies and answer walk back exactly once each
+// with nothing else on the task among them; the root joins only when asked.
+func TestACommentThreadPagesOnlyItsOwnConversation(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("the brand palette")
+	at := func(minute int) time.Time { return wednesday.Add(time.Duration(minute) * time.Minute) }
+	comment := func(id string, minute int, replyTo string) {
+		t.Helper()
+		c := worklet.Comment{ID: id, Task: created.ID, Author: "ana",
+			AuthorKind: worklet.AuthorHuman, Body: "about " + id, CreatedAt: at(minute)}
+		if replyTo != "" {
+			c.ReplyTo = &replyTo
+		}
+		askOn(t, r, "op-"+id, created.ID, c)
+	}
+	read := func(thread worklet.CommentThread, cursor string, limit int) worklet.TaskDetail {
+		t.Helper()
+		page, err := r.reader.Task(t.Context(), created.ID, worklet.DetailWants{
+			Comments: true, CommentThread: thread, CommentCursor: cursor, CommentLimit: limit,
+		}, statelog.Freshness{Level: statelog.ReadStale})
+		if err != nil {
+			t.Fatalf("read the thread: %v", err)
+		}
+		return page
+	}
+	walk := func(thread worklet.CommentThread) []string {
+		t.Helper()
+		var ids []string
+		cursor := ""
+		for pages := 0; ; pages++ {
+			if pages > 10 {
+				t.Fatal("the cursor never ran out")
+			}
+			page := read(thread, cursor, 10)
+			if len(page.Comments) == 0 {
+				t.Fatal("a page of a non-empty thread was empty")
+			}
+			got := make([]string, 0, len(page.Comments))
+			for _, c := range page.Comments {
+				got = append(got, c.ID)
+			}
+			ids = append(got, ids...)
+			if cursor = page.CommentsCursor; cursor == "" {
+				return ids
+			}
+		}
+	}
+
+	askOn(t, r, "op-ask", created.ID, worklet.Comment{ID: "cm-ask", Task: created.ID,
+		Author: "bo", AuthorKind: worklet.AuthorAgent, Body: "Which yellow?", Ask: "ana",
+		CreatedAt: at(0)})
+	for i := range 25 {
+		comment(fmt.Sprintf("cm-other-%02d", i), 1+i, "")
+	}
+
+	// THE TASK GOES BACK; THE QUESTION'S CONVERSATION DOES NOT.
+	if whole := read(worklet.CommentThread{}, "", 0); whole.CommentsCursor == "" {
+		t.Fatal("26 comments fit the detail's page, so the task's cursor was not exercised")
+	}
+	empty := read(worklet.CommentThread{Root: "cm-ask"}, "", 0)
+	if len(empty.Comments) != 0 || empty.CommentsCursor != "" {
+		t.Fatalf("an ask with no replies paged %d comment(s) and cursor %q, want none and none",
+			len(empty.Comments), empty.CommentsCursor)
+	}
+
+	var want []string
+	for i := range 21 {
+		id := fmt.Sprintf("cm-reply-%02d", i)
+		comment(id, 30+2*i, "cm-ask")
+		comment(fmt.Sprintf("cm-aside-%02d", i), 31+2*i, "")
+		want = append(want, id)
+	}
+	answerOn(t, r, "op-answer", created.ID, "cm-answer", "ana", "cm-ask", "", "The warm one.", at(80))
+	want = append(want, "cm-answer")
+
+	if got := walk(worklet.CommentThread{Root: "cm-ask"}); !slices.Equal(got, want) {
+		t.Fatalf("the ask's thread walked\n  %v\nwant its replies and answer in order\n  %v", got, want)
+	}
+	withRoot := append([]string{"cm-ask"}, want...)
+	if got := walk(worklet.CommentThread{Root: "cm-ask", WithRoot: true}); !slices.Equal(got, withRoot) {
+		t.Fatalf("the thread with its root walked\n  %v\nwant\n  %v", got, withRoot)
+	}
+	// A ROOT THE TASK DOES NOT HOLD NARROWS TO NOTHING, never to another
+	// task's conversation: the read stays on the task it was asked of.
+	other := r.createTask("another task")
+	askOn(t, r, "op-elsewhere", other.ID, worklet.Comment{ID: "cm-elsewhere", Task: other.ID,
+		Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "elsewhere", CreatedAt: at(90)})
+	elsewhere := "cm-elsewhere"
+	askOn(t, r, "op-elsewhere-reply", other.ID, worklet.Comment{ID: "cm-elsewhere-reply",
+		Task: other.ID, Author: "bo", AuthorKind: worklet.AuthorAgent, Body: "a reply",
+		ReplyTo: &elsewhere, CreatedAt: at(91)})
+	for _, root := range []string{"cm-nobody-wrote", "cm-elsewhere"} {
+		page := read(worklet.CommentThread{Root: root, WithRoot: true}, "", 0)
+		if len(page.Comments) != 0 || page.CommentsCursor != "" {
+			t.Errorf("root %s paged %d comment(s) and cursor %q on %s, want none",
+				root, len(page.Comments), page.CommentsCursor, created.ID)
+		}
+	}
+}
