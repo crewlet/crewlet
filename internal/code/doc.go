@@ -231,17 +231,23 @@
 //
 // So every data node, holding the whole estate, holds 679.9 bytes for each
 // seat's push of the last 181 days (622.6 for a person's), and pack rows that
-// follow its repositories rather than its pushes. A repository's home merges
-// its small packs at every poll, so a repository holds about
-// [CompactTargetPacks] live pack rows at the most — some 29 KB whatever its
-// age, and a row more for every [FullPackBytes] its history fills — and the
-// rows merged in the last day, retired: a compaction below the target takes
-// [CompactMinMerge] packs or more into one output, so where the packs a
-// repository's pushes add are what its compactions take, a push retires at
-// most CompactMinMerge ÷ (CompactMinMerge − 1) packs, 16/15, and about one
-// where a repository is pushed to fast enough that a minute's roll takes
-// hundreds (internal/code/compact's steady arms: 1.05 for a repository pushed
-// once a minute, 1.003 for one pushed three hundred times a minute). The
+// follow its repositories rather than its pushes. A repository's home looks
+// at it at every poll, a minute apart, and merges its small packs once
+// [CompactMinMerge] have gathered — a busy repository's at every poll, the
+// minute's pushes taking it past them — so a repository holds at most
+// [CompactTargetPacks] live pack rows plus a minute's pushes whatever its age,
+// and a row more for every [FullPackBytes] its history fills: one pushed now
+// and then sits near the floor (internal/code/compact's steady arms: 20 at
+// the most for a repository pushed once a minute), and one pushed three
+// hundred times a minute held 304 at the most — some 29 KB at the target and
+// 179 KB at 304. It holds the rows merged in the last day too, retired: a
+// compaction below the target takes [CompactMinMerge] packs or more into one
+// output, so where the packs a repository's pushes add are what its
+// compactions take, a push retires at most CompactMinMerge ÷
+// (CompactMinMerge − 1) packs, 16/15, and about one where a repository is
+// pushed to fast enough that a minute's roll takes hundreds (the steady arms:
+// 1.05 for a repository pushed once a minute, 1.003 for one pushed three
+// hundred times a minute). The
 // reference company's 3 000 pushes a day, every one a seat's, carry about
 // 369 MB of push rows at the horizon and at most about 2.0 MB of retired pack
 // rows — 3 200 of them, a day of 16/15 a push and the RetentionInterval past

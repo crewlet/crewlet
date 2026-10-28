@@ -471,7 +471,9 @@ while it runs, since it clones a mirror there and bundles it; see
 ## A busy repository's packs are merged
 
 Every push that carries objects stores one pack, and the repository's home git
-node merges its small packs into a few, once a minute, with no step of yours
+node merges its small packs into a few with no step of yours: it looks every
+minute and merges them once sixteen have gathered, or a busy repository's
+minute of pushes at every look
 ([Compaction](../concepts/code-host.md#compaction)). The packs a merge replaces
 are kept a day for any clone still reading them, then deleted. A repository
 that takes pushes faster than its home merges them can reach the 2 048 live

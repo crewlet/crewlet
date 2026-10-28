@@ -403,16 +403,21 @@ whole estate, and the code host's rows with it. A seat's push of one commit
 leaves a push row of about 680 bytes, naming the seat and the turn, work item
 and model behind it (a person's push, naming the token it came through,
 leaves one of about 623), kept 181 days, and its pack's row of about 588,
-kept while the pack is live: a repository's home merges its small packs every
-minute ([Compaction](code-host.md#compaction)), so a repository holds about
-fifty live pack rows at the most — some 29 KB whatever its age, and a row more
-for each 0.9 GB its history fills — and the row of a pack a merge took is kept
-one more day, as a retired row of about 608 bytes. A merge below that bound
-takes sixteen packs or more into one, so once the packs a repository's pushes
-add are what its merges take, a push leaves at most sixteen retired rows for
-every fifteen pushes — 1.05 a push measured for a repository pushed once a
-minute, and about one where it is pushed to fast enough that a minute's merge
-takes hundreds. A forced update or a deletion leaves a row more, naming the
+kept while the pack is live: a repository's home looks at it every minute and
+merges its small packs once sixteen have gathered — a busy repository's at
+every look, the minute's pushes taking it past them
+([Compaction](code-host.md#compaction)) — so a repository holds at most fifty
+live pack rows plus a minute's pushes whatever its age, and a row more for each
+0.9 GB its history fills: one pushed now and then sits near the sixteen, and
+one pushed three hundred times a minute held 304 at the most, measured — some
+29 KB at fifty and 179 KB at 304. The row of a pack a merge took is kept one
+more day, as a retired row of about 608 bytes. A merge of a repository
+holding fifty or fewer takes sixteen packs or more into one, so once the
+packs a repository's pushes add are what its merges take, a push leaves at
+most sixteen retired rows for every fifteen pushes — 1.05 a push measured for
+a repository pushed once a minute, and about one where it is pushed to fast
+enough that a minute's merge takes hundreds. A forced update or a deletion
+leaves a row more, naming the
 object it left, kept 14 days, and longer while the
 repository's pushes fill their records with such updates
 ([ref drops](code-host.md#retention-and-history)). A seat that has pushed
@@ -439,7 +444,8 @@ company's are its thousands of seats'. So:
 | 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 269 000, 164 MB | 1.6 to 2.9 GB |
 
 The live pack rows are not a column, because they follow the repositories and
-not the pushes: some 29 KB a repository, 29 MB for every thousand. So the code
+not the pushes: some 29 KB a repository at fifty, 29 MB for every thousand,
+and a minute's pushes more on a busy one. So the code
 host's rows stop growing once the push history reaches its horizon — where,
 while nothing merged a repository's packs, its pack rows grew by about 644 MB
 a year at 3 000 pushes a day and 53.6 GB at 250 000, for as long as the
