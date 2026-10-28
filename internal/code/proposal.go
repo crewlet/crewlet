@@ -114,14 +114,16 @@ type PushAnswer struct {
 	// is the decision's, tentative until the record resolves.
 	Commands []Command `json:"commands"`
 	// Refused is a refusal of the whole push — busy, compaction_behind,
-	// push_quota, expunging, unavailable, not_applied, repo_deleted,
-	// repo_archived — with every command it covers ng under the same code.
+	// push_quota, expunging, too_many_changes, unavailable, not_applied,
+	// repo_deleted, repo_archived — with every command it covers ng under the
+	// same code.
 	Refused Refusal `json:"refused,omitempty"`
 	// Detail is a whole-push refusal's one sentence of specifics, and every
 	// command the refusal covers carries the SAME sentence as its own
 	// Detail — one placement whichever path formed the refusal (the decide,
 	// for a repository deleted or archived, at its pack bound, at a seat's
-	// day's quota, or at another drop epoch than the push was checked at; the
+	// day's quota, at another drop epoch than the push was checked at, or for
+	// the live changes it moves; the
 	// committer, for busy, unavailable, not_applied and a deletion the log
 	// refused), so a reader of the answer or of a command finds it. A
 	// command the receiver had already refused keeps its own. Empty when
@@ -566,6 +568,27 @@ func rowBound(p Proposal) int {
 		rows++
 	}
 	if p.Principal.Kind == PrincipalAgent {
+		rows += seatDayRows
+	}
+	return rows
+}
+
+// entryRows is the most rows a DECIDED entry makes its record's apply touch
+// besides the changes its commands move: its push row, [commandRows] for every
+// command that applies, its pack, and for a seat's entry the [seatDayRows]
+// its day's count takes — [rowBound] of the commands its decide found ok,
+// which the decide admits an entry by and [withinRecord] holds the record to.
+func entryRows(e PushEntry) int {
+	rows := 1
+	for _, c := range e.Commands {
+		if c.Result == ResultOK {
+			rows += commandRows(c)
+		}
+	}
+	if e.Pack != nil {
+		rows++
+	}
+	if e.Principal.Kind == PrincipalAgent {
 		rows += seatDayRows
 	}
 	return rows

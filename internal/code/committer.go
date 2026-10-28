@@ -35,6 +35,18 @@ import (
 // group commit of sixty-four small pushes holds the lane 0.16–0.18 ms a push
 // against 3.4–4.8 ms for one alone).
 //
+// # A push whose changes do not fit leads the next record
+//
+// A batch is gathered by what each push may write of its own — its bytes and
+// its rows, bounded before any record exists — but a push record also writes
+// the rows of the live changes its pushes move (revisions.go), which only a
+// snapshot can count. So the decide counts them as it admits each push, and
+// one whose changes' rows would take the record past MaxRecordRows beside the
+// pushes before it is CARRIED rather than refused: nothing of it or of the
+// pushes behind it is decided, and they lead the next batch in the order they
+// arrived, where its rows are the record's first. Only a push whose changes'
+// rows would not fit even a record of its own is refused, too_many_changes.
+//
 // # An ok is only ever reported from a row
 //
 // A batch's record is decided inside the publisher's snapshot and is applied
@@ -459,13 +471,15 @@ func (q *queued) shortOfTime(left time.Duration) string {
 }
 
 // answered is one proposal's answer: res a push's, compact a compaction's,
-// expunge an expunge record's, change a change's.
+// expunge an expunge record's, change a change's — or carried, a push its
+// batch decided nothing of, which leads the next batch and is answered there.
 type answered struct {
 	res     ProposeResult
 	compact CompactResult
 	expunge ExpungeResult
 	change  ChangeResult
 	err     error
+	carried bool
 }
 
 // NewCommitter builds a committer, refusing what it cannot work without.
@@ -705,17 +719,21 @@ func (c *Committer) run(rc *repoCommitter) {
 	defer c.wg.Done()
 	idle := time.NewTimer(c.idle)
 	defer idle.Stop()
-	var carry *queued
+	// carried leads the next batch, in the order it arrived: the pushes the
+	// last batch's decide carried, then the first proposal its gather met
+	// that did not fit it — every one taken from the queue already.
+	var carried []*queued
 	for {
 		select {
 		case <-c.stopping:
-			c.refuseQueued(rc, carry)
+			c.refuseQueued(rc, carried)
 			return
 		default:
 		}
-		first := carry
-		carry = nil
-		if first == nil {
+		var first *queued
+		if len(carried) > 0 {
+			first, carried = carried[0], carried[1:]
+		} else {
 			select {
 			case first = <-rc.inbox:
 				c.dequeued(rc, first)
@@ -746,8 +764,8 @@ func (c *Committer) run(rc *repoCommitter) {
 			c.change(rc.repoID, first)
 		default:
 			var batch []*queued
-			batch, carry = c.gather(rc, first)
-			c.commit(rc.repoID, batch)
+			batch, carried = c.gather(rc, first, carried)
+			carried = append(c.commit(rc.repoID, batch), carried...)
 		}
 		if !idle.Stop() {
 			select {
@@ -759,11 +777,12 @@ func (c *Committer) run(rc *repoCommitter) {
 	}
 }
 
-// gather is first — a push — and every push already queued behind it that fits
-// the record — WITHOUT LINGER: a batch is what was waiting, never what might
-// come. A proposal [Committer.admit] turns away is answered and left out; the
-// first that does not fit is carried to lead the next batch, and admitted
-// again then, since that batch is the one it would start in.
+// gather is first — a push — and every proposal already waiting behind it that
+// fits the record, the carried before the queued — WITHOUT LINGER: a batch is
+// what was waiting, never what might come. A proposal [Committer.admit] turns
+// away is answered and left out; the first that does not fit is carried to
+// lead the next batch, and admitted again then, since that batch is the one it
+// would start in. It answers the batch and what is carried still, in order.
 //
 // A COMPACTION, AN EXPUNGE RECORD OR A CHANGE'S WRITE IS NEVER GATHERED: a
 // record carries one op, and each is a record of its own (OpCompact,
@@ -771,28 +790,33 @@ func (c *Committer) run(rc *repoCommitter) {
 // lists). Met behind pushes, it ends the batch and is carried to be decided
 // alone, after them and before anything queued behind it, so a repository's
 // proposals still land in the order they arrived.
-func (c *Committer) gather(rc *repoCommitter, first *queued) ([]*queued, *queued) {
+func (c *Committer) gather(rc *repoCommitter, first *queued, carried []*queued) ([]*queued, []*queued) {
 	batch := []*queued{first}
 	bytes, rows := recordOverheadBytes+first.bytes, first.rows
 	for len(batch) < MaxPushesPerRecord {
-		select {
-		case q := <-rc.inbox:
-			c.dequeued(rc, q)
-			if !c.admit(q) {
-				continue
+		var q *queued
+		if len(carried) > 0 {
+			q, carried = carried[0], carried[1:]
+		} else {
+			select {
+			case q = <-rc.inbox:
+				c.dequeued(rc, q)
+			default:
+				return batch, nil
 			}
-			if q.alone() || bytes+q.bytes > MaxRecordBytes ||
-				recordRows(rows+q.rows) > MaxRecordRows {
-				return batch, q
-			}
-			batch = append(batch, q)
-			bytes += q.bytes
-			rows += q.rows
-		default:
-			return batch, nil
 		}
+		if !c.admit(q) {
+			continue
+		}
+		if q.alone() || bytes+q.bytes > MaxRecordBytes ||
+			recordRows(rows+q.rows) > MaxRecordRows {
+			return batch, append([]*queued{q}, carried...)
+		}
+		batch = append(batch, q)
+		bytes += q.bytes
+		rows += q.rows
 	}
-	return batch, nil
+	return batch, carried
 }
 
 // admit reports whether q may be decided in the batch about to start, and
@@ -848,17 +872,17 @@ func (c *Committer) dequeued(rc *repoCommitter, q *queued) {
 	rc.queued -= q.bytes
 }
 
-// refuseQueued answers carry and everything still queued [ErrNotServing], and
-// forgets the repository. Nothing can be queued after it: a proposal is sent
-// under mu only while the committer is not stopped, and this runs only once
-// Stop has said it is.
-func (c *Committer) refuseQueued(rc *repoCommitter, carry *queued) {
+// refuseQueued answers what is carried and everything still queued
+// [ErrNotServing], and forgets the repository. Nothing can be queued after it:
+// a proposal is sent under mu only while the committer is not stopped, and
+// this runs only once Stop has said it is.
+func (c *Committer) refuseQueued(rc *repoCommitter, carried []*queued) {
 	refuse := func(q *queued) {
 		q.answer <- answered{err: fmt.Errorf("%w: the committer stopped before deciding the %s",
 			ErrNotServing, q.kind())}
 	}
-	if carry != nil {
-		refuse(carry)
+	for _, q := range carried {
+		refuse(q)
 	}
 	for {
 		select {
@@ -879,8 +903,13 @@ type round struct {
 	answers []decided
 }
 
-// commit publishes one batch as ONE record and answers every proposal in it.
-func (c *Committer) commit(repoID string, batch []*queued) {
+// commit publishes one batch as ONE record and answers every proposal in it —
+// but the pushes its decide CARRIED, decided by none of its rounds, which it
+// answers the caller instead, in the order they arrived, to lead the next
+// batch (decide.go). Only a publish that answered carries one: a batch whose
+// publish failed answers every proposal in it the failure, the carried among
+// them, since what failed may be a round's record that held them.
+func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 	// THE EPOCH'S CHART AND CALENDAR, READ ONCE A BATCH that carries a seat's
 	// push — every round of the batch judges by the same — and on a node
 	// that holds none yet, every such push handed on, decided by nobody,
@@ -898,7 +927,7 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 				return true
 			})
 			if len(batch) == 0 {
-				return
+				return nil
 			}
 		}
 	}
@@ -941,7 +970,7 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 			last = round{}
 			now := c.now()
 			formed := verdicts.formed
-			entries, answers, version, err := decideBatch(ctx, tx, repoID, proposals, limits,
+			entries, answers, changeRows, version, err := decideBatch(ctx, tx, repoID, proposals, limits,
 				retention, seats, now, &verdicts)
 			if c.formedInRound != nil {
 				c.formedInRound(verdicts.formed - formed)
@@ -958,7 +987,7 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if err := withinRecord(decision, entries); err != nil {
+			if err := withinRecord(decision, entries, changeRows); err != nil {
 				return statelog.Decision{}, err
 			}
 			decision.Version = version
@@ -966,32 +995,27 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 		},
 	})
 	answers := c.answers(ctx, repoID, proposals, last, res, err, opID)
+	var carried []*queued
 	for i, q := range batch {
+		if answers[i].carried {
+			carried = append(carried, q)
+			continue
+		}
 		q.answer <- answers[i]
 	}
+	return carried
 }
 
 // withinRecord refuses a decision past a record's bytes or rows, which the
-// batching keeps from ever forming — the check makes the invariant the
-// record's own rather than the batcher's. Rows are counted as [rowBound]
-// counts them, each command that applies by [commandRows] — its ref, the
-// object a forced update or a deletion left, and the sweep's room for the
-// tombstone a deletion makes — and a seat's entry by [seatDayRows] more.
-func withinRecord(d statelog.Decision, entries []PushEntry) error {
-	rows := 0
+// batching and the decide's admission of each entry keep from ever forming —
+// the check makes the invariant the record's own rather than the batcher's.
+// Rows are counted as the decide admitted them: each entry's [entryRows], and
+// changeRows, what its apply writes about the live changes the entries move
+// ([changeBook]).
+func withinRecord(d statelog.Decision, entries []PushEntry, changeRows int) error {
+	rows := changeRows
 	for _, e := range entries {
-		rows++
-		for _, c := range e.Commands {
-			if c.Result == ResultOK {
-				rows += commandRows(c)
-			}
-		}
-		if e.Pack != nil {
-			rows++
-		}
-		if e.Principal.Kind == PrincipalAgent {
-			rows += seatDayRows
-		}
+		rows += entryRows(e)
 	}
 	switch {
 	case len(d.Payload) > MaxRecordBytes:
@@ -1127,6 +1151,11 @@ func (c *Committer) answer(repoID string, p Proposal, d decided, res statelog.Re
 			Outcome: statelog.OutcomeApplied, Position: d.collapsed.Position,
 			Answer: PushAnswer{PushID: p.PushID, Commands: d.collapsed.Commands, Collapsed: true},
 		}}
+	}
+	if d.carried {
+		// DECIDED BY NO ROUND, and in no record: it leads the next batch,
+		// which answers it ([Committer.commit]).
+		return answered{carried: true}
 	}
 	if !d.inRecord {
 		// ANSWERED WITH NO RECORD: every command noop or ng, or the whole

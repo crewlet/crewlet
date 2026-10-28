@@ -99,6 +99,17 @@ import (
 // than allowed to abort the insert on its primary key, which would stall the
 // log on every node.
 //
+// # The changes its pushes move are its own rows
+//
+// A push that moves a live change's source branch writes the change's next
+// revision and makes its pusher an author; one that sets a change's target to
+// exactly its head merges it; one that deletes its source closes it — each in
+// this record, from the change rows it finds, in its entries' order
+// ([applyChangeMoves], revisions.go). Their rows are the record's own, written
+// before any horizon and counted in its rows: the decide admitted each entry
+// only while they fit with its own, counted by the same model this writes them
+// from ([changeBook]).
+//
 // # A seat's pushes are counted on its company day
 //
 // Every seat's entry the record applies is counted on the day its decide
@@ -191,6 +202,15 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		return 0, err
 	}
 	rows += counted
+
+	// THE CHANGES THE RECORD MOVES, before any horizon too: their rows are
+	// the record's own, which its decide counted as this writes them
+	// (revisions.go) — each entry in order, each change one version.
+	changed, err := applyChangeMoves(ctx, tx, at, p.RepoID, pushRows)
+	if err != nil {
+		return 0, err
+	}
+	rows += changed
 
 	// THE PUSH HISTORY FIRST, before any ref is written: what it removes is
 	// rows of the record's budget the tombstones cannot have, and the
@@ -326,6 +346,27 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		return 0, err
 	}
 	return rows + expired + swept + forgotten, nil
+}
+
+// applyChangeMoves writes what the record's entries — pushes, in order, none
+// already applied — do to the live changes their ok commands reach: a head
+// move's revision and its pusher as an author, a merge, a close (revisions.go),
+// from the change rows the record finds, and answers the rows it wrote.
+func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
+	pushes []PushEntry) (int, error) {
+
+	book, err := readChangeBook(ctx, tx, repoID, pushes, at.packed, at.at())
+	if err != nil {
+		return 0, fmt.Errorf("code: the push at %s: %w", at.position, err)
+	}
+	for _, e := range pushes {
+		book.move(e)
+	}
+	written, err := book.write(ctx, tx, at.maxVariables)
+	if err != nil {
+		return 0, fmt.Errorf("code: the changes the push at %s moves: %w", at.position, err)
+	}
+	return written, nil
 }
 
 // refDrop is one object a forced update or a deletion moved a ref off: one

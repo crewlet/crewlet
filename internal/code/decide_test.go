@@ -110,7 +110,7 @@ func decideErr(e *estate, repoID string, limits Limits, retention time.Duration,
 	)
 	err := e.db.Read(context.Background(), func(tx *sql.Tx) error {
 		var err error
-		entries, answers, _, err = decideBatch(context.Background(), tx, repoID, batch, limits,
+		entries, answers, _, _, err = decideBatch(context.Background(), tx, repoID, batch, limits,
 			retention, seats, now, v)
 		return err
 	})

@@ -16,7 +16,7 @@ import (
 type Refusal string
 
 // The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
-// the last nine are answers ABOUT a push, never part of one.
+// the last ten are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
 	RefusalStale Refusal = "stale"
@@ -127,6 +127,24 @@ const (
 	// versionedFields row, carried by the estate router in
 	// [PushAnswer.Refused].
 	RefusalExpunging Refusal = "expunging"
+	// RefusalTooManyChanges is a push that moves more live changes than its
+	// record can carry the rows of beside its own — each change's row, the
+	// revision a head move writes and the author it makes, a merge's and a
+	// close's row (revisions.go) — past [MaxRecordRows] even alone in its
+	// record: a push of hundreds of branches each heading a live change, in
+	// practice a bot's force-push of every change it rebased. Nothing of it
+	// was decided, and it lands as several pushes of fewer branches.
+	//
+	// The push decide refuses it, from the change rows its snapshot holds,
+	// counted as the record's apply will write them ([changeBook]); a push
+	// whose changes fit alone but not beside the entries before it is
+	// refused nothing — the committer carries it to lead its next record.
+	//
+	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]),
+	// as compaction_behind is: no field of the code domain's records and no
+	// versionedFields row, carried by the estate router in
+	// [PushAnswer.Refused].
+	RefusalTooManyChanges Refusal = "too_many_changes"
 	// RefusalUnavailable is the code log or the object store refusing.
 	RefusalUnavailable Refusal = "unavailable"
 	// RefusalStoreFull is a push whose bundle the object store refused
@@ -161,8 +179,8 @@ func Refusals() []Refusal {
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
 		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
-		RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalUnavailable,
-		RefusalStoreFull, RefusalNotApplied, RefusalUnknown, RefusalPending,
+		RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalTooManyChanges,
+		RefusalUnavailable, RefusalStoreFull, RefusalNotApplied, RefusalUnknown, RefusalPending,
 	}
 }
 
@@ -170,12 +188,12 @@ func Refusals() []Refusal {
 func (r Refusal) Valid() bool { return slices.Contains(Refusals(), r) }
 
 // Recorded reports a code that may appear on a recorded command: every one but
-// the nine that are answers ABOUT a push — whether it could be committed at
+// the ten that are answers ABOUT a push — whether it could be committed at
 // all — rather than a verdict on one of its commands.
 func (r Refusal) Recorded() bool {
 	switch r {
-	case RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalUnavailable,
-		RefusalStoreFull, RefusalNotApplied, RefusalUnknown, RefusalPending:
+	case RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalTooManyChanges,
+		RefusalUnavailable, RefusalStoreFull, RefusalNotApplied, RefusalUnknown, RefusalPending:
 		return false
 	}
 	return r.Valid()
@@ -212,6 +230,8 @@ var sentences = map[Refusal]string{
 		"and nothing was decided; the count starts again when the company's day turns",
 	RefusalExpunging: "an expunge of the repository's unreachable objects began after the push was checked, " +
 		"and nothing was decided; run git push again",
+	RefusalTooManyChanges: "the push moves more live changes than one record can carry beside its own refs, " +
+		"and nothing was decided; push their branches in fewer pushes",
 	RefusalUnavailable: "the code log or the object store refused the write; run git push again",
 	RefusalNotApplied:  "the push was durable and applied nowhere; run git push again",
 	RefusalUnknown:     "the push's outcome is unknown; fetch, then run git push again",
@@ -342,6 +362,16 @@ func ExpungingDetail(name string, checked, holds int64) string {
 	}
 	return fmt.Sprintf("this push was checked against %s at drop epoch %d, and it is at %d: nothing was "+
 		"decided; run git push again", name, checked, holds)
+}
+
+// tooManyChangesDetail is the sentence of a push refused too_many_changes: how
+// many live changes it moves, the rows a record of its own would hold with
+// their rows beside its own, and the bound. Formed by the push decide alone,
+// the one counter of a record's change rows.
+func tooManyChangesDetail(changes, rows int) string {
+	return fmt.Sprintf("this push moves %d live changes, and their rows beside its own would take its record "+
+		"to %d of the %d rows one record may write: nothing was decided; push their branches in fewer pushes",
+		changes, rows, MaxRecordRows)
 }
 
 // StatelessRefusal is the rules of the push decide that no state decides —

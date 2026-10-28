@@ -138,6 +138,26 @@ import (
 // precheck), which spares every refused retry an upload; this decide, from the
 // rows of its one snapshot, is the authority.
 //
+// # A push's changes are counted, and one that does not fit leads the next
+//
+// A push record writes the rows of the live changes its pushes move — a
+// revision, an author, a merge, a close (revisions.go) — beside its entries'
+// own, so the decide counts them as it admits each entry: the live changes the
+// batch's branch commands can move, and the authors its pushers already are of
+// them, read ONCE a round into one model ([changeBook]), moved by every entry
+// it admits as the apply will move it, and the record held to [MaxRecordRows]
+// with what that model writes. The batcher cannot count them — they are what
+// the repository holds, which only a snapshot reads — so a push whose changes'
+// rows would take the record past its bound beside the entries before it is
+// CARRIED: the round decides nothing of it or of any push after it, and the
+// committer runs them, in the order they arrived, as its next batch, the
+// carried push first ([Committer.commit]). There its rows are the record's
+// first; a push whose changes' rows would take even a record of its own past
+// the bound — weighed against the changes as the entries before it leave
+// them, since those land first — is refused WHOLE, too_many_changes
+// ([RefusalTooManyChanges]), nothing of it decided. Judged after the pack
+// bound, so a push past both is told the bound that clears in a minute.
+//
 // # A push that already landed is answered from its row
 //
 // A push id the repository's history already holds is a push that applied —
@@ -162,7 +182,10 @@ import (
 // the directories its creates would make, and the refs under each create —
 // and one that creates none reads neither; a batch carrying a SEAT'S push
 // reads one more, every seat's count of the day over the counter's key, and
-// one of persons' pushes alone reads none.
+// one of persons' pushes alone reads none; and a batch whose commands name a
+// branch reads up to three more, each driven from its list — the live changes
+// its branches head, the ones whose targets it sets to their heads, and the
+// authors its pushers are of the changes whose heads they move (revisions.go).
 //
 // # A ref is never beside a directory of its name
 //
@@ -346,10 +369,15 @@ type decided struct {
 	// collapsed is the row an earlier record applied this push as.
 	collapsed *PushRow
 	// refused is a refusal of the whole push — repo_deleted, repo_archived,
-	// expunging, compaction_behind — and detail its sentence, which every
-	// command it covers carries too.
+	// expunging, compaction_behind, too_many_changes — and detail its
+	// sentence, which every command it covers carries too.
 	refused Refusal
 	detail  string
+	// carried is a push this round decided nothing of, which leads the
+	// committer's next batch: the first whose changes' rows would take the
+	// record past its bound beside the entries before it, and every push
+	// after it, so the batch's pushes still land in the order they arrived.
+	carried bool
 	// err is a proposal no rule decides: its push id names a push to
 	// another repository.
 	err error
@@ -359,14 +387,16 @@ type decided struct {
 }
 
 // decideBatch is one round's decision over the rows tx holds, for the batch in
-// order: the entries of the record, every proposal's answer, and the version
-// the decision read. Pure over (the rows, the batch, limits, retention, seats,
-// now): retention is code.deleted_retention_days on the deciding node's epoch,
-// from which a deleted repository's refusal names when its purge may begin;
-// seats is that epoch's chart and calendar, which a seat's push is judged by
-// and which a batch carrying none may leave unset; v is the protection
-// verdicts the batch's earlier rounds formed, which this round reads only
-// where its own snapshot holds the rules they were formed under.
+// order: the entries of the record, every proposal's answer, the rows the
+// record's apply will write about the live changes its entries move
+// ([changeBook]), and the version the decision read. Pure over (the rows, the
+// batch, limits, retention, seats, now): retention is
+// code.deleted_retention_days on the deciding node's epoch, from which a
+// deleted repository's refusal names when its purge may begin; seats is that
+// epoch's chart and calendar, which a seat's push is judged by and which a
+// batch carrying none may leave unset; v is the protection verdicts the
+// batch's earlier rounds formed, which this round reads only where its own
+// snapshot holds the rules they were formed under.
 //
 // A SEAT'S PUSH IS DECIDED ONLY WITH A CHART. The committer hands every one on
 // to the repository's next committer before a batch with no chart is decided
@@ -376,7 +406,7 @@ type decided struct {
 // an agent nothing on a nil roster).
 func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal,
 	limits Limits, retention time.Duration, seats SeatRules, now time.Time, v *verdicts) (entries []PushEntry,
-	answers []decided, version int64, err error) {
+	answers []decided, changeRows int, version int64, err error) {
 
 	answers = make([]decided, len(batch))
 	ids := make([]string, 0, len(batch))
@@ -392,7 +422,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	}
 	landed, err := pushRowsIn(ctx, tx, ids)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, 0, err
 	}
 	open := make([]int, 0, len(batch))
 	for i, p := range batch {
@@ -413,7 +443,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, 0, err
 	}
 	var refused Refusal
 	var detail string
@@ -423,7 +453,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// ([RepoGone]): a deleted repository comes back when declared again,
 		// one being purged or purged never does.
 		if detail, err = goneDetail(ctx, tx, repoID, repo, found, retention); err != nil {
-			return nil, nil, 0, err
+			return nil, nil, 0, 0, err
 		}
 		refused = RefusalRepoDeleted
 	case repo.status == RepoStatusArchived:
@@ -435,7 +465,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			answers[i].refused, answers[i].detail = refused, detail
 			answers[i].commands = refuseEvery(batch[i].Commands, refused, detail)
 		}
-		return nil, answers, repo.version, nil
+		return nil, answers, 0, repo.version, nil
 	}
 	// THE DROP EPOCH, before every rule of the push's own: a push checked
 	// against a copy at another epoch is refused whole, and the rest of the
@@ -454,30 +484,51 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	if seats.Roster == nil && slices.ContainsFunc(open, func(i int) bool {
 		return batch[i].Principal.Kind.readsChart()
 	}) {
-		return nil, nil, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
+		return nil, nil, 0, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
 			"it by — the committer hands such a push to the repository's next committer", repoID)
 	}
 	stored, err := protectionsIn(ctx, tx, repoID)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, 0, err
 	}
 	// PARSED ONCE A BATCH, never once a command and rule (refusal.go), and
 	// again only in a round whose rules are not the ones parsed.
 	if err = v.under(stored); err != nil {
-		return nil, nil, 0, fmt.Errorf("code: read %s's protections: %w", repoID, err)
+		return nil, nil, 0, 0, fmt.Errorf("code: read %s's protections: %w", repoID, err)
 	}
 	w, err := newWorking(ctx, tx, repoID, repo, batch, open, now)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, 0, err
 	}
 	quota, err := newSeatQuota(ctx, tx, batch, open, seats.Zone, now, limits.PushesPerSeatDay)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, 0, err
 	}
+	// THE LIVE CHANGES THE BATCH'S BRANCHES CAN MOVE, and the authors its
+	// pushers are of them, read once a round — for every command the
+	// receiver did not refuse, a superset of the ones this round finds ok —
+	// so the record's change rows are counted as its apply will write them,
+	// entry by entry ([changeBook]).
+	proposed := make([]PushEntry, 0, len(open))
+	for _, i := range open {
+		proposed = append(proposed, PushEntry{Principal: batch[i].Principal, Commands: batch[i].Commands})
+	}
+	book, err := readChangeBook(ctx, tx, repoID, proposed, 0, 0)
+	if err != nil {
+		return nil, nil, 0, 0, err
+	}
+	// rows is what the record's entries make its apply write besides their
+	// changes' rows, as [withinRecord] counts it; carrying is set once a push
+	// is carried, which carries every push after it.
+	rows, carrying := 0, false
 	// THE REPOSITORY AS A GRANT READS IT, from the round's own row: its
 	// owner and its visibility, which a seat's relation is judged on.
 	ref := repo.grantRef(repoID)
 	for _, i := range open {
+		if carrying {
+			answers[i].carried = true
+			continue
+		}
 		p := batch[i]
 		cmds := w.decide(i, p, v, limits, GrantOf(p.Principal, ref, seats.Roster))
 		answers[i].commands = cmds
@@ -498,12 +549,37 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			answers[i].commands = refuseEvery(p.Commands, RefusalCompactionBehind, detail)
 			continue
 		}
+		// AND THE CHANGES IT MOVES, counted as the record's apply will write
+		// them, after the entries before it: a push whose changes' rows take
+		// the record past its bound is decided nothing of — refused whole,
+		// too_many_changes, where even a record of its own could never hold
+		// them, and carried to lead the next batch where one could.
+		entry := p.entryWith(cmds, quota.day.Label)
+		trial := book.clone()
+		trial.move(entry)
+		own := entryRows(entry)
+		if recordRows(rows+own+trial.rowCount()) > MaxRecordRows {
+			// ALONE is the push leading the next record, the entries before
+			// it landed: what it would cost there decides whether it can
+			// land at all.
+			solo := book.afresh()
+			solo.move(entry)
+			if alone := recordRows(own + solo.rowCount()); alone > MaxRecordRows {
+				detail := tooManyChangesDetail(solo.moved(), alone)
+				answers[i].refused, answers[i].detail = RefusalTooManyChanges, detail
+				answers[i].commands = refuseEvery(p.Commands, RefusalTooManyChanges, detail)
+				continue
+			}
+			answers[i].carried, carrying = true, true
+			continue
+		}
+		book, rows = trial, rows+own
 		w.apply(p, cmds)
 		quota.count(p)
 		answers[i].inRecord = true
-		entries = append(entries, p.entryWith(cmds, quota.day.Label))
+		entries = append(entries, entry)
 	}
-	return entries, answers, repo.version, nil
+	return entries, answers, book.rowCount(), repo.version, nil
 }
 
 // seatQuota is one round's count of each seat's pushes on the deciding

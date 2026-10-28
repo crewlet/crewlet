@@ -53,7 +53,8 @@ This is the product's current shape, not a configuration choice:
   push](#who-may-read-and-push)).
 - **Nothing asks for a change yet, and there are no reviews or checks.** A
   repository's committer decides a [change](#changes)'s opening, its edits and
-  its close, but no tool, route or push asks it to in this release, and no
+  its close, and a push to a change's branches writes its revisions, merges it
+  or closes it — but no tool, route or push opens one in this release, and no
   change is reviewed or gated in front of a protected branch. A protection
   rule decides what a push may do to a ref, and nothing else stands in front
   of one.
@@ -264,7 +265,10 @@ record in flight into the next one — **group commit**, without lingering for
 more, up to 64 pushes a record. An idle repository pays one record a push and
 a burst one record a batch. A batch is decided in one snapshot of the rows,
 each push against what the ones before it did, and a push is answered `ok`
-only from the row its record applied, never from the decision.
+only from the row its record applied, never from the decision. A push whose
+[changes](#revisions) would take the record past the rows one record may
+write, beside the pushes before it, is decided first in the next record
+instead, with the pushes behind it after it.
 
 The live data nodes are the ones each node's view of the fleet's presence
 names. The view hears a presence claim or release as it lands and lists the
@@ -659,6 +663,44 @@ A write that is refused appends nothing, and says why in one sentence:
 asked to decide, by its write and what became of it, and
 `crewlet.code.commit.busy` counts one met busy under `kind` `change` (the
 [metrics reference](../reference/metrics.md)).
+
+### Revisions
+
+A change's revisions are the moves of its source branch's head while it is
+live, and no record of the change's own says one happened: the push that moved
+the branch does. Its record writes the revision — on every data node, from the
+push's commands and the change's rows, in the same record as the refs it
+moves — and each push of a record sees what the ones before it did.
+
+- **A push to the source is the next revision.** A command that moves a live
+  change's source branch to a new commit writes revision n + 1: the new head,
+  who pushed it and the push that did. The change's head, revision and
+  version move with it, so a write of the change formed before the push is
+  refused `stale`. A forced update is a revision like any other.
+- **Whoever pushes a revision becomes an author**, from the revision they first
+  wrote; the change's owner is one from its first. An author's approval of
+  their own change counts for nothing.
+- **A push that sets the target to exactly the change's head merges it**:
+  `merged`, by `push`, at that commit. The head is the one the same push's own
+  moves left, so a push of one commit to both the source and the target
+  merges the change whatever order the refs were sent in. One record merges at
+  most 64 changes, the lowest numbers first; a change past it stays open with
+  its head in its target. A push that moves the target past the head rather
+  than onto it leaves the change open: nothing in this release yet finds a
+  head inside its target.
+- **Deleting the source branch closes the change**: `closed`, its reason
+  `source_deleted` — after the same push's merges, so a push that sets the
+  target to the head and deletes the branch leaves the change merged.
+  Reopening it needs the branch pushed again.
+- **Every change one record moves counts one version**, however many of its
+  pushes moved it.
+- **A record holds the rows of the changes it moves.** The committer counts
+  what a record will write about the changes its pushes move beside the
+  record's own rows. A push whose changes would take the record past the rows
+  one record may write, beside the pushes batched before it, waits for the
+  next record and is decided first in it, the pushes behind it after it; one
+  whose changes would not fit even a record of its own is refused
+  `too_many_changes` — see [What git prints](#what-git-prints-and-what-it-means).
 
 ---
 
@@ -2992,6 +3034,7 @@ words, since git does not read the header.
 | The repository is taking pushes faster than its committer commits them | `(busy: <n> pushes are queued for this repository on this node, the most it holds)`, or the same of the bytes queued for it or held across the node's repositories; `(busy: the push's asker stops waiting in <t>, and a batch started now may take 30s and its answer 1s more; run git push again)`, or `(busy: the push waited <t> behind this repository's earlier pushes on this node, …)`; or `(busy: the repository kept changing for every round the write may take; run git push again)` | Run the push again; nothing of it landed. One repository's pushes meet at one node, which commits them a batch at a time ([The committer](#the-committer)). |
 | A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home git node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
 | A seat's push past the pushes one seat may land in a day on the company's calendar, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has landed <n> pushes since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat land <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
+| A push moving the branches of more open changes than one record can carry beside its own refs — hundreds of change branches force-pushed at once ([Revisions](#revisions)) | `(too_many_changes: this push moves <n> live changes, and their rows beside its own would take its record to <rows> of the 4000 rows one record may write: nothing was decided; push their branches in fewer pushes)` | Push the branches in groups: each group's revisions are written in its own record. Nothing of the push was decided. A push whose changes fit a record of its own, but not beside the pushes batched before it, is never refused: the committer decides it first in its next record. |
 | A push its node checked against the repository just before an expunge of the repository's unreachable objects began — which nothing in this build begins yet ([what it does not do yet](#what-it-does-not-do-yet)) | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
 | The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room — moves the files to a bucket (crewlet objects migrate -to s3), raises the bucket's byte reservation on an external broker, or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |

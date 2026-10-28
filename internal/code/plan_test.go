@@ -26,7 +26,8 @@ import (
 // sweeps and the ref drops it forgets past their grace, each oldest first,
 // among them, and the fences it reads: an eviction's, the activation's), the
 // lifecycle store's decides, the push decide's reads, a change's lifecycle's
-// decide, apply and answer, the reader's pages in
+// decide, apply and answer, the live changes a push record moves and the
+// authors its pushers already are of them, the reader's pages in
 // their first and keyset forms — a snapshot's retired phase and its layers
 // phase among them — and its bounded counts, the purge's bounded count, its
 // parts and its statements over a repository's changes and its published
@@ -456,6 +457,20 @@ func registeredStatements() map[string]statement {
 			[]string{changeKey + " (id=?)"}},
 		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		// THE LIVE CHANGES A PUSH RECORD MOVES — a decide's and an apply's —
+		// driven from the list of its branches, and from the list of the
+		// targets and heads its commands set: one seek of an index partial on
+		// the live states an element; and the authors its pushers already are
+		// of them, driven from the list of the pairs, one seek of the
+		// authors' key a pair.
+		"live changes by source": {liveBySourceSQL, []any{"repo-1", `["refs/heads/f000001","refs/heads/f000002"]`},
+			[]string{"SCAN json_each AS j", "code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		"live changes by target": {liveByTargetSQL, []any{"repo-1",
+			`[["refs/heads/main","` + oid("head-1-3") + `"],["refs/heads/main","` + oid("head-2-3") + `"]]`},
+			[]string{"SCAN json_each AS j", "code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},
+		"held authors": {heldAuthorsSQL,
+			[]any{`[["repo-1-change-000001","seat-0"],["repo-1-change-000002","seat-2"]]`},
+			[]string{"SCAN json_each AS j", authorKey + " (change_id=? AND author=?)"}},
 		"change body":        {changeBodySQL, []any{"repo-1-change-000002"}, []string{bodyKey + " (change_id=?)"}},
 		"delete change body": {deleteBodySQL, []any{"repo-1-change-000002"}, []string{bodyKey + " (change_id=?)"}},
 		"next change":        {nextChangeSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
@@ -651,9 +666,6 @@ func planShapes() map[string]shape {
 // sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
-		"code_changes_target_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND target_ref = ?
-			AND head_oid = ? AND ` + liveChanges, []any{"repo-1", "refs/heads/main", oid("head-1-1")},
-			[]string{"code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},
 		"code_changes_state_idx": {`SELECT id FROM code_changes WHERE state = ?
 			ORDER BY opened_position DESC, id DESC LIMIT ?`, []any{string(ChangeStateOpen), 50},
 			[]string{"code_changes_state_idx (state=?)"}},

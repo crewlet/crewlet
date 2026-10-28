@@ -95,6 +95,21 @@
 // row with no record. A seat's is judged from the chart of the deciding node's
 // epoch ([SeatRules]), and a node that cannot judge one decides none.
 //
+// ITS REVISIONS ARE ITS PUSHES' (revisions.go). The apply of the push record
+// that moves a live change's source writes the change's next revision and
+// makes its pusher an author; one that sets a change's target to exactly its
+// head merges it, by push, at most [MaxPushMerges] a record; one that deletes
+// its source closes it ([SourceDeleted]) — each entry in the record's order,
+// its head moves before its merges before its closes, every change one
+// version a record, pure over the record and the rows it finds — the changes,
+// and the authors its pushers already are of them ([changeBook]). The push
+// decide moves the same model by each entry it admits, so it counts exactly
+// the rows the apply will write about changes beside the entries' own and
+// holds the record to [MaxRecordRows] with them: a push whose changes cannot
+// fit even a record of its own is refused [RefusalTooManyChanges], and one
+// that fits only alone is carried, with the pushes behind it, to lead the
+// committer's next batch.
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a
