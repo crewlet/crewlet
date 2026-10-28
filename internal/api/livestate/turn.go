@@ -21,7 +21,7 @@ import "github.com/crewlet/crewlet/internal/events/types"
 // that set it, and a turn that has ENDED is remembered by id so a straggler
 // from it cannot put it back on the seat.
 
-// touchTurn records that an event of turn `turnID` happened on this seat, at
+// touchTurn records that a step of turn `turnID` happened on this seat, at
 // `stage`.
 //
 // It creates the turn when the seat is on none — the start may have been
@@ -29,6 +29,58 @@ import "github.com/crewlet/crewlet/internal/events/types"
 // one: an event of an older turn arriving late is not the seat moving back to
 // it.
 func (s *LiveState) touchTurn(agent *agentLive, env Envelope, payload map[string]any, stage Stage) {
+	s.markTurn(agent, env, payload, stage, true)
+}
+
+// noteTurn records an event that names turn `turnID` without being one of its
+// own steps — see [phaseStage] — and so MOVES NO STAGE: it opens the turn at
+// `stage` on a seat that holds none, as [LiveState.touchTurn] does, and leaves
+// the stage of a turn the seat holds, and the instant that stage was set,
+// where the turn's own steps put them. What it still states is what every
+// event of the turn states: the node that published it, the item the turn is
+// on, and a failure.
+func (s *LiveState) noteTurn(agent *agentLive, env Envelope, payload map[string]any, stage Stage) {
+	s.markTurn(agent, env, payload, stage, false)
+}
+
+// phaseStage is the stage a phase record puts its turn in, and whether it
+// MOVES the stage of a turn the seat already holds.
+//
+// ONLY THE TURN'S OWN PHASES MOVE IT — onboarding, execute and review, each
+// published by the segment that runs it. Two other kinds of record name the
+// turn and are not one of them:
+//
+//   - A NESTED record (`host_phase` set): a delegated worker, or the round-cap
+//     judge a phase consults, each run while the phase that called it waits.
+//     That phase's own events stage the turn.
+//   - The run's own record (`sandbox`), which the run's collection publishes
+//     before the turn resumes: the turn is parked on the run until the
+//     resumed segment announces itself.
+//
+// EVERY WORKER RUNS WHILE ITS TURN IS PARKED. `delegate` is the executor's
+// alone and every executor is its coding CLI's run in a box, which calls it
+// over the bridge after the turn has parked. Read as one of the turn's own
+// phases, a worker's record un-parked the turn: the seat's strip stopped
+// saying its coding run was working while the run worked on, and the seat's
+// next spawn took the turn off it as one its old instance had died with (the
+// spawn arm of [LiveState.applyTurnEvent] spares a parked turn alone). Such a
+// record still OPENS the turn on a seat that holds none, at the stage it
+// implies: parked under the executor's run, in a phase under any other host.
+func phaseStage(payload map[string]any) (stage Stage, moves bool) {
+	host := str(payload, "host_phase")
+	switch {
+	case str(payload, "phase") == string(types.PhaseSandbox),
+		host == string(types.PhaseExecute):
+		return StageParked, false
+	case host != "":
+		return StagePhase, false
+	}
+	return StagePhase, true
+}
+
+// markTurn is [LiveState.touchTurn] and [LiveState.noteTurn]: `moves` says
+// whether the event moves the turn's stage.
+func (s *LiveState) markTurn(agent *agentLive, env Envelope, payload map[string]any, stage Stage, moves bool) {
 	turnID := str(payload, "turn_id")
 	if turnID == "" {
 		return
@@ -61,9 +113,11 @@ func (s *LiveState) touchTurn(agent *agentLive, env Envelope, payload map[string
 	// seat back to gathering context. A RESUMED segment's start is newer
 	// than the suspension that parked it, so it moves the turn on.
 	if at.empty() || agent.turnAt.empty() || !at.before(agent.turnAt) {
-		cur.Stage = stage
-		if !at.empty() {
-			agent.turnAt = at
+		if moves {
+			cur.Stage = stage
+			if !at.empty() {
+				agent.turnAt = at
+			}
 		}
 		if node := str(payload, "node"); node != "" {
 			cur.Node = node

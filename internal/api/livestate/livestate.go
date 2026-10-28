@@ -696,7 +696,13 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 	turnID := str(payload, "turn_id")
 	switch env.Type {
 	case "agent_phase_started", "agent_phase_completed":
-		s.touchTurn(agent, env, payload, StagePhase)
+		// ONE OF THE TURN'S OWN PHASES MOVES IT; a worker's record, a
+		// judge's or the run's own leaves its stage alone. See [phaseStage].
+		if stage, moves := phaseStage(payload); moves {
+			s.touchTurn(agent, env, payload, stage)
+		} else {
+			s.noteTurn(agent, env, payload, stage)
+		}
 	case "agent_turn_completed":
 		if flag(payload, "suspended") {
 			// A SUSPENSION IS NOT AN END. The segment parked on a
