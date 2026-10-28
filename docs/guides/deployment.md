@@ -1412,7 +1412,9 @@ draining, and rolling upgrades. The two things that bite hardest:
 > `coordination.type: embedded-kv`; see [Running a Fleet](fleet.md). The slot
 > governs the *leases* only — the fleet's shared records are on the KV
 > regardless, because they have to survive a restart as much as a peer, and
-> the KV lives on the stream's own broker whichever value the slot holds.
+> the KV lives on the stream's own broker whichever value the slot holds. So
+> is the fencing counter the leases mint their epochs from, for the same
+> reason: those epochs are written into the shared records.
 >
 > **And, when the nodes *are* the broker, a quorum to keep it on.**
 >

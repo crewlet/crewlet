@@ -802,6 +802,19 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 // sandbox run — a BILLED box — was forgotten by the process that launched it.
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
+//
+// # AND THE FENCING COUNTER IS A RECORD, whatever the coordination slot says
+//
+// The in-process lease table is right about OWNERSHIP and was wrong about the
+// TOKEN. A seat's epoch is written into fleet records (a sandbox run's
+// owner_epoch) and compared with later, so it has to outlive the process as
+// those records do. Counted beside the in-process leases, it restarted at 1 on
+// every boot, and after a graceful restart the seat's new holder was refused
+// as older than its own previous self on every run that self had parked: an
+// answer to such a run was never recorded, and its resume and reap were
+// refused too. So a single node's leases mint from the same persistent counter
+// a fleet's lease store does (coord/kv.Epochs), in the same bucket, which also
+// carries the tokens across a move from local coordination to a fleet.
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
 	// sequence actually is: every replicated bucket of both coordination
@@ -822,7 +835,14 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 	out.Fleet = shared
 
 	if b.Coordination.Type != config.CoordinationEmbeddedKV {
-		out.Coord = coordmem.New()
+		epochs, err := kv.OpenEpochs(ctx, js, kv.EpochsConfig{
+			Replicas:  b.Stream.Replicas,
+			Clustered: clusteredStream(b),
+		})
+		if err != nil {
+			return fmt.Errorf("engine: coordination: %w", err)
+		}
+		out.Coord = &coordmem.Backend{Epochs: epochs}
 		return nil
 	}
 	leases, err := kv.Open(ctx, js, kv.Config{
