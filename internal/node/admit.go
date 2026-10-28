@@ -35,8 +35,25 @@ import (
 //     may already be entitled to.
 //  2. A CONCURRENCY SLOT ([gate]), which waits while the node is at its
 //     ceiling and refuses at once while it drains.
-//  3. THE DRAIN'S CUT: the admitted context is cancelled if a drain finds the
+//  3. ONE TURN PER SEAT ([ErrSeatBusy]), refused rather than waited for: see
+//     below. After the slot, so a draining node says it is draining (the
+//     refusal its callers hand work on for), and a turn that waited for a
+//     slot is checked against the seat as it stands once it has one.
+//  4. THE DRAIN'S CUT: the admitted context is cancelled if a drain finds the
 //     queue's acknowledgements lost, as every mailbox turn's always was.
+//
+// # One turn per seat
+//
+// A seat is one agent, and a turn acts for it: it reads the seat's thread and
+// memory, posts as it, and writes to the tracker under its name. Two of its
+// turns in flight at once each act with no view of the other. The mailbox
+// alone could not have caused that, because it dispatches one delivery at a
+// time, but the other roads could: a person's answer reaches the run it names
+// on the seat's control topic, which no mailbox turn waits for, and its resume
+// would start beside whatever turn the mailbox was running. So the admission
+// that every road passes is where the rule lives. The second turn is REFUSED,
+// not queued: a mailbox delivery is deferred and keeps its place, a completion
+// is handed back, and a recorded answer waits for [Config.SeatTurnEnded].
 //
 // # A turn inside a turn
 //
@@ -54,6 +71,11 @@ import (
 // holds the seat. The work belongs to whichever node does, and the caller hands
 // it back for that node to take.
 var ErrSeatNotOwned = errors.New("node: this node cannot prove it holds the seat")
+
+// ErrSeatBusy is a turn refused because another turn is running on the same
+// seat on this node. Nothing is wrong with the work: the caller hands it back,
+// or waits for [Config.SeatTurnEnded], and it runs once the seat's turn ends.
+var ErrSeatBusy = errors.New("node: another turn is running on the seat")
 
 // ErrDraining is a turn refused because this node is draining. The node is
 // handing its seats to peers, and a turn started now would run inside a
@@ -77,9 +99,9 @@ type admissionKey struct{}
 //
 // Admitted, it returns the context the turn runs under and the release the
 // caller defers. The release is idempotent, and it ends the context it
-// returned. Refused, the error wraps [ErrSeatNotOwned], [ErrDraining] or the
-// caller's own context error, and the release is nil: there is nothing to give
-// back.
+// returned. Refused, the error wraps [ErrSeatNotOwned], [ErrSeatBusy],
+// [ErrDraining] or the caller's own context error, and the release is nil:
+// there is nothing to give back.
 func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, func(), error) {
 	if held, ok := ctx.Value(admissionKey{}).(*admission); ok &&
 		held.node == n && held.handle == handle && !held.released.Load() {
@@ -99,7 +121,17 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 		}
 		return nil, nil, fmt.Errorf("%w, so the turn on %q was not started", ErrDraining, handle)
 	}
+	// THE SEAT, once the turn has a slot: a second turn on a seat that is
+	// mid-turn gives its slot straight back and is refused.
 	held := &admission{node: n, handle: handle}
+	n.mu.Lock()
+	if _, busy := n.running[handle]; busy {
+		n.mu.Unlock()
+		free()
+		return nil, nil, fmt.Errorf("%w %q", ErrSeatBusy, handle)
+	}
+	n.running[handle] = held
+	n.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.WithValue(ctx, admissionKey{}, held))
 	// ENDED BY A DRAIN THAT CANNOT WAIT FOR IT, and by nothing else here:
 	// once the queue's acknowledgements can no longer land, this turn's
@@ -118,6 +150,21 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 		if held.released.CompareAndSwap(false, true) {
 			cancel()
 			free()
+			n.endSeatTurn(held)
 		}
 	}, nil
+}
+
+// endSeatTurn frees the seat a turn held and says so ([Config.SeatTurnEnded]),
+// outside the lock: the hook re-checks waiting work, which may admit a turn on
+// this very seat.
+func (n *Node) endSeatTurn(held *admission) {
+	n.mu.Lock()
+	if n.running[held.handle] == held {
+		delete(n.running, held.handle)
+	}
+	n.mu.Unlock()
+	if n.cfg.SeatTurnEnded != nil {
+		n.cfg.SeatTurnEnded(held.handle)
+	}
 }

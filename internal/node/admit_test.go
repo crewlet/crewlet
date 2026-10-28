@@ -290,3 +290,59 @@ func TestTheDrainsCutEndsATurnAdmittedOutsideTheMailbox(t *testing.T) {
 // gateWaitBound is how long a case waits for an admission that should already
 // have been answered: it only elapses on a failure.
 const gateWaitBound = 2 * time.Second
+
+// A SEAT RUNS ONE TURN AT A TIME, whichever road each arrives by, and says so
+// when the one running ends.
+//
+// The road this is about: a person's answer reaches the run it names on the
+// seat's control topic, which no mailbox turn waits for, so its resume used to
+// be able to start while the seat's mailbox was in the middle of a turn. The
+// second turn is refused at once with the sentinel its caller waits on, never
+// queued behind the first, and the seat's turn ending is announced so the
+// waiting work tries again then rather than on a timer. A turn inside the
+// running one is the same turn, and another seat is another turn.
+//
+// Mutation: drop the per-seat check and the second admission is granted; drop
+// the hook call from the release and the ending is never announced.
+func TestASeatRunsOneTurnAtATime(t *testing.T) {
+	t.Parallel()
+	ended := make(chan string, 4)
+	g := gatedFleetWith(t, 4, nil, func(cfg *node.Config) {
+		cfg.SeatTurnEnded = func(handle string) { ended <- handle }
+	}, idleTurn, "ceo", "cto")
+
+	running, release := admit(t.Context(), t, g.n, "ceo")
+	if _, second, err := g.n.AdmitTurn(t.Context(), "ceo"); !errors.Is(err, node.ErrSeatBusy) {
+		if second != nil {
+			second()
+		}
+		t.Fatalf("a second turn on a seat mid-turn = %v, want ErrSeatBusy", err)
+	}
+	if got := g.n.InFlightTurns(); got != 1 {
+		t.Fatalf("in flight = %d after a busy refusal, want the one turn's slot", got)
+	}
+	_, nested := admit(running, t, g.n, "ceo")
+	nested()
+	_, other := admit(t.Context(), t, g.n, "cto")
+	other()
+	select {
+	case handle := <-ended:
+		if handle != "cto" {
+			t.Fatalf("the ending announced is %q, want cto's: ceo's turn is still running", handle)
+		}
+	case <-time.After(gateWaitBound):
+		t.Fatal("the end of cto's turn was not announced")
+	}
+
+	release()
+	select {
+	case handle := <-ended:
+		if handle != "ceo" {
+			t.Fatalf("the ending announced is %q, want ceo's", handle)
+		}
+	case <-time.After(gateWaitBound):
+		t.Fatal("the end of ceo's turn was not announced")
+	}
+	_, again := admit(t.Context(), t, g.n, "ceo")
+	again()
+}
