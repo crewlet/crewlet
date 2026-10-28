@@ -120,12 +120,12 @@ type Stall struct {
 //     it was handed stay dark until a person notices.
 //
 // What it does not buy is the held mail back. JetStream releases a
-// fetched-unacked message when ackWait elapses (30 minutes — see
-// internal/queue/jetstream), and closing the connection does not shorten
+// fetched-unacked message when its ack wait elapses (jetstream.DefaultAckWait,
+// 30 minutes), and closing the connection does not shorten
 // that: unlike a broker that returns unacked mail on session close, there is
 // no session-scoped release here. So a wedged seat's in-flight batch — bounded
 // by the batch cap, not by the seat's whole backlog, because pull consumers
-// prefetch nothing — is invisible to the successor until ackWait expires. The
+// prefetch nothing — is invisible to the successor until the ack wait expires. The
 // successor serves everything published after that point normally; it is the
 // already-fetched batch that waits.
 //

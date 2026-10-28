@@ -56,19 +56,49 @@ const (
 	// the dashboard after a weekend.
 	ChannelRetention = 7 * 24 * time.Hour
 
-	// ChannelIdleTimeout is how long an OPEN channel may stay open with
-	// nothing happening.
+	// ChannelIdleTimeout is how long an OPEN channel may stay quiet before
+	// the sweep closes it, where nothing still owes its answer.
 	//
-	// A channel is closed by the answering turn. A turn that crashes, or a
-	// node that dies between the wake and the answer, leaves one open
-	// forever — and an open channel is not free: it is a row, and it is a
-	// promise to the requester that a reply may still arrive.
+	// A channel is closed by the turn that answers it, or by the ending of
+	// a coding run lost under that turn. A turn that crashes, or a node that
+	// dies between the wake and the answer, leaves one open forever — and an
+	// open channel is not free: it is a row, and it is a promise to the
+	// requester that a reply may still arrive.
 	//
-	// One hour, against a turn whose own worst case is around twenty
-	// minutes under the Execute extension ceiling. Three times the longest
-	// thing that could legitimately still be running, so the sweep never
-	// closes a channel somebody is about to answer on.
-	ChannelIdleTimeout = time.Hour
+	// # What is left to this clock
+	//
+	// Every wait with no end a clock could be sized to is SPARED rather than
+	// timed (internal/a2a's Owed, which the engine answers): an ask on the
+	// record of the coding run its turn launched — a run has no clock bound
+	// and can wait days on a person's question — and one waiting in its
+	// seat's inbox while a run, a person's pause or a spent budget window
+	// holds it. What this timeout still covers is an ask in flight where
+	// none of those can see it, and the longest silence such an ask can show
+	// and still be answered is a delivery a node that died held
+	// unacknowledged: invisible for the broker's ack wait
+	// (jetstream.DefaultAckWait, thirty minutes), redelivered once the
+	// seat's next holder takes its lease (seat.SeatLeaseTTL, forty-five
+	// seconds), and then up to two dispatch segments before a launch writes
+	// a run's record — one ahead of it in the seat's mail, whose launch then
+	// holds the inbox and so spares it, and its own. A segment before its
+	// launch is turn-start reads of seconds each and, on a seat's first
+	// turn, its onboarding pass, which the pass's own claim bounds with
+	// slack (runner.ClaimTTL, fifteen minutes). About an hour in all.
+	//
+	// # Two hours
+	//
+	// Twice that, and the asymmetry is the reason for the margin rather
+	// than its size: closing too early drops an answer that is on its way
+	// and leaves the asker, whose turn ended when it asked, never woken;
+	// closing late keeps one row open and delays by an hour the
+	// a2a_channel_closed an operator reads as "nobody answered". The sweep
+	// wakes nobody either way. The one hour this replaces was three times a
+	// twenty-minute turn under the Execute extension ceiling, which no
+	// longer exists: a turn now parks on a run with no clock bound, which is
+	// what the spare is for. TestAnIdleAskOutlastsTheSilenceOfOneStillOwed
+	// (internal/engine) holds the order against the three constants above,
+	// which live in packages that know nothing of this one.
+	ChannelIdleTimeout = 2 * time.Hour
 
 	// CounterpartyRetention is how long a profile survives with no
 	// interaction.

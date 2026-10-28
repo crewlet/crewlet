@@ -7,14 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -332,6 +335,37 @@ func TestAStoppedEngineGivesItsDutiesBackAndKeepsItsHolds(t *testing.T) {
 	}
 	if got, err := leases.Get(ctx, hold); err != nil || got == nil || got.Owner != owner {
 		t.Fatalf("after a graceful stop the setup hold reads (%v, %v), want it left to its pass", got, err)
+	}
+}
+
+// AN IDLE ASK OUTLASTS THE LONGEST SILENCE OF ONE THAT IS STILL OWED.
+//
+// The idle sweep spares every channel whose ask waits somewhere the engine can
+// see it — a coding run's record, an inbox held by a run, a pause or a spent
+// budget window — and closes the rest once they have been quiet for
+// [maintenance.ChannelIdleTimeout]. What it cannot see is an ask in flight: a
+// delivery a node that died held unacknowledged, invisible for the broker's
+// ack wait, redelivered once the seat's next holder takes its lease, and then
+// up to two dispatch segments — one ahead of it, and its own — before a launch
+// writes a run's record, each bounded by a first turn's onboarding pass. A
+// timeout shorter than that closes the channel of an ask that is about to be
+// answered, and the answer is refused when it comes.
+//
+// FOUR CONSTANTS IN FOUR PACKAGES, and nothing else connects them: the broker's
+// ack wait is sized to the queue, the lease to the seat host, the onboarding
+// claim to its pass. Only the ORDER is asserted, for the reason
+// TestARevisionOutlivesTheAuditRowThatNamesIt gives: a demanded multiple would
+// fail a sound change and be edited to say so.
+func TestAnIdleAskOutlastsTheSilenceOfOneStillOwed(t *testing.T) {
+	t.Parallel()
+	silence := jetstream.DefaultAckWait + seat.SeatLeaseTTL + 2*runner.ClaimTTL
+	if maintenance.ChannelIdleTimeout <= silence {
+		t.Errorf("an idle A2A channel is closed after %v, and an ask still owed its answer can "+
+			"be silent for %v (the broker's ack wait %v, a seat lease %v, two onboarding claims "+
+			"of %v).\nThe sweep would close the channel of an ask about to be answered, and the "+
+			"answer would be refused. Raise ChannelIdleTimeout, or shorten what it outlasts.",
+			maintenance.ChannelIdleTimeout, silence, jetstream.DefaultAckWait, seat.SeatLeaseTTL,
+			runner.ClaimTTL)
 	}
 }
 
