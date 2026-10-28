@@ -184,7 +184,9 @@ type Refusal struct {
 
 	// Until is the instant the refusal lifts on the clock alone — the end of
 	// the budget window that is refusing, the next lease renew — and zero
-	// when only an event can lift it.
+	// when only an event can lift it. An instant at or before the refusal is
+	// one the clock has already passed without lifting it, so it is read as
+	// zero ([Coordinator.waitOwed]).
 	Until time.Time
 }
 
@@ -1307,12 +1309,22 @@ func (c *Coordinator) endingDone(turnID string) {
 // found nothing waiting, and the wait that followed slept through it, to the
 // clock or the backstop. So the caller reads what had been signalled before it
 // checked (seen), and a wait on a condition signalled since re-checks at once.
+//
+// # An instant already past is no instant
+//
+// A refusal that names an instant the clock has already reached says the
+// condition still stands although its instant came: the clock did not lift it,
+// so only its event or the backstop can. Waited out as the instant it names, it
+// was a re-check at once, refused at once, for as long as the condition stood:
+// a provider park whose probe was out named the instant the probe had been
+// armed for, and every answer waiting on the seat re-checked thousands of times
+// a second until the probe's call came back.
 func (c *Coordinator) waitOwed(ctx context.Context, turnID string, refusal Refusal,
 	seen map[signal]uint64,
 ) {
 	wait := answerWaitBackstop
-	if !refusal.Until.IsZero() {
-		wait = min(wait, max(refusal.Until.Sub(c.now()), 0))
+	if until := refusal.Until.Sub(c.now()); !refusal.Until.IsZero() && until > 0 {
+		wait = min(wait, until)
 	}
 	c.mu.Lock()
 	r := c.retries[turnID]
