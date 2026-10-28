@@ -274,8 +274,11 @@ func (o OpKind) Valid() bool { return slices.Contains(OpKinds, o) }
 type ActorKind string
 
 const (
-	// ActorOperator is an eviction or a readmission a person ran, recorded
-	// by their credential's id.
+	// ActorOperator is a person or a credential acting on the company's
+	// behalf — an eviction or a readmission they ran, a reanchor of this log
+	// — recorded under the name iam.ActorFor gives them (a person's human
+	// seat, an unbound credential's login) with the credential they acted
+	// through beside it, as every other log's records name them.
 	ActorOperator ActorKind = "operator"
 
 	// ActorConfig is the reconcile of code.repos at a configuration
@@ -286,23 +289,51 @@ const (
 	// ActorSystem is the engine on its own account: the committer's push
 	// batches, compactions, expunge records and change records — a person's
 	// purge request and every write of a change's lifecycle among them, whose
-	// principal its payload names — and the code-retention pass's sweeps and
-	// purges.
+	// principal its payload names — the code-retention pass's sweeps and
+	// purges, and a reanchor nobody named, recorded under the node that ran
+	// it.
 	ActorSystem ActorKind = "system"
+
+	// ActorAgent is a seat of the chart, by its handle: a reanchor run
+	// through a seat's credential.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this kind — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a record a seat decided reads it. Once a build without it
+	// has run, a record a seat decided takes, for each op such a record can
+	// carry, {Name: "MutationRecord.ActorKind agent", Since: 2, Op: <the
+	// op>, Path: []string{"actor_kind"}, Equals: string(ActorAgent)} in
+	// versionedFields, with RecordVersion at 2, its line under "What each
+	// version added" and a Carrying record in the statelogtest candidate.
+	// A reanchor's generation takes none: every build reads it for ever
+	// ([RecordEnvelope.readByEveryBuild], so [Encode] would refuse it a
+	// versioned field), and an older build files its author from the
+	// payload's By alone, which names the seat as this build does.
+	ActorAgent ActorKind = "agent"
 )
 
 // ActorKinds is the closed set, in this order.
-func ActorKinds() []ActorKind { return []ActorKind{ActorOperator, ActorConfig, ActorSystem} }
+func ActorKinds() []ActorKind {
+	return []ActorKind{ActorOperator, ActorConfig, ActorSystem, ActorAgent}
+}
 
 // Valid reports whether a kind off the wire is one this build knows.
 func (k ActorKind) Valid() bool { return slices.Contains(ActorKinds(), k) }
 
 // Actor is who decided a record.
 type Actor struct {
-	// ID is an operator's credential id, or the deciding node's id.
+	// ID is who decided it, BARE: an operator's or a seat's name as
+	// iam.ActorFor gives it — a person's human seat, an unbound credential's
+	// login, a seat's handle — or the deciding node's id. NO PREFIX: the
+	// kind is a column of its own, and a name spelled `operator:<name>` is
+	// one no other row in the audit feed calls that party by.
 	ID   string
 	Kind ActorKind
-	// OperatorID is set exactly when Kind is ActorOperator.
+	// OperatorID is the credential the record was made through: REQUIRED of
+	// an operator's record, which [Actor.validate] holds, and carried beside
+	// a seat's or the engine's only where the reanchor that wrote it names
+	// one ([generationActor]).
 	OperatorID string
 }
 

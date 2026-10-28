@@ -3,7 +3,9 @@ package code
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -32,17 +34,13 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // GenerationRecord encodes the reanchor's record for the NEW generation,
 // create-only on the generation's own subject so two operators deriving the
 // same number race at the broker and exactly one record lands. The operation
-// id names the writer ([statelog.GenerationFacts.OpID]), and the operator is
-// the author, recorded as every operator write is: the credential's own id.
+// id names the writer ([statelog.GenerationFacts.OpID]), and the author is
+// whoever ran the reanchor, recorded as every other log's generation record
+// records them ([generationActor]).
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	opID := f.OpID()
-	// THE KNOWLEDGE BASE'S SPELLING of an operator with no credential name,
-	// so the audit row of a reanchor reads alike on every log.
-	actor := Actor{ID: "operator:anonymous", Kind: ActorOperator, OperatorID: f.By}
-	if f.By != "" {
-		actor.ID = "operator:" + f.By
-	}
+	actor := generationActor(f)
 	body, err := json.Marshal(Generation{
 		V:               GateRecordVersion,
 		Generation:      f.Generation,
@@ -72,4 +70,45 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 		return statelog.GenerationRecord{}, false, err
 	}
 	return statelog.GenerationRecord{Subject: subject.statelog(), OpID: opID, Payload: encoded}, true, nil
+}
+
+// generationActor is who a generation record names as its author, in this
+// domain's actor kinds.
+//
+// THE FACTS' THREE COLUMNS, as the knowledge base's and the tracker's
+// generation records read them, and as this log's own eviction gate names its
+// operator: the name BARE, the kind in a column of its own, the credential
+// beside them. It took the name alone and recorded `"operator:" + name` with
+// the NAME in the credential column, so the one record that says who moved
+// this log named a party nothing else in the audit feed calls by that name,
+// read a person's reanchor as an API token named after them, and lost the
+// credential that actually ran it — the one a revocation would be about.
+//
+// THE KIND IS READ IN EITHER VOCABULARY the facts may carry: the one
+// [iam.ActorFor] records a party under, or the principal's (a seat, a person, a
+// machine, the engine). This domain has no word for a person: a person is an
+// OPERATOR here, named by the human seat they hold with their credential
+// beside it — the eviction gate's spelling — so a person, a machine, an
+// operator and a kind nobody stated are each an operator. An operator's
+// record always names a credential ([Actor.validate]), and one the facts name
+// with none is a credential acting under its own login — the one party whose
+// name [iam.ActorFor] also records as its credential — so the name stands in
+// for it there and nowhere else. A SEAT is an agent and the ENGINE the
+// system, each keeping the credential the facts name, if any. And NOBODY NAMED
+// IS THE NODE, recorded as the node's own work is: its id, as the system.
+func generationActor(f statelog.GenerationFacts) Actor {
+	if strings.TrimSpace(f.By) == "" {
+		return Actor{ID: f.Writer, Kind: ActorSystem}
+	}
+	switch {
+	case iam.Kind(f.ByKind) == iam.KindSeat, iam.ActorKind(f.ByKind) == iam.ActorAgent:
+		return Actor{ID: f.By, Kind: ActorAgent, OperatorID: f.OperatorID}
+	case iam.Kind(f.ByKind) == iam.KindEngine, iam.ActorKind(f.ByKind) == iam.ActorSystem:
+		return Actor{ID: f.By, Kind: ActorSystem, OperatorID: f.OperatorID}
+	}
+	operator := f.OperatorID
+	if strings.TrimSpace(operator) == "" {
+		operator = f.By
+	}
+	return Actor{ID: f.By, Kind: ActorOperator, OperatorID: operator}
 }
