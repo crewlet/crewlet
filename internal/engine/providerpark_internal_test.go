@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,11 +14,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -455,5 +459,110 @@ func TestARetriedResumeWaitsForALimitItsModelsKnow(t *testing.T) {
 				t.Errorf("refusal (%q) lifts at %v, want the entry's retry %v", reason, until, retry)
 			}
 		})
+	}
+}
+
+// threeSeatDoc is a company of three seats on one model entry.
+const threeSeatDoc = `
+name: Acme
+roles:
+  - name: Lead
+    handle: lead
+  - name: PM
+    handle: pm
+  - name: QA
+    handle: qa
+`
+
+// ONE PROBE PER LIMITED CHAIN, HOWEVER MANY SEATS IT HOLDS. Three seats parked
+// on one spent entry for 40 hours are probed once an hour, not three times,
+// and the answer that ends the limit releases all three: the limit is the
+// entry's, and each probe is a full, charged run of its CLI.
+//
+// Mutation: give each seat's park an alarm and a probe of its own, and every
+// tick asks the model three times.
+func TestSeatsOnOneLimitedEntryShareOneProbe(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	now := parkedAt
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	at := func(t time.Time) { mu.Lock(); now = t; mu.Unlock() }
+
+	reset := parkedAt.Add(40 * time.Hour)
+	model := &limitedModel{reset: reset, retry: parkedAt.Add(time.Hour), now: clock}
+	c := companyFor(t, threeSeatDoc)
+	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: model}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c.Models = reg
+	alarms := &fakeAlarms{}
+	e := &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, clock: clock}
+	e.epoch.current.Store(c)
+	e.providerParks.after = alarms.after
+	var released atomic.Int32
+	if err := q.Subscribe(t.Context(), topics.Event("seat_provider_released"), "test-released",
+		func(context.Context, *events.Event) queue.Result { released.Add(1); return queue.Ack() }); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	_, refusal := model.Complete(t.Context(), llm.Request{})
+	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+		Failures: []error{refusal}, Err: refusal})
+	if !limited {
+		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+	}
+	handles := []string{"lead", "pm", "qa"}
+	for _, h := range handles {
+		if _, parked, err := e.providerPark(t.Context(), h, limit); err != nil || !parked {
+			t.Fatalf("providerPark(%s) = %v, %v", h, parked, err)
+		}
+	}
+	held := func() int {
+		n := 0
+		for _, h := range handles {
+			id, _ := org.DeriveAgentID("Acme", h)
+			if slices.Contains(q.PauseHolds(topics.AgentInbox(id), topics.AgentInboxGroup(id)),
+				pauseReasonProvider) {
+				n++
+			}
+		}
+		return n
+	}
+
+	asked := model.asked()
+	for tick := parkedAt.Add(time.Hour); tick.Before(reset); tick = tick.Add(time.Hour) {
+		live := alarms.live()
+		if len(live) != 1 {
+			t.Fatalf("at %v, %d alarms are armed for three seats on one entry, want one", tick, len(live))
+		}
+		at(tick)
+		live[0].fire()
+		if got := model.asked() - asked; got != 1 {
+			t.Fatalf("at %v the model was asked %d times, want one probe for all three seats", tick, got)
+		}
+		asked = model.asked()
+		if n := held(); n != 3 {
+			t.Fatalf("at %v, %d of the three seats are held, want all three", tick, n)
+		}
+	}
+	at(reset.Add(time.Second))
+	alarms.live()[0].fire()
+	if got := model.asked() - asked; got != 1 {
+		t.Errorf("the probe that answered asked the model %d times, want once", got)
+	}
+	if n := held(); n != 0 {
+		t.Errorf("%d seats still held after the probe answered, want none", n)
+	}
+	if got := released.Load(); got != 3 {
+		t.Errorf("%d releases published, want one per seat", got)
+	}
+	if live := alarms.live(); len(live) != 0 {
+		t.Errorf("%d alarms left armed after the limit lifted, want none", len(live))
 	}
 }

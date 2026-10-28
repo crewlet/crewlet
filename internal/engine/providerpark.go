@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,9 +43,11 @@ import (
 //   - a pause hold under [pauseReasonProvider] is taken on its inbox, so
 //     nothing more is delivered to it, and the delivery is DEFERRED, which
 //     keeps its place at the head of the inbox;
-//   - an alarm is armed for the instant the first member is tried again
-//     ([chain.Limit.RetryAt]), which PROBES the chain: one short call through
-//     the members that refused, outside any delivery;
+//   - the seat joins the PROBE of the chain that refused: one alarm, armed
+//     for the instant the first member is tried again
+//     ([chain.Limit.RetryAt]), which makes one short call through the members
+//     that refused, outside any delivery, for every seat parked on that chain
+//     at once ([limitProbes]);
 //   - and `seat_provider_parked` says so, with when the vendors said the
 //     limit lifts, so every screen draws one steady condition rather than a
 //     seat that blinks.
@@ -55,22 +59,33 @@ import (
 // (a weekly plan, a day's quota) walked the held message to the dead-letter
 // boundary one probe at a time: 24 probes, a day, for a limit named 40 hours
 // out, and about five and a half hours for one whose reset nobody named. So
-// the alarm asks the models itself ([Engine.probeProviderPark]), and the
-// answer decides:
+// the alarm asks the models itself ([Engine.probeLimit]), and the answer
+// decides for every seat parked on the chain:
 //
-//   - the call answers, or fails for a reason that is not a limit: the hold
-//     is lifted, `seat_provider_released` says why, and the mail is delivered
-//     again in order, once, the held head first, having spent only the one
-//     delivery its park did;
+//   - the call answers, or fails for a reason that is not a limit: each hold
+//     is lifted, `seat_provider_released` says why, and each seat's mail is
+//     delivered again in order, once, the held head first, having spent only
+//     the one delivery its park did;
 //   - every member refuses for a limit again: the alarm is armed for the new
-//     instant, `seat_provider_parked` is published again with what the
-//     vendors now say, and the inbox is not touched.
+//     instant, `seat_provider_parked` is published again for each seat with
+//     what the vendors now say, and no inbox is touched.
 //
-// The probe is spend like any other auxiliary call, charged and recorded
-// through the seam under the background stage (`provider_probe`), and asks
-// the members on the seat's own CLI home ([llm.WithSeat]). Members still
-// sitting out refuse without a process being started, so a probe costs one
-// short call to the member whose window is over.
+// ONE PROBE PER LIMITED CHAIN, NOT PER SEAT. The limit is the entries', and so
+// is its end: five seats on one spent subscription each arming its own alarm
+// made five calls at every retry instant, each a full run of the CLI, to learn
+// one fact. Seats parked on the same entries, in the same order, of the same
+// registry share one probe, and its answer settles them all; a seat on another
+// chain has its own.
+//
+// WHAT A PROBE COSTS. It is a full run of the entry's CLI: a process launched,
+// and a request carrying the CLI's own fixed overhead (its harness, which a
+// one-word prompt does not shrink), far more than the prompt itself. It is
+// spend like any other auxiliary call, charged and recorded through the seam
+// under the background stage (`provider_probe`), where the Spend screen
+// shows it, to the seat the probe runs as: the parked seat that sorts first,
+// on whose CLI home ([llm.WithSeat]) the call is made. Members still sitting
+// out refuse without a process being started, so each retry instant costs
+// one such run, to the member whose window is over, for every seat at once.
 //
 // ONLY A CHAIN THAT IS LIMITED THROUGHOUT. A seat whose head is spent and whose
 // fallback failed for a reason nothing says will last keeps the ordinary
@@ -118,6 +133,43 @@ type providerParks = seatParks[providerBasis]
 // providerParking is one seat's provider park.
 type providerParking = seatParking[providerBasis]
 
+// limitProbes is every limited chain this node probes, one probe for all the
+// seats parked on it (see the file's doc).
+type limitProbes struct {
+	mu     sync.Mutex
+	probes map[probeKey]*limitProbe
+
+	// stopped refuses new alarms once the engine is tearing down.
+	stopped bool
+
+	// asking counts the probes making their call, which
+	// [Engine.stopProviderParks] ends and waits for: the call is this
+	// node's, and a stopping node must not leave one running.
+	asking sync.WaitGroup
+}
+
+// probeKey names one limited chain: the registry it was decided under and its
+// keys in order.
+type probeKey struct {
+	models *phase.Registry
+	keys   string
+}
+
+func probeKeyOf(b providerBasis) probeKey {
+	return probeKey{models: b.models, keys: strings.Join(b.keys, "\x00")}
+}
+
+// limitProbe is one limited chain's probe: what it asks, when, and the seats
+// its answer settles, by id with their handles.
+type limitProbe struct {
+	basis providerBasis
+	until time.Time
+	seats map[uuid.UUID]string
+	alarm alarm
+	// cancel ends the call the probe is making, nil when none is.
+	cancel context.CancelFunc
+}
+
 // providerProbe is the probe's whole request: a text function whose answer is
 // read for nothing but whether it came, so it is as short as a call can be.
 var providerProbe = llm.Request{Messages: []llm.Message{
@@ -144,10 +196,17 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 	if c != nil {
 		basis.models = c.Models
 	}
-	if err := e.providerParks.take(ctx, e, providerParkSpec, seat, handle, basis, limit.RetryAt,
-		"its models are tried again", e.probeProviderPark); err != nil {
+	// A SEAT PARKED AGAIN ON ANOTHER CHAIN leaves the probe of the one it
+	// was parked on, which no longer settles it.
+	if old := e.providerParks.parking(seat); old != nil && probeKeyOf(old.basis) != probeKeyOf(basis) {
+		e.leaveLimitProbe(seat, old.basis)
+	}
+	// NO INSTANT OF ITS OWN: the chain's probe releases it.
+	if err := e.providerParks.take(ctx, e, providerParkSpec, seat, handle, basis, time.Time{},
+		"its models answered"); err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its models' limit: %w", handle, err)
 	}
+	e.joinLimitProbe(ctx, basis, seat, handle, limit.RetryAt)
 
 	resets := resetsOf(limit)
 	reason := fmt.Sprintf("provider limit: %s, tried again %s, resets %s",
@@ -167,48 +226,174 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 	return reason, true, nil
 }
 
-// probeProviderPark is a provider park's alarm: one call through the chain that
-// refused, outside any delivery, and the park settled on what it answers (see
-// the file's doc). ctx ends if the park is released, given up or stopped while
-// the call is out, and whoever did that has already settled it.
-func (e *Engine) probeProviderPark(ctx context.Context, seat uuid.UUID, parking *providerParking) {
-	// SETTLED ON A CONTEXT THE PARK DOES NOT END: the release cancels the
-	// call's context before it lifts the hold.
-	settle := context.WithoutCancel(ctx)
-	c := e.Company()
-	if c == nil || c.Models != parking.basis.models {
-		// The apply that installed other models releases this park itself
-		// ([Engine.reconcileProviderParks]); one that raced the alarm here
-		// is released the same way.
-		e.releaseProviderParking(settle, seat, parking, "the seat's models changed")
+// joinLimitProbe puts seat on the probe of the chain basis names, creating the
+// probe and arming it for retry if it has none, and arming it sooner if retry
+// is earlier than the instant it waits for. A probe whose call is out already
+// settles a seat that joins meanwhile with its answer.
+func (e *Engine) joinLimitProbe(ctx context.Context, basis providerBasis, seat uuid.UUID,
+	handle string, retry time.Time) {
+
+	p := &e.limitProbes
+	key := probeKeyOf(basis)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.probes == nil {
+		p.probes = map[probeKey]*limitProbe{}
+	}
+	probe := p.probes[key]
+	if probe == nil {
+		probe = &limitProbe{basis: basis, seats: map[uuid.UUID]string{}}
+		p.probes[key] = probe
+	}
+	probe.seats[seat] = handle
+	if probe.cancel == nil && (probe.alarm == nil || retry.Before(probe.until)) {
+		probe.until = retry
+		e.armLimitProbeLocked(ctx, key, probe)
+	}
+}
+
+// armLimitProbeLocked arms probe's alarm for its instant, on
+// context.WithoutCancel(ctx) for the reason [seatParks.armLocked] gives. The
+// caller holds the probes' lock.
+func (e *Engine) armLimitProbeLocked(ctx context.Context, key probeKey, probe *limitProbe) {
+	if e.limitProbes.stopped {
 		return
 	}
-	err := e.probeModels(ctx, c, parking.handle, parking.basis.keys)
+	if probe.alarm != nil {
+		probe.alarm.Stop()
+	}
+	wait := max(probe.until.Sub(e.now()), 0)
+	fired := context.WithoutCancel(ctx)
+	probe.alarm = e.providerParks.arm(wait, func() { e.fireLimitProbe(fired, key, probe) })
+}
+
+// fireLimitProbe is a probe's alarm: its one call, under a context ended if the
+// probe's last seat leaves it or the node stops meanwhile.
+func (e *Engine) fireLimitProbe(ctx context.Context, key probeKey, probe *limitProbe) {
+	p := &e.limitProbes
+	p.mu.Lock()
+	if p.stopped || p.probes[key] != probe || len(probe.seats) == 0 {
+		p.mu.Unlock()
+		return
+	}
+	asking, cancel := context.WithCancel(ctx)
+	probe.cancel = cancel
+	// THE PARKED SEAT THAT SORTS FIRST runs the call, on its CLI home and
+	// its counter: a stable choice, so one probe after another runs as
+	// the same seat while the set is the same.
+	handle := probe.seats[slices.MinFunc(slices.Collect(maps.Keys(probe.seats)),
+		func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })]
+	p.asking.Add(1)
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		probe.cancel = nil
+		p.mu.Unlock()
+		cancel()
+		p.asking.Done()
+	}()
+	e.probeLimit(asking, key, probe, handle)
+}
+
+// probeLimit makes a probe's one call through the chain that refused and
+// settles every seat parked on it by the answer (see the file's doc). ctx ends
+// if the probe's last seat leaves it or the node stops while the call is out,
+// and whoever did that has already settled them.
+func (e *Engine) probeLimit(ctx context.Context, key probeKey, probe *limitProbe, handle string) {
+	// SETTLED ON A CONTEXT THE PROBE DOES NOT END: a release cancels the
+	// call's context before it lifts the holds.
+	settle := context.WithoutCancel(ctx)
+	c := e.Company()
+	if c == nil || c.Models != probe.basis.models {
+		// The apply that installed other models releases these parks
+		// itself ([Engine.reconcileProviderParks]); one that raced the
+		// alarm here is released the same way.
+		e.endLimitProbe(settle, key, probe, "the seat's models changed")
+		return
+	}
+	err := e.probeModels(ctx, c, handle, probe.basis.keys)
 	if ctx.Err() != nil {
 		return
 	}
 	if limit, limited := chain.Limited(err); limited {
-		if !e.providerParks.rearm(settle, e, providerParkSpec, seat, parking, limit.RetryAt,
-			"its models are tried again") {
+		p := &e.limitProbes
+		p.mu.Lock()
+		current := !p.stopped && p.probes[key] == probe
+		var handles []string
+		if current {
+			probe.until = limit.RetryAt
+			e.armLimitProbeLocked(settle, key, probe)
+			handles = slices.Sorted(maps.Values(probe.seats))
+		}
+		p.mu.Unlock()
+		if !current {
 			return
 		}
-		log.InfoContext(settle, "seat_provider_park_renewed", "seat", parking.handle,
+		log.InfoContext(settle, "seat_provider_park_renewed", "seats", strings.Join(handles, ","),
 			"providers", strings.Join(limit.Keys, ","), "retry_at", rfc3339(limit.RetryAt),
 			"resets_at", resetsOf(limit), "said", limit.Said,
-			"detail", "the probe met the limit again; this seat's mail stays on its inbox, "+
-				"untouched, until its models are tried again")
-		e.publishProviderPark(settle, parking.handle, providerParked(limit))
+			"detail", "the probe met the limit again; these seats' mail stays on their "+
+				"inboxes, untouched, until their models are tried again")
+		for _, h := range handles {
+			e.publishProviderPark(settle, h, providerParked(limit))
+		}
 		return
 	}
 	why := "its models answered"
 	if err != nil {
 		why = "its models no longer report a usage limit"
-		log.InfoContext(settle, "seat_provider_probe_failed", "seat", parking.handle,
+		log.InfoContext(settle, "seat_provider_probe_failed", "seat", handle,
 			"error", err.Error(),
-			"detail", "the probe failed for a reason that is not a usage limit, so the park "+
-				"is lifted and the seat's mail meets the failure on the ordinary retry")
+			"detail", "the probe failed for a reason that is not a usage limit, so the parks "+
+				"are lifted and the seats' mail meets the failure on the ordinary retry")
 	}
-	e.releaseProviderParking(settle, seat, parking, why)
+	e.endLimitProbe(settle, key, probe, why)
+}
+
+// endLimitProbe retires probe and releases every seat it still settles.
+func (e *Engine) endLimitProbe(ctx context.Context, key probeKey, probe *limitProbe, why string) {
+	p := &e.limitProbes
+	p.mu.Lock()
+	if p.probes[key] == probe {
+		delete(p.probes, key)
+	}
+	if probe.alarm != nil {
+		probe.alarm.Stop()
+		probe.alarm = nil
+	}
+	seats := sortedSeats(maps.Keys(probe.seats))
+	p.mu.Unlock()
+	for _, seat := range seats {
+		if parking := e.providerParks.parking(seat); parking != nil && probeKeyOf(parking.basis) == key {
+			e.releaseProviderParking(ctx, seat, parking, why)
+		}
+	}
+}
+
+// leaveLimitProbe takes seat off the probe of the chain basis names, and
+// retires the probe, its alarm stopped and its call ended, once no seat is on
+// it.
+func (e *Engine) leaveLimitProbe(seat uuid.UUID, basis providerBasis) {
+	p := &e.limitProbes
+	key := probeKeyOf(basis)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	probe := p.probes[key]
+	if probe == nil {
+		return
+	}
+	delete(probe.seats, seat)
+	if len(probe.seats) > 0 {
+		return
+	}
+	delete(p.probes, key)
+	if probe.alarm != nil {
+		probe.alarm.Stop()
+		probe.alarm = nil
+	}
+	if probe.cancel != nil {
+		probe.cancel()
+	}
 }
 
 // probeModels makes the probe's one call through the members of c's registry
@@ -318,6 +503,7 @@ func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, par
 	if !e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why) {
 		return
 	}
+	e.leaveLimitProbe(seat, parking.basis)
 	e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
 	e.readmitResumes(waitProvider)
 }
@@ -342,14 +528,33 @@ func (e *Engine) reconcileProviderParks(ctx context.Context, next *Company) {
 // that takes it asks its own models on the first delivery.
 func (e *Engine) forgetProviderPark(ctx context.Context, seat uuid.UUID) {
 	if parking, ok := e.providerParks.forget(seat); ok {
+		e.leaveLimitProbe(seat, parking.basis)
 		e.publishProviderPark(ctx, parking.handle,
 			types.SeatProviderReleased{Reason: "the seat was released by this node"})
 	}
 }
 
-// stopProviderParks disarms every alarm, for a node shutting down; see
-// [seatParks.stop].
-func (e *Engine) stopProviderParks() { e.providerParks.stop() }
+// stopProviderParks disarms every probe's alarm and ends every probe's call,
+// for a node shutting down, and returns once those calls have (see
+// [seatParks.stop] for the holds). The wait is outside the lock, which a
+// probe's own settling takes.
+func (e *Engine) stopProviderParks() {
+	e.providerParks.stop()
+	p := &e.limitProbes
+	p.mu.Lock()
+	p.stopped = true
+	for _, probe := range p.probes {
+		if probe.alarm != nil {
+			probe.alarm.Stop()
+			probe.alarm = nil
+		}
+		if probe.cancel != nil {
+			probe.cancel()
+		}
+	}
+	p.mu.Unlock()
+	p.asking.Wait()
+}
 
 // publishProviderPark announces a provider park or its release for handle's
 // seat, best effort: the park holds whether or not a screen hears of it.

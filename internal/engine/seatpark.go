@@ -23,20 +23,20 @@ import (
 //   - a pause hold is taken on its inbox, under the park's own reason, so
 //     nothing more is delivered to it, and the delivery that found the
 //     condition is DEFERRED, which keeps its place at the head of the inbox;
-//   - an alarm is armed for the instant, and the mail is delivered again in
-//     order, ONCE, when the hold is lifted: the hold keeps the resumed
-//     attachment from being handed anything until then;
+//   - the hold is lifted when the condition ends, and the mail is delivered
+//     again in order, ONCE: the hold keeps the resumed attachment from being
+//     handed anything until then;
 //   - and the record of what the park was decided under (its basis) lets a
 //     change of the company release it at once.
 //
-// WHAT THE ALARM DOES is the one place the two differ in kind. A window's end
-// IS the end of the budget's condition, so its alarm lifts the hold. A model's
-// limit names only when it is worth asking again, so its alarm ASKS (one call,
-// outside any delivery) and lifts the hold only on an answer that says the
-// limit is over, arming itself again otherwise ([seatParking.due]). The held
-// mail is never the question: a delivery handed back by a park spends one of
-// its deliveries, and a limit asked about hourly through the held head would
-// dead-letter it within a day.
+// WHAT ENDS THE CONDITION is the one place the two differ in kind. A window's
+// end IS the end of the budget's condition, so each budget park arms its own
+// alarm for it ([seatParks.take] with an instant). A model's limit is the
+// limited entries', not the seat's, and its end is learned by asking them: one
+// probe per limited chain, whatever number of seats are parked on it, which
+// releases them all (providerpark.go). Such a park is taken with no instant
+// and no alarm of its own. The held mail is never the question either way: a
+// delivery handed back by a park spends one of its deliveries.
 //
 // What else differs between the two is the condition, the basis and what a
 // park says about itself, which each file keeps. What is the same (the record,
@@ -72,11 +72,6 @@ type seatParks[B any] struct {
 	mu    sync.Mutex
 	seats map[uuid.UUID]*seatParking[B]
 
-	// asking counts the alarms making their call ([seatParking.due]), which
-	// [seatParks.stop] ends and waits for: the call is this node's, and a
-	// stopping node must not leave one running into the teardown.
-	asking sync.WaitGroup
-
 	// stopped refuses new alarms once the engine is tearing down: an alarm
 	// armed after [seatParks.stop] would fire into a closed queue.
 	stopped bool
@@ -91,21 +86,13 @@ type seatParks[B any] struct {
 }
 
 // seatParking is one parked seat: what the park was decided under, when its
-// alarm fires, and the seat's handle, for the log lines.
+// alarm releases it (zero for a park something else releases), and the seat's
+// handle, for the log lines.
 type seatParking[B any] struct {
 	handle string
 	basis  B
 	until  time.Time
 	alarm  alarm
-
-	// due is what the alarm does: nil lifts the hold, for a condition whose
-	// end the instant is; set, it asks whether the condition still holds,
-	// under a context the park ends when it is released, given up or
-	// stopped, and settles the park itself ([seatParks.rearm] or
-	// [seatParks.releaseParking]).
-	due func(ctx context.Context, seat uuid.UUID, parking *seatParking[B])
-	// cancel ends the call due is making, or is nil when none is.
-	cancel context.CancelFunc
 }
 
 func (p *seatParks[B]) arm(d time.Duration, f func()) alarm {
@@ -116,8 +103,8 @@ func (p *seatParks[B]) arm(d time.Duration, f func()) alarm {
 }
 
 // take holds seat's inbox under spec and records the park until the instant
-// given, when its alarm releases it for why or, given due, asks
-// ([seatParking.due]).
+// given, when its alarm releases it for why. A zero instant arms nothing: the
+// park is released by whoever learns its condition ended.
 //
 // THE HOLD IS TAKEN AND RECORDED UNDER THE LOCK, which is what closes the race
 // with a release: a company's apply installs its epoch before it reconciles
@@ -126,8 +113,7 @@ func (p *seatParks[B]) arm(d time.Duration, f func()) alarm {
 // queue call does not drain, so holding the lock across it cannot call back
 // into here.
 func (p *seatParks[B]) take(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID,
-	handle string, basis B, until time.Time, why string,
-	due func(context.Context, uuid.UUID, *seatParking[B])) error {
+	handle string, basis B, until time.Time, why string) error {
 
 	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
 	p.mu.Lock()
@@ -135,18 +121,16 @@ func (p *seatParks[B]) take(ctx context.Context, e *Engine, spec parkSpec, seat 
 	if err := e.backends.Queue.PauseTopic(ctx, subject, group, spec.hold); err != nil {
 		return err
 	}
-	p.recordLocked(ctx, e, spec, seat, &seatParking[B]{handle: handle, basis: basis, until: until,
-		due: due}, why)
+	p.recordLocked(ctx, e, spec, seat, &seatParking[B]{handle: handle, basis: basis, until: until}, why)
 	return nil
 }
 
 // recordLocked records a park and arms its alarm. The caller holds p.mu.
 //
 // A seat parked again while already parked (a second partition of the drain
-// that parked it) replaces the record, and the earlier alarm is stopped, and
-// its call ended: the ALARM IS THE RECORD'S, never the seat's, so an alarm
-// that fires after its record was replaced releases nothing (see
-// [seatParks.releaseParking]).
+// that parked it) replaces the record, and the earlier alarm is stopped: the
+// ALARM IS THE RECORD'S, never the seat's, so an alarm that fires after its
+// record was replaced releases nothing (see [seatParks.releaseParking]).
 func (p *seatParks[B]) recordLocked(ctx context.Context, e *Engine, spec parkSpec,
 	seat uuid.UUID, parking *seatParking[B], why string) {
 
@@ -169,7 +153,7 @@ func (p *seatParks[B]) recordLocked(ctx context.Context, e *Engine, spec parkSpe
 func (p *seatParks[B]) armLocked(ctx context.Context, e *Engine, spec parkSpec,
 	seat uuid.UUID, parking *seatParking[B], why string) {
 
-	if p.stopped {
+	if p.stopped || parking.until.IsZero() {
 		return
 	}
 	// Never a negative wait: the instant was decided on the engine's
@@ -177,69 +161,17 @@ func (p *seatParks[B]) armLocked(ctx context.Context, e *Engine, spec parkSpec,
 	// clock stepped forward between the two reads must not arm an alarm
 	// that has already passed as though it had not.
 	wait := max(parking.until.Sub(e.now()), 0)
-	fired := context.WithoutCancel(ctx)
+	released := context.WithoutCancel(ctx)
 	parking.alarm = p.arm(wait, func() {
-		p.fire(fired, e, spec, seat, parking, why)
+		p.releaseParking(released, e, spec, seat, parking, why)
 	})
 }
 
-// fire is parking's alarm: the release, or the call its due makes, under a
-// context the park ends if it is released, given up or stopped meanwhile.
-func (p *seatParks[B]) fire(ctx context.Context, e *Engine, spec parkSpec,
-	seat uuid.UUID, parking *seatParking[B], why string) {
-
-	if parking.due == nil {
-		p.releaseParking(ctx, e, spec, seat, parking, why)
-		return
-	}
-	p.mu.Lock()
-	if p.stopped || p.seats[seat] != parking {
-		p.mu.Unlock()
-		return
-	}
-	asking, cancel := context.WithCancel(ctx)
-	parking.cancel = cancel
-	p.asking.Add(1)
-	p.mu.Unlock()
-	defer func() {
-		p.mu.Lock()
-		parking.cancel = nil
-		p.mu.Unlock()
-		cancel()
-		p.asking.Done()
-	}()
-	parking.due(asking, seat, parking)
-}
-
-// rearm arms parking's alarm again for until, reporting whether it did: what
-// a due's call that found the condition still holding does. A park released,
-// replaced or stopped while the call was out is left as whoever did that
-// left it.
-func (p *seatParks[B]) rearm(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID,
-	parking *seatParking[B], until time.Time, why string) bool {
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.stopped || p.seats[seat] != parking {
-		return false
-	}
-	if parking.alarm != nil {
-		parking.alarm.Stop()
-	}
-	parking.until = until
-	p.armLocked(ctx, e, spec, seat, parking, why)
-	return true
-}
-
-// disarm stops parking's alarm and ends the call its due is making. The
-// caller holds the parks' lock.
+// disarm stops parking's alarm. The caller holds the parks' lock.
 func (parking *seatParking[B]) disarm() {
 	if parking.alarm != nil {
 		parking.alarm.Stop()
 		parking.alarm = nil
-	}
-	if parking.cancel != nil {
-		parking.cancel()
 	}
 }
 
@@ -293,7 +225,7 @@ func (p *seatParks[B]) releaseParking(ctx context.Context, e *Engine, spec parkS
 				p.seats = map[uuid.UUID]*seatParking[B]{}
 			}
 			p.seats[seat] = &seatParking[B]{handle: parking.handle, basis: parking.basis,
-				until: parking.until, due: parking.due}
+				until: parking.until}
 		}
 		p.mu.Unlock()
 		log.WarnContext(ctx, spec.notReleased, "seat", parking.handle,
@@ -339,18 +271,15 @@ func (p *seatParks[B]) forget(seat uuid.UUID) (*seatParking[B], bool) {
 	return parking, true
 }
 
-// stop disarms every alarm and ends every call one is making, for a node
-// shutting down, and returns once those calls have.
+// stop disarms every alarm, for a node shutting down.
 //
 // The holds are left to the queue client, which the node's stop detaches: a
 // resume here would only hand a stopping node mail it is about to give back.
-// The wait is outside the lock, which a call's own settling takes.
 func (p *seatParks[B]) stop() {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.stopped = true
 	for _, seat := range sortedSeats(maps.Keys(p.seats)) {
 		p.seats[seat].disarm()
 	}
-	p.mu.Unlock()
-	p.asking.Wait()
 }

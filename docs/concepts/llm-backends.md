@@ -696,11 +696,16 @@ seat's inbox until the first entry is tried again (`seat_provider_parked`), the
 way a spent token window parks it: the delivery keeps its place at the head of
 the inbox, and a message that arrives meanwhile waits behind it. When the first
 entry is tried again the engine **probes** the chain with one short call of its
-own, outside any delivery (charged to the seat and recorded as the background
-stage's `provider_probe`): a limit that still holds arms the park again for the
-next instant and touches nothing on the inbox, however long the limit lasts,
-and an answer lifts the park (`seat_provider_released`), after which each
-message is delivered once, in order. The held mail is never the probe, because
+own, outside any delivery: **one probe for every seat parked on the same
+entries**, never one per seat. A limit that still holds arms the probe again for
+the next instant and touches nothing on any inbox, however long the limit
+lasts, and an answer lifts every park on the chain (`seat_provider_released`),
+after which each seat's messages are delivered once, in order. A probe is a full
+run of the entry's CLI, so it costs what the CLI's smallest request costs (its
+own fixed overhead, which the one-word prompt does not shrink), not what the
+prompt costs; it is charged to the parked seat it runs as (the one that sorts
+first) and recorded as the background stage's `provider_probe`, so it shows on
+the Spend screen. The held mail is never the probe, because
 every hand-back of a message spends one of its deliveries. Throughout, the seat
 reads `stopped` with the reason `provider`, and the dashboard's Inbox draws one
 condition for the kind of limit ("Claude Code subscription limit reached.

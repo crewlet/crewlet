@@ -282,6 +282,10 @@ type Engine struct {
 	// a probe when the first is tried again. See providerpark.go.
 	providerParks providerParks
 
+	// limitProbes is one probe per limited chain, which settles every seat
+	// parked on it. See providerpark.go.
+	limitProbes limitProbes
+
 	// clock is the instant every token-budget window this engine cuts is
 	// read at, and nil is the wall clock — which is what every engine [New]
 	// builds runs on. See [Engine.now] for why there is one and why it is

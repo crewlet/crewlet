@@ -120,9 +120,10 @@ const (
 	AuxSkillClustering AuxPurpose = "skill_clustering"
 	// AuxSkillPromotion promotes sibling skills to a unit's skill.
 	AuxSkillPromotion AuxPurpose = "skill_promotion"
-	// AuxProviderProbe asks a parked seat's models whether their usage
-	// limit has lifted: one short call when the first of them is tried
-	// again, outside any delivery (internal/engine/providerpark.go).
+	// AuxProviderProbe asks a limited chain whether its usage limit has
+	// lifted: one short call when the first of its entries is tried again,
+	// outside any delivery, for every seat parked on it
+	// (internal/engine/providerpark.go).
 	AuxProviderProbe AuxPurpose = "provider_probe"
 
 	// AuxAnswerKnowledge answers a person's question from the company's
