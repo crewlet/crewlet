@@ -737,7 +737,7 @@ each, on one idle machine, and read the two outputs with
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |
-| `BENCH_TIMEOUT` | `8h` | `-timeout`, a hang detector, each package's: at six counts of every arm, the large ones included, `internal/code/cache` takes about five and three quarter hours on four vCPUs and `internal/code/host` about two and a half |
+| `BENCH_TIMEOUT` | `8h` | `-timeout`, a hang detector, each package's: at six counts of every arm, the large ones included, `internal/code/cache` takes about six and a half hours on four vCPUs and `internal/code/host` about two and a half |
 
 The packages run one at a time (`-p 1`) and without the race detector, and the
 output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
@@ -745,22 +745,22 @@ output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
 `internal/code/host` and `internal/code/query` skip unless
 `CREWLET_BENCH_S3_BUCKET` names a bucket
 (`internal/objstore/s3obj`'s doc lists the variables that do), and the arms
-whose fixture takes minutes and gigabytes — in `internal/code/cache` a cold
-sync of 2 000 pushes, repositories of 10 000 packs, a 5 GB index, a gigabyte
-split into hundreds of packs; in `internal/code/host` a gigabyte history, a
-hundred thousand refs and a 100 000-file tree; in `internal/code/query` a
-gigabyte history under a 100 000-file tree read by object id; in
-`internal/jsapi` streams of a million and of three million subjects — skip
-unless `CREWLET_BENCH_LARGE=1`.
+whose fixture takes minutes and gigabytes — in `internal/code/cache` cold
+syncs of 2 048 and of 10 000 pushes, repositories of 10 000 packs, a 5 GB
+index, a gigabyte split into hundreds of packs; in `internal/code/host` a
+gigabyte history, a hundred thousand refs and a 100 000-file tree; in
+`internal/code/query` a gigabyte history under a 100 000-file tree read by
+object id; in `internal/jsapi` streams of a million and of three million
+subjects — skip unless `CREWLET_BENCH_LARGE=1`.
 
 A code host figure is the pool's git's as much as the engine's, so `make bench`
 runs the node pin — the git the engine image builds — first on `PATH`, as every
 test target does: every pool and every client a benchmark starts runs it, and
 never whichever git the machine has (`internal/code/codecluster`'s commit chain
-runs no git: its pushes carry no pack). A figure the docs quote names that
-version, and a pin bump leaves the figures taken on the git before it as what
-they are — measured on the version they name — until a change to that path
-measures again.
+runs no git: its pushes carry no pack, or one it names and never builds). A
+figure the docs quote names that version, and a pin bump leaves the figures
+taken on the git before it as what they are — measured on the version they
+name — until a change to that path measures again.
 
 **A figure the design argues from is recorded in the package doc of what it
 measures**, with the machine it was measured on — its CPUs and model, and

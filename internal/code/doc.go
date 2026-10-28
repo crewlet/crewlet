@@ -188,23 +188,23 @@
 // nothing: no record carries two repositories' pushes, and a data node more
 // adds no stream, since one log has one leader.
 //
-// THE PUSH'S TWO ROWS (BenchmarkPushHistoryBytes, the same figure every
-// count; restated from one count of one iteration once each row was weighed
-// by its own table, again once every id was the shape production writes, and
-// the pack row again once it named the position its content dates from,
+// THE PUSH'S ROWS (BenchmarkPushHistoryBytes, the same figure every count;
+// restated from one count of one iteration once each row was weighed by its
+// own table, again once every id was the shape production writes, and the
+// pack row again once it named the position its content dates from,
 // replicated 0067, with that column's index),
 // measured as the replicated estate's growth after a truncating checkpoint
 // over records whose refs existed before, so a ref's own row is rewritten in
 // place and never counted — EACH ROW BY THE PAGES ITS OWN TABLE'S B-TREES
 // GREW BY, never by the file's growth with a pack less its growth without
 // one, which counted the push row's pack columns, kept 181 days, as the pack
-// row's, kept for good. Every id is a production one, in production's order:
-// the repository's, the push's and its pack's object's are UUIDs, which a
-// push row and its index entries carry six times and a pack row and its
-// nine, and a person's credential is a token's name (`pat:` and its id). A
-// figure is whole pages over the rows that filled them, so a row a few bytes
-// wider moves it only where it fits fewer rows a page. They have two
-// lifetimes:
+// row's, kept while the pack is live. Every id is a production one, in
+// production's order: the repository's, the push's and its pack's object's
+// are UUIDs, which a push row and its index entries carry six times and a
+// pack row and its nine, and a person's credential is a token's name (`pat:`
+// and its id). A figure is whole pages over the rows that filled them, so a
+// row a few bytes wider moves it only where it fits fewer rows a page. They
+// have three lifetimes:
 //
 //   - its code_pushes row, which the push-history horizon keeps for the 181
 //     days of usage.History: 622.6 bytes with its index entries for a
@@ -218,21 +218,42 @@
 //     420 086 for the widest a push can leave ([MaxCommandsPerPush] commands
 //     on refs of [MaxRefNameBytes], [MaxIntroduced] ids; 100 records);
 //   - its pack's code_packs row, 587.8 bytes with its index entries, which
-//     lives as long as the pack does — until the repository is purged, since
-//     nothing in this release compacts a repository's packs.
+//     lives while the pack is LIVE: until a compaction merges it (# A
+//     compaction merges packs, decided alone), or the repository is purged;
+//   - and once a compaction has merged the pack, its code_packs_retired row,
+//     608.0 bytes with its three index entries (the retired/inputs=16 arm:
+//     4 096 typical pushes' packs merged sixteen at a time, as a compaction
+//     at the floor merges them, the same figure merged eight at a time; one
+//     count of one iteration on two E-cores of an Intel Core Ultra 7 265U,
+//     2026-10-27 and 28), which keeps its object from the collector for
+//     [RetireGrace] until the code-retention duty's sweep removes it, a
+//     [RetentionInterval] later at the most.
 //
 // So every data node, holding the whole estate, holds 679.9 bytes for each
-// seat's push of the last 181 days (622.6 for a person's) and 587.8 for each
-// push ANY repository not yet purged has ever taken — the estate's whole
-// growth a seat's push of one commit, 1 268 — and the reference company's
-// 3 000 pushes a day, every one a seat's, carry about 369 MB of push rows at
-// the horizon and grow by about 644 MB of pack rows a year for as long as its
-// repositories live. A seat that has pushed holds one row more however much
-// it pushes, its pushes on its newest company day (code_seat_days, the
-// counter the decide's daily quota reads): a row of about thirty bytes and
-// its key's entry, where an index of the push rows serving that one-day
-// question would have kept an entry of some forty bytes for every seat's
-// push for its 181 days, about 1.8 GB at 250 000 pushes a day. A forced
+// seat's push of the last 181 days (622.6 for a person's), and pack rows that
+// follow its repositories rather than its pushes. A repository's home merges
+// its small packs at every poll, so a repository holds about
+// [CompactTargetPacks] live pack rows at the most — some 29 KB whatever its
+// age, and a row more for every [FullPackBytes] its history fills — and the
+// rows merged in the last day, retired: a compaction below the target takes
+// [CompactMinMerge] packs or more into one output, so where the packs a
+// repository's pushes add are what its compactions take, a push retires at
+// most CompactMinMerge ÷ (CompactMinMerge − 1) packs, 16/15, and about one
+// where a repository is pushed to fast enough that a minute's roll takes
+// hundreds (internal/code/compact's steady arms: 1.05 for a repository pushed
+// once a minute, 1.003 for one pushed three hundred times a minute). The
+// reference company's 3 000 pushes a day, every one a seat's, carry about
+// 369 MB of push rows at the horizon and at most about 2.0 MB of retired pack
+// rows — 3 200 of them, a day of 16/15 a push and the RetentionInterval past
+// it — beside its repositories' live ones, where while nothing merged a
+// repository's packs every push's row stayed for as long as its repository
+// did, about 644 MB more a year. A seat that has
+// pushed holds one row more however much it pushes, its pushes on its newest
+// company day (code_seat_days, the counter the decide's daily quota reads): a
+// row of about thirty bytes and its key's entry, where an index of the push
+// rows serving that one-day question would have kept an entry of some forty
+// bytes for every seat's push for its 181 days, about 1.8 GB at 250 000
+// pushes a day. A forced
 // update or a deletion leaves one row more, its ref drop, a commit id and a
 // ref without the history row's commands, kept [PruneGrace] — two weeks of
 // such commands, against the history's half year of every push — and longer
@@ -258,11 +279,18 @@
 // where a person's names the token, its way is `engine`, and its entry
 // carries the company day its quota counted it on ([PushEntry.Day]),
 // nineteen bytes (`,"day":"2031-04-02"`); so 1 481 bytes alone in its record
-// and about 893 in a burst. The log keeps the trim's window of records rather
-// than the history, so the reference company's 3 000 pushes a day, every one
-// a seat's, hold about 31 MB of it over the default seven-day min_age, about
-// a thirty-fifth of the log's 1 GiB floor, and the bytes of a push's pack are
-// never on it: a record names its bundle.
+// and about 893 in a burst. The compactions that merge the pushes' packs add
+// their own records, MEASURED a push (internal/code/compact's steady arms,
+// the code log's growth over every pass): 108 bytes where a merge takes the
+// floor's sixteen, a quiet repository's, and 43 where it takes a minute's
+// hundreds, a busy one's — a compaction's record is its envelope and its
+// output's row, shared by every pack it merges, and a few dozen bytes a pack,
+// so the more it merges at once the less a push pays. The log keeps the trim's
+// window of records rather than the history, so the reference company's 3 000
+// pushes a day, every one a seat's, hold about 31 MB of it over the default
+// seven-day min_age, and their compactions at most about 2.3 MB beside them —
+// about 33 MB, a thirty-second of the log's 1 GiB floor — and the bytes of a
+// push's pack are never on it: a record names its bundle.
 //
 // # The activation fence
 //
@@ -689,7 +717,10 @@
 // the queue's count and bytes, the node's bytes, its asker's deadline — and
 // answered busy past them the same way (crewlet.code.commit.busy, kind
 // compaction); but no batch carries it beside a push, or beside another, so
-// its decision is its own and its refusal refuses nothing else. Its OPERATION
+// its decision is its own and its refusal refuses nothing else, and what it
+// costs the pushes queued behind it is a record's slot, its decide reading
+// its inputs' rows where a batch reads its pushes' (codecluster's
+// BenchmarkCommitChain, its mix=compaction arm beside mix=packs). Its OPERATION
 // ID IS THE COMPACTION'S ID, minted once by the node that built it, so a
 // compaction asked again of the repository's runner-up after a failover is
 // collapsed by the ledger onto the record that landed rather than decided

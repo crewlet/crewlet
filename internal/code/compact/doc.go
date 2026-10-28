@@ -131,7 +131,58 @@
 // code.CompactMinMerge, code.CompactTargetPacks, code.MaxCompactInputs,
 // code.MaxCompactOutputs); [Poll], [InputByteCap]'s half and the cache's
 // CompactBytesPerObject and CompactWindowBytes are BenchmarkCompact's
-// (bench_test.go), whose arms and what each decides are listed there.
+// (bench_test.go), whose arms and what each decides are listed there. Every
+// figure below is of git 2.56.0 over the in-memory store, so what an S3
+// bucket would bill is stated as requests and bytes, never as a bucket's
+// time; each arm ran once (-benchtime 1x, one count) on two E-cores of an
+// Intel Core Ultra 7 265U, on 2026-10-27 and 28.
+//
+// THE BUILD (history=source/inputs={4,8,16,64}): one compaction of the
+// 100 MB source history — 295 680 objects, 99 MB of bundles pushed as 4, 8,
+// 16 or 64 packs — held 139 MiB of anonymous memory at its peak whichever,
+// 493.4 to 493.8 bytes an object, the input count adding nothing, which the
+// cache's CompactBytesPerObject is rounded up from (500, where 300 had been
+// reasoned); its build took 28 to 48 s a gibibyte of the pack bytes it
+// merged, more the more packs it read, under a twentieth of the second a
+// mebibyte gitproc.PackWorkDeadline gives it; and its outputs held 94.8 MB.
+// Eight revisions of one 50 MiB blob, each a delta of the one before
+// (blobs=max_blob/inputs=8), held 269.7 MiB, 5.4 blobs, where the build had
+// been charged two for its window: the cache's CompactWindowBytes is six of
+// the epoch's largest blob since. A roll at its byte cap
+// (cap=input_byte_cap/cut=4MiB: the history pushed as
+// gittest.HistorySessions packs, the cut scaled to 4 MiB) wrote 8 outputs for
+// its 8 cuts, so [InputByteCap]'s half is KEPT: a cap of the whole
+// code.MaxCompactOutputs would have held on this history, and the half is
+// what holds whatever a history deltas, by the rule at its definition.
+//
+// A BUSY REPOSITORY (steady/pushes=6000/rate=300/min: 6 000 one-commit
+// pushes of 24.6 KB — a 20 KB file, its commit and its two trees — three
+// hundred to a simulated minute, a pass every minute, the other git node
+// syncing after every push and every pass; counts and bytes, none a time):
+// at most 304 live packs, under code.CompactTargetPacks and a minute's
+// pushes, which confirms [Poll]; twenty compactions, one a pass, each taking
+// the minute's three hundred, so 1.003 packs retired a push; outputs weighing
+// 2.38 times what was pushed, and the other git node downloading 3.38 times
+// it — every push once, and every output once more; 42.6 bytes a push of
+// compaction records on the code log, their signed frames included. A
+// thousand pushes cost 3.3 PUTs of outputs (58.5 MB) and 23.3 GETs of them on
+// a fleet of eight git nodes (410 MB), and a cold sync of what the 6 000 left
+// reads two packs, 125 MB — the same at min-merge 4, 8 and 16, since every
+// pass found three hundred packs whatever the floor.
+//
+// A QUIET REPOSITORY (steady/pushes=1200/rate=1/min: 1 200 such pushes, one a
+// minute, a pass every minute, so a merge waits for the floor's packs to
+// gather), merged from code.CompactMinMerge's sixteen: 77 compactions, at
+// most 20 live packs, 1.05 packs retired a push, outputs weighing 3.73 times
+// what was pushed and the other git node downloading 4.73 times it, and
+// 108 bytes a push of records; a thousand pushes cost 64 PUTs and 449 GETs of
+// the outputs on a fleet of eight, and 13 GETs a cold sync of what was left —
+// 527 requests, where merging from eight cost 1 081 (161 compactions, at most
+// 13 live packs, 1.13 retired a push, 184 bytes of records) and from four
+// 2 212 (331, 9, 1.27, 337): the floor is the one with the fewest requests.
+//
+// THE SWAP (swap/packs={50,2048}) is the cache's — a compaction is what makes
+// one — and internal/code/cache's doc states it.
 //
 // THE FULL LISTING STANDS (M3-decisions M3-O26): BenchmarkCompact's
 // poll/repos=10000 arm read one page of the listing of 10 000 repositories in

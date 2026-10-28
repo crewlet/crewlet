@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/objstore"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -54,11 +55,21 @@ import (
 //     repositories is sixty-four single-push records at once: what ONE code
 //     log appends a second, the company's ceiling for pushes that do not
 //     share a repository.
+//   - mix=packs and mix=compaction are a batch of 64 whose pushes each carry
+//     a pack — named only: the decide reads no object — and mix=compaction
+//     proposes, beside every batch after compactEvery more have landed, ONE
+//     compaction of every pack landed since the last to the same committer,
+//     which queues it among the pushes and decides it alone (internal/code's
+//     "A compaction merges packs, decided alone"). The two differ by the
+//     compactions alone: what a busy repository's compactions cost its
+//     pushes — a record's slot each, its decide reading its inputs' rows,
+//     beside a push batch's.
 //
 // Each arm reports pushes and records a second, pushes a record, and the p50
-// and p99 of one push's latency, from its proposal to its answer. An arm stops
-// itself before its repository's refs would pass code.MaxRefsPerRepo, which
-// would start measuring refusals. internal/code's doc records the figures.
+// and p99 of one push's latency, from its proposal to its answer; a
+// mix=compaction arm the compactions it applied too. An arm stops itself
+// before its repository's refs would pass code.MaxRefsPerRepo, which would
+// start measuring refusals. internal/code's doc records the figures.
 func BenchmarkCommitChain(b *testing.B) {
 	codetest.Quiet(b)
 	b.Run("members=1", func(b *testing.B) {
@@ -66,7 +77,14 @@ func BenchmarkCommitChain(b *testing.B) {
 		for _, batch := range []int{1, 8, code.MaxPushesPerRecord} {
 			b.Run(fmt.Sprintf("batch=%d", batch), func(b *testing.B) {
 				repos := declare(b, 1)
-				chain(b, batch, repos, d.Served().Propose, func() int { return d.Appends() })
+				chain(b, batch, repos, d.Served().Propose, func() int { return d.Appends() }, nil)
+			})
+		}
+		for _, compacting := range []bool{false, true} {
+			b.Run(fmt.Sprintf("batch=%d/%s", code.MaxPushesPerRecord, mixName(compacting)), func(b *testing.B) {
+				repos := declare(b, 1)
+				chain(b, code.MaxPushesPerRecord, repos, d.Served().Propose, func() int { return d.Appends() },
+					newMix(repos[0], compacting, d.Served().ProposeCompaction))
 			})
 		}
 	})
@@ -83,9 +101,18 @@ func BenchmarkCommitChain(b *testing.B) {
 			for _, batch := range []int{1, 8, code.MaxPushesPerRecord} {
 				b.Run(fmt.Sprintf("via=%s/batch=%d", via, batch), func(b *testing.B) {
 					repos := clusterRepos(b, c, 1)
-					chain(b, batch, repos, c.proposer(b, via, repos[0]), appends)
+					chain(b, batch, repos, c.proposer(b, via, repos[0]), appends, nil)
 				})
 			}
+		}
+		for _, compacting := range []bool{false, true} {
+			b.Run(fmt.Sprintf("via=committer/batch=%d/%s", code.MaxPushesPerRecord, mixName(compacting)),
+				func(b *testing.B) {
+					repos := clusterRepos(b, c, 1)
+					committer := c.member(b, c.Committer(repos[0])).data.Served()
+					chain(b, code.MaxPushesPerRecord, repos, committer.Propose, appends,
+						newMix(repos[0], compacting, committer.ProposeCompaction))
+				})
 		}
 		// A FULL INBOX: more than one record holds, so records fill to
 		// MaxPushesPerRecord, and at CommitterInbox the whole queue a
@@ -93,7 +120,7 @@ func BenchmarkCommitChain(b *testing.B) {
 		for _, batch := range []int{4 * code.MaxPushesPerRecord, code.CommitterInbox} {
 			b.Run(fmt.Sprintf("via=committer/batch=%d", batch), func(b *testing.B) {
 				repos := clusterRepos(b, c, 1)
-				chain(b, batch, repos, c.proposer(b, "committer", repos[0]), appends)
+				chain(b, batch, repos, c.proposer(b, "committer", repos[0]), appends, nil)
 			})
 		}
 		for _, arm := range []struct{ batch, repos int }{{8, 1}, {8, 16}, {64, 16}, {64, 64}} {
@@ -103,17 +130,112 @@ func BenchmarkCommitChain(b *testing.B) {
 				// FROM: one member proposes every push, so the pushes of a
 				// repository it commits for itself are answered in process
 				// and the rest cross the wire, as a receiving node's are.
-				chain(b, arm.batch, repos, c.members[0].router.Load().Code().Propose, appends)
+				chain(b, arm.batch, repos, c.members[0].router.Load().Code().Propose, appends, nil)
 			})
 		}
 	})
 }
 
+// compactEvery is a mix=compaction arm's cadence: one compaction for every 300
+// pushes landed — internal/code/compact's steady arm's rate, a pass of the
+// home's compactor a minute at 300 pushes a minute — merging every pack those
+// pushes landed, as a pass whose roll is due merges what the minute added.
+const compactEvery = 300
+
+// compactionMix is a mix= arm's pushes and compactions on repo: every push
+// carries a pack, and where compact is set — mix=compaction — the packs its
+// pushes landed since the last compaction, and the newest position one landed
+// at, are proposed through it once compactEvery of them have.
+type compactionMix struct {
+	repo    string
+	compact func(context.Context, code.CompactionProposal) (code.CompactResult, error)
+
+	mu     sync.Mutex
+	landed []string
+	seen   statelog.Position
+	done   int
+}
+
+// newMix is a mix= arm's on repo: mix=compaction proposing through compact
+// where compacting, mix=packs — the same pushes, no compaction — where not.
+func newMix(repo string, compacting bool,
+	compact func(context.Context, code.CompactionProposal) (code.CompactResult, error)) *compactionMix {
+
+	m := &compactionMix{repo: repo}
+	if compacting {
+		m.compact = compact
+	}
+	return m
+}
+
+// mixName is the arm's name for a mix that compacts or does not.
+func mixName(compacting bool) string {
+	if compacting {
+		return "mix=compaction"
+	}
+	return "mix=packs"
+}
+
+// land counts a push's pack as landed at at.
+func (m *compactionMix) land(packID string, at statelog.Position) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.landed = append(m.landed, packID)
+	// Every push lands on the code log, so the two compare.
+	if later, err := m.seen.Before(at); m.seen.IsZero() || (err == nil && later) {
+		m.seen = at
+	}
+}
+
+// due is the compaction of every pack landed since the last, once
+// compactEvery have — planned at the newest position one landed at, its one
+// output holding every object of its inputs — and nil before, or in a mix
+// that does not compact.
+func (m *compactionMix) due() func(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.compact == nil || len(m.landed) < compactEvery {
+		return nil
+	}
+	retire, seen := slices.Clone(m.landed), m.seen
+	m.landed = m.landed[:0]
+	slices.Sort(retire)
+	return func(ctx context.Context) error {
+		cid := statelog.NewOpID(time.Now(), "")
+		out := benchPack(code.DeriveOutputPackID(cid, 0), int64(len(retire)))
+		res, err := m.compact(ctx, code.CompactionProposal{Compaction: code.Compaction{RepoID: m.repo,
+			CompactionID: cid, Node: "bench", Seen: seen, Retire: retire, Add: []code.PackRef{*out}}})
+		switch {
+		case err != nil:
+			return fmt.Errorf("the compaction of %d packs: %w", len(retire), err)
+		case res.Outcome != statelog.OutcomeApplied:
+			return fmt.Errorf("the compaction of %d packs was answered %+v, want applied", len(retire), res)
+		}
+		m.mu.Lock()
+		m.done++
+		m.mu.Unlock()
+		return nil
+	}
+}
+
+// benchPack is pack id's row as a mix= arm names it: objects
+// objects, its bundle's sizes the exact ones a bundle of that many has
+// (code.PackRef.Check), under a key minted now — named and never stored,
+// since a decide reads no object.
+func benchPack(id string, objects int64) *code.PackRef {
+	return &code.PackRef{PackID: id, Object: objstore.KeyAt(time.Now()), Hash: objstore.HashOf([]byte(id)),
+		Size:       32*objects + code.IndexBytesFor(objects) + code.ReverseBytesFor(objects),
+		IndexBytes: code.IndexBytesFor(objects), ReverseBytes: code.ReverseBytesFor(objects),
+		GitChecksum: randomOID(), Objects: objects}
+}
+
 // chain is one arm: per iteration, batch pushes proposed at once through
 // propose — the k-th to repos[k mod len(repos)] — each creating a ref of its
-// own, and waited for until every one is applied with its command ok.
+// own, and waited for until every one is applied with its command ok. With a
+// mix, every push carries a pack and the mix's due compaction is proposed
+// beside the batch, waited for with it.
 func chain(b *testing.B, batch int, repos []string, propose func(context.Context, code.Proposal) (code.ProposeResult, error),
-	appends func() int) {
+	appends func() int, mix *compactionMix) {
 
 	b.Helper()
 	var (
@@ -130,7 +252,8 @@ func chain(b *testing.B, batch int, repos []string, propose func(context.Context
 				"run it for less time", per, code.MaxRefsPerRepo)
 		}
 		var wg sync.WaitGroup
-		errs := make([]error, batch)
+		// The batch's pushes, and the slot past them the mix's compaction's.
+		errs := make([]error, batch+1)
 		for k := range batch {
 			p := code.Proposal{
 				PushID: uuid.Must(uuid.NewV7()).String(), RepoID: repos[(pushes+k)%len(repos)],
@@ -138,6 +261,9 @@ func chain(b *testing.B, batch int, repos []string, propose func(context.Context
 				Via:       code.ViaGit, Node: "bench", ReceivedAt: time.Now().UTC(),
 				Commands: []code.Command{{Ref: fmt.Sprintf("refs/heads/b%d-%d", pushes, k), Old: code.ZeroOID,
 					New: randomOID()}},
+			}
+			if mix != nil {
+				p.Pack = benchPack(p.PushID, 1)
 			}
 			wg.Go(func() {
 				at := time.Now()
@@ -149,11 +275,18 @@ func chain(b *testing.B, batch int, repos []string, propose func(context.Context
 				case res.Outcome != statelog.OutcomeApplied || len(res.Answer.Commands) != 1 ||
 					res.Answer.Commands[0].Result != code.ResultOK:
 					errs[k] = fmt.Errorf("push %s was answered %+v, want applied and ok", p.PushID, res)
+				case mix != nil:
+					mix.land(p.PushID, res.Position)
 				}
 				mu.Lock()
 				took = append(took, elapsed)
 				mu.Unlock()
 			})
+		}
+		if mix != nil {
+			if compaction := mix.due(); compaction != nil {
+				wg.Go(func() { errs[batch] = compaction(b.Context()) })
+			}
 		}
 		wg.Wait()
 		for _, err := range errs {
@@ -171,6 +304,9 @@ func chain(b *testing.B, batch int, repos []string, propose func(context.Context
 	b.ReportMetric(float64(pushes)/float64(max(records, 1)), "pushes/record")
 	b.ReportMetric(quantile(took, 0.50), "p50-ms")
 	b.ReportMetric(quantile(took, 0.99), "p99-ms")
+	if mix != nil && mix.compact != nil {
+		b.ReportMetric(float64(mix.done), "compactions")
+	}
 }
 
 // soloChain is one data node on an embedded broker of its own that fsyncs

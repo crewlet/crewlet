@@ -171,9 +171,12 @@ const (
 	// by one rule — config's DerivedCodeLogNumerator, whose arithmetic is
 	// what this log takes a day at the reference company once seats push:
 	// 3 000 pushes at the MEASURED 1 481 bytes a seat's push alone in its
-	// record (BenchmarkPushLogBytes), 4.4 MB, and its git clients' barriers at
-	// BarrierRecordBytes, 2.4–5.0 MB, against the tracker's measured 9.9 MB
-	// of records and 2.2 MB of barriers, every record in its signed frame.
+	// record (BenchmarkPushLogBytes), 4.4 MB, the compactions that merge
+	// their packs at the MEASURED 43 to 108 bytes a push
+	// (internal/code/compact's steady arms), 0.1–0.3 MB, and its git clients'
+	// barriers at BarrierRecordBytes, 2.4–5.0 MB, against the tracker's
+	// measured 9.9 MB of records and 2.2 MB of barriers, every record in its
+	// signed frame.
 	// It was the tracker's whole sixteen, on an estimate of 2 KiB a push and
 	// no barriers, which put the two logs on "the same order" rather than at
 	// the ratio a blocked trim fills both in the same time.
@@ -872,14 +875,19 @@ const (
 	//
 	// 2 048, from a cold sync of every live pack at ONE sync's width (the
 	// cache's FetchConcurrency, sixteen GETs in flight) at S3's slow first
-	// byte (200 ms: 76 bundles a second, measured on the S3 fake by M2's
-	// BenchmarkColdSync): 27 s, half of the code host's spool wait (55 s, a
-	// minute of the balancer's quiet less a keepalive), which leaves the
-	// other half for the round's index and its peel before the first byte of
-	// the request that waited for them. PROVISIONAL: BenchmarkColdSync's
-	// packs=2048 arm at that first byte and width confirms it — its downloads
-	// within 27 s and its whole round within the spool wait — or makes it
-	// the largest count the measured rate downloads in 27 s.
+	// byte, 200 ms: its downloads held to 27 s, half of the code host's spool
+	// wait (55 s, a minute of the balancer's quiet less a keepalive), which
+	// leaves the other half for the round's index and its peel before the
+	// first byte of the request that waited for them. MEASURED, and kept:
+	// internal/code/cache's BenchmarkColdSync, its
+	// bucket=fake/firstbyte=200ms/packs=2048/fetch=16 arm — the S3 fake,
+	// pushes of 150 KB, git 2.56.0, one bounded run (-benchtime 1x, one
+	// count) on two E-cores of an Intel Core Ultra 7 265U, 2026-10-28 —
+	// downloaded the 2 048 in 26.4 s, 77 bundles a second at 204 ms a GET,
+	// and ended its whole round at 26.6 s. Downloads past 27 s would make
+	// this the largest count their rate downloads in 27 s; a round past the
+	// spool wait with its downloads inside them is a finding against the
+	// round's index (internal/code/cache's MidxRoundPacks), never this.
 	MaxPacksPerRepo = 2_048
 
 	// CompactFactor is the geometric progression a home keeps a repository's

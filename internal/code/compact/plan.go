@@ -20,9 +20,16 @@ import (
 // any two consecutive outputs sum past one cut, so the count stays within
 // MaxCompactOutputs absent that expansion, and a build past it is refused
 // before any upload and halves the repository's next plan
-// ([Compactor.Compact]). PROVISIONAL ½ (M3-decisions M3-O29), re-derived from
-// BenchmarkCompact's cap= arm: outputs ÷ ⌈input bytes ÷ cut⌉ over b5's
-// composition, at rolls at this cap.
+// ([Compactor.Compact]). MEASURED (M3-decisions M3-O29): BenchmarkCompact's
+// cap= arm — a roll at this cap over the 100 MB source history pushed as
+// gittest.HistorySessions packs, at a cut scaled to 4 MiB, git 2.56.0 over
+// the in-memory store, one bounded run (-benchtime 1x, one count) on two
+// E-cores of an Intel Core Ultra 7 265U, 2026-10-27 — wrote 8 outputs for its
+// 8 cuts: outputs ÷ ⌈input bytes ÷ cut⌉ = 1.0, half the 2.0 this half
+// absorbs. So the half is KEPT, not raised to what that composition would
+// allow: past it, the count's bound would rest on how one history deltas —
+// how few of its deltas are written whole — rather than on the rule above,
+// which holds for any.
 //
 // ONE FUNCTION, for the two plans that cap a roll: this package's compaction
 // and a repository's publication's repack, which caps its own the same.

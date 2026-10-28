@@ -21,10 +21,10 @@ import (
 )
 
 // Poll is the interval between two passes: one indexed listing a git node a
-// minute (master §3.8). BenchmarkCompact's steady arm — pushes at three hundred
-// a minute, one pass a simulated minute — confirms it by the most live packs a
-// repository reaches, which must stay under code.CompactTargetPacks plus a
-// minute's pushes.
+// minute (master §3.8). BenchmarkCompact's steady arm confirms it — pushes at
+// three hundred a minute, one pass a simulated minute: the repository held 304
+// live packs at the most, under code.CompactTargetPacks plus a minute's pushes
+// (350), every pass merging the minute's three hundred (doc.go's Measured).
 const Poll = time.Minute
 
 // Estate is the code log as the compactor reaches it: the due listing through

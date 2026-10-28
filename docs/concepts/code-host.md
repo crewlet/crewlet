@@ -338,11 +338,12 @@ the limit `git push origin :old new` — or a `--prune` push — goes through.
 A repository also holds at most **2 048 live packs**: every push that carries
 objects stores one, and they stay until a compaction merges them. The bound is
 a cold read's: a git node that has never served the repository downloads one
-object for every live pack before it answers, sixteen at a time, and at the
-76 a second a cold read took from an S3 fake answering each request 200 ms
-late, 2 048 of them take about 27 s — half of 55 s, the minute of quiet a
+object for every live pack before it answers, sixteen at a time, and from an
+S3 fake answering each request 200 ms late a cold read downloaded 2 048 of
+them in 26.4 s, 77 a second — within 27 s, half of 55 s, the minute of quiet a
 balancer allows a git request ([Deployment](../guides/deployment.md)) less a
-keepalive, with the other half left for indexing what arrived. A push
+keepalive, with the other half left for indexing what arrived — and ended its
+whole read at 26.6 s. A push
 carrying a pack into a repository that holds that many is refused
 **`compaction_behind`**, whole: nothing of it is decided, no row names
 anything it uploaded, and it lands when it is run again once a compaction has
@@ -368,16 +369,21 @@ refuses one past the bound before anything of it is run or stored.
 [`crewlet code import`](../reference/cli.md#crewlet-code-import) cuts each
 batch of refs it pushes by the same rule, so an import never meets it.
 
-What a repository holds is its packs **as the pushes stored them**, and
-nothing repacks them yet — which matters for a history that arrived in many
-pushes rather than grew by them. A history [imported](../guides/code.md#import-from-github-or-gitlab)
+What a repository holds is its packs **as the pushes stored them** until its
+home merges them ([Compaction](#compaction)) — which matters for a history
+that arrived in many pushes rather than grew by them. A history [imported](../guides/code.md#import-from-github-or-gitlab)
 in steps stores more than one pack of it: every step keeps whole the files it
 touches whose earlier versions an earlier step stored. Measured on this
 project's own history, 34 MB as one pack stored 68.5 MB in eleven steps and
 78.6 MB in forty-two. Those bytes are what the object store holds, what every
 git node serving the repository caches and what a cold sync downloads, so
 size `repo_max_bytes`, the object store and the git nodes' caches for the
-repository as it was pushed, not for the source it came from.
+repository as it was pushed, not for the source it came from. A merge writes
+each object of the packs it takes once, and git searches for deltas among the
+objects it merges, so a file a step kept whole may be stored as a delta again
+once its home merges the steps' packs; how much that saves depends on the
+history, which is why the sizing above is for the repository as it was
+pushed.
 
 ### A ref and a directory of refs
 
@@ -514,6 +520,25 @@ upload or an answer that failed, each tried again at the next poll. A
 repository that takes pushes faster than one node merges them shows as
 `crewlet.code.compact.duration` against the pushes' rate
 ([metrics reference](../reference/metrics.md)).
+
+**What it costs.** The build holds about 500 bytes of memory an object it
+merges — 139 MiB for a 100 MB source history's 295 680 objects, measured —
+and more where its delta search meets large files (eight revisions of a
+50 MiB file held 270 MiB), and takes 28 to 48 seconds for every gibibyte of
+packs it merges, in the node's maintenance lane. Every other git node holding
+the repository downloads each output once, so over a repository's life a git
+node downloads, and writes, at most about 16 times what is pushed to it at
+20 KB pushes, fewer the more pushes a merge takes at once
+([Scaling Out](scaling.md#git-nodes) has what that bills); a merge's record
+takes 43 to 108 bytes a push on the code log; a merged pack's row is kept a
+day, about 608 bytes; and a git node drops the merged packs by a move into a
+next directory that links three files a pack it keeps, whatever the packs'
+bytes (a sync that downloaded a merge's output and moved a copy of 50 packs
+took 7 ms, and one of 2 048 took 119 ms). What it buys is the cold read:
+the fifty or so packs a compacted repository holds come up in under a second
+at S3's slow first byte, where the 2 048 a repository may hold take
+27 seconds and the 10 000 of a history nothing merged over two minutes
+([The cache on a git node](#the-cache-on-a-git-node)).
 
 **What it does not do.** It removes no object: what no ref reaches stays in
 the repository's packs for as long as it lives. And every merge drops the
@@ -755,10 +780,12 @@ node's git indexed it — a push stores its pack together with its index, so no
 other node spends a core re-indexing it, and a cold sync is bound by the
 object store rather than the CPU. S3 answers each request in about 100 to
 200 ms, and from a fake answering that late a cold sync read about 75 to 150
-small packs a second: 10 000 of them — as many pushes, one pack each, were
-nothing to bound them — come up in about 70 to 130 seconds before the first
-request is answered (about 22 seconds from the same fake answering in 30 ms),
-which is why a repository holds at most 2 048 live packs
+small packs a second: the fifty or so a [compacted](#compaction) repository
+holds come up in under a second, the 2 048 a repository may hold at the most
+in about 14 to 27 seconds before the first request is answered (about
+5 seconds from the same fake answering in 30 ms), and 10 000 — as many
+pushes, one pack each, were nothing to merge them — in about 70 to 130
+seconds, which is why a repository holds at most 2 048 live packs
 ([Limits](#limits)).
 
 The first fetch of a repository after a node restarts reads the whole of its
@@ -883,10 +910,11 @@ it, part way through, so a pack never leaves a copy a request may be
 reading: the node builds the copy's **next directory** beside it — every pack
 the rows still name, the ref file and the files built over them that the
 change leaves valid, each hard-linked from the old directory, so it
-downloads nothing, runs no git and costs a few file links a pack and four
-to six disk syncs (six to nine for a copy that serves from a published
-chain, whose two chain files it writes from the rows), whatever the
-repository's size — moves it into place
+downloads nothing, runs no git and costs three file links a pack it keeps and
+four to six disk syncs (six to nine for a copy that serves from a published
+chain, whose two chain files it writes from the rows), whatever the packs'
+bytes (a sync that downloaded a merge's output and moved a copy of 50 packs
+took 7 ms, and one of 2 048 took 119 ms, measured) — moves it into place
 whole, moves the memo of answers
 into it in one rename, and serves every later request from it, while the
 requests already reading the old directory keep

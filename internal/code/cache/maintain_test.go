@@ -26,9 +26,11 @@ import (
 // the round's own index rather than hundreds.
 const caseRoundPacks = 8
 
-// A FULL ROUND INDEXES MANY PACKS BEFORE IT ANSWERS: one push is one pack and
-// nothing compacts them, so the request a cold cache was synced for would
-// otherwise be served by git searching every pack's index for every object.
+// A FULL ROUND INDEXES MANY PACKS BEFORE IT ANSWERS: one push is one pack
+// until the repository's home merges them, and a repository its compactions
+// fall behind holds up to code.MaxPacksPerRepo, so the request a cold cache
+// was synced for would otherwise be served by git searching every pack's
+// index for every object.
 // The round's index has no bitmap — a merge of the packs' own indexes — and
 // a busy node answers without it rather than wait: slower, never wrong. The
 // bitmap is the maintainer's, due as soon as the packs have stood still.

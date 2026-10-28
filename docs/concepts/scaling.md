@@ -241,8 +241,9 @@ The object store sees the same multiplication. A git node reads at most 32
 bundles at once — sixteen for any one repository — and S3 answers each in
 about 100 to 200 ms, so a node syncing repositories it has never served reads
 about 150 to 290 small ones a second (about 75 to 150 for one repository,
-measured on git 2.43 against a fake answering 100 and 200 ms late, the GETs
-alone bounding it). Every bundle is named under the one `files/` prefix, so
+measured on git 2.56.0 against a fake answering 100 and 200 ms late, on two
+cores of a Core Ultra 7 265U — the GETs alone bound it, not the machine).
+Every bundle is named under the one `files/` prefix, so
 about 19 to 37 git nodes cold-syncing at once at their full 32 — twice as many
 syncing one repository each — reach the 5 500 reads a second S3 serves one
 prefix (a fresh fleet, or a repository imported and then fetched through every
@@ -250,9 +251,12 @@ node), past which it answers `SlowDown` until it has partitioned the prefix.
 Each node's client then slows every request it sends to the bucket rather than
 failing it ([the object store](object-store.md#an-s3-bucket--s3)), so those syncs slow
 down and nothing they hold is wrong, and routing by repository is again what
-bounds it. What shortens a cold sync is fewer packs: at one a push, 10 000
-pushes' packs come up in about 70 to 130 seconds, which is why a repository
-holds at most 2 048 live packs ([Limits](code-host.md#limits)).
+bounds it. What shortens a cold sync is fewer packs, which is why a
+repository's home merges them ([Compaction](code-host.md#compaction)): the
+fifty or so a compacted repository holds come up in under a second, the
+2 048 a repository holds at the most ([Limits](code-host.md#limits)) in about
+14 to 27 seconds, and the 10 000 of a history nothing merged — one pack a
+push — in about 70 to 130 seconds.
 
 **A git node is sized by its memory before its disk.** Every git process a
 node runs over a whole repository holds memory in proportion to the
@@ -317,6 +321,29 @@ push until the repository's home git node merges its packs into a few
 ([Compaction](code-host.md#compaction)); the packs a merge replaces keep their
 objects a day, then the collector deletes them.
 
+**What a compaction costs every other git node.** Each output of a merge is
+downloaded once by every git node holding the repository but the one that
+built it, which links its own, and git's geometric roll merges a history again
+each time it doubles, until its packs are full. So over a repository's life a
+git node downloads, and writes to its disk, at most about (1 + log₂(0.9 GB ÷
+the mean push's pack)) times the bytes pushed to the repositories it holds:
+about 16 times at pushes of 20 KB, and fewer the more pushes a merge takes at
+once. Measured (`BenchmarkCompact`, git 2.56.0 over the in-memory store,
+requests and bytes counted), a quiet repository — 1 200 pushes of 24 KB, one
+a minute, merged sixteen at a time — had the other git node download 4.7
+times what was pushed, the git node that built the merges having uploaded
+3.7 times it, and twenty minutes of a busy one — 6 000 pushes at three
+hundred a minute — 3.4 and 2.4 times, both still far from full packs: a
+longer history is merged more times, up to the multiple above. On S3 inside the
+bucket's region the bytes are not billed and the requests are: a merge is one
+PUT an output and one GET of it on every other git node holding the
+repository — 64 PUTs and 449 GETs a thousand pushes on a fleet of eight git
+nodes for the quiet repository, 3 and 23 for the busy one, beside the 7 000
+GETs of the pushes' own packs. An object store that bills its egress —
+another provider's, or a bucket in another region — bills those bytes too,
+once for every git node but the builder, so size a git node's download and
+disk-write rates, and that bill, by the multiple above.
+
 **What the index of pushes costs a git node.** Beside each copy a git node
 keeps the index of which push introduced each commit
 ([Which push landed a commit](code-host.md#which-push-landed-a-commit)): about
@@ -376,8 +403,17 @@ whole estate, and the code host's rows with it. A seat's push of one commit
 leaves a push row of about 680 bytes, naming the seat and the turn, work item
 and model behind it (a person's push, naming the token it came through,
 leaves one of about 623), kept 181 days, and its pack's row of about 588,
-kept as long as the repository is; a forced update or a deletion leaves a row
-more, naming the object it left, kept 14 days, and longer while the
+kept while the pack is live: a repository's home merges its small packs every
+minute ([Compaction](code-host.md#compaction)), so a repository holds about
+fifty live pack rows at the most — some 29 KB whatever its age, and a row more
+for each 0.9 GB its history fills — and the row of a pack a merge took is kept
+one more day, as a retired row of about 608 bytes. A merge below that bound
+takes sixteen packs or more into one, so once the packs a repository's pushes
+add are what its merges take, a push leaves at most sixteen retired rows for
+every fifteen pushes — 1.05 a push measured for a repository pushed once a
+minute, and about one where it is pushed to fast enough that a minute's merge
+takes hundreds. A forced update or a deletion leaves a row more, naming the
+object it left, kept 14 days, and longer while the
 repository's pushes fill their records with such updates
 ([ref drops](code-host.md#retention-and-history)). A seat that has pushed
 holds one row more however much it pushes — its pushes on its newest company
@@ -386,24 +422,34 @@ rows for that one-day question would have kept an entry of some 40 bytes for
 every seat's push for its 181 days, about 1.8 GB at 250 000 pushes a day. The
 code log, which keeps only the trim's window of records, takes 1 481 bytes
 for a seat's push in a record of its own and about 890 for each of a burst
-group commit holds together. The table prices every push as a seat's: the
-reference company's 3 000 pushes a day are all its seats', a hundred seats
+group commit holds together, and the merges of the packs those pushes add
+43 to 108 bytes a push more — the more a merge takes at once, the less. The
+table prices every push as a seat's: the reference company's 3 000 pushes a
+day are all its seats', a hundred seats
 pushing thirty times a day while its people fetch, and a larger company's are
 its thousands of seats'. So:
 
-| Pushes a day | Push rows at the 181-day horizon | Pack rows added a year | On the code log, over the default seven days |
+| Pushes a day | Push rows at the 181-day horizon | Retired pack rows, at most | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 644 MB | about 31 MB |
-| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 53.6 GB | 1.6 to 2.6 GB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 3 200, 2.0 MB | about 33 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 269 000, 164 MB | 1.6 to 2.8 GB |
+
+The live pack rows are not a column, because they follow the repositories and
+not the pushes: some 29 KB a repository, 29 MB for every thousand. So the code
+host's rows stop growing once the push history reaches its horizon — where,
+while nothing merged a repository's packs, its pack rows grew by about 644 MB
+a year at 3 000 pushes a day and 53.6 GB at 250 000, for as long as the
+repositories lived.
 
 These rows come on top of what the tracker, the knowledge base and the rest of
 the estate hold: [the storage forecast](../guides/retention.md#the-storage-forecast)
 counts them on a line of their own for a company that hosts code, and every
 data node's snapshot volume holds about 4.2 times them, as it does the rest of
-its estate. The code log's column is its push records alone; each linearizable
-read a git client makes — an advertisement, a push's sync, a fetch's ls-refs —
-appends a 176-byte barrier beside them, which is why the log's ceiling is
-derived at two thirds of the mutation log's rather than from its pushes alone
+its estate. The code log's column is its push and compaction records alone;
+each linearizable read a git client makes — an advertisement, a push's sync, a
+fetch's ls-refs — appends a 176-byte barrier beside them, which is why the
+log's ceiling is derived at two thirds of the mutation log's rather than from
+its pushes alone
 ([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)).
 The push records fit the ceiling a first boot derives from 50 GiB free or more
 ([the code log's reservation](../guides/replication.md#what-the-code-logs-reservation-costs)),

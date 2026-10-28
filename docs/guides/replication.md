@@ -970,15 +970,18 @@ mutation log takes a day**:
 is `code` at most half the one whose `domain` is `tracker` — the two logs'
 `bytes_per_day` in `crewlet retention status` — which count every record each
 log takes, so a code log at half the mutation log's ceiling fills no sooner
-while a trim is blocked. For a code log that takes nothing but pushes and its
-git clients' barriers, the same line is a count of the barriers:
+while a trim is blocked. For a code log that takes nothing but pushes, the
+compactions that merge their packs and its git clients' barriers, the same
+line is a count of the barriers:
 [`crewlet.statelog.barrier.applied`](../reference/metrics.md) whose `stream` is
 `CREWLET_CODE_LOG`, a day's increase of it on any one data node, which counts
 every barrier because every data node applies every record, so the nodes'
 counts are not added together. Beside the reference company's 3 000 pushes a
-day, that is **about 9 200 barriers a day**: its pushes' 4.4 MB — every one a
-seat's, 1 481 bytes alone in its record — and those barriers' 1.6 MB are half
-the 12.1 MB a day its tracker writes and its seats' reads take. That is fewer
+day, that is **about 7 400 barriers a day**: its pushes' 4.4 MB — every one a
+seat's, 1 481 bytes alone in its record — the 0.3 MB of the
+[compactions](../concepts/code-host.md#compaction) that merge their packs, at
+most 108 bytes a push, and those barriers' 1.3 MB are half the 12.1 MB a day
+its tracker writes and its seats' reads take. That is fewer
 than the reference company's own git clients append
 with no CI at all — 13 800, three reads a push and thirty people fetching every
 three minutes of a working day — so a half is for a company whose people and

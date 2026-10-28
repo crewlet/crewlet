@@ -743,8 +743,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # -v: a SKIPPED benchmark prints nothing without it. The real-bucket arms skip
 # unless CREWLET_BENCH_S3_BUCKET names a bucket (internal/objstore/s3obj's
 # package doc), and the arms whose fixture takes minutes and gigabytes —
-# internal/code/cache's 2 000-push cold sync, its 10 000-pack repositories,
-# its 5 GB index and its gigabyte split into hundreds of packs,
+# internal/code/cache's cold syncs of 2 048 and of 10 000 pushes, its
+# 10 000-pack repositories, its 5 GB index and its gigabyte split into
+# hundreds of packs,
 # internal/code/host's gigabyte history, hundred thousand refs and
 # 100 000-file tree, internal/code/query's gigabyte history under a
 # 100 000-file tree read by object id, and internal/jsapi's streams of a
@@ -764,11 +765,12 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # four vCPUs its arms took an hour and three quarters, half an hour of it
 # BenchmarkBoot's thousand repositories, and BenchmarkMidx's memory arms add
 # about five minutes a count (the gigabyte's clone walking its history a
-# minute and a half of it); with CREWLET_BENCH_LARGE=1 about five and three
-# quarter hours, two of them the gigabyte split into packs, whose clones with
-# no index take minutes each, and a quarter of an hour BenchmarkColdSync's
-# cold syncs at S3's 100 and 200 ms first byte (two minutes and a half a
-# count: two more 2 000-push fixtures, and a minute of syncs). The next is
+# minute and a half of it); with CREWLET_BENCH_LARGE=1 about six and a half
+# hours, two of them the gigabyte split into packs, whose clones with no index
+# take minutes each, and an hour BenchmarkColdSync's cold syncs of the pack
+# bound's 2 048 pushes and of an uncompacted 10 000, from memory and from the
+# S3 fake at 30, 100 and 200 ms (seven and a half minutes of syncs a count,
+# and a quarter of an hour of fixtures once). The next is
 # internal/code/host: fifty minutes at six counts, and with
 # CREWLET_BENCH_LARGE=1 about two and a half hours — half an hour of it
 # BenchmarkPushSmall's gigabyte history and an hour BenchmarkCloneCold's

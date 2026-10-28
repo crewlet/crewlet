@@ -33,8 +33,9 @@
 //
 // BenchmarkCommitChain measures one repository's commit chain here, where
 // the router hop is the production one, and beside it on one member of a
-// broker of its own: every push a ref created with no pack, so the figure is
-// the chain and never the object store. On four vCPUs of a 2.1 GHz Xeon with
+// broker of its own: every push a ref created with no pack — but in its mix
+// arms (below), whose packs are named and never stored — so the figure is the
+// chain and never the object store. On four vCPUs of a 2.1 GHz Xeon with
 // every write fsynced (three counts, internal/code's "What a push costs,
 // measured" has the rest) — the three members sharing the machine's cores
 // and its ONE disk, so a record's three fsyncs queue on one device and its
@@ -51,6 +52,16 @@
 // record rate, not any one committer, bounds them, and neither group commit,
 // which never puts two repositories in one record, nor a member more, since
 // one log has one leader, raises it.
+//
+// Its mix arms put a busy repository's compactions in the same chain:
+// sixty-four pushes at once, each naming a pack (mix=packs), and the same
+// with one compaction of every pack landed proposed beside a batch for every
+// three hundred pushes (mix=compaction) — internal/code/compact's busy
+// repository, a pass a minute at three hundred pushes a minute. The
+// committer queues a compaction among the pushes and decides it alone, its
+// decide reading its inputs' rows where a batch reads its pushes', so the two
+// arms should differ by about a record's slot a compaction: the claim the
+// pair is there to measure.
 //
 // # Why a package of its own
 //

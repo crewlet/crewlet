@@ -40,13 +40,15 @@ import (
 
 // BenchmarkBoot is a warm git node's boot of its cache: Prepare — its reading
 // of repos/ and Layout.Held — then Open and Stop, over repos repositories of
-// packs packs each (a pack is three files; one push stores one, and M2
-// compacts nothing, so a busy repository's packs are its pushes). With a
-// state in every incarnation, what each holds is the state's to say, so a
-// boot reads one small file a repository and stats none of its packs: the
-// figure follows repos and not packs. states=false is the same tree with no
-// state anywhere — what a boot pays for an incarnation it must walk, and what
-// every boot paid when Held was a walk of repos/.
+// packs packs each (a pack is three files; one push stores one until its
+// repository's home merges them, which holds a busy repository near
+// code.CompactTargetPacks and under code.MaxPacksPerRepo, so 100 and 1 000
+// packs are a repository its compactions keep up with and one falling behind
+// them). With a state in every incarnation, what each holds is the state's to
+// say, so a boot reads one small file a repository and stats none of its
+// packs: the figure follows repos and not packs. states=false is the same
+// tree with no state anywhere — what a boot pays for an incarnation it must
+// walk, and what every boot paid when Held was a walk of repos/.
 //
 // The pack files are empty: nothing a boot does reads their bytes, and a
 // fixture of millions of real packs would measure the disk filling up.
@@ -402,9 +404,9 @@ func quiet(b *testing.B) {
 // and without that index (BenchmarkPackLookup). Every fixture is real git — a
 // history fast-imported, each push's objects packed alone as the bundle a
 // receiving node's receive-pack stores, its row in the fake log — built with
-// the timer stopped. The arms whose fixture takes minutes and gigabytes — 2 000
-// cold pushes, a repository of 10 000 packs, a 5 GB index — run only under
-// gittest.LargeEnv.
+// the timer stopped. The arms whose fixture takes minutes and gigabytes — the
+// cold syncs of code.MaxPacksPerRepo and of 10 000 pushes, a repository of
+// 10 000 packs, a 5 GB index — run only under gittest.LargeEnv.
 
 // benchWorkers is how many of a fixture's pushes are packed and stored at
 // once: a push's pack is mostly a git process starting, and its put to a
@@ -438,11 +440,27 @@ const (
 const providerFirstByte = 30 * time.Millisecond
 
 // s3FirstBytes is the first byte BenchmarkColdSync's fake also answers its
-// 2 000-push shape at: 100 and 200 ms, the range AWS's performance guidelines
+// pack-count shapes at — the compacted repository's, the pack bound's and the
+// uncompacted one's: 100 and 200 ms, the range AWS's performance guidelines
 // give for S3's first byte, at which a GET holds its slot three to six times
 // as long as at providerFirstByte — so a cold sync's rate at a real bucket is
 // MEASURED at each end of it, never computed from the 30 ms arm.
 var s3FirstBytes = []time.Duration{100 * time.Millisecond, 200 * time.Millisecond}
+
+// The pack counts BenchmarkColdSync reads a repository at, each a push of
+// medianPush bytes a pack.
+const (
+	// compactedPacks is a repository its home compacts: code.CompactTargetPacks,
+	// the live packs a compaction holds one near — what a cold sync of every
+	// compacted repository costs.
+	compactedPacks = code.CompactTargetPacks
+
+	// uncompactedPacks is a repository of 10 000 pushes that NOTHING
+	// compacted, one live pack a push — the before: a repository of the code
+	// host's first build, five times the pack bound (code.MaxPacksPerRepo)
+	// that refuses such a history's pushes now until its home has merged them.
+	uncompactedPacks = 10_000
+)
 
 // providerConnBytes is the most a second the S3 fake sends one connection of
 // an object's bytes: 80 MB/s, the low end of what one S3 connection carries.
@@ -736,15 +754,20 @@ func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64) {
 // multi-pack-index, packed-refs and the state. Over a history of packs
 // pushes, each one commit adding medianPush seeded random bytes, read by a
 // FRESH cache (prepared and opened with the timer stopped) fetching fetch
-// bundles at once.
+// bundles at once. The pack counts are a compacted repository's
+// (compactedPacks, 50), 200, the pack bound's (code.MaxPacksPerRepo, 2 048:
+// exactly the most a repository may hold) and an uncompacted repository's
+// (uncompactedPacks, 10 000: the before); the last two only under
+// CREWLET_BENCH_LARGE=1.
 //
 //   - bucket=memobj is the store in process: the node's own side alone —
 //     SHA-256 over every byte, the disk.
 //   - bucket=fake is the S3 fake over HTTP at the production part size, 80
 //     MB/s a connection (providerConnBytes) and firstbyte to every
 //     request's first byte: 30 ms for every shape (providerFirstByte), and
-//     100 and 200 ms — S3's own range (s3FirstBytes) — for the 2 000-push
-//     shape at the cache's two widths, fetch=16 and fetch=32.
+//     100 and 200 ms — S3's own range (s3FirstBytes) — for the compacted
+//     repository's and the bound's at the cache's two widths, fetch=16 and
+//     fetch=32, and for the uncompacted one's.
 //   - bucket=real is the bucket CREWLET_BENCH_S3_* names
 //     (s3fake.RealBucket), and skips when none is named.
 //   - shape=tail is the same 200 pushes with the first 512 MiB — an
@@ -753,13 +776,21 @@ func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64) {
 //
 // fetch=1 is one GET at a time; fetch=16 is FetchConcurrency, half the
 // node's; fetch=32 is NodeFetches, the whole node given to one repository,
-// which the share gives up. packs/s at 200 and at 2 000 pushes is one rate
-// when a cold sync is bound by its GETs rather than by the node; at a
-// first byte f, fetch GETs in flight bound it near fetch/f a second. get-ms is
-// one GET as the cache sees it, from its open to its close; cpu-ms/pack is
-// the process's CPU a bundle, user and system — the S3 fake's server's
-// among it, since it runs in the process and on the same cores, which a
-// real bucket's does not.
+// which the share gives up. The uncompacted shape runs at FetchConcurrency
+// alone, a repository's own width, on every bucket: it is the before beside
+// the compacted shape's after, and at the other widths it is ten thousand
+// GETs that tell nothing the bound's 2 048 do not — one at a time, six
+// minutes a count of first bytes in a row at 30 ms. packs/s at 200 and at
+// 2 048 pushes is one rate when a cold sync is bound by its GETs rather than
+// by the node; at a first byte f, fetch GETs in flight bound it near fetch/f a
+// second. get-ms is one GET as the cache sees it, from its open to its close;
+// dl-s is a sync's DOWNLOADS, from its first GET's open to its last GET's
+// close — what code.MaxPacksPerRepo is held to at the bound (27 s, half the
+// spool wait, at 200 ms and fetch=16), apart from the whole round (ns/op),
+// which adds the read of the rows, the round's index and its peel and is held
+// to the spool wait itself; cpu-ms/pack is the process's CPU a bundle, user
+// and system — the S3 fake's server's among it, since it runs in the process
+// and on the same cores, which a real bucket's does not.
 func BenchmarkColdSync(b *testing.B) {
 	quiet(b)
 	type arm struct {
@@ -768,14 +799,17 @@ func BenchmarkColdSync(b *testing.B) {
 		shapes    []coldShape
 		fetches   []int
 	}
-	every := []coldShape{{packs: 200}, {packs: 2000}, {packs: 200, tail: 512 << 20}}
+	compacted, bound, uncompacted := coldShape{packs: compactedPacks}, coldShape{packs: code.MaxPacksPerRepo},
+		coldShape{packs: uncompactedPacks}
+	counts := []coldShape{compacted, {packs: 200}, bound, uncompacted}
+	every := append(slices.Clone(counts), coldShape{packs: 200, tail: 512 << 20})
 	widths := []int{1, cache.FetchConcurrency, cache.NodeFetches}
 	arms := []arm{
-		{bucket: "memobj", shapes: every[:2], fetches: widths},
+		{bucket: "memobj", shapes: counts, fetches: widths},
 		{bucket: "fake", firstByte: providerFirstByte, shapes: every, fetches: widths},
 	}
 	for _, firstByte := range s3FirstBytes {
-		arms = append(arms, arm{bucket: "fake", firstByte: firstByte, shapes: every[1:2],
+		arms = append(arms, arm{bucket: "fake", firstByte: firstByte, shapes: []coldShape{compacted, bound, uncompacted},
 			fetches: []int{cache.FetchConcurrency, cache.NodeFetches}})
 	}
 	arms = append(arms, arm{bucket: "real", shapes: every, fetches: widths})
@@ -789,28 +823,34 @@ func BenchmarkColdSync(b *testing.B) {
 			if shape.tail > 0 {
 				name += "/shape=tail"
 			}
+			fetches := a.fetches
+			if shape == uncompacted {
+				fetches = []int{cache.FetchConcurrency}
+			}
 			b.Run(name, func(b *testing.B) {
 				if shape.packs > 200 {
-					gittest.Large(b, "2 000 pushes packed and stored")
+					gittest.Large(b, fmt.Sprintf("%d pushes packed and stored", shape.packs))
 				}
 				w := coldWorld(b, a.bucket, a.firstByte)
 				repo, total := w.coldRepo(b, shape)
-				for _, fetch := range a.fetches {
+				for _, fetch := range fetches {
 					b.Run(fmt.Sprintf("fetch=%d", fetch), func(b *testing.B) {
 						root := b.TempDir()
 						b.SetBytes(total)
 						timed := &timedObjects{inner: w.store}
-						var cpu time.Duration
+						var cpu, downloads time.Duration
 						n := 0
 						for b.Loop() {
 							b.StopTimer()
 							c, drop := w.coldCache(b, root, n, fetch, func(o *cache.Options) { o.Objects = timed })
 							n++
+							timed.reset()
 							began := processCPU(b)
 							b.StartTimer()
 							s, err := c.Sync(b.Context(), repo, linearizable)
 							b.StopTimer()
 							cpu += processCPU(b) - began
+							downloads += timed.span()
 							if err != nil {
 								b.Fatalf("a cold sync: %v", err)
 							}
@@ -823,6 +863,7 @@ func BenchmarkColdSync(b *testing.B) {
 						}
 						b.ReportMetric(float64(shape.packs)*float64(b.N)/b.Elapsed().Seconds(), "packs/s")
 						b.ReportMetric(float64(timed.took.Load())/float64(timed.gets.Load())/1e6, "get-ms")
+						b.ReportMetric(downloads.Seconds()/float64(b.N), "dl-s")
 						b.ReportMetric(float64(cpu)/float64(shape.packs*b.N)/1e6, "cpu-ms/pack")
 					})
 				}
@@ -832,21 +873,59 @@ func BenchmarkColdSync(b *testing.B) {
 }
 
 // timedObjects is the cache's object store with every read timed from its
-// open to its close: what one GET of a cold sync takes as the cache sees it.
+// open to its close: what one GET of a cold sync takes as the cache sees it,
+// and the span from the earliest open to the latest close since reset — the
+// sync's downloads, whatever else its round does.
 type timedObjects struct {
 	inner      cache.Objects
 	took, gets atomic.Int64
+	// first and last are the earliest open and the latest close since reset,
+	// in Unix nanoseconds, 0 before any.
+	first, last atomic.Int64
+}
+
+// reset forgets the span: a sync about to begin.
+func (o *timedObjects) reset() {
+	o.first.Store(0)
+	o.last.Store(0)
+}
+
+// span is the earliest open since reset to the latest close: 0 where no read
+// both opened and closed.
+func (o *timedObjects) span() time.Duration {
+	first, last := o.first.Load(), o.last.Load()
+	if first == 0 || last < first {
+		return 0
+	}
+	return time.Duration(last - first)
+}
+
+// extreme moves v to at where at is past it in the direction later says —
+// later, or earlier where later is false — v's 0 holding no instant yet.
+func extreme(v *atomic.Int64, at int64, later bool) {
+	for {
+		cur := v.Load()
+		if cur != 0 && (cur >= at) == later {
+			return
+		}
+		if v.CompareAndSwap(cur, at) {
+			return
+		}
+	}
 }
 
 func (o *timedObjects) Open(ctx context.Context, obj objstore.Object) (io.ReadCloser, error) {
 	began := time.Now()
+	extreme(&o.first, began.UnixNano(), false)
 	rc, err := o.inner.Open(ctx, obj)
 	if err != nil {
 		return nil, err
 	}
 	return &timedRead{ReadCloser: rc, done: func() {
-		o.took.Add(int64(time.Since(began)))
+		ended := time.Now()
+		o.took.Add(int64(ended.Sub(began)))
 		o.gets.Add(1)
+		extreme(&o.last, ended.UnixNano(), true)
 	}}, nil
 }
 
@@ -1779,9 +1858,12 @@ const lookupFetch = 4
 // BenchmarkPackLookup is what a cache holding packs packs pays per request
 // with no multi-pack-index, with the round's own and with the maintainer's,
 // and what writing the round's costs — the figures MidxRoundPacks is set
-// from. M2 stores one pack a push and compacts nothing, so packs is how many
-// pushes a repository has had; every arm of a size splits the same history.
-// The gigabyte and 10 000 packs run only under CREWLET_BENCH_LARGE=1.
+// from. A push stores one pack, so packs is how many pushes a repository has
+// had since its home last compacted them — up to code.MaxPacksPerRepo, past
+// which a push is refused until a compaction merges them, and 10 000 an
+// uncompacted repository's, the code host's first build; every arm of a size
+// splits the same history. The gigabyte and 10 000 packs run only under
+// CREWLET_BENCH_LARGE=1.
 //
 //   - write=round is the round's index written over the packs (IndexRound,
 //     the threshold lowered to one so every arm writes it): what a full

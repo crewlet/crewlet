@@ -991,7 +991,13 @@
 // fsyncs, the state's and repos/'s among them, where synced step by step it
 // took up to eleven, each while the round holds the repository; six to nine
 // for a copy serving from a published chain, whose two directories are synced
-// with the rest and whose two chain files are written from the rows. The
+// with the rest and whose two chain files are written from the rows.
+// MEASURED (internal/code/compact's BenchmarkCompact, its swap arms: git
+// 2.56.0 over the in-memory store, one bounded run on two E-cores of an Intel
+// Core Ultra 7 265U, 2026-10-28), the sync that swapped a copy of 50 packs
+// took 7.0 ms and linked 150 files, and one of 2 048 took 119 ms and linked
+// 6 144 — the pack count's, never the bytes' — each with its download of the
+// one output the compaction wrote. The
 // promote carries every per-file verdict of the files it links (the same
 // inodes) — their vouches, a hint's hash, the scrub's schedule, what a repair
 // still owes them — and the repository's own records, every field of an
@@ -1137,28 +1143,32 @@
 //
 // The byte path, on the same machine (nproc 4) with git 2.43.0, its
 // CREWLET_BENCH_LARGE=1 arms too — the 5 GB index and the lookups over a
-// gigabyte and over 10 000 packs at three counts, everything else at six.
-// Every cold-sync figure is the S3 FAKE's, whose first byte is the arm's rather
-// than a bucket's: what a first byte that long costs the node. A
-// COLD SYNC of 2 000 pushes of 150 KB, from the S3 fake at 30 ms to every
-// request's first byte and 80 MB/s a connection, takes 67 s one GET at a time,
-// 4.5 s at FetchConcurrency's sixteen and 2.9 s at NodeFetches' thirty-two —
-// 30, 448 and 680 bundles a second, and at 200 pushes, the round's index among
-// them, 30, 396 and 529 — while from a store in the process, the node's own
-// side alone, the same 2 000 take 2.9 s, 2.3 s and 2.1 s (679, 878 and 948 a
-// second): no git runs but the round's index and its peel, so a cold sync is
-// bound by its GETs and that side, never by a core. Sixteen is bound by its
-// GETs, at 93% of the 484 a second sixteen of the 33 ms each took allow; at
-// thirty-two each took 40 ms, the fake's server sharing the node's four cores.
-// S3 itself answers in about 100 to 200 ms (AWS's performance guidelines), and
-// with the fake answering that late (the firstbyte arms, three operations
-// each, 2026-10-15, in a run that gave the 30 ms arm 30, 417 and 623 bundles a
-// second) the same 2 000 take 13.4 s and 26.2 s at sixteen and 7.0 s and
-// 13.3 s at thirty-two — 150 and 76, and 285 and 150, bundles a second, at
-// 104 and 205 ms a GET: bound by the GETs alone, within a few percent of
-// fetch over first byte, so the node's own side bounds a sync only at a first
-// byte under about 35 ms, and 10 000 pushes' packs take about 67 to 131
-// seconds at a repository's sixteen.
+// gigabyte and over 10 000 packs at three counts, everything else at six —
+// but the cold syncs, measured again on git 2.56.0 at the pack counts a
+// repository's compactions leave it (BenchmarkColdSync, one bounded run of
+// each arm, -benchtime 1x and one count, on two E-cores of an Intel Core
+// Ultra 7 265U, 2026-10-27 and 28). Every cold-sync figure is the S3 FAKE's,
+// whose first byte is the arm's rather than a bucket's: what a first byte
+// that long costs the node. A COLD SYNC of pushes of 150 KB, one pack each,
+// from the S3 fake at 30 ms to every request's first byte and 80 MB/s a
+// connection, takes 2.0 s one GET at a time, 0.26 s at FetchConcurrency's
+// sixteen and 0.13 s at NodeFetches' thirty-two over the fifty packs a
+// compacted repository is held near (code.CompactTargetPacks), and 75.5 s,
+// 5.3 s and 2.9 s over the 2 048 a repository holds at the most
+// (code.MaxPacksPerRepo) — 27, 389 and 705 bundles a second: no git runs but
+// the round's index and its peel, so a cold sync is bound by its GETs and the
+// node's own side (below), never by a core. Sixteen is bound by its GETs, at
+// 86% of the 454 a second sixteen of the 35 ms each took allow. S3 itself
+// answers in about 100 to 200 ms (AWS's performance guidelines), and with the
+// fake answering that late the 2 048 take 13.8 s and 26.6 s at sixteen — the
+// downloads 13.6 s and 26.4 s of it, inside the 27 s MaxPacksPerRepo is held
+// to — and 7.0 s and 13.7 s at thirty-two: 149 and 77, and 292 and 149,
+// bundles a second, at 104 and 204 ms a GET, bound by the GETs alone, within
+// a few percent of fetch over first byte. So the node's own side bounds a
+// sync only at a first byte under about 35 ms; the fifty of a compacted
+// repository come up in 0.43 s and 0.88 s at sixteen, and the 10 000 of a
+// history nothing compacted — the code host's first build, one pack a push —
+// in 69.9 s and 129.6 s.
 // The node's own side is a bundle's FILE WORK (BenchmarkBundleFiles: its files
 // created, written, synced and renamed, without the GET or the hashing):
 // sixteen at once, about 700 a second whether the syncs are made or not, bound

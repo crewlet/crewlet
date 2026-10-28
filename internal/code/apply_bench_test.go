@@ -881,12 +881,16 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 //
 // BY THE TABLES, never by the file's growth with a pack less its growth
 // without one: that difference counts the push row's pack columns, kept 181
-// days, as the pack row's, kept for good, and moves with how many rows of each
-// shape fit a page, so one pack row weighed differently beside a person's push
-// and beside a seat's. What a deployment's push history costs a data node is
-// the first figure times its pushes a day times 181, plus the second times
-// every push whose pack its repositories still hold; every data node holds
-// both, since every one holds the whole estate.
+// days, as the pack row's, kept while the pack is live, and moves with how
+// many rows of each shape fit a page, so one pack row weighed differently
+// beside a person's push and beside a seat's. What a deployment's push
+// history costs a data node is the first figure times its pushes a day times
+// 181, plus the second times the live packs its repositories hold — about
+// CompactTargetPacks a compacted repository, never past MaxPacksPerRepo, and
+// a full pack (FullPackBytes) more for each that its history has filled —
+// plus the retired arm's figure times the packs a compaction retired in the
+// last RetireGrace and the code-retention pass's interval; every data node
+// holds all three, since every one holds the whole estate.
 //
 // Two arms by the pack — pack=yes, a push carrying objects, and pack=no, one
 // carrying none (a deletion, or a ref moved to a commit the repository
@@ -904,6 +908,18 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 //   - push=widest: MaxCommandsPerPush commands on refs of MaxRefNameBytes and
 //     MaxIntroduced introduced ids — the widest row a push stores.
 //
+// And one arm by what a pack's row becomes once a compaction merges it,
+// retired/inputs=CompactMinMerge: typical pushes landed CompactMinMerge at a
+// time, each group merged into one output by a compaction — held to what a
+// committer forms, Validated and decided over the rows before its record is
+// applied — so the code_packs_retired-bytes/row it reports is a retired
+// pack's row and its three index entries, which code_packs_retired keeps
+// RetireGrace until the code-retention duty's retire_sweep removes it. How
+// many a data node holds is that figure times the packs retired a day — a
+// push's pack, and the outputs a later compaction merges again
+// (internal/code/compact's steady arm counts them, retired/push) — times
+// RetireGrace and RetentionInterval over a day.
+//
 // EVERY ID IS THE SHAPE PRODUCTION WRITES, AND IN ITS ORDER, since an id is
 // in a row and in the index entries beside it, and an index takes its
 // entries at its end only while they come in order: the repository's and
@@ -911,9 +927,10 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 // receiver mints one, its pack's id the push's own and its pack's object key
 // minted at its put as the object store mints one (objstore.KeyAt), and a
 // person's credential a token's name — `pat:` and its id, the push row's
-// actor — beside the human seat they hold. Ids of a dozen bytes and object
-// keys in no order once made every row these figures price lighter than the
-// rows a data node holds.
+// actor — beside the human seat they hold; and a compaction's id a UUIDv7
+// minted as its home builds it, its output's object key at its put. Ids of a
+// dozen bytes and object keys in no order once made every row these figures
+// price lighter than the rows a data node holds.
 //
 // Every push moves refs that exist before the file is measured, so a ref's
 // row is rewritten in place and never counted: a ref lives as long as it is
@@ -1035,6 +1052,78 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 			})
 		}
 	}
+	b.Run(fmt.Sprintf("retired/inputs=%d", CompactMinMerge), func(b *testing.B) {
+		// retiredRows is how many packs the arm's compactions retire: enough
+		// that code_packs_retired grows by hundreds of pages, so a page's
+		// granularity is lost in the figure.
+		const retiredRows = 4_096
+		var retiredRow float64
+		for b.Loop() {
+			b.StopTimer()
+			e := openApplyEstate(b)
+			repo := uuid.Must(uuid.NewV7()).String()
+			e.apply(create(b, repo, "history"))
+			tip := oid("tip-0")
+			e.apply(pushOf(b, repo, pushed(move(typicalRef, ZeroOID, tip))))
+			before := e.tally(b)
+			b.StartTimer()
+			for r := range retiredRows / CompactMinMerge {
+				retire := make([]string, 0, CompactMinMerge)
+				for k := range CompactMinMerge {
+					next := oid(fmt.Sprint("tip-", r, "-", k))
+					entry := pushed(move(typicalRef, tip, next))
+					e.apply(pushOf(b, repo, entry))
+					retire, tip = append(retire, entry.Pack.PackID), next
+				}
+				slices.Sort(retire)
+				// AS ITS HOME BUILDS ONE: the compaction's id minted when it
+				// is built, its output's key at its put — each after the
+				// last, as the object index takes production's.
+				cid := statelog.NewOpID(time.Now(), "")
+				c := Compaction{RepoID: repo, CompactionID: cid, Node: "node-a", Seen: codeAt(e.next - 1),
+					Retire: retire, Add: []PackRef{outputOf(cid, 0, int64(len(retire)), time.Now())}}
+				if err := (CompactionProposal{Compaction: c}).Validate(); err != nil {
+					b.Fatalf("the committer refuses the compaction's proposal: %v", err)
+				}
+				switch d, err := compactionDecidedIn(b, e, c, time.Now()); {
+				case err != nil:
+					b.Fatalf("decide the compaction: %v", err)
+				case d.refusal != "":
+					b.Fatalf("the compaction is refused %s: %s", d.refusal, d.detail)
+				}
+				e.apply(recordOf(b, c))
+			}
+			b.StopTimer()
+			if got := e.num(`SELECT COUNT(*) FROM code_packs_retired WHERE repo_id = ?`, repo); got != retiredRows {
+				b.Fatalf("the estate holds %d retired pack rows, want %d", got, retiredRows)
+			}
+			after := e.tally(b)
+			retired := after.tables["code_packs_retired"] - before.tables["code_packs_retired"]
+			retiredRow = float64(retired*after.pageBytes) / retiredRows
+			// THE RETIREMENT LEAVES ONE ROW: beside the retired rows, a
+			// compaction moves its inputs out of code_packs and its output
+			// in, and the pushes the arm lands leave theirs — every other
+			// table a record touches is rewritten in place.
+			var elsewhere int64
+			var grown []string
+			for table, pages := range after.tables {
+				if grew := pages - before.tables[table]; grew > 0 && table != "code_packs_retired" &&
+					table != "code_packs" && table != "code_pushes" {
+					elsewhere += grew
+					grown = append(grown, fmt.Sprintf("%s by %d", table, grew))
+				}
+			}
+			if elsewhere*inPlaceShare > retired {
+				slices.Sort(grown)
+				b.Fatalf("over %d retirements the retired rows grew by %d pages and the tables a "+
+					"compaction rewrites in place by %d (%s), past a %dth of them: a row each retirement "+
+					"leaves beside its own, whose lifetime nothing here prices — measure it with theirs",
+					retiredRows, retired, elsewhere, strings.Join(grown, ", "), inPlaceShare)
+			}
+			b.StartTimer()
+		}
+		b.ReportMetric(retiredRow, "code_packs_retired-bytes/row")
+	})
 }
 
 // inPlaceShare is how small, against what the push rows grow by over a
