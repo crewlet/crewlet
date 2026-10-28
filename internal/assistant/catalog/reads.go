@@ -618,7 +618,9 @@ func readTools() []Tool {
 				"days":   positive("The window in company days. Default 30.", 90),
 				"bucket": oneOf("day (the default) or week.", "day", "week"),
 				"view":   oneOf("over_time (the default) or by_group.", "over_time", "by_group"),
-				"group":  oneOf("by_group only: what to group by.", "phase", "model", "provider", "seat", "unit", "worker"),
+				"group": oneOf("by_group only: what to group by. provider (the company's model entries) "+
+					"is answered to an admin alone and refused to anyone else.",
+					"phase", "model", "provider", "seat", "unit", "worker"),
 			}),
 			Routes: []string{"GET /tokens/series"},
 			Build: func(a map[string]any) (exec.Request, error) {
