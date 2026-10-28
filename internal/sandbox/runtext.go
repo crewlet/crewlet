@@ -247,6 +247,11 @@ func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
 // 256 KiB of its own — and the shim's own route already stops near 128 KiB,
 // the most one argument can carry. Past it the question is condensed by the
 // seat's auxiliary model, never cut.
+//
+// AN ANSWER BY TURN IS HELD TO THE SAME PAGE
+// ([github.com/crewlet/crewlet/internal/agent/builtin.MaxRunAnswerBytes]): it
+// rides beside the question, on the row until the run is carried on and in
+// that prompt after it, so a bound changed here moves that one with it.
 const MaxQuestionBytes = 16 << 10
 
 // MaxDeliveredRefBytes bounds the branches and pull requests a run's record

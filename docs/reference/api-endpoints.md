@@ -5272,7 +5272,7 @@ answers any parked run by naming it:
 | Argument | |
 |---|---|
 | `turn_id` | The parked run's `turn_id`, as [`GET /sandbox-runs`](#get-sandbox-runs) lists it. |
-| `answer` | What the coding agent should be told, at most 32 KiB. It carries the run on: the coding CLI is launched again in the box the run kept, continuing its own session with the answer as its next message, where the relaunch reuses that box (the box was kept, the member picked runs the same CLI in the same cell, and the box is the resuming node's to drive); otherwise afresh in a new box from the run's pushed branch, told the question and the answer. |
+| `answer` | What the coding agent should be told. It carries the run on: the coding CLI is launched again in the box the run kept, continuing its own session with the answer as its next message, where the relaunch reuses that box (the box was kept, the member picked runs the same CLI in the same cell, and the box is the resuming node's to drive); otherwise afresh in a new box from the run's pushed branch, told the question and the answer. Either way the answer is part of the run's prompt from then on, which its coding CLI sends again with every request it makes, so it is held to the page its question is: at most 16 KiB. Put anything longer on a page the run can read and answer with where it is; a longer answer is refused `invalid`. |
 
 It answers `{"turn_id", "agent_handle", "question", "outcome": "pending"}`:
 the answer is on the inbox of the seat holding the run, and **that** node

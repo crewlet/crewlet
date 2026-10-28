@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -160,19 +161,44 @@ func TestAnswerRunThatMayHaveLandedAnswersUnknown(t *testing.T) {
 	}
 }
 
-// AN ANSWER IS BOUNDED, and the refusal names the bound: it is spliced into the
-// run as one tool reply.
-func TestAnswerRunRefusesAnAnswerTooLongToSplice(t *testing.T) {
+// AN ANSWER IS HELD TO THE PAGE ITS QUESTION IS: it rides beside the question,
+// on the run's row and then in the prompt of the run it carries on, which that
+// run's coding agent reads again at every step. One as long as the longest
+// question is delivered whole; one a byte longer is refused `invalid`, with
+// nothing delivered, and the refusal says how long it is — rounded up, so a
+// byte past the bound never reads as the bound itself — what the bound is, and
+// where the detail goes instead.
+func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
-	result, _ := answerRunTool(t, desk).Call(t.Context(), map[string]any{
-		"turn_id": "t1", "answer": strings.Repeat("a", builtin.MaxRunAnswerBytes+1),
+	tool := answerRunTool(t, desk)
+	result, _ := tool.Call(t.Context(), map[string]any{
+		"turn_id": "t1", "answer": strings.Repeat("a", sandbox.MaxQuestionBytes+1),
 	})
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalInvalid {
-		t.Fatalf("answer_run with an oversized answer = %+v, want invalid", result)
+		t.Fatalf("answer_run with an answer a byte past a page = %+v, want invalid", result)
 	}
 	if len(desk.delivered) != 0 {
-		t.Error("an oversized answer was delivered")
+		t.Fatalf("an answer past the bound was delivered: %d bytes", len(desk.delivered[0].Answer))
+	}
+	for _, want := range []string{
+		fmt.Sprintf("That answer is %d KiB", sandbox.MaxQuestionBytes>>10+1),
+		fmt.Sprintf("at most %d KiB", sandbox.MaxQuestionBytes>>10),
+		"Put the detail on a page",
+	} {
+		if !strings.Contains(result.Output, want) {
+			t.Errorf("the refusal says %q, want it to say %q", result.Output, want)
+		}
+	}
+
+	page := strings.Repeat("a", sandbox.MaxQuestionBytes)
+	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "answer": page})
+	if err != nil || result.Failed {
+		t.Fatalf("answer_run with an answer as long as a question may be = %+v, %v; "+
+			"want it delivered", result, err)
+	}
+	if len(desk.delivered) != 1 || desk.delivered[0].Answer != page {
+		t.Fatalf("delivered %d answers, want the one answer whole", len(desk.delivered))
 	}
 }
 
