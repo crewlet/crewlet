@@ -637,6 +637,18 @@ func TestTheThreadQuestionFollowsTheCursorAtTheCallersPage(t *testing.T) {
 		t.Errorf("a caller naming no page got %d, want the detail's own %d",
 			w.taskWants.CommentLimit, worklet.DetailComments)
 	}
+	if w.taskWants.CommentThread != (worklet.CommentThread{}) {
+		t.Errorf("a caller naming no thread narrowed the read to %+v", w.taskWants.CommentThread)
+	}
+	// ONE COMMENT'S CONVERSATION IS NARROWED BY THE READ, so its cursor is
+	// that conversation's and not the task's.
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_comments",
+		map[string]any{"item": "ENG-2", "thread": " c-7 ", "with_root": true}); err != nil {
+		t.Fatalf("work_comments with a thread: %v", err)
+	}
+	if want := (worklet.CommentThread{Root: "c-7", WithRoot: true}); w.taskWants.CommentThread != want {
+		t.Errorf("a thread asked the reader for %+v, want %+v", w.taskWants.CommentThread, want)
+	}
 }
 
 // EVERY FILTER REACHES THE READER. A filter honoured on one transport and
