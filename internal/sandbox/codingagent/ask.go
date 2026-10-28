@@ -2,6 +2,8 @@ package codingagent
 
 import (
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // The in-box ask shim.
@@ -98,8 +100,8 @@ esc() {
       }
     }'
 }
-mkdir -p ` + shellQuote(dir) + `
-printf '{"question":"%s","to":"%s","branch":"%s"}' "$(esc "$question")" "$(esc "$to")" "$(esc "$branch")" > ` + shellQuote(outputPath) + `
+mkdir -p ` + sandbox.ShellQuote(dir) + `
+printf '{"question":"%s","to":"%s","branch":"%s"}' "$(esc "$question")" "$(esc "$to")" "$(esc "$branch")" > ` + sandbox.ShellQuote(outputPath) + `
 echo "Question recorded; stop now — a person will answer and your work will resume with their reply."
 `
 }
@@ -170,15 +172,4 @@ func FindingsInstruction(findingsPath string) string {
 		"Write that file even if you also print a summary — it is the " +
 			"authoritative report that gets read back to continue the task.",
 	}, "\n")
-}
-
-// shellQuote wraps a value in single quotes for a POSIX shell, escaping any
-// single quote it contains.
-//
-// Its own function rather than a fmt verb because every path this package
-// interpolates into a shell command goes through it: a box home is derived
-// from a provider's id and an operator's state_dir, neither of which this
-// package gets to assume anything about.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

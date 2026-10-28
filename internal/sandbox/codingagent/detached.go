@@ -254,13 +254,13 @@ func (r *Runner) Name() string { return r.cli.Name() }
 // this returns.
 func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	paths := PathsFor(box)
-	if _, err := box.Exec(ctx, "mkdir -p "+shellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
+	if _, err := box.Exec(ctx, "mkdir -p "+sandbox.ShellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: preparing %s: %w", paths.BinDir(), err)
 	}
 	if err := box.WriteFile(ctx, paths.AskShim(), []byte(AskShim(paths.Ask()))); err != nil {
 		return fmt.Errorf("codingagent: installing the ask shim: %w", err)
 	}
-	if _, err := box.Exec(ctx, "chmod +x "+shellQuote(paths.AskShim()), sandbox.ExecOptions{}); err != nil {
+	if _, err := box.Exec(ctx, "chmod +x "+sandbox.ShellQuote(paths.AskShim()), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: making the ask shim executable: %w", err)
 	}
 	return nil
@@ -287,7 +287,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	}
 	quoted := make([]string, len(targets))
 	for i, path := range targets {
-		quoted[i] = shellQuote(path)
+		quoted[i] = sandbox.ShellQuote(path)
 	}
 	if _, err := box.Exec(ctx, "rm -f "+strings.Join(quoted, " "), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: clearing the prior run's artefacts: %w", err)
@@ -339,7 +339,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// directory is prepended INSIDE the script (see withShimPath) rather
 	// than exported around it: an assignment made outside would be replaced
 	// by the profile before the agent ever ran.
-	pid, err := box.StartBackground(ctx, "sh -lc "+shellQuote(script), sandbox.ExecOptions{Env: req.Env})
+	pid, err := box.StartBackground(ctx, "sh -lc "+sandbox.ShellQuote(script), sandbox.ExecOptions{Env: req.Env})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("codingagent: starting %s: %w", r.cli.Name(), err)
 	}
@@ -358,16 +358,16 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 func wrapperScript(inner string, out Output, paths Paths) string {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
-		stdin = shellQuote(paths.Brief())
+		stdin = sandbox.ShellQuote(paths.Brief())
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
-		inner, stdin, shellQuote(out.Stdout), shellQuote(paths.Err()))
+		inner, stdin, sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(paths.Err()))
 	if out.Result != "" && out.Result != out.Stdout {
-		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", shellQuote(out.Stdout), shellQuote(out.Result))
+		fmt.Fprintf(&b, "tail -n 1 %s > %s; ", sandbox.ShellQuote(out.Stdout), sandbox.ShellQuote(out.Result))
 	}
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
-		shellQuote(paths.ExitCode()), shellQuote(paths.Done()))
+		sandbox.ShellQuote(paths.ExitCode()), sandbox.ShellQuote(paths.Done()))
 	return b.String()
 }
 
@@ -392,7 +392,7 @@ func finalSystem(system string, paths Paths) string {
 // [Paths.BinDir]), so the system text's `crewlet-ask "..."` instruction only
 // resolves if that directory is on the agent's PATH.
 func withShimPath(cmd string, paths Paths) string {
-	return "PATH=" + shellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
+	return "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
 // Poll reports whether the detached job has finished.

@@ -158,7 +158,7 @@ const listEntryBytes = 2*artifacts.MaxPathBytes + 1
 // hand the engine an unbounded answer.
 func (b *runBox) Files(ctx context.Context, dir string, max int) ([]string, error) {
 	limit := max * listEntryBytes
-	cmd := "cd " + shellQuote(b.root) + " && find " + shellQuote(dir) +
+	cmd := "cd " + sandbox.ShellQuote(b.root) + " && find " + sandbox.ShellQuote(dir) +
 		" -type f -print0 | head -c " + strconv.Itoa(limit)
 	res, err := b.box.Exec(ctx, cmd, sandbox.ExecOptions{TimeoutSec: boxListTimeout})
 	if err != nil {
@@ -200,7 +200,7 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 	b.mu.Unlock()
 	full := path.Join(b.root, p)
 	if !listed {
-		q := shellQuote(full)
+		q := sandbox.ShellQuote(full)
 		res, err := b.box.Exec(ctx, "test -f "+q+" && test ! -L "+q,
 			sandbox.ExecOptions{TimeoutSec: boxListTimeout})
 		if err != nil {
@@ -211,11 +211,6 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 		}
 	}
 	return b.box.OpenFile(ctx, full)
-}
-
-// shellQuote is s as one single-quoted shell word.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // clipTail is the end of a command's error output, enough to name the error.

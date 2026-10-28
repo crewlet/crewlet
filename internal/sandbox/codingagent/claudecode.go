@@ -78,19 +78,19 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // text, so a run with none runs on the vendor's prompt alone.
 func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string) string {
 	parts := []string{
-		"claude", "-p", shellQuote(req.Brief),
+		"claude", "-p", sandbox.ShellQuote(req.Brief),
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
 	}
 	if req.System != "" {
-		parts = append(parts, "--append-system-prompt-file", shellQuote(paths.System()))
+		parts = append(parts, "--append-system-prompt-file", sandbox.ShellQuote(paths.System()))
 	}
 	// VERBATIM, because the only entry that reaches this runner is a
 	// claude-code one, which already names the model in Claude Code's own
 	// terms — its alias or id exactly as its text calls pass it. The engine
 	// refuses every other CLI's entry here.
 	if req.Model != "" {
-		parts = append(parts, "--model", shellQuote(req.Model))
+		parts = append(parts, "--model", sandbox.ShellQuote(req.Model))
 	}
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-turns", strconv.Itoa(req.Limits.MaxTurns))
@@ -103,7 +103,7 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 		// --strict-mcp-config so the agent gets EXACTLY the scoped surface:
 		// without it the CLI also loads whatever config the box's home
 		// happens to carry, which on a reused box is the previous run's.
-		parts = append(parts, "--mcp-config", shellQuote(configPath), "--strict-mcp-config")
+		parts = append(parts, "--mcp-config", sandbox.ShellQuote(configPath), "--strict-mcp-config")
 	}
 	return strings.Join(parts, " ")
 }

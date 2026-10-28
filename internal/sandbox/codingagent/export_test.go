@@ -52,7 +52,7 @@ type OpenCodeTimes struct {
 // for the cases about a wait running out, a sync coming round or a stop that
 // must not wait, at lengths a test can tell apart.
 func OpenCodeCommandTimed(req sandbox.RunRequest, paths Paths, times OpenCodeTimes) string {
-	return "sh -c " + shellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
+	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
 		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
 		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, openCodeStopWait),
 	}))

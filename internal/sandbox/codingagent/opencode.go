@@ -147,7 +147,7 @@ func (OpenCode) Name() string { return OpenCodeName }
 // the whole total, so the script prints it as one last line of its own type
 // ([openCodeUsageEvent]) once the run has ended.
 func (OpenCode) Command(req sandbox.RunRequest, paths Paths, _ string) string {
-	return "sh -c " + shellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
+	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
 		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: openCodeStopWait,
 	}))
 }
@@ -199,14 +199,14 @@ func newOpenCodeSession() string {
 // replace the login the box came with, and the teardown would otherwise write
 // it back over the shared one.
 func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times openCodeTimes) string {
-	doc := shellQuote(paths.CredentialDocument())
-	next := shellQuote(paths.CredentialDocument() + ".next")
-	loop := shellQuote(paths.CredentialDocument() + ".sync")
-	srv := shellQuote(paths.WorkDir() + "/opencode-server")
+	doc := sandbox.ShellQuote(paths.CredentialDocument())
+	next := sandbox.ShellQuote(paths.CredentialDocument() + ".next")
+	loop := sandbox.ShellQuote(paths.CredentialDocument() + ".sync")
+	srv := sandbox.ShellQuote(paths.WorkDir() + "/opencode-server")
 	sid := "ses_" + session
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
-		"--title", "crewlet", "--session", shellQuote(sid)}
+		"--title", "crewlet", "--session", sandbox.ShellQuote(sid)}
 	// THE ENTRY'S MODEL AS WRITTEN. It is the string every text call on
 	// the same providers.llm entry hands `opencode run --model`, which
 	// OpenCode splits at its first slash into a provider and a model — so
@@ -214,7 +214,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	// means one thing in both places, signed in by the login or the key of
 	// the provider it names. The engine refuses every other CLI's entry here.
 	if req.Model != "" {
-		run = append(run, "--model", shellQuote(req.Model))
+		run = append(run, "--model", sandbox.ShellQuote(req.Model))
 	}
 
 	var b strings.Builder
@@ -302,7 +302,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`%s`, strings.Join(run, " "))
 	line(`code=$?`)
 	line(`report=$(opencode api --server "$url" session.get --param sessionID=%s < /dev/null 2> /dev/null) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac`,
-		shellQuote(sid), openCodeUsageEvent)
+		sandbox.ShellQuote(sid), openCodeUsageEvent)
 	line(`unsync`)
 	line(`[ -z "$imported" ] || keep %s --server "$url"`, next)
 	line(`stop; trap - EXIT TERM INT HUP`)
@@ -331,7 +331,7 @@ func openCodeReadiness(servers map[string]sandbox.MCPServer) string {
 		present := `"name":` + jsonStringify(name)
 		pending := present + `,"status":{"status":"pending"`
 		fmt.Fprintf(&b, "  case \"$s\" in *%s*) case \"$s\" in *%s*) ready=0;; esac;; *) ready=0;; esac\n",
-			shellQuote(present), shellQuote(pending))
+			sandbox.ShellQuote(present), sandbox.ShellQuote(pending))
 	}
 	return b.String()
 }
