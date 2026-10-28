@@ -35,12 +35,15 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { firstLine } from "~/lib/format.ts";
+import { TokenScope } from "~/components/InlineToken.tsx";
 import { renderTokens } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { ItemRef } from "~/lib/work.ts";
+import type { WorkAskRow } from "~/protocol/index.ts";
 import {
   answerWords,
   askQuestion,
+  askTexts,
   budgetLine,
   moment,
   noticeText,
@@ -352,7 +355,8 @@ const InboxItem = memo(function InboxItem({
   const unread = row.kind === "notice" && !row.notice.read && !row.notice.snoozed;
   // WHAT WAS SAID: the answer this visit gave, or the one the engine recorded.
   const said = answered ?? (settled?.answer ? givenWords(settled.answer) : null);
-  return (
+  const ask = rowAsk(row);
+  const drawn = (
     <Row
       title={rowName(row, who)}
       qualifier={qualifier?.word}
@@ -382,14 +386,23 @@ const InboxItem = memo(function InboxItem({
       onClick={() => onOpen(row.key)}
       aside={
         item ? (
-          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} />
+          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} glyph />
         ) : undefined
       }
     >
       {renderTokens(words.text, "words")}
     </Row>
   );
+  // A ROW'S WORDS ARE ITS ASK'S: a bare `#11` in its question is placed by
+  // what the ask's context names, as in the reading pane.
+  return ask ? <TokenScope texts={askTexts(ask)}>{drawn}</TokenScope> : drawn;
 });
+
+/** The ask a row is about, open or answered, or undefined for any other row. */
+function rowAsk(row: InboxRow): WorkAskRow | undefined {
+  if (row.kind === "decision") return row.subject.kind === "ask" ? row.subject.ask : undefined;
+  return row.kind === "answered" ? row.answered.ask : undefined;
+}
 
 /** The answer this visit gave, in the words an answered row says it with. */
 function givenWords(answer: AskAnswer): AnswerWords {

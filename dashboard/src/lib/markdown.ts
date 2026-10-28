@@ -55,7 +55,7 @@ import {
   type MarkdownFence,
 } from "@crewlethq/ui";
 import { InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
-import { codeColour } from "./inlineTokens.ts";
+import { codeColour, type LinkMode } from "./inlineTokens.ts";
 import { inlineText, plainText } from "./markdownText.ts";
 
 // --- sectioning ------------------------------------------------------------
@@ -375,21 +375,27 @@ export interface RenderOptions {
    * instead of choosing the row. Inside a link it is also invalid HTML: an
    * `<a>` may not hold another.
    *
-   * `inert`: a MODEL'S link is never live. The Dashboard Assistant's prose is
-   * written by a model that may have read anything, so a link in it is drawn
-   * as its label followed by the host it names (`docs.example.com/pricing`),
-   * in the quiet link ink, not underlined and not focusable; an autolink is
-   * its host and path; and an image is its alt text, never fetched and never
-   * a link. Navigation from the assistant is only ever an engine-built Open in
-   * app card, which the drawer checks itself.
+   * `checked`: a link is live only where the dashboard BUILT it, from parts
+   * it checked, to a place that is the company's (`LinkMode` in
+   * `lib/inlineTokens.ts`). For words written by an agent or a model that may
+   * have read anything: the Dashboard Assistant's answers and the Inbox. Any
+   * other address is drawn inert, its label and then the host it names, in
+   * the quiet link ink, readable and copyable and never a control.
    */
-  links?: "anchor" | "text" | "inert";
+  links?: LinkMode;
+  /**
+   * The whole message a run belongs to, which a bare `#11` is placed by
+   * (`messageScope`). [renderMarkdown] sets it to its source; a surface whose
+   * message spans several renders (an ask's question, context and options)
+   * says so with `TokenScope` instead.
+   */
+  message?: string;
 }
 
 /** What the inline walk needs of [RenderOptions]. */
 export type InlineOptions = Pick<
   RenderOptions,
-  "breaks" | "highlight" | "image" | "links" | "prose"
+  "breaks" | "highlight" | "image" | "links" | "message" | "prose"
 > & {
   /**
    * The walk is inside a link's own label ([asLabel]), whose words are
@@ -408,6 +414,9 @@ export function renderInline(
   let at = 0;
   let n = 0;
   const hard = options.breaks === "hard";
+  const mode = options.links ?? "anchor";
+  // WHERE A LINK MAY BE AT ALL, and by which rule: null inside a control.
+  const live = mode === "text" ? null : mode;
 
   for (const { index, end, groups: g } of markdownInline(text)) {
     if (index > at) {
@@ -447,9 +456,6 @@ export function renderInline(
             )
           : createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code),
       );
-    } else if (g.src !== undefined && options.links === "inert") {
-      // A MODEL'S PICTURE IS ITS ALT TEXT: nothing it names is fetched.
-      out.push(createElement("span", { key }, g.alt ?? ""));
     } else if (g.src !== undefined) {
       const alt = g.alt ?? "";
       const src = options.image ? options.image(g.src) : shownImage(g.src);
@@ -459,21 +465,17 @@ export function renderInline(
       // tell a third party who reads the page and when. The reader can still
       // follow it on purpose. Inside a link's own label it stays its alt text,
       // since a link inside a link is no link at all.
-      const elsewhere = !src && !options.image && options.links !== "text" ? safeHref(g.src) : null;
+      const elsewhere = !src && !options.image && live !== null ? safeHref(g.src) : null;
       // AN IMAGE WITH A REFUSED SOURCE RENDERS AS ITS ALT TEXT, which is
       // what alt text is for — not as a broken image and not as nothing.
       out.push(
         src
           ? createElement("img", { key, src, alt, loading: "lazy" })
-          : elsewhere
-            ? anchor(key, elsewhere, [alt || elsewhere])
+          : elsewhere && live
+            ? createElement(LabelledLink, { key, href: elsewhere, mode: live }, alt || elsewhere)
             : createElement("span", { key }, alt),
       );
-    } else if (g.href !== undefined && options.links === "inert") {
-      out.push(inertLink(key, renderInline(g.label ?? "", key, asLabel(options)), g.href));
-    } else if (g.auto !== undefined && options.links === "inert") {
-      out.push(inertLink(key, [], g.auto));
-    } else if (g.auto !== undefined && options.links !== "text" && safeHref(g.auto) !== null) {
+    } else if (g.auto !== undefined && mode !== "text" && safeHref(g.auto) !== null) {
       // AN AUTOLINK IS AN ADDRESS, drawn as a bare one in prose is: the mark
       // of where it goes and the reference it is.
       const auto = safeHref(g.auto)!;
@@ -481,26 +483,26 @@ export function renderInline(
         createElement(InlineToken, {
           key,
           token: { kind: "address", at: 0, end: g.auto.length, text: g.auto, href: auto },
-          links: true,
+          links: mode,
         }),
       );
     } else if (g.href !== undefined) {
-      const href = options.links === "text" ? null : safeHref(g.href);
+      const href = live === null ? null : safeHref(g.href);
       const label = g.label ?? "";
       // A LINK'S LABEL IS TEXT TO ANY LINK INSIDE IT: an anchor inside an
       // anchor is invalid, and a browser splits the outer one around it.
       const inner = href ? { ...asLabel(options), links: "text" as const } : asLabel(options);
       // A LINK CARRIES THE MARK OF WHERE IT GOES, read from its address and
       // never from its words (`LabelledLink`), and its words are read as no
-      // token ([asLabel]).
+      // token ([asLabel]). Whether it is live is the link mode's.
       out.push(
-        href
-          ? createElement(LabelledLink, { key, href, live: true }, renderInline(label, key, inner))
+        href && live
+          ? createElement(LabelledLink, { key, href, mode: live }, renderInline(label, key, inner))
           : createElement("span", { key }, renderInline(label, key, inner)),
       );
     } else if (g.auto !== undefined) {
-      const href = options.links === "text" ? null : safeHref(g.auto);
-      out.push(href ? anchor(key, href, [g.auto]) : createElement("span", { key }, g.auto));
+      // AN AUTOLINK NO LINK MAY BE, or one with an unsafe address: its words.
+      out.push(createElement("span", { key }, g.auto));
     } else if (g.strong !== undefined || g.strongUnder !== undefined) {
       const inner = g.strong ?? g.strongUnder ?? "";
       out.push(createElement("strong", { key }, renderInline(inner, key, options)));
@@ -532,65 +534,6 @@ export function shownImage(src: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * An outbound link opens in a new tab and carries `noopener noreferrer`.
- *
- * `noopener` because a page's links are written by an agent from content it
- * read somewhere else, so the target must not get a handle on this window;
- * `noreferrer` because the dashboard's own URL names the company. An in-app
- * `#/` link is neither — it IS this application, and opening it in a tab
- * would break every internal reference a page makes.
- */
-function anchor(key: string, href: string, children: ReactNode[]): ReactNode {
-  const internal = href.startsWith("#/");
-  return createElement(
-    "a",
-    internal ? { key, href } : { key, href, target: "_blank", rel: "noopener noreferrer" },
-    children,
-  );
-}
-
-/**
- * Where a link points, as a reader checks it: the host and the path of a web
- * address with no scheme (`docs.example.com/pricing`), the address of a
- * `mailto:`, and nothing for anything else (an app route, a scheme this
- * product does not follow), which is drawn as its label alone.
- */
-export function linkTarget(raw: string): string | null {
-  const href = safeHref(raw);
-  if (!href || href.startsWith("#")) return null;
-  if (href.startsWith("mailto:")) return href.slice("mailto:".length);
-  try {
-    const url = new URL(href);
-    const path = url.pathname === "/" ? "" : url.pathname;
-    return `${url.host}${path}`;
-  } catch {
-    return null;
-  }
-}
-
-/** A model's link, drawn inert: its label, then the place it names. See [RenderOptions.links]. */
-function inertLink(key: string, label: ReactNode[], raw: string): ReactNode {
-  const target = linkTarget(raw);
-  const named = label.length > 0;
-  return createElement(
-    "span",
-    { key },
-    named
-      ? createElement(LabelledLink, { key: `${key}-label`, href: raw, live: false }, label)
-      : null,
-    target === null
-      ? named
-        ? null
-        : raw
-      : createElement(
-          "span",
-          { key: `${key}-host`, className: "md-link-inert-host" },
-          named ? ` (${target})` : target,
-        ),
-  );
 }
 
 /**
@@ -653,14 +596,13 @@ function soften(text: string): string {
  * reference it is (`InlineToken`), in the words a caller's `prose` left as
  * words: a record chip the caller drew is never read again.
  *
- * A LINK ONLY WHERE A LINK MAY BE: `links: "anchor"`, the default. Inside a
- * control (`text`) a link is invalid, and in a model's prose (`inert`)
- * nothing the model wrote becomes one; there every token is its words with
- * its mark. A link's own label reads no token at all ([asLabel]).
+ * A LINK ONLY WHERE A LINK MAY BE ([RenderOptions.links]): inside a control
+ * (`text`) none is, and where words are `checked` only one the dashboard
+ * built is. A link's own label reads no token at all ([asLabel]).
  */
 function tokenise(said: ReactNode, key: string, options: InlineOptions): ReactNode {
   const pieces = Array.isArray(said) ? (said as ReactNode[]) : [said];
-  const links = (options.links ?? "anchor") === "anchor";
+  const links = options.links ?? "anchor";
   const terms = options.highlight && options.highlight.length > 0 ? options.highlight : undefined;
   return pieces.map((piece, i): ReactNode => {
     if (typeof piece !== "string") return piece;
@@ -668,22 +610,24 @@ function tokenise(said: ReactNode, key: string, options: InlineOptions): ReactNo
     if (options.label) {
       return terms ? createElement(Highlight, { key: `${key}-${i}`, text: piece, terms }) : piece;
     }
-    return createElement(TokenRun, { key: `${key}-${i}`, text: piece, links, highlight: terms });
+    return createElement(TokenRun, {
+      key: `${key}-${i}`,
+      text: piece,
+      links,
+      highlight: terms,
+      message: options.message ?? piece,
+    });
   });
 }
 
 /**
  * Operator-facing words that are NOT Markdown (an Inbox row's excerpt, a
  * question, an answer's option, a notice's quote) with their inline tokens
- * drawn. No token links unless the caller says it may (`anchor`): most such
+ * drawn. No token links unless the caller says it may (`anchor`, `checked`): most such
  * words sit inside a control or a row that is a link already.
  */
-export function renderTokens(
-  text: string,
-  key = "t",
-  links: "anchor" | "text" = "text",
-): ReactNode {
-  return tokenise(text, key, { links });
+export function renderTokens(text: string, key = "t", links: LinkMode = "text"): ReactNode {
+  return tokenise(text, key, { links, message: text });
 }
 
 // --- block rendering -------------------------------------------------------
@@ -878,8 +822,10 @@ function renderBlock(
  * element this file did not construct — whichever [RenderOptions] are set,
  * since they choose between elements this file builds and nothing else.
  */
-export function renderMarkdown(source: string, options: RenderOptions = {}): ReactNode[] {
+export function renderMarkdown(source: string, given: RenderOptions = {}): ReactNode[] {
   const blocks = parseMarkdown(source ?? "");
+  // THE MESSAGE IS THE SOURCE unless the caller names a larger one.
+  const options: RenderOptions = { message: source ?? "", ...given };
   if (!options.anchors || options.headings === "text") {
     return blocks.map((block, i) => renderBlock(block, `b${i}`, options));
   }
@@ -899,10 +845,22 @@ export function renderMarkdown(source: string, options: RenderOptions = {}): Rea
 export const MODEL_WORDS: RenderOptions = { breaks: "hard", headings: "text" };
 
 /**
- * How the Dashboard Assistant's prose is read: a model's words, whose every
- * link is inert and whose pictures are their alt text (`links: "inert"`).
+ * How the Dashboard Assistant's prose is read: a model's words, whose links
+ * are live only where the dashboard built them (`links: "checked"`) and whose
+ * pictures are their alt text, never fetched (an `image` that shows none).
  */
-export const ASSISTANT_WORDS: RenderOptions = { ...MODEL_WORDS, links: "inert" };
+export const ASSISTANT_WORDS: RenderOptions = {
+  ...MODEL_WORDS,
+  links: "checked",
+  image: () => null,
+};
+
+/**
+ * How words an agent wrote for a person to act on are read in the Inbox (an
+ * ask, its context, its conversation): a link is live only where the
+ * dashboard built it (`links: "checked"`), as in the assistant's answers.
+ */
+export const CHECKED_WORDS: RenderOptions = { links: "checked" };
 
 /** One heading of a document, as an "On this page" entry points at it. */
 export interface Heading {

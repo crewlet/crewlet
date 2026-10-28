@@ -7061,10 +7061,11 @@ a.work-cal-chip {
   overflow-wrap: break-word;
 }
 
-/* A MODEL'S LINK, DRAWN INERT (`links: "inert"` in lib/markdown.ts): the
-   label in the text's own ink, then the place it names in the quiet link ink,
-   never underlined and never a control, so a reader can see where a link
-   would have gone without being able to follow one a model wrote. */
+/* A WRITTEN LINK, DRAWN INERT (`links: "checked"` in lib/markdown.ts, for an
+   address that is not the company's): the label in the text's own ink, then
+   the place it names in the quiet link ink, never underlined and never a
+   control, so a reader can see where a link would have gone without being
+   able to follow one a model or an agent wrote. */
 .md-link-inert-host {
   color: var(--color-text-link-quiet);
   overflow-wrap: anywhere;

@@ -15,6 +15,7 @@ import {
   codeHostOwners,
   describeLink,
   inlineTokens,
+  messageScope,
   referenceTarget,
   repositoryTarget,
 } from "./inlineTokens.ts";
@@ -147,6 +148,9 @@ describe("what an address is", () => {
       label: "gophrase/backend#14",
       code: true,
       kind: "GitHub",
+      // ON NO HOST OF THE COMPANY'S, nothing is rebuilt.
+      canonical: null,
+      place: { path: "gophrase/backend", number: "14" },
     });
     expect(describeLink("https://github.com/gophrase/backend/commit/b5362d22aa", [])?.label).toBe(
       "gophrase/backend@b5362d2",
@@ -242,6 +246,8 @@ describe("what an address is", () => {
       label: "grafana.example.com/d/api-latency",
       code: false,
       kind: null,
+      canonical: null,
+      place: null,
     });
     expect(describeLink(`https://example.com/${"a".repeat(80)}`, [])?.label).toHaveLength(48);
     expect(describeLink("javascript:alert(1)", [])).toBeNull();
@@ -331,6 +337,62 @@ describe("repositories", () => {
   });
 });
 
+describe("bare numbers", () => {
+  const GH: LinkHost[] = [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }];
+  /** A run's references as `path#id` for its text, read in a message of `texts`. */
+  const placed = (text: string, texts: readonly string[] = [text]) =>
+    inlineTokens(text, new Set(["gophrase"]), messageScope(texts, GH)).flatMap((t) =>
+      t.kind === "reference" ? [`${t.text}=${t.path}${t.sep}${t.id}`] : [],
+    );
+
+  test.each([
+    ["#7 in gophrase/frontend", "#7 in gophrase/frontend=gophrase/frontend#7"],
+    ["#7 of gophrase/frontend.", "#7 of gophrase/frontend=gophrase/frontend#7"],
+    ["gophrase/frontend PR #7", "gophrase/frontend PR #7=gophrase/frontend#7"],
+    ["gophrase/frontend pull request #7", "gophrase/frontend pull request #7=gophrase/frontend#7"],
+    ["gophrase/frontend issue #7", "gophrase/frontend issue #7=gophrase/frontend#7"],
+    ["platform/api MR #7", "platform/api MR #7=platform/api!7"],
+    ["acme/widget #7", "acme/widget #7=acme/widget#7"],
+  ])("the sentence binds %s", (text, want) => {
+    expect(placed(text)).toEqual([want]);
+  });
+
+  test("the same number in full elsewhere in the message places it, and nothing else does", () => {
+    const texts = ["Review on gophrase/backend#11 and gophrase/web#3.", "Then #11, not #3x or #4."];
+    expect(placed(texts[1]!, texts)).toEqual(["#11=gophrase/backend#11"]);
+  });
+
+  test("a number under two repositories is a word", () => {
+    const texts = ["gophrase/backend#11 and gophrase/web#11.", "Then #11."];
+    expect(placed(texts[1]!, texts)).toEqual([]);
+  });
+
+  test("the message's one repository places a number, from an address too", () => {
+    expect(placed("in gophrase/backend; start after #11")).toContain("#11=gophrase/backend#11");
+    const texts = ["See https://github.com/gophrase/backend/pull/11/files.", "Then #12."];
+    expect(placed(texts[1]!, texts)).toEqual(["#12=gophrase/backend#12"]);
+  });
+
+  test.each([
+    "#011",
+    "&#11;",
+    "C#11",
+    "a#11",
+    "x/#11",
+    "#11a",
+    "#11-b",
+    "#1.5",
+    "https://example.com/#11",
+    "/issues/#11",
+  ])("%s is no bare number", (text) => {
+    expect(placed(text, [text, "gophrase/backend"])).toEqual([]);
+  });
+
+  test("with nothing to place it, a number is a word", () => {
+    expect(placed("Our #1 priority is #11.")).toEqual([]);
+  });
+});
+
 describe("cost", () => {
   // EVERY PATTERN IS LINEAR IN ITS RUN: a comment an agent wrote is rendered by
   // every reader, so a run that costs seconds freezes everybody. The bound is
@@ -348,6 +410,8 @@ describe("cost", () => {
     ["5,000 keys", "GP-1/".repeat(5_000)],
     ["10,000 handles", "@a".repeat(10_000)],
     ["3,000 commits", "commit ".repeat(3_000)],
+    ["10,000 bound numbers", "#1 in a/b ".repeat(10_000)],
+    ["10,000 repositories before a number", "a/b PR ".repeat(10_000)],
   ])("%s reads in linear time", (_, text) => {
     const start = performance.now();
     inlineTokens(text, new Set(["a", "gp"]));

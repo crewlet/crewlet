@@ -8,8 +8,8 @@
  *   into one line with commas or semicolons.
  * - A JSON DOCUMENT (a request's body) is code, in a code block.
  * - TEXT ACROSS LINES (a page's body) is a preview of the page: the
- *   assistant's own inert Markdown (`ASSISTANT_WORDS`, no live link and no
- *   picture), so its headings and bullets read as they will.
+ *   assistant's own Markdown (`ASSISTANT_WORDS`: no written address opened
+ *   and no picture), so its headings and bullets read as they will.
  * - A COLOUR is its chip beside its hex. The chip is decoration; the hex is
  *   the words a screen reader hears.
  * - Anything else is its text, on the line.

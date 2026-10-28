@@ -155,10 +155,10 @@ test("a key in a path or a bare address is part of it, never a mention", () => {
   expect(mark("Filed under worklet/GOP-11 and /worklet/GOP-11.", reads).named.size).toBe(0);
   expect(mark("Open ./GOP-11 or ../GOP-11 (/items/GOP-11).", reads).named.size).toBe(0);
   expect(mark("See www.x.test/GOP-11 for it.", reads).named.size).toBe(0);
-  // The address is drawn as a model's always is, its host and path and no
-  // link; the key after it is still the record's mention.
+  // The address is drawn as a model's is on no host of the company's: as
+  // written, and no link; the key after it is still the record's mention.
   expect(mark("See https://x.test/a, then GOP-11.", reads).text).toBe(
-    "See x.test/a, then [task:GOP-11|GOP-11].",
+    "See https://x.test/a, then [task:GOP-11|GOP-11].",
   );
 });
 
