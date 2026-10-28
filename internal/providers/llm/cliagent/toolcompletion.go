@@ -102,16 +102,9 @@ func (p *Provider) toolCompletion(
 	// stderr — never the whole of stdout, which is the tools' words too.
 	if hit, ok := classifyMarkers(p.profile, cliOutput{
 		said: out.text, stdout: res.stdout, stderr: res.stderr, failed: failed,
-		events: t.reader.failureLines(),
+		events: t.reader.failureLines(), at: p.now(),
 	}); ok {
-		reason := nonEmpty(hit.Said, firstLine(out.text, res.stderr))
-		if hit.Kind == llm.KindRateLimit {
-			until := p.bench(hit.Retry, reason)
-			log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
-				"source", string(hit.Source), "said", reason)
-			return nil, p.limited(fmt.Errorf("%s", reason), until)
-		}
-		return nil, p.fail(hit.Kind, fmt.Errorf("%s", reason))
+		return nil, p.classified(ctx, hit, nonEmpty(hit.Said, firstLine(out.text, res.stderr)))
 	}
 	if !connected {
 		return nil, p.fail(llm.KindServer, fmt.Errorf("the %s CLI never reached the seat's tools: "+

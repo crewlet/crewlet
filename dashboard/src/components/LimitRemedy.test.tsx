@@ -11,7 +11,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
 import { useSectionArrival } from "~/lib/arrival.ts";
-import { ADMIN_RAISES } from "~/lib/remedy.ts";
+import { ADMIN_CHANGES_MODELS, ADMIN_RAISES } from "~/lib/remedy.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
@@ -121,6 +121,23 @@ test.each([
   await settle();
   expect(screen.queryByRole("link")).toBeNull();
   expect(screen.getByText(sentence)).toBeDefined();
+});
+
+// A MODEL AT ITS USAGE LIMIT OPENS SETTINGS › MODELS, where a fallback is
+// given or a plan changed, for an admin; anybody else is told who can.
+//
+// Mutation: resolve model_providers to Budgets, and the screen is not models.
+test("a model's limit opens the company's models, and only for an admin", async () => {
+  mount({ setting: "model_providers" });
+  await settle();
+  const to = screen.getByRole("link", { name: "Open models" }).getAttribute("href") ?? "";
+  const [path] = to.replace(/^#\//, "").split("?");
+  expect(resolve(path!.split("/"))).toMatchObject({ resolved: true, screen: "models" });
+  cleanup();
+  mount({ setting: "model_providers" }, MEMBER);
+  await settle();
+  expect(screen.queryByRole("link")).toBeNull();
+  expect(screen.getByText(ADMIN_CHANGES_MODELS)).toBeDefined();
 });
 
 test("a refusal no limit caused draws nothing, and asks no gate", () => {

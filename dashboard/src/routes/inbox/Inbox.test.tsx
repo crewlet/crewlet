@@ -1083,3 +1083,112 @@ describe("what was answered", () => {
     ).toHaveLength(1);
   });
 });
+
+// THE INBOX DOES NOT FLICKER. While a spent subscription was retried once a
+// second, the engine pushed every seat's state about thirteen times a second,
+// each seat flipping between working, stopped and a failed turn, and every
+// flip took one row out of Needs you and put another in (two ids for one seat),
+// moving every row below it. A burst of pushes that changes nothing a person
+// sees must leave every row where it was, the same element, and a seat moving
+// between stopped and failed is one row whose words change.
+describe("a burst of live pushes", () => {
+  const limit = {
+    parked: true,
+    resets_at: "2026-10-27T23:30:00Z",
+    since: "2026-10-27T23:16:00Z",
+    cli: "claude-code",
+    subscription: true,
+  };
+  function failed(n: number) {
+    return {
+      kind: "rate_limit",
+      detail: "llm chain exhausted after 1 providers (default)",
+      phase: "execute",
+      turn_id: `t-${n}`,
+      at: new Date(Date.now() - 60_000 + n).toISOString(),
+      event_id: `e-${n}`,
+    };
+  }
+  const CTO = {
+    id: "cto",
+    agent_id: "cto",
+    handle: "cto",
+    role: "CTO",
+    activity: "stopped",
+    stopped_reason: "provider",
+  };
+  const PM = {
+    id: "pm",
+    agent_id: "pm",
+    handle: "pm",
+    role: "PM",
+    activity: "stopped",
+    stopped_reason: "unplaced",
+  };
+
+  /** Every control in Needs you, in order: a row remounted or moved is a
+   *  different element at its place. */
+  function rows(): HTMLElement[] {
+    return within(screen.getByRole("region", { name: /^Needs you/ })).getAllByRole("button");
+  }
+
+  test("moves no row, remounts none, and says the limit once", async () => {
+    const { store } = mount({
+      agents: [{ ...CTO, provider_limit: limit, last_error: failed(0) }, PM],
+      answers: { decisions: decisionsOf(askItem()) },
+    });
+    await settle();
+    const before = rows();
+    const names = before.map((r) => r.textContent);
+    expect(names.some((n) => n?.includes("Claude Code subscription limit reached"))).toBe(true);
+    // NOT ONCE PER SEAT: the parked seat draws no stop or failed turn of its own.
+    expect(names.filter((n) => /CTO is stopped|CTO's last turn failed/.test(n ?? ""))).toHaveLength(
+      0,
+    );
+
+    for (let i = 1; i <= 25; i++) {
+      await act(async () => {
+        store.applyAgents([
+          // The parked seat's probe: its live state moves, its condition
+          // does not.
+          {
+            agent_id: "cto",
+            activity: "stopped",
+            stopped_reason: "provider",
+            provider_limit: limit,
+            last_error: failed(i),
+            live_call_seq: i,
+          },
+          // A seat re-sent exactly as it was.
+          { agent_id: "pm", activity: "stopped", stopped_reason: "unplaced" },
+        ]);
+      });
+    }
+    const after = rows();
+    expect(after).toHaveLength(before.length);
+    after.forEach((row, i) => expect(row, `row ${i} was remounted or moved`).toBe(before[i]));
+  });
+
+  test("a seat moving between stopped and a failed turn is one row in one place", async () => {
+    const { store } = mount({
+      agents: [PM],
+      answers: { decisions: decisionsOf(askItem()) },
+    });
+    await settle();
+    const before = rows();
+    for (let i = 1; i <= 6; i++) {
+      await act(async () => {
+        store.applyAgents([
+          i % 2
+            ? { agent_id: "pm", activity: "idle", stopped_reason: null, last_error: failed(i) }
+            : { agent_id: "pm", activity: "stopped", stopped_reason: "unplaced", last_error: null },
+        ]);
+      });
+      const now = rows();
+      expect(now).toHaveLength(before.length);
+      now.forEach((row, n) =>
+        expect(row, `flip ${i}: row ${n} was remounted or moved`).toBe(before[n]),
+      );
+    }
+  });
+});

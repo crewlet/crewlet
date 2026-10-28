@@ -641,7 +641,7 @@ function Notices({
   const failureFacts = failure && (
     <>
       {facts && ` (${facts})`}
-      <TechnicalDetails text={failure.message} />
+      <TechnicalDetails text={failure.detail} />
     </>
   );
   const eventLink = failure?.event_id ? (

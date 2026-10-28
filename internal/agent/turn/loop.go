@@ -54,6 +54,14 @@ type Work struct {
 	// Calls is what the phase actually invoked, engine-recorded.
 	Calls []ledger.Call
 
+	// Inherited is how many of Calls, at the front, an EARLIER ATTEMPT
+	// made: a resumed phase's record opens with what the round that parked
+	// called before it suspended, because the delivery check and the
+	// iteration ledger are about the whole phase. Those writes are on the
+	// record and stay there; what they are not is THIS attempt's, so they
+	// do not make it one a retry would repeat ([Result.Acted]).
+	Inherited int
+
 	// MissingTools are names the phase called that the surface did not
 	// have. Surfaced to the reviewer, which is what turns "the model
 	// hallucinated a tool" into a next round naming the real one.
@@ -320,8 +328,10 @@ type Result struct {
 	// Suspended marks a turn parked on a detached sandbox run.
 	Suspended bool
 
-	// Acted reports that this turn's own record PROVES it already reached
-	// outside the engine — see [Acted].
+	// Acted reports that this attempt's own record PROVES it already
+	// reached outside the engine (see [Acted]): what a retry of THIS attempt
+	// would repeat. A resumed attempt answers for its own calls, never for
+	// those of the attempt that parked ([Work.Inherited]).
 	//
 	// It exists for the callers that have to tell a turn which broke
 	// having done nothing from one which broke having already posted,
@@ -496,7 +506,15 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		//
 		// Accumulated with ||, never assigned: a round that read nothing
 		// must not un-say what round one posted.
-		res.Acted = res.Acted || Acted(work.Calls, surface)
+		//
+		// THIS ATTEMPT'S CALLS ONLY. A resumed round's record opens with
+		// what the attempt that parked wrote ([Work.Inherited]), and a
+		// retry of the resume does not write those again: it re-enters the
+		// conversation they are part of. Counted, every resume that broke
+		// before its first new round (a model at its usage limit, a runner
+		// that could not be built) was settled for good as a turn that had
+		// written, and the coding run's result never reached the seat.
+		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.
 		res.Delivered = Answered(work.Calls, surface, in.Reply)

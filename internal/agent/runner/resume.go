@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -146,14 +147,13 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		// appending it — so its writes exist in no ledger anywhere, and a
 		// resume that broke would otherwise report a turn that had done
 		// nothing when it is precisely the turn that has done the most.
-		return turn.Work{Calls: resumedCalls(surface, state)}, describe(surface), err
+		return resumedWork(turn.Work{}, surface, state), describe(surface), err
 	}
 
 	if res.Suspended {
 		r.recordSuspension(state.Round, surface, res.Result, history, res.Elapsed)
-		return turn.Work{
-			Text: res.Text, Calls: resumedCalls(surface, state), Suspended: true,
-		}, describe(surface), nil
+		return resumedWork(turn.Work{Text: res.Text, Suspended: true}, surface, state),
+			describe(surface), nil
 	}
 
 	// The same finish as a fresh pass, including the rescue: an executor
@@ -171,12 +171,11 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		run: r.cfg.Resume.Run,
 	})
 	if err != nil {
-		return turn.Work{Calls: resumedCalls(surface, state)}, describe(surface), err
+		return resumedWork(turn.Work{}, surface, state), describe(surface), err
 	}
-	// The WHOLE phase's calls, pre-suspend rounds included — see
-	// resumedCalls.
-	work.Calls = resumedCalls(surface, state)
-	return work, described, nil
+	// The WHOLE phase's calls, pre-suspend rounds included (see
+	// resumedCalls), the parked round's marked as an earlier attempt's.
+	return resumedWork(work, surface, state), described, nil
 }
 
 // resumedCalls is what the WHOLE executor phase called, pre-suspend rounds
@@ -187,7 +186,18 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 // re-entry: a resumed turn that saw only the post-resume calls would read a
 // delivery made before the suspend as never having happened, and re-fire it.
 func resumedCalls(s *tools.Surface, state execstate.State) []ledger.Call {
-	return append(parkedCalls(state), calls(s)...)
+	return resumedWork(turn.Work{}, s, state).Calls
+}
+
+// resumedWork is a resumed phase's work: the whole phase's calls, the parked
+// round's marked as an earlier attempt's ([turn.Work.Inherited]), so the
+// record is whole and the question "did THIS attempt write" is still asked of
+// this attempt alone.
+func resumedWork(w turn.Work, s *tools.Surface, state execstate.State) turn.Work {
+	parked := parkedCalls(state)
+	w.Calls = slices.Concat(parked, calls(s))
+	w.Inherited = len(parked)
+	return w
 }
 
 // parkedCalls is what the parked round called before it suspended, read back

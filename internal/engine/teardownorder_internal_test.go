@@ -163,7 +163,7 @@ func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 		return i
 	}
 	for _, answerer := range []string{"stopHistory", "stopSteer", "stopMemoryReads",
-		"stopSandboxTails", "stopSeatPauses", "stopBudgetParks",
+		"stopSandboxTails", "stopSeatPauses", "stopBudgetParks", "stopProviderParks",
 		"stopServingEstate", "stopServingFleetBroker"} {
 		if at(answerer) > at("stopCore") {
 			t.Errorf("the teardown stops the core before %s", answerer)

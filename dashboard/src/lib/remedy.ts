@@ -35,6 +35,10 @@ import type { ConfigWriteAccess, OrgTarget } from "./useWriteAccess.ts";
 /** The query key a section of a screen is named by. */
 export const SECTION_PARAM = "section";
 
+/** Settings › Models, where the company's models are given a fallback or
+ *  another plan. */
+export const MODELS_PATH: readonly string[] = ["settings", "models"];
+
 /** Company › Budgets, where every token ceiling is raised. */
 export const BUDGETS_PATH: readonly string[] = ["company", "budgets"];
 
@@ -85,6 +89,10 @@ export function remedyDestination(remedy: Remedy): RemedyDestination {
         target: { seat },
       };
     }
+    case "model_providers":
+      // THE COMPANY'S MODELS, which an admin alone edits: a model at its
+      // usage limit is answered there by a fallback or another plan.
+      return { path: MODELS_PATH, query: {}, label: "Open models", target: "company" };
   }
 }
 
@@ -112,6 +120,9 @@ export type RemedyOffer =
 /** What a reader who holds no Admin is told of a ceiling only an admin raises. */
 export const ADMIN_RAISES = "An admin can raise this ceiling.";
 
+/** What a reader who holds no Admin is told of the company's models. */
+export const ADMIN_CHANGES_MODELS = "An admin can change the company's models.";
+
 /**
  * What a remedy offers a reader the write gate answered `access` for: the
  * decision over values, which the component reads and a test pins.
@@ -123,7 +134,10 @@ export function remedyOffer(remedy: Remedy, access: ConfigWriteAccess): RemedyOf
     case "loading":
       return { kind: "pending" };
     case "no_grant":
-      return { kind: "who", sentence: ADMIN_RAISES };
+      return {
+        kind: "who",
+        sentence: remedy.setting === "model_providers" ? ADMIN_CHANGES_MODELS : ADMIN_RAISES,
+      };
     case "anonymous":
     case "outside_scope":
     case "managed":

@@ -530,7 +530,7 @@ func (s *Service) Snapshot(audience Audience) map[string]any {
 		"schedules": s.currentSchedules(),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
 		"sandboxes": SandboxRows(s.state.ActiveSandboxes()),
-		"tokens":    s.TokenRollup(),
+		"tokens":    SpendRollup(s.TokenRollup()),
 		"budget":    s.state.Budget(),
 	}
 	// EACH KEY IS WHAT ITS PUSH WOULD CARRY, so a reader receives in the
@@ -829,7 +829,7 @@ func (s *Service) flushTokens() {
 	}
 	rollup := s.TokenRollup()
 	s.tokensDirty.Store(false)
-	s.hub.Broadcast(Push(KindTokens, rollup, s.now()))
+	s.hub.Broadcast(Push(KindTokens, SpendRollup(rollup), s.now()))
 }
 
 // TokenRollup folds the live window into the breakdown the `tokens` push and

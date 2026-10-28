@@ -288,16 +288,16 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	// the call's wall-clock cap stops it (measured on 1.4.13), so a spent
 	// plan arrives as a timeout that never sits the entry out. With n
 	// retries the CLI waits 2^n - 1 seconds and then reports the limit
-	// itself; that wait must stay inside the one minute the engine then
-	// sits the entry out for, so the engine and not the CLI decides how
-	// long a limited entry waits.
+	// itself; that wait must stay inside the first window the engine then
+	// sits the entry out for (a minute, the first step of its backoff), so
+	// the engine and not the CLI decides how long a limited entry waits.
 	switch n := doc.ProviderRetry.MaxRetries; {
 	case n == nil:
 		t.Error("settings.json sets no provider_retry.max_retries, so a 429 is retried " +
 			"until the call times out and a spent plan never sits the entry out")
-	case *n < 1 || time.Duration((1<<*n)-1)*time.Second >= limitBench:
+	case *n < 1 || time.Duration((1<<*n)-1)*time.Second >= limitBackoff[0]:
 		t.Errorf("provider_retry.max_retries = %d: the CLI would wait %ds, want at least "+
-			"one retry and less than the engine's %s sit-out", *n, (1<<*n)-1, limitBench)
+			"one retry and less than the engine's %s sit-out", *n, (1<<*n)-1, limitBackoff[0])
 	}
 	// The stream's run.usage event carries the run's counts
 	// (TestAMuseCodeRunIsChargedTheCountsItsStreamReports holds how).

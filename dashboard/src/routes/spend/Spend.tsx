@@ -39,7 +39,7 @@ import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { urlAction } from "~/app/assistant/urlAction.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { GROUPS } from "~/contract/spend.ts";
+import { ADMIN_GROUPS, GROUPS } from "~/contract/spend.ts";
 import { useNow } from "~/lib/clock.ts";
 import { isRange, useTimeRange, windowParam } from "~/lib/range.ts";
 import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
@@ -60,8 +60,11 @@ import { agentLines, spendCsv, spendOffer, spendWindowParams, windowWords } from
 import { spendGroupKeys, spendRangeKeys } from "./assistantActions.ts";
 import { DownloadButton, TimeRangePicker } from "@crewlethq/ui";
 
-/** The dimensions the chart splits on — the contract's six, and nothing else. */
-const GROUP_VALUES: readonly string[] = GROUPS.map((g) => g.value);
+/** The dimensions the chart splits on for a reader: the contract's six, less
+ *  the ones only an admin is answered (`ADMIN_GROUPS`). */
+function groupsFor(admin: boolean) {
+  return GROUPS.filter((g) => admin || !ADMIN_GROUPS.includes(g.value));
+}
 
 export function Spend() {
   const zone = useOrg()?.timezone;
@@ -70,11 +73,13 @@ export function Spend() {
   const named = isRange(range.window);
   const params = spendWindowParams(range.window, zone);
 
+  const viewer = useViewer();
+  const groups = groupsFor(viewer.admin);
   const [rawGroup, setGroup] = useParam("group", "phase", "section");
   // A GROUP THE ENGINE WOULD REFUSE IS THE DEFAULT, not a refusal on screen:
   // a hand-edited `group=turn` (the dimension this answer no longer has) is a
   // stale link, and the chart is still worth drawing.
-  const group = GROUP_VALUES.includes(rawGroup) ? rawGroup : "phase";
+  const group = groups.some((g) => g.value === rawGroup) ? rawGroup : "phase";
 
   // --- assistant page actions (WP12) ---
   const nav = useNavigator();
@@ -103,7 +108,6 @@ export function Spend() {
 
   const budget = useOrgBudget();
   const agents = useAgents();
-  const viewer = useViewer();
   const runs = useServicesRun();
 
   // A REFUSED WINDOW HAS NO FIGURES. The previous answer is still in the
@@ -169,7 +173,13 @@ export function Spend() {
               budget={budget}
               mayConfigure={mayChangeConfig(viewer)}
             />
-            <PhaseChart series={series} group={group} onGroup={setGroup} zone={zone} />
+            <PhaseChart
+              series={series}
+              group={group}
+              groups={groups}
+              onGroup={setGroup}
+              zone={zone}
+            />
           </div>
           {/* WHO SPENT IT, three ways: the seats' table beside the two ranked
               lists that break the same tokens down by model and by team. */}

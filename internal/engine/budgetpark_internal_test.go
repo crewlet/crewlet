@@ -39,13 +39,28 @@ type fakeAlarms struct {
 	armed []*fakeAlarm
 }
 
+// fakeAlarm is one armed alarm. A FIRED ALARM IS SPENT, as a timer that
+// fired is: live() stops counting it, so an alarm the code under test fails
+// to arm again after one fires is seen missing rather than counted twice.
 type fakeAlarm struct {
+	mu      *sync.Mutex
 	wait    time.Duration
-	fire    func()
+	fn      func()
 	stopped bool
 }
 
+// fire runs the alarm, spent first, as a timer's goroutine runs after the
+// timer has fired.
+func (a *fakeAlarm) fire() {
+	a.mu.Lock()
+	a.stopped = true
+	a.mu.Unlock()
+	a.fn()
+}
+
 func (a *fakeAlarm) Stop() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	was := !a.stopped
 	a.stopped = true
 	return was
@@ -54,7 +69,7 @@ func (a *fakeAlarm) Stop() bool {
 func (f *fakeAlarms) after(d time.Duration, fn func()) alarm {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	a := &fakeAlarm{wait: d, fire: fn}
+	a := &fakeAlarm{mu: &f.mu, wait: d, fn: fn}
 	f.armed = append(f.armed, a)
 	return a
 }
@@ -86,6 +101,10 @@ type parkRig struct {
 	noted int
 	// handed counts deliveries the dispatcher was handed.
 	handed int
+	// worked is every trigger a turn was run on, in the order the turns
+	// ran, and left the deliveries each had left as its turn ran.
+	worked []uuid.UUID
+	left   []int
 	turnFn func() (turn.Result, error)
 }
 
@@ -131,17 +150,24 @@ func newParkRig(t *testing.T, dayCeiling string) *parkRig {
 	// meter the question is asked through all read.
 	r.e.clock = r.clock
 	r.e.budgetParks.after = r.alarms.after
+	r.e.providerParks.after = r.alarms.after
 
 	d := &Dispatcher{
-		Budget: r.e.budgetPark,
+		Budget:   r.e.budgetPark,
+		Provider: r.e.providerPark,
 		NoteDeferred: func(string) {
 			r.mu.Lock()
 			r.noted++
 			r.mu.Unlock()
 		},
-		Turn: func(context.Context, Request) (turn.Result, error) {
+		Turn: func(ctx context.Context, req Request) (turn.Result, error) {
 			r.mu.Lock()
 			r.ran++
+			for _, ev := range req.Events {
+				r.worked = append(r.worked, ev.ID)
+				left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
+				r.left = append(r.left, left)
+			}
 			fn := r.turnFn
 			r.mu.Unlock()
 			if fn != nil {
