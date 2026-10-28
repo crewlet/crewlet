@@ -1028,8 +1028,9 @@ The receiver **accepts and drops** when no upstream is configured: the engine's 
 
 This replaced a twelve-hour age-out, which was wrong in both directions. A finished run whose completion was lost stayed on the panel as running for twelve hours. A run parked on a question for longer than twelve hours disappeared from the panel, and a run waiting on a person is the one the panel most needs to show.
 
-Each entry is `{turn_id, role, agent_handle, agent_id, coding_agent, provider_key, model, sandbox_id, task, status, started_at, question, audience, work_item, owner, paused_at}` — `provider_key` and `model` the `providers.llm` entry the launch picked and its model.
+Each entry is `{turn_id, role, agent_handle, agent_id, coding_agent, provider_key, model, sandbox_id, task, status, started_at, question, audience, body_withheld, work_item, owner, paused_at}` — `provider_key` and `model` the `providers.llm` entry the launch picked and its model.
 
+- `body_withheld` is set for a reader who may not read the launching seat's body, which only an administrator and the seat's lead may: `task` is then empty, and so is `question` unless the question is put to that reader ([A status reader never receives a transcript](../reference/api-endpoints.md#a-status-reader-never-receives-a-transcript)). A reader without Worklet is sent no `work_item`.
 - `status` uses the record's own vocabulary: `launching`, `running`, `awaiting_clarification`, `reseed` or `answered` (a reply is recorded and the engine is resuming the run with it). A `resumed` run is over, because its turn has already taken back the result, so it is not listed. The panel used to write `awaiting_input`, a status the record cannot hold, so the dashboard never saw a live run as waiting on a person.
 - `owner` is the node driving the run.
 - `paused_at` is the pause reaper's own reading of when the box began being held.

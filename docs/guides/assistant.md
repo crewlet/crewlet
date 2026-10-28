@@ -310,8 +310,10 @@ A run goes to the first of these the company configures:
 A run dials `CREWLET_MCP_BRIDGE_URL`, the fleet's address for the tool bridge
 ([Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)),
 and its call is relayed to the node that opened its session wherever it lands.
-Where every box runs on the engine host, as on a single node with no sandbox
-cell, point that variable at the node's loopback address
+Where every box runs on the engine host — a single node whose
+`providers.sandbox` configures no `e2b` cell, such as one with only the
+`direct` cell the [Quickstart](../getting-started/quickstart.md) sets up —
+point that variable at the node's loopback address
 (`http://127.0.0.1:<api.port>`; `[::1]`, `localhost` and a name under it,
 such as `engine.localhost`, are loopback too). A confined run's bridge token
 is then admitted from that host's loopback only, under a loopback host name or

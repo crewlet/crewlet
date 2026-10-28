@@ -2720,7 +2720,7 @@ company did.** That is Home until its reader arranges it (see
   longest-running four whose turn has an id — the very rows the sidebar's
   Running group names, in its order — what each is on (the item the turn is
   charged to, never a work key), how long, where it is in context → execute →
-  review ("Execute · round 7 of 25"), and the last call it made, each a way
+  review ("Execute · coding run"), and the last call it made, each a way
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Tasks completed** per company day over the last fourteen (today in the
@@ -3314,8 +3314,8 @@ tabs draw). Those sections, and Schedules, open on their work, with no
 introduction above it.
 
 **The seat peek answers "who is this, and what is it doing".** A state card
-tinted by the state — the line, how long the turn has run, "Turn 2 · round 7 of
-25 · coding run in progress", where the turn number is the task's own count
+tinted by the state — the line, how long the turn has run, "Turn 2 · coding
+run in progress", where the turn number is the task's own count
 (`work_item_turns`, asked by the task's id — see [An item's
 address](#an-items-address)) — then Reports to, Model (the phase chain from
 the org projection, which carries it only to an admin —
@@ -3480,7 +3480,7 @@ has no ceiling of its own — "company cap 60M/day +1" (and "no seat cap" on hov
 company's own budget caps a window, because that ceiling binds every seat (one
 line in the tile, the whole sentence on hover). A shortened token count carries
 no zero fraction: `60M`, never `60.0M`. The **current turn** card shows where the turn is — Context, Execute
-("round 7 of 25", against the cap the phase was granted), Review; there is no
+("coding run" once the turn parks on its run), Review; there is no
 delivery step, because whether a turn reached anybody is decided as it
 closes — the turn's number on its task and the task's title (read by the
 turn's own task, by its id — see [An item's address](#an-items-address) —
@@ -3560,7 +3560,7 @@ beside the running clock as a second unlabelled figure. A phase that finishes wh
 tab is open reaches its transcripts off the push, matched on the seat's own id
 as Live's recent phases are — never on its role name, which two unit seats
 stamped from one template share. A row for a turn still running says what the seat is doing
-and what it is on, from the push ("running — executing · round 2 of 24",
+and what it is on, from the push ("running — reviewing · round 2 of 4",
 ENG-32), and draws its iterations and tokens as not settled rather than as
 zeros — `#/live/turns` does the same. On a phone a row's summary takes two
 lines with its item under it, and a settled turn has no State line at all. And
@@ -5177,8 +5177,8 @@ be read at a glance:
   Home's Live now draws (`LiveTurnRow`): what it is doing and on what — the
   item's key, or on a turn charged to no item the trigger's own summary
   ("Executing · Drafting the 2.4 launch brief") rather than a bare verb —
-  where the turn is (Context → Execute "round 7 of 25" → Review, and "round 1
-  of 25" from the phase's opening frame, before the model has answered once;
+  where the turn is (Context → Execute "coding run" → Review, and "round 1
+  of 1" from the executor's opening frame, while its run is being launched;
   on a phone the round leads the call line instead, so Review keeps its place
   on the stepper's one line),
   how long it has run from the turn's own start —
@@ -6389,7 +6389,7 @@ is one of the rules on this page applied to a tracker.
   predicate that decides restates each mark's own emptiness rule — the price of
   asking BEFORE rendering — so a mark that gains a field adds it there. The
   last row is a STATE and the only part of a card with a hue: blue while a
-  seat's turn is on the task ("SWE · executing · round 7 of 20 · 6m"), amber
+  seat's turn is on the task ("SWE · coding run · 6m"), amber
   while a coding run on it is parked waiting for the READER. The turn is joined
   on the item the engine CHARGES it to (`live_call.work_item`), never on the
   trigger's `work_key`, which names whatever a webhook mentioned; and a run

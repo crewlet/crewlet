@@ -1457,9 +1457,9 @@ drawn for everybody and held with that reason for anybody without it.
   ends in **Load more** and how many of how many are loaded, so no task is
   past the end of a page. A card says what it has cost in **tokens**, what it
   blocks, its labels and — while a seat's turn is on it — who is doing what
-  ("SWE · executing · round 7 of 20"), matched on the task the engine charges
-  that turn to. A card's labels give way to a "+N" before its mark row
-  wraps, so the token count keeps its place.
+  ("SWE · coding run", "SWE · reviewing · round 2 of 4"), matched on the
+  task the engine charges that turn to. A card's labels give way to a "+N"
+  before its mark row wraps, so the token count keeps its place.
 
   **What you change here is made as you.** Drag a card — in the manual order,
   which is a project's default — to reorder it or move it to another lane
@@ -1481,7 +1481,7 @@ drawn for everybody and held with that reason for anybody without it.
   and what the reviewer asked for, the tools it called,
   how long it took and how many tokens, and a link to its trace. While a seat's
   turn is running on the task, the foot of the activity says so ("SWE is on
-  turn 3 · executing · round 7 of 25") with a way to watch it live. Each
+  turn 3 · coding run") with a way to watch it live. Each
   announced change has **Who this reached**: the people it woke and why. The
   three histories are read a page at a time, and **Earlier activity** reads
   further back — the merged list only ever shows a stretch of time that is
