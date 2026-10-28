@@ -119,7 +119,7 @@ import {
   type Seat,
 } from "~/lib/seats.ts";
 import { turnIdOf, watchLink } from "~/lib/turns.ts";
-import { itemPath, projectPath, statusLabel, unfinished } from "~/lib/work.ts";
+import { itemPath, PROJECT_PAGE, projectPath, statusLabel, unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
 import { useOpenProjectSwitcher } from "../header/ProjectSwitcher.tsx";
 import { fmtCount } from "~/lib/format.ts";
@@ -138,7 +138,6 @@ import {
   ALL_ROWS,
   ALL_ROWS_UNDER_ANSWER,
   GO_TO_ROWS,
-  PROJECT_PAGE,
   SCOPES,
   SOURCE_CHIPS,
   ARTIFACT_HITS,

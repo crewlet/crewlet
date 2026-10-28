@@ -109,6 +109,14 @@ export function itemAddress(ref: ItemRef): string {
   return ref.key && !ref.key_collision ? ref.key : ref.id;
 }
 
+/**
+ * The project listing's cap: the engine's own page of projects (200), so no
+ * company's live project is missing from a read of them. ONE VALUE for every
+ * reader of the listing: the project switcher, the palette's create step,
+ * the chart's unit keys and the keys prose links by (`lib/projectKeys.ts`).
+ */
+export const PROJECT_PAGE = 200;
+
 /** Where a task's page is: `#/worklet/{address}`. See [itemAddress]. */
 export function itemPath(ref: ItemRef): string[] {
   return ["worklet", itemAddress(ref)];

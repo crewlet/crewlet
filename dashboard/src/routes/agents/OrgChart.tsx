@@ -121,6 +121,7 @@ import {
 } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
+import { PROJECT_PAGE } from "~/lib/work.ts";
 import { CANVAS_PEEK_WIDTH, PHONE_BREAKPOINT } from "~/app/layout.ts";
 import {
   activityOf,
@@ -174,9 +175,6 @@ import {
 } from "~/ui/orgNodes.tsx";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
-
-/** The project page the chart reads its unit keys from: every live project. */
-const PROJECT_PAGE = 200;
 
 /** The legend's four states, in the order a reader acts on them. */
 const LEGEND: readonly (keyof StateCounts)[] = ["working", "needs", "stopped", "idle"];
