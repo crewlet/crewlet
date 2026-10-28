@@ -238,10 +238,10 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 6.8–9.3 MB a day: 3 000 pushes at 1 462 bytes,
+	//   - the code log 6.9–9.4 MB a day: 3 000 pushes at 1 481 bytes,
 	//     MEASURED for a seat's push alone in its record, as every one of the
 	//     reference company's is (internal/code's BenchmarkPushLogBytes, its
-	//     push=agent arm beside a person's; about 874 a push in a burst group
+	//     push=agent arm beside a person's; about 893 a push in a burst group
 	//     commit holds together), 4.4 MB; and the barriers of its git
 	//     clients, 2.4–5.0 MB — a push asks the log twice (its advertisement
 	//     and its receive's sync) and the fetch before it once (its ls-refs,
@@ -256,8 +256,8 @@ const (
 	// percent, so it moved the code log, whose day is half barriers, more
 	// than the mutation log.
 	//
-	// So the code log takes 0.56–0.77 of the mutation log's day — 0.36 on
-	// its push records alone (0.44 of the tracker's records), which is what
+	// So the code log takes 0.57–0.78 of the mutation log's day — 0.37 on
+	// its push records alone (0.45 of the tracker's records), which is what
 	// the 1.5–2 KiB a record this ratio was first set from overstated — and
 	// TWO THIRDS is the middle of that range, never past its top. Not below
 	// the middle, because the changes, reviews and checks that later
@@ -281,8 +281,8 @@ const (
 	// clients' barriers, the same line is a count of the barriers, its
 	// crewlet.statelog.barrier.applied (stream CREWLET_CODE_LOG), which any
 	// one data node counts whole, since every data node applies every
-	// barrier: beside the reference company's 4.4 MB of pushes, ABOUT 9 500
-	// BARRIERS A DAY, 1.7 MB, make half the mutation log's 12.1 MB day. The
+	// barrier: beside the reference company's 4.4 MB of pushes, ABOUT 9 200
+	// BARRIERS A DAY, 1.6 MB, make half the mutation log's 12.1 MB day. The
 	// reference company's own git clients append more than that with no CI
 	// at all (13 800), so a half is for a company whose people and CI fetch
 	// less.

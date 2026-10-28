@@ -52,15 +52,16 @@ const (
 // a SEAT'S, as every one of the reference company's is — a hundred seats
 // pushing thirty times a day — alone in its record: internal/code's measured
 // figure for a person's push (BenchmarkPushLogBytes, its package doc's "What
-// a push costs, measured") and what a seat's principal and way take of the
-// log beyond it (its push=agent arm). The barriers are its git clients'
+// a push costs, measured") and what a seat's principal, its way and the
+// company day its quota counted it on take of the log beyond it (its
+// push=agent arm). The barriers are its git clients'
 // linearizable reads: a seat's push asks the log three times (its
 // advertisement, its receive's sync and the fetch before it), thirty people
 // fetch every three minutes of an eight-hour day, and a CI polls ten
 // repositories a minute where one runs.
 const (
 	referencePushesADay  = 3_000
-	codePushRecordBytes  = 1_462
+	codePushRecordBytes  = 1_481
 	referencePushReads   = 3 * referencePushesADay
 	referencePeopleReads = 30 * 8 * 60 / 3
 	referenceCIReads     = 10 * 60 * 24

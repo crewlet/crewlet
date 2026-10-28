@@ -115,9 +115,9 @@ const (
 	// company's seats push about thirty times a day each, so a thousand is
 	// some thirty-three times that, which no seat working as intended meets,
 	// and it caps what a seat pushing in a loop costs the code log at a
-	// thousand push records a day — a push alone in its record is 1 344
-	// bytes (internal/code's BenchmarkPushLogBytes), a seat's carrying its
-	// run beside — rather than without bound.
+	// thousand push records a day — a seat's push alone in its record is
+	// 1 481 bytes (internal/code's BenchmarkPushLogBytes, its push=agent
+	// arm), so about 1.5 MB a day — rather than without bound.
 	DefaultCodePushesPerSeatDay = 1_000
 
 	// CodeMinPushesPerSeatDay and CodePushesPerSeatDayCeiling bound

@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/period"
 )
 
 // BenchmarkPushLogBytes is what ONE PUSH COSTS THE CODE LOG: the stream's
@@ -39,15 +41,19 @@ import (
 //     person's (extra-bytes/push) — built by the engine, its principal naming
 //     the seat and the run behind it at each field's usual size, a turn id (a
 //     UUID), a tracker's work item (`native`, `ENG-1234`) and a model id of a
-//     provider's usual length, and its way `engine`. The committer copies a
-//     proposal's principal and way into its record's entry as the proposer
-//     stamped them (Proposal.entryWith) and decides the rest of the entry
-//     alike for both, so the principal and the way are all a seat's entry
-//     differs by: they are measured as the difference between a seat's and a
-//     person's otherwise identical entries over records formed here, each
-//     alone in its record and published through the same publisher onto the
-//     same broker, and what a seat's push takes of the log, alone or in a
-//     burst, is the batch arms' figure plus it.
+//     provider's usual length, and its way `engine`. The committer forms a
+//     record's entry from its proposal (Proposal.entryWith): it copies the
+//     principal and the way as the proposer stamped them, stamps a SEAT'S
+//     entry alone with the company day its quota counted the push against
+//     (PushEntry.Day), and decides the rest alike for both — so the
+//     principal, the way and the day are all a seat's entry differs by. Each
+//     entry here is formed by that same function (code.EntryOf), a seat's on
+//     the day committerOn's committer would count it against, and they are
+//     measured as the difference between a seat's and a person's otherwise
+//     identical entries over records formed here, each alone in its record
+//     and published through the same publisher onto the same broker; what a
+//     seat's push takes of the log, alone or in a burst, is the batch arms'
+//     figure plus it.
 //
 // The branches are created before the stream is measured, and each iteration
 // is a fresh log of a fixed number of rounds, so the figure is the same at any
@@ -128,6 +134,9 @@ func BenchmarkPushLogBytes(b *testing.B) {
 		// rounds is the records each principal's pushes are measured over,
 		// as many as the lone push's arm takes.
 		const rounds = 16
+		// day is the company day a seat's push is counted against, as the
+		// committer stamps it: harnessAt's on UTC's calendar, committerOn's.
+		day := period.At(period.Day, harnessAt, time.UTC).Label
 		var extra float64
 		for b.Loop() {
 			b.StopTimer()
@@ -145,9 +154,12 @@ func BenchmarkPushLogBytes(b *testing.B) {
 					if who.Kind == code.PrincipalAgent {
 						who.Run.TurnID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("turn-", r))).String()
 					}
-					n.push(repo, code.PushEntry{PushID: id, Principal: who, Via: via, Node: n.id,
-						Commands: []code.Command{set(ref, tip, next)}, Pack: suitePack(id),
-						Introduced: []string{next}, IntroducedCount: 1, ReceivedAt: harnessAt})
+					// THE ENTRY AS THE COMMITTER FORMS IT: a seat's carries
+					// its day, and a person's none.
+					n.push(repo, code.EntryOf(code.Proposal{PushID: id, RepoID: repo, Principal: who,
+						Via: via, Node: n.id, Commands: []code.Command{set(ref, tip, next)},
+						Pack: suitePack(id), Introduced: []string{next}, IntroducedCount: 1,
+						ReceivedAt: harnessAt}, day))
 					tip = next
 				}
 				// THE BRANCH EXISTS BEFORE THE LOG IS MEASURED, as in the

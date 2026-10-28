@@ -384,8 +384,8 @@ holds one row more however much it pushes — its pushes on its newest company
 day, a row of about 30 bytes and its key's entry — where an index of the push
 rows for that one-day question would have kept an entry of some 40 bytes for
 every seat's push for its 181 days, about 1.8 GB at 250 000 pushes a day. The
-code log, which keeps only the trim's window of records, takes 1 462 bytes
-for a seat's push in a record of its own and about 870 for each of a burst
+code log, which keeps only the trim's window of records, takes 1 481 bytes
+for a seat's push in a record of its own and about 890 for each of a burst
 group commit holds together. The table prices every push as a seat's: the
 reference company's 3 000 pushes a day are all its seats', a hundred seats
 pushing thirty times a day while its people fetch, and a larger company's are
@@ -394,7 +394,7 @@ its thousands of seats'. So:
 | Pushes a day | Push rows at the 181-day horizon | Pack rows added a year | On the code log, over the default seven days |
 |---|---|---|---|
 | 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 644 MB | about 31 MB |
-| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 53.6 GB | 1.5 to 2.6 GB |
+| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 53.6 GB | 1.6 to 2.6 GB |
 
 These rows come on top of what the tracker, the knowledge base and the rest of
 the estate hold: [the storage forecast](../guides/retention.md#the-storage-forecast)

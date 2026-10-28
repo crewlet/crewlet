@@ -170,7 +170,7 @@ const (
 	// so the log the suites provision and the log a node creates are sized
 	// by one rule — config's DerivedCodeLogNumerator, whose arithmetic is
 	// what this log takes a day at the reference company once seats push:
-	// 3 000 pushes at the MEASURED 1 462 bytes a seat's push alone in its
+	// 3 000 pushes at the MEASURED 1 481 bytes a seat's push alone in its
 	// record (BenchmarkPushLogBytes), 4.4 MB, and its git clients' barriers at
 	// BarrierRecordBytes, 2.4–5.0 MB, against the tracker's measured 9.9 MB
 	// of records and 2.2 MB of barriers, every record in its signed frame.

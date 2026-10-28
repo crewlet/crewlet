@@ -241,22 +241,24 @@
 //
 // THE PUSH ON THE LOG (BenchmarkPushLogBytes; restated from one count of one
 // iteration once an entry named its way, once a seat's push was measured
-// beside a person's, and once the person pushed through a token's name): the
-// code log's growth over the records the committer forms for that same
-// person's push — its principal naming the token bound to them, `pat:` and
-// its id, its one command, its bundle named and its one introduced id — is
-// 1 380 bytes a push in a record of its own, the same every count, and about
-// 792 a push for sixty-four at once to one repository, which group commit
-// lands in two records or, as its batches fall, now and then one, moving the
-// figure by under a byte: a record's envelope is about 610 bytes, forty of
-// them the signed frame every record is appended in (ADR-0031), and each push
-// it carries about 773 more, twelve of them the way it names
-// (`"via":"git",`). A SEAT's push of the same commit takes 82.0 bytes more
-// (push=agent, the same every count): its principal names the seat and the
-// run behind it — a UUID turn id, the work item `native ENG-1234`, a
-// seventeen-byte model id — where a person's names the token, and its way is
-// `engine`; so 1 462 bytes alone in its record and about 874 in a burst. The
-// log keeps the trim's window of records rather
+// beside a person's, once the person pushed through a token's name, and once
+// a seat's entry carried the day its quota counted it on): the code log's
+// growth over the records the committer forms for that same person's push —
+// its principal naming the token bound to them, `pat:` and its id, its one
+// command, its bundle named and its one introduced id — is 1 380 bytes a push
+// in a record of its own, the same every count, and about 792 a push for
+// sixty-four at once to one repository, which group commit lands in two
+// records or, as its batches fall, now and then one, moving the figure by
+// under a byte: a record's envelope is about 610 bytes, forty of them the
+// signed frame every record is appended in (ADR-0031), and each push it
+// carries about 773 more, twelve of them the way it names (`"via":"git",`).
+// A SEAT's push of the same commit takes 101.0 bytes more (push=agent, the
+// same every count): its principal names the seat and the run behind it — a
+// UUID turn id, the work item `native ENG-1234`, a seventeen-byte model id —
+// where a person's names the token, its way is `engine`, and its entry
+// carries the company day its quota counted it on ([PushEntry.Day]),
+// nineteen bytes (`,"day":"2031-04-02"`); so 1 481 bytes alone in its record
+// and about 893 in a burst. The log keeps the trim's window of records rather
 // than the history, so the reference company's 3 000 pushes a day, every one
 // a seat's, hold about 31 MB of it over the default seven-day min_age, about
 // a thirty-fifth of the log's 1 GiB floor, and the bytes of a push's pack are
