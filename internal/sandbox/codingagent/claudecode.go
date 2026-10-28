@@ -121,12 +121,15 @@ func (ClaudeCode) NoteInstruction() string { return ClaudeCodeSteerInstruction }
 // command line is readable by every account on a `direct` box's host, the
 // reason [Paths.System] gives for the system text's file.
 //
-// It runs with permissions bypassed, and that is a deliberate consequence of
-// the scoping model rather than an oversight: the box IS the boundary, and
-// there is no per-tool allowlist inside it. What the agent may reach is
-// decided by which MCP servers were rendered into its config and which
-// credentials the run env carries — both engine-side, both before the agent
-// starts. A permission prompt would simply hang a headless run.
+// It runs with permissions bypassed, in every cell, and that is a deliberate
+// consequence of how the run is driven rather than an oversight: a headless
+// run has nobody to answer a permission prompt, so a gate left to ask would
+// hang the run or refuse the step, and there is no per-tool allowlist inside
+// it. What the agent may reach is decided before it starts, engine-side: by
+// its box's CELL — `container` and `e2b` keep it off the engine host, while
+// `direct` runs it on the engine host as the engine's own user — by which MCP
+// servers were rendered into its config, and by which credentials the run
+// env carries.
 //
 // STREAM-JSON, AND --verbose WITH IT. `--output-format json` prints ONE object
 // when the run ends and nothing before it, and in print mode this CLI writes
