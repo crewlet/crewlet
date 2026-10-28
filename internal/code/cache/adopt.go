@@ -106,6 +106,12 @@ type staging struct {
 // object no row names, fetchable by id from this node alone until the next
 // full round swept it.
 //
+// EVERY PACK ADOPTED IS LIVE, linked into objects/pack: a push's and a
+// compaction's output are, by the records that add them (code.PackPush,
+// code.PackCompact). A pack an expunge's begin leaves dropping is no
+// adoption's — linked here it would be one a push could rely on — and enters
+// the copy's dropping view by a round's install, as its row places it.
+//
 // Each of packs is its row's: its checksum must be one of the scratch's
 // packs', and each section's size that pack's file's (a .rev missing
 // included) — the files linked ARE the bundle the caller uploaded and sealed,
@@ -521,7 +527,7 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 	// out by this id, before any delta has served it).
 	held := func(st *staging) {
 		e.mu.Lock()
-		setLive(inc, st.pack.PackID, liveOf(st.pack))
+		setLive(inc, st.pack.PackID, liveOf(st.pack, code.PackLive))
 		e.mu.Unlock()
 	}
 	outcomes := make([]adoptOutcome, len(stagings))
@@ -568,7 +574,7 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 			held(st)
 			outcomes[i] = adoptHeld
 		default:
-			c.vouchPack(e, inc, st.pack.GitChecksum)
+			c.vouchPack(e, inc, placeLive, st.pack.GitChecksum)
 			linked = append(linked, i)
 		}
 	}
@@ -580,7 +586,7 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 	e.mu.Lock()
 	for _, i := range linked {
 		st := stagings[i]
-		setLive(inc, st.pack.PackID, liveOf(st.pack))
+		setLive(inc, st.pack.PackID, liveOf(st.pack, code.PackLive))
 		inc.packs++
 		inc.objects += st.pack.Objects
 		c.setSize(inc, inc.diskBytes+st.pack.Size)

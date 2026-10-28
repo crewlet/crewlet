@@ -180,7 +180,9 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 
 // measureIncarnation is what an incarnation with no state holds, counted as a
 // state counts it: the files under objects/ — the packs, and every derived
-// file git writes — and under every other root a declaration owns files in
+// file git writes — under the dropping view (gitproc.DroppingDir: the packs an
+// expunge's begin left dropping, which a state counts in DiskBytes too), and
+// under every other root a declaration owns files in
 // (derivedRoots: crewlet/, the cache's own derived files), since validateAll
 // refuses a declaration that owns or holds a file anywhere else; and
 // packed-refs. The roots are READ FROM THE DECLARATIONS, so a root

@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -390,28 +391,32 @@ type swapping struct {
 	stagedAt string
 	step     string
 
-	// packs is the live packs by checksum — what the next incarnation holds
-	// — and keys the same checksums as the twenty bytes a vouch keys a pack
-	// by. keep is the declarations a swap may carry: those no event of what
-	// is leaving drops; carried, the ones it linked files of, and the memo
-	// once the promote has moved its tree (carryMemo). linked is every
-	// derived file it linked, by its path relative to the incarnation.
+	// packs is the live set's packs by checksum — what the next incarnation
+	// holds — places where it holds each (packPlace: objects/pack, or the
+	// dropping view for a pack only dropping rows name), and keys the same
+	// checksums as the twenty bytes a vouch keys a pack by. keep is the
+	// declarations a swap may carry: those no event of what is leaving
+	// drops; carried, the ones it linked files of, and the memo once the
+	// promote has moved its tree (carryMemo). linked is every derived file it
+	// linked, by its path relative to the incarnation.
 	packs   map[string]livePack
+	places  map[string]packPlace
 	keys    map[[hashTrailer]byte]bool
 	keep    derivedSet
 	carried derivedSet
 	linked  map[string]bool
 	// events is every event that took a pack file out, refsBytes the
 	// packed-refs it linked, and shared the bytes the two incarnations hold
-	// alike: the live packs' and the packed-refs'. heldGraph: the copy the
-	// swap leaves held a commit-graph once nothing could write one in it —
-	// its own whole graph, or its installed chain's graph layers — what tells
-	// a swap that dropped the graph from one of a copy with none to keep
-	// (swapped).
-	events    map[Event]bool
-	refsBytes int64
-	shared    int64
-	heldGraph bool
+	// alike: the live packs' and the packed-refs' — of which sharedDropping
+	// the dropping view's. heldGraph: the copy the swap leaves held a
+	// commit-graph once nothing could write one in it — its own whole graph,
+	// or its installed chain's graph layers — what tells a swap that dropped
+	// the graph from one of a copy with none to keep (swapped).
+	events         map[Event]bool
+	refsBytes      int64
+	shared         int64
+	sharedDropping int64
+	heldGraph      bool
 }
 
 // keepsPack reports whether the next incarnation holds the pack checksum cs.
@@ -427,10 +432,11 @@ func (s *swapping) keepsDecl(name DerivedName) bool {
 }
 
 // holds reports whether the next incarnation holds inc's file at rel, as
-// the same inode: one of a live pack's files, or a derived file it linked.
+// the same inode: one of a pack's files it keeps at the place rel lies in, or
+// a derived file it linked.
 func (s *swapping) holds(rel string) bool {
 	if cs, ok := packOfRel(rel); ok {
-		return s.keepsPack(cs)
+		return s.keepsPack(cs) && s.places[cs].rel() == filepath.Dir(rel)
 	}
 	return s.linked[rel]
 }
@@ -442,14 +448,20 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	c, e, inc := s.c, s.e, s.inc
 	e.mu.Lock()
 	s.packs = make(map[string]livePack, len(inc.byChecksum))
+	s.places = make(map[string]packPlace, len(inc.byChecksum))
 	for _, p := range inc.live {
 		s.packs[p.checksum] = p
+		s.places[p.checksum] = placeOf(inc, p.checksum)
 	}
 	s.events = map[Event]bool{}
+	// leaving is the checksums whose files leave objects/pack — what a layer
+	// of the chain may name; one leaving the dropping view names none.
 	leaving := map[string]bool{}
 	for key, ev := range inc.leaving {
 		s.events[ev] = true
-		leaving[key] = true
+		if key.place != placeDropping {
+			leaving[key.name] = true
+		}
 	}
 	installed, chainPacks := slices.Clone(inc.installed), maps.Clone(inc.installedPacks)
 	s.tip, s.tipOver, s.tipWritten = inc.tip, inc.tipOver, inc.tipWritten
@@ -509,15 +521,27 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	// swap that fails takes nothing back out: the promote counts it in.
 	s.next = &incarnation{dir: s.staged, discarded: true}
 
-	// 2. THE PACKS, every live one, largest first: .pack, .rev, then .idx
-	// last, so a pack is present to git only once whole.
+	// 2. THE PACKS, every one the live set names, largest first: .pack, .rev,
+	// then .idx last, so a pack is present to git only once whole — each
+	// where the live set places it, linked from where inc holds it there: a
+	// dropping pack into the next incarnation's dropping view, made for its
+	// first (a next incarnation holding none has none), every other into
+	// objects/pack.
 	s.step = stepPacks
 	order := slices.SortedFunc(maps.Keys(s.packs), func(a, b string) int {
 		return cmp.Or(cmp.Compare(s.packs[b].size, s.packs[a].size), cmp.Compare(a, b))
 	})
-	from, into := filepath.Join(inc.dir, packRel), filepath.Join(s.staged, packRel)
+	viewMade := false
 	for _, cs := range order {
-		linked, err := linkBundle(c.link, filepath.Join(from, "pack-"+cs), into, cs, nil)
+		place := s.places[cs]
+		into := filepath.Join(s.staged, place.rel())
+		if place == placeDropping && !viewMade {
+			if err := os.MkdirAll(into, hostbox.DirMode); err != nil {
+				return nil, err
+			}
+			viewMade = true
+		}
+		linked, err := linkBundle(c.link, filepath.Join(inc.dir, place.rel(), "pack-"+cs), into, cs, nil)
 		switch {
 		case err != nil:
 			return nil, err
@@ -525,6 +549,9 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 			return nil, fmt.Errorf("pack-%s is in %s already", cs, into)
 		}
 		s.shared += s.packs[cs].size
+		if place == placeDropping {
+			s.sharedDropping += s.packs[cs].size
+		}
 	}
 
 	// 3. THE ROOT'S FILES — HEAD, config and packed-refs — the old
@@ -606,7 +633,9 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		s.step = stepCanary
 		objects := make(map[string]int64, len(s.packs))
 		for cs, p := range s.packs {
-			objects[cs] = p.objects
+			if s.places[cs] != placeDropping {
+				objects[cs] = p.objects
+			}
 		}
 		share := func() {}
 		if s.layers.installer {
@@ -737,8 +766,12 @@ func (s *swapping) carryDerived() error {
 // readers waiting on the round with it.
 func (s *swapping) syncStaged() error {
 	dirs := map[string]bool{}
-	if len(s.packs) > 0 {
-		dirs[packRel] = true
+	for _, place := range s.places {
+		dirs[place.rel()] = true
+		if place == placeDropping {
+			// The view's own directory, which names its pack directory.
+			dirs[gitproc.DroppingDir] = true
+		}
 	}
 	for rel := range s.linked {
 		if dir := filepath.Dir(rel); dir != "." {
@@ -820,7 +853,8 @@ func (s *swapping) chainOf(installed []code.LayerRow, held map[string]livePack, 
 				return fmt.Errorf("layer %s names pack-%s, which the copy holds for no live row and no "+
 					"installed layer", r.Layer.LayerID, cs)
 			}
-			s.packs[cs] = p
+			// In objects/pack, where every pack a layer names lies.
+			s.packs[cs], s.places[cs] = p, placeLive
 		}
 	}
 	return nil
@@ -1039,12 +1073,25 @@ func (s *swapping) writeState(ctx context.Context) error {
 	next.refsDigest, next.refs = inc.refsDigest, inc.refs
 	next.maintained = inc.maintained
 	next.lastUsed = inc.lastUsed
-	next.packs = len(s.packs)
-	next.objects = 0
-	for _, p := range s.packs {
-		next.objects += p.objects
+	// The packs and objects an index covers are objects/pack's: the
+	// dropping view's are on the disk the budget counts, and in neither.
+	next.packs, next.objects = 0, 0
+	for cs, p := range s.packs {
+		if s.places[cs] != placeDropping {
+			next.packs++
+			next.objects += p.objects
+		}
 	}
 	s.c.setSize(next, s.shared)
+	s.c.setDropping(next, s.sharedDropping)
+	// THE EPOCH ITS OBJECTS/ HOLDS (Synced.DropEpoch): the rows' at the
+	// position it reflects, every pack file of which it holds where they
+	// place it — a begin's inputs gone with inc — once its chain holds no
+	// pack for a row that is not live (liveChain), and inc's otherwise.
+	next.dropEpoch = inc.dropEpoch
+	if liveChain(inc, s.chain) {
+		next.dropEpoch = inc.repo.DropEpoch
+	}
 	s.e.mu.Unlock()
 	return s.c.persist(ctx, s.e, next, false)
 }
@@ -1117,7 +1164,9 @@ func (s *swapping) promote() {
 	// no memo yet: the move below counts it as it moves it (setMemo).
 	next.discarded = false
 	c.heldBytes.Add(next.diskBytes + next.metaBytes)
+	c.droppingBytes.Add(next.droppingBytes)
 	c.setSize(inc, max(inc.diskBytes-s.shared, 0))
+	c.setDropping(inc, max(inc.droppingBytes-s.sharedDropping, 0))
 	c.image.each(s.carried, func(_ int, d *Derived) {
 		if st, ok := inc.derived[d.Name]; ok {
 			// A chain's files are shared only where a layer was kept, linked:
@@ -1195,13 +1244,13 @@ func (c *Cache) swapped(s *swapping, next *incarnation, took time.Duration) {
 	dropped := 0
 	s.e.mu.Lock()
 	for key := range s.inc.leaving {
-		if packChecksum.MatchString(key) {
+		if packChecksum.MatchString(key.name) {
 			dropped++
 		}
 	}
 	for cs := range s.inc.installedPacks {
 		_, kept := s.packs[cs]
-		_, counted := s.inc.leaving[cs]
+		_, counted := s.inc.leaving[leaveKey{placeLive, cs}]
 		if !kept && !counted {
 			dropped++
 		}
@@ -1226,7 +1275,7 @@ func (c *Cache) link(oldname, newname string) error {
 
 // leavingRetired reports whether a compaction's retirement took out any of
 // leaving: what a state's LeavingSince is written for.
-func leavingRetired(leaving map[string]Event) bool {
+func leavingRetired(leaving map[leaveKey]Event) bool {
 	for _, ev := range leaving {
 		if ev == EventPackRetired {
 			return true
@@ -1337,6 +1386,11 @@ var swapFields = []swapField{
 	{name: "objects", class: recomputed, why: "the live rows' objects"},
 	{name: "diskBytes", class: recomputed, why: "the live packs' bundles and the packed-refs it linked (setSize)"},
 	{name: "metaBytes", class: recomputed, why: "its derived files' bytes, as setDerived keeps them"},
+	{name: "droppingBytes", class: recomputed, why: "the dropping packs' bundles it linked into its dropping view " +
+		"(setDropping)"},
+	{name: "dropEpoch", class: recomputed, why: "the rows' epoch at the position it reflects once its chain " +
+		"holds no pack for a row that is not live, and inc's otherwise (writeState): it holds every pack file " +
+		"where they place it, a begin's inputs gone with inc"},
 	{name: "derived", class: recomputed, why: "what the swap linked of the declarations it carries, the " +
 		"round's index it wrote, and the memo's record, moved with its tree (carryMemo)"},
 	{name: "maintained", class: carried, why: "the duty cycle's clock is the repository's: copied whatever the " +
@@ -1435,6 +1489,9 @@ var swapFields = []swapField{
 		carry: func(s *swapping) { s.next.live, s.inc.live = s.inc.live, nil }},
 	{name: "byChecksum", class: carried, why: "the live rows' checksums are next's files",
 		carry: func(s *swapping) { s.next.byChecksum, s.inc.byChecksum = s.inc.byChecksum, nil }},
+	{name: "droppingPacks", class: carried, why: "the packs the live set carried places in the dropping view, " +
+		"which next holds there: what its readers are handed the view by (droppingView)",
+		carry: func(s *swapping) { s.next.droppingPacks = s.inc.droppingPacks }},
 	{name: "leaving", class: recomputed, why: "empty: the swap took out every file that was leaving"},
 	{name: "leavingSince", class: recomputed, why: "zero: nothing is leaving next"},
 	{name: "successor", class: notCarried, why: "inc's: the promote points it at next"},

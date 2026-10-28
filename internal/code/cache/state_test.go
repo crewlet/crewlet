@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // stateDoc is the state file as this suite writes and reads it: the on-disk
@@ -32,6 +33,7 @@ type stateDoc struct {
 	Refs          int                   `json:"refs"`
 	Packs         int                   `json:"packs"`
 	DiskBytes     int64                 `json:"disk_bytes"`
+	DroppingBytes int64                 `json:"dropping_bytes,omitempty"`
 	Derived       map[string]derivedDoc `json:"derived,omitempty"`
 	Maintained    struct {
 		LastRun time.Time     `json:"last_run"`
@@ -141,8 +143,10 @@ func readStateDoc(t testing.TB, dir string) stateDoc {
 }
 
 // aState is a state with every field set: the maintainer's multi-pack-index
-// over the three packs with its bitmap, and its commit-graph, and pack files a
-// compaction retired below the position still leaving the directory.
+// over the three packs with its bitmap, and its commit-graph, a pack an
+// expunge's begin left dropping in its dropping view — 700 of the disk's bytes
+// and none of the packs an index covers — and pack files a compaction retired
+// below the position still leaving the directory.
 func aState(id string) stateDoc {
 	doc := stateDoc{
 		Format:        2,
@@ -154,10 +158,11 @@ func aState(id string) stateDoc {
 			Protections: []code.Protection{{Pattern: "refs/heads/trunk", DirectPush: code.DirectNone}},
 			Refs:        12, LivePacks: 3, LiveBytes: 9000,
 		},
-		RefsDigest: strings.Repeat("ab", 32),
-		Refs:       12,
-		Packs:      3,
-		DiskBytes:  9100,
+		RefsDigest:    strings.Repeat("ab", 32),
+		Refs:          12,
+		Packs:         3,
+		DiskBytes:     9800,
+		DroppingBytes: 700,
 		Derived: map[string]derivedDoc{
 			string(cache.DerivedMidx):  {Bytes: 400, Covers: 3, Step: string(cache.StepBitmap)},
 			string(cache.DerivedGraph): {Bytes: 120, Covers: 3, Step: string(cache.StepGraph)},
@@ -356,8 +361,10 @@ func TestAStateOfAnotherFormatIsDiscarded(t *testing.T) {
 // WHAT A STATE SAYS IS WHAT THE NEXT BOOT KNOWS, field for field: a boot reads
 // nothing but the disk, so a field the state drops is a fact every restart
 // forgets — each derived file's bytes among them, or the budget would
-// undercount every warm cache after a restart, and the last maintenance run,
-// or every repository would be due at once after one.
+// undercount every warm cache after a restart, the bytes of its dropping
+// view, or the node's dropping total would read zero until each copy's next
+// full round, and the last maintenance run, or every repository would be due
+// at once after one.
 func TestTheStateIsWhatTheNextBootKnows(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -365,7 +372,11 @@ func TestTheStateIsWhatTheNextBootKnows(t *testing.T) {
 	written := aState(repoA)
 	writeState(t, dir, written)
 
-	c := w.open(t)
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := w.open(t, func(o *cache.Options) { o.Metrics = rec })
 	if !cache.HasState(c, repoA) {
 		t.Fatal("a valid state was not read")
 	}
@@ -373,6 +384,10 @@ func TestTheStateIsWhatTheNextBootKnows(t *testing.T) {
 	if len(opened) != 1 || opened[0]["bytes"] != float64(written.DiskBytes+written.derivedBytes()) {
 		t.Errorf("code_cache_opened = %v, want the state's %d + %d bytes", opened, written.DiskBytes,
 			written.derivedBytes())
+	}
+	if got := gauge(t, rec, metrics.CodeCacheDroppingBytes); got != float64(written.DroppingBytes) {
+		t.Errorf("the boot counts %s = %v, want the state's %d", metrics.CodeCacheDroppingBytes, got,
+			written.DroppingBytes)
 	}
 	// What the maintainer reads of it is the state's two entries.
 	if packs, bitmap, graph := cache.Indexed(c, repoA); packs != written.midx().Covers || !bitmap || !graph {

@@ -99,6 +99,25 @@
 // REAL path it resolves the line to, the alternate's objects directory being
 // its own is what makes that path the alternate checked.
 //
+// THE DROPPING VIEW IS A SERVING PROCESS'S ALONE. A cache incarnation keeps
+// the packs an expunge has left dropping (internal/code's PackDropping) in an
+// object directory of its own beside objects/, [DroppingDir], so a client
+// still reading one of their objects is served it while no push may rely on
+// one. A process that serves the incarnation names it ([Cmd.Dropping]) and
+// reads it as GIT_ALTERNATE_OBJECT_DIRECTORIES — set in its environment by
+// the pool, never as an alternates file, which git follows from every
+// repository that names the incarnation as ITS alternate, and never named by
+// a process that leans on an alternate, which the pool refuses. And because
+// git loads the FIRST commit-graph its object directories hold, an
+// alternate's included, a process leaning on an alternate that holds a
+// dropping view — a push's scratch, an advertisement view, a build — would
+// parse a commit only a dropping pack holds out of the alternate's graph
+// without reading the object it cannot see, and its connectivity check would
+// pass over it: such a process runs with GIT_COMMIT_GRAPH_PARANOIA=1, which
+// has git hold every commit the graph names to the objects it can reach. The
+// view's directory is the repository's own too ([ShapeDropping]): a link
+// there would serve another directory's objects by id.
+//
 // The refusal is a *[ShapeError] naming its [ShapeRule] and the repository
 // that broke it (errors.Is [ErrRepoShape]), a definite answer — a file absent,
 // other bytes, a commondir present — and a read that FAILED is never one: it

@@ -240,7 +240,12 @@ func (c *Cache) confirmHint(ctx context.Context, e *entry, inc *incarnation, h g
 // a new one, its hash started on the cache's lifetime with inc pinned. nil
 // when the cache is stopping.
 func (c *Cache) packCheck(e *entry, inc *incarnation, h gitproc.Hint, rows *snapshot) *packCheck {
-	stem := filepath.Join(inc.dir, "objects", "pack", "pack-"+h.Pack)
+	// Where the copy keeps the pack: a serving process reads the dropping
+	// view, and names a pack there as readily as one in objects/pack.
+	e.mu.Lock()
+	place := placeOf(inc, h.Pack)
+	e.mu.Unlock()
+	stem := filepath.Join(inc.dir, place.rel(), "pack-"+h.Pack)
 	id := identify(stem)
 	e.mu.Lock()
 	defer e.mu.Unlock()

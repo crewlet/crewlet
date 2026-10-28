@@ -252,15 +252,16 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "c")
 	prepare(t, dir).Release()
 
-	// A: its state says 9 100 + 400 + 120 — the packs, and each derived
-	// file's entry; its files are not what is counted.
+	// A: its state says what its packs hold — its dropping view's among them
+	// — and each derived file's entry; its files are not what is counted.
 	a := aState(repoA)
 	writeState(t, filepath.Join(dir, "repos", repoA+".3.git"), a)
 	write(t, filepath.Join(dir, "repos", repoA+".3.git", "objects", "pack", "pack-1.pack"), strings.Repeat("p", 1000))
-	// B's kept incarnation has no state: its objects and packed-refs are
-	// walked (HEAD is not what a state counts either).
+	// B's kept incarnation has no state: its objects, its dropping view and
+	// its packed-refs are walked (HEAD is not what a state counts either).
 	b := filepath.Join(dir, "repos", repoB+".2.git")
 	write(t, filepath.Join(b, "objects", "pack", "pack-2.pack"), strings.Repeat("q", 2000))
+	write(t, filepath.Join(b, gitproc.DroppingDir, "pack", "pack-4.pack"), strings.Repeat("v", 900))
 	write(t, filepath.Join(b, "packed-refs"), strings.Repeat("r", 100))
 	write(t, filepath.Join(b, "HEAD"), "ref: refs/heads/main\n")
 	outside := filepath.Join(t.TempDir(), "elsewhere")
@@ -308,8 +309,8 @@ func TestPrepareMeasuresWhatTheCacheHolds(t *testing.T) {
 		filepath.Join(dir, "scratch", "swap.staged.git", "objects", "pack", "pack-2.pack"))
 
 	layout := prepare(t, dir)
-	want := (9100 + 400 + 120) + (2000 + 100 + linkInfo.Size()) + (olderState.Size() + 800) + 300 + 5000 + 7000 +
-		600 + 40
+	want := (a.DiskBytes + a.derivedBytes()) + (2000 + 900 + 100 + linkInfo.Size()) + (olderState.Size() + 800) +
+		300 + 5000 + 7000 + 600 + 40
 	if layout.Held != want {
 		t.Errorf("Layout.Held = %d, want %d: what each kept state counts, the stateless and the older walked, and "+
 			"the leftovers, each file once", layout.Held, want)

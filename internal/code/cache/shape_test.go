@@ -58,6 +58,18 @@ var shapeDamages = []shapeDamage{
 		spoil: func(t *testing.T, dir string) {
 			write(t, filepath.Join(dir, "objects", "info", "alternates"), "garbage")
 		}},
+	{name: "a dropping view a link to another repository's objects", rule: gitproc.ShapeDropping,
+		spoil: func(t *testing.T, dir string) {
+			// What a process serving the copy would read as its dropping
+			// packs, and so serve another repository's objects by id.
+			other := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(other, "objects", "pack"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(other, "objects"), filepath.Join(dir, gitproc.DroppingDir)); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	{name: "objects a link out of the repository", rule: gitproc.ShapeObjects, moved: true,
 		spoil: func(t *testing.T, dir string) {
 			moved := filepath.Join(t.TempDir(), "objects.d")

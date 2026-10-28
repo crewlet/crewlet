@@ -229,18 +229,92 @@ func (f *fakeLog) compact(repo string, outputs []code.PackRow, retire ...string)
 	f.seq++
 	pos := f.at()
 	r := f.repos[repo]
-	for _, id := range retire {
+	f.retire(repo, pos, retire...)
+	for _, out := range outputs {
+		out.Added = pos
+		r.packs = append(r.packs, out)
+	}
+	return pos
+}
+
+// retire moves the pack rows of repo whose ids are ids out of the live rows
+// for the retired ones, at pos, as every record that retires a pack does, and
+// answers the checksums they named; f.mu is held.
+func (f *fakeLog) retire(repo string, pos statelog.Position, ids ...string) map[string]bool {
+	r := f.repos[repo]
+	gone := map[string]bool{}
+	for _, id := range ids {
 		i := slices.IndexFunc(r.packs, func(p code.PackRow) bool { return p.PackID == id })
 		if i < 0 {
-			panic(fmt.Sprintf("the fake log: %s holds no live pack %s to retire", repo, id))
+			panic(fmt.Sprintf("the fake log: %s holds no pack %s to retire", repo, id))
 		}
 		p := r.packs[i]
 		r.packs = slices.Delete(r.packs, i, i+1)
 		r.retired = append(r.retired, code.RetiredRow{PackID: p.PackID, Part: p.Part, GitChecksum: p.GitChecksum,
 			RetiredAt: time.Unix(1_800_000_000+int64(f.seq), 0).UTC(), Position: pos})
+		gone[p.GitChecksum] = true
 	}
-	for _, out := range outputs {
-		out.Added = pos
+	return gone
+}
+
+// expungeBegin is one expunge begin record on repo, as the code domain's apply
+// of one writes it (code.ExpungeBegin): its inputs — the live packs whose ids
+// retire — leave the live rows for the retired ones, kept are added live and
+// dropping added DROPPING (code.PackDropping), the repository's drop epoch
+// moves one up, and the published chain is cut from the lowest layer naming
+// an input (its DropLayers) — at one position, which it answers. A record of
+// its own that moves no ref.
+func (f *fakeLog) expungeBegin(repo string, kept, dropping []code.PackRow, retire ...string) statelog.Position {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	pos := f.at()
+	r := f.repos[repo]
+	for _, id := range retire {
+		if i := slices.IndexFunc(r.packs, func(p code.PackRow) bool { return p.PackID == id }); i >= 0 &&
+			r.packs[i].State != code.PackLive {
+			panic(fmt.Sprintf("the fake log: %s's pack %s is %s, and an expunge's input is live", repo, id,
+				r.packs[i].State))
+		}
+	}
+	inputs := f.retire(repo, pos, retire...)
+	for _, out := range kept {
+		out.Added, out.State, out.Kind = pos, code.PackLive, code.PackExpunge
+		r.packs = append(r.packs, out)
+	}
+	for _, out := range dropping {
+		out.Added, out.State, out.Kind = pos, code.PackDropping, code.PackCruft
+		r.packs = append(r.packs, out)
+	}
+	r.ref.DropEpoch++
+	if k := slices.IndexFunc(r.layers, func(l code.LayerRow) bool {
+		return slices.ContainsFunc(l.Layer.Packs, func(cs string) bool { return inputs[cs] })
+	}); k >= 0 {
+		r.layers, r.layersAt = slices.Clone(r.layers[:k]), pos
+	}
+	return pos
+}
+
+// expungeCommit is one expunge commit record on repo, as the code domain's
+// apply of one writes it (code.ExpungeCommit): every dropping pack retired,
+// and rescue — what of them a ref reached again — added live, at one
+// position, which it answers. The drop epoch stays: the commit closes the
+// expunge its begin opened.
+func (f *fakeLog) expungeCommit(repo string, rescue ...code.PackRow) statelog.Position {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	pos := f.at()
+	r := f.repos[repo]
+	var ids []string
+	for _, p := range r.packs {
+		if p.State == code.PackDropping {
+			ids = append(ids, p.PackID)
+		}
+	}
+	f.retire(repo, pos, ids...)
+	for _, out := range rescue {
+		out.Added, out.State, out.Kind = pos, code.PackLive, code.PackRescue
 		r.packs = append(r.packs, out)
 	}
 	return pos
@@ -260,16 +334,7 @@ func (f *fakeLog) publish(repo string, chain []code.LayerRef, outputs []code.Pac
 	f.seq++
 	pos := f.at()
 	r := f.repos[repo]
-	for _, id := range retire {
-		i := slices.IndexFunc(r.packs, func(p code.PackRow) bool { return p.PackID == id })
-		if i < 0 {
-			panic(fmt.Sprintf("the fake log: %s holds no live pack %s to retire", repo, id))
-		}
-		p := r.packs[i]
-		r.packs = slices.Delete(r.packs, i, i+1)
-		r.retired = append(r.retired, code.RetiredRow{PackID: p.PackID, Part: p.Part, GitChecksum: p.GitChecksum,
-			RetiredAt: time.Unix(1_800_000_000+int64(f.seq), 0).UTC(), Position: pos})
-	}
+	f.retire(repo, pos, retire...)
 	for _, out := range outputs {
 		out.Added = pos
 		r.packs = append(r.packs, out)
@@ -802,10 +867,13 @@ func (f *fakeLog) phase(r *fakeRepo, cur code.StateCursor) []keyed {
 func (f *fakeLog) repoRef(r *fakeRepo, cp statelog.Position) code.RepoRef {
 	ref := r.ref
 	ref.Position = cp
-	ref.LivePacks = int64(len(r.packs))
-	ref.LiveBytes = 0
+	// A dropping pack is never counted among the live ones (code.PackDropping).
+	ref.LivePacks, ref.LiveBytes = 0, 0
 	for _, p := range r.packs {
-		ref.LiveBytes += p.Size
+		if p.State != code.PackDropping {
+			ref.LivePacks++
+			ref.LiveBytes += p.Size
+		}
 	}
 	ref.Refs = 0
 	for _, x := range r.refs {

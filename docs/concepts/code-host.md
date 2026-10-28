@@ -951,6 +951,29 @@ the commit-graph came along, was dropped or was never there to keep —
 layers move with it, a placement of one included
 ([Published layers](#published-layers)) — and every one that failed.
 
+**Packs an expunge is dropping.** An expunge of a repository's unreachable
+objects — which nothing in this build begins yet ([what it does not do
+yet](#what-it-does-not-do-yet)) — first rewrites the packs it takes into
+packs of what the refs reach, kept, and packs of what nothing reached when it
+read the refs, **dropping**, and only a second record takes the dropping ones
+out. Between the two, a git node keeps the repository's dropping packs in a
+directory of their own beside its packs, `objects-dropping/pack`, which only a
+git process serving the repository reads: a clone, a fetch and a seat's read
+still find an object there by its id, so a client that already holds one
+loses nothing before the expunge ends. A push never sees them. It is received
+in a scratch repository that reads the copy's own packs and nothing beside
+them, so a push that relies on an object being dropped is refused by git's
+own connectivity check rather than landing a ref on an object the expunge
+then takes out of every node; and a push the node checked while the packs the
+expunge rewrote were still in the copy is refused `expunging` and runs again
+([What git prints](#what-git-prints-and-what-it-means)). No index or bitmap
+covers the dropping packs. They count against the cache's budget like any
+other pack, and `crewlet.code.cache.dropping.bytes` shows how much of the
+node's cache they hold: nothing but while an expunge is open on a repository
+the node holds, and held up for long by one that began and does not end.
+`crewlet code verify` names a dropping pack found among the live ones, or a
+live one among the dropping, as a stray, and its repair puts each back.
+
 **What the cache writes beside the packs.** Six kinds of file in a
 repository's cache are derived on the git nodes rather than named by the
 rows: the multi-pack index — a full read's, written before it answers once
@@ -2521,7 +2544,9 @@ repository it runs in *before* any hook can refuse them, so a push received
 in a node's cache would leave a refused push's objects there — fetchable by id
 from that one node, and a base a later push could build on that no other node
 holds. So a push is received in a throwaway **scratch** repository whose one
-alternate is the cache, and its pack enters the cache only once its row has
+alternate is the cache's packs — never the packs an expunge is dropping
+([the cache on a git node](#the-cache-on-a-git-node)), so no push relies on
+one — and its pack enters the cache only once its row has
 applied ([ADR-0054](https://github.com/crewlet/crewlet/blob/main/adr/0054-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
 The scratch is removed when the request ends, and a node that crashed with one
 open sweeps it at its next boot.

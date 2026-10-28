@@ -1199,12 +1199,13 @@ func (d *Derived) validateChained(bad func(field, format string, args ...any) er
 
 // derivedRoots is every directory of an incarnation's root that holds what
 // the rows and the declarations put there: objects/ — the packs', and git's
-// derived files' — and every other root a declaration owns or holds a file
-// under, each once, in the declarations' order. What a boot's walk of a copy
-// with no state reads (measureIncarnation), so a root validateAll admits is
-// one that walk reads.
+// derived files' — the dropping view (gitproc.DroppingDir, the packs an
+// expunge's begin left dropping), and every other root a declaration owns or
+// holds a file under, each once, in the declarations' order. What a boot's
+// walk of a copy with no state reads (measureIncarnation), so a root
+// validateAll admits is one that walk reads.
 func derivedRoots(decls []Derived) []string {
-	roots := []string{"objects"}
+	roots := []string{"objects", gitproc.DroppingDir}
 	for i := range decls {
 		for _, p := range decls[i].patterns() {
 			root, _, _ := strings.Cut(p.Dir, "/")

@@ -141,7 +141,8 @@ func (r *read) list(ctx context.Context, rev, dir, tree string, recursive bool, 
 		return code.GitAnswer{}, err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: append([]string{"ls-tree", "-z", "-l"}, tail...),
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args:   append([]string{"ls-tree", "-z", "-l"}, tail...),
 		Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	switch {

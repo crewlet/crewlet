@@ -359,6 +359,7 @@ func (c *Cache) setGauges() {
 	c.metrics.Set(metrics.CodeCacheBytes, float64(c.total()), nil)
 	c.metrics.Set(metrics.CodeCacheRepos, float64(c.heldRepos.Load()), nil)
 	c.metrics.Set(metrics.CodeCacheMemoBytes, float64(c.memoBytes.Load()), nil)
+	c.metrics.Set(metrics.CodeCacheDroppingBytes, float64(c.droppingBytes.Load()), nil)
 	c.metrics.Set(metrics.CodeCacheChained, float64(c.chainedRepos.Load()), nil)
 }
 

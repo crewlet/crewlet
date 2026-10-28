@@ -567,6 +567,12 @@ func TestCheckShapeIsThePoolsOwnCheck(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		gitproc.ShapeDropping: func(t *testing.T, bare string) {
+			if err := os.Symlink(filepath.Join(gittest.Empty(t), "objects"),
+				filepath.Join(bare, gitproc.DroppingDir)); err != nil {
+				t.Fatal(err)
+			}
+		},
 	}
 	for rule := range spoil {
 		if !rule.Valid() {

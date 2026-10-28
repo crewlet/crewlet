@@ -78,11 +78,18 @@ type state struct {
 	RefsDigest string `json:"refs_digest"`
 	// Refs is how many refs packed-refs holds.
 	Refs int `json:"refs"`
-	// Packs is how many packs are installed.
+	// Packs is how many packs are installed in objects/pack: what a
+	// multi-pack-index covers, which never covers the dropping view.
 	Packs int `json:"packs"`
-	// DiskBytes is the bytes of the installed pack files and packed-refs —
-	// what the rounds wrote. The derived files' are each Derived entry's.
+	// DiskBytes is the bytes of the installed pack files — the dropping
+	// view's among them — and packed-refs: what the rounds wrote. The
+	// derived files' are each Derived entry's.
 	DiskBytes int64 `json:"disk_bytes"`
+	// DroppingBytes is, of DiskBytes, the dropping view's pack files'
+	// (objects-dropping/pack): what a boot restores of the node's dropping
+	// total (crewlet.code.cache.dropping.bytes) without listing a directory.
+	// Absent while the copy holds none.
+	DroppingBytes int64 `json:"dropping_bytes,omitempty"`
 	// Derived is every declared derived file with a file of it on disk, by
 	// its declaration's name: a declaration with none on disk has no entry.
 	// One entry a declaration rather than one field a fact, so a kind a

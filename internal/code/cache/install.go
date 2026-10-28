@@ -19,6 +19,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -230,6 +232,13 @@ const (
 // packs installed before it stay, named by rows, and the next round skips
 // them.
 //
+// EACH PACK GOES WHERE ITS ROWS PLACE IT once the round has applied
+// (placesAfter): objects/pack, or — for a pack only rows an expunge's begin
+// left dropping name — the incarnation's DROPPING VIEW, made with the first
+// pack placed in it (ensureView), which only a process serving the copy reads
+// (packPlace). A pack its rows moved from one to the other is installed at
+// its new place, one GET, its files at the old leaving with the swap.
+//
 // A FULL ROUND'S LAYERS JOIN THE SAME QUEUE (layers.go): every part of every
 // layer of chain.want — the published chain above what the copy keeps, root
 // first — is handed out BEHIND the round's packs in the one turn chain, in
@@ -246,7 +255,6 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	chain chainPlan) (installs, error) {
 
 	var out installs
-	packDir := filepath.Join(inc.dir, "objects", "pack")
 	reinstall, _ := ck.still(c.image, inc.dir)
 	var todo []code.PackRow
 	// over is every pack this install places over files present, by its
@@ -268,9 +276,16 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	e.mu.Lock()
 	before := inc.state
 	heldOff := inc.repair.heldOff(now)
+	// WHERE EACH PACK GOES: where the live set places it once the round has
+	// applied the snapshot — the dropping view for a pack only rows an
+	// expunge's begin left dropping name, objects/pack for any other.
+	places := placesAfter(inc, snap)
 	e.mu.Unlock()
 	for _, p := range snap.packs {
-		have, err := installed(packDir, p, snap.full)
+		// Two rows of one checksum name one set of files, which one place
+		// holds: their rows place it together.
+		place := places[p.GitChecksum]
+		have, err := installed(filepath.Join(inc.dir, place.rel()), p, snap.full)
 		f, failed := reinstall[p.GitChecksum]
 		switch {
 		case err != nil:
@@ -283,12 +298,15 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 			continue
 		case have == packWhole && f.hinted:
 			over[p.GitChecksum] = reinstallWhy{found: "hint", trigger: f.trigger,
-				drops: f.index || !c.indexVouched(e, inc, p.GitChecksum)}
+				drops: f.index || !c.indexVouched(e, inc, place, p.GitChecksum)}
 		case have == packWhole:
 			over[p.GitChecksum] = reinstallWhy{found: "trailer", trigger: f.trigger, drops: f.index}
 		case have == packWrongSize:
 			over[p.GitChecksum] = reinstallWhy{found: "size", trigger: ck.trigger, drops: true}
-		case lost(before, snap, p):
+		case lost(before, snap, p) && !heldAt(inc.dir, place.other(), p):
+			// Lost, not MOVED: a pack its rows place anew — out of
+			// objects/pack into the dropping view, or back — is installed at
+			// its new place, and is no repair.
 			absent[p.GitChecksum] = true
 		}
 		todo = append(todo, p)
@@ -395,12 +413,27 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	}
 	var workers sync.WaitGroup
 	var waited error
+	// placedIn is every directory a pack was placed in, by its place: each
+	// synced once the install ends, before any ref names what it holds.
+	var placedIn [placeDropping + 1]atomic.Bool
+	viewMade := false
 	turn := make(chan struct{})
 	close(turn) // the first worker's turn is now
 	for _, p := range todo {
 		if err := rctx.Err(); err != nil {
 			waited = context.Cause(rctx)
 			break
+		}
+		place := places[p.GitChecksum]
+		packDir := filepath.Join(inc.dir, place.rel())
+		if place == placeDropping && !viewMade {
+			// The dropping view, made durable before any pack is placed in
+			// it — the copy's first dropping pack makes it.
+			if err := c.ensureView(inc.dir); err != nil {
+				fail(fmt.Errorf("cache: sync %s: install: %w", e.id, err))
+				break
+			}
+			viewMade = true
 		}
 		// A pack this node's own push wrote, handed to the round by its
 		// adoption (adopt.go), is installed from those files — three links
@@ -415,7 +448,8 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 					break
 				}
 			}
-			if c.installHanded(e, inc, packDir, p, st) {
+			if c.installHanded(e, inc, place, p, st) {
+				placedIn[place].Store(true)
 				added.Add(1)
 				continue
 			}
@@ -480,10 +514,11 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 					return
 				}
 			}
-			if err := c.placePack(e, inc, packDir, staged, present, absent[staged.p.GitChecksum]); err != nil {
+			if err := c.placePack(e, inc, place, staged, present, absent[staged.p.GitChecksum]); err != nil {
 				fail(err)
 				return
 			}
+			placedIn[place].Store(true)
 			if !present {
 				added.Add(1)
 				if absent[staged.p.GitChecksum] {
@@ -589,13 +624,49 @@ func (c *Cache) install(ctx context.Context, e *entry, inc *incarnation, snap sn
 	if droppedOver.Load() {
 		out.dropped = dropped
 	}
-	if out.added+out.replaced > 0 {
-		// The renames are durable before any ref names what they installed.
-		if serr := syncDir(packDir); serr != nil && err == nil {
+	// The renames are durable before any ref names what they installed: each
+	// directory a pack landed in synced once.
+	for _, place := range []packPlace{placeLive, placeDropping} {
+		if !placedIn[place].Load() {
+			continue
+		}
+		if serr := syncDir(filepath.Join(inc.dir, place.rel())); serr != nil && err == nil {
 			err = fmt.Errorf("cache: sync %s: install: %w", e.id, serr)
 		}
 	}
 	return out, err
+}
+
+// ensureView makes the dropping view of the incarnation at dir where it is
+// not there yet — its two directories, gitproc.DroppingDir and its pack
+// directory — each new entry durable before any pack is placed in it, as
+// durable.go's rule asks of what a file names. Something else at either name
+// fails it: the next full round's sweep moves that aside (sweep.go's image).
+func (c *Cache) ensureView(dir string) error {
+	view := filepath.Join(dir, droppingRel)
+	if info, err := os.Lstat(view); err == nil && info.IsDir() {
+		return nil
+	}
+	if err := os.MkdirAll(view, hostbox.DirMode); err != nil {
+		return fmt.Errorf("making the dropping view %s: %w", view, err)
+	}
+	for _, d := range []string{filepath.Join(dir, gitproc.DroppingDir), dir} {
+		if err := syncDir(d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// heldAt reports whether the incarnation at dir holds p whole at place: what
+// tells a pack its rows MOVED — out of objects/pack into the dropping view, or
+// back — from one the copy lost. A file that cannot be read says it does not.
+func heldAt(dir string, place packPlace, p code.PackRow) bool {
+	if place == placeNone {
+		return false
+	}
+	have, err := installed(filepath.Join(dir, place.rel()), p, false)
+	return err == nil && have == packWhole
 }
 
 // reinstallWhy is why an install places a pack over files the directory
@@ -633,11 +704,12 @@ type installs struct {
 	layers []layerFetch
 }
 
-// indexVouched reports whether the .idx of inc's pack cs is one this process
-// wrote or held to its trailer, at the identity it has now: a hint's damage,
-// which the hint places only in the pack's bundle, is then not the index's.
-func (c *Cache) indexVouched(e *entry, inc *incarnation, cs string) bool {
-	rel := packFileRel(cs, ".idx")
+// indexVouched reports whether the .idx of inc's pack cs at place is one this
+// process wrote or held to its trailer, at the identity it has now: a hint's
+// damage, which the hint places only in the pack's bundle, is then not the
+// index's.
+func (c *Cache) indexVouched(e *entry, inc *incarnation, place packPlace, cs string) bool {
+	rel := packFileRel(place, cs, ".idx")
 	id := lstatID(filepath.Join(inc.dir, rel))
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -693,10 +765,14 @@ func installed(packDir string, p code.PackRow, sized bool) (packHeld, error) {
 	return held, nil
 }
 
-// placePack makes s durable and renames it into packDir, counting the pack into
+// placePack makes s durable and renames it into the directory place puts it in
+// — objects/pack, or the dropping view (packPlace) — counting the pack into
 // inc: its three files synced at once while still in tmp/, then renamed
 // .pack, .rev, and the .idx LAST, because git counts a pack present once its
-// .idx exists. Whatever of s is not placed is removed, failure or not.
+// .idx exists. Whatever of s is not placed is removed, failure or not. A pack
+// in the dropping view is counted in the bytes inc holds (setDropping beside
+// setSize) and in none of the packs or objects an index covers (inc.packs,
+// inc.objects), which never covers the view.
 //
 // THE SYNCS ARE ISSUED TOGETHER: a sync is a journal commit, and a bundle's
 // three made one after another were three commits a bundle — half of a cold
@@ -718,11 +794,12 @@ func installed(packDir string, p code.PackRow, sized bool) (packHeld, error) {
 // wrote it, from a bundle held to its row (check.go). A placement over damaged
 // files, or of a pack the copy had lost, is a REPAIR (incarnation.repairWrite):
 // a request that failed before it may have failed on what it replaced.
-func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedPack, over, repairs bool) error {
+func (c *Cache) placePack(e *entry, inc *incarnation, place packPlace, s *stagedPack, over, repairs bool) error {
 	defer s.remove(c)
 	if err := c.syncStaged(s); err != nil {
 		return fmt.Errorf("cache: sync %s: install pack %s: %w", e.id, s.p.PackID, err)
 	}
+	packDir := filepath.Join(inc.dir, place.rel())
 	var was int64
 	for _, ext := range []string{".pack", ".rev", ".idx"} {
 		dst := filepath.Join(packDir, "pack-"+s.p.GitChecksum+ext)
@@ -739,11 +816,7 @@ func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedP
 		c.hookInstall(strings.TrimPrefix(ext, "."), packDir)
 	}
 	e.mu.Lock()
-	if !over {
-		inc.packs++
-		inc.objects += s.p.Objects
-	}
-	c.setSize(inc, inc.diskBytes+s.p.Size-was)
+	c.counted(inc, place, s.p, !over, s.p.Size-was)
 	if over || repairs {
 		repaired(inc)
 	}
@@ -751,8 +824,24 @@ func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedP
 	// is over (repairMark.fetchFailed).
 	delete(inc.repair.fetchFailed, s.p.GitChecksum)
 	e.mu.Unlock()
-	c.vouchPack(e, inc, s.p.GitChecksum)
+	c.vouchPack(e, inc, place, s.p.GitChecksum)
 	return nil
+}
+
+// counted counts a pack placed at place into inc — added, a pack it did not
+// hold there before, or placed over files it held, which moves its bytes by
+// grew alone: the bytes on its disk, of them the dropping view's, and the
+// packs and objects an index covers, which a pack in the view is none of.
+// e.mu is held.
+func (c *Cache) counted(inc *incarnation, place packPlace, p code.PackRow, added bool, grew int64) {
+	if added && place != placeDropping {
+		inc.packs++
+		inc.objects += p.Objects
+	}
+	c.setSize(inc, inc.diskBytes+grew)
+	if place == placeDropping {
+		c.setDropping(inc, inc.droppingBytes+grew)
+	}
 }
 
 // installHanded installs p from the staging an adoption handed the round —
@@ -761,8 +850,9 @@ func (c *Cache) placePack(e *entry, inc *incarnation, packDir string, s *stagedP
 // order, and reports whether it did. One it could not link is logged and
 // left to the download, which needs nothing from it: the staging is dropped
 // either way, and the directory is synced with the round's other installs.
-func (c *Cache) installHanded(e *entry, inc *incarnation, packDir string, p code.PackRow, st *staging) bool {
+func (c *Cache) installHanded(e *entry, inc *incarnation, place packPlace, p code.PackRow, st *staging) bool {
 	defer c.dropStaging(st)
+	packDir := filepath.Join(inc.dir, place.rel())
 	linked, err := linkBundle(nil, st.stem, packDir, p.GitChecksum, func(ext string) {
 		c.hookInstall(strings.TrimPrefix(ext, "."), packDir)
 	})
@@ -773,11 +863,9 @@ func (c *Cache) installHanded(e *entry, inc *incarnation, packDir string, p code
 		return false
 	}
 	e.mu.Lock()
-	inc.packs++
-	inc.objects += p.Objects
-	c.setSize(inc, inc.diskBytes+p.Size)
+	c.counted(inc, place, p, true, p.Size)
 	e.mu.Unlock()
-	c.vouchPack(e, inc, p.GitChecksum)
+	c.vouchPack(e, inc, place, p.GitChecksum)
 	return true
 }
 

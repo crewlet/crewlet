@@ -168,7 +168,8 @@ func (r *read) touched(ctx context.Context, base, head string, limit int) ([]str
 		return nil, false, err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-r", "--name-only", "-z", "--no-renames"}, base, head),
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args:   append([]string{"diff-tree", "-r", "--name-only", "-z", "--no-renames"}, base, head),
 		Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	switch {
@@ -202,7 +203,8 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, bool, er
 	defer func() { _ = spool.Close() }()
 	w := &spooled{f: spool, limit: r.s.patchBytes}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-r", "-p", "--full-index", "--no-renames",
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: append([]string{"diff-tree", "-r", "-p", "--full-index", "--no-renames",
 			"--no-color", "--no-ext-diff", "--no-textconv", "-U3"}, base, head),
 		Config: append(r.s.o.Cache.ServeConfig(), patchConfig), Stdout: w, Class: gitproc.ClassRead,
 		Deadline: deadline,
@@ -231,7 +233,8 @@ func (r *read) patchID(ctx context.Context, base, head string) (string, bool, er
 		return "", true, nil // the patch spent the read's whole budget
 	}
 	res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: []string{"patch-id", "--verbatim"}, Config: r.s.o.Cache.ServeConfig(),
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: []string{"patch-id", "--verbatim"}, Config: r.s.o.Cache.ServeConfig(),
 		Stdin: spool, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	if r.omits(ctx, res, err) {

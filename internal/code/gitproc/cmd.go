@@ -59,6 +59,14 @@ type KV struct{ Key, Value string }
 // refuses a directory whose config is anything else ([ErrRepoShape]).
 const RepoConfig = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n"
 
+// DroppingDir is the name, in a cache incarnation's root, of the OBJECT
+// DIRECTORY its dropping packs live in ([Cmd.Dropping]): beside objects/ and
+// never under it, so a process that reads objects/ through an alternate — a
+// push's scratch, an advertisement view, a build — reaches none of it, and so
+// git, which lists an alternate's refs by stripping "/objects" from its path
+// and running in what is left, starts no process at it.
+const DroppingDir = "objects-dropping"
+
 // The two variables a call site may add (Cmd.Env): where receive-pack's hook
 // reaches the engine's relay, and the token it presents there.
 const (
@@ -273,6 +281,19 @@ type Cmd struct {
 	// scratch and an advertisement view name the cache incarnation they
 	// lean on; nothing else the engine runs git in has one.
 	Alternate string
+
+	// Dropping is the object directory of the DROPPING packs of the cache
+	// incarnation Dir is — exactly Dir's [DroppingDir], a directory of Dir's
+	// own — or "" for none: what a process that SERVES the incarnation reads
+	// beside its objects, as GIT_ALTERNATE_OBJECT_DIRECTORIES, so an object
+	// an expunge has left dropping is still answered by id while no push may
+	// rely on it. Refused ([ErrInvalid]) with no Dir, beside an Alternate —
+	// a process leaning on one writes into a repository of its own, and
+	// nothing it writes may rely on a dropping object — and as any other
+	// path; a directory that is not Dir's own, or none at all, is the
+	// repository's shape ([ShapeDropping]). Never an alternates file: git
+	// follows one from every repository that names Dir as its alternate.
+	Dropping string
 
 	// Loads, when set, is the chunk-format files the process loads, where
 	// its caller knows it loads only one of them — a cat-file asked about
@@ -720,6 +741,9 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		return prepared{}, fmt.Errorf("%w: Cmd.Alternate %q names an alternate for no repository: Cmd.Dir is empty",
 			ErrInvalid, c.Alternate)
 	}
+	if err := checkDroppingCall(c); err != nil {
+		return prepared{}, err
+	}
 	if err := checkConfig(c.Config); err != nil {
 		return prepared{}, err
 	}
@@ -737,7 +761,9 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		remote = c.Remote.config(p.remoteStall)
 	}
 
-	env := make([]string, 0, len(p.baseEnv)+3+2*(len(baseKeys)+len(remote)+len(c.Config))+len(c.Env)+len(identityVars))
+	// Five beside the tables: GIT_DIR or GIT_CEILING_DIRECTORIES,
+	// GIT_PROTOCOL, GIT_CONFIG_COUNT, and the dropping view's two.
+	env := make([]string, 0, len(p.baseEnv)+5+2*(len(baseKeys)+len(remote)+len(c.Config))+len(c.Env)+len(identityVars))
 	env = append(env, p.baseEnv...)
 	wd := c.Dir
 	if c.Dir != "" {
@@ -752,6 +778,18 @@ func (p *Pool) prepare(c Cmd) (prepared, error) {
 		} else {
 			p.log.Debug("code_git_protocol_dropped", "protocol", textcut.Ellipsis(c.Protocol, 64))
 		}
+	}
+	if c.Dropping != "" {
+		// A SERVING PROCESS'S VIEW of the dropping packs, and its children's
+		// — upload-pack's pack-objects among them — which inherit it.
+		env = append(env, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+alternateEntry(c.Dropping))
+	}
+	if c.Alternate != "" && leansOnDropping(c.Alternate) {
+		// No commit-graph's word for a commit the process cannot read: its
+		// alternate's graph may name one only a dropping pack holds
+		// (leansOnDropping), and git answers a commit the graph names from
+		// the graph alone unless told to hold it to the objects.
+		env = append(env, "GIT_COMMIT_GRAPH_PARANOIA=1")
 	}
 	env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(baseKeys)+len(remote)+len(c.Config)))
 	threads := -1
@@ -873,11 +911,17 @@ const (
 	// naming the alternate's objects directory for one — and the alternate
 	// to holding none of its own.
 	ShapeAlternates ShapeRule = "alternates"
+	// ShapeDropping holds a [DroppingDir], where there is one, to a
+	// directory of the repository's OWN — at its real path, never a link,
+	// which would serve another directory's objects by id to every process
+	// that names it ([Cmd.Dropping]) — and holds a call that names it to one
+	// that is there.
+	ShapeDropping ShapeRule = "dropping"
 )
 
 // ShapeRules is every [ShapeRule]: each holds the call's Dir, and the
 // alternate it names, alike.
-var ShapeRules = []ShapeRule{ShapeConfig, ShapeCommondir, ShapeObjects, ShapeAlternates}
+var ShapeRules = []ShapeRule{ShapeConfig, ShapeCommondir, ShapeObjects, ShapeAlternates, ShapeDropping}
 
 // Valid reports whether r is one of [ShapeRules].
 func (r ShapeRule) Valid() bool { return slices.Contains(ShapeRules, r) }
@@ -986,7 +1030,117 @@ func checkRepo(dir string, alternate bool) error {
 	case !errors.Is(err, fs.ErrNotExist):
 		return fmt.Errorf("gitproc: reading whether %s holds a commondir: %w", dir, err)
 	}
-	return checkObjects(dir, alternate)
+	if err := checkObjects(dir, alternate); err != nil {
+		return err
+	}
+	return checkDropping(dir, alternate, false)
+}
+
+// checkDropping holds dir's [DroppingDir] to ShapeDropping: absent — but for
+// a call that names it (named), to which it must be there — or a directory of
+// dir's own, at its real path. As checkObjects does dir's objects, and for
+// its reason: a link there would read another directory's objects as the
+// dropping packs of this repository, every one of them fetchable by id.
+func checkDropping(dir string, alternate, named bool) error {
+	view := filepath.Join(dir, DroppingDir)
+	_, err := os.Lstat(view)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && !named:
+		return nil
+	case errors.Is(err, fs.ErrNotExist):
+		return misshapen(ShapeDropping, dir, alternate, "%s holds no %s, and the call names it as the dropping view "+
+			"it serves: the cache makes it with the first dropping pack it installs", dir, DroppingDir)
+	case err != nil:
+		return fmt.Errorf("gitproc: reading whether %s holds a %s: %w", dir, DroppingDir, err)
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("gitproc: resolving %s: %w", dir, err)
+	}
+	resolved, err := filepath.EvalSymlinks(view)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return misshapen(ShapeDropping, dir, alternate, "%s's %s is a link to nowhere: %v", dir, DroppingDir, err)
+	case err != nil:
+		return fmt.Errorf("gitproc: resolving %s: %w", view, err)
+	case resolved != filepath.Join(real, DroppingDir):
+		return misshapen(ShapeDropping, dir, alternate, "%s's %s is a link to %s: a repository's dropping packs are "+
+			"its own, and the engine never links them", dir, DroppingDir, resolved)
+	}
+	info, err := os.Stat(resolved)
+	switch {
+	case err != nil:
+		return fmt.Errorf("gitproc: reading %s: %w", resolved, err)
+	case !info.IsDir():
+		return misshapen(ShapeDropping, dir, alternate, "%s's %s is no directory", dir, DroppingDir)
+	}
+	return nil
+}
+
+// checkDroppingCall refuses a call that names a dropping view it may not
+// ([Cmd.Dropping]): with no repository, beside an alternate, or as anything
+// but its repository's own DroppingDir — and holds the one it names to being
+// there (ShapeDropping, checkDropping).
+func checkDroppingCall(c Cmd) error {
+	switch {
+	case c.Dropping == "":
+		return nil
+	case c.Dir == "":
+		return fmt.Errorf("%w: Cmd.Dropping %q names a dropping view for no repository: Cmd.Dir is empty",
+			ErrInvalid, c.Dropping)
+	case c.Alternate != "":
+		return fmt.Errorf("%w: Cmd.Dropping %q beside Cmd.Alternate %q: a process leaning on an alternate writes into "+
+			"a repository of its own, and nothing it writes may rely on an object an expunge has left dropping",
+			ErrInvalid, c.Dropping, c.Alternate)
+	case c.Dropping != filepath.Join(c.Dir, DroppingDir):
+		return fmt.Errorf("%w: Cmd.Dropping %q is not %s: a dropping view is its own repository's %s",
+			ErrInvalid, c.Dropping, filepath.Join(c.Dir, DroppingDir), DroppingDir)
+	}
+	return checkDropping(c.Dir, false, true)
+}
+
+// leansOnDropping reports whether alternate — the repository a process leans
+// on — holds a dropping view (DroppingDir): its commit-graph, which git loads
+// for the process as its own, may then name a commit only a dropping pack
+// holds, which the process cannot read. Anything at the name but its absence
+// counts, an unreadable one included: the paranoia it asks costs a lookup a
+// commit, and leaving it off a process that needed it lets a push rely on an
+// object an expunge drops.
+func leansOnDropping(alternate string) bool {
+	_, err := os.Lstat(filepath.Join(alternate, DroppingDir))
+	return !errors.Is(err, fs.ErrNotExist)
+}
+
+// alternateEntry is path as one entry of GIT_ALTERNATE_OBJECT_DIRECTORIES:
+// as it is, or — where it holds the list's separator, begins with a double
+// quote or holds a byte git's C-style unquoting would read — C-quoted, as git
+// reads an entry that begins with a double quote (object-file.c's
+// parse_alt_odb_entry, unquote_c_style): a cache directory may be named
+// anything its operator chose.
+func alternateEntry(path string) string {
+	if !strings.ContainsAny(path, string(os.PathListSeparator)+`"\`) && !hasControl(path) {
+		return path
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := range len(path) {
+		switch c := path[i]; {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&b, `\%03o`, c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// hasControl reports whether s holds an ASCII control byte.
+func hasControl(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
 }
 
 // checkObjects holds dir to ShapeObjects: its objects directory, resolved,

@@ -28,7 +28,12 @@ import (
 //	objects/info/   nothing fixed: an alternates file here would serve
 //	                another repository's objects by id, and the pool refuses
 //	                it (gitproc.ShapeAlternates)
-//	objects/pack/   pack-<cs>.{pack,idx,rev} for every pack the rows name
+//	objects/pack/   pack-<cs>.{pack,idx,rev} for every pack a live row names
+//	objects-dropping/pack/
+//	                pack-<cs>.{pack,idx,rev} for every pack only rows an
+//	                expunge's begin left dropping name: the DROPPING VIEW,
+//	                which only a process serving the copy reads
+//	                (gitproc.Cmd.Dropping), there while it holds a pack
 //	declared        every file a declaration of derived.go owns, in the
 //	                directory it names — the commit-graph in objects/info, the
 //	                multi-pack-index's files in objects/pack — unless a change
@@ -94,6 +99,24 @@ var packFileName = regexp.MustCompile(`^pack-([0-9a-f]{40})\.(pack|idx|rev)$`)
 // it; where each derived file lives is its declaration's (derived.go).
 var packRel = filepath.Join("objects", "pack")
 
+// droppingRel is the directory of an incarnation its DROPPING packs live in,
+// relative to it (packPlace, M6-D3): objects-dropping/pack, in an object
+// directory of its own BESIDE objects/ (gitproc.DroppingDir), which a process
+// serving the copy names and nothing leaning on the copy's objects/ — a push's
+// scratch, a build — reaches. Not under objects/, where a scratch's alternate
+// would find it; and no alternates file names it, which git would follow from
+// every repository that names the copy as ITS alternate.
+var droppingRel = filepath.Join(gitproc.DroppingDir, "pack")
+
+// packDirs is the directories of an incarnation pack files live in, each a
+// place's (packPlace.rel): objects/pack, then the dropping view's.
+var packDirs = []string{packRel, droppingRel}
+
+// droppingDirs is the dropping view's directories, parents first: in the
+// image whenever they are there, and made by whatever places a pack in them —
+// required of no incarnation, since most never hold a dropping pack.
+var droppingDirs = []string{gitproc.DroppingDir, droppingRel}
+
 // entryKind is what a directory entry is: a regular file, a directory, or
 // anything else (a symbolic link, a device, a socket).
 type entryKind uint8
@@ -124,13 +147,14 @@ type image struct {
 	// decls is the declarations, in DerivedFiles' order: a derivedSet's bit i
 	// is decls[i].
 	decls []Derived
-	// dirs is every directory of the image, parents first: fixedDirs, then
-	// every directory a declaration owns or holds a file in, with its
-	// parents, each as the filepath of the incarnation's.
+	// dirs is every directory of the image, parents first: fixedDirs, the
+	// dropping view's (droppingDirs), then every directory a declaration owns
+	// or holds a file in, with its parents, each as the filepath of the
+	// incarnation's.
 	dirs []string
 	// dir is dirs as a set, and required those of them every incarnation
 	// has: fixedDirs. A declared directory git has not yet written is no
-	// directory missing.
+	// directory missing, and nor is a dropping view a copy holds no pack in.
 	dir, required map[string]bool
 	// stating, when set, is told the path relative to the incarnation of
 	// every entry sizes is about to stat: the suite's count of what a
@@ -158,6 +182,9 @@ func newImage(decls []Derived) (*image, error) {
 	for _, rel := range fixedDirs {
 		add(filepath.FromSlash(rel))
 		im.required[filepath.FromSlash(rel)] = true
+	}
+	for _, rel := range droppingDirs {
+		add(rel)
 	}
 	for i := range im.decls {
 		for _, p := range im.decls[i].patterns() {
@@ -638,10 +665,10 @@ func (c *Cache) tidy(inc *incarnation, snap snapshot) (bool, error) {
 	}
 	// Every other directory of the image, parents first, so a declared
 	// directory that is something else than a directory went with its
-	// parent's listing before its own is read. objects/pack is the second
-	// half's (packStrays).
+	// parent's listing before its own is read. objects/pack and the dropping
+	// view's pack directory are the second half's (packStrays).
 	for _, rel := range c.image.dirs {
-		if rel != "." && rel != packRel {
+		if rel != "." && !slices.Contains(packDirs, rel) {
 			t.outside(inc.dir, rel)
 		}
 	}
@@ -768,11 +795,15 @@ func (t *trashing) dirs(inc string) []string {
 }
 
 // packStrays decides the sweep's second half on a full answer, before the
-// round's index and its refs: every pack file of objects/pack the snapshot
-// does not name — a stray, a pack no row names any more — and what took each
-// out: a COMPACTION'S RETIREMENT (EventPackRetired) where the snapshot's
-// retired phase names its checksum and the log under the incarnation is the
-// history it was read from (history false), and otherwise a pack REMOVED
+// round's index and its refs: every pack file of a pack directory that the
+// snapshot does not place there — a stray: a pack no row names any more, or
+// one its rows now place in the other directory (snapshot.places: the
+// dropping view for a pack only dropping rows name, objects/pack for any
+// other) — and what took each out: a COMPACTION'S RETIREMENT
+// (EventPackRetired) where the snapshot's retired phase names its checksum
+// and the log under the incarnation is the history it was read from (history
+// false), or where its rows still place the pack in the other directory, its
+// objects staying in the copy; and otherwise a pack REMOVED
 // (EventPackRemoved): a log gone back or recreated, or a full answer that
 // served no retirements, which leaves no stray accounted for. A stray's
 // leaving is what a declaration built over the packs answers (On): an index
@@ -787,12 +818,15 @@ func (t *trashing) dirs(inc string) []string {
 // move once the new refs are in, and every derived file built over the packs
 // is dropped NOW, first, by the strongest event among them (dropFor): an
 // index naming a missing pack fails every read of the repository, and the
-// round's own index is then written over exactly the snapshot's packs. Any
-// OTHER — converged, so atOnce may hand it to a reader while this round runs,
-// or pinned — keeps every file a reader may open, and its strays are answered
-// as leaving, by checksum: the round's end swaps the incarnation for the next
-// (swap.go), which holds the live packs alone, and nothing of them is dropped
-// or moved here.
+// round's own index is then written over exactly the snapshot's packs. A
+// dropping view the snapshot places no pack in goes whole with its strays,
+// so a push's scratch leaning on the copy is spared the paranoia a view asks
+// of it (gitproc.Cmd.Dropping). Any OTHER — converged, so atOnce may hand it
+// to a reader while this round runs, or pinned — keeps every file a reader
+// may open, and its strays are answered as leaving, by where they are and
+// their checksum: the round's end swaps the incarnation for the next
+// (swap.go), which holds each pack its rows name where they place it and
+// nothing else, and nothing of them is dropped or moved here.
 //
 // Every other entry the image does not admit goes now too, at this one
 // listing: it is no pack's file, so no reader of the old refs reads it, and
@@ -801,50 +835,78 @@ func (t *trashing) dirs(inc string) []string {
 // is what would refuse the round's index below. Kept for sweepPacks, the lock
 // was refused the index, whose failure removed it from under the sweep that
 // had listed it, and the round failed on the move. It reports whether it
-// moved anything, or will once the refs are in.
-func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bool) ([]string, map[string]Event,
-	bool, error) {
+// moved anything, or will once the refs are in; the strays it answers are
+// paths relative to the incarnation.
+func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bool) ([]string,
+	map[leaveKey]Event, bool, error) {
 
-	packDir := filepath.Join(inc.dir, packRel)
-	want := map[string]bool{}
-	for _, p := range snap.packs {
-		for _, ext := range []string{".pack", ".idx", ".rev"} {
-			want["pack-"+p.GitChecksum+ext] = true
+	places := snap.places()
+	want := map[string]map[string]bool{packRel: {}, droppingRel: {}}
+	viewWanted := false
+	for cs, place := range places {
+		viewWanted = viewWanted || place == placeDropping
+		for _, ext := range bundleOrder {
+			want[place.rel()]["pack-"+cs+ext] = true
 		}
 	}
 	// THE CHAIN HOLDS ITS PACKS (layers.go): a pack an installed layer names
-	// is no stray, whatever its rows say, until the layer goes.
+	// is no stray of objects/pack, whatever its rows say, until the layer
+	// goes.
 	e.mu.Lock()
 	for cs := range inc.installedPacks {
-		for _, ext := range []string{".pack", ".idx", ".rev"} {
-			want["pack-"+cs+ext] = true
+		for _, ext := range bundleOrder {
+			want[packRel]["pack-"+cs+ext] = true
 		}
 	}
 	e.mu.Unlock()
-	list, err := os.ReadDir(packDir)
-	if err != nil {
-		return nil, nil, false, err
+	type stray struct {
+		place packPlace
+		name  string
 	}
-	var strays []string
+	var strays []stray
 	now := &trashing{c: c}
-	for _, d := range list {
-		name := d.Name()
-		switch {
-		case (want[name] && d.Type().IsRegular()) || c.image.imaged(packRel, name, kindOf(d)):
-		case strings.HasPrefix(name, "pack-"):
-			strays = append(strays, name)
-		default:
-			if now.move(filepath.Join(packDir, name)); now.err != nil {
-				return nil, nil, now.moved, now.err
+	// The view's directory there at all: tidy has held it to the image, a
+	// directory, or moved it aside.
+	_, err := os.Lstat(filepath.Join(inc.dir, gitproc.DroppingDir))
+	viewHeld := err == nil
+	for _, place := range []packPlace{placeLive, placeDropping} {
+		rel := place.rel()
+		list, err := c.image.listed(inc.dir, rel)
+		if err != nil {
+			return nil, nil, now.moved, err
+		}
+		dir := filepath.Join(inc.dir, rel)
+		moved := false
+		for _, d := range list {
+			name := d.Name()
+			switch {
+			case (want[rel][name] && d.Type().IsRegular()) || c.image.imaged(rel, name, kindOf(d)):
+			case strings.HasPrefix(name, "pack-"):
+				strays = append(strays, stray{place, name})
+			default:
+				if now.move(filepath.Join(dir, name)); now.err != nil {
+					return nil, nil, now.moved, now.err
+				}
+				moved = true
+			}
+		}
+		if moved {
+			if err = syncDir(dir); err != nil {
+				return nil, nil, true, err
 			}
 		}
 	}
-	if now.moved {
-		if err = syncDir(packDir); err != nil {
-			return nil, nil, true, err
-		}
-	}
+	e.mu.Lock()
+	held := inc.converged || inc.pins > 0
+	known := maps.Clone(inc.leaving)
+	e.mu.Unlock()
+	emptied := viewHeld && !viewWanted && !held
 	if len(strays) == 0 {
+		if emptied {
+			// A view the rows place nothing in, left by a crash or a hand:
+			// it goes, so no scratch over the copy is paranoid for nothing.
+			return []string{gitproc.DroppingDir}, nil, true, nil
+		}
 		return nil, nil, now.moved, nil
 	}
 	// What took a stray out is what this answer's retirements say, or what
@@ -855,16 +917,13 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	if !history && !snap.retiredFrom.IsZero() {
 		retired = snap.retiredChecksums()
 	}
-	e.mu.Lock()
-	held := inc.converged || inc.pins > 0
-	known := maps.Clone(inc.leaving)
-	e.mu.Unlock()
-	leaving := map[string]Event{}
-	for _, name := range strays {
-		key, ev := name, EventPackRemoved
-		if m := packFileName.FindStringSubmatch(name); m != nil {
-			key = m[1]
-			if !history && (retired[key] || known[key] == EventPackRetired) {
+	leaving := map[leaveKey]Event{}
+	for _, s := range strays {
+		key, ev := leaveKey{s.place, s.name}, EventPackRemoved
+		if m := packFileName.FindStringSubmatch(s.name); m != nil {
+			key.name = m[1]
+			if places[key.name] != placeNone ||
+				!history && (retired[key.name] || known[key] == EventPackRetired) {
 				ev = EventPackRetired
 			}
 		}
@@ -881,32 +940,55 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 		if v == EventPackRemoved {
 			ev = EventPackRemoved
 		}
-		gone[key] = true
+		gone[key.name] = true
 	}
-	if _, err = c.dropFor(e, inc, ev, eventDetail{packs: gone}); err != nil {
+	if _, err := c.dropFor(e, inc, ev, eventDetail{packs: gone}); err != nil {
 		return nil, nil, true, err
 	}
-	return strays, nil, true, nil
+	var rels []string
+	for _, s := range strays {
+		if !emptied || s.place != placeDropping {
+			rels = append(rels, filepath.Join(s.place.rel(), s.name))
+		}
+	}
+	if emptied {
+		// The view whole, its strays in it: one rename, and no directory left
+		// behind to make every scratch over the copy paranoid for nothing.
+		rels = append(rels, gitproc.DroppingDir)
+	}
+	return rels, nil, true, nil
 }
 
 // sweepPacks is the sweep's second half, once the refs are in: every stray
 // packStrays answered to move — none where the strays leave by the swap — is
 // moved into trash/, so a reader of the old refs never loses a pack they name
 // — and then the incarnation's counts are MEASURED, whatever they had drifted
-// to: strays the swap is about to take out included.
+// to: strays the swap is about to take out included. strays are paths
+// relative to the incarnation: a pack's file, or a dropping view whole.
 func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, error) {
-	packDir := filepath.Join(inc.dir, packRel)
 	t := &trashing{c: c}
-	for _, name := range strays {
-		if t.move(filepath.Join(packDir, name)); t.err != nil {
+	for _, rel := range strays {
+		gone := []string{rel}
+		if rel == gitproc.DroppingDir {
+			// The view whole: the vouches of the files it takes with it go too.
+			list, err := os.ReadDir(filepath.Join(inc.dir, droppingRel))
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return t.moved, err
+			}
+			gone = gone[:0]
+			for _, d := range list {
+				gone = append(gone, filepath.Join(droppingRel, d.Name()))
+			}
+		}
+		if t.move(filepath.Join(inc.dir, rel)); t.err != nil {
 			return true, t.err
 		}
 		e.mu.Lock()
-		unvouch(inc, filepath.Join(packRel, name))
+		unvouch(inc, gone...)
 		e.mu.Unlock()
 	}
-	if t.moved {
-		if err := syncDir(packDir); err != nil {
+	for d := range t.touched {
+		if err := syncDir(d); err != nil {
 			return true, err
 		}
 	}
@@ -1104,9 +1186,10 @@ func (c *Cache) droppedDerived(inc *incarnation, s derivedSet) {
 	}
 }
 
-// measure sets inc's counts from its directory: the packs installed (an .idx
-// with its .pack), the bytes of their files and packed-refs, and each derived
-// file's (recordDerived). A derived file whose main file is no longer on disk
+// measure sets inc's counts from its directory: the packs installed in
+// objects/pack (an .idx with its .pack), the bytes of their files, of the
+// dropping view's and of packed-refs, and each derived file's
+// (recordDerived). A derived file whose main file is no longer on disk
 // is no longer recorded as made — an index gone covers nothing, a graph gone
 // is due again — and a declaration with no file on disk has no entry.
 //
@@ -1152,6 +1235,17 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 		}
 		c.image.ownedIn(rel, other, &m)
 	}
+	// The dropping view's packs: on the disk the budget counts, and in the
+	// count of none of the packs an index covers, which never covers them.
+	view, err := c.image.sizes(inc.dir, droppingRel, nil)
+	if err != nil {
+		return err
+	}
+	var dropping int64
+	for _, size := range view {
+		dropping += size
+	}
+	disk += dropping
 	switch info, lerr := os.Lstat(filepath.Join(inc.dir, "packed-refs")); {
 	case lerr == nil:
 		disk += info.Size()
@@ -1161,6 +1255,7 @@ func (c *Cache) measure(e *entry, inc *incarnation) error {
 	e.mu.Lock()
 	inc.packs = packs
 	c.setSize(inc, disk)
+	c.setDropping(inc, dropping)
 	c.recordDerived(inc, m)
 	e.mu.Unlock()
 	return nil

@@ -1007,9 +1007,9 @@ func TestAFailedSwapServesTheOldIncarnationAndIsRetried(t *testing.T) {
 			}
 			leaving := cache.Leaving(c, repo)
 			for _, r := range k.rows[:2] {
-				if leaving[r.GitChecksum] != cache.EventPackRetired {
-					t.Errorf("after the failed swap pack %s is leaving by %q, want a retirement", r.GitChecksum,
-						leaving[r.GitChecksum])
+				if ev := leaving[filepath.Join("objects", "pack", r.GitChecksum)]; ev != cache.EventPackRetired {
+					t.Errorf("after the failed swap pack %s is leaving objects/pack by %q, want a retirement",
+						r.GitChecksum, ev)
 				}
 			}
 			if got := names(t, w.path("scratch")); len(got) != 0 {

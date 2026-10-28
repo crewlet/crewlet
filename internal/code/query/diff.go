@@ -337,13 +337,15 @@ func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, r
 		narrow = fmt.Errorf("%w: the walk of the diff of %s and %s did not finish in the read's %s of git: "+
 			"diff commits closer together", code.ErrSliceTooLarge, base, head, r.s.gitBudget)
 		res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
-			Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff",
+			Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+			Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff",
 				"--no-textconv"}, tail...),
 			Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 		})
 	} else {
 		res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
-			Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff",
+			Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+			Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--numstat", "--no-ext-diff",
 				"--no-textconv"}, tail...),
 			Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 		})
@@ -390,7 +392,8 @@ func (r *read) count(ctx context.Context, p *statParser, base, head string) erro
 	}
 	recs := newRecords(0, gitproc.MaxLine+code.MaxGitPathBytes, p.record)
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: []string{"diff-pairs", "-z", "--numstat", "--no-ext-diff", "--no-textconv"},
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args:   []string{"diff-pairs", "-z", "--numstat", "--no-ext-diff", "--no-textconv"},
 		Config: r.s.o.Cache.ServeConfig(), Stdin: &p.pairs, Stdout: recs, Class: gitproc.ClassRead,
 		Deadline: deadline,
 	})
@@ -929,7 +932,8 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 		return rawEntry{}, false, err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff",
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: append([]string{"diff-tree", "-z", "-r", "--raw", "--no-ext-diff",
 			"--no-textconv"}, tail...),
 		Config: r.s.o.Cache.ServeConfig(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 	})
@@ -963,7 +967,8 @@ func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pages *
 		return err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: []string{"diff-pairs", "-z", "-p", "--full-index", "--no-color", "--no-ext-diff",
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: []string{"diff-pairs", "-z", "-p", "--full-index", "--no-color", "--no-ext-diff",
 			"--no-textconv", "-U3"},
 		Config: append(r.s.o.Cache.ServeConfig(), patchConfig), Stdin: bytes.NewReader(e.raw()), Stdout: pages,
 		Class: gitproc.ClassRead, Deadline: deadline,

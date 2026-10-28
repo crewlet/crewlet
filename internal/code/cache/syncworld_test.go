@@ -418,7 +418,7 @@ func imageOf(t testing.TB, dir string) string {
 	for _, name := range []string{"HEAD", "config", "packed-refs"} {
 		fmt.Fprintf(&b, "== %s\n%s", name, read(t, filepath.Join(dir, name)))
 	}
-	var packs, strays []string
+	var packs, dropping, strays []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -429,14 +429,19 @@ func imageOf(t testing.TB, dir string) string {
 		case rel == ".":
 		case parent == "." && name == "crewlet" && d.IsDir():
 			return fs.SkipDir
-		case parent == "." && (name == "refs" || name == "objects") && d.IsDir():
+		case parent == "." && (name == "refs" || name == "objects" || name == gitproc.DroppingDir) && d.IsDir():
 		case parent == "." && !d.IsDir() && slices.Contains([]string{"HEAD", "config", "packed-refs", "crewlet-state.json"}, name):
 		case parent == "refs" && d.IsDir() && (name == "heads" || name == "tags"):
 		case parent == "objects" && d.IsDir() && (name == "pack" || name == "info"):
+		case parent == gitproc.DroppingDir && d.IsDir() && name == "pack":
 		case rel == filepath.Join("objects", "info", "commit-graph"):
 		case parent == filepath.Join("objects", "pack") && packFile.MatchString(name):
 			packs = append(packs, name)
 		case parent == filepath.Join("objects", "pack") && maintainer.MatchString(name):
+		case parent == filepath.Join(gitproc.DroppingDir, "pack") && packFile.MatchString(name):
+			// THE DROPPING VIEW: the packs only rows an expunge's begin
+			// left dropping name, part of the image as much as objects/pack.
+			dropping = append(dropping, name)
 		default:
 			strays = append(strays, rel)
 			if d.IsDir() {
@@ -449,8 +454,15 @@ func imageOf(t testing.TB, dir string) string {
 		t.Fatalf("reading %s: %v", dir, err)
 	}
 	slices.Sort(packs)
+	slices.Sort(dropping)
 	slices.Sort(strays)
-	fmt.Fprintf(&b, "== packs\n%s\n== outside the image\n%s\n", strings.Join(packs, "\n"), strings.Join(strays, "\n"))
+	fmt.Fprintf(&b, "== packs\n%s\n", strings.Join(packs, "\n"))
+	if len(dropping) > 0 {
+		// Only where there are any, so every image of a copy no expunge has
+		// touched reads as it always has.
+		fmt.Fprintf(&b, "== dropping\n%s\n", strings.Join(dropping, "\n"))
+	}
+	fmt.Fprintf(&b, "== outside the image\n%s\n", strings.Join(strays, "\n"))
 	return b.String()
 }
 

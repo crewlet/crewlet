@@ -71,14 +71,17 @@ type Proposal struct {
 	// receive it.
 	Seen statelog.Position `json:"seen,omitzero"`
 	// DropEpoch is the repository's drop epoch as the receiving node checked
-	// the push against it — its synced row's ([RepoRef.DropEpoch]), read with
-	// the copy receive-pack checked the push's objects over. The committer
-	// refuses the push `expunging` WHOLE where the repository's epoch is
-	// another ([RefusalExpunging]): an expunge's begin since has left
-	// dropping objects that copy held live, and a ref landed onto one would
-	// name an object the expunge's commit retires. The snapshot that synced
-	// the copy reads every page at one epoch (Reader.Snapshot), so the epoch
-	// is the copy's. Never recorded, as Seen is not.
+	// the push against it — the epoch the objects of the copy receive-pack
+	// checked the push's objects over hold (internal/code/cache's
+	// Synced.DropEpoch): its synced row's ([RepoRef.DropEpoch]) once the copy
+	// holds every pack where the rows place it, and the epoch before while an
+	// expunge's begin's inputs, holding what it made dropping, are still among
+	// the copy's live objects. The committer refuses the push `expunging`
+	// WHOLE where the repository's epoch is another ([RefusalExpunging]): an
+	// expunge's begin since has left dropping objects that copy held live, and
+	// a ref landed onto one would name an object the expunge's commit retires.
+	// The snapshot that synced the copy reads every page at one epoch
+	// (Reader.Snapshot). Never recorded, as Seen is not.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
 }
 

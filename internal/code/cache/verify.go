@@ -729,9 +729,10 @@ type listing struct {
 	repo   code.RepoRef
 	digest string
 	refs   *os.File
-	// packs is every pack file in objects/pack, by checksum: each
-	// extension's size.
-	packs map[string]map[string]int64
+	// packs is every pack file of a pack directory, by the place it lies in
+	// (objects/pack, the dropping view) and its checksum: each extension's
+	// size.
+	packs map[packPlace]map[string]map[string]int64
 	// derived is every file a declaration owns that the grammar admitted
 	// (derived.go), with its declaration, in declaration order.
 	derived []ownedFile
@@ -777,7 +778,8 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 		c.knobs.verifyListing(inc.dir)
 	}
 
-	l := &listing{packs: map[string]map[string]int64{}, chained: map[string]bool{}}
+	l := &listing{packs: map[packPlace]map[string]map[string]int64{placeLive: {}, placeDropping: {}},
+		chained: map[string]bool{}}
 	e.mu.Lock()
 	l.at, l.stream, l.repo, l.digest = inc.at, inc.stream, inc.repo, inc.refsDigest
 	l.installed, l.chains, l.mark = slices.Clone(inc.installed), chainWants(inc), markChain(inc)
@@ -800,7 +802,7 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 			return true
 		case kind == dirEntry:
 			return false
-		case rel == packRel && packFileName.MatchString(name):
+		case slices.Contains(packDirs, rel) && packFileName.MatchString(name):
 			return true
 		}
 		return running && im.holderOf(rel, name) >= 0
@@ -813,7 +815,11 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 	// lists it.
 	admitted := map[string]bool{".": true}
 	derived := make([][]ownedFile, len(im.decls))
-	var packFiles []fs.DirEntry
+	type packFile struct {
+		place packPlace
+		d     fs.DirEntry
+	}
+	var packFiles []packFile
 	dir := func(rel string) error {
 		if !admitted[rel] {
 			if im.required[rel] {
@@ -834,9 +840,13 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 			admitted[path] = true
 			// A directory of the image under objects/pack — the installed
 			// chain's, multi-pack-index.d — is listed as one, below; every
-			// other entry there is a file a pack's or a declaration's.
-			if rel == packRel && !im.dir[path] {
-				packFiles = append(packFiles, d)
+			// other entry there, and every one of the dropping view's, is a
+			// file a pack's or a declaration's.
+			switch {
+			case rel == packRel && !im.dir[path]:
+				packFiles = append(packFiles, packFile{placeLive, d})
+			case rel == droppingRel:
+				packFiles = append(packFiles, packFile{placeDropping, d})
 			}
 			if f, ok := im.owned(path); ok {
 				derived[f.i] = append(derived[f.i], f)
@@ -880,9 +890,10 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 			return nil, err
 		}
 	}
-	for _, d := range packFiles {
+	for _, f := range packFiles {
+		d := f.d
 		if !d.Type().IsRegular() {
-			unexpected(filepath.Join(packRel, d.Name()))
+			unexpected(filepath.Join(f.place.rel(), d.Name()))
 			continue
 		}
 		m := packFileName.FindStringSubmatch(d.Name())
@@ -896,10 +907,11 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 		if ierr != nil {
 			return nil, ierr
 		}
-		if l.packs[m[1]] == nil {
-			l.packs[m[1]] = map[string]int64{}
+		at := l.packs[f.place]
+		if at[m[1]] == nil {
+			at[m[1]] = map[string]int64{}
 		}
-		l.packs[m[1]]["."+m[2]] = info.Size()
+		at[m[1]]["."+m[2]] = info.Size()
 	}
 	for _, files := range derived {
 		l.derived = append(l.derived, files...)
@@ -925,10 +937,13 @@ type packFindings struct {
 }
 
 // checkPacks holds every pack a row added at or before the listing's position
-// to its row, one at a time, and names every pack file no row names; it
-// answers how many packs it checked, the checksums of those it found whole,
-// and what it found. A row added after the listing is not asked about: what
-// the listing saw of it says nothing.
+// to its row, one at a time, where its rows place it (packPlace: objects/pack,
+// or the dropping view for a pack only dropping rows name), and names every
+// pack file no row places where it lies — no row names it, or its rows place
+// it at the other place, a pack only dropping rows name in objects/pack among
+// them, which a push could rely on; it answers how many packs it checked, the
+// checksums of those it found whole, and what it found. A row added after the
+// listing is not asked about: what the listing saw of it says nothing.
 func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int, []string, packFindings,
 	error) {
 
@@ -941,17 +956,26 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 	})
 	var found packFindings
 	var whole []string
-	named := map[string]bool{}
+	// EACH PACK WHERE ITS ROWS PLACE IT (packPlace): a dropping pack in the
+	// dropping view, every other in objects/pack — a pack's files at the
+	// other place are no pack the rows name there, and a stray.
+	places := snap.places()
 	checked := 0
+	seen := map[string]bool{}
 	buf := make([]byte, copyBuffer)
 	for _, row := range rows {
-		named[row.GitChecksum] = true
-		if !reached(l.at, row.Added) {
+		if !reached(l.at, row.Added) || seen[row.GitChecksum] {
+			// Two rows of one checksum name one set of files, held once.
 			continue
 		}
+		seen[row.GitChecksum] = true
 		checked++
+		place := places[row.GitChecksum]
 		label := "pack " + row.PackID + " (pack-" + row.GitChecksum + ")"
-		files := l.packs[row.GitChecksum]
+		if place == placeDropping {
+			label += " in the dropping view"
+		}
+		files := l.packs[place][row.GitChecksum]
 		if _, ok := files[".idx"]; !ok {
 			found.damaged = append(found.damaged, label+" is missing")
 			continue
@@ -979,7 +1003,7 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 		if !sized {
 			continue
 		}
-		sum, err := hashBundle(ctx, filepath.Join(dir, "objects", "pack", "pack-"+row.GitChecksum), buf, nil)
+		sum, err := hashBundle(ctx, filepath.Join(dir, place.rel(), "pack-"+row.GitChecksum), buf, nil)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			found.damaged = append(found.damaged, label+" is missing")
@@ -992,17 +1016,29 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 			whole = append(whole, row.GitChecksum)
 		}
 	}
-	strays := make([]string, 0)
-	for cs := range l.packs {
-		// A pack an installed layer names is the chain's, held until the
-		// layer goes (layers.go): no stray, its row retired or not.
-		if !named[cs] && !l.chained[cs] {
-			strays = append(strays, cs)
+	for _, place := range []packPlace{placeLive, placeDropping} {
+		strays := make([]string, 0)
+		for cs := range l.packs[place] {
+			// A pack an installed layer names is the chain's, held in
+			// objects/pack until the layer goes (layers.go): no stray, its
+			// row retired or not.
+			if places[cs] != place && (place != placeLive || !l.chained[cs]) {
+				strays = append(strays, cs)
+			}
 		}
-	}
-	slices.Sort(strays)
-	for _, cs := range strays {
-		found.strays = append(found.strays, "stray pack pack-"+cs+" (no row names it)")
+		slices.Sort(strays)
+		for _, cs := range strays {
+			switch {
+			case places[cs] == placeNone:
+				found.strays = append(found.strays, "stray pack pack-"+cs+" (no row names it)")
+			case place == placeDropping:
+				found.strays = append(found.strays,
+					"stray pack pack-"+cs+" in the dropping view (a live row names it)")
+			default:
+				found.strays = append(found.strays,
+					"stray pack pack-"+cs+" in objects/pack (only dropping rows name it)")
+			}
+		}
 	}
 	return checked, whole, found, nil
 }
@@ -1224,8 +1260,13 @@ func (c *Cache) fsck(ctx context.Context, e *entry, inc *incarnation, label stri
 	if c.knobs != nil && c.knobs.verifyFsck != nil {
 		c.knobs.verifyFsck(inc.dir)
 	}
+	// THROUGH THE DROPPING VIEW where the copy holds one (heldView): the
+	// check is of what the copy serves, and a ref a push revived onto a
+	// dropping object in an expunge's window reaches one, which the
+	// expunge's commit keeps live (its rescue).
 	_, err := slot.Run(ctx, gitproc.Cmd{
-		Dir: inc.dir, Args: []string{"fsck", "--connectivity-only", "--no-dangling", "--no-progress"},
+		Dir: inc.dir, Dropping: heldView(inc.dir),
+		Args:   []string{"fsck", "--connectivity-only", "--no-dangling", "--no-progress"},
 		Config: c.ServeConfig(), Stdout: out, Class: gitproc.ClassMaintenance,
 		Deadline: gitproc.PackWorkDeadline(held),
 	})

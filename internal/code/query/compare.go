@@ -97,7 +97,8 @@ func (r *read) mergeBase(ctx context.Context, base, head string, tooLong error) 
 		return "", err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: []string{"merge-base", base, head}, Config: r.s.o.Cache.ServeConfig(),
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: []string{"merge-base", base, head}, Config: r.s.o.Cache.ServeConfig(),
 		Class: gitproc.ClassRead, Deadline: deadline, Answers: []int{1},
 	})
 	if err := r.failed(ctx, "merge base", res, err, tooLong); err != nil {
@@ -121,7 +122,8 @@ func (r *read) sides(ctx context.Context, base, head string) (behind, ahead int,
 		return 0, 0, err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: append([]string{"rev-list", "--left-right", "--count"}, base+"..."+head),
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args:   append([]string{"rev-list", "--left-right", "--count"}, base+"..."+head),
 		Config: r.s.o.Cache.ServeConfig(), Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	if err := r.failed(ctx, "count of the commits on each side", res, err, r.walkTooLong(base, head)); err != nil {

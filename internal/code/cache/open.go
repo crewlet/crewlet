@@ -97,6 +97,13 @@ type Cache struct {
 	// too, so the share is held to both together (memoExcess) and a
 	// repository is never evicted for a page in flight.
 	memoBytes, memoStaged atomic.Int64
+	// droppingBytes is what every incarnation's dropping view holds, of
+	// heldBytes — the pack files an expunge's begin left dropping, which
+	// leave with its commit — a RUNNING TOTAL moved where an incarnation's
+	// dropping files move (setDropping, discard), and reported as it stands
+	// (crewlet.code.cache.dropping.bytes): what an open expunge keeps on the
+	// node's disk beside the live packs, with no walk of the node's copies.
+	droppingBytes atomic.Int64
 	// memoNewest is the node's NEWEST COHORT of the memo (memo.go) — where
 	// every answer is placed and every entry a read finds in an older one is
 	// moved — read without a lock; memoFill is what has been placed in it
@@ -440,6 +447,7 @@ func (c *Cache) index(b *boot) (int, error) {
 			inc.lastUsed = c.now()
 		}
 		c.heldBytes.Add(inc.diskBytes + inc.metaBytes)
+		c.droppingBytes.Add(inc.droppingBytes)
 		// The memo's record as the state holds it — what the janitor writes
 		// again once it moves (Cache.stateMemos) — and its bytes in the
 		// memo's running total; the newest cohort is opened past every one

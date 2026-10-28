@@ -74,8 +74,12 @@ func (c *Cache) Missing(ctx context.Context, s Synced, wants iter.Seq2[string, e
 	// FOR s's READER (Synced.Repairer): the damage the check meets is its
 	// answer to the caller, who repairs it, so what the run reports is held
 	// for that repair rather than made the copy's scrub beside it.
+	// THROUGH s's DROPPING VIEW (Synced.Dropping): an object an expunge has
+	// left dropping is one the fetch's upload-pack serves by id, so it is no
+	// want the cache lacks, which a sync could only fail to bring.
 	res, err := c.git.Run(ctx, gitproc.Cmd{
-		Dir: s.Dir, Repairer: s.Repairer, Args: []string{"cat-file", "--batch-check", "--buffer"},
+		Dir: s.Dir, Dropping: s.Dropping, Repairer: s.Repairer,
+		Args:   []string{"cat-file", "--batch-check", "--buffer"},
 		Config: c.ServeConfig(), Loads: gitproc.PartMultiPackIndex, Stdin: in, Stdout: lines,
 		Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(max(inputBytes, 0)),
 	})

@@ -140,7 +140,8 @@ func (r *read) hunks(ctx context.Context, in *bytes.Buffer, n int) ([][]code.Hun
 		return nil, err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: []string{"diff-pairs", "-z", "-p", "-U0", "--no-color", "--no-ext-diff",
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: []string{"diff-pairs", "-z", "-p", "-U0", "--no-color", "--no-ext-diff",
 			"--no-textconv"},
 		Config: r.s.o.Cache.ServeConfig(), Stdin: in, Stdout: lines, Class: gitproc.ClassRead, Deadline: deadline,
 	})

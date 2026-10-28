@@ -13,16 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A PUSH CARRIES THE DROP EPOCH ITS COPY WAS SYNCED AT, and its committer's
-// refusal of another reaches git whole: while every snapshot the git node's
-// cache syncs by says the repository is at drop epoch 7 and its rows say 0 —
-// a copy at an epoch the repository is not at — the push's proposal carries
-// 7, its committer refuses it expunging, decided nothing and writing no push
-// row, git prints the refusal's sentence on the ref and the push is recorded
-// refused under its code; once the snapshots say what the rows hold, the same
-// push lands.
+// A PUSH CARRIES THE DROP EPOCH ITS COPY WAS SYNCED AT — the one its copy's
+// objects/ holds (cache.Synced.DropEpoch), the snapshot's once nothing is
+// leaving the copy — and its committer's refusal of another reaches git
+// whole: while every snapshot the git node's cache syncs by says the
+// repository is at drop epoch 7 and its rows say 0 — a copy at an epoch the
+// repository is not at — the push's proposal carries 7, its committer refuses
+// it expunging, decided nothing and writing no push row, git prints the
+// refusal's sentence on the ref and the push is recorded refused under its
+// code; once the snapshots say what the rows hold, the same push lands.
 //
-// Mutation: propose without the synced row's drop epoch, and the first push
+// Mutation: propose without the synced copy's drop epoch, and the first push
 // lands.
 func TestAPushCarriesTheDropEpochItsCopyWasSyncedAt(t *testing.T) {
 	var (

@@ -36,6 +36,12 @@ import (
 // entry's lock, so a round moving the set meanwhile changes nothing handed
 // out; nil for a Synced this cache did not hand out.
 //
+// NEVER A ROW AN EXPUNGE'S BEGIN LEFT DROPPING: no compaction takes one as an
+// input — its decide refuses it stale (code's liveInput), so a plan naming
+// one would be refused at every poll until the expunge commits — and the
+// compaction's build reads its inputs through its scratch's one alternate,
+// the incarnation's objects/, where no dropping pack lies.
+//
 // AS THE INCARNATION HOLDS THEM, which may be past s.Position: a round that
 // adds packs applies in place on the incarnation s pins. A plan from them is
 // judged by the committer against the rows of its own snapshot, which refuses
@@ -48,7 +54,9 @@ func (c *Cache) Packs(s Synced) []code.PackRow {
 	s.entry.mu.Lock()
 	out := make([]code.PackRow, 0, len(s.inc.live))
 	for id, p := range s.inc.live {
-		out = append(out, p.row(id))
+		if !p.dropping {
+			out = append(out, p.row(id))
+		}
 	}
 	s.entry.mu.Unlock()
 	slices.SortFunc(out, func(a, b code.PackRow) int { return strings.Compare(a.PackID, b.PackID) })

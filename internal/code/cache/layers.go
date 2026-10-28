@@ -357,26 +357,33 @@ func (c *Cache) setInstalled(e *entry, inc *incarnation, rows []code.LayerRow, h
 	c.noteChained(e)
 }
 
-// heldPacks is every pack inc holds, by checksum, at the figures its rows
-// count: its live rows', and those its installed chain holds beyond them.
-// e.mu is held.
+// heldPacks is every pack inc holds in objects/pack, by checksum, at the
+// figures its rows count: those its live set places there, and those its
+// installed chain holds beyond them — what a layer may name. e.mu is held.
 func heldPacks(inc *incarnation) map[string]livePack {
 	out := maps.Clone(inc.installedPacks)
 	if out == nil {
 		out = map[string]livePack{}
 	}
 	for _, p := range inc.live {
-		out[p.checksum] = p
+		if placeOf(inc, p.checksum) == placeLive {
+			out[p.checksum] = p
+		}
 	}
 	return out
 }
 
-// packFigures is the packs snap names, by checksum, at the figures their rows
-// count: what a full round's copy holds once its install has run.
+// packFigures is the packs snap places in objects/pack, by checksum, at the
+// figures their rows count: what a full round's copy holds there once its
+// install has run — what a layer may name, and what an index covers, neither
+// of which ever reaches the dropping view.
 func (s snapshot) packFigures() map[string]livePack {
+	places := s.places()
 	out := make(map[string]livePack, len(s.packs))
 	for _, p := range s.packs {
-		out[p.GitChecksum] = liveOf(p.Ref())
+		if places[p.GitChecksum] == placeLive {
+			out[p.GitChecksum] = liveOf(p.Ref(), code.PackLive)
+		}
 	}
 	return out
 }
@@ -1532,19 +1539,25 @@ func (c *Cache) canary(ctx context.Context, e *entry, inc *incarnation, dir stri
 		defer c.knobs.canaryRunning(dir)()
 	}
 	// Each argument list a literal at its run, so the writers gate reads it.
+	// THROUGH THE DROPPING VIEW where dir holds one: the walk reads what the
+	// refs reach, as every reader the chain serves does, and a ref a push
+	// revived onto a dropping object before its expunge's begin reaches one
+	// (heldView) — read without it, the layer would be refused for an object
+	// the copy holds.
 	deadline := gitproc.ReadDeadline + gitproc.HistoryWalk(tail)
+	view := heldView(dir)
 	var res gitproc.Result
 	var err error
 	if len(tips) > 0 {
 		res, err = c.git.Run(ctx, gitproc.Cmd{
-			Dir: dir, Config: c.ServeConfig(), Class: gitproc.ClassRead, Repairer: by, Deadline: deadline,
-			Args:  []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--stdin"},
+			Dir: dir, Dropping: view, Config: c.ServeConfig(), Class: gitproc.ClassRead, Repairer: by,
+			Deadline: deadline, Args: []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--stdin"},
 			Stdin: strings.NewReader(strings.Join(tips, "\n") + "\n"),
 		})
 	} else {
 		res, err = c.git.Run(ctx, gitproc.Cmd{
-			Dir: dir, Config: c.ServeConfig(), Class: gitproc.ClassRead, Repairer: by, Deadline: deadline,
-			Args: []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--all"},
+			Dir: dir, Dropping: view, Config: c.ServeConfig(), Class: gitproc.ClassRead, Repairer: by,
+			Deadline: deadline, Args: []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--all"},
 		})
 	}
 	var exit *gitproc.ExitError
@@ -2149,7 +2162,9 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 	kept := chain[:k]
 	want := c.installable(e, inc, chain[k:], func(cs string) bool {
 		_, chained := inc.installedPacks[cs]
-		return inc.byChecksum[cs] > 0 || chained
+		// In objects/pack, where a layer's index finds its packs: no layer
+		// names a pack in the dropping view.
+		return placeOf(inc, cs) == placeLive || chained
 	})
 	stale := slices.Clone(inc.installed[k:])
 	gen := inc.chainGen

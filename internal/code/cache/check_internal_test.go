@@ -26,7 +26,7 @@ import (
 // as it found them (the fourth).
 func TestOnlyDamageAtAnotherIdentityReplacesAFinding(t *testing.T) {
 	t.Parallel()
-	rel := packFileRel(strings.Repeat("5e", hashTrailer), ".rev")
+	rel := packFileRel(placeLive, strings.Repeat("5e", hashTrailer), ".rev")
 	at := func(ino uint64) fileID { return fileID{present: true, dev: 1, ino: ino, size: 1068, modified: 1} }
 	scrubbed := checkedFile{kind: fileRev, rel: rel, id: at(1), trigger: triggerReport, scrubbed: true}
 	unvouched := checkedFile{kind: fileRev, rel: rel, id: at(1), trigger: triggerUnvouched}

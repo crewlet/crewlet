@@ -340,7 +340,8 @@ func (l *landing) ancestor(tip string) (bool, error) {
 		return false, err
 	}
 	res, err := l.r.s.o.Git.Run(l.ctx, gitproc.Cmd{
-		Dir: l.r.synced.Dir, Args: []string{"merge-base", "--is-ancestor", l.commit, tip},
+		Dir: l.r.synced.Dir, Dropping: l.r.synced.Dropping,
+		Args:   []string{"merge-base", "--is-ancestor", l.commit, tip},
 		Config: l.r.s.o.Cache.ServeConfig(), Class: gitproc.ClassRead, Deadline: deadline, Answers: []int{1},
 	})
 	tooLong := fmt.Errorf("%w: whether %s is in %s's history did not finish in the read's %s of git",

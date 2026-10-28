@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -256,17 +257,21 @@ func (c *Cache) indexed(inc *incarnation) bool {
 // held back by the work in flight, said so and left to the maintainer. It
 // reports whether it wrote.
 func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap snapshot) bool {
-	packs := len(snap.packs)
+	// Over objects/pack's packs: an index never covers the dropping view,
+	// which git reads beside it in a serving process alone.
+	figures := snap.packFigures()
+	packs := len(figures)
 	if packs < c.roundPacks || c.indexed(inc) {
 		return false
 	}
 	w := c.mw.round
 	var names bytes.Buffer
 	covers := Covers{Packs: packs}
-	for _, p := range snap.packs {
-		names.WriteString("pack-" + p.GitChecksum + ".idx\n")
-		covers.IndexBytes += p.IndexBytes
-		covers.Objects += p.Objects
+	for _, cs := range slices.Sorted(maps.Keys(figures)) {
+		p := figures[cs]
+		names.WriteString("pack-" + cs + ".idx\n")
+		covers.IndexBytes += p.indexBytes
+		covers.Objects += p.objects
 	}
 	mem := chargeOver(covers.Objects, w.BytesPerObject, covers.Objects)
 	switch c.maint.admitOther(mem) {

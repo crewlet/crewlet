@@ -134,10 +134,15 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	// its stderr or its answer's side band, which copy the client's request
 	// ("unexpected line: '<arg>'") and so would let a crafted fetch force a
 	// rebuild.
+	//
+	// THROUGH THE DROPPING VIEW (Synced.Dropping): an object an expunge has
+	// begun dropping is served by id until its commit removes it — a fetch
+	// that already holds its id loses nothing before then — while no push
+	// may build on it (cache's doc, "The dropping view").
 	err = s.repairing(ctx, r, adm.name, &synced, inIncarnation, out.Started, func(in cache.Synced) error {
 		out.again()
 		_, gerr := s.runGit(ctx, gitproc.Cmd{
-			Dir: in.Dir, Repairer: in.Repairer,
+			Dir: in.Dir, Dropping: in.Dropping, Repairer: in.Repairer,
 			Args:   []string{"upload-pack", "--stateless-rpc", in.Dir},
 			Config: s.o.Cache.ServeConfig(), Protocol: r.Header.Get("Git-Protocol"),
 			Stdin: body.feed(), Stdout: out, Class: gitproc.ClassTransfer, Share: adm.share(),

@@ -1179,6 +1179,20 @@ func Catalogue() []Instrument {
 				"every answer read from it.",
 		},
 		{
+			Name: CodeCacheDroppingBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "What this node's git cache holds of packs an expunge's " +
+				"begin has left dropping — what no ref reached when the " +
+				"expunge was planned, kept apart from the live packs so a " +
+				"client still reading one of their objects is served it and " +
+				"no push may rely on one: part of `crewlet.code.cache.bytes`. " +
+				"Zero but while an expunge is open on a repository this node " +
+				"holds; it falls back as each expunge commits and the next " +
+				"sync of the repository takes the dropping packs out. Held " +
+				"up for long is an expunge that began and does not commit — " +
+				"its maintainer's rescue failing — which also refuses every " +
+				"layer the repository would publish meanwhile.",
+		},
+		{
 			Name: CodeCacheMemoLookups, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Seats' reads by object id that this node's git cache looked " +

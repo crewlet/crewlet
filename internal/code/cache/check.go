@@ -531,8 +531,11 @@ func heldFiles(files []ownedFile, wants map[string]expect, chains map[string][]b
 	return out, nil
 }
 
-// packRel names one of a pack's files relative to its incarnation.
-func packFileRel(cs, ext string) string { return filepath.Join(packRel, "pack-"+cs+ext) }
+// packFileRel names one of a pack's files relative to its incarnation, in the
+// directory its place puts it in (packPlace).
+func packFileRel(place packPlace, cs, ext string) string {
+	return filepath.Join(place.rel(), "pack-"+cs+ext)
+}
 
 // vouches is what of an incarnation's files this process wrote or checked, at
 // which identity (incarnation.vouched): a pack's .idx and .rev in ONE entry
@@ -563,12 +566,16 @@ func stampOf(id fileID) fileStamp {
 }
 
 // packIndexOf is the checksum, as its twenty bytes, and the extension of the
-// pack index file at rel — objects/pack/pack-<forty hex>.idx or .rev — or
-// false for any other path, a .pack among them.
+// pack index file at rel — pack-<forty hex>.idx or .rev, in objects/pack or
+// the dropping view — or false for any other path, a .pack among them. ONE
+// VOUCH A CHECKSUM, wherever its files lie: a pack the rows move between the
+// two directories has its files in both only while a round installs it at its
+// new place, and a vouch held to an identity (vouchedAt) is no vouch for the
+// other's, whose check then reads it — never a verdict carried across.
 func packIndexOf(rel string) ([hashTrailer]byte, string, bool) {
 	var key [hashTrailer]byte
 	dir, name := filepath.Split(rel)
-	if filepath.Clean(dir) != packRel {
+	if !slices.Contains(packDirs, filepath.Clean(dir)) {
 		return key, "", false
 	}
 	m := packFileName.FindStringSubmatch(name)
@@ -626,10 +633,11 @@ func (c *Cache) vouchFiles(e *entry, inc *incarnation, rels ...string) {
 	}
 }
 
-// vouchPack vouches for the index files of inc's pack cs as they are now:
-// files this process has just placed there, from a bundle held to its row.
-func (c *Cache) vouchPack(e *entry, inc *incarnation, cs string) {
-	c.vouchFiles(e, inc, packFileRel(cs, ".idx"), packFileRel(cs, ".rev"))
+// vouchPack vouches for the index files of inc's pack cs at place as they are
+// now: files this process has just placed there, from a bundle held to its
+// row.
+func (c *Cache) vouchPack(e *entry, inc *incarnation, place packPlace, cs string) {
+	c.vouchFiles(e, inc, packFileRel(place, cs, ".idx"), packFileRel(place, cs, ".rev"))
 }
 
 // ids is the identity of every derived file in the incarnation at dir now,
@@ -717,17 +725,18 @@ func vouchedAt(inc *incarnation, rel string, id fileID) bool {
 	return ok && have == stampOf(id)
 }
 
-// vouchedRels is every path, relative to inc, a vouch is held for, sorted;
-// e.mu is held.
+// vouchedRels is every path, relative to inc, a vouch is held for, sorted —
+// a pack's at the place its live set puts it; e.mu is held.
 func vouchedRels(inc *incarnation) []string {
 	var out []string
 	for key, v := range inc.vouched.packs {
 		cs := hex.EncodeToString(key[:])
+		place := placeOf(inc, cs)
 		if v.idx != (fileStamp{}) {
-			out = append(out, packFileRel(cs, ".idx"))
+			out = append(out, packFileRel(place, cs, ".idx"))
 		}
 		if v.rev != (fileStamp{}) {
-			out = append(out, packFileRel(cs, ".rev"))
+			out = append(out, packFileRel(place, cs, ".rev"))
 		}
 	}
 	for rel := range inc.vouched.derived {
@@ -796,9 +805,12 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 		files []checkedFile
 		wants = map[string]expect{}
 	)
-	packDir := filepath.Join(inc.dir, packRel)
+	// Each pack where the snapshot places it: a pack held at the other place
+	// — its rows moved it — is the install's, as one absent is.
+	places := snap.places()
 	for _, p := range snap.packs {
-		held, err := installed(packDir, p, true)
+		place := places[p.GitChecksum]
+		held, err := installed(filepath.Join(inc.dir, place.rel()), p, true)
 		if err != nil {
 			return ck, err
 		}
@@ -810,7 +822,10 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			kind fileKind
 			ext  string
 		}{{fileIdx, ".idx"}, {fileRev, ".rev"}} {
-			rel := packFileRel(p.GitChecksum, f.ext)
+			rel := packFileRel(place, p.GitChecksum, f.ext)
+			if _, twice := wants[rel]; twice {
+				continue // two rows of one checksum name one file
+			}
 			files = append(files, checkedFile{kind: f.kind, rel: rel})
 			wants[rel] = expect{prior: prior}
 		}

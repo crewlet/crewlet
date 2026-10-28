@@ -27,6 +27,7 @@ const (
 	CodeCacheChained                 = "crewlet.code.cache.chained"
 	CodeCacheCheckDuration           = "crewlet.code.cache.check.duration"
 	CodeCacheChecks                  = "crewlet.code.cache.checks"
+	CodeCacheDroppingBytes           = "crewlet.code.cache.dropping.bytes"
 	CodeCacheFullRounds              = "crewlet.code.cache.full_rounds"
 	CodeCacheHintHashes              = "crewlet.code.cache.hint.hashes"
 	CodeCacheHints                   = "crewlet.code.cache.hints"

@@ -259,9 +259,10 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 				t.Errorf("%s: validateAll answered %v, want the root rule's refusal", tc.name, err)
 			}
 		}
-		if got := derivedRoots(DerivedFiles()); !slices.Equal(got, []string{"objects", engineRoot}) {
-			t.Errorf("the roots a boot walks are %v, want objects and %s: the walk reads what the declarations "+
-				"own", got, engineRoot)
+		want := []string{"objects", gitproc.DroppingDir, engineRoot}
+		if got := derivedRoots(DerivedFiles()); !slices.Equal(got, want) {
+			t.Errorf("the roots a boot walks are %v, want %v: the walk reads the packs' two places and what the "+
+				"declarations own", got, want)
 		}
 	})
 }

@@ -872,8 +872,8 @@ func VouchMemory(n int) (perPack float64) {
 	for i := range n {
 		binary.BigEndian.PutUint64(key[:], uint64(i))
 		cs := hex.EncodeToString(key[:])
-		vouch(inc, packFileRel(cs, ".idx"), id)
-		vouch(inc, packFileRel(cs, ".rev"), id)
+		vouch(inc, packFileRel(placeLive, cs, ".idx"), id)
+		vouch(inc, packFileRel(placeLive, cs, ".rev"), id)
 	}
 	runtime.GC()
 	runtime.ReadMemStats(&after)
@@ -1756,9 +1756,11 @@ func SyncingWith(fn func(dir string)) func(*Options) {
 }
 
 // Leaving is what is leaving repoID's current incarnation
-// (incarnation.leaving): each pack file no live row names any more, by its
-// checksum — or by its name, where it carries none — with the event that took
-// it out; nil when nothing is, or the cache holds no copy of repoID.
+// (incarnation.leaving): each pack's files it holds where the rows no longer
+// place them, by the directory they are in joined with the checksum they are
+// named by — objects/pack/<cs>, or objects-dropping/pack/<cs> for the dropping
+// view — or with the file's name, where it carries none, each with the event
+// that took it out; nil when nothing is, or the cache holds no copy of repoID.
 func Leaving(c *Cache, repoID string) map[string]Event {
 	e := lookup(c, repoID)
 	if e == nil {
@@ -1766,10 +1768,14 @@ func Leaving(c *Cache, repoID string) map[string]Event {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.current == nil {
+	if e.current == nil || e.current.leaving == nil {
 		return nil
 	}
-	return maps.Clone(e.current.leaving)
+	out := make(map[string]Event, len(e.current.leaving))
+	for key, ev := range e.current.leaving {
+		out[filepath.Join(key.place.rel(), key.name)] = ev
+	}
+	return out
 }
 
 // Maintained is when the last run of the maintainer the duty cycle counts

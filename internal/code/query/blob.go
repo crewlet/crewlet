@@ -107,7 +107,8 @@ func (r *read) readBlob(ctx context.Context, rev, blob, path string, size int64,
 		return code.GitAnswer{}, err
 	}
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: []string{"cat-file", "blob", blob}, Config: r.s.o.Cache.ServeConfig(),
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: []string{"cat-file", "blob", blob}, Config: r.s.o.Cache.ServeConfig(),
 		Stdout: pages, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	if errors.Is(err, errStop) {

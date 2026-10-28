@@ -218,10 +218,9 @@ func TestNothingButSyncWritesACache(t *testing.T) {
 // widening the allowance: an allowance kept past its subject is how a list
 // of excuses quietly grows.
 func writersStatic(t *testing.T) {
-	root := sourcetree.Root(t)
-	found, err := walkForWriters(root)
+	found, err := codeWalk()
 	if err != nil {
-		t.Fatalf("walking %s: %v", filepath.Join(root, "internal", "code"), err)
+		t.Fatalf("walking internal/code: %v", err)
 	}
 	if found.cacheFiles == 0 {
 		t.Fatalf("scanned %d files and none of internal/code/cache — the walk certified nothing; "+
@@ -419,8 +418,9 @@ var cacheWriters = []writerRow{
 	{"internal/code/cache/entry.go", kindOS,
 		"a new incarnation's directory and its skeleton's subdirectories", nil},
 	{"internal/code/cache/install.go", kindOS,
-		"a download's three files in tmp/, renamed into objects/pack in the order git reads a pack by, " +
-			"and what a failed download left removed", nil},
+		"a download's three files in tmp/, renamed in the order git reads a pack by into objects/pack — or, " +
+			"for a pack only rows an expunge's begin left dropping name, into the dropping view, made with the " +
+			"first pack placed there (ensureView) — and what a failed download left removed", nil},
 	{"internal/code/cache/sweep.go", kindOS,
 		"the image's directories made again where a full round's sweep found them missing", nil},
 	{"internal/code/cache/evict.go", kindOS,
@@ -477,8 +477,9 @@ var cacheWriters = []writerRow{
 		[]cache.DerivedName{cache.DerivedMemo}},
 	{"internal/code/cache/swap.go", kindOS,
 		"a swap's next incarnation, staged under scratch/: its directory, every incarnation's directories " +
-			"and those of what it links, every live pack's three files — and every pack its installed chain " +
-			"names — HEAD, config, the packed-refs and each derived file a retirement keeps but the memo and " +
+			"and those of what it links — its dropping view among them, made for the first dropping pack it " +
+			"links — every pack's three files where the live set places them — and every pack its installed " +
+			"chain names — HEAD, config, the packed-refs and each derived file a retirement keeps but the memo and " +
 			"the chain HARD-LINKED from the incarnation it replaces — the same inodes, written by nothing " +
 			"here — and the whole renamed into repos/ under its number; its state goes through durable.go, " +
 			"the memo's tree moves whole through memo.go, and the chain is placed through layers.go, the " +
@@ -643,7 +644,30 @@ type writerWalk struct {
 	// argv is every argument list a file that runs git spells whole, by the
 	// file, slash-separated and relative to the root.
 	argv map[string][][]string
+	// literals is every Cmd literal the walk judged, as the dropping view's
+	// gate reads one (TestOnlyServingReadsNameTheDroppingView).
+	literals []cmdLiteral
 }
+
+// cmdLiteral is one Cmd literal as the dropping view's gate reads it: where it
+// is, the subcommand its Args begin with ("" where they begin with no string
+// literal), and whether it names a dropping view (Cmd.Dropping) and an
+// alternate (Cmd.Alternate).
+type cmdLiteral struct {
+	pos, file, word     string
+	dropping, alternate bool
+}
+
+// codeWalk is the walk of internal/code every static gate of this package
+// reads, made once a test binary: a walk types every file of the tree, and
+// two gates reading it apart walked it twice.
+var codeWalk = sync.OnceValues(func() (writerWalk, error) {
+	root, err := sourcetree.ModuleRoot()
+	if err != nil {
+		return writerWalk{}, err
+	}
+	return walkForWriters(root)
+})
 
 // harnessDir is a directory the walk does not enter: a test harness, named
 // as the tree names them.
@@ -702,6 +726,7 @@ func walkForWriters(root string) (writerWalk, error) {
 		}
 		out.cmds += m.cmds
 		out.handed += m.handed
+		out.literals = append(out.literals, m.literals...)
 	}
 	if errs := w.Errors(); len(errs) > 0 {
 		return out, fmt.Errorf("a file the walk could not read is a file it judged nothing in: %w",
@@ -754,6 +779,9 @@ type writerMatch struct {
 	// literal of string literals — in a file that runs git: what a declared
 	// write's Args are held to (derivedHalf).
 	argvs [][]string
+	// literals is every Cmd literal judged, as the dropping view's gate reads
+	// one.
+	literals []cmdLiteral
 }
 
 func newWriterMatch(w *decltype.World, f *decltype.File, cmd ast.Expr, inGitproc bool) (*writerMatch, error) {
@@ -1137,9 +1165,12 @@ func (m *writerMatch) elided(lit *ast.CompositeLit, key, elt decltype.Type) {
 	}
 }
 
-// judgeCmd judges one Cmd literal by its Args.
+// judgeCmd judges one Cmd literal by its Args, and records it as the dropping
+// view's gate reads it (cmdLiteral).
 func (m *writerMatch) judgeCmd(lit *ast.CompositeLit) {
 	var args ast.Expr
+	p := m.w.FileSet().Position(lit.Pos())
+	named := cmdLiteral{pos: fmt.Sprintf("%s:%d:%d", m.f.Rel, p.Line, p.Column), file: m.f.Rel}
 	for _, el := range lit.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {
@@ -1148,10 +1179,23 @@ func (m *writerMatch) judgeCmd(lit *ast.CompositeLit) {
 			m.hit(lit.Pos(), kindRuntime, "the arguments of a Cmd literal without field names")
 			return
 		}
-		if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Args" {
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		switch key.Name {
+		case "Args":
 			args = kv.Value
+		case "Dropping":
+			named.dropping = true
+		case "Alternate":
+			named.alternate = true
 		}
 	}
+	if list, _ := argvLiteral(args); list != nil {
+		named.word, _ = stringLit(firstOf(list.Elts))
+	}
+	m.literals = append(m.literals, named)
 	if args == nil {
 		// No Args: handed straight to the pool, it runs nothing — Run
 		// refuses a Cmd with no subcommand before any process starts — and

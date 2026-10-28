@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -553,7 +554,7 @@ func (c *Cache) swappedAnswer(ctx context.Context, e *entry) (Synced, error) {
 // installed by the round anyway.
 func (c *Cache) reinstallHinted(inc *incarnation, packs []string) {
 	for _, cs := range packs {
-		rel := packFileRel(cs, ".pack")
+		rel := packFileRel(placeOf(inc, cs), cs, ".pack")
 		id := lstatID(filepath.Join(inc.dir, rel))
 		if !id.present {
 			continue
@@ -1169,18 +1170,39 @@ func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason, w
 // does not seed, can afford, and it seeds no layer it did not check.
 func (c *Cache) seedRebuild(ctx context.Context, e *entry, replaced, inc *incarnation, whole []string) error {
 	c.seedIndex(e, replaced, inc)
-	from := filepath.Join(replaced.dir, "objects", "pack")
-	into := filepath.Join(inc.dir, "objects", "pack")
+	// EACH PACK WHERE THE COPY REPLACED KEPT IT: a dropping pack into the
+	// new incarnation's dropping view, every other into objects/pack. The
+	// rebuild's own full round holds each to where its rows place it, and
+	// downloads one its rows moved.
+	e.mu.Lock()
+	places := make(map[string]packPlace, len(whole))
+	for _, cs := range whole {
+		places[cs] = placeOf(replaced, cs)
+	}
+	e.mu.Unlock()
 	seeded := 0
 	linked := map[string]bool{}
+	synced := map[string]bool{}
 	for _, cs := range whole {
-		ok, err := linkBundle(nil, filepath.Join(from, "pack-"+cs), into, cs, nil)
+		place := places[cs]
+		into := filepath.Join(inc.dir, place.rel())
+		if place == placeDropping && !synced[into] {
+			if err := c.ensureView(inc.dir); err != nil {
+				return err
+			}
+		}
+		ok, err := linkBundle(nil, filepath.Join(replaced.dir, place.rel(), "pack-"+cs), into, cs, nil)
 		switch {
 		case ok:
 			// Found whole by the check that seeded it, bundle and all: what
 			// it holds is vouched in the new incarnation as in the old.
-			c.vouchPack(e, inc, cs)
-			linked[cs] = true
+			c.vouchPack(e, inc, place, cs)
+			if place != placeDropping {
+				// What a layer may name (seedLayers): no layer names a
+				// dropping pack, publication being refused while one is.
+				linked[cs] = true
+			}
+			synced[into] = true
 			seeded++
 		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			c.log.Warn("code_cache_rebuild_seed_failed", "repo", e.id, "pack", "pack-"+cs, "error", err)
@@ -1191,8 +1213,10 @@ func (c *Cache) seedRebuild(ctx context.Context, e *entry, replaced, inc *incarn
 	}
 	c.log.Info("code_cache_rebuild_seeded", "repo", e.id, "incarnation", inc.n, "packs", seeded,
 		"whole", len(whole))
-	if err := syncDir(into); err != nil {
-		return err
+	for _, dir := range slices.Sorted(maps.Keys(synced)) {
+		if err := syncDir(dir); err != nil {
+			return err
+		}
 	}
 	return c.seedLayers(ctx, e, replaced, inc, linked)
 }

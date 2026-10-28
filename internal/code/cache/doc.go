@@ -904,6 +904,8 @@
 //	  lock                          this process's claim (internal/flock)
 //	  repos/<id>.<n>.git/           a repository's INCARNATION: a bare repository
 //	    crewlet-state.json          what the directory reflects, renamed in last
+//	    objects-dropping/pack/      the packs an expunge's begin left dropping, which
+//	                                only a git process serving the copy reads
 //	    crewlet/provenance.<n>      the index of pushes' runs, which no git reads
 //	    crewlet/memo/<n>/<key>      an answer of a read by object id, in cohort n, which no git reads
 //	  scratch/                      a request's own repositories: a push's scratch, a view;
@@ -1019,6 +1021,87 @@
 // as the retirements they are and keeps the graph. An incarnation nobody can
 // hold — one not yet converged and unpinned: a boot's first round, a
 // rebuild's product — sheds what leaves it in place, as it always has.
+//
+// # The dropping view
+//
+// An EXPUNGE drops a repository's unreachable objects in two records
+// (internal/code's ExpungeBegin and ExpungeCommit): its begin retires the
+// packs it rewrote and adds what they held as packs KEPT, live, and as packs
+// of what no ref reached when it was planned, DROPPING (code.PackDropping);
+// its commit retires those, adding back live what a ref reached again
+// meanwhile (its rescue). Between the two a dropping object is still the
+// repository's to SERVE — to a client that already holds its id, a fetch of it
+// by id, a read begun over it — and never one a PUSH may rely on: a ref landed
+// on one would name an object the commit takes out of every copy. So an
+// incarnation keeps a dropping pack apart, in an object directory of its own
+// beside objects/ — its DROPPING VIEW, objects-dropping/pack
+// (gitproc.DroppingDir) — which a git process reads only when it names it
+// (gitproc.Cmd.Dropping, set in its environment as
+// GIT_ALTERNATE_OBJECT_DIRECTORIES; TestOnlyServingReadsNameTheDroppingView
+// holds every process that does to a closed table):
+//
+//   - EVERY PROCESS THAT SERVES THE COPY names it: upload-pack's
+//     advertisement and its fetch (internal/code/host), the check of a
+//     fetch's wants ([Cache.Missing]) and every read internal/code/query makes
+//     over the copy, each handed it with the copy ([Synced.Dropping]: the view
+//     where the live set places a pack there, "" where it places none); and
+//     the cache's own reads of what the refs reach — a round's peel, a
+//     placement's canary and Verify's connectivity check — name the view the
+//     directory holds (heldView), which a round fills before its live set says
+//     so.
+//   - NOTHING THAT WRITES OBJECTS does: a push's scratch, an advertisement
+//     view, a compaction's build and an engine write lean on the copy's
+//     objects/ alone, their one alternate, and the pool refuses a call naming
+//     the view beside an alternate — never an alternates file naming it,
+//     which git follows from every repository that names the copy as ITS
+//     alternate. And git loads the first commit-graph its object directories
+//     hold, an alternate's included, which a retirement keeps (X04) and so may
+//     name a commit only a dropping pack holds: a process leaning on a copy
+//     that holds a view has git hold every commit a graph names to the
+//     objects it can reach (gitproc's GIT_COMMIT_GRAPH_PARANOIA), so its
+//     connectivity check never passes over one.
+//
+// WHERE A PACK LIES is its rows' (packPlace): objects/pack where any live row
+// names its checksum — a live row is one a push may rely on — and the view
+// where only dropping rows do. Everything that places, keeps or judges a pack
+// reads the place from the live set (placeOf) or a snapshot
+// (snapshot.places): the install, which makes the view with the first pack it
+// places there (ensureView); a delta's live set and a full round's sweep,
+// whose strays are a pack's files where its rows no longer place them; the
+// swap, which links each pack where its rows place it, so a next incarnation
+// holding no dropping pack holds no view; the check, the scrub and Verify,
+// which hold a pack at its place and name its files at the other a stray; a
+// rebuild's seed; and the boot's walk of a copy with no state. A pack its rows
+// move from one place to the other — a row of its checksum added or retired
+// in the other state — is downloaded to its new place, its files at the old
+// leaving with the swap. NO DERIVED FILE IS BUILT OVER THE VIEW: an index
+// never covers it, the round's — over objects/pack's packs alone — and the
+// maintainer's alike, and no published layer names a pack in it, nothing
+// being published while an expunge is open. The budget counts its files (the
+// state's DiskBytes, DroppingBytes of them, which a boot restores), and
+// crewlet.code.cache.dropping.bytes is the node's total.
+//
+// THE EPOCH A COPY'S OBJECTS/ HOLDS ([Synced.DropEpoch]). A push carries the
+// repository's drop epoch as the copy its scratch leaned on held it, and its
+// committer refuses one of another (code.RefusalExpunging), so a push
+// checked before a begin is never decided after it. That is the rows' epoch
+// only once the copy holds every pack file where its rows place it: a begin's
+// inputs hold everything it made dropping, and they leave objects/pack by the
+// swap at the end of the round that applied it — so a copy whose round
+// failed to swap, or that a reader was handed while the round ran, is at the
+// epoch before. And a pack an installed layer names, which the chain holds
+// past its row (layers.go), may hold what a later begin made dropping, so the
+// epoch moves past a begin only once the chain holds no pack for a row that
+// is not live: a delta that finds the rows past the copy's epoch takes every
+// such pack out with its swap, cutting the chain below it — the cut the begin
+// made of the rows' chain.
+//
+// A REF MAY REACH A DROPPING OBJECT between a begin and its commit — a push
+// decided after the expunge read the refs and before its begin landed relied
+// on objects then live, which the commit's rescue keeps live again. Until
+// then every serving read reads it through the view, and a push that builds on
+// it is refused by its own connectivity check, its scratch reading nothing of
+// the view.
 //
 // # The installed chain
 //

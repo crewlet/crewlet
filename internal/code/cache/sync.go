@@ -1505,9 +1505,10 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 	var (
 		strays []string
 		// leaving is what a full round's strays leave by the swap — every
-		// pack file no row names, in an incarnation a reader may hold — and
-		// nil where they leave in place or there are none (packStrays).
-		leaving map[string]Event
+		// pack file no row places where it lies, in an incarnation a reader
+		// may hold — and nil where they leave in place or there are none
+		// (packStrays).
+		leaving map[leaveKey]Event
 		// placedHere: the round placed the published chain in place, or
 		// wrote its chain files again (placeChain).
 		placedHere bool
@@ -1676,35 +1677,19 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		liveWhole(inc, snap.packs)
 		inc.leaving = leaving
 	} else {
-		for _, p := range snap.packs {
-			setLive(inc, p.PackID, liveOf(p.Ref()))
-		}
-		for _, r := range snap.retired {
-			if r.Part != "pack" {
-				// A part this build installs none of: no live row is it.
-				continue
-			}
-			cs := deleteLive(inc, r.PackID)
-			if _, chained := inc.installedPacks[cs]; cs == "" || chained {
-				// THE CHAIN HOLDS ITS PACKS (layers.go): a pack an installed
-				// layer names stays, its row retired or not, until the
-				// placement of the layer's replacement takes it out.
-				continue
-			}
-			if inc.leaving == nil {
-				inc.leaving = map[string]Event{}
-			}
-			inc.leaving[cs] = EventPackRetired
-		}
-		// A DELTA NEVER DOWNLOADS A LAYER: the chain it served is recorded,
-		// and what of it the copy does not hold is the installer's (converge
-		// kicks it once the round has answered).
-		if snap.layersServed {
-			setChain(inc, snap.layers)
-		}
+		applyDelta(inc, snap)
 	}
 	if len(inc.leaving) == 0 {
 		inc.leaving, inc.leavingSince = nil, statelog.Position{}
+	}
+	if len(inc.leaving) == 0 && liveChain(inc, inc.installed) {
+		// THE EPOCH OBJECTS/ HOLDS (Synced.DropEpoch) is the rows' once the
+		// copy holds every pack file where they place it and, in objects/,
+		// none for a row that is not live: a begin's inputs, holding what it
+		// made dropping, leave by the swap, and a full round's chain held for
+		// rows a publication retired goes with the placement its swap makes
+		// — until they do, the copy is at the epoch before.
+		inc.dropEpoch = snap.repo.DropEpoch
 	}
 	e.mu.Unlock()
 	if snap.full {
@@ -1732,6 +1717,85 @@ func (c *Cache) apply(ctx context.Context, e *entry, inc *incarnation, snap snap
 		}
 	}
 	return res, nil
+}
+
+// applyDelta applies a delta's rows to inc's live set — its added rows first,
+// then its retired ones taken out (apply) — and marks LEAVING every pack's
+// files the incarnation holds where the rows no longer place them (placeOf):
+// a pack no row names any more, and one its rows MOVED — out of objects/pack
+// into the dropping view, or back — whose files at its old place go while its
+// new place is installed. e.mu is held.
+//
+// THE CHAIN HOLDS ITS PACKS (layers.go): a pack an installed layer names
+// stays in objects/pack, its row retired or not, until the placement of the
+// layer's replacement takes it out — the installer's, behind the serving —
+// since a merge keeps every object it retires and the chain's bitmap is
+// worth keeping meanwhile. NOT PAST A BEGIN: where the rows' drop epoch is
+// past the one the copy's objects/ holds (Synced.DropEpoch), an expunge has
+// begun since, and what it left dropping is in its retired inputs — and in
+// every pack a publication retired before it, whose objects it took as
+// inputs too. A layer holding one would keep that in objects/pack, where a
+// push relies on it, for as long as the installer waits on a replacement
+// no publication brings while the expunge is open; and the copy's epoch
+// stays the one before for as long (apply). So every pack the chain holds
+// for no live row leaves with this round's swap, which cuts the chain at
+// the lowest layer naming one (swap.go's chainOf) — the very cut the begin
+// made of the rows' chain (code.ExpungeBegin.DropLayers).
+func applyDelta(inc *incarnation, snap snapshot) {
+	was := map[string]packPlace{}
+	note := func(cs string) {
+		if _, ok := was[cs]; !ok {
+			was[cs] = placeOf(inc, cs)
+		}
+	}
+	for _, p := range snap.packs {
+		note(p.GitChecksum)
+	}
+	for _, r := range snap.retired {
+		if p, ok := inc.live[r.PackID]; ok && r.Part == "pack" {
+			note(p.checksum)
+		}
+	}
+	for _, p := range snap.packs {
+		setLive(inc, p.PackID, liveOf(p.Ref(), p.State))
+	}
+	for _, r := range snap.retired {
+		if r.Part != "pack" {
+			// A part this build installs none of: no live row is it.
+			continue
+		}
+		deleteLive(inc, r.PackID)
+	}
+	leave := func(key leaveKey) {
+		if inc.leaving == nil {
+			inc.leaving = map[leaveKey]Event{}
+		}
+		inc.leaving[key] = EventPackRetired
+	}
+	begun := snap.repo.DropEpoch > inc.dropEpoch
+	for cs, from := range was {
+		now := placeOf(inc, cs)
+		if from == placeNone || from == now {
+			continue
+		}
+		if _, chained := inc.installedPacks[cs]; chained && from == placeLive && !begun {
+			continue
+		}
+		leave(leaveKey{from, cs})
+	}
+	if begun {
+		for cs := range inc.installedPacks {
+			if placeOf(inc, cs) != placeLive {
+				leave(leaveKey{placeLive, cs})
+			}
+		}
+	}
+	// A DELTA NEVER DOWNLOADS A LAYER: the chain it served is recorded, and
+	// what of it the copy does not hold is the installer's (converge kicks it
+	// once the round has answered).
+	if snap.layersServed {
+		setChain(inc, snap.layers)
+	}
 }
 
 // sameRepo reports whether two reads of a repository's row found it the same,

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -745,38 +744,42 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 
 // scrubFiles is every file of the incarnation at dir a scrub hashes, sorted by
 // its path relative to the incarnation, with what its name says of its last
-// forty bytes: each pack's three files where all three are there — its .pack
-// held to the trailer that is its name, its .idx and .rev to their pack's
-// checksum before their own — and every derived file present, held as its
-// declaration says (derived.go): a chain file to what chains says it holds
-// (chainWants), the ids the incarnation installed.
+// forty bytes: each pack's three files where all three are there — in
+// objects/pack and in the dropping view alike, since a damaged dropping pack
+// is sent to a client still reading it as a live one is — its .pack held to
+// the trailer that is its name, its .idx and .rev to their pack's checksum
+// before their own; and every derived file present, held as its declaration
+// says (derived.go): a chain file to what chains says it holds (chainWants),
+// the ids the incarnation installed.
 func scrubFiles(im *image, dir string, chains map[string][]byte) ([]checkedFile, map[string]expect, error) {
-	list, err := os.ReadDir(filepath.Join(dir, packRel))
-	if err != nil {
-		return nil, nil, err
-	}
-	held := map[string]int{}
-	for _, d := range list {
-		if m := packFileName.FindStringSubmatch(d.Name()); m != nil && d.Type().IsRegular() {
-			held[m[1]]++
-		}
-	}
 	var files []checkedFile
 	wants := map[string]expect{}
-	for cs, n := range held {
-		if n != 3 {
-			continue
+	for _, place := range []packPlace{placeLive, placeDropping} {
+		list, err := im.listed(dir, place.rel())
+		if err != nil {
+			return nil, nil, err
 		}
-		sum := checksumBytes(cs)
-		for _, f := range []struct {
-			kind fileKind
-			ext  string
-			want expect
-		}{{fileIdx, ".idx", expect{prior: sum}}, {filePack, ".pack", expect{trailer: sum}},
-			{fileRev, ".rev", expect{prior: sum}}} {
-			rel := packFileRel(cs, f.ext)
-			files = append(files, checkedFile{kind: f.kind, rel: rel})
-			wants[rel] = f.want
+		held := map[string]int{}
+		for _, d := range list {
+			if m := packFileName.FindStringSubmatch(d.Name()); m != nil && d.Type().IsRegular() {
+				held[m[1]]++
+			}
+		}
+		for cs, n := range held {
+			if n != 3 {
+				continue
+			}
+			sum := checksumBytes(cs)
+			for _, f := range []struct {
+				kind fileKind
+				ext  string
+				want expect
+			}{{fileIdx, ".idx", expect{prior: sum}}, {filePack, ".pack", expect{trailer: sum}},
+				{fileRev, ".rev", expect{prior: sum}}} {
+				rel := packFileRel(place, cs, f.ext)
+				files = append(files, checkedFile{kind: f.kind, rel: rel})
+				wants[rel] = f.want
+			}
 		}
 	}
 	present, err := im.present(dir)

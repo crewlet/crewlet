@@ -527,10 +527,15 @@ func (c *Cache) peel(ctx context.Context, id, dir string, snap snapshot, by gitp
 	// git writes and flushes every line on its own — 14 ms against 22 ms a
 	// thousand ids (gitproc's measured section) — paid for every tag a full
 	// round sets, while the round holds the repository's directory.
+	// THROUGH THE DROPPING VIEW where the copy holds one (heldView): a tag a
+	// push revived onto a dropping tag object before its expunge's begin is
+	// one the copy serves, and named missing it would fail every round of the
+	// repository until the expunge's commit — which its maintainer's own
+	// rescue, waiting on a sync of the repository, could then never make.
 	_, err := c.git.Run(ctx, gitproc.Cmd{
-		Dir: dir, Args: []string{"cat-file", "--batch-check=%(objectname)", "--buffer"}, Config: c.ServeConfig(),
-		Stdin: bytes.NewReader(stdin.Bytes()), Stdout: lines, Class: gitproc.ClassRead, Repairer: by,
-		Deadline: gitproc.PackWorkDeadline(int64(stdin.Len())),
+		Dir: dir, Dropping: heldView(dir), Args: []string{"cat-file", "--batch-check=%(objectname)", "--buffer"},
+		Config: c.ServeConfig(), Stdin: bytes.NewReader(stdin.Bytes()), Stdout: lines, Class: gitproc.ClassRead,
+		Repairer: by, Deadline: gitproc.PackWorkDeadline(int64(stdin.Len())),
 	})
 	if cerr := lines.Close(); err == nil {
 		err = cerr

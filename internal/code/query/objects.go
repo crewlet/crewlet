@@ -231,7 +231,8 @@ func (r *read) expand(ctx context.Context, abbrevs []string) (map[string]string,
 		return nil
 	})
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: append([]string{"rev-parse"}, flags...), Config: r.s.o.Cache.ServeConfig(),
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: append([]string{"rev-parse"}, flags...), Config: r.s.o.Cache.ServeConfig(),
 		Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 	})
 	if err == nil {
@@ -281,7 +282,8 @@ func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 		return nil
 	})
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: r.synced.Dir, Args: []string{"cat-file", "--batch-check", "-Z"}, Config: r.s.o.Cache.ServeConfig(),
+		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
+		Args: []string{"cat-file", "--batch-check", "-Z"}, Config: r.s.o.Cache.ServeConfig(),
 		Stdin: &stdin, Stdout: recs, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 	})
 	if err == nil {

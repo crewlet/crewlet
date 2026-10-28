@@ -677,9 +677,15 @@ func validPush(p code.IntroducedRow) error {
 // so a row no git node can install is one no proposal was ever published
 // with, rather than one this copy alone refuses on every git node for good.
 func checkPack(p code.PackRow) error {
-	if p.Part != "pack" {
+	switch {
+	case p.Part != "pack":
 		// A newer peer's new part is not a bundle this build can install.
 		return fmt.Errorf("part %q is not one this build installs", p.Part)
+	case !p.State.Valid():
+		// Nor is a state it cannot place (packPlace): a pack it put in
+		// objects/pack would be one a push may rely on, whatever the state
+		// says of it.
+		return fmt.Errorf("state %q is not one this build places", p.State)
 	}
 	return p.Ref().Check()
 }

@@ -63,6 +63,24 @@ type Synced struct {
 	// it asks ([Cache.Rebuild]) consumes it, and Release hands whatever it
 	// did not to the ordinary report rules.
 	Repairer gitproc.Repairer
+	// Dropping is Dir's DROPPING VIEW — the object directory holding the
+	// packs an expunge has left dropping (code.PackDropping),
+	// Dir/objects-dropping — or "" where Dir holds none: what every process
+	// that SERVES Dir names (gitproc.Cmd.Dropping), so an object a reader is
+	// still on is answered by id, and what nothing that writes objects over
+	// Dir ever names — a push's scratch leans on Dir's objects/ alone
+	// (Cache.NewScratch), so no push relies on a dropping object.
+	Dropping string
+	// DropEpoch is the repository's drop epoch AS DIR'S OBJECTS/ HOLDS IT:
+	// the epoch of the newest expunge begin whose split of the repository's
+	// objects into live and dropping packs Dir's objects/ reflects — the
+	// row's (Repo.DropEpoch) but while a begin's inputs are still in it,
+	// leaving by the swap that has not yet been made, when it is the epoch
+	// before. What a push checked over a scratch leaning on Dir carries
+	// (code.Proposal.DropEpoch): its committer refuses one of another epoch,
+	// so a push that relied on an input's object the begin made dropping is
+	// never decided.
+	DropEpoch int64
 
 	// release unpins Dir, once: what [Synced.Release] calls.
 	release func()
@@ -319,8 +337,22 @@ type incarnation struct {
 	objects int64
 	// diskBytes is the pack files and packed-refs, set only through setSize;
 	// metaBytes the derived files', the sum of derived's Bytes, set only
-	// through setDerived. Each keeps the cache's total in step.
+	// through setDerived. Each keeps the cache's total in step. droppingBytes
+	// is, of diskBytes, the dropping view's pack files' (objects-dropping/
+	// pack), set only through setDropping, which keeps the node's dropping
+	// total (crewlet.code.cache.dropping.bytes) in step.
 	diskBytes, metaBytes int64
+	droppingBytes        int64
+	// dropEpoch is the repository's drop epoch as its objects/ holds it
+	// (Synced.DropEpoch): the row's once a round leaves nothing leaving the
+	// copy — every pack file it holds one the rows name where they name it —
+	// and its installed chain holds no pack for a row that is not live
+	// (liveChain), and otherwise what it was, since a begin's inputs, which
+	// hold what the begin made dropping, leave objects/ by the swap alone.
+	// A delta that finds the rows' epoch past it takes out every pack the
+	// chain holds for no live row (applyDelta). In memory only: no reader is
+	// handed a copy before its first full round in a process, which sets it.
+	dropEpoch int64
 	// derived is what it records of each declared derived file on disk, by
 	// the declaration's name (state.go's derivedState): a declaration with
 	// no file on disk has no entry. maintained is its last maintenance run,
@@ -503,26 +535,35 @@ type incarnation struct {
 	// moved forward by the janitor's recordUse.
 	stamped time.Time
 
-	// THE LIVE SET (swap.go). live is the incarnation's LIVE ROWS, by pack
-	// id, as the rows it last converged to hold them: set whole by every
-	// full round, a delta's added rows set and its retired rows deleted, an
-	// adopted pack set — by pack id, so a pack adopted and then served again
-	// by the next delta is one entry, never two. byChecksum counts the
-	// entries naming each git checksum (two rows of one checksum share one
-	// file), changed only through setLive and deleteLive, so a pack's files
-	// leave only once NO live row names them. In memory only: a boot's first
-	// round is full, so both are built before a delta reads them. What a
-	// swap keeps and drops is read from them, never from the directory.
+	// THE LIVE SET (swap.go). live is the incarnation's PACK ROWS, by pack
+	// id, as the rows it last converged to hold them — a row left dropping by
+	// an expunge's begin as much as a live one, each with its state: set
+	// whole by every full round, a delta's added rows set and its retired
+	// rows deleted, an adopted pack set — by pack id, so a pack adopted and
+	// then served again by the next delta is one entry, never two. byChecksum
+	// counts the entries naming each git checksum (two rows of one checksum
+	// share one file), and of them the dropping ones, changed only through
+	// setLive and deleteLive, so a pack's files leave only once NO row names
+	// them — and leave objects/pack for the dropping view once only dropping
+	// rows do (placeOf). In memory only: a boot's first round is full, so
+	// both are built before a delta reads them. What a swap keeps and drops,
+	// and where it keeps each, is read from them, never from the directory.
 	live       map[string]livePack
-	byChecksum map[string]int
-	// leaving is the pack files the incarnation holds that no live row names
-	// any more, by the checksum they are named by — or, for a file of
-	// objects/pack named like a pack's whose name carries no checksum, by
-	// its name — each with the event that took it out: EventPackRetired, or
-	// EventPackRemoved for a stray no retirement accounts for. Non-empty
-	// only between a round's apply and its swap, and after a swap that
-	// failed, which the repository's next round tries again.
-	leaving map[string]Event
+	byChecksum map[string]checksumRows
+	// droppingPacks is how many packs the live set places in the dropping
+	// view (placeOf): kept in step by placeMoved, so a reader is handed the
+	// view (droppingView) exactly while the copy holds a pack in it.
+	droppingPacks int
+	// leaving is the pack files the incarnation holds that it is to hold no
+	// longer where they are, by where they are (their place) and the checksum
+	// they are named by — or, for a file of a pack directory named like a
+	// pack's whose name carries no checksum, by its name — each with the
+	// event that took it out: EventPackRetired, or EventPackRemoved for a
+	// stray no retirement accounts for. A pack whose files MOVE — out of
+	// objects/pack into the dropping view, or back — leaves the place it was
+	// in. Non-empty only between a round's apply and its swap, and after a
+	// swap that failed, which the repository's next round tries again.
+	leaving map[leaveKey]Event
 	// leavingSince is the position the retirements of what is leaving are
 	// all above, zero while nothing is (state.LeavingSince): persisted, and
 	// what a full round asks its retirements from where it is below at, so a
@@ -667,23 +708,31 @@ func (t tailCount) covers() Covers {
 	return Covers{Packs: t.packs, Objects: t.objects, DiskBytes: t.bytes}
 }
 
-// livePack is one live row as the swap and a compaction's plan read it: the
-// checksum its files are named by, the bundle's bytes and its two indexes' —
-// what tells its pack section, and whether the pack is FULL
-// (code.PackRow.Full), which a plan never merges ([Cache.Packs]) — and the
-// objects its row counts. A pack id names one bundle for ever — a row is never
-// rewritten — so two rows of one checksum carry the same figures. The row's
-// object key and hash are not kept: nothing that reads the set fetches by
-// them, and the set lives in every incarnation the node holds.
+// livePack is one row of the live set as the swap and a compaction's plan
+// read it: the checksum its files are named by, the bundle's bytes and its two
+// indexes' — what tells its pack section, and whether the pack is FULL
+// (code.PackRow.Full), which a plan never merges ([Cache.Packs]) — the objects
+// its row counts, and whether an expunge's begin left the row dropping. A pack
+// id names one bundle for ever — a row is never rewritten — so two rows of one
+// checksum carry the same figures. The row's object key and hash are not kept:
+// nothing that reads the set fetches by them, and the set lives in every
+// incarnation the node holds.
 type livePack struct {
 	checksum                                string
 	size, indexBytes, reverseBytes, objects int64
+	// dropping: the row is one an expunge's begin left dropping
+	// (code.PackDropping), whose files the incarnation keeps in its dropping
+	// view while no live row names the same checksum (placeOf).
+	dropping bool
 }
 
-// liveOf is p as the live set keeps it.
-func liveOf(p code.PackRef) livePack {
+// liveOf is p, a row in state, as the live set keeps it: dropping exactly
+// where state is code.PackDropping — the one state of a row the cache keeps
+// out of objects/pack (read.go's checkPack refuses a state this build does
+// not know).
+func liveOf(p code.PackRef, state code.PackState) livePack {
 	return livePack{checksum: p.GitChecksum, size: p.Size, indexBytes: p.IndexBytes, reverseBytes: p.ReverseBytes,
-		objects: p.Objects}
+		objects: p.Objects, dropping: state == code.PackDropping}
 }
 
 // row is p, named id, as a plan reads it ([Cache.Packs]): every figure the
@@ -694,28 +743,112 @@ func (p livePack) row(id string) code.PackRow {
 		GitChecksum: p.checksum, Objects: p.objects}
 }
 
-// setLive records the row id names, whose files are p's, as live in inc; e.mu
-// is held. A row already live is left as it is — a pack adopted and then
-// served by the next delta is one row — and a pack a row names again is no
-// longer leaving.
+// checksumRows is the live set's rows naming one git checksum: how many, and
+// how many of them are dropping — what says where the incarnation keeps the
+// files they name (placeOfRows).
+type checksumRows struct{ rows, dropping int }
+
+// packPlace is WHERE AN INCARNATION KEEPS A PACK'S FILES (M6-D3): in
+// objects/pack, which every git process run in it or leaning on it reads, or
+// in its DROPPING VIEW, objects-dropping/pack, which only a process serving it
+// reads (Synced.Dropping, gitproc.Cmd.Dropping) — so an object an expunge has
+// left dropping is answered by id to a reader still on it, and never relied on
+// by a push, whose scratch leans on objects/ alone.
+type packPlace uint8
+
+const (
+	// placeNone: no row of the incarnation names the pack.
+	placeNone packPlace = iota
+	// placeLive: objects/pack — a live row names the pack, whatever dropping
+	// rows name it too, since a live row is one a push may rely on.
+	placeLive
+	// placeDropping: the dropping view — every row naming the pack is one an
+	// expunge's begin left dropping.
+	placeDropping
+)
+
+// rel is the directory p's files live in, relative to an incarnation: the
+// dropping view's for placeDropping, objects/pack otherwise.
+func (p packPlace) rel() string {
+	if p == placeDropping {
+		return droppingRel
+	}
+	return packRel
+}
+
+// placeOfRows is where rows place the files they name.
+func placeOfRows(r checksumRows) packPlace {
+	switch {
+	case r.rows == 0:
+		return placeNone
+	case r.dropping == r.rows:
+		return placeDropping
+	}
+	return placeLive
+}
+
+// placeOf is where inc's live set places the files of the pack checksum cs
+// (placeOfRows): by its rows alone — a pack an installed layer names is in
+// objects/pack besides, whatever its rows say (layers.go, the chain holds its
+// packs), which a caller asks of installedPacks. e.mu is held.
+func placeOf(inc *incarnation, cs string) packPlace { return placeOfRows(inc.byChecksum[cs]) }
+
+// leaveKey is one pack's files an incarnation holds that are leaving it: where
+// they are, and the checksum they are named by — or, for a file of a pack
+// directory named like a pack's whose name carries no checksum, its name.
+type leaveKey struct {
+	place packPlace
+	name  string
+}
+
+// setLive records the row id names, whose files are p's, as a row of inc's
+// live set; e.mu is held. A row already there is left as it is — a pack
+// adopted and then served by the next delta is one row — and a pack a row
+// names again where it lies is no longer leaving from there.
 func setLive(inc *incarnation, id string, p livePack) {
 	if _, ok := inc.live[id]; ok {
 		return
 	}
 	if inc.live == nil {
-		inc.live, inc.byChecksum = map[string]livePack{}, map[string]int{}
+		inc.live, inc.byChecksum = map[string]livePack{}, map[string]checksumRows{}
 	}
+	was := placeOf(inc, p.checksum)
 	inc.live[id] = p
-	if inc.byChecksum[p.checksum]++; inc.byChecksum[p.checksum] == 1 {
-		// THE TAIL counts a pack's files once, whichever rows name them.
-		tailMoved(inc, p, 1)
+	r := inc.byChecksum[p.checksum]
+	r.rows++
+	if p.dropping {
+		r.dropping++
 	}
-	delete(inc.leaving, p.checksum)
+	inc.byChecksum[p.checksum] = r
+	now := placeOf(inc, p.checksum)
+	placeMoved(inc, p, was, now)
+	delete(inc.leaving, leaveKey{now, p.checksum})
 }
 
-// tailMoved counts the pack p a live set gained (sign 1) or lost (-1) into
-// inc's tail when no installed layer names it — one an installed layer names
-// is the chain's, never the tail's. e.mu is held.
+// placeMoved counts p — the pack whose files the live set placed at was and
+// places at now — into or out of inc's tail and its dropping count: THE TAIL
+// counts a pack's files once, whichever rows name them, and only those in
+// objects/pack — a dropping pack holds no commit the node's tip covers,
+// written as it is without the dropping view; and droppingPacks counts the
+// packs placed in the view (droppingView). e.mu is held.
+func placeMoved(inc *incarnation, p livePack, was, now packPlace) {
+	switch {
+	case was != placeLive && now == placeLive:
+		tailMoved(inc, p, 1)
+	case was == placeLive && now != placeLive:
+		tailMoved(inc, p, -1)
+	}
+	switch {
+	case was != placeDropping && now == placeDropping:
+		inc.droppingPacks++
+	case was == placeDropping && now != placeDropping:
+		inc.droppingPacks--
+	}
+}
+
+// tailMoved counts the pack p a live set gained (sign 1) or lost (-1) in
+// objects/pack into inc's tail when no installed layer names it — one an
+// installed layer names is the chain's, never the tail's. e.mu is held.
 func tailMoved(inc *incarnation, p livePack, sign int64) {
 	if _, chained := inc.installedPacks[p.checksum]; chained {
 		return
@@ -723,10 +856,10 @@ func tailMoved(inc *incarnation, p livePack, sign int64) {
 	inc.tail.add(p, sign)
 }
 
-// recountTail counts inc's tail afresh — every live pack's files once, those
-// no installed layer names — for an installed chain set whole
-// (recordInstalled) or a live set carried into a swap's next incarnation
-// (promote). e.mu is held.
+// recountTail counts inc's tail afresh — every pack's files the live set
+// places in objects/pack once, those no installed layer names — for an
+// installed chain set whole (recordInstalled) or a live set carried into a
+// swap's next incarnation (promote). e.mu is held.
 func recountTail(inc *incarnation) {
 	var t tailCount
 	counted := make(map[string]bool, len(inc.byChecksum))
@@ -735,7 +868,7 @@ func recountTail(inc *incarnation) {
 			continue
 		}
 		counted[p.checksum] = true
-		if _, chained := inc.installedPacks[p.checksum]; !chained {
+		if _, chained := inc.installedPacks[p.checksum]; !chained && placeOf(inc, p.checksum) == placeLive {
 			t.add(p, 1)
 		}
 	}
@@ -743,33 +876,166 @@ func recountTail(inc *incarnation) {
 }
 
 // deleteLive takes the row id names out of inc's live set, and answers the
-// checksum of the files it named when NO live row names them any more —
-// files leaving the incarnation — or "" for a row that leaves none, or none
-// the set held: a retirement of a pack the incarnation never held names
-// nothing to drop. e.mu is held.
-func deleteLive(inc *incarnation, id string) string {
+// checksum of the files it named — "" for a row the set did not hold: a
+// retirement of a pack the incarnation never held names nothing to drop —
+// and where the set placed those files before and places them now (placeOf):
+// a pack whose files no row names any more is placed nowhere, and one only
+// dropping rows still name moves to the dropping view. e.mu is held.
+func deleteLive(inc *incarnation, id string) (cs string, was, now packPlace) {
 	p, ok := inc.live[id]
 	if !ok {
-		return ""
+		return "", placeNone, placeNone
 	}
+	was = placeOf(inc, p.checksum)
 	delete(inc.live, id)
-	if inc.byChecksum[p.checksum]--; inc.byChecksum[p.checksum] > 0 {
-		return ""
+	r := inc.byChecksum[p.checksum]
+	r.rows--
+	if p.dropping {
+		r.dropping--
 	}
-	delete(inc.byChecksum, p.checksum)
-	tailMoved(inc, p, -1)
-	return p.checksum
+	if r.rows == 0 {
+		delete(inc.byChecksum, p.checksum)
+	} else {
+		inc.byChecksum[p.checksum] = r
+	}
+	now = placeOf(inc, p.checksum)
+	placeMoved(inc, p, was, now)
+	return p.checksum, was, now
 }
 
 // liveWhole makes inc's live set exactly the rows packs: what a full round's
 // snapshot names. e.mu is held.
 func liveWhole(inc *incarnation, packs map[packKey]code.PackRow) {
 	inc.live = make(map[string]livePack, len(packs))
-	inc.byChecksum = make(map[string]int, len(packs))
-	inc.tail = tailCount{}
+	inc.byChecksum = make(map[string]checksumRows, len(packs))
+	inc.tail, inc.droppingPacks = tailCount{}, 0
 	for _, p := range packs {
-		setLive(inc, p.PackID, liveOf(p.Ref()))
+		setLive(inc, p.PackID, liveOf(p.Ref(), p.State))
 	}
+}
+
+// other is the place a pack's files are at that is not p: the dropping view
+// for objects/pack and objects/pack for the view; none for none.
+func (p packPlace) other() packPlace {
+	switch p {
+	case placeLive:
+		return placeDropping
+	case placeDropping:
+		return placeLive
+	}
+	return placeNone
+}
+
+// places is where the rows s names place each pack's files, by checksum
+// (placeOfRows) — every pack the repository holds, on a full snapshot.
+func (s snapshot) places() map[string]packPlace {
+	rows := make(map[string]checksumRows, len(s.packs))
+	for _, p := range s.packs {
+		r := rows[p.GitChecksum]
+		r.rows++
+		if p.State == code.PackDropping {
+			r.dropping++
+		}
+		rows[p.GitChecksum] = r
+	}
+	out := make(map[string]packPlace, len(rows))
+	for cs, r := range rows {
+		out[cs] = placeOfRows(r)
+	}
+	return out
+}
+
+// placesAfter is where inc's live set places the files of each pack snap
+// names once a round has applied snap to it (apply's live set): a full
+// snapshot's own places, and a delta's over inc's live set as it stands — its
+// rows added, a row the set holds already left as it is (setLive), and its
+// retired rows taken out — for every checksum the delta names. e.mu is held.
+func placesAfter(inc *incarnation, snap snapshot) map[string]packPlace {
+	if snap.full {
+		return snap.places()
+	}
+	rows := map[string]checksumRows{}
+	touch := func(cs string) checksumRows {
+		r, ok := rows[cs]
+		if !ok {
+			r = inc.byChecksum[cs]
+		}
+		return r
+	}
+	for _, p := range snap.packs {
+		r := touch(p.GitChecksum)
+		if _, held := inc.live[p.PackID]; !held {
+			r.rows++
+			if p.State == code.PackDropping {
+				r.dropping++
+			}
+		}
+		rows[p.GitChecksum] = r
+	}
+	for _, x := range snap.retired {
+		p, held := inc.live[x.PackID]
+		if x.Part != "pack" || !held {
+			continue
+		}
+		r := touch(p.checksum)
+		r.rows--
+		if p.dropping {
+			r.dropping--
+		}
+		rows[p.checksum] = r
+	}
+	out := make(map[string]packPlace, len(rows))
+	for cs, r := range rows {
+		out[cs] = placeOfRows(r)
+	}
+	return out
+}
+
+// heldView is the dropping view the incarnation — or a swap's staged next
+// incarnation — at dir holds on the disk: its objects-dropping directory where
+// there is one, "" where there is none. What the cache's own reads of what a
+// copy's refs reach name (the round's peel, a placement's canary, Verify's
+// connectivity check): a round places a dropping pack before the live set it
+// ends with says so, and a ref a push revived onto a dropping object in an
+// expunge's window reaches one, which read without the view is an object the
+// copy holds named missing. Something else at the name is the pool's to
+// refuse (gitproc.ShapeDropping), whatever is named.
+func heldView(dir string) string {
+	view := filepath.Join(dir, gitproc.DroppingDir)
+	if info, err := os.Lstat(view); err == nil && info.IsDir() {
+		return view
+	}
+	return ""
+}
+
+// liveChain reports whether every pack the layers of chain name is one inc's
+// live set places in objects/pack (placeOf): what the copy's objects/ must
+// hold besides its live packs before its drop epoch is the rows'
+// (Synced.DropEpoch). A pack a layer names for no live row — the chain holds
+// its packs (layers.go) between a publication that retired them and the
+// installer's placement — holds what a publication retired, which an expunge
+// begun since may have made dropping, and a push relying on that is what the
+// epoch refuses. e.mu is held.
+func liveChain(inc *incarnation, chain []code.LayerRow) bool {
+	for _, r := range chain {
+		for _, cs := range r.Layer.Packs {
+			if placeOf(inc, cs) != placeLive {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// droppingView is inc's dropping view as a process serving it names it
+// (Synced.Dropping, gitproc.Cmd.Dropping) — its objects-dropping directory —
+// where its live set places a pack there, and "" where it places none. e.mu
+// is held.
+func droppingView(inc *incarnation) string {
+	if inc.droppingPacks == 0 {
+		return ""
+	}
+	return filepath.Join(inc.dir, gitproc.DroppingDir)
 }
 
 // serving is the incarnation that serves inc's files now: inc, or the last of
@@ -798,6 +1064,7 @@ func (inc *incarnation) fromState(st *state) {
 	inc.refs = st.Refs
 	inc.packs = st.Packs
 	inc.diskBytes = st.DiskBytes
+	inc.droppingBytes = st.DroppingBytes
 	inc.metaBytes = st.derivedBytes()
 	inc.derived, st.Derived = st.Derived, nil
 	inc.maintained = st.Maintained
@@ -818,6 +1085,7 @@ func (inc *incarnation) stateValue(id string) state {
 		Refs:          inc.refs,
 		Packs:         inc.packs,
 		DiskBytes:     inc.diskBytes,
+		DroppingBytes: inc.droppingBytes,
 		Derived:       maps.Clone(inc.derived),
 		Maintained:    inc.maintained,
 		LeavingSince:  inc.leavingSince,
@@ -899,15 +1167,17 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 	c.used(e, inc)
 	by := c.reader(inc)
 	return Synced{
-		Dir:      inc.dir,
-		Repo:     inc.repo,
-		Position: inc.at,
-		Kind:     kind,
-		Repairer: by,
-		release:  sync.OnceFunc(func() { c.release(e, inc, by) }),
-		inc:      inc,
-		entry:    e,
-		owner:    c,
+		Dir:       inc.dir,
+		Repo:      inc.repo,
+		Position:  inc.at,
+		Kind:      kind,
+		Repairer:  by,
+		Dropping:  droppingView(inc),
+		DropEpoch: inc.dropEpoch,
+		release:   sync.OnceFunc(func() { c.release(e, inc, by) }),
+		inc:       inc,
+		entry:     e,
+		owner:     c,
 	}
 }
 
@@ -989,6 +1259,16 @@ func (c *Cache) setSize(inc *incarnation, disk int64) {
 		c.heldBytes.Add(disk - inc.diskBytes)
 	}
 	inc.diskBytes = disk
+}
+
+// setDropping sets what inc's dropping view's pack files hold — a part of
+// what setSize counts, set beside it wherever those files move — keeping the
+// node's dropping total (Cache.droppingBytes) in step; the entry's mu is held.
+func (c *Cache) setDropping(inc *incarnation, dropping int64) {
+	if !inc.discarded {
+		c.droppingBytes.Add(dropping - inc.droppingBytes)
+	}
+	inc.droppingBytes = dropping
 }
 
 // setDerived records d as what inc holds of the declaration name on disk —
@@ -1094,6 +1374,7 @@ func (c *Cache) discard(inc *incarnation) string {
 	}
 	inc.discarded = true
 	c.heldBytes.Add(-(inc.diskBytes + inc.metaBytes))
+	c.droppingBytes.Add(-inc.droppingBytes)
 	c.memoBytes.Add(-inc.derived[DerivedMemo].Bytes)
 	// No reader holds it, so every run of its index mapped goes now.
 	c.forgetRuns(inc)
