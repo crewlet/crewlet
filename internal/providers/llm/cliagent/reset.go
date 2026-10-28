@@ -60,17 +60,32 @@ func leadingInt(rest string) (int64, bool) {
 	return value, err == nil
 }
 
-// clockReset reads "4:30pm (America/Vancouver)", "4pm (Europe/Berlin)" or
-// "16:30 (Asia/Tokyo)" as the occurrence of that time of day, in that zone,
-// NEAREST now: yesterday's, today's or tomorrow's.
+// clockResetGrace is how far before now a named time of day still reads as the
+// occurrence that has just gone by, rather than tomorrow's.
 //
-// THE NEAREST, because the vendor names a time and not a date. A reset named
-// at 11 pm for "2am" is the coming night's, three hours away, and one named
-// for "4:30pm" a minute after half past four is the one that has just gone
-// by (which [resetAt] then reads as no instant at all), not tomorrow's, a
-// whole day away. A window that genuinely lasts longer than twelve hours is
-// written with a date this reading does not take, and so sits out the bounded
-// window an unread reset does.
+// FIVE MINUTES. The vendor names a time, rounded to the minute or the hour,
+// that the window turns over at on its own clock, and this reads it against
+// the engine host's clock when the run ended: the two clocks can disagree by a
+// minute or two on a host whose time is not disciplined, and the run's exit can
+// trail the line it printed. A reset that has passed by less than that is the
+// window turning over as the report was read, which [resetAt] answers as no
+// instant at all. Anything further back cannot be today's (a vendor does not
+// report a limit whose reset passed a quarter of an hour ago), so it is
+// tomorrow's.
+const clockResetGrace = 5 * time.Minute
+
+// clockReset reads "4:30pm (America/Vancouver)", "4pm (Europe/Berlin)" or
+// "16:30 (Asia/Tokyo)" as the NEXT occurrence of that time of day, in that
+// zone: the first one no more than [clockResetGrace] before now.
+//
+// THE NEXT, because the vendor names a time and not a date, and a reset is
+// always ahead of the report that names it. A reset named at 11 pm for "2am"
+// is the coming night's, three hours away; one named at 4:16 pm for "5am" is
+// tomorrow's, thirteen hours away, which the nearest occurrence read as this
+// morning's and so as no instant; and one named for "4:30pm" a minute after
+// half past four is the one that has just gone by (no instant), not tomorrow's.
+// A window that lasts longer than a day is written with a date this reading
+// does not take, and so sits out the bounded window an unread reset does.
 //
 // THE ZONE IS REQUIRED. Claude Code names the zone it rendered the time in,
 // which is the zone of the host the CLI ran on: a sandbox's, the engine's, or
@@ -113,14 +128,13 @@ func clockReset(rest string, now time.Time) time.Time {
 		return time.Time{}
 	}
 	local := now.In(zone)
-	nearest := time.Time{}
+	earliest := now.Add(-clockResetGrace)
 	for _, day := range []int{-1, 0, 1} {
-		at := time.Date(local.Year(), local.Month(), local.Day()+day, hour, minute, 0, 0, zone)
-		if nearest.IsZero() || absDuration(at.Sub(now)) < absDuration(nearest.Sub(now)) {
-			nearest = at
+		if at := time.Date(local.Year(), local.Month(), local.Day()+day, hour, minute, 0, 0, zone); !at.Before(earliest) {
+			return at
 		}
 	}
-	return nearest
+	return time.Time{}
 }
 
 // clockNumber reads up to width digits off the front of s.
@@ -134,11 +148,4 @@ func clockNumber(s string, width int) (int, string, bool) {
 	}
 	n, err := strconv.Atoi(s[:end])
 	return n, s[end:], err == nil
-}
-
-func absDuration(d time.Duration) time.Duration {
-	if d < 0 {
-		return -d
-	}
-	return d
 }

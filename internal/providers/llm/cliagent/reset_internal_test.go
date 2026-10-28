@@ -13,13 +13,16 @@ import (
 // refused a seat with "resets 4:30pm (America/Vancouver)".
 var reportedAt = time.Date(2026, time.October, 27, 23, 16, 0, 0, time.UTC)
 
-// A RESET NAMED AS A TIME OF DAY IS THE OCCURRENCE OF IT NEAREST THE REPORT, in
+// A RESET NAMED AS A TIME OF DAY IS ITS NEXT OCCURRENCE AFTER THE REPORT, in
 // the zone the vendor named, and anything this reading cannot take is no
 // instant at all rather than a guess.
 //
 // Mutation: read the time in UTC, and the Vancouver reset lands seven hours
-// early; take today's occurrence always, and "2am" at 11 pm lands in the past.
-func TestAClockResetIsTheNearestOccurrenceInItsZone(t *testing.T) {
+// early; take today's occurrence always, and "2am" at 11 pm lands in the past;
+// take the nearest occurrence, and a reset 13 or 23 hours ahead reads as this
+// morning's, which is no instant; drop the grace, and one a minute gone by is
+// tomorrow's.
+func TestAClockResetIsTheNextOccurrenceInItsZone(t *testing.T) {
 	t.Parallel()
 	clock := cliprofile.ResetReading{Separator: "resets ", Unit: cliprofile.ResetClock}
 	lateNight := time.Date(2026, time.October, 28, 6, 0, 0, 0, time.UTC) // 11 pm in Vancouver
@@ -52,9 +55,21 @@ func TestAClockResetIsTheNearestOccurrenceInItsZone(t *testing.T) {
 			said: "You've hit your 5-hour limit · resets 12am (America/Vancouver)",
 			now:  lateNight, want: time.Date(2026, time.October, 28, 7, 0, 0, 0, time.UTC),
 		},
+		"thirteen hours ahead is tomorrow morning's": {
+			said: "You've hit your weekly limit · resets 5:16am (America/Vancouver)",
+			now:  reportedAt, want: time.Date(2026, time.October, 28, 12, 16, 0, 0, time.UTC),
+		},
+		"twenty-three hours ahead is tomorrow afternoon's": {
+			said: "You've hit your weekly limit · resets 3:16pm (America/Vancouver)",
+			now:  reportedAt, want: time.Date(2026, time.October, 28, 22, 16, 0, 0, time.UTC),
+		},
 		"a reset that has just gone by is no instant": {
-			said: "You've hit your 5-hour limit · resets 4pm (America/Vancouver)",
+			said: "You've hit your 5-hour limit · resets 4:15pm (America/Vancouver)",
 			now:  reportedAt,
+		},
+		"a reset past the grace is tomorrow's": {
+			said: "You've hit your 5-hour limit · resets 4pm (America/Vancouver)",
+			now:  reportedAt, want: time.Date(2026, time.October, 28, 23, 0, 0, 0, time.UTC),
 		},
 		"no zone": {said: "You've hit your 5-hour limit · resets 4:30pm", now: reportedAt},
 		"a zone the database does not know": {
