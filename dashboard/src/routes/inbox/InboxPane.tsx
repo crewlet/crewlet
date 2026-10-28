@@ -68,7 +68,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { renderMarkdown } from "~/lib/markdown.ts";
+import { renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
@@ -336,19 +336,19 @@ function AskPane({
           {frame.task && <> on {frame.task}</>}
         </>,
       )}
-      <ReadingPaneTitle>{askQuestion(ask)}</ReadingPaneTitle>
+      <ReadingPaneTitle>{renderTokens(askQuestion(ask), "question")}</ReadingPaneTitle>
       {context && <ReadingPaneLead>{renderMarkdown(context)}</ReadingPaneLead>}
       {reasoning ? (
         <ReadingPaneReasoning
           title={
             <>
               {`${frame.name} recommends `}
-              <strong>{reasoning.label}</strong>
+              <strong>{renderTokens(reasoning.label, "recommended")}</strong>
             </>
           }
           footer={chips}
         >
-          <p>{reasoning.text}</p>
+          <p>{renderTokens(reasoning.text, "reasoning", "anchor")}</p>
         </ReadingPaneReasoning>
       ) : (
         chips
@@ -438,7 +438,7 @@ function AnsweredPane({
           {frame.task && <> on {frame.task}</>}
         </>,
       )}
-      <ReadingPaneTitle>{askQuestion(ask)}</ReadingPaneTitle>
+      <ReadingPaneTitle>{renderTokens(askQuestion(ask), "question")}</ReadingPaneTitle>
       <ReadingPaneOutcome>
         {`${words.who} ${words.verb}`}
         {said && (
@@ -984,11 +984,11 @@ function NoticePane({
       {said &&
         (comment ? (
           <ReadingPaneQuote>
-            <p>{said}</p>
+            <p>{renderTokens(said, "said", "anchor")}</p>
           </ReadingPaneQuote>
         ) : (
           <ReadingPaneLead>
-            <p>{said}</p>
+            <p>{renderTokens(said, "said", "anchor")}</p>
           </ReadingPaneLead>
         ))}
       {ask && (

@@ -42,7 +42,8 @@
  *     address (a scheme's `://`, a `www.` host) or a path (one that starts
  *     with `/`, `./` or `../`, or has a slash after a part that is no key) is
  *     something the model wrote out, and a key in it (https://x.test/GOP-11,
- *     /worklet/GOP-11, worklet/GOP-11) is part of it, never a mention.
+ *     /worklet/GOP-11, worklet/GOP-11) is part of it, never a mention. The
+ *     rule is `lib/writtenOut.ts`'s, which the inline tokens read too.
  *  4. In each run of text, the earliest mention wins; where two start at one
  *     place, the longer. Only a record's FIRST mention, in reading order, is
  *     its chip; the rest stay text.
@@ -58,6 +59,7 @@ import type { ReactNode } from "react";
 import type { AssistantCardEvent } from "~/contract/assistant.ts";
 import { narrowCard } from "~/protocol/assistantWire.ts";
 import { fmtExact } from "~/lib/format.ts";
+import { overlapsAny, writtenOutSpans } from "~/lib/writtenOut.ts";
 
 type EntityKind = NonNullable<NonNullable<AssistantCardEvent["card"]["entity"]>["kind"]>;
 
@@ -197,34 +199,6 @@ function escape(s: string): string {
 const BEFORE = "(?<![\\p{L}\\p{N}_-])";
 const AFTER = "(?![\\p{L}\\p{N}_-])";
 
-/** A word of the run: what lies between spaces. */
-const WORD = /\S+/gu;
-/** What surrounds a word without being part of it: brackets, quotes, stops. */
-const AROUND = /^["'\u201c\u2018([{<]*(.*?)[.,;:!?"'\u201d\u2019)\]}>]*$/su;
-/** A bare address: a scheme's `://` or a `www.` host. */
-const ADDRESS = /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu;
-/** A part of a word a key could be: a capital, then capitals and digits, then a number. */
-const KEY_SHAPED = /^\p{Lu}[\p{Lu}\p{N}]*(?:-\p{N}+)?$/u;
-
-/** Whether a word is an address or a path, which nothing in is a mention (rule 3). */
-function writtenOut(word: string): boolean {
-  if (ADDRESS.test(word) || /^\.{0,2}\//u.test(word)) return true;
-  // A SLASH AFTER A PART THAT IS NO KEY: "worklet/GOP-11" is a path, and
-  // "GOP-10/GOP-11" two keys.
-  const parts = word.split("/");
-  return parts.slice(0, -1).some((part) => !KEY_SHAPED.test(part));
-}
-
-/** Where each address or path in `text` lies, as [start, end) (rule 3). */
-function addresses(text: string): Array<readonly [number, number]> {
-  const out: Array<readonly [number, number]> = [];
-  for (const m of text.matchAll(WORD)) {
-    const word = AROUND.exec(m[0])?.[1] ?? m[0];
-    if (word !== "" && writtenOut(word)) out.push([m.index, m.index + m[0].length]);
-  }
-  return out;
-}
-
 /** Text that ends a sentence: its stop, and any closing quote or bracket after it. */
 const ENDS_SENTENCE = /[.!?]["'\u201d\u2019)\]]*\s*$/u;
 /** What may open a sentence before its first word: a quote, a bracket, space. */
@@ -275,7 +249,7 @@ function startsSentence(text: string, at: number, run: RunContext): boolean {
 
 /** Whether a match of `p` at `at` is a mention by rules 2 and 3. */
 function mentions(p: Pattern, text: string, at: number, end: number, run: RunContext): boolean {
-  if (run.addresses.some(([from, to]) => at < to && end > from)) return false;
+  if (overlapsAny(run.addresses, at, end)) return false;
   return !(p.ordinary && startsSentence(text, at, run));
 }
 
@@ -322,7 +296,7 @@ export function mentionsOf(
   const patterns = patternsOf(reads);
   let previous = "";
   const prose = (text: string, key: string, opens = false): ReactNode => {
-    const run: RunContext = { opens, previous, addresses: addresses(text) };
+    const run: RunContext = { opens, previous, addresses: writtenOutSpans(text) };
     previous = text;
     if (patterns.length === 0) return text;
     const out: ReactNode[] = [];

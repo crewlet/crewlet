@@ -42,6 +42,7 @@ import type { AgentRow } from "~/protocol/types.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { projectsByUnit } from "~/lib/orgchart.ts";
+import { PROJECT_PAGE } from "~/lib/work.ts";
 import {
   activityOf,
   handleLabel,
@@ -62,9 +63,6 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PreviousRevisionNote } from "~/routes/org/builder/AfterSaveStrip.tsx";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
-
-/** The project page the unit keys are read from: every live project. */
-const PROJECT_PAGE = 200;
 
 /**
  * Every live project filed to each unit, by unit key, from Worklet. A

@@ -79,7 +79,8 @@ import { QueryState } from "~/components/common.tsx";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateCompact, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
-import { plainText, renderMarkdown } from "~/lib/markdown.ts";
+import { renderMarkdown } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { useRecents } from "~/lib/recents.ts";
 import {
   SEARCH_MODES,

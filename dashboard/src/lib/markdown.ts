@@ -40,8 +40,10 @@
 
 import { createElement, Fragment, type ReactNode } from "react";
 import {
+  ColorChip,
   Highlight,
   InlineCode,
+  InlineRef,
   MARKDOWN_CALLOUT_NAMES,
   markdownClosesFence,
   markdownFenceOf,
@@ -52,6 +54,9 @@ import {
   type MarkdownBlock,
   type MarkdownFence,
 } from "@crewlethq/ui";
+import { InlineToken, LabelledLink } from "~/components/InlineToken.tsx";
+import { codeColour, inlineTokens } from "./inlineTokens.ts";
+import { inlineText, plainText } from "./markdownText.ts";
 
 // --- sectioning ------------------------------------------------------------
 
@@ -344,8 +349,12 @@ export interface RenderOptions {
    * first word starts a sentence. The Dashboard Assistant makes the first
    * mention of each record a turn read its chip here
    * (`app/assistant/chunk/mentions.ts`), so a key quoted in code or written
-   * into a link's label stays as written. A caller gives this or `highlight`;
-   * given both, this is the one applied.
+   * into a link's label stays as written.
+   *
+   * IT READS FIRST. The inline tokens every render draws (a colour's swatch,
+   * an address's mark, a key's link: `lib/inlineTokens.ts`) are read in the
+   * words this leaves as words, and `highlight` marks the words left after
+   * that, so a record chip is never read again as a key.
    */
   prose?: (text: string, key: string, opens?: boolean) => ReactNode;
   /**
@@ -413,7 +422,25 @@ export function renderInline(
       // the flag. Up to [UnbrokenCode] characters it is kept on one line; a
       // longer one (a URL, a whole config line) still wraps, since holding it
       // whole would overflow a phone's column.
-      out.push(createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code));
+      // A SPAN THAT IS ONE COLOUR is drawn with a swatch of it, since that is
+      // how a colour is quoted (`#ffe100`); a colour inside a longer span is
+      // code (`lib/inlineTokens.ts`, rule 1).
+      const colour = codeColour(code);
+      out.push(
+        colour
+          ? createElement(
+              InlineCode,
+              { key, whole: true },
+              // THE SAME MARK BOX as a colour in words, so the two swatches
+              // stand at one height and both say "Colour" to a screen reader.
+              createElement(InlineRef, {
+                kind: "Colour",
+                mark: createElement(ColorChip, { value: colour, size: "text", shape: "square" }),
+                children: code,
+              }),
+            )
+          : createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code),
+      );
     } else if (g.src !== undefined && options.links === "inert") {
       // A MODEL'S PICTURE IS ITS ALT TEXT: nothing it names is fetched.
       out.push(createElement("span", { key }, g.alt ?? ""));
@@ -440,15 +467,28 @@ export function renderInline(
       out.push(inertLink(key, renderInline(g.label ?? "", key, unprosed(options)), g.href));
     } else if (g.auto !== undefined && options.links === "inert") {
       out.push(inertLink(key, [], g.auto));
+    } else if (g.auto !== undefined && options.links !== "text" && safeHref(g.auto) !== null) {
+      // AN AUTOLINK IS AN ADDRESS, drawn as a bare one in prose is: the mark
+      // of where it goes and the reference it is.
+      const auto = safeHref(g.auto)!;
+      out.push(
+        createElement(InlineToken, {
+          key,
+          token: { kind: "address", at: 0, end: g.auto.length, text: g.auto, href: auto },
+          links: true,
+        }),
+      );
     } else if (g.href !== undefined) {
       const href = options.links === "text" ? null : safeHref(g.href);
       const label = g.label ?? "";
       // A LINK'S LABEL IS TEXT TO ANY LINK INSIDE IT: an anchor inside an
       // anchor is invalid, and a browser splits the outer one around it.
       const inner = href ? { ...unprosed(options), links: "text" as const } : unprosed(options);
+      // A LINK CARRIES THE MARK OF WHERE IT GOES, read from its address and
+      // never from its words (`LabelledLink`).
       out.push(
         href
-          ? anchor(key, href, renderInline(label, key, inner))
+          ? createElement(LabelledLink, { key, href, live: true }, renderInline(label, key, inner))
           : createElement("span", { key }, renderInline(label, key, inner)),
       );
     } else if (g.auto !== undefined) {
@@ -531,7 +571,9 @@ function inertLink(key: string, label: ReactNode[], raw: string): ReactNode {
   return createElement(
     "span",
     { key },
-    ...(named ? label : []),
+    named
+      ? createElement(LabelledLink, { key: `${key}-label`, href: raw, live: false }, label)
+      : null,
     target === null
       ? named
         ? null
@@ -562,15 +604,19 @@ function unprosed(options: InlineOptions): InlineOptions {
 }
 
 function breakLines(text: string, key: string, hard: boolean, options: InlineOptions): ReactNode {
-  const { highlight, prose } = options;
-  // A RUN OF PROSE, as the caller makes it, or marked where a search matched
-  // it when the caller asked.
-  const run = (part: string, at: number): ReactNode =>
-    prose
-      ? createElement(Fragment, { key: `${key}-p${at}` }, prose(soften(part), `${key}-p${at}`))
-      : highlight && highlight.length > 0
-        ? createElement(Highlight, { key: `${key}-h${at}`, text: soften(part), terms: highlight })
-        : soften(part);
+  const { prose } = options;
+  // A RUN OF PROSE, read in order: what the caller makes of it first (the
+  // assistant's record chips), then the inline tokens in the words it left,
+  // then a search's marks in the words left after that ([tokenise]).
+  const run = (part: string, at: number): ReactNode => {
+    const words = soften(part);
+    const k = `${key}-p${at}`;
+    return createElement(
+      Fragment,
+      { key: k },
+      tokenise(prose ? prose(words, k) : words, k, options),
+    );
+  };
   const parts = text.split(hard ? /(?:  +|\\)?\n/ : /(?:  +|\\)\n/);
   if (parts.length === 1) return createElement("span", { key }, run(text, 0));
   const nodes: ReactNode[] = [];
@@ -583,6 +629,51 @@ function breakLines(text: string, key: string, hard: boolean, options: InlineOpt
 
 function soften(text: string): string {
   return text.replace(/\n/g, " ");
+}
+
+/**
+ * The inline tokens of a run (`lib/inlineTokens.ts`), each drawn as the
+ * reference it is (`InlineToken`), in the words a caller's `prose` left as
+ * words: a record chip the caller drew is never read again.
+ *
+ * A LINK ONLY WHERE A LINK MAY BE: `links: "anchor"`, the default. Inside a
+ * link's own label (`text`) a link is invalid, and in a model's prose
+ * (`inert`) nothing the model wrote becomes one; there every token is its
+ * words with its mark.
+ */
+function tokenise(said: ReactNode, key: string, options: InlineOptions): ReactNode {
+  const pieces = Array.isArray(said) ? (said as ReactNode[]) : [said];
+  const links = (options.links ?? "anchor") === "anchor";
+  const words = (text: string, k: string): ReactNode =>
+    options.highlight && options.highlight.length > 0
+      ? createElement(Highlight, { key: k, text, terms: options.highlight })
+      : text;
+  return pieces.flatMap((piece, i): ReactNode[] => {
+    if (typeof piece !== "string") return [piece];
+    const out: ReactNode[] = [];
+    let at = 0;
+    for (const token of inlineTokens(piece)) {
+      if (token.at > at) out.push(words(piece.slice(at, token.at), `${key}-${i}-w${at}`));
+      out.push(createElement(InlineToken, { key: `${key}-${i}-k${token.at}`, token, links }));
+      at = token.end;
+    }
+    if (at < piece.length) out.push(words(piece.slice(at), `${key}-${i}-w${at}`));
+    return out;
+  });
+}
+
+/**
+ * Operator-facing words that are NOT Markdown (an Inbox row's excerpt, a
+ * question, an answer's option, a notice's quote) with their inline tokens
+ * drawn. No token links unless the caller says it may (`anchor`): most such
+ * words sit inside a control or a row that is a link already.
+ */
+export function renderTokens(
+  text: string,
+  key = "t",
+  links: "anchor" | "text" = "text",
+): ReactNode {
+  return tokenise(text, key, { links });
 }
 
 // --- block rendering -------------------------------------------------------
@@ -855,84 +946,7 @@ function anchorIds(blocks: MarkdownBlock[]): Map<number, string> {
   return ids;
 }
 
-// --- flattening ------------------------------------------------------------
-
-/**
- * One run of inline markdown as the text it renders to.
- *
- * THE SAME WALK AS [renderInline] ([markdownInline]), deliberately. What a code
- * span is, where a destination ends and which emphasis run closes which are
- * decisions this file has already made once; a second set of them for the text
- * case is the drift `textcut` and `whsec` each record in their own package docs.
- * What differs between the two walks is only what a match BECOMES — a node
- * there, a string here.
- */
-function inlineText(text: string): string {
-  const out: string[] = [];
-  let at = 0;
-
-  for (const { index, end, groups: g } of markdownInline(text)) {
-    if (index > at) out.push(text.slice(at, index));
-    at = end;
-
-    if (g.esc !== undefined) {
-      out.push(g.esc);
-    } else if (g.tick !== undefined) {
-      // A code span's own content, minus the one padding space CommonMark lets
-      // a span carry so it can start with a backtick.
-      out.push((g.code ?? "").replace(/^ | $/g, ""));
-    } else if (g.src !== undefined) {
-      // AN IMAGE IS ITS ALT TEXT, which is what alt text is for. One with no alt
-      // contributes nothing rather than a filename nobody wrote.
-      out.push(g.alt ?? "");
-    } else if (g.href !== undefined) {
-      // A LINK IS ITS LABEL, never its destination: the label is the sentence
-      // somebody wrote, and a URL in a one-line cell spends the whole line.
-      out.push(inlineText(g.label ?? ""));
-    } else if (g.auto !== undefined) {
-      // An autolink has no label, so the URL IS the text it renders to.
-      out.push(g.auto);
-    } else {
-      out.push(inlineText(g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? ""));
-    }
-  }
-  if (at < text.length) out.push(text.slice(at));
-  return out.join("");
-}
-
-/** One block as text. Every case is the prose the block renders to. */
-function blockText(block: MarkdownBlock): string {
-  switch (block.kind) {
-    case "heading":
-    case "paragraph":
-      return inlineText(block.text);
-    case "code":
-      // THE CODE, WITHOUT ITS FENCE. What was inside a fence is still what the
-      // comment said; the backticks are the only part that was never content.
-      return block.text;
-    case "quote":
-    case "callout":
-      return block.blocks.map(blockText).join(" ");
-    case "list":
-      return block.items
-        .map((item) => {
-          const said = item.blocks.map(blockText).join(" ");
-          // A TASK ITEM KEEPS ITS BOX. `[ ]` and `[x]` are markdown syntax, and
-          // they are the one piece of it whose meaning survives being flattened
-          // — dropping them turns "not done yet" into a sentence that reads as a
-          // statement of fact.
-          if (item.checked === null) return said;
-          return (item.checked ? "[x] " : "[ ] ") + said;
-        })
-        .join(" ");
-    case "table":
-      return [block.head, ...block.rows].map((row) => row.map(inlineText).join(" ")).join(" ");
-    case "rule":
-      // A rule is a MARK rather than content: its whole meaning is visual, so it
-      // renders to nothing rather than to three dashes in a sentence.
-      return "";
-  }
-}
+// --- the document's pictures ----------------------------------------------
 
 /**
  * Every image source the document names, once each, in order: what a host
@@ -974,36 +988,4 @@ export function imageSources(source: string): string[] {
   };
   parseMarkdown(source ?? "").forEach(block);
   return [...out];
-}
-
-/**
- * A markdown document as ONE LINE of the prose it renders to.
- *
- * WHY IT EXISTS: a comment body and a task description are markdown by contract
- * — every tool that writes one says so in its own schema — and the engine's
- * `excerpt` is a cut of one of them. Every surface that draws an excerpt in a
- * single cell was therefore drawing `## Understanding the work` with the hashes
- * in it: the same `pre-wrap` bug this file was written to end, surviving in the
- * places too narrow to render blocks into.
- *
- * WHY NOT [renderMarkdown] THERE: those cells are one line inside a grid track,
- * and `.truncate` is `white-space: nowrap` — it cannot clip a block box at all,
- * so an `<h2>` or a `<table>` in one breaks the row rather than being shortened.
- * Several of them are a `<p>`, where a block child is invalid DOM. And an
- * excerpt is a CUT fragment rather than a document: `textcut.Within` ends it
- * mid-construct, which is exactly the case `firstLines` avoids on the one
- * surface that can render blocks.
- *
- * WHITESPACE COLLAPSES TO A SINGLE SPACE and blocks join with one, which is the
- * engine's own rule for the same job (`internal/search`'s `excerptOf` is
- * `strings.Join(strings.Fields(body), " ")`). No separator is invented between
- * blocks: a reader cannot tell a "·" this function added from one somebody
- * typed, and the row already links to the full text.
- */
-export function plainText(source: string): string {
-  return parseMarkdown(source ?? "")
-    .map(blockText)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
 }

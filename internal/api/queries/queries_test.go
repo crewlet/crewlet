@@ -269,6 +269,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"viewer": "everybody", "schedule_runs": "everybody",
 		"budgets": "everybody", "schedules": "everybody",
 		"knowledge": "everybody", "colleague": "everybody",
+		// Hosts alone, so a reader can link a reference; never the repositories.
+		"link_hosts":   "everybody",
 		"sandbox_runs": "everybody", "company_feed": "everybody",
 		"decisions": "everybody",
 		// The other half of `decisions`: a person's own asks need no app.

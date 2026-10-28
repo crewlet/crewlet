@@ -46,15 +46,18 @@ phase is one colour on every chart. `contract/spend.ts`' `PHASE_BANDS` is that
 fold written out by phase, and `internal/api/queries` holds it against the
 engine's in both directions.
 
-There are five exceptions, and each is held to exactly what makes it one.
+There are six exceptions, and each is held to exactly what makes it one.
 
 The first is a **third-party app's own mark** on Company › Integrations
 (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
 Atlassian's blue, GitLab's orange,
 Datadog's violet, drawn as the third-party app draws them. A mark is identity by
 definition, and a recoloured Slack mark is not Slack's. The exception is held
-to exactly that: a mark is drawn only beside the third-party app's name,
-nothing reads state from it, none of its hues is reused as a token, and the
+to exactly that: a mark is drawn only beside the third-party app's name, or
+beside a link or a reference INTO that app in operator-facing words, where it
+says whose the pull request or the channel is ([What prose names is drawn as
+what it is](#what-prose-names-is-drawn-as-what-it-is)); nothing reads state
+from it, none of its hues is reused as a token, and the
 integration's STATE beside it is carried by the status tone like everything
 else. A tool the company has not set up keeps its mark at full strength:
 whether it is connected is the state beside it, and a drained Datadog read as
@@ -115,6 +118,15 @@ name and never stored on them. Past six people hues repeat and the flag tells
 them apart, and the same fact is in words in every cell's description and the
 presence list, so nothing relies on colour alone. The reader's own place is
 the focus ring, as everywhere.
+
+The sixth is a **colour value's swatch** (`ColorChip` at the text's size):
+where words write a colour (`#ffe100`), a small square of it is drawn before
+the value. It is not identity and not state but the value itself, shown. It is
+held to exactly that: drawn only beside the value it shows, which stays
+written out (the swatch is decoration, so nothing is read from colour alone);
+filled only from a value that passed the design system's `#rrggbb` gate, never
+from raw CSS; and drawn with an edge of its own, so a colour that matches the
+ground is still a swatch.
 
 A seat's badge takes one of three **status glyphs**, or none, from what it is DOING,
 and what it is doing is the ENGINE'S word, never the dashboard's. Every seat row carries
@@ -3704,8 +3716,9 @@ content it read somewhere else:
   are files of its version, fetched with the reader's credential, and are
   unaffected. A link inside a link's label is that label's text.
 
-An outbound link opens in a new tab with `rel="noopener noreferrer"`; an
-in-app `#/` link does neither, because it *is* this application. A task
+An outbound link opens in a new tab with `rel="noopener noreferrer"`, and a
+screen reader is told it does; an in-app `#/` link does neither, because it
+*is* this application. A task
 list's checkboxes are disabled — this surface performs no writes, and a box a
 reader could tick would report a change that never reached the page.
 
@@ -3792,6 +3805,70 @@ they stand for: a gap silently closed makes a document edited at both ends
 look like one rewritten in the middle. "This save did not change the body" is
 its own answer, because a title, a label and a move are saved beside a body
 and a pane of unmarked lines reads as one that failed to load.
+
+### What prose names is drawn as what it is
+
+Operator-facing words are full of things a reader has to stop and decode:
+`gophrase/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
+`~design-review` is a Mattermost channel, `GP-66` is a task. Every surface
+`lib/markdown.ts` renders (a page, a description, a comment, the Inbox, an
+assistant's answer, a transcript) draws each with the mark that says what it
+is, at the text's size and on its line (`InlineRef` from `@crewlethq/ui`):
+
+| Written | Drawn |
+|---|---|
+| `#ffe100` in words, or a code span that is one colour (`` `#fff` ``, `` `rgb(255, 225, 0)` ``) | A swatch before the value |
+| A web address | The mark of the app it belongs to (or a globe), and the reference it is (`gophrase/backend#14`, `Message in gophrase`, `~design-review`, `MOB-12`, a page's title) in place of the whole address, which the link's title keeps |
+| `[label](address)` | Its label, after the mark of the app its address belongs to |
+| `owner/repo#14`, `group/project!7`, `owner/repo@b5362d2` | The code host's mark, linked to the company's code host |
+| A SHA after a reference ("at b5362d2") or after the word *commit* | The same, linked to the commit |
+| `GP-66` | The task glyph, linked to the work item |
+| `@miles` | The seat's face, linked to the seat |
+
+`lib/inlineTokens.ts` holds the recognition rules and the reasons for each.
+Each rule is a guess that can go wrong in two directions, and both are
+refused:
+
+- **Too eager.** A colour in words needs a digit and a letter, so `#123` (an
+  issue) and `#facade` (a hashtag) are words; a colour inside a longer code
+  span (`color: #fff;`) is code; a SHA needs a reference or the word *commit*
+  before it, so `deadbeef1` is a word; a key needs its project to be one of
+  the company's, so `ISO-8601` and `UTF-8` are words; a handle needs a seat,
+  so `@nobody` is a word and an email address is never a mention; and an
+  address swallows every key and colour spelled inside it.
+- **Too trusting.** A mark is chosen from the address a link GOES TO, parsed,
+  and never from its words: a link labelled "github.com/…" that goes
+  elsewhere carries no GitHub mark, and a look-alike host
+  (`github.com.login.example.net`, `github.com@login.example.net`) is
+  nobody's. An app is recognised at its public host exactly (github.com,
+  gitlab.com), under its own domain on a dot (`*.slack.com`,
+  `*.atlassian.net`), or at a host the company configured for it.
+
+**The company's hosts reach every reader, and nothing else of its
+integrations does.** A self-hosted GitLab, an Enterprise Server, a Mattermost
+or a Jira site lives at an address no rule can guess, so the frame reads
+`link_hosts` once ([API Endpoints](api-endpoints.md)): a kind and a base
+address per configured app, which every reader may ask for, where
+`integrations` is an administrator's. It carries no organization, repository,
+project, team, credential or health, so a bare reference links by the host
+alone, and one GitHub and GitLab could both own (a company with both) is left
+as words. With no code host configured, `owner/repo#14` keeps GitHub's mark
+and links nowhere. The project keys a key needs are the reader's own
+`work_projects`, read once by the frame where Worklet is served to them. No
+mark is ever fetched from anywhere: every mark is the design system's.
+
+**A token is a link only where a link may be.** In a model's words
+(`links: "inert"`) nothing it wrote becomes a link, so a token there is its
+mark and its words. Inside a control or a link (an Inbox row, an answer's
+option, a link's own label) a link would be invalid or steal the press, so
+those draw marks and swatches alone (`renderTokens`). An outbound link a token
+makes opens a tab with `rel="noopener noreferrer"` and says so to a screen
+reader, as every outbound link in rendered Markdown does.
+
+**The caller reads first.** The Dashboard Assistant's record chips
+(`RenderOptions.prose`) are drawn before any token is read, and tokens are
+read only in the words the chips left, so a record the turn read stays its
+chip; a search's highlight marks the words left after that.
 
 ## ⌘K: search, answer, act
 

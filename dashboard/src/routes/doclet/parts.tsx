@@ -39,7 +39,7 @@ import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { plural } from "~/lib/format.ts";
 import { authorWords } from "~/lib/attribution.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useSeatBadgeOf, type SeatBadge } from "~/lib/seats.ts";

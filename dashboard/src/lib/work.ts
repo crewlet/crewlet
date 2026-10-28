@@ -32,12 +32,11 @@ import {
   plural,
   readerDay,
 } from "./format.ts";
-// THE ONE IMPORT THAT REACHES A RENDERING FILE, and it is not a breach of the
-// rule above: `plainText` is a pure string→string function that happens to live
-// beside the grammar it has to agree with. A private stripper here instead would
-// be a second copy of markdown's rules, which is the drift `textcut` and `whsec`
-// each record.
-import { plainText } from "./markdown.ts";
+// MARKDOWN AS TEXT, from the pure half of the markdown files, never the
+// renderer: `plainText` walks the grammar the renderer walks, and a private
+// stripper here instead would be a second copy of its rules, which is the drift
+// `textcut` and `whsec` each record.
+import { plainText } from "./markdownText.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import type {
   WorkActivityRecord,
@@ -108,6 +107,14 @@ export interface ItemRef {
 export function itemAddress(ref: ItemRef): string {
   return ref.key && !ref.key_collision ? ref.key : ref.id;
 }
+
+/**
+ * The project listing's cap: the engine's own page of projects (200), so no
+ * company's live project is missing from a read of them. ONE VALUE for every
+ * reader of the listing: the project switcher, the palette's create step,
+ * the chart's unit keys and the keys prose links by (`lib/projectKeys.ts`).
+ */
+export const PROJECT_PAGE = 200;
 
 /** Where a task's page is: `#/worklet/{address}`. See [itemAddress]. */
 export function itemPath(ref: ItemRef): string[] {
