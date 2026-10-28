@@ -218,14 +218,15 @@
 //
 // `admin` is ONE permission over the whole company configuration, and that
 // configuration runs code: an `mcp_servers` entry is a command every engine
-// host executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`, a
-// `cli-agent` provider among them) choose what a seat's children run and which
-// credentials they are handed, a `providers.llm` entry or
-// `providers.sandbox.default_run_in` placed `direct` runs every agent seat's
-// executor — a coding CLI with its own shell — on the engine host itself, and
-// a seat's worker grants decide which of its tools a worker runs with. So holding it IS running code on every engine
-// host, and whatever a process there can read — the keyring included — is
-// reachable through it. It is conferred like host access.
+// host executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`,
+// each naming a `providers.llm` entry, which is a coding CLI) choose what a
+// seat's children run and which credentials they are handed, a
+// `providers.llm` entry or `providers.sandbox.default_run_in` placed `direct`
+// runs every agent seat's executor — a coding CLI with its own shell — on the
+// engine host itself, and a seat's worker grants decide which of its tools a
+// worker runs with. So holding it IS running code on every engine host, and
+// whatever a process there can read — the keyring included — is reachable
+// through it. It is conferred like host access.
 //
 // THE ORG CHART IS ALSO ITS LEADS' ([ClassSubtree]): a person who leads a unit
 // may change the seats and units inside it without admin, every field but a
@@ -233,11 +234,12 @@
 // its own environment wherever one stands — and every place a change reaches
 // held to their own subtree on both sides of the write
 // (internal/api/configapi). What that reaches is stated rather than narrowed:
-// a lead may point a seat in their team at any model chain and any sandbox
-// cell the company's SETTINGS offer — which remain admin's, so whether a
-// `cli-agent` provider or a host-side sandbox cell exists for a lead to choose
-// is the administrator's decision — and may not name a credential or a
-// variable at all.
+// a lead may point a seat in their team at any model chain the company's
+// SETTINGS offer, and with it at the cell each of those entries runs an
+// executor in (its `run_in`, else `providers.sandbox.default_run_in`) — the
+// entries and their cells remain admin's, so whether an entry runs a seat's
+// executor on the engine host, for a lead to choose, is the administrator's
+// decision — and may not name a credential or a variable at all.
 package authz
 
 import (
