@@ -17,12 +17,13 @@ import (
 //
 // PRIVATE, because the answer was decided for the credential that asked it,
 // and a shared cache in front of the node would hand it to whoever asked the
-// same path next. A YEAR, because the answer itself never expires — it is a
-// function of object ids, which name the same bytes for ever — so the bound is
-// the longest a cache is asked to keep anything (RFC 9111's caches may hold
-// less; RFC 8246's own example asks the same year), not a property of the
-// answer. And `immutable`, because without it a browser revalidates a fresh
-// entry on every reload, a round trip per page of a diff for nothing.
+// same path next. A YEAR, because such an answer never expires — its bytes
+// are a function of what its request named, the contract internal/api/queries'
+// Immutable holds a question to — so the bound is the longest a cache is asked
+// to keep anything (RFC 9111's caches may hold less; RFC 8246's own example
+// asks the same year), not a property of the answer. And `immutable`, because
+// without it a browser revalidates a fresh entry on every reload, a round trip
+// per page of a diff for nothing.
 const ImmutableCacheControl = "private, max-age=31536000, immutable"
 
 // Immutable answers 200 with body as JSON, marked as never changing: a STRONG
@@ -35,7 +36,11 @@ const ImmutableCacheControl = "private, max-age=31536000, immutable"
 // whatever the answer was a function of, including the build that encoded it,
 // so a newer build answering the same request with another field is a new tag
 // rather than a 304 confirming a body it never sent. What it saves is the
-// transfer; the answer is still read to compute it.
+// transfer; the answer is still read to compute it. And it saves that only
+// while the bytes hold still: an answer carrying anything the read that
+// answered it stamps — the answering copy's position, whether a memo answered
+// — is a new tag on every read, which is one reason queries' Immutable wraps
+// nothing that moves.
 //
 // THE CACHE KEY HOLDS THE BEARER A CLIENT SETS, AND NEVER THE SESSION COOKIE.
 // `private` keeps the answer out of shared caches and not out of the next

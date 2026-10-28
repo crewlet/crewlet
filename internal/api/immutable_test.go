@@ -20,18 +20,18 @@ import (
 )
 
 // AN ANSWER NAMED BY OBJECT IDS IS SENT AS ONE THAT NEVER CHANGES. A question
-// answering [queries.Immutable] — a tree, a file's lines or a diff read by
-// commit id, the same bytes on every node at every position — is sent over
-// REST with a strong entity tag of the bytes it answered, kept by the caller's
-// own cache and never revalidated while kept (`immutable`), under a cache key
-// holding the bearer a client sets (`Authorization`) and never the session
-// cookie, whose bytes every re-issue moves (see
-// [TestAKeptOidAnswerIsServedPastItsCookiesReissue]); a request that already
-// holds the tag is answered `304` with no body and the same headers, by the
-// weak comparison `If-None-Match` takes, in a list or as `*`. The socket,
-// which caches nothing, carries the answer itself and never the wrapper. And
-// an answer that is not wrapped carries none of it, since the same question
-// asked by a branch moves when the branch does.
+// answering [queries.Immutable] — one whose bytes are a function of what its
+// request named, as a tree, a file's lines or a diff read by whole commit ids
+// can be — is sent over REST with a strong entity tag of the bytes it
+// answered, kept by the caller's own cache and never revalidated while kept
+// (`immutable`), under a cache key holding the bearer a client sets
+// (`Authorization`) and never the session cookie, whose bytes every re-issue
+// moves (see [TestAKeptOidAnswerIsServedPastItsCookiesReissue]); a request
+// that already holds the tag is answered `304` with no body and the same
+// headers, by the weak comparison `If-None-Match` takes, in a list or as `*`.
+// The socket, which caches nothing, carries the answer itself and never the
+// wrapper. And an answer that is not wrapped carries none of it, since the
+// same question asked by a branch moves when the branch does.
 //
 // Mutation: drop httpjson.Immutable's If-None-Match arm → every repeat is a
 // full 200, red; drop Immutable.MarshalJSON → the socket's frame carries

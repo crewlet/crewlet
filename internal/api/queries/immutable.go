@@ -2,14 +2,38 @@ package queries
 
 import "encoding/json"
 
-// Immutable is an answer that is a function of the OBJECT IDS its question
-// named and of nothing that moves: a tree, a file's lines or a diff read by
-// commit id names the same bytes on every node at every position, so the
-// answer to one such request never changes. An answer returns it in place of
-// the value it wraps exactly when it was asked by id — the same question asked
-// by a branch is a function of where the branch points now, and returns the
-// value bare — so whether an answer may be cached is decided per request, by
-// the only code that knows what the request named.
+// Immutable is an answer whose BYTES are a function of what its request named
+// — whole object ids, and the question's arguments — and of the build that
+// encodes them, and of nothing a node, a moment or a caller holds: a tree, a
+// file's lines or a diff read by whole commit ids can be one, since git names
+// the same objects on every node at every position. An answer returns it in
+// place of the value it wraps exactly when it was asked so — the same question
+// asked by a branch is a function of where the branch points now, and one
+// asked by an abbreviated id of whichever object the abbreviation finds now,
+// which an object arriving can change; both return the value bare — so
+// whether an answer may be cached is decided per request, by the only code
+// that knows what the request named.
+//
+// # Nothing the answering read stamps
+//
+// IT WRAPS WHAT THE REQUEST NAMED, NEVER WHAT THE READ THAT ANSWERED IT ADDED.
+// A git node's answer to a read by object id (code.GitAnswer) is not one as it
+// stands. The read stamps it with the repository the name resolved to, the
+// answering copy's position, whether the page was recalled from the memo or
+// cut, and the push the node's index says introduced each commit with what
+// that index covers so far — and each of those moves between two reads of one
+// request: from one node to the next, from the read that cut a page to the one
+// that recalled it, and as the index fills. The page's EXTENT follows them
+// too: a git node cuts each page against the room its stamps leave
+// (code/query's room), so the same page cut where the index holds more of its
+// commits holds fewer items. Wrapped, any of them makes every read a new
+// entity tag, so the `304` that saves the transfer never comes, and a browser
+// keeps for a year whatever the field said once — a commit's pusher left out
+// because the index had not reached it yet, read ever after as nobody. No type
+// can see what a field means, so a question that answers Immutable carries the
+// test that holds it to this: asked twice — by a read that cuts its page and
+// one that recalls it, on copies at different positions — it answers the same
+// bytes.
 //
 // A REST route sends it with a strong entity tag and as cacheable for as long
 // as a cache keeps anything, and answers a request that names that tag `304`
