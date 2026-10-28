@@ -35,6 +35,7 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { firstLine } from "~/lib/format.ts";
+import { renderTokens } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { ItemRef } from "~/lib/work.ts";
 import {
@@ -367,7 +368,9 @@ const InboxItem = memo(function InboxItem({
         ) : undefined
       }
       leading={<Badge row={row} who={who} />}
-      excerpt={words.excerpt}
+      // A ROW IS A LINK ALREADY, so what it says is drawn with its marks and
+      // swatches and never a link of its own (`renderTokens`).
+      excerpt={words.excerpt === undefined ? undefined : renderTokens(words.excerpt, "excerpt")}
       outcome={said ? <AnswerLine words={said} /> : undefined}
       outcomeIcon={said ? <AnswerMark words={said} /> : undefined}
       outcomeTone="success"
@@ -379,11 +382,11 @@ const InboxItem = memo(function InboxItem({
       onClick={() => onOpen(row.key)}
       aside={
         item ? (
-          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} />
+          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} glyph />
         ) : undefined
       }
     >
-      {words.text}
+      {renderTokens(words.text, "words")}
     </Row>
   );
 });

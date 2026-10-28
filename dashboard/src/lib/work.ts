@@ -32,12 +32,11 @@ import {
   plural,
   readerDay,
 } from "./format.ts";
-// THE ONE IMPORT THAT REACHES A RENDERING FILE, and it is not a breach of the
-// rule above: `plainText` is a pure string→string function that happens to live
-// beside the grammar it has to agree with. A private stripper here instead would
-// be a second copy of markdown's rules, which is the drift `textcut` and `whsec`
-// each record.
-import { plainText } from "./markdown.ts";
+// MARKDOWN AS TEXT, from the pure half of the markdown files, never the
+// renderer: `plainText` walks the grammar the renderer walks, and a private
+// stripper here instead would be a second copy of its rules, which is the drift
+// `textcut` and `whsec` each record.
+import { plainText } from "./markdownText.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import type {
   WorkActivityRecord,

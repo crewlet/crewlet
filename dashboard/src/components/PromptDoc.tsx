@@ -81,7 +81,8 @@ import {
 } from "react";
 import { Button, CodeBlock, cx, Input, SegmentedControl, Select } from "@crewlethq/ui";
 import { ChevronLeftGlyph, ChevronRightGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
-import { MODEL_WORDS, plainText, renderInline, renderMarkdown } from "~/lib/markdown.ts";
+import { MODEL_WORDS, renderInline, renderMarkdown } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import type { SectionNode } from "~/lib/markdown.ts";
 import {
   findCounts,

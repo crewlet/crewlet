@@ -57,6 +57,7 @@ import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { textBudget } from "~/lib/format.ts";
+import { renderTokens } from "~/lib/markdown.ts";
 import { useServicesRun } from "~/lib/services.ts";
 
 /**
@@ -823,7 +824,13 @@ export function AnswerAsk({
       <Stack gap={2}>
         <ChoiceButtons
           label="Answers"
-          options={options.map((o) => ({ value: o.id, label: o.label, detail: o.detail }))}
+          // AN OPTION IS A BUTTON: its colours and references are drawn with
+          // their marks and never as links, which would steal the press.
+          options={options.map((o) => ({
+            value: o.id,
+            label: renderTokens(o.label, `option-${o.id}`),
+            detail: o.detail === undefined ? undefined : renderTokens(o.detail, `detail-${o.id}`),
+          }))}
           recommended={recommended}
           pending={write.busy ? chosen : null}
           disabledReason={write.access.can ? undefined : write.access.reason}

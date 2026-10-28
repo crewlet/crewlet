@@ -26,7 +26,7 @@
  */
 
 import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import {
   ENGINE_SENTENCES,

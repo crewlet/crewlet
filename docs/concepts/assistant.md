@@ -275,7 +275,9 @@ These limits are structural: they hold whatever the model is asked or reads.
   decline.
 - **Links and pictures in its answers are inert.** A link the model writes is
   shown as its label and the address it points to, never as something you can
-  click, and a picture is shown as its description and never loaded.
+  click, and a picture is shown as its description and never loaded. A
+  reference it writes (a pull request, a colour, a task's key, a seat's handle)
+  is drawn with the mark that says what it is, and is never a link either.
 
 **What is proved, and what is not.** The engine's own tests prove the limits
 above by structure: with a scripted model that obeys an injected instruction

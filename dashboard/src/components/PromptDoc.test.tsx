@@ -210,7 +210,7 @@ describe("a prompt with headings", () => {
     expect(row.textContent).toMatch(/^See the guide/);
     fireEvent.click(row);
     // THE CONTROL: the reader's own title is not a control, and keeps it.
-    expect(within(reader()).getByRole("link", { name: "the guide" })).toBeTruthy();
+    expect(within(reader()).getByRole("link", { name: /^the guide/ })).toBeTruthy();
   });
 
   it("keeps the prompt's own line breaks", () => {
