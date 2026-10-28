@@ -1320,8 +1320,13 @@ const (
 	// `#11` by its message, a bare `owner/repo` under the company's owners and
 	// uilet 0.75.1's smaller marks took it to 4629.3 KiB, again all in the lazy
 	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
-	// still refuses a doubled baseline.
-	treeBudget = 4<<20 + 534<<10
+	// still refuses a doubled baseline. The hardening after it (a cited
+	// address drawn by the checked rule, a reply scoped by its own words,
+	// references linked only under the company's owners and a Confluence page
+	// rebuilt from its space and id) took it to 4630.0 KiB, past it by bytes
+	// and again in those lazy chunks, the first load still 348.9 KiB.
+	// 4631 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 535<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
