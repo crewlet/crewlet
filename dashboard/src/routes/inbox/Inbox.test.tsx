@@ -929,6 +929,9 @@ describe("the pane", () => {
 
     test("says the run ended, not that it was answered, when its record goes away", async () => {
       await answerRun({ gone: true });
+      expect(
+        document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
+      ).toBe("pending");
       expect(outcome()).toBe("Answer sent. CTO’s run has ended.");
       expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
     });
@@ -951,6 +954,9 @@ describe("the pane", () => {
         work_item: { backend: "native", id: "t-4", key: "GP-4", project: "GP" },
       };
       await answerRun({ status: "answered", answer_ids: ["a1"] }, [busy]);
+      expect(
+        document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
+      ).toBe("pending");
       expect(outcome()).toBe(
         "Answer recorded. The Senior Backend Engineer is busy on GP-4’s run and picks this up next.",
       );
