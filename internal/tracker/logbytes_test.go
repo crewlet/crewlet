@@ -1,13 +1,19 @@
 package tracker_test
 
 import (
-	"errors"
+	"cmp"
+	"encoding"
+	"encoding/json"
 	"fmt"
-	"io/fs"
+	"go/ast"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -67,12 +73,17 @@ const (
 // merge of more costs less a push (43 bytes where a minute's merge takes
 // three hundred), and so do a quarter hour's merges swept together, so these
 // two figures are the most the reference company's pushes cost the log, and
-// the day prices both terms at them, at its least as at its most. The
-// barriers are its git clients'
-// linearizable reads: a seat's push asks the log three times (its
-// advertisement, its receive's sync and the fetch before it), thirty people
-// fetch every three minutes of an eight-hour day, and a CI polls ten
-// repositories a minute where one runs.
+// the day prices both terms at them, at its least as at its most. They are a
+// MERGE's figures and nothing else's: the steady arm's compactor publishes no
+// layer, so no compaction it makes carries one, and a PUBLICATION — the
+// compaction a repository's maintainer appends to publish a multi-pack-index
+// layer, naming every pack the layer covers — is a shape of that op the day
+// has no figure for, which no node of this build appends
+// (codeLogUnwrittenShapes). The barriers are its git clients' linearizable
+// reads: a seat's push asks the log three times (its advertisement, its
+// receive's sync and the fetch before it), thirty people fetch every three
+// minutes of an eight-hour day, and a CI polls ten repositories a minute
+// where one runs.
 const (
 	referencePushesADay  = 3_000
 	codePushRecordBytes  = 1_481
@@ -83,28 +94,59 @@ const (
 	referenceCIReads     = 10 * 60 * 24
 )
 
-// codeLogTerm is one term of the code log's day: the bytes a day one op's
-// records take at the reference company, at the least of its day and at the
-// most — the barriers without a CI and with one, every other term the same at
-// both.
-type codeLogTerm struct{ least, most float64 }
+// codeLogTerm is one term of the code log's day: the bytes a day one SHAPE of
+// one op's records takes at the reference company — the records its figure
+// was measured on — at the least of its day and at the most: the barriers
+// without a CI and with one, every other term the same at both.
+//
+// A term is a shape's and not its op's, because one op is appended by more
+// than one writer, at sizes and rates no one figure covers: a publication is
+// a compaction, and a merge's 108 bytes a push say nothing of the layer one
+// names. So an op's records of another shape are a term of their own beside
+// its first, never folded into a figure measured without them.
+type codeLogTerm struct {
+	op code.OpKind
+	// shape is which of the op's records the term prices: the ones its
+	// figure was measured on.
+	shape       string
+	least, most float64
+}
 
-// codeLogDay is the code log's day, by the op whose records each term is: its
-// pushes, the compactions that merge their packs, the sweeps of what those
-// retired, and its git clients' barriers at code.BarrierRecordBytes. What the
-// day is summed from, so a term priced here is a term of every figure
-// TestTheDocsPrintTheMeasuredDay holds.
-func codeLogDay() map[code.OpKind]codeLogTerm {
+// codeLogDay is the code log's day, a term for each shape of record it
+// prices: a seat's push, a merge of the pushes' packs — a plain merge and no
+// publication, since the steady arm its figure is measured on publishes
+// nothing — the sweep of what the merges retired, and its git clients'
+// barriers at code.BarrierRecordBytes. What the day is summed from, so a term
+// priced here is a term of every figure TestTheDocsPrintTheMeasuredDay holds.
+func codeLogDay() []codeLogTerm {
 	pushes := float64(referencePushesADay * codePushRecordBytes)
 	compactions := float64(referencePushesADay * codeCompactionBytes)
 	sweeps := float64(referencePushesADay * codeSweepBytes)
 	git := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
-	return map[code.OpKind]codeLogTerm{
-		code.OpPush:        {least: pushes, most: pushes},
-		code.OpCompact:     {least: compactions, most: compactions},
-		code.OpRetireSweep: {least: sweeps, most: sweeps},
-		code.OpBarrier:     {least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)},
+	return []codeLogTerm{
+		{op: code.OpPush, shape: "a seat's push alone in its record, built by the engine for a " +
+			"tool — the reference company's every push — as BenchmarkPushLogBytes's push=agent " +
+			"arm measures it", least: pushes, most: pushes},
+		{op: code.OpCompact, shape: "a merge: a compaction carrying no layer, as every one " +
+			"BenchmarkCompact's steady arm makes", least: compactions, most: compactions},
+		{op: code.OpRetireSweep, shape: "a sweep of the pack rows the merges retired, a day later",
+			least: sweeps, most: sweeps},
+		{op: code.OpBarrier, shape: "a git client's linearizable read",
+			least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)},
 	}
+}
+
+// codeLogOp is the day's terms of op summed: what op's records take a day,
+// whatever their shapes.
+func codeLogOp(day []codeLogTerm, op code.OpKind) codeLogTerm {
+	sum := codeLogTerm{op: op}
+	for _, term := range day {
+		if term.op == op {
+			sum.least += term.least
+			sum.most += term.most
+		}
+	}
+	return sum
 }
 
 // codeLogNegligible is every op of the code domain whose records the code
@@ -136,29 +178,162 @@ var codeLogNegligible = map[code.OpKind]string{
 }
 
 // codeLogUnwritten is every op of the code domain that no node of this build
-// appends, with the package — or the file in one — whose code would append it
-// and how: the day leaves the op out while that writer does not exist, and
-// TestTheCodeLogsDayPricesEveryRecordItTakes fails the day it does.
-var codeLogUnwritten = map[code.OpKind]struct{ writer, how string }{
-	// THE EXPUNGER'S OWN FILE, not its package: the compactor's package is
-	// there already, its compactions and sweeps priced into the day, and an
-	// expunge's records are appended only by the expunger beside it, whose
-	// begin can list a thousand packs — what the day must price once they
-	// exist, which its writer is the one to measure.
-	code.OpExpungeBegin: {"internal/code/compact/expunge.go", "an expunge is begun by a " +
-		"repository's maintainer alone, through the estate's code.expunge"},
-	code.OpExpungeCommit: {"internal/code/compact/expunge.go", "an expunge is committed by " +
-		"the maintainer that began it, through the estate's code.expunge"},
+// appends, with the LISTING the loop that would append it polls for its work —
+// a code.ReadKind the code domain declares for that loop, and serves before
+// the loop exists — and how: the day leaves the op out while no file the
+// crewlet binary is built from names that listing (codeLogPolled), and
+// TestTheCodeLogsDayPricesEveryRecordItTakes fails the day one does.
+//
+// KEYED BY THE LISTING, NOT BY A FILE: the plan names a loop's files, and an
+// implementer names them after the code they land beside — the compactor's
+// loop and its decide, planned in compact.go and decide_compact.go, landed in
+// compactor.go, poll.go and compaction.go — so a file the plan names may never
+// exist while its loop runs, and a tripwire on it would never fire. Every loop
+// polls its listing, whatever its files are called, and the listing is the
+// code domain's own declaration. The compactor's poll names
+// code.ReadCompactionDue, and the gate holds that it finds it there, so a walk
+// that would find no loop at all fails rather than passes.
+var codeLogUnwritten = map[code.OpKind]struct {
+	listing code.ReadKind
+	how     string
+}{
+	code.OpExpungeBegin: {code.ReadExpungeDue, "an expunge is begun by a repository's maintainer " +
+		"alone, through the estate's code.expunge, for a repository its listing names, and a " +
+		"begin can list a thousand packs"},
+	code.OpExpungeCommit: {code.ReadExpungeDue, "an expunge is committed by the maintainer " +
+		"that began it, through the estate's code.expunge"},
+}
+
+// codeLogUnwrittenShapes is every SHAPE of record of an op the day classifies
+// that no node of this build appends, and that nothing but its writer tells
+// apart — records no term of the op was measured on, at a size or a rate its
+// term does not cover — with the listing the loop that would append them
+// polls, as codeLogUnwritten has it, and how.
+//
+// The op gate cannot see one: its op is classified already, so when its loop
+// lands the code log's day stays short and nothing fails — a publication
+// taken for a merge's 108 bytes a push. A shape the code's own closed sets
+// tell apart is held by them (codeLogPushVias, codeLogManagers), and one a
+// payload's keys tell apart by those (codeLogFields); this list is for the
+// rest.
+var codeLogUnwrittenShapes = []struct {
+	op      code.OpKind
+	listing code.ReadKind
+	shape   string
+	how     string
+}{
+	{
+		op: code.OpCompact, listing: code.ReadPublicationDue,
+		shape: "a PUBLICATION: a compaction carrying the multi-pack-index layer it publishes " +
+			"(code.Compaction's Layer), which names every pack the layer covers, 43 bytes a pack " +
+			"and up to code.MaxPacksPerRepo of them, beside its parts and the repack of the packs " +
+			"it gathers — none of the merges BenchmarkCompact's steady arm measured, whose " +
+			"compactor publishes nothing",
+		how: "a repository's maintainer proposes a layer through the estate's code.compact once " +
+			"the packs outside its published chain are worth one — for a small repository, a " +
+			"share of its objects — so a young repository publishes often",
+	},
+}
+
+// codeLogPushVias is every way a push's pack is built (code.PushVias), and
+// how the day counts the pushes built that way. A WAY IS A SHAPE OF PUSH the
+// code tells apart — who builds the pack, for what, carrying how many refs,
+// at what rate — and a way added (a ref expiry's, a merge queue's, a
+// mirror's) is a writer of pushes the push term was not measured on, so
+// TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until its pushes are
+// priced into the day or argued out of it here.
+var codeLogPushVias = map[code.PushVia]string{
+	code.ViaEngine: "a write the engine builds for a tool: a seat's is the push term's records " +
+		"(codeLogDay), every one of the reference company's 3 000 a day, and a person's takes " +
+		"the log less, naming no run and no day",
+	code.ViaGit: "received by git: a person's push, which the day prices as a seat's, since it " +
+		"takes the log less (1 380 bytes alone in its record against a seat's 1 481, " +
+		"BenchmarkPushLogBytes), and none of the reference company's 3 000 is one; and an " +
+		"import's batches (crewlet code import), up to code.MaxCommandsPerPush refs a record, " +
+		"once a repository when a person imports it",
+}
+
+// codeLogManagers is everything that may manage a repository
+// (code.ManagedBys), and how the day counts the creates, settings changes,
+// deletions, restores and purges of the repositories each manages. A MANAGER
+// IS A SHAPE OF LIFECYCLE the code tells apart: one added — the code tools'
+// own repositories, a seat's scratch ones among them — creates and deletes
+// repositories at its own rate, which no reason of codeLogNegligible states,
+// so TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until those
+// records are priced into the day or argued out of it here.
+var codeLogManagers = map[code.ManagedBy]string{
+	code.ManagedConfig: "a repository code.repos declares: an activation of the company's " +
+		"document creates, settles, deletes and restores it, and its purge follows its " +
+		"deletion — codeLogNegligible's reasons",
+}
+
+// codeLogFields is every key the payload of an op the day prices declares, as
+// the day's term for its records was measured: the keys the measured records
+// CARRY, and every other one with why the term's records never carry it — an
+// absent key naming a whole subtree where they carry none of it (a merge's
+// records, no layer at all). A KEY IS A SHAPE OF RECORD the payload tells
+// apart: one declared since the term was measured — a box's push naming its
+// coding run and agent, a push opening a change — is a record of that op the
+// term was not measured on, larger by what the key spells in every record that
+// carries it, so TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until
+// the term is measured again and restated, or the key is listed here with why
+// the term's records never carry it.
+//
+// The ENVELOPE every record carries is no op's: a barrier is nothing else,
+// and internal/code's census test holds what one costs.
+var codeLogFields = map[code.OpKind]struct {
+	payload reflect.Type
+	carried []string
+	absent  map[string]string
+}{
+	code.OpPush: {
+		payload: reflect.TypeFor[code.PushBatch](),
+		carried: []string{"repo_id", "pushes.push_id", "pushes.principal.kind",
+			"pushes.principal.seat", "pushes.principal.run.turn_id",
+			"pushes.principal.run.work_backend", "pushes.principal.run.work_key",
+			"pushes.principal.run.model", "pushes.via", "pushes.node", "pushes.commands.ref",
+			"pushes.commands.old", "pushes.commands.new", "pushes.commands.result",
+			"pushes.pack.pack_id", "pushes.pack.object", "pushes.pack.hash", "pushes.pack.size",
+			"pushes.pack.index_bytes", "pushes.pack.reverse_bytes", "pushes.pack.git_checksum",
+			"pushes.pack.objects", "pushes.introduced", "pushes.introduced_count",
+			"pushes.received_at", "pushes.day"},
+		absent: map[string]string{
+			"pushes.principal.operator_id": "a person's credential, and a seat acts as itself",
+			"pushes.atomic": "--atomic, which a push the engine builds never carries: it moves " +
+				"one ref",
+			"pushes.commands.forced": "a forced update, and a seat's write moves its branch on " +
+				"from its tip",
+			"pushes.commands.reason": "a refused command's code, and the measured push lands",
+			"pushes.commands.detail": "an answer's sentence, which no record carries",
+		},
+	},
+	code.OpCompact: {
+		payload: reflect.TypeFor[code.Compaction](),
+		carried: []string{"repo_id", "compaction_id", "node", "seen", "retire", "add.pack_id",
+			"add.object", "add.hash", "add.size", "add.index_bytes", "add.reverse_bytes",
+			"add.git_checksum", "add.objects"},
+		absent: map[string]string{
+			"layer": "a publication's layer, and a merge carries none (codeLogUnwrittenShapes)",
+		},
+	},
+	code.OpRetireSweep: {
+		payload: reflect.TypeFor[code.RetireSweep](),
+		carried: []string{"repo_id", "through"},
+	},
 }
 
 // codeLogKinds is every kind of object the code log's records are on, and how
 // its day counts the records on it.
 var codeLogKinds = map[code.ObjectKind]string{
-	code.KindRepo: "a push, a compaction and its sweep are on their repository (codeLogDay); so " +
-		"are its settings, deletion, restore, purge and a person's purge of its unreachable " +
-		"objects (codeLogNegligible), and an expunge's begin and commit (codeLogUnwritten)",
-	code.KindBarrier:    "a git client's read (codeLogDay)",
-	code.KindName:       "a repository's create, on the name it claims (codeLogNegligible)",
+	code.KindRepo: "a push (codeLogDay, by the way its pack was built: codeLogPushVias), a " +
+		"merge of the pushes' packs and the sweep of the rows a merge retired (codeLogDay) are " +
+		"on their repository; so are its settings, deletion, restore and purge " +
+		"(codeLogNegligible, by its manager: codeLogManagers), a person's purge of its " +
+		"unreachable objects (codeLogNegligible), an expunge's begin and commit " +
+		"(codeLogUnwritten) and a publication of its layers (codeLogUnwrittenShapes)",
+	code.KindBarrier: "a git client's read (codeLogDay)",
+	code.KindName: "a repository's create, on the name it claims (codeLogNegligible, by its " +
+		"manager: codeLogManagers)",
 	code.KindEviction:   "an operator's eviction or readmission (codeLogNegligible)",
 	code.KindGeneration: "a reanchor (codeLogNegligible)",
 	code.KindCompany:    "the activation fence (codeLogNegligible)",
@@ -604,15 +779,17 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	// THE CODE LOG'S DAY BESIDE THIS ONE, at its least (no CI) and its most:
 	// every term it prices, summed.
 	terms := codeLogDay()
-	pushes := terms[code.OpPush].most
-	compactions, sweeps := terms[code.OpCompact].most, terms[code.OpRetireSweep].most
+	pushes := codeLogOp(terms, code.OpPush).most
+	compactions := codeLogOp(terms, code.OpCompact).most
+	sweeps := codeLogOp(terms, code.OpRetireSweep).most
 	merges := compactions + sweeps
-	gitLeast, gitMost := terms[code.OpBarrier].least, terms[code.OpBarrier].most
+	readBarriers := codeLogOp(terms, code.OpBarrier)
+	gitLeast, gitMost := readBarriers.least, readBarriers.most
 	var codeLeastBytes, codeMostBytes, besideBarriers float64
-	for op, term := range terms {
+	for _, term := range terms {
 		codeLeastBytes += term.least
 		codeMostBytes += term.most
-		if op != code.OpBarrier {
+		if term.op != code.OpBarrier {
 			besideBarriers += term.most
 		}
 	}
@@ -856,31 +1033,67 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // mutation log's ceiling suffices. A kind of record the log takes and the day
 // leaves out makes both quietly short, and no figure
 // TestTheDocsPrintTheMeasuredDay reads moves when it joins the log: a
-// compaction's, a change's or a check's record would come on top of a day
+// publication's, a change's or a check's record would come on top of a day
 // that has no room for it, and a company that lowered its code log to a half
 // on the barrier count would fill it first.
 //
-// So every op the code domain declares is exactly one of three: a term of the
-// day (codeLogDay), negligible beside it for the reason given
-// (codeLogNegligible), or appended by no node of this build (codeLogUnwritten)
-// — and that last only while the package that would append it does not exist.
-// Every kind of object the log's records are on says how the day counts them
-// (codeLogKinds). A new op, a new kind, or the package that writes an
-// unwritten op fails here until its records are priced into the day — and the
-// share and when a half suffices restated on the pages
-// TestTheDocsPrintTheMeasuredDay holds — or argued negligible.
+// So every op the code domain declares is exactly one of three: priced by the
+// day (codeLogDay, a term for each shape of its records it prices),
+// negligible beside it for the reason given (codeLogNegligible), or appended
+// by no node of this build (codeLogUnwritten) — and that last only while no
+// file the crewlet binary is built from names the listing its loop would
+// poll. Every kind of object the log's records are on says how the day counts
+// them (codeLogKinds).
 //
-// Mutation: declare an op or a kind in the code domain, or make
-// internal/code/compact/expunge.go, and this fails naming it.
+// AN OP IS CLASSIFIED ONCE, AND ITS RECORDS CHANGE SHAPE UNDER IT: a later
+// writer appends the same op's records at a size or a rate its term was not
+// measured on, or its reason does not describe, and nothing above moves. So
+// the shapes are held too, each by what the code itself tells it apart by:
+// every way a push's pack is built and everything that may manage a
+// repository, each closed set classified whole (codeLogPushVias,
+// codeLogManagers); every key a priced op's payload declares, against the
+// keys its term was measured on (codeLogFields); and a shape only its writer
+// tells apart — a publication among compactions — by the listing its loop
+// would poll (codeLogUnwrittenShapes).
+//
+// A new op, kind, way, manager or payload key, or the loop of an unwritten op
+// or shape, fails here until its records are priced into the day — and the
+// share and when a half suffices restated on the pages
+// TestTheDocsPrintTheMeasuredDay holds — or argued out of it.
+//
+// Mutation: declare an op, a kind, a way or a manager in the code domain, add
+// a key to a priced op's payload, or name code.ReadPublicationDue or
+// code.ReadExpungeDue in a non-test file of internal/code/compact, and this
+// fails naming it; take the compactor's poll off code.ReadCompactionDue and
+// it fails saying the walk found no loop.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	t.Parallel()
 	const remedy = "price its records into codeLogDay — and restate the code log's share and " +
 		"when a half suffices on the pages TestTheDocsPrintTheMeasuredDay holds — or say in " +
 		"codeLogNegligible why they are no rate beside the day"
+	const shapeRemedy = "price them into codeLogDay as a term of their own beside their op's, " +
+		"measured — and restate the code log's share and when a half suffices on the pages " +
+		"TestTheDocsPrintTheMeasuredDay holds — or argue them out of the day with the measured " +
+		"figure that keeps them out; then say so where this test reads it"
 	day := codeLogDay()
+	// AN OP IS PRICED BY ITS SHAPES' TERMS, each one shape of its records, once.
+	priced := map[code.OpKind]bool{}
+	shapes := map[[2]string]bool{}
+	for _, term := range day {
+		priced[term.op] = true
+		key := [2]string{string(term.op), term.shape}
+		switch {
+		case strings.TrimSpace(term.shape) == "":
+			t.Errorf("codeLogDay prices %q records without saying which: a term is the shape of "+
+				"its op's records its figure was measured on", term.op)
+		case shapes[key]:
+			t.Errorf("codeLogDay prices %q records of the shape %q twice", term.op, term.shape)
+		}
+		shapes[key] = true
+	}
 	for _, op := range code.OpKinds {
 		var in []string
-		if _, found := day[op]; found {
+		if priced[op] {
 			in = append(in, "codeLogDay")
 		}
 		if _, found := codeLogNegligible[op]; found {
@@ -899,13 +1112,19 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 				op, strings.Join(in, " and "))
 		}
 	}
+	var shapeOps []code.OpKind
+	for _, unwritten := range codeLogUnwrittenShapes {
+		shapeOps = append(shapeOps, unwritten.op)
+	}
 	for _, listed := range []struct {
 		name string
 		ops  []code.OpKind
 	}{
-		{"codeLogDay", slices.Collect(maps.Keys(day))},
+		{"codeLogDay", slices.Collect(maps.Keys(priced))},
 		{"codeLogNegligible", slices.Collect(maps.Keys(codeLogNegligible))},
 		{"codeLogUnwritten", slices.Collect(maps.Keys(codeLogUnwritten))},
+		{"codeLogUnwrittenShapes", shapeOps},
+		{"codeLogFields", slices.Collect(maps.Keys(codeLogFields))},
 	} {
 		for _, op := range listed.ops {
 			if !op.Valid() {
@@ -918,17 +1137,109 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 			t.Errorf("codeLogNegligible leaves %q out of the day and says nothing of why", op)
 		}
 	}
-	// AN UNWRITTEN OP IS UNWRITTEN WHILE ITS WRITER DOES NOT EXIST.
+
+	// THE LOOPS, each by the listing it polls: an unwritten op or shape stays
+	// unwritten while no file the crewlet binary is built from names its loop's
+	// listing. The walk that looks must find the compactor's, whose merges the
+	// day prices, or it is a walk that would find no loop at all.
+	polled := codeLogPolled(t)
+	if !polled[code.ReadCompactionDue] {
+		t.Errorf("no file the crewlet binary is built from names the compactor's listing (%q), "+
+			"which its poll reads for the merges codeLogDay prices: either the compactor is gone, "+
+			"and its term with it, or codeLogPolled reads no loop and would miss every one this "+
+			"test holds unwritten", code.ReadCompactionDue)
+	}
 	for op, unwritten := range codeLogUnwritten {
-		_, err := os.Stat(filepath.Join(sourcetree.Root(t), filepath.FromSlash(unwritten.writer)))
 		switch {
-		case err == nil:
-			t.Errorf("%s exists, so a node appends %q records — %s: %s", unwritten.writer, op,
-				unwritten.how, remedy)
-		case !errors.Is(err, fs.ErrNotExist):
-			t.Fatalf("whether %s exists, which would append %q records: %v", unwritten.writer, op, err)
+		case !unwritten.listing.Valid() || strings.TrimSpace(unwritten.how) == "":
+			t.Errorf("codeLogUnwritten holds %q records unwritten on the listing %q, which is no "+
+				"listing the code domain declares, or does not say how they would be appended",
+				op, unwritten.listing)
+		case polled[unwritten.listing]:
+			t.Errorf("a file the crewlet binary is built from names the listing %q, which the "+
+				"loop that appends %q records polls, so a node appends them — %s: %s",
+				unwritten.listing, op, unwritten.how, remedy)
 		}
 	}
+	for _, unwritten := range codeLogUnwrittenShapes {
+		_, negligible := codeLogNegligible[unwritten.op]
+		switch {
+		case !unwritten.listing.Valid() || strings.TrimSpace(unwritten.shape) == "" ||
+			strings.TrimSpace(unwritten.how) == "":
+			t.Errorf("codeLogUnwrittenShapes holds a shape of %q records unwritten on the listing "+
+				"%q, which is no listing the code domain declares, or does not say what the "+
+				"records are or how they would be appended", unwritten.op, unwritten.listing)
+		case !priced[unwritten.op] && !negligible:
+			t.Errorf("codeLogUnwrittenShapes holds a shape of %q records, which the day neither "+
+				"prices nor leaves out for a reason: a shape is one of an op the day classifies, "+
+				"and every record of an op no node appends is unwritten with it (codeLogUnwritten)",
+				unwritten.op)
+		case polled[unwritten.listing]:
+			t.Errorf("a file the crewlet binary is built from names the listing %q, which the "+
+				"loop that appends them polls, so a node appends %q records of a shape the day "+
+				"does not price — %s — %s: %s", unwritten.listing, unwritten.op, unwritten.shape,
+				unwritten.how, shapeRemedy)
+		}
+	}
+
+	// THE WAYS AND THE MANAGERS, each closed set classified whole.
+	classifiedWhole(t, "codeLogPushVias", "way of building a push's pack", code.PushVias(),
+		codeLogPushVias, shapeRemedy)
+	classifiedWhole(t, "codeLogManagers", "manager of a repository", code.ManagedBys(),
+		codeLogManagers, shapeRemedy)
+
+	// THE KEYS of every priced op's payload, against those its term was
+	// measured on. A barrier carries none: its record is the envelope alone.
+	for op := range priced {
+		if _, listed := codeLogFields[op]; !listed && op != code.OpBarrier {
+			t.Errorf("codeLogDay prices %q records, and codeLogFields does not list the keys of "+
+				"their payload its term was measured on", op)
+		}
+	}
+	for op, fields := range codeLogFields {
+		if !priced[op] {
+			t.Errorf("codeLogFields lists the keys of %q records, which the day does not price", op)
+		}
+		declared := payloadKeys(t, fields.payload)
+		carried := map[string]bool{}
+		for _, key := range fields.carried {
+			switch {
+			case carried[key]:
+				t.Errorf("codeLogFields lists %q as carried by %q records twice", key, op)
+			case !slices.Contains(declared, key):
+				t.Errorf("codeLogFields lists %q as carried by %q records, and their payload "+
+					"declares no such key: the term was measured on records this build no "+
+					"longer writes — measure it again and restate the figures", key, op)
+			}
+			carried[key] = true
+		}
+		for key, why := range fields.absent {
+			switch {
+			case carried[key]:
+				t.Errorf("codeLogFields lists %q as both carried by %q records and absent from "+
+					"them", key, op)
+			case strings.TrimSpace(why) == "":
+				t.Errorf("codeLogFields lists %q as absent from %q records and says nothing of "+
+					"why", key, op)
+			case !slices.ContainsFunc(declared, func(d string) bool { return under(d, key) }):
+				t.Errorf("codeLogFields lists %q as absent from %q records, and their payload "+
+					"declares no such key", key, op)
+			}
+		}
+		for _, key := range declared {
+			absent := slices.ContainsFunc(slices.Collect(maps.Keys(fields.absent)),
+				func(a string) bool { return under(key, a) })
+			if !carried[key] && !absent {
+				t.Errorf("%q records declare the key %q, which their term in the day was not "+
+					"measured with: measure the term again with records that carry it and restate "+
+					"the figures — and the code log's share and when a half suffices on the pages "+
+					"TestTheDocsPrintTheMeasuredDay holds — then list it in codeLogFields as "+
+					"carried, or list it there as absent with why the term's records never carry it",
+					op, key)
+			}
+		}
+	}
+
 	for _, kind := range code.ObjectKinds {
 		if strings.TrimSpace(codeLogKinds[kind]) == "" {
 			t.Errorf("the code log's records are on %q objects, and codeLogKinds does not say how "+
@@ -940,6 +1251,220 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 			t.Errorf("codeLogKinds names %q, which is no kind of object the code domain declares", kind)
 		}
 	}
+}
+
+// classifiedWhole fails t for every member of one of the code domain's closed
+// sets that classified does not say how the code log's day counts the records
+// of, and for every member classified names that the set does not hold.
+func classifiedWhole[K ~string](t *testing.T, name, what string, set []K, classified map[K]string,
+	remedy string) {
+	t.Helper()
+	for _, member := range set {
+		if strings.TrimSpace(classified[member]) == "" {
+			t.Errorf("the code domain declares the %s %q, and %s does not say how the code log's "+
+				"day counts its records: %s", what, member, name, remedy)
+		}
+	}
+	for member := range classified {
+		if !slices.Contains(set, member) {
+			t.Errorf("%s names %q, which is no %s the code domain declares", name, member, what)
+		}
+	}
+}
+
+// under reports whether key is the key parent or one nested in it.
+func under(key, parent string) bool {
+	return key == parent || strings.HasPrefix(key, parent+".")
+}
+
+// payloadKeys is every key a payload of type rt declares, as its encoding
+// spells it, a nested key after its parent's and a dot: a struct the code
+// domain declares is walked into — through a pointer or a slice, and inlined
+// where the encoder inlines it — and every other value, a string, a number,
+// an instant, another package's type or anything that encodes itself, is one
+// key. Read off the type and not a record, so a key a record leaves out
+// (omitempty) is a key all the same: what the payload can carry, not what one
+// sample did.
+func payloadKeys(t *testing.T, rt reflect.Type) []string {
+	t.Helper()
+	domain := reflect.TypeFor[code.PushBatch]().PkgPath()
+	var keys []string
+	var walk func(prefix string, rt reflect.Type)
+	walk = func(prefix string, rt reflect.Type) {
+		for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Slice {
+			rt = rt.Elem()
+		}
+		if rt.Kind() != reflect.Struct || rt.PkgPath() != domain || encodesItself(rt) {
+			keys = append(keys, prefix)
+			return
+		}
+		for i := range rt.NumField() {
+			field := rt.Field(i)
+			tagged, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			embedded := field.Type
+			if embedded.Kind() == reflect.Pointer {
+				embedded = embedded.Elem()
+			}
+			switch {
+			case tagged == "-":
+			case field.Anonymous && tagged == "" && embedded.Kind() == reflect.Struct:
+				walk(prefix, field.Type)
+			case !field.IsExported():
+			default:
+				walk(strings.TrimPrefix(prefix+"."+cmp.Or(tagged, field.Name), "."), field.Type)
+			}
+		}
+	}
+	walk("", rt)
+	if len(keys) == 0 || slices.Contains(keys, "") {
+		t.Fatalf("%s is no payload of keys: it encodes as one value", rt)
+	}
+	return keys
+}
+
+// encodesItself reports a type that writes its own encoding, which is one key
+// whatever its fields are.
+func encodesItself(rt reflect.Type) bool {
+	for _, encoder := range []reflect.Type{reflect.TypeFor[json.Marshaler](),
+		reflect.TypeFor[encoding.TextMarshaler]()} {
+		if rt.Implements(encoder) || reflect.PointerTo(rt).Implements(encoder) {
+			return true
+		}
+	}
+	return false
+}
+
+// codeLogPolled is every listing of the code domain (a code.ReadKind) that a
+// file the crewlet binary is built from names: a non-test file, read as
+// go/build reads it for this platform, of a package cmd/crewlet reaches through
+// its imports — so no test, and no package only tests import (the suites'
+// harnesses, codetest among them, poll a listing to check it) — outside the
+// code domain's own package, which declares and serves them. A listing is
+// named by the domain's own identifier for it, read off its declaration rather
+// than spelled here, so a listing renamed is the one the walk looks for.
+func codeLogPolled(t *testing.T) map[code.ReadKind]bool {
+	t.Helper()
+	root := sourcetree.Root(t)
+	domain := reflect.TypeFor[code.ReadKind]().PkgPath()
+	module, found := strings.CutSuffix(domain, "/internal/code")
+	if !found {
+		t.Fatalf("the code domain's import path is %s, not its module's internal/code", domain)
+	}
+	fset := token.NewFileSet()
+
+	// THE DOMAIN'S NAME FOR EACH LISTING: every constant of type ReadKind its
+	// package declares, by the listing it spells.
+	domainDir := filepath.Join(root, "internal", "code")
+	domainPkg, err := build.Default.ImportDir(domainDir, 0)
+	if err != nil {
+		t.Fatalf("read the code domain's package: %v", err)
+	}
+	listings := map[string]code.ReadKind{}
+	for _, file := range domainPkg.GoFiles {
+		f, err := parser.ParseFile(fset, filepath.Join(domainDir, file), nil,
+			parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse the code domain's %s: %v", file, err)
+		}
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value := spec.(*ast.ValueSpec)
+				if typ, ok := value.Type.(*ast.Ident); !ok || typ.Name != "ReadKind" {
+					continue
+				}
+				for i, name := range value.Names {
+					var lit *ast.BasicLit
+					if i < len(value.Values) {
+						lit, _ = value.Values[i].(*ast.BasicLit)
+					}
+					if lit == nil || lit.Kind != token.STRING {
+						t.Fatalf("the code domain's %s declares the listing %s with no string "+
+							"literal, which this walk reads the listing it names from", file,
+							name.Name)
+					}
+					spelled, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatalf("the code domain's %s spells the listing %s as %s: %v", file,
+							name.Name, lit.Value, err)
+					}
+					listings[name.Name] = code.ReadKind(spelled)
+				}
+			}
+		}
+	}
+	for _, listing := range code.ReadKinds() {
+		if !slices.Contains(slices.Collect(maps.Values(listings)), listing) {
+			t.Fatalf("no constant of type ReadKind in the code domain spells the listing %q, so "+
+				"this walk has no name to find it by", listing)
+		}
+	}
+
+	ids := sourcetree.MustIdentifiers(slices.Collect(maps.Keys(listings))...)
+	polled := map[code.ReadKind]bool{}
+	read := map[string]bool{}
+	for queue := []string{"cmd/crewlet"}; len(queue) > 0; queue = queue[1:] {
+		pkgPath := queue[0]
+		if read[pkgPath] {
+			continue
+		}
+		read[pkgPath] = true
+		dir := filepath.Join(root, filepath.FromSlash(pkgPath))
+		pkg, err := build.Default.ImportDir(dir, 0)
+		if err != nil {
+			t.Fatalf("read %s, which the crewlet binary is built from: %v", pkgPath, err)
+		}
+		for _, imported := range pkg.Imports {
+			if inModule, ok := strings.CutPrefix(imported, module+"/"); ok {
+				queue = append(queue, inModule)
+			}
+		}
+		if dir == domainDir {
+			continue
+		}
+		for _, file := range slices.Concat(pkg.GoFiles, pkg.CgoFiles) {
+			path := filepath.Join(dir, file)
+			src, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ids.In(src) {
+				continue
+			}
+			f, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+			local := ""
+			for _, imported := range f.Imports {
+				if spelled, _ := strconv.Unquote(imported.Path.Value); spelled != domain {
+					continue
+				}
+				local = domainPkg.Name
+				if imported.Name != nil {
+					local = imported.Name.Name
+				}
+			}
+			if local == "." {
+				t.Fatalf("%s imports the code domain into its own scope, so this walk cannot "+
+					"tell the domain's listings from its own names", path)
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok {
+					if x, ok := sel.X.(*ast.Ident); ok && local != "" && x.Name == local {
+						if listing, ok := listings[sel.Sel.Name]; ok {
+							polled[listing] = true
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	return polled
 }
 
 // prose is a file of this tree as a reader reads its words: a comment's
