@@ -652,3 +652,19 @@ test("a run's page names the member its job was launched on", async () => {
   expect(screen.getByText("spare")).toBeTruthy();
   expect(screen.getByText(/claude-haiku/)).toBeTruthy();
 });
+
+// THE ENTRY IS AN ADMIN'S, THE MODEL EVERYBODY'S: the engine sends a run's
+// `provider_key` to an admin alone, and every other reader the model the job
+// runs under, which the page still names rather than dropping the fact.
+//
+// Mutation: draw the fact only where the entry is present, and a reader who
+// is not an admin is told nothing about what the run runs on.
+test("a run's page names its model to a reader the entry is withheld from", async () => {
+  mountPage({
+    sandbox_runs: { runs: [run({ model: "claude-haiku" })] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getByText("Launched on")).toBeTruthy();
+  expect(screen.getByText("claude-haiku")).toBeTruthy();
+});

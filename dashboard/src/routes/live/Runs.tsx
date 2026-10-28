@@ -230,9 +230,12 @@ function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
     },
     { label: "Runs in", value: run.placement },
     { label: "Coding agent", value: run.coding_agent },
-    // THE MEMBER THE JOB WAS LAUNCHED ON: a fallback at launch runs it on an
-    // entry other than the chain's head, and which entry's plan a long run is
-    // spending is the first thing a person watching it asks.
+    // THE MEMBER THE JOB WAS LAUNCHED ON, and its model: a fallback at launch
+    // runs it on an entry other than the chain's head, and which entry's plan a
+    // long run is spending is the first thing an admin watching it asks. The
+    // entry is the company's configuration, which the engine sends an admin
+    // alone; every other reader is sent the model, the run's own fact, and is
+    // told that rather than nothing.
     {
       label: "Launched on",
       value: run.provider_key ? (
@@ -241,7 +244,7 @@ function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
           {run.model ? ` · ${run.model}` : ""}
         </span>
       ) : (
-        ""
+        (run.model ?? "")
       ),
     },
     { label: "Branch", value: run.branch ? <InlineCode>{run.branch}</InlineCode> : "" },

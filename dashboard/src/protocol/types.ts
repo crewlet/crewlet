@@ -726,7 +726,9 @@ export interface SandboxEntry {
   agent_id: string;
   coding_agent: string;
   /** The executor-chain member the run was launched on, and its model — which
-   *  a fallback at launch makes other than the chain's head. */
+   *  a fallback at launch makes other than the chain's head. The member is the
+   *  company's configuration and is sent to an admin alone; the model goes to
+   *  every reader. */
   provider_key?: string;
   model?: string;
   sandbox_id: string;
@@ -785,7 +787,8 @@ export interface SandboxRun {
   status: SandboxStatus;
   coding_agent: string;
   /** The executor-chain member the job was launched on, and its model. Absent
-   *  on a live entry that named none. */
+   *  on a live entry that named none; the member is also absent for every
+   *  reader but an admin, since it is the company's configuration. */
   provider_key?: string;
   model?: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
