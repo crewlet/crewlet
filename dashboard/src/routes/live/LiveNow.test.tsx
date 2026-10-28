@@ -471,6 +471,39 @@ test("after Load older, a reconnect asks nothing of the first page of phases", a
   expect(within(card).getByText("Paused while you page back.")).toBeTruthy();
 });
 
+// AN OLDER PAGE OF PHASES THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN,
+// its failure said beside it, never in its place. Mutation: draw the failure
+// in the control's place again, and there is no Load older to press.
+test("an older page of phases that fails keeps Load older, which asks it again", async () => {
+  let failures = 1;
+  const { asked } = mount({
+    answers: {
+      phases: (p: Record<string, unknown>) =>
+        p.before_id
+          ? failures-- > 0
+            ? Promise.reject(new Error("unavailable"))
+            : { phases: [phaseEvent("p-2", "t-2", "id")], next: {}, exhausted: true }
+          : {
+              phases: [phaseEvent("p-1", "t-1", "id")],
+              next: { before_time: "2026-09-28T10:00:00Z", before_id: "p-1" },
+              exhausted: false,
+            },
+    },
+  });
+  const card = await phasesCard(asked);
+  const more = () =>
+    within(card).getByRole<HTMLButtonElement>("button", { name: `Load ${PHASE_PAGE} older` });
+  await waitFor(() => expect(more().disabled).toBe(false));
+  act(() => more().click());
+  expect(
+    await within(card).findByText("Could not read the next page (unavailable). Try again."),
+  ).toBeTruthy();
+  await waitFor(() => expect(more().disabled).toBe(false));
+  act(() => more().click());
+  await within(card).findByText("Start of the record.");
+  expect(within(card).queryByText(/Could not read the next page/)).toBeNull();
+});
+
 // THE EVENT LOG IS A LINK TO THE LOG, carrying the seat. It was a button
 // navigating to the path this screen was already on for one release, which
 // reloaded Now running.

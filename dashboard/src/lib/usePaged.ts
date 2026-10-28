@@ -52,6 +52,15 @@
  * dropped — rather than keep pages that no longer continue what is above
  * them, and an older page that fails with nothing older held does the same.
  *
+ * # A page that fails is asked again by the same press
+ *
+ * An older page that fails keeps what is held — the pages under it still
+ * continue the newest one — and the cursor it was asked from, so `older`
+ * asks that page again. Its code is `pageError`, which a caller says BESIDE
+ * the control that asks it (`components/common.tsx`'s `PageFailed`), never
+ * in its place: in its place it left the reader nothing to press, and under a
+ * list held still, nothing to do but reload.
+ *
  * # Where the cursor is
  *
  * The caller's to say (`cursorOf`), because the answers do not agree on a

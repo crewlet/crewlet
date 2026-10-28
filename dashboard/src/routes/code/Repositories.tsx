@@ -46,7 +46,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { closedBy } from "~/app/nav.ts";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { REPO_STATUS_FILTERS, repoStatusWord, shortOID } from "~/lib/code.ts";
 import { fmtBytes, fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
@@ -263,7 +263,9 @@ export function Repositories() {
           ]}
         />
       </QueryState>
-      {paged.pageError && <QueryState error={paged.pageError} refusal={null} loading={false} />}
+      {/* SAID, NOT BANNERED: the grid's Load more stays, and asks the page
+          again (`PageFailed`). */}
+      {paged.pageError && <PageFailed error={paged.pageError} />}
     </>
   );
 }

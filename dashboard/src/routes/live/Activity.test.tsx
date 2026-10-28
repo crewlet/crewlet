@@ -150,6 +150,53 @@ test("a refused first page is not a company that has published nothing", async (
   expect(screen.queryByText("Nothing has been published yet")).toBeNull();
 });
 
+// AND A REFUSED PAGE KEEPS THE CONTROL THAT ASKS IT AGAIN: the first page of
+// the window is said as the refusal it was, with the control beside it rather
+// than in its place, where it left a reader nothing to press. Mutation: draw
+// the refusal in the control's place again, and there is nothing to press.
+test("a refused first page keeps the control that asks it again", async () => {
+  let failures = 1;
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) => {
+    if (what !== "events") return new Promise(() => {});
+    if (failures-- > 0) return Promise.reject(new Error("query_failed"));
+    return Promise.resolve({
+      events: [
+        {
+          id: "e-1",
+          type: "task_assigned",
+          category: "task",
+          source: "engine",
+          actor: "CEO",
+          summary: "opened a task",
+          timestamp: new Date(Date.now() - 60_000).toISOString(),
+          failed: false,
+        },
+      ],
+      next: null,
+      exhausted: true,
+    });
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Activity />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /^Load \d+ older$/ }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(screen.getByText("opened a task")).toBeTruthy();
+  expect(screen.queryByText(/The engine failed to answer\./)).toBeNull();
+});
+
 // AND A PAGE STILL IN FLIGHT IS NOT ONE EITHER.
 test("a first page still in flight is not a company that has published nothing", () => {
   const store = new Store();

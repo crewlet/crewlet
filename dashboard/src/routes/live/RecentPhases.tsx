@@ -45,7 +45,7 @@ import {
   type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { DataGridColumn } from "@crewlethq/ui";
@@ -330,9 +330,7 @@ export function RecentPhases({
         />
       )}
       <div className="live-card-foot">
-        {pageError ? (
-          <QueryState error={pageError} refusal={null} loading={false} />
-        ) : exhausted ? (
+        {exhausted ? (
           <span className="t-caption">Start of the record.</span>
         ) : (
           <>
@@ -348,6 +346,8 @@ export function RecentPhases({
             <span className="t-caption">{eventHistoryLabel(engine?.event_history_seconds)}</span>
           </>
         )}
+        {/* BESIDE THE CONTROL, which asks the page again. */}
+        {pageError && <PageFailed error={pageError} />}
         {/* SAID ONLY ONCE IT IS TRUE: until then a reconnect reads the first
             page again. */}
         {paged.held && <span className="t-caption">Paused while you page back.</span>}

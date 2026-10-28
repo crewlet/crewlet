@@ -347,6 +347,30 @@ test("Load older asks for the page past the cursor and lists it", async () => {
   });
 });
 
+// AN OLDER PAGE THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN, its failure
+// said beside it, never in its place. Mutation: draw the failure in the
+// control's place again, and there is no Load older to press.
+test("an older page that fails keeps Load older, which asks it again", async () => {
+  let failures = 1;
+  const { asked } = mountWith({
+    turns: (p: Record<string, unknown>) =>
+      p.before
+        ? failures-- > 0
+          ? Promise.reject(new Error("unavailable"))
+          : { turns: [row("t-2", "the older one", { complete: true })], next: null }
+        : { turns: [row("t-1", "the newer one", { complete: true })], next: "cursor-1" },
+    event_series: series(2),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Load older" }));
+  expect(
+    await screen.findByText("Could not read the next page (unavailable). Try again."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+  await screen.findByText("the older one");
+  expect(screen.queryByText(/Could not read the next page/)).toBeNull();
+  expect(asked.filter((q) => q.kind === "turns" && q.params.before === "cursor-1")).toHaveLength(2);
+});
+
 // FROM THE PRESS OF LOAD OLDER THE FIRST PAGE IS HELD: its cursor was minted
 // from its last turn, and read again under turns that ended since it would
 // push its last ones out of both pages — so neither its poll nor a reconnect

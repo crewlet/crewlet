@@ -212,6 +212,31 @@ test("a page holding no row but a cursor offers the next, asked with that cursor
   expect(asked.some((u) => u.searchParams.get("cursor") === "m")).toBe(true);
 });
 
+// A PAGE THAT FAILS KEEPS LOAD MORE, which asks it again, the failure said
+// beside it rather than as a banner promising a retry nothing makes.
+// Mutation: answer the failure with QueryState's banner again, and the
+// caption is not there.
+test("a page that fails keeps Load more, which asks it again", async () => {
+  let failures = 1;
+  stubFetch((url) => {
+    if (url.pathname !== "/query/code_repos") return null;
+    if (url.searchParams.get("cursor") !== "m") {
+      return json({ repos: [repo("alpha")], next: "m", position: POSITION, level: "stale" });
+    }
+    return failures-- > 0
+      ? json({ error: "query_failed" }, 500)
+      : json({ repos: [repo("zeta")], position: POSITION, level: "stale" });
+  });
+  mount(<Repositories />);
+  fireEvent.click(await screen.findByRole("button", { name: /load more/i }));
+  expect(
+    await screen.findByText("Could not read the next page (query_failed). Try again."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /load more/i }));
+  expect(await screen.findByText("zeta")).toBeTruthy();
+  expect(screen.queryByText(/Could not read the next page/)).toBeNull();
+});
+
 // THE ENGINE'S OWN FILTER: `status=` is asked as the engine reads it, and an
 // empty answer under it says which state was empty.
 test("the state filter is the engine's status, said when nothing is in that state", async () => {

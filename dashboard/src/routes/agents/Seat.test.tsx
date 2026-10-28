@@ -1825,6 +1825,34 @@ test("after Load older turns, neither a poll tick nor a reconnect asks the newes
   }
 });
 
+// AN OLDER PAGE OF TURNS THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN,
+// its failure said beside it, never in its place. Mutation: draw the failure
+// in the control's place again, and there is no Load older turns to press.
+test("an older page of turns that fails keeps Load older turns, which asks it again", async () => {
+  let failures = 1;
+  mount("#/company/org/seats/swe?tab=turns", {
+    answers: {
+      turns: (p: Record<string, unknown>) =>
+        p.before
+          ? failures-- > 0
+            ? Promise.reject(new Error("unavailable"))
+            : { turns: [turnRow(50)], next: null }
+          : { turns: Array.from({ length: 50 }, (_, i) => turnRow(i)), next: "t-49" },
+    },
+  });
+  await settle();
+  const card = screen
+    .getByRole("heading", { name: "Turns" })
+    .closest(".crewlet-card") as HTMLElement;
+  fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
+  expect(
+    await within(card).findByText("Could not read the next page (unavailable). Try again."),
+  ).toBeTruthy();
+  fireEvent.click(within(card).getByRole("button", { name: "Load older turns" }));
+  await within(card).findByText("did thing 50");
+  expect(within(card).queryByText(/Could not read the next page/)).toBeNull();
+});
+
 // A KEYLESS ITEM IS NAMED SHORT, whole on its title: `native:<uuid>` took the
 // whole cell on a phone and laid the summary out one letter per line.
 test("a turn's keyless work item is named by its kind and the head of its id", async () => {

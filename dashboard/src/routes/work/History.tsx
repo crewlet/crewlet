@@ -63,7 +63,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { Coverage, type CoverageFacts } from "~/components/work.tsx";
 import { Button, Card, EmptyValue, Select, Skeleton, Tag } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
@@ -425,28 +425,25 @@ export function HistoryView({
           fewer, newer rows. */}
       {(more || paging || pageError || head) && (
         <footer className="panel-foot">
-          {pageError ? (
-            <QueryState error={pageError} refusal={null} loading={false} />
+          {more ? (
+            <Button
+              size="small"
+              variant="secondary"
+              onClick={() => void loadOlder()}
+              disabled={paging}
+            >
+              {paging ? "Loading…" : "Load older changes"}
+            </Button>
           ) : (
-            <>
-              {more ? (
-                <Button
-                  size="small"
-                  variant="secondary"
-                  onClick={() => void loadOlder()}
-                  disabled={paging}
-                >
-                  {paging ? "Loading…" : "Load older changes"}
-                </Button>
-              ) : (
-                <span>That is the oldest change in this window.</span>
-              )}
-              <span className="spacer" />
-              {/* SAID ONLY ONCE THE HEAD IS HELD, because until then it is not
-                  true: the first page is re-asked on every poll. */}
-              {head && <span>Paused while you page back.</span>}
-            </>
+            <span>That is the oldest change in this window.</span>
           )}
+          {/* BESIDE THE CONTROL, which asks the page again: the cursor it was
+              asked from is kept. */}
+          {pageError && <PageFailed error={pageError} />}
+          <span className="spacer" />
+          {/* SAID ONLY ONCE THE HEAD IS HELD, because until then it is not
+              true: the first page is re-asked on every poll. */}
+          {head && <span>Paused while you page back.</span>}
         </footer>
       )}
       {paging && <Skeleton variant="text" rows={3} label="Loading older changes" />}

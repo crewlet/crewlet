@@ -1945,7 +1945,15 @@ order holds the same way, since its first page read again pushes rows out
 alike — Code's Repositories, Work's task lists, Knowledge's listings, the
 Inbox's Snoozed and Earlier, and the artifact gallery and its folders — and
 where its foot counts what is loaded, that count says the list is "paused
-while more are loaded".
+while more are loaded". **An older page that fails is said beside the control
+that asks it, never in its place** (`PageFailed`: "Could not read the next
+page", with the code): the pager keeps what it holds and the cursor the page
+was asked from, so the same press reads it again. In its place, a footer left
+the reader nothing to press — under a list held still, nothing to do but
+reload — and a refusal's banner promises a retry the screen makes on its own,
+which a page the reader asked for once never gets. Live › Activity reads the
+first page of its window through the same control, so a first page refused
+before any answered is said as the refusal it was, with the control beside it.
 
 **A date is a band, not a wider cell.** A row's time column is sized for a wall
 clock, which is right for every row in a log but the first of each day — and

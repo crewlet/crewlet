@@ -428,6 +428,33 @@ test("a poll tick while the older page is on its way asks nothing of the first",
   expect(newest(asked)).toHaveLength(1);
 });
 
+// AN OLDER PAGE THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN, its failure
+// said beside it: the pager keeps the cursor the page was asked from, and a
+// banner in the button's place left a reader nothing to press — under a list
+// held still from the press, nothing to do but reload. Mutation: draw the
+// failure in the control's place again, and there is no Load older to press.
+test("an older page that fails keeps Load older, which asks it again", async () => {
+  let failures = 1;
+  stubFetch((url) => {
+    if (url.searchParams.get("cursor") !== "c1") {
+      return json({ pushes: [push("p2")], next: "c1", position: POSITION, level: "stale" });
+    }
+    return failures-- > 0
+      ? json({ error: "query_failed" }, 500)
+      : json({ pushes: [push("p1")], position: POSITION, level: "stale" });
+  });
+  mount("#/code/pushes?repo=web");
+  await screen.findByRole("table", { name: "Pushes to web" });
+  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+  expect(
+    await screen.findByText("Could not read the next page (query_failed). Try again."),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+  await screen.findByText("That is every push the repository keeps.");
+  expect(screen.queryByText(/Could not read the next page/)).toBeNull();
+  expect(screen.getByText("2 pushes listed")).toBeTruthy();
+});
+
 // ANOTHER REPOSITORY AND BACK starts the history again: what was held for the
 // first is discarded, never hidden under its name, where it came back under a
 // first page read since and the pushes between the two vanished. Mutation:

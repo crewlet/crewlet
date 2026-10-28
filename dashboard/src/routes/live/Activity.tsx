@@ -39,7 +39,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
-import { EventRow, QueryState } from "~/components/common.tsx";
+import { EventRow, PageFailed, QueryState } from "~/components/common.tsx";
 import { Button, Card, FilterChip, Input, Skeleton, Tag, InlineCode } from "@crewlethq/ui";
 import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/store-hooks.ts";
@@ -571,9 +571,17 @@ export function Activity() {
           )
         )}
         <footer className="panel-foot">
-          {pageError ? (
-            <QueryState error={pageError} refusal={null} loading={false} />
-          ) : exhausted ? (
+          {/* A REFUSED PAGE KEEPS THE CONTROL that asks it again. The first
+              page of the window is the log's own read, so its refusal is said
+              as the refusal it was — an access the reader lacks, say; a later
+              page's is said beside the control. */}
+          {pageError &&
+            (pageCoverage.length === 0 ? (
+              <QueryState error={pageError} refusal={null} loading={false} />
+            ) : (
+              <PageFailed error={pageError} />
+            ))}
+          {exhausted ? (
             // THE END OF WHAT WAS ASKED, NOT OF THE STORE. Pages are bounded
             // by the window and narrowed by the filters, so "exhausted" means
             // nothing older in THIS window matches — it said "the beginning of

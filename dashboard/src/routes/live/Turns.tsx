@@ -52,7 +52,7 @@
 
 import { useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import {
   Button,
@@ -468,10 +468,8 @@ export function Turns() {
       </QueryState>
 
       {(rows.length > 0 || more || pageError) && (
-        <div className="row gap-2">
-          {pageError ? (
-            <QueryState error={pageError} refusal={null} loading={false} />
-          ) : more ? (
+        <div className="row gap-2 wrap">
+          {more ? (
             <Button
               size="small"
               variant="secondary"
@@ -488,6 +486,8 @@ export function Turns() {
                 : "That is every turn in this window."}
             </span>
           )}
+          {/* BESIDE THE CONTROL, which asks the page again. */}
+          {pageError && <PageFailed error={pageError} />}
           {rows.length > 0 && (
             <span className="t-caption">{plural(rows.length, "turn")} listed</span>
           )}

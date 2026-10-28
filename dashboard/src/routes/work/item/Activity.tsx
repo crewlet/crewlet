@@ -65,7 +65,7 @@ import {
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { PageFailed, QueryState, SeatChip } from "~/components/common.tsx";
 import { AsksTag, type RowChrome } from "~/components/work.tsx";
 import { Composer, type ComposeMode } from "~/components/Composer.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -361,7 +361,8 @@ export function Activity({
               Earlier activity
             </Button>
           )}
-          {pageError && <QueryState error={pageError} refusal={null} loading={false} />}
+          {/* BESIDE THE CONTROL, which asks the page again. */}
+          {pageError && <PageFailed error={pageError} />}
           {/* SAID ONLY ONCE IT IS TRUE: until then each history's newest page
               is read again every thirty seconds. */}
           {held && <span className="t-caption">Paused while you page back.</span>}

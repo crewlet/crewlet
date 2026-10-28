@@ -1173,6 +1173,48 @@ test("after Earlier activity, neither a poll tick nor a reconnect asks a newest 
   }
 });
 
+// AN EARLIER PAGE THAT FAILS KEEPS "EARLIER ACTIVITY", which asks it again,
+// the failure said beside it rather than as a banner promising a retry
+// nothing makes. Mutation: answer the failure with QueryState's banner again,
+// and the caption is not there.
+test("an earlier page that fails keeps Earlier activity, which asks it again", async () => {
+  let failures = 1;
+  const comment = (id: string, at: string, body: string) => ({
+    id,
+    task: "t-1",
+    author: "ada",
+    author_kind: "agent",
+    body,
+    created_at: at,
+  });
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_comments: (params: Record<string, unknown>) =>
+        params.cursor === "c-50" && failures-- > 0
+          ? Promise.reject(new Error("unavailable"))
+          : Promise.resolve({
+              item: "t-1",
+              key: "ENG-42",
+              title: "x",
+              ...(params.cursor === "c-50"
+                ? { comments: [comment("c-1", "2031-04-01T09:00:00Z", "the very first word")] }
+                : {
+                    comments: [comment("c-51", "2031-04-12T09:00:00Z", "the newest word")],
+                    next_cursor: "c-50",
+                  }),
+            }),
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Earlier activity" }));
+  await settle();
+  expect(screen.getByText("Could not read the next page (unavailable). Try again.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Earlier activity" }));
+  await settle();
+  expect(screen.getByText("the very first word")).toBeTruthy();
+  expect(screen.queryByText(/Could not read the next page/)).toBeNull();
+});
+
 // THE FOUR ANSWERS OF "WHO THIS REACHED" KEEP THEIR SENTENCES: reached nobody,
 // no such change here, beyond the retention window, and cannot say — four
 // different facts, which a tracker that listed recipients would draw as one

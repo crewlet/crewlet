@@ -236,3 +236,39 @@ test("an older page that fails with nothing held lets the newest page go live", 
   await afterMicrotasks();
   expect(query).toHaveBeenCalledTimes(2);
 });
+
+// A PAGE THAT FAILS UNDER PAGES HELD KEEPS THEM, and the same press asks it
+// again: the cursor it was asked from is the last held page's, so `older`
+// reads it and the list goes on with no row left out — which is why a footer
+// says the failure beside its control (`PageFailed`), never in its place.
+// Mutation: drop the pages held when a page fails, and the reading the reader
+// paged back through is gone.
+test("an older page that fails under pages held keeps them, and older asks it again", async () => {
+  const h = history(2);
+  h.holds(6);
+  engine(h.newest);
+  let failing = false;
+  const page = vi.fn((cursor: string) =>
+    failing ? Promise.reject(new Error("unavailable")) : Promise.resolve(h.after(cursor)),
+  );
+  const { result } = renderHook(() => usePager({ item: "t-1" }, page));
+  await afterMicrotasks();
+  act(() => result.current.older());
+  await afterMicrotasks();
+  expect(ids(result.current.items)).toEqual(["r6", "r5", "r4", "r3"]);
+
+  failing = true;
+  act(() => result.current.older());
+  await afterMicrotasks();
+  expect(result.current.pageError).toBe("unavailable");
+  expect(result.current.held).toBe(true);
+  expect(result.current.more).toBe(true);
+  expect(ids(result.current.items)).toEqual(["r6", "r5", "r4", "r3"]);
+
+  failing = false;
+  act(() => result.current.older());
+  await afterMicrotasks();
+  expect(page).toHaveBeenLastCalledWith("c3");
+  expect(ids(result.current.items)).toEqual(["r6", "r5", "r4", "r3", "r2", "r1"]);
+  expect(result.current.pageError).toBeNull();
+});

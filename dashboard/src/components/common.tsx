@@ -551,3 +551,23 @@ export function QueryState({
   }
   return <>{children}</>;
 }
+
+/**
+ * A page a pager asked for and did not get, said BESIDE the control that asks
+ * it again — never in its place. The pager keeps the cursor the page was
+ * asked from (`lib/usePaged.ts`), so the same press reads it; a footer whose
+ * banner took the button's place left a reader nothing to press, and under a
+ * list held still from the press of "older", nothing to do but reload.
+ *
+ * A CAPTION, NOT [QueryState]'s BANNER, whose sentences promise what a polled
+ * question does — "this screen retries on its own", "the screen reloads when
+ * it's back" — where a page the reader asked for once is asked again by the
+ * reader alone. Read as an alert, since it lands where the reader pressed.
+ */
+export function PageFailed({ error }: { error: string }) {
+  return (
+    <span className="t-caption" role="alert">
+      {`Could not read the next page (${error}). Try again.`}
+    </span>
+  );
+}

@@ -65,7 +65,7 @@ import { UploadGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import {
   commandWord,
@@ -265,10 +265,8 @@ export function Pushes() {
             />
           </QueryState>
           {(rows.length > 0 || more || paged.pageError) && (
-            <div className="row gap-2">
-              {paged.pageError ? (
-                <QueryState error={paged.pageError} refusal={null} loading={false} />
-              ) : more ? (
+            <div className="row gap-2 wrap">
+              {more ? (
                 <Button
                   size="small"
                   variant="secondary"
@@ -281,6 +279,8 @@ export function Pushes() {
               ) : (
                 <span className="t-caption">That is every push the repository keeps.</span>
               )}
+              {/* BESIDE THE CONTROL, which asks the page again. */}
+              {paged.pageError && <PageFailed error={paged.pageError} />}
               {rows.length > 0 && (
                 <span className="t-caption">{plural(rows.length, "push", "pushes")} listed</span>
               )}
