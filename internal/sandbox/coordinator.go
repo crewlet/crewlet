@@ -366,6 +366,18 @@ type CoordinatorOptions struct {
 	// [Admission]. Nil admits every retry.
 	Admit Admission
 
+	// Gate is the node's admission, which every resume passes before it
+	// claims its run, on every route: see [TurnGate]. Nil admits every
+	// turn, which a coordinator with no node beneath it (a test's) is
+	// entitled to; the engine passes its node's.
+	//
+	// NOT Admit, which it sits beside: Admit is the seat's own conditions
+	// (a person's pause, a budget, a posture), which a retried answer asks
+	// because it runs outside the delivery that would have screened it. The
+	// gate is the node's question, whether this process may start a turn at
+	// all, and a completion asks it as much as a retry does.
+	Gate TurnGate
+
 	// Lease is the seat lease this node holds a seat under, which a launch
 	// stamps on the run's row ([PendingStore.BeginLaunch]) and every later
 	// write this node makes on the row carries back off it. It is what lets
@@ -541,6 +553,8 @@ type Coordinator struct {
 
 	hold  SeatHold
 	admit Admission
+	// gate is [CoordinatorOptions.Gate]; see [Coordinator.admitTurn].
+	gate  TurnGate
 	after func(time.Duration, func()) func() bool
 	// spent is [CoordinatorOptions.Spent]; see [Coordinator.spend].
 	spent func(ctx context.Context, handle string, evs []*events.Event)
@@ -635,6 +649,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		signals:   map[signal]uint64{},
 		hold:      opts.Hold,
 		admit:     opts.Admit,
+		gate:      opts.Gate,
 		after:     opts.After,
 		spent:     opts.Spent,
 		lease:     opts.Lease,
@@ -915,6 +930,21 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "claiming a completion"))
 	}
+	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
+	// [TurnGate]. A refusal leaves the run unclaimed and hands the
+	// completion back, so it reaches the seat's next holder, or this node
+	// once it may start turns again; meanwhile the waiter's keepalive keeps
+	// the box.
+	adm, err := c.admitTurn(ctx, ev.AgentHandle)
+	if err != nil {
+		log.InfoContext(ctx, "sandbox_completion_not_admitted",
+			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "reason", err.Error(),
+			"detail", "this node may not start the turn the completion resumes, so the "+
+				"run is left unclaimed and the completion goes back for the seat's next holder")
+		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
+	}
+	defer adm.release()
+	ctx = adm.ctx
 	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
@@ -963,7 +993,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// survives the handoffs which reset it. Every
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
-	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
+	_, err = c.resumeAndSettle(adm, run, resumeText(result), result.Success, trigger, runOutcome{
 		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
@@ -1910,9 +1940,12 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 // A REPLY A TURN TOOK IS SPENT, whatever becomes of the turn, and the line
 // between the two is drawn by the turn's own start ([ResumeRequest.Begin]) —
 // which is where its delivery is recorded as worked, too.
-func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
+func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) (AnswerDisposition, error) {
+	// UNDER THE ADMISSION, which is the only way here: the turn this
+	// re-enters is one the node admitted ([admitted]).
+	ctx := adm.ctx
 	if len(run.ExecuteState) == 0 {
 		// No suspended conversation to resume, and the turn cannot
 		// continue without one.

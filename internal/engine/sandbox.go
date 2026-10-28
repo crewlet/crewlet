@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -1930,6 +1931,10 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
 		Hold:  seatHold{engine: e},
 		Admit: e.mayResumeAnswer,
+		// AND EVERY RESUME, on either route, is a turn this node admits
+		// as it admits a mailbox's: the seat owned fresh, a slot under
+		// node.max_concurrent, and no drain. See [Engine.admitResume].
+		Gate: e.admitResume,
 		// A recorded answer that leaves its run — taken by a turn, on the
 		// inline attempt as on a retry, or handed back — is recorded as
 		// worked in the same completion ledger the dispatcher records a
@@ -2187,7 +2192,40 @@ const (
 	// Lifted on the clock when the window turns over, which the refusal
 	// names, or at once by an apply that changes the ceilings.
 	waitBudget sandbox.Condition = "budget"
+
+	// waitDrain: this node is draining, and starts no turn. Nothing
+	// signals it, because nothing in the engine undoes a drain
+	// ([Engine.Drain] latches): the wait ends when the drain hands the seat
+	// back, which lets go of the answer for the seat's next holder to
+	// resume ([sandbox.Coordinator.ReleaseSeat]), or when the node stops.
+	waitDrain sandbox.Condition = "drain"
 )
+
+// admitResume is the coordinator's [sandbox.TurnGate]: the node's own
+// admission ([node.Node.AdmitTurn]), with its refusal named as what an
+// answer's retry waits on.
+//
+// The cause stays reachable through the refusal, so the control topic can tell
+// a node that is leaving from a seat it cannot prove it holds
+// ([controlOutcome]).
+func (e *Engine) admitResume(ctx context.Context, handle string) (context.Context, func(), error) {
+	ctx, release, err := e.node.AdmitTurn(ctx, handle)
+	switch {
+	case err == nil:
+		return ctx, release, nil
+	case errors.Is(err, node.ErrDraining):
+		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
+			Condition: waitDrain, Reason: err.Error()}}
+	case errors.Is(err, node.ErrSeatNotOwned):
+		// THE SAME WAIT [Engine.mayResumeAnswer] names for a seat it
+		// does not find owned, for the same edges.
+		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
+			Condition: waitOwnership, Reason: err.Error(),
+			Until: e.now().Add(e.node.Host().HeartbeatInterval())}}
+	default:
+		return nil, nil, err
+	}
+}
 
 // mayResumeAnswer is the coordinator's [sandbox.Admission]: whether a seat may
 // run a RETRIED resume of a recorded answer now, and if not, what that waits
@@ -2446,13 +2484,7 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// A detached run outlives its node, so that window is not hypothetical.
 	if err := e.backends.Queue.Subscribe(ctx, control, group,
 		func(ctx context.Context, ev *events.Event) queue.Result {
-			if err := rt.coordinator.OnEvent(ctx, ev); err != nil {
-				// NAK, so a completion this node could not settle comes
-				// back — to this node once its store recovers, or to the
-				// seat's next owner. Acking it would lose the turn.
-				return queue.Nak(err)
-			}
-			return queue.Ack()
+			return controlOutcome(rt.coordinator.OnEvent(ctx, ev))
 		}); err != nil {
 		return fmt.Errorf("attaching the sandbox control topic: %w", err)
 	}
@@ -2468,6 +2500,32 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// its recovery would be told its live run had ended.
 	e.bridge.SeatReady(seat.ID)
 	return nil
+}
+
+// controlOutcome is what a seat's control-topic delivery leaves with the broker,
+// given what the coordinator made of it.
+//
+// A DRAINING NODE DEFERS: the completion is handed back unspent and the control
+// attachment quiesced, as a mailbox's deliveries are, because this process has
+// lost the right to start the turn it resumes and every redelivery would be
+// refused the same way until the drain hands the seat back
+// ([node.ErrDraining]). The seat's next holder collects it, or a later fire of
+// the waiter's poll, whichever comes first. One-way like the drain itself:
+// nothing un-quiesces a control attachment, and nothing needs to, because the
+// drain ends by detaching it.
+//
+// ANY OTHER FAILURE NAKS, so a completion this node could not settle comes back
+// on the broker's backoff: to this node once its store recovers, or to the
+// seat's next owner. Acking it would lose the turn.
+func controlOutcome(err error) queue.Result {
+	switch {
+	case err == nil:
+		return queue.Ack()
+	case errors.Is(err, node.ErrDraining):
+		return queue.Defer(err.Error())
+	default:
+		return queue.Nak(err)
+	}
 }
 
 // sandboxSeatAttached reports whether this node attached the seat's sandbox
