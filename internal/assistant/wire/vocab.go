@@ -223,19 +223,29 @@ const (
 	CardOpenInApp CardKind = "open_in_app"
 	// CardError is a refusal or a failure, in the engine's own words.
 	CardError CardKind = "error"
-	// CardNotice is a line the engine adds: a truncation, a withheld
+	// CardNotice is a line the engine adds: a shortened table, a withheld
 	// result.
 	CardNotice CardKind = "notice"
+	// CardOversize is a read whose answer was past what one step reads:
+	// named for what it read, with the screen that shows all of it and what
+	// would narrow it, never drawn as though it held the answer (ADR-0061).
+	CardOversize CardKind = "oversize"
 
 	// --- deep work (im-deep) ---
 
 	// CardFile is the files a deep run delivered (ADR-0054).
 	CardFile CardKind = "file"
+
+	// CardBrief is a brief turn's answer ([TurnBrief]): what the page is
+	// about, and the ranked things the person has to do, each row a record
+	// the engine read and resolved for them.
+	CardBrief CardKind = "brief"
 )
 
-// CardKinds are the seven, in declaration order.
+// CardKinds are the nine, in declaration order.
 var CardKinds = []CardKind{
-	CardTable, CardEntity, CardProposal, CardOpenInApp, CardError, CardNotice, CardFile,
+	CardTable, CardEntity, CardProposal, CardOpenInApp, CardError, CardNotice, CardOversize,
+	CardFile, CardBrief,
 }
 
 // Valid reports whether k is a kind this build knows.
@@ -470,13 +480,16 @@ const (
 	// the person no longer holds an app it read through: what it read may
 	// not be handed back to the model for them.
 	ErrorAccessWithdrawn ErrorCode = "access_withdrawn"
+	// ErrorBriefInvalid is a brief turn whose model did not write a brief
+	// the engine could accept within its one retry.
+	ErrorBriefInvalid ErrorCode = "brief_invalid"
 )
 
-// ErrorCodes are the eleven, in declaration order.
+// ErrorCodes are the twelve, in declaration order.
 var ErrorCodes = []ErrorCode{
 	ErrorModelUnavailable, ErrorModelSignedOut, ErrorModelBusy, ErrorModelTimeout,
 	ErrorTurnTimeout, ErrorStepLimit, ErrorBudgetExhausted, ErrorTurnInterrupted,
-	ErrorGrantEnded, ErrorInternal, ErrorAccessWithdrawn,
+	ErrorGrantEnded, ErrorInternal, ErrorAccessWithdrawn, ErrorBriefInvalid,
 }
 
 // Valid reports whether c is a code this build knows.
@@ -504,6 +517,7 @@ var errorSentences = map[ErrorCode]string{
 	ErrorInternal:         "Something went wrong inside the engine. The reason is in this node's log.",
 	ErrorAccessWithdrawn: "The assistant stopped: you no longer have access to something this " +
 		"conversation read.",
+	ErrorBriefInvalid: "The brief could not be written. Ask for it again.",
 }
 
 // ResourceKind is what a page context's resource or selection names.
@@ -533,6 +547,98 @@ var ResourceKinds = []ResourceKind{
 
 // Valid reports whether k is a kind this build knows.
 func (k ResourceKind) Valid() bool { return slices.Contains(ResourceKinds, k) }
+
+// Keyed reports whether a record of kind k is written in prose by a short key
+// of its own (a task's "GOP-11", a project's "GOP"), which its
+// [EntityCard.Key] then carries. Every other kind is written by its name, a
+// seat's included: the assistant names a seat by its name, never its handle.
+func (k ResourceKind) Keyed() bool { return k == ResourceTask || k == ResourceProject }
+
+// RecordNoun is what the person calls the record a screen has open, as the
+// drawer names it ("Brief me on this decision"): a selection's word for itself
+// beside its [ResourceKind], which says only how the engine reads it. An ask
+// is a decision the Inbox shows on a task, and a seat is an agent.
+type RecordNoun string
+
+// The nouns a screen names its open record by.
+const (
+	NounDecision RecordNoun = "decision"
+	NounUpdate   RecordNoun = "update"
+	NounTask     RecordNoun = "task"
+	NounProject  RecordNoun = "project"
+	NounAgent    RecordNoun = "agent"
+	NounArtifact RecordNoun = "artifact"
+	NounPage     RecordNoun = "page"
+	NounTurn     RecordNoun = "turn"
+	NounRun      RecordNoun = "run"
+)
+
+// RecordNouns are the nine, in declaration order.
+var RecordNouns = []RecordNoun{
+	NounDecision, NounUpdate, NounTask, NounProject, NounAgent, NounArtifact, NounPage,
+	NounTurn, NounRun,
+}
+
+// Valid reports whether n is a noun this build knows.
+func (n RecordNoun) Valid() bool { return slices.Contains(RecordNouns, n) }
+
+// TurnMode is what a question asks for: an answer in the assistant's own
+// words, or a brief in a fixed shape ([BriefCard]).
+type TurnMode string
+
+const (
+	// TurnAsk is an ordinary question, answered in prose and cards.
+	TurnAsk TurnMode = "ask"
+	// TurnBrief asks for a brief of the page the person is on, or of the
+	// one record it has open: read only, answered by one brief card.
+	TurnBrief TurnMode = "brief"
+)
+
+// TurnModes are the two, in declaration order.
+var TurnModes = []TurnMode{TurnAsk, TurnBrief}
+
+// Valid reports whether m is a mode this build knows.
+func (m TurnMode) Valid() bool { return slices.Contains(TurnModes, m) }
+
+// BriefTone is how loud a brief's row is. Every row is something the person
+// has to do, so there is no quiet tone: a fact merely worth knowing is the
+// brief's context line, never a row.
+//
+// DANGER IS THE ENGINE'S: a row is drawn danger only when the record it cites
+// carries a fact the engine read (a seat stopped, a task marked urgent, a
+// failed turn); a danger the model chose without such a fact is drawn
+// warning.
+type BriefTone string
+
+// The tones a brief's row is drawn in.
+const (
+	BriefDanger  BriefTone = "danger"
+	BriefWarning BriefTone = "warning"
+)
+
+// BriefTones are the two, in declaration order.
+var BriefTones = []BriefTone{BriefDanger, BriefWarning}
+
+// Valid reports whether t is a tone this build knows.
+func (t BriefTone) Valid() bool { return slices.Contains(BriefTones, t) }
+
+// BriefActionKind is what a brief's action does. A brief never writes: an
+// action opens a record's screen or asks a question in the same conversation.
+type BriefActionKind string
+
+const (
+	// BriefOpen opens the screen of the record a row cites, at the address
+	// the engine built and checked the person may open.
+	BriefOpen BriefActionKind = "open"
+	// BriefAsk asks a question in the same conversation.
+	BriefAsk BriefActionKind = "ask"
+)
+
+// BriefActionKinds are the two, in declaration order.
+var BriefActionKinds = []BriefActionKind{BriefOpen, BriefAsk}
+
+// Valid reports whether k is a kind this build knows.
+func (k BriefActionKind) Valid() bool { return slices.Contains(BriefActionKinds, k) }
 
 // ViewerReason is why the assistant is not available to the viewer, the
 // first failing condition, so the Ask pill is drawn disabled with a reason

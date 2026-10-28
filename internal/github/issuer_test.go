@@ -478,23 +478,24 @@ func TestADeliverableAddressIsOneGitHubReaches(t *testing.T) {
 	}
 }
 
-// AN APP FOR AN ADDRESS GITHUB CANNOT REACH IS CREATED WITH ITS WEBHOOK OFF,
-// never pointed at a placeholder: an inactive hook is a state GitHub's own
+// AN APP FOR AN ADDRESS GITHUB CANNOT REACH IS CREATED WITH NO WEBHOOK, never
+// pointed at a placeholder: an app with no webhook is a state GitHub's own
 // settings page shows, and an unreachable one fails every delivery while the
 // app reads as healthy.
-func TestAManifestWithNoDeliveryAddressHasItsWebhookOff(t *testing.T) {
+func TestAManifestGitHubCannotDeliverToHasNoWebhook(t *testing.T) {
 	t.Parallel()
 	off := github.BuildManifest(github.ManifestOptions{
 		Seat: "pm", Name: "GoPhrase Product Manager",
+		DeliveryURL: "http://localhost:8200/webhooks/github/pm",
+		DeliveryOff: true,
 		RedirectURL: "http://localhost:8200/webhooks/github-app",
 		SetupURL:    "http://localhost:8200/webhooks/github-app?installed=pm",
 		Access:      github.Access{Tier: github.TierReview},
 	})
-	if off.HookAttributes["active"] != false {
-		t.Errorf("hook = %v, want it inactive", off.HookAttributes)
-	}
-	if _, has := off.HookAttributes["url"]; has {
-		t.Errorf("an inactive hook was given an address: %v", off.HookAttributes)
+	// GitHub refuses an unreachable hook, active or not, and events with
+	// no hook, so a local engine's app carries neither.
+	if off.HookAttributes != nil || len(off.DefaultEvents) != 0 {
+		t.Errorf("hook = %v, events = %v, want neither", off.HookAttributes, off.DefaultEvents)
 	}
 	if off.RedirectURL == "" || off.SetupURL == "" {
 		t.Error("the browser's return addresses were dropped with the delivery address")

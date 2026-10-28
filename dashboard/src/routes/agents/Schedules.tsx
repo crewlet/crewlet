@@ -774,6 +774,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 key: "task",
                 header: "Task",
                 floor: "8rem",
+                sortValue: (s) => s.task,
                 cell: (s) => <TableTextCell>{s.task}</TableTextCell>,
               },
               {
@@ -795,6 +796,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
               {
                 key: "next",
+                align: "right",
                 header: "Next",
                 shrink: true,
                 sortValue: (s) => tsKey(s.next_run) || Number.MAX_SAFE_INTEGER,
@@ -818,6 +820,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
               {
                 key: "last",
+                align: "right",
                 header: "Last",
                 shrink: true,
                 drop: 1,
@@ -861,6 +864,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             columns={[
               {
                 key: "fired",
+                align: "right",
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),
@@ -940,6 +944,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // ends in an ellipsis, over the tick's own label in the title.
                 key: "due",
                 header: "For the tick",
+                align: "right",
                 shrink: true,
                 drop: 2,
                 sortValue: (r) => tsKey(r.scheduled_at),
@@ -1073,6 +1078,7 @@ function OneSchedule({
             columns={[
               {
                 key: "fired",
+                align: "right",
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -524,10 +525,8 @@ func TestUnassignedWorkLandsOnTheProjectsDefaultAssignee(t *testing.T) {
 		if row := r.task(t, id).Task; row.Assignee != "" || got.Assignee != "" {
 			t.Errorf("%s: filed to %q (reported %q), want triage", name, row.Assignee, got.Assignee)
 		}
-		if !slices.ContainsFunc(got.Warnings, func(w string) bool {
-			return strings.Contains(w, `"bo"`) && strings.Contains(w, "default_assignee")
-		}) {
-			t.Errorf("%s: the writer was not told the default was skipped: %v", name, got.Warnings)
+		if !slices.Contains(got.Caveats, caveat.DefaultAssigneeGone("ENG", "bo")) {
+			t.Errorf("%s: the writer was not told the default was skipped: %+v", name, got.Caveats)
 		}
 	}
 }

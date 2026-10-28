@@ -19,11 +19,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Projects } from "./Projects.tsx";
-import { Router } from "~/app/router.tsx";
-import { peekHref } from "~/app/frame/peekAddress.ts";
+import { Router, href } from "~/app/router.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkProjectRow } from "~/protocol/index.ts";
-import { targetLabel } from "~/lib/work.ts";
+import { projectPath, targetLabel } from "~/lib/work.ts";
 import { withDerived } from "~/test/org.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 
@@ -155,33 +154,50 @@ test("the project count is the answer's total, and a short page says so", async 
   expect(screen.queryByText(/Counts cover the/)).toBeNull();
 });
 
-// A ROW OPENS THE PEEK, which is the question a directory is read with — "is
-// this the one I meant". The handler ignored its event, so the browser followed
-// the row's own anchor straight afterwards: the rail was opened and destroyed
-// by one click and the reader landed on the project's page every time.
-test("a plain click peeks beside the list rather than leaving it", async () => {
+// A ROW OPENS THE PROJECT. A project is a place a reader goes into, and its
+// page is its task list; the row used to open the peek, which left the work
+// itself one more press away on every visit.
+test("a plain click on a project row goes into the project, and opens no peek", async () => {
   location.hash = "#/worklet";
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
 
-  // THE HREF IS THE FRAME'S OWN ADDRESS for the object, which is what the
-  // peek's `Open ↗` is built from too: a row and the panel it opens can never
-  // name different pages.
+  // THE ROW IS A REAL LINK TO THE PROJECT'S PAGE, so a plain click navigates
+  // and every way a browser opens a link elsewhere keeps working.
   const link = container.querySelector<HTMLAnchorElement>("a.crewlet-data-grid__row-link");
-  expect(link?.getAttribute("href")).toBe(peekHref({ kind: "project", id: "ENG" }));
+  expect(link?.getAttribute("href")).toBe(href(projectPath("ENG")));
 
   const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
   link?.dispatchEvent(plain);
-  expect(plain.defaultPrevented).toBe(true);
-  expect(peeked()).toBe("project:ENG");
-  expect(location.hash.split("?")[0]).toBe("#/worklet");
+  // NOTHING TAKES THE CLICK FROM THE BROWSER, and nothing opens beside it.
+  expect(plain.defaultPrevented).toBe(false);
+  expect(peeked()).toBeNull();
+});
 
-  // AND A MODIFIED CLICK FALLS THROUGH to the browser, or the anchor is a lie:
-  // ⌘-click, middle-click and "copy link address" are what it is there for.
-  const meta = new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true });
-  link?.dispatchEvent(meta);
-  expect(meta.defaultPrevented).toBe(false);
+// AND FROM THE KEYBOARD: `j` puts the cursor on a project and Enter goes into
+// it, as a click does. The row's open key used to need a handler, and with the
+// peek gone the directory had none, so Enter did nothing.
+test("j then Enter goes into the project the cursor is on", async () => {
+  location.hash = "#/worklet";
+  Element.prototype.scrollIntoView = () => {};
+  serving({ work_projects: { projects: [project()], total: 1, complete: true } });
+  mount();
+  await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
+  const followed: (string | null)[] = [];
+  const watch = (event: MouseEvent) => {
+    followed.push((event.target as Element).closest("a")?.getAttribute("href") ?? null);
+    event.preventDefault();
+  };
+  document.addEventListener("click", watch);
+  try {
+    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(window, { key: "Enter" });
+  } finally {
+    document.removeEventListener("click", watch);
+  }
+  expect(followed).toEqual([href(projectPath("ENG"))]);
+  expect(peeked()).toBeNull();
 });
 
 // THE NINTH COLUMN. It was declared `optional`, and on a screen with no Display

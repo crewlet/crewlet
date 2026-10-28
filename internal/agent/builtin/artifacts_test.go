@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // artifactRig is the artifacts tools registered for a seat over fakes, behind
@@ -554,9 +555,9 @@ func TestTheTurnNamesEveryPublish(t *testing.T) {
 		t.Fatalf("a re-run turn's publish was named %q then %q, want one operation", keys[0], keys[1])
 	}
 	// A, THEN B, THEN A AGAIN in one run is three publishes.
-	first.CallLog().Record(builtin.PublishArtifactTool, args)
-	first.CallLog().Record(builtin.PublishArtifactTool, map[string]any{
-		"artifact": h.ID.String(), "base_version": 2, "content": "z"})
+	first.CallLog().Record(builtin.PublishArtifactTool, toolargs.Of(nil, args))
+	first.CallLog().Record(builtin.PublishArtifactTool, toolargs.Of(nil, map[string]any{
+		"artifact": h.ID.String(), "base_version": 2, "content": "z"}))
 	r.call(t, first, builtin.PublishArtifactTool, args)
 	if r.f.calls[2].OpKey == keys[0] {
 		t.Error("the same content published again after another publish reused " +
@@ -710,7 +711,7 @@ func TestAnArtifactWriteWhoseOutcomeIsUnknownIsNotReportedDone(t *testing.T) {
 	}
 }
 
-// EVERY WRITE IS A SHARED ONE TO THE SUB-AGENT GUARD, and the four reads are
+// EVERY WRITE IS A SHARED ONE TO THE SUB-AGENT GUARD, and the five reads are
 // reads, so a worker reads artifacts (and the company's brand) and writes none.
 func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 	t.Parallel()
@@ -721,7 +722,8 @@ func TestAWorkerReadsArtifactsAndWritesNone(t *testing.T) {
 			t.Fatalf("%s is not registered", name)
 		}
 		read := name == builtin.ListArtifactsTool || name == builtin.GetArtifactTool ||
-			name == builtin.DashboardSourcesTool || name == builtin.CompanyBrandTool
+			name == builtin.DashboardSourcesTool || name == builtin.ArtifactFormatTool ||
+			name == builtin.CompanyBrandTool
 		if mcp.WritesToSharedSurface(entry.Annotations) == read {
 			t.Errorf("%s: WritesToSharedSurface = %v", name, !read)
 		}

@@ -35,10 +35,20 @@
  *
  * # What is done is shown, then the next item opens
  *
- * An answered question or run stays in its place in the list, struck through,
- * and its pane shows what was answered; a read or snoozed update shows its new
- * state. A moment later (`ADVANCE_MS`) the next item opens, unless the reader
- * has already moved on.
+ * An answered question or run stays in its place in Needs you until the
+ * reader leaves the screen, marked Answered in its head with the answer under
+ * the question, and its pane shows what was answered; a read or snoozed
+ * update shows its new state. A moment later (`ADVANCE_MS`) the next item
+ * opens, unless the reader has already moved on.
+ *
+ * # What was answered before stays to be looked back at
+ *
+ * The asks put to the reader and closed in the last week
+ * (`answered_decisions`, by them or by somebody else) are a closed, counted
+ * Answered group after Updates. Opened, its rows step with `j` and `k` like
+ * any other; a row answered on this visit is in Needs you instead, never
+ * twice. An answered ask opens in the pane with who answered it and what the
+ * asker has done with it since.
  *
  * # Every mark is a gesture, made as you
  *
@@ -74,13 +84,16 @@ import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
-import { InboxColumn, taskTitleOf, titleOf } from "./InboxColumn.tsx";
+import { InboxColumn, taskTitleOf, titleOf, type Settled as Given } from "./InboxColumn.tsx";
+import type { AskAnswer } from "~/components/writes.tsx";
 import { InboxPane } from "./InboxPane.tsx";
 import { usePagedInbox } from "./pages.tsx";
 import {
+  answeredRows,
   earlierOf,
   inboxQuiet,
   inboxResources,
+  inboxSelection,
   inboxRows,
   nextAfter,
   noticeRows,
@@ -104,9 +117,8 @@ const INBOX_POLL_MS = 30_000;
  */
 export const ADVANCE_MS = 700;
 
-/** A row answered here: how, and where it stood in Needs you. */
-interface Settled {
-  label: string;
+/** A row answered here: how and with what, and where it stood in Needs you. */
+interface Settled extends Given {
   row: InboxRow;
   at: number;
 }
@@ -194,6 +206,13 @@ export function Inbox() {
     enabled: bound,
     pollMs: INBOX_POLL_MS,
   });
+  // WHAT WAS ANSWERED LATELY, Worklet's like the asks themselves: elsewhere
+  // the engine keeps none to list.
+  const answeredRead = useQuery("answered_decisions", undefined, {
+    enabled: notices,
+    pollMs: INBOX_POLL_MS,
+  });
+  const [answeredOpen, setAnsweredOpen] = useState(false);
   // THE SNOOZE BOUND, so a preset the engine would refuse is never offered.
   const person = useQuery("work_person", notices ? { handle: owner } : undefined, {
     enabled: notices,
@@ -217,19 +236,27 @@ export function Inbox() {
 
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
   const needs = useMemo(() => keepSettled(rows.needs, settled), [rows.needs, settled]);
-  // WHAT NEEDS YOU IS ABOUT, named for the assistant: the screen's list is
-  // built here and no route answers it, so a question asked on this screen
-  // reads these records rather than the task notices alone.
-  useAssistantContext({ resources: inboxResources(needs) });
+  // ANSWERED BEFORE THIS VISIT: a row answered here is in Needs you, never
+  // in both places.
+  const answered = useMemo(
+    () => answeredRows(answeredRead.data).filter((r) => !settled.has(r.key)),
+    [answeredRead.data, settled],
+  );
   const snoozedRows = snoozedOpen && snoozed.notices ? noticeRows(snoozed.notices) : null;
   const earlierRows =
     earlierOpen && earlier.notices ? noticeRows(earlierOf(earlier.notices)) : null;
   const order: InboxRow[] = [
     ...needs,
     ...rows.updates,
+    ...(answeredOpen ? answered : []),
     ...(snoozedRows ?? []),
     ...(earlierRows ?? []),
   ];
+  // AN ANSWERED ROW THE ADDRESS NAMES OPENS ITS GROUP, so the open row is
+  // never one the list is hiding: a link to an answer, or a return to one.
+  useEffect(() => {
+    if (open && !answeredOpen && answered.some((r) => r.key === open)) setAnsweredOpen(true);
+  }, [open, answeredOpen, answered]);
 
   // THE OPEN ROW: the one the URL names, or, beside the list (never in one
   // pane, where the pane replaces it), the first one not yet dealt with, so the pane
@@ -238,12 +265,22 @@ export function Inbox() {
   // until the next one opens: what happened to it is what the pane shows.
   const held = useRef<InboxRow | null>(null);
   const named =
-    order.find((r) => r.key === open) ?? (open && held.current?.key === open ? held.current : null);
+    order.find((r) => r.key === open) ??
+    answered.find((r) => r.key === open) ??
+    (open && held.current?.key === open ? held.current : null);
   const selected =
-    named ?? (single ? null : (order.find((r) => !settled.has(r.key)) ?? order[0] ?? null));
+    named ??
+    (single
+      ? null
+      : (order.find((r) => r.kind !== "answered" && !settled.has(r.key)) ?? order[0] ?? null));
   useEffect(() => {
     if (selected) held.current = selected;
   }, [selected]);
+  // WHAT NEEDS YOU IS ABOUT, named for the assistant: the screen's list is
+  // built here and no route answers it, so a question asked on this screen
+  // reads these records rather than the task notices alone. The row the
+  // reader opened is its selection, so a brief asked now is of that row.
+  useAssistantContext({ resources: inboxResources(needs), selection: inboxSelection(named) });
 
   const openRow = useCallback((key: string) => nav.filter({ row: key }), [nav]);
 
@@ -254,13 +291,15 @@ export function Inbox() {
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const settle = useCallback(
-    (row: InboxRow, label: string | null) => {
+    (row: InboxRow, label: string | null, answer?: AskAnswer) => {
       const before = live.current.order.map((r) => r.key);
       if (label) {
         const at = live.current.order
-          .filter((r) => r.kind !== "notice")
+          .filter((r) => r.kind !== "notice" && r.kind !== "answered")
           .findIndex((r) => r.key === row.key);
-        setSettled((was) => new Map(was).set(row.key, { label, row, at: Math.max(0, at) }));
+        const given: Settled = { label, row, at: Math.max(0, at) };
+        if (answer) given.answer = answer;
+        setSettled((was) => new Map(was).set(row.key, given));
       }
       // NAMED FIRST, so the row stays open while it leaves the list.
       if (live.current.open !== row.key) nav.filter({ row: row.key });
@@ -269,11 +308,16 @@ export function Inbox() {
         const { open: now, order: after, settled: done } = live.current;
         // THE READER MOVED ON: the advance is theirs now, not this one's.
         if (now !== row.key) return;
+        // NEVER INTO WHAT WAS ANSWERED BEFORE: the next item is the next
+        // thing to deal with.
         const next = nextAfter(
           row.key,
           before,
           after.map((r) => r.key),
-          new Set(done.keys()),
+          new Set([
+            ...done.keys(),
+            ...after.filter((r) => r.kind === "answered").map((r) => r.key),
+          ]),
         );
         if (next) nav.filter({ row: next });
       }, ADVANCE_MS);
@@ -336,8 +380,14 @@ export function Inbox() {
   });
   const showList = !single || !named;
   const showPane = !single || named !== null;
-  const settledLabels = useMemo(
-    () => new Map([...settled].map(([key, s]) => [key, s.label] as const)),
+  const given = useMemo(
+    () =>
+      new Map(
+        [...settled].map(
+          ([key, s]) =>
+            [key, s.answer ? { label: s.label, answer: s.answer } : { label: s.label }] as const,
+        ),
+      ),
     [settled],
   );
 
@@ -393,7 +443,9 @@ export function Inbox() {
               onOpenChange: setEarlierOpen,
             }}
             onEarlierMore={earlier.next}
-            settled={settledLabels}
+            settled={given}
+            answered={{ rows: answered, open: answeredOpen, onOpenChange: setAnsweredOpen }}
+            reader={owner}
             selected={selected?.key ?? ""}
             onOpen={openRow}
             titles={titles}
@@ -407,7 +459,11 @@ export function Inbox() {
             refusal={
               // A READ THAT FAILED IS SAID, never drawn as a quiet list: each
               // read's own refusal, where the rows it would have given go.
-              (updatesRead.error || decisions.error || snoozed.error || earlier.error) && (
+              (updatesRead.error ||
+                decisions.error ||
+                answeredRead.error ||
+                snoozed.error ||
+                earlier.error) && (
                 <>
                   <QueryState
                     error={updatesRead.error}
@@ -421,6 +477,14 @@ export function Inbox() {
                     error={decisions.error}
                     refusal={decisions.refusal}
                     detail={decisions.detail}
+                    loading={false}
+                  >
+                    {null}
+                  </QueryState>
+                  <QueryState
+                    error={answeredRead.error}
+                    refusal={answeredRead.refusal}
+                    detail={answeredRead.detail}
                     loading={false}
                   >
                     {null}
@@ -450,7 +514,7 @@ export function Inbox() {
               selected ? (titleOf(titles, rowItem(selected)) ?? taskTitleOf(selected)) : undefined
             }
             onBack={single ? () => nav.filter({ row: null }) : undefined}
-            onSettled={(label) => selected && settle(selected, label)}
+            onSettled={(label, answer) => selected && settle(selected, label, answer)}
           />
         )}
       </div>

@@ -794,6 +794,14 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil || s.Sandbox != nil {
 		r.Register("decisions", Everybody(), s.decisions)
 	}
+	// WHAT A PERSON DECIDED LATELY, the other half of `decisions` and
+	// scoped as it is: the asks put to them and closed, by them or by
+	// somebody else. The tracker's alone, since a parked run that was
+	// answered is gone from the sandbox; and everybody's, since a person's
+	// own asks need no tracker (section 5a of ADR-0033).
+	if s.Work != nil {
+		r.Register("answered_decisions", Everybody(), s.answeredDecisions)
+	}
 	if s.Pages != nil {
 		r.Register("pages", Requires(iam.GrantDoclet), s.pageList)
 		r.Register("page", Requires(iam.GrantDoclet), s.page)

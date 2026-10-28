@@ -3,7 +3,9 @@ package wire
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -21,8 +23,11 @@ type Card struct {
 	OpenInApp *OpenInAppCard `json:"open_in_app,omitempty"`
 	Error     *ErrorCard     `json:"error,omitempty"`
 	Notice    *NoticeCard    `json:"notice,omitempty"`
+	Oversize  *OversizeCard  `json:"oversize,omitempty"`
 	// --- deep work (im-deep) ---
 	File *FileCard `json:"file,omitempty"`
+	// Brief is a brief turn's answer ([TurnBrief]).
+	Brief *BriefCard `json:"brief,omitempty"`
 }
 
 // TableCard is rows from a read.
@@ -37,9 +42,14 @@ type TableCard struct {
 	Total []any   `json:"total,omitempty"`
 	// RowCount is the rows the read answered, which is more than Rows
 	// holds when Truncated.
-	RowCount  int       `json:"row_count"`
-	Truncated bool      `json:"truncated"`
-	AsOf      time.Time `json:"as_of"`
+	RowCount  int  `json:"row_count"`
+	Truncated bool `json:"truncated"`
+	// More is a read whose answer says rows lie past the page it read (a
+	// cursor, a "has more"), so RowCount is a page and never the total: the
+	// card's screen shows the rest. The drawer says so on the card itself
+	// rather than in a notice beside it (ADR-0061).
+	More bool      `json:"more,omitempty"`
+	AsOf time.Time `json:"as_of"`
 	// Exports are the stored snapshot's downloads, re-checked against the
 	// person's ownership and apps on every download.
 	Exports *Exports `json:"exports,omitempty"`
@@ -84,15 +94,30 @@ type Link struct {
 type EntityCard struct {
 	// Kind is the dashboard object the record is, absent for a record that
 	// is none of them: a generic read's answer, which is the API's.
-	Kind     ResourceKind `json:"kind,omitempty"`
-	ID       string       `json:"id"`
-	Title    string       `json:"title"`
-	Subtitle string       `json:"subtitle,omitempty"`
-	Facts    []Fact       `json:"facts,omitempty"`
+	Kind ResourceKind `json:"kind,omitempty"`
+	ID   string       `json:"id"`
+	// Key is the short name the record is written by in prose, where it has
+	// one: a task's key ("GOP-11"), a project's ("GOP"). The drawer makes the
+	// answer's first mention of it the record's chip. A record with no key is
+	// matched by its Title, and only where the title is a name a person writes
+	// (a seat's, a team's), never a task's sentence (dashboard
+	// app/assistant/mentions.ts). A seat has none: the answer names a seat by
+	// its name, never its handle.
+	Key      string `json:"key,omitempty"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle,omitempty"`
+	Facts    []Fact `json:"facts,omitempty"`
 	// Text is a body the record carries, rendered in the restricted
 	// Markdown subset: no images, no raw HTML, no autolinks.
 	Text  string       `json:"text,omitempty"`
 	Items []EntityItem `json:"items,omitempty"`
+	// ItemsTotal is how many items the record holds where Items is only the
+	// first of them; absent where Items is the whole list.
+	ItemsTotal int `json:"items_total,omitempty"`
+	// ItemsMore is a record whose answer says items lie past the page it
+	// read (a thread's older comments), so Items is a page and never the
+	// whole list: the record's screen shows the rest (ADR-0061).
+	ItemsMore bool `json:"items_more,omitempty"`
 	// ItemsNoun is what one item and several are called ("policy",
 	// "policies"), so the drawer can say how many a folded card holds. Absent
 	// on a card with no list, and on one stored before it was carried.
@@ -278,6 +303,22 @@ type NoticeCard struct {
 	Text string     `json:"text"`
 }
 
+// OversizeCard is a read whose answer was past what one step reads, so none
+// of it is shown: what it read, where all of it is, and what would narrow it.
+// The drawer lists it with the turn's other reads (ADR-0061), never as a
+// result.
+type OversizeCard struct {
+	// Title is what the read was, as its card would have been titled
+	// ("Matching tasks, \"brand\"") or its step said ("Read this agent").
+	Title string `json:"title"`
+	// Open is the screen that shows the whole of it, where the engine's link
+	// table has one the read names.
+	Open *Link `json:"open,omitempty"`
+	// Narrow names what the read takes that would narrow it, in the words a
+	// person reads ("project", "status"), where it takes any.
+	Narrow []string `json:"narrow,omitempty"`
+}
+
 // bodies names each kind's body as set or not.
 func (c Card) bodies() map[CardKind]bool {
 	return map[CardKind]bool{
@@ -287,7 +328,9 @@ func (c Card) bodies() map[CardKind]bool {
 		CardOpenInApp: c.OpenInApp != nil,
 		CardError:     c.Error != nil,
 		CardNotice:    c.Notice != nil,
+		CardOversize:  c.Oversize != nil,
 		CardFile:      c.File != nil,
+		CardBrief:     c.Brief != nil,
 	}
 }
 
@@ -341,6 +384,12 @@ func (c Card) Validate() error {
 		}
 	case CardFile:
 		return c.File.validate()
+	case CardBrief:
+		return c.Brief.Validate()
+	case CardOversize:
+		if c.Oversize.Title == "" {
+			return fmt.Errorf("%w: an oversize card names what it read", ErrInvalid)
+		}
 	case CardNotice:
 		if !c.Notice.Tone.Valid() {
 			return fmt.Errorf("%w: notice tone %q is not one of %v", ErrInvalid,
@@ -417,6 +466,204 @@ func (p *ProposalCard) validate() error {
 		}
 	}
 	return nil
+}
+
+// BriefCard is a brief: what the page or its open record is about, and the
+// things the person has to do, ranked, each with the one press that deals
+// with it.
+//
+// THE VERDICT IS NOT A FIELD. Whether anything needs the person is the
+// number of rows ([BriefCard.Verdict]), so no writer can put "nothing needs
+// you" beside a row that needs them. The first row is the recommendation: a
+// separate next step would say it again.
+//
+// THE MODEL WRITES THE WORDS, THE ENGINE EVERYTHING ELSE. Each row's record is
+// one this turn read and resolved for the person, its address is the link
+// table's, its danger tone is a fact the engine read, and an action can only
+// open that address or ask a question. A brief never writes.
+type BriefCard struct {
+	// Scope is what the brief covers: the page, or the one record it has
+	// open.
+	Scope BriefScope `json:"scope"`
+	// About is what the page or record is about right now, in one line.
+	About string `json:"about"`
+	// Needs are what the person has to do, most pressing first, at most
+	// [BriefMaxNeeds]; none is "Nothing needs you".
+	Needs []BriefNeed `json:"needs"`
+	// Context is one fact from elsewhere that bears on what to do, absent
+	// where none does.
+	Context string `json:"context,omitempty"`
+	// FollowUps are questions to ask next, at most [BriefMaxFollowUps].
+	FollowUps []string `json:"follow_ups"`
+	// AsOf is when the engine finished reading for it.
+	AsOf time.Time `json:"as_of"`
+}
+
+// Verdict is whether anything needs the person, in the words the
+// conversation the model re-reads says it: derived from the rows, never
+// written.
+func (b *BriefCard) Verdict() string {
+	switch n := len(b.Needs); n {
+	case 0:
+		return "Nothing needs you"
+	case 1:
+		return "1 thing needs you"
+	default:
+		return fmt.Sprintf("%d things need you", n)
+	}
+}
+
+// BriefScope is what a brief covers: the screen, and the record it has open
+// where the brief is of that one record.
+type BriefScope struct {
+	Screen string `json:"screen"`
+	// Title is the page's chip ("Worklet › Tasks").
+	Title string `json:"title"`
+	// Record is the open record the brief is limited to, absent for a brief
+	// of the whole page.
+	Record *ResourceRef `json:"record,omitempty"`
+}
+
+// BriefNeed is one thing the person has to do, citing its record.
+type BriefNeed struct {
+	Ref ResourceRef `json:"ref"`
+	// Text is what to do, as an instruction naming the record.
+	Text string `json:"text"`
+	// Detail is why now, in one fact.
+	Detail string       `json:"detail,omitempty"`
+	Tone   BriefTone    `json:"tone"`
+	Action *BriefAction `json:"action"`
+}
+
+// BriefAction is the one press a row offers: open a record's screen at the
+// address the engine built, or ask a question.
+type BriefAction struct {
+	Kind  BriefActionKind `json:"kind"`
+	Label string          `json:"label"`
+	// Link is an open action's address, from the link table.
+	Link *Link `json:"link,omitempty"`
+	// Question is an ask action's question.
+	Question string `json:"question,omitempty"`
+}
+
+// The bounds on a brief, in characters: each line one glance in a 420 pixel
+// drawer (about 60 characters a line at the card's size), so the about line
+// and a row's instruction are at most two lines, a row's reason and every
+// question one or two. Three rows is a short list the reader takes in at
+// once; two follow-ups are the next questions, not a menu. Together they draw
+// at most [BriefBudgetRunes] characters of the model's words, where the shape
+// before them allowed 1,520.
+const (
+	BriefMaxNeeds         = 3
+	BriefMaxFollowUps     = 2
+	BriefAboutMaxRunes    = 90
+	BriefTextMaxRunes     = 80
+	BriefDetailMaxRunes   = 60
+	BriefContextMaxRunes  = 100
+	BriefQuestionMaxRunes = 80
+	briefLabelMaxRunes    = 40
+)
+
+// BriefBudgetRunes is the most characters of the model's words a brief
+// draws, every cap at once: the about line, three rows of an instruction and
+// a reason, the context line and two follow-ups (90 + 3 × (80 + 60) + 100 +
+// 2 × 80). An ask's question is not counted: it is asked, never drawn. A cap
+// raised past this budget is a brief made longer, and a test refuses it until
+// the budget is raised on purpose.
+const BriefBudgetRunes = 770
+
+// Validate reports what is wrong with a brief: its bounds, every closed set,
+// and that each row carries the one action its kind needs.
+func (b *BriefCard) Validate() error {
+	switch {
+	case !screenPattern.MatchString(b.Scope.Screen):
+		return fmt.Errorf("%w: a brief's scope screen %q is not a screen name", ErrInvalid,
+			b.Scope.Screen)
+	case !briefText(b.Scope.Title, pageTitleMaxRunes):
+		return fmt.Errorf("%w: a brief's scope title is not one line of at most %d characters",
+			ErrInvalid, pageTitleMaxRunes)
+	case b.About == "" || !briefText(b.About, BriefAboutMaxRunes):
+		return fmt.Errorf("%w: a brief's about is not one line of 1 to %d characters",
+			ErrInvalid, BriefAboutMaxRunes)
+	case !briefText(b.Context, BriefContextMaxRunes):
+		return fmt.Errorf("%w: a brief's context is not one line of at most %d characters",
+			ErrInvalid, BriefContextMaxRunes)
+	case len(b.Needs) > BriefMaxNeeds:
+		return fmt.Errorf("%w: a brief lists %d needs, over %d", ErrInvalid, len(b.Needs),
+			BriefMaxNeeds)
+	case len(b.FollowUps) > BriefMaxFollowUps:
+		return fmt.Errorf("%w: a brief offers %d follow-ups, over %d", ErrInvalid,
+			len(b.FollowUps), BriefMaxFollowUps)
+	case b.AsOf.IsZero():
+		return fmt.Errorf("%w: a brief says no as_of", ErrInvalid)
+	}
+	if b.Scope.Record != nil {
+		if err := b.Scope.Record.validate(); err != nil {
+			return err
+		}
+	}
+	cited := map[ResourceRef]bool{}
+	for i, n := range b.Needs {
+		switch {
+		case cited[n.Ref]:
+			return fmt.Errorf("%w: brief need %d cites %s %s, which an earlier need cites",
+				ErrInvalid, i, n.Ref.Kind, n.Ref.ID)
+		case n.Text == "" || !briefText(n.Text, BriefTextMaxRunes):
+			return fmt.Errorf("%w: brief need %d is not one line of 1 to %d characters",
+				ErrInvalid, i, BriefTextMaxRunes)
+		case !briefText(n.Detail, BriefDetailMaxRunes):
+			return fmt.Errorf("%w: brief need %d's detail is not one line of at most %d "+
+				"characters", ErrInvalid, i, BriefDetailMaxRunes)
+		case !n.Tone.Valid():
+			return fmt.Errorf("%w: brief need %d tone %q is not one of %v", ErrInvalid, i,
+				n.Tone, BriefTones)
+		case n.Action == nil:
+			return fmt.Errorf("%w: brief need %d offers no action", ErrInvalid, i)
+		}
+		if err := n.Ref.validate(); err != nil {
+			return err
+		}
+		if err := n.Action.validate(); err != nil {
+			return fmt.Errorf("%w (brief need %d)", err, i)
+		}
+		cited[n.Ref] = true
+	}
+	for i, q := range b.FollowUps {
+		if q == "" || !briefText(q, BriefQuestionMaxRunes) {
+			return fmt.Errorf("%w: brief follow-up %d is not one line of 1 to %d characters",
+				ErrInvalid, i, BriefQuestionMaxRunes)
+		}
+	}
+	return nil
+}
+
+// validate holds an action to its kind: an open carries a link from the link
+// table's grammar and no question, an ask a question and no link.
+func (a *BriefAction) validate() error {
+	switch {
+	case !a.Kind.Valid():
+		return fmt.Errorf("%w: brief action kind %q is not one of %v", ErrInvalid, a.Kind,
+			BriefActionKinds)
+	case a.Label == "" || !briefText(a.Label, briefLabelMaxRunes):
+		return fmt.Errorf("%w: a brief action's label is not one line of 1 to %d characters",
+			ErrInvalid, briefLabelMaxRunes)
+	case a.Kind == BriefOpen && (a.Link == nil || a.Question != "" ||
+		!strings.HasPrefix(a.Link.Href, "#/") || !screenPattern.MatchString(a.Link.Screen)):
+		return fmt.Errorf("%w: a brief's open action carries a dashboard link and no question",
+			ErrInvalid)
+	case a.Kind == BriefAsk && (a.Link != nil || a.Question == "" ||
+		!briefText(a.Question, BriefQuestionMaxRunes)):
+		return fmt.Errorf("%w: a brief's ask action carries a question of at most %d "+
+			"characters and no link", ErrInvalid, BriefQuestionMaxRunes)
+	}
+	return nil
+}
+
+// briefText reports whether s is one plain line of at most max characters: a
+// brief's words are drawn as they are, never as Markdown, and never over
+// lines.
+func briefText(s string, max int) bool {
+	return plain(s, 4*max) && utf8.RuneCountInString(s) <= max
 }
 
 // DigestPrefix opens a proposal's digest on the wire.

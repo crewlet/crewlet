@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -199,6 +200,13 @@ type typedKind struct {
 	typ  reflect.Type
 }
 
+// rebuiltByPeer are the typed kinds that cannot be set field by field, each
+// with what rebuilds it. A refusal's person phrasing is the one: its words are
+// rebuilt only here ([caveat.SaidFromPeer]).
+var rebuiltByPeer = map[string]func(typedError) (reflect.Value, bool){
+	"caveat.Said": saidFromPeer,
+}
+
 // typedKinds are every error TYPE a caller may unwrap with errors.As, keyed
 // by the Go identifier for the reason [sentinels] is.
 //
@@ -245,6 +253,12 @@ var typedKinds = []typedKind{
 	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
+
+	// A REFUSAL'S WORDS FOR A PERSON, which a writer puts beside its
+	// error (ADR-0060): carried so a write refused on a data node answers
+	// a person on this one with them. A peer that does not send it is
+	// answered with the refusal code's own sentence, never a model's.
+	{"caveat.Said", reflect.TypeFor[*caveat.Said]()},
 }
 
 // wireError is an error as it crosses: what it says, and what it is.
@@ -406,6 +420,9 @@ func decodeTyped(t typedError) (reflect.Value, bool) {
 	if kind == nil {
 		return reflect.Value{}, false
 	}
+	if rebuilt, ok := rebuiltByPeer[t.Code]; ok {
+		return rebuilt(t)
+	}
 	structType := kind.typ
 	if structType.Kind() == reflect.Pointer {
 		structType = structType.Elem()
@@ -434,4 +451,21 @@ func decodeTyped(t typedError) (reflect.Value, bool) {
 		return ptr, true
 	}
 	return v, true
+}
+
+// saidFromPeer rebuilds a refusal's person phrasing a peer carried as
+// `{"Words": {"person": "<sentence>", "remedy": {...}}}`, or reports false for
+// one with no words or words it cannot read, which leave the refusal its
+// code's own sentence, as every field of a typed error this router cannot
+// decode does.
+func saidFromPeer(t typedError) (reflect.Value, bool) {
+	raw, ok := t.Fields["Words"]
+	if !ok {
+		return reflect.Value{}, false
+	}
+	said, err := caveat.SaidFromPeer(raw)
+	if err != nil || said == nil {
+		return reflect.Value{}, false
+	}
+	return reflect.ValueOf(said), true
 }

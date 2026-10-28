@@ -111,6 +111,69 @@ describe("the context a turn sends", () => {
   });
 });
 
+describe("what the person has open", () => {
+  const record = (
+    screen: string,
+    params: Record<string, string>,
+    query: Record<string, string> = {},
+  ): FramePage => ({
+    screen,
+    title: "Somewhere",
+    path: [screen],
+    params,
+    query,
+  });
+
+  test("a record's own screen has that record open, named by what a person calls it", () => {
+    expect(buildPageContext(record("item", { id: "ENG-7" }), null).selection).toEqual({
+      kind: "task",
+      id: "ENG-7",
+      noun: "task",
+    });
+    expect(buildPageContext(record("seat", { handle: "qa" }), null).selection).toEqual({
+      kind: "seat",
+      id: "qa",
+      noun: "agent",
+    });
+    expect(buildPageContext(record("artifact", { id: "a1" }), null).selection).toEqual({
+      kind: "artifact",
+      id: "a1",
+      noun: "artifact",
+    });
+  });
+
+  test("a list screen has nothing open until a row is peeked", () => {
+    expect(buildPageContext(PAGE, null).selection).toBeNull();
+    expect(buildPageContext({ ...PAGE, query: { peek: "item:ENG-3" } }, null).selection).toEqual({
+      kind: "task",
+      id: "ENG-3",
+      noun: "task",
+    });
+  });
+
+  test("a peek over a record's screen is what is open, and the screen's own word wins", () => {
+    const seat = record("seat", { handle: "qa" }, { peek: "item:ENG-3" });
+    expect(buildPageContext(seat, null).selection).toMatchObject({ kind: "task", id: "ENG-3" });
+    expect(
+      buildPageContext(PAGE, { selection: { kind: "task", id: "ENG-9", noun: "decision" } })
+        .selection,
+    ).toEqual({ kind: "task", id: "ENG-9", noun: "decision" });
+  });
+
+  test("a screen that says nothing is open is believed over the address", () => {
+    expect(
+      buildPageContext(record("item", { id: "ENG-7" }), { selection: null }).selection,
+    ).toBeNull();
+  });
+
+  test("a kind with no record noun is sent without one", () => {
+    expect(buildPageContext(PAGE, { selection: { kind: "unit", id: "core" } }).selection).toEqual({
+      kind: "unit",
+      id: "core",
+    });
+  });
+});
+
 describe("the registry", () => {
   test("says when the page moved, on the bus, with the new revision", () => {
     const heard: string[] = [];

@@ -812,6 +812,47 @@ func Catalogue() []Instrument {
 				"dispatcher breaking under the assistant.",
 		},
 		{
+			Name: AssistantBriefs, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Brief answers the assistant's model wrote, by what the engine did with " +
+				"each (`written`, `refused`). A `refused` answer is written again once; a " +
+				"climb in it is a model that cannot keep to the brief's shape.",
+		},
+		{
+			Name: ToolPolicyRefusalLoops, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool"},
+			Shows: "Runs of policy refusals a seat's or a worker's write tool answered in a " +
+				"row on one target until it reached the limit (internal/tools." +
+				"PolicyRefusalLimit), each counted once when it did, by `tool`: the model was " +
+				"told to stop retrying and raise a blocker. A climb names a tool whose " +
+				"contract the model cannot see or cannot meet.",
+		},
+		{
+			Name: ToolArgsOutsideSchema, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool"},
+			Shows: "Calls a first-party tool answered successfully although their arguments " +
+				"were outside the schema it advertises (an argument it does not take, a value " +
+				"outside its closed set or its bounds), by `tool`. The model was told on the " +
+				"answer. A tool that keeps climbing here is one whose schema and reading " +
+				"disagree, and the drift a later refusal at the surface would have to fix first.",
+		},
+		{
+			Name: AssistantBriefRowsDropped, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Records a brief cited (a row, or its recommendation's press) that the " +
+				"engine left out because the record was not in what its turn read, or " +
+				"the person may not open it. A steady climb is a model citing records " +
+				"it did not read.",
+		},
+		{
+			Name: AssistantCardsShownAsNotice, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"type"},
+			Shows: "Stored assistant cards read back as a plain notice because this build's " +
+				"contract refuses their shape, by card `type`. Expected for briefs recorded " +
+				"before the brief's current shape, and during a rolling upgrade when an older " +
+				"node reads a newer node's card. A climb outside both is a card written past " +
+				"its own validation.",
+		},
+		{
 			Name: AssistantStreamsActive, Kind: KindGauge, Unit: UnitCount,
 			Shows: "Assistant live streams this node is serving. Each holds a " +
 				"connection and a subscription to one turn's frame log; a count that " +

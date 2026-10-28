@@ -38,6 +38,7 @@ export const SESSION_QUERIES = {
     "work_flow",
     "company_feed",
     "decisions",
+    "answered_decisions",
   ],
   pages: ["pages", "page", "containers", "page_activity", "page_revision"],
 } as const;

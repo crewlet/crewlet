@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -245,12 +246,12 @@ func TestAnArgumentTheToolDoesNotReadIsRefusedByName(t *testing.T) {
 	}{
 		{"the old personal-view shape", http.MethodPost, "/worklet/views",
 			map[string]any{"owner": "ana", "container": "project:ENG",
-				"name": "Mine", "type": "list"}, `"owner"`},
+				"name": "Mine", "type": "list"}, "owner"},
 		{"a stray field on a create", http.MethodPost, "/worklet/items",
 			map[string]any{"title": "rotate the key", "project": "ENG",
-				"assigne": "ana"}, `"assigne"`},
+				"assigne": "ana"}, "assigne"},
 		{"a stray field on an edit", http.MethodPatch, "/worklet/items/ENG-1",
-			map[string]any{"status": "done", "stauts": "done"}, `"stauts"`},
+			map[string]any{"status": "done", "stauts": "done"}, "stauts"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -259,8 +260,10 @@ func TestAnArgumentTheToolDoesNotReadIsRefusedByName(t *testing.T) {
 			if got.status != http.StatusBadRequest {
 				t.Fatalf("answered %d, want 400: %v", got.status, got.body)
 			}
-			if !strings.Contains(got.detail(), c.named) {
-				t.Errorf("the refusal does not name %s: %s", c.named, got.detail())
+			// NAMED AS A FIELD, never in the tool's sentence, which is
+			// written for a model (ADR-0060).
+			if fields, _ := got.body[operator.KeyFields].([]any); !slices.Contains(fields, any(c.named)) {
+				t.Errorf("the refusal does not name %q: %v", c.named, got.body)
 			}
 			if len(r.writes.views)+len(r.writes.created)+len(r.writes.updates) != 0 {
 				t.Error("a request carrying an argument nothing reads was written")

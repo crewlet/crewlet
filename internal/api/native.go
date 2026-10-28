@@ -272,6 +272,15 @@ func (l liveWork) Decisions(ctx context.Context, q worklet.DecisionsQuery, now t
 	return r.Decisions(ctx, q, now, loc)
 }
 
+func (l liveWork) AnsweredAsks(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+	loc *time.Location) (worklet.AnsweredAnswer, error) {
+	r, err := l.reader()
+	if err != nil {
+		return worklet.AnsweredAnswer{}, err
+	}
+	return r.AnsweredAsks(ctx, q, now, loc)
+}
+
 func (l liveWork) TurnPlaces(ctx context.Context, runs []string,
 	fresh statelog.Freshness) (map[string]worklet.TurnPlace, error) {
 	r, err := l.reader()

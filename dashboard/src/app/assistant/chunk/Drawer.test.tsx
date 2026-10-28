@@ -70,8 +70,11 @@ afterEach(() => {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-/** The engine, as the drawer meets it: each request recorded and answered. */
-function engine() {
+/**
+ * The engine, as the drawer meets it: each request recorded and answered.
+ * `refusal`, where given, is how it answers the question itself.
+ */
+function engine(refusal?: () => Response | Promise<Response>) {
   const sent: { url: string; init: RequestInit }[] = [];
   vi.stubGlobal(
     "fetch",
@@ -93,6 +96,7 @@ function engine() {
         );
       }
       if (path.endsWith("/turns")) {
+        if (refusal) return refusal();
         return json(
           {
             turn_id: TURN,
@@ -182,7 +186,7 @@ test("a question is sent with its page, streamed, and drawn with every card the 
     "Fix the flaky sign-in test",
   );
   expect(screen.getAllByText("Worklet › Tasks").length).toBeGreaterThan(0);
-  expect(screen.getAllByText("Matching tasks").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^Matching tasks/).length).toBeGreaterThan(0);
   expect(screen.getAllByText("No open task covers it yet.").length).toBeGreaterThan(0);
   // A CHANGE WAITS ON THE PERSON, and the Ask button would say so.
   expect(assistantActivity()).toBe("waiting");
@@ -204,7 +208,7 @@ test("a follow-up typed fast under a turn with cards keeps every keystroke and r
     fireEvent.keyDown(box, { key: "Enter" });
   });
   await waitFor(() => expect(conversation().turns[0]?.phase).toBe("awaiting_approval"));
-  expect(screen.getAllByText("Matching tasks").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^Matching tasks/).length).toBeGreaterThan(0);
 
   // KEYSTROKES AS A BROWSER DELIVERS THEM WHEN THEY QUEUE UP: one native
   // input event after another, each flushed by React on its own, outside
@@ -600,4 +604,227 @@ test("an answer that ended between the clock's ticks never reads as in the futur
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("the home offers a brief of the page, and no list of its own of what waits", () => {
+  engine();
+  setFramePage({
+    screen: "worklet-tasks",
+    title: "Worklet › Tasks",
+    path: ["worklet", "tasks"],
+    params: {},
+    query: {},
+  });
+  mount();
+  expect(screen.getByRole("region", { name: "This page" })).toBeDefined();
+  expect(screen.getByRole("button", { name: /^Brief me on this page/ })).toBeDefined();
+  expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull();
+  expect(screen.getByRole("region", { name: "Anywhere in Crewlet" })).toBeDefined();
+});
+
+test("with a record open the row names it, and asks a brief of that record alone", async () => {
+  const sent = engine();
+  setFramePage({
+    screen: "item",
+    title: "Tasks › ENG-7",
+    path: ["worklet", "ENG-7"],
+    params: { id: "ENG-7" },
+    query: {},
+  });
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "half a question" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /^Brief me on this task/ }));
+  });
+  await waitFor(() =>
+    expect(sent.some((r) => new URL(r.url).pathname.endsWith("/turns"))).toBe(true),
+  );
+  const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
+  const body = JSON.parse(String(turn.init.body));
+  expect(body).toMatchObject({
+    mode: "brief",
+    input: { text: "Brief me on this task" },
+    page_context: { screen: "item", selection: { kind: "task", id: "ENG-7", noun: "task" } },
+  });
+  // WHAT THE READER WAS TYPING STAYS: a brief is not their question.
+  expect(box.value).toBe("half a question");
+});
+
+/** The golden's brief turn, and the engine that answers a brief with it. */
+const BRIEF_TURN = "b7d720ed-6183-5418-829b-8067fd903172";
+const BRIEF_CONVERSATION = "a51f5e8d-b74a-53fd-8dbc-db770396a8ad";
+const BRIEF = GOLDEN.split("\n\n")
+  .filter((block) => block.includes(`${BRIEF_TURN}.`))
+  .map((block) => `${block}\n\n`)
+  .join("");
+
+function briefEngine() {
+  const sent: { url: string; init: RequestInit }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      sent.push({ url, init });
+      const path = new URL(url).pathname;
+      if (path === "/assistant/conversations" && init.method === "POST") {
+        return json(
+          {
+            conversation: {
+              id: BRIEF_CONVERSATION,
+              title: "",
+              created_at: "2026-10-24T09:41:00Z",
+              updated_at: "2026-10-24T09:41:00Z",
+              last_activity_at: "2026-10-24T09:41:00Z",
+            },
+          },
+          201,
+        );
+      }
+      if (path.endsWith("/turns")) {
+        return json(
+          {
+            turn_id: BRIEF_TURN,
+            stream_url: `/assistant/conversations/${BRIEF_CONVERSATION}/stream?turn=${BRIEF_TURN}`,
+            after_seq: 0,
+          },
+          202,
+        );
+      }
+      if (path.endsWith("/stream")) {
+        return new Response(BRIEF, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return json({ error: "not_found" }, 404);
+    }),
+  );
+  return sent;
+}
+
+test("a brief is the conversation's first answer: its card, its press and its follow-ups", async () => {
+  const sent = briefEngine();
+  setFramePage({ screen: "inbox", title: "Inbox", path: ["inbox"], params: {}, query: {} });
+  mount();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /^Brief me on this page/ }));
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("completed"));
+  const turn = sent.find((r) => new URL(r.url).pathname.endsWith("/turns"))!;
+  expect(JSON.parse(String(turn.init.body))).toMatchObject({ mode: "brief" });
+  const brief = screen.getByRole("region", { name: "Brief 1 thing needs you" });
+  expect(brief.textContent).toContain("Answer ENG-133: test the store build");
+  expect(brief.textContent).toContain("Decision ENG-133");
+  expect(screen.getByRole("button", { name: "Open ENG-133" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "What did QA test last?" })).toBeDefined();
+});
+
+// THE NOTICE NEVER PROMISES WHAT THE DRAWER DOES NOT DO. A question the engine
+// turns away unsent goes back in the box, and only then does the notice say so;
+// only the person's own question limit holds the box shut, since a spent budget
+// clears the moment somebody raises the ceiling. The incident: a spent budget
+// said "your question is back in the box below" over an empty box, because the
+// sentence followed the wait and the restore followed one code.
+//
+// Mutation: put the question back for `assistant_busy` alone, or hold the box
+// for every refusal that names a wait, and a case fails.
+test.each([
+  {
+    name: "a spent budget",
+    answer: {
+      error: "budget_exhausted",
+      message: "The token budget for this window is spent.",
+      scope: "person",
+      window: "2026-10-24",
+      remedy: { setting: "assistant_token_budget" },
+    },
+    wait: "35160",
+    title: "Your own assistant budget for this window is spent.",
+    line: "It resets in 9h 46m, or as soon as the ceiling is raised.",
+    held: false,
+  },
+  {
+    name: "the person's question limit",
+    answer: { error: "assistant_busy", message: "Too many questions at once." },
+    wait: "30",
+    title: "Question limit reached.",
+    line: "You can ask again in 30s.",
+    held: true,
+  },
+])("$name puts the question back, says so, and holds the box only for a wait", async (c) => {
+  engine(
+    () =>
+      new Response(JSON.stringify(c.answer), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": c.wait },
+      }),
+  );
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Who spent most this week?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("refused"));
+
+  expect(box.value).toBe("Who spent most this week?");
+  expect(screen.getByText(c.title)).toBeDefined();
+  expect(document.body.textContent).toContain(`${c.line} Your question is back in the box below.`);
+  const send = screen.getByRole("button", { name: /send/i });
+  expect(send.getAttribute("aria-disabled") === "true").toBe(c.held);
+  expect(box.disabled).toBe(c.held);
+});
+
+// THE BOX IS NEVER FILLED OVER WHAT THE READER TYPED SINCE, and then the notice
+// does not claim the question is in it.
+test("a refused question is not put back over a new one, and the notice does not say it is", async () => {
+  let answer: (r: Response) => void = () => {};
+  engine(() => new Promise<Response>((r) => (answer = r)));
+  mount();
+  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Who spent most this week?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  // TYPED WHILE THE QUESTION WAS ON ITS WAY.
+  fireEvent.change(box, { target: { value: "And last week?" } });
+  await act(async () => {
+    answer(json({ error: "budget_exhausted", remedy: { setting: "company_token_budget" } }, 429));
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("refused"));
+  expect(box.value).toBe("And last week?");
+  expect(screen.getByText("The company's token budget for this window is spent.")).toBeDefined();
+  expect(document.body.textContent).not.toContain("back in the box");
+});
+
+// A QUESTION IS PUT BACK ONCE PER TURN, not once per drawer: closing the
+// drawer unmounts it, and a question the reader deleted must not come back
+// when they open it again. The notice still says where it went.
+//
+// Mutation: keep the decision in the drawer's own state, and the reopened box
+// holds the deleted question again.
+test("a restored question the reader deleted stays deleted when the drawer opens again", async () => {
+  engine(
+    () =>
+      new Response(
+        JSON.stringify({ error: "budget_exhausted", remedy: { setting: "company_token_budget" } }),
+        { status: 429, headers: { "Content-Type": "application/json", "Retry-After": "60" } },
+      ),
+  );
+  const first = mount();
+  const box = () =>
+    screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  fireEvent.change(box(), { target: { value: "Who spent most this week?" } });
+  await act(async () => {
+    fireEvent.keyDown(box(), { key: "Enter" });
+  });
+  await waitFor(() => expect(conversation().turns[0]?.phase).toBe("refused"));
+  expect(box().value).toBe("Who spent most this week?");
+  fireEvent.change(box(), { target: { value: "" } });
+
+  first.unmount();
+  mount();
+  await act(async () => {});
+  expect(box().value).toBe("");
+  expect(document.body.textContent).toContain("Your question is back in the box below.");
 });

@@ -126,6 +126,7 @@ type Answer = unknown | ((params: Record<string, unknown>) => Promise<unknown>);
 
 const QUIET: Record<string, Answer> = {
   decisions: { handle: "jane", items: [], total: 0, capped: false },
+  answered_decisions: { handle: "jane", items: [] },
   work_inbox: inboxOf([]),
   work_person: {
     handle: "jane",
@@ -293,7 +294,7 @@ describe("the list", () => {
     });
     await settle();
     const list = within(screen.getByRole("navigation", { name: "Inbox" }));
-    const needs = within(list.getByRole("region", { name: "Needs you" }));
+    const needs = within(list.getByRole("region", { name: /^Needs you/ }));
     const updates = within(list.getByRole("region", { name: "Updates" }));
     expect(needs.getAllByRole("listitem")).toHaveLength(1);
     // THE ASK'S NOTICE rides on its row; only the other notice is an update.
@@ -572,13 +573,53 @@ describe("the pane", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
     await settle();
-    // WHAT HAPPENED, FIRST: the open item shows its answer, and its row is
-    // struck through and read as answered.
+    // WHAT HAPPENED, FIRST: the open item shows its answer, and its row stays
+    // where it stood, marked Answered with the choice under the question,
+    // and read as answered. Never struck: every word stays legible.
     expect(location.hash).toContain("row=ask%3Ac-12");
-    const needs = within(screen.getByRole("region", { name: "Needs you" }));
-    expect(needs.getAllByRole("button", { name: /Answered$/ })).toHaveLength(1);
+    const region = screen.getByRole("region", { name: /^Needs you/ });
+    const needs = within(region);
+    const done = needs.getAllByRole("button", { name: /Answered$/ });
+    expect(done).toHaveLength(1);
+    expect(done[0]!.textContent).toContain("You chose Hold release");
+    expect(done[0]!.querySelector(".crewlet-inbox-row__status")?.textContent).toBe("Answered");
+    expect(done[0]!.querySelector(".crewlet-inbox-row__meta")).toBeNull();
+    // THE COUNT IS WHAT IS STILL OPEN.
+    expect(region.getAttribute("aria-labelledby")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Needs you, 1" })).toBe(region);
     await wait(ADVANCE_MS + 50);
     expect(location.hash).toContain("row=ask%3Ac-13");
+  });
+
+  test("a run answered in words stays in place with what was written under it", async () => {
+    location.hash = "#/inbox?row=run%3Aturn-7";
+    mount({
+      answers: {
+        decisions: decisionsOf({
+          kind: "run",
+          at: new Date(Date.now() - 5 * 60_000).toISOString(),
+          run: {
+            turn_id: "turn-7",
+            agent_handle: "cto",
+            status: "awaiting_clarification",
+            question: "May I delete the fixtures directory?",
+            audience_handles: ["jane"],
+            started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+            updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+          },
+        }),
+      },
+    });
+    await settle();
+    fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+      target: { value: "Yes, but keep the golden files." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+    await settle();
+    const row = within(screen.getByRole("region", { name: /^Needs you/ })).getByRole("button", {
+      name: /Answered$/,
+    });
+    expect(row.textContent).toContain("You replied “Yes, but keep the golden files.”");
   });
 
   // THE E-W9 LINE: only an ask that promised a channel says it posts to one.
@@ -928,4 +969,117 @@ test("an empty inbox says so once, in the list, and the pane holds a quiet line"
   expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
   expect(screen.queryByText("All clear")).toBeNull();
   expect(document.querySelector(".inbox-pane")?.textContent).toBe("New updates open here.");
+});
+
+/** An ask put to Jane and closed, as `answered_decisions` lists it. */
+function answeredItem(extra: Record<string, unknown> = {}) {
+  const ask = { ...askItem().ask, comment: "c-20", key: "LEAD-20", id: "t-20" };
+  return {
+    at: new Date(Date.now() - 60 * 60_000).toISOString(),
+    ask: { ...ask, open: false, answer_with: undefined },
+    answer: {
+      by: "maya",
+      by_kind: "human",
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      comment: "c-21",
+      choice: "ship",
+      body: "Ship anyway",
+    },
+    ...extra,
+  };
+}
+
+describe("what was answered", () => {
+  test("answers from before this visit wait in a closed, counted group after Updates", async () => {
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        answered_decisions: { handle: "jane", items: [answeredItem()] },
+        work_inbox: inboxes({ unread: [notice("r-2")] }),
+      },
+    });
+    await settle();
+    const list = within(screen.getByRole("navigation", { name: "Inbox" }));
+    const toggle = list.getByRole("button", { name: "Answered, 1" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // CLOSED: its rows are neither drawn nor stepped through.
+    expect(screen.queryByRole("button", { name: /Maya Ops chose/ })).toBeNull();
+    const groups = list.getAllByRole("region").map((g) => g.getAttribute("aria-labelledby"));
+    expect(groups).toHaveLength(3);
+    fireEvent.click(toggle);
+    await settle();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const row = within(list.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+      name: /Answered$/,
+    });
+    // WHO ANSWERED IS SAID: a colleague may answer what was put to you.
+    expect(row.textContent).toContain("Maya Ops chose Ship anyway");
+    // AND THE GROUP COMES AFTER UPDATES.
+    const order = list.getAllByRole("region").map((g) => g.textContent ?? "");
+    expect(order[1]).toMatch(/^Updates/);
+    expect(order[2]).toMatch(/^Answered/);
+  });
+
+  test("a link to an answered ask opens its group and its pane, with what happened next", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-20";
+    mount({
+      agents: [{ id: "cto", agent_id: "cto", handle: "cto", role: "CTO", activity: "idle" }],
+      answers: {
+        answered_decisions: {
+          handle: "jane",
+          items: [
+            answeredItem({
+              followed_up: {
+                at: new Date(Date.now() - 30 * 60_000).toISOString(),
+                kind: "status",
+                fields: { status: { from: "todo", to: "in_progress" } },
+              },
+            }),
+          ],
+        },
+      },
+    });
+    await settle();
+    await settle();
+    expect(screen.getByRole("button", { name: "Answered, 1" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    expect(byline()).toBe("CTO asked for your approval on LEAD-20 Q4 release plan");
+    expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toBe(
+      "Maya Ops chose Ship anyway",
+    );
+    expect(screen.getByText(/Maya Ops answered for you at/)).toBeTruthy();
+    const steps = within(screen.getByRole("list", { name: "What CTO did with the answer" }));
+    expect(steps.getByText("CTO acted on it")).toBeTruthy();
+    expect(steps.getByText(/In progress/)).toBeTruthy();
+    // NOTHING TO ANSWER AGAIN: the pane draws no options.
+    expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
+  });
+
+  test("a row answered here is in Needs you, never in the Answered group as well", async () => {
+    const mine = answeredItem({
+      ask: { ...askItem().ask, open: false },
+      answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
+    });
+    let answeredYet = false;
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        answered_decisions: () =>
+          Promise.resolve({ handle: "jane", items: answeredYet ? [mine] : [] }),
+      },
+    });
+    await settle();
+    answeredYet = true;
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    await settle();
+    expect(screen.queryByRole("button", { name: /^Answered, / })).toBeNull();
+    expect(
+      within(screen.getByRole("region", { name: /^Needs you/ })).getAllByRole("button", {
+        name: /Answered$/,
+      }),
+    ).toHaveLength(1);
+  });
 });

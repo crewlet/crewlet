@@ -7,12 +7,15 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  answerWords,
   askContext,
   askQuestion,
   earlierOf,
   firstSentence,
+  followThrough,
   inboxQuiet,
   inboxResources,
+  inboxSelection,
   inboxRows,
   nextAfter,
   noticeNote,
@@ -25,7 +28,13 @@ import {
   type InboxRow,
 } from "./model.ts";
 import type { DecisionSubject } from "~/lib/decisions.ts";
-import type { SandboxRun, WorkAskRow, WorkInboxNotice } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  AnsweredDecision,
+  SandboxRun,
+  WorkAskRow,
+  WorkInboxNotice,
+} from "~/protocol/index.ts";
 import { itemAddress } from "~/lib/work.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { withDerived } from "~/test/org.ts";
@@ -347,5 +356,150 @@ describe("what Needs you names for the assistant", () => {
       { kind: "seat", id: "qa" },
       { kind: "run", id: "turn-2" },
     ]);
+  });
+});
+
+describe("the row the reader opened, for the assistant", () => {
+  test("an ask or a parked run is a decision, an update its task, a stopped seat an agent", () => {
+    const ask = { kind: "ask", ask: { id: "t1", key: "FAIR-10" } };
+    const collided = { kind: "ask", ask: { id: "t9", key: "FAIR-1", key_collision: true } };
+    const run = { kind: "run", run: { turn_id: "turn-1" } };
+    const budget = { kind: "seat", seat: { row: { handle: "pm" } } };
+    const rows = [
+      { kind: "decision", key: "a", subject: ask, notices: [] },
+      { kind: "decision", key: "b", subject: collided, notices: [] },
+      { kind: "decision", key: "c", subject: run, notices: [] },
+      { kind: "decision", key: "d", subject: budget, notices: [] },
+      { kind: "condition", key: "e", item: { id: "stopped-y", subject: "seat", who: "qa" } },
+      { kind: "condition", key: "f", item: { id: "posture-draining", subject: "engine" } },
+      {
+        kind: "notice",
+        key: "g",
+        at: "2026-10-26T08:00:00Z",
+        notice: notice("g", { task: "t-3", subject_key: "FAIR-3" }),
+      },
+      {
+        kind: "answered",
+        key: "h",
+        at: "2026-10-26T08:00:00Z",
+        answered: { ask: { id: "t-4", key: "FAIR-4" } },
+      },
+    ] as unknown as InboxRow[];
+    expect(rows.map(inboxSelection)).toEqual([
+      { kind: "task", id: "FAIR-10", noun: "decision" },
+      { kind: "task", id: "t9", noun: "decision" },
+      { kind: "run", id: "turn-1", noun: "decision" },
+      { kind: "seat", id: "pm", noun: "agent" },
+      { kind: "seat", id: "qa", noun: "agent" },
+      null,
+      { kind: "task", id: "FAIR-3", noun: "update" },
+      { kind: "task", id: "FAIR-4", noun: "decision" },
+    ]);
+  });
+
+  test("no row opened is nothing selected: the Inbox is what a brief is of", () => {
+    expect(inboxSelection(null)).toBeNull();
+  });
+});
+
+describe("what was answered", () => {
+  const ask = {
+    id: "t-20",
+    key: "LEAD-20",
+    project: "LEAD",
+    title: "Q4 release plan",
+    type: "task",
+    status: "todo",
+    comment: "c-20",
+    asked_by: "cto",
+    asked_at: "2026-09-30T10:00:00Z",
+    body: "",
+    decision: {
+      question: "Hold?",
+      options: [
+        { id: "hold", label: "Hold release" },
+        { id: "ship", label: "Ship anyway" },
+      ],
+      recommended: "hold",
+      role: "approver" as const,
+    },
+    open: false,
+  };
+  const answered = (extra: Partial<AnsweredDecision> = {}): AnsweredDecision => ({
+    at: "2026-09-30T11:00:00Z",
+    ask: ask as AnsweredDecision["ask"],
+    answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "hold", body: "Hold release" },
+    ...extra,
+  });
+  const index = indexOrg(
+    withDerived({
+      name: "Nimbus",
+      roles: [
+        { name: "Jane Founder", handle: "jane", kind: "human" },
+        { name: "Maya Ops", handle: "maya", kind: "human" },
+        { name: "CTO", handle: "cto", kind: "agent" },
+      ],
+      units: [],
+    }) as never,
+  );
+
+  test("an answer says who gave it: you, or the colleague who answered for you", () => {
+    expect(answerWords(answered(), "jane", index)).toEqual({
+      who: "You",
+      verb: "chose",
+      said: "Hold release",
+      kind: "choice",
+      recommended: true,
+    });
+    const maya = answered({
+      answer: { by: "maya", by_kind: "human", at: "2026-09-30T11:00:00Z", body: "Not yet." },
+    });
+    expect(answerWords(maya, "jane", index)).toMatchObject({
+      who: "Maya Ops",
+      verb: "replied",
+      said: "Not yet.",
+      kind: "reply",
+    });
+    const resolved = answered({
+      answer: { by: "cto", at: "2026-09-30T11:00:00Z", body: "", resolved: true },
+    });
+    expect(answerWords(resolved, "jane", index).kind).toBe("resolved");
+  });
+
+  test("how far the asker has got: acted from the tracker, the rest from its seat now", () => {
+    const seat = (extra: Record<string, unknown>) =>
+      ({ handle: "cto", activity: "idle", ...extra }) as unknown as AgentRow;
+    expect(
+      followThrough(
+        answered({ followed_up: { at: "2026-09-30T11:30:00Z", kind: "status" } }),
+        seat({ paused: { at: "x" } }),
+      ),
+    ).toEqual({ state: "acted", at: "2026-09-30T11:30:00Z" });
+    expect(
+      followThrough(
+        answered(),
+        seat({
+          activity: "working",
+          turn: { work_item: { id: "t-20", key: "LEAD-20" }, started_at: "2026-09-30T11:05:00Z" },
+        }),
+      ),
+    ).toEqual({ state: "acting", at: "2026-09-30T11:05:00Z" });
+    // ON ANOTHER TASK IS NOT ON THIS ONE.
+    expect(
+      followThrough(
+        answered(),
+        seat({ activity: "working", turn: { work_item: { id: "t-9", key: "LEAD-9" } } }),
+      ),
+    ).toEqual({ state: "waiting" });
+    expect(followThrough(answered(), seat({ paused: { at: "x" } }))).toEqual({
+      state: "held",
+      reason: "paused",
+    });
+    expect(followThrough(answered(), seat({ activity: "stopped" }))).toEqual({
+      state: "held",
+      reason: "stopped",
+    });
+    // A PERSON WHO ASKED has no seat state to read.
+    expect(followThrough(answered(), undefined)).toBeNull();
   });
 });

@@ -136,23 +136,37 @@ func TestAnOptedInSeatsAppAsksForWorkflowWrites(t *testing.T) {
 	}
 }
 
-// AN APP WITH NOWHERE TO DELIVER IS CREATED SWITCHED OFF, not pointed at a
-// placeholder: an inactive hook is a state the operator can see, and a wrong
-// URL is one that looks healthy at GitHub and arrives nowhere.
-func TestAnAppWithNoAddressIsCreatedWithDeliveryOff(t *testing.T) {
+// AN APP GITHUB CANNOT DELIVER TO IS CREATED WITH NO WEBHOOK AND NO EVENTS.
+// GitHub validates the hook whether or not it is active: it refuses one with
+// no url, one at an address it cannot reach, and events with no hook. So the
+// only manifest it accepts from a local engine carries neither.
+func TestAnAppGitHubCannotReachIsCreatedWithNoWebhook(t *testing.T) {
 	t.Parallel()
-	off := github.BuildManifest(github.ManifestOptions{Seat: "s", Access: github.Access{Tier: github.TierReadOnly}})
-	if active, _ := off.HookAttributes["active"].(bool); active {
-		t.Error("an app with no delivery address was created active")
+	off := github.BuildManifest(github.ManifestOptions{
+		Seat: "s", Access: github.Access{Tier: github.TierReadOnly},
+		DeliveryURL: "http://localhost:8200/webhooks/github/s", DeliveryOff: true,
+	})
+	if off.HookAttributes != nil {
+		t.Errorf("hook = %v, want none: GitHub refuses an unreachable hook, active or not", off.HookAttributes)
 	}
-	if _, has := off.HookAttributes["url"]; has {
-		t.Error("an app with no delivery address was given one anyway")
+	if len(off.DefaultEvents) != 0 {
+		t.Errorf("events = %v, want none: GitHub refuses events with no hook", off.DefaultEvents)
+	}
+	if body, _ := json.Marshal(off); strings.Contains(string(body), "hook_attributes") ||
+		strings.Contains(string(body), "default_events") {
+		t.Errorf("the manifest sent to GitHub still names a hook or events: %s", body)
 	}
 	on := github.BuildManifest(github.ManifestOptions{
 		Seat: "s", Access: github.Access{Tier: github.TierReadOnly}, DeliveryURL: "https://e.example.com/w",
 	})
 	if active, _ := on.HookAttributes["active"].(bool); !active {
-		t.Error("an app with an address was created inactive")
+		t.Error("an app with a deliverable address was created inactive")
+	}
+	if on.HookAttributes["url"] != "https://e.example.com/w" {
+		t.Errorf("hook url = %v, want the delivery address", on.HookAttributes["url"])
+	}
+	if len(on.DefaultEvents) == 0 {
+		t.Error("an app with a deliverable address subscribes to nothing")
 	}
 }
 

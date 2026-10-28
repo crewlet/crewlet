@@ -42,7 +42,14 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
-import type { WorkAskRow, WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  AnsweredDecision,
+  AnsweredDecisionsAnswer,
+  WorkAskRow,
+  WorkInboxAnswer,
+  WorkInboxNotice,
+} from "~/protocol/index.ts";
 
 export type InboxRow =
   | {
@@ -54,12 +61,61 @@ export type InboxRow =
       notices: WorkInboxNotice[];
     }
   | { kind: "condition"; key: string; at?: string; item: Attention }
-  | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice };
+  | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice }
+  /**
+   * An ask put to the reader and closed in the last week, from
+   * `answered_decisions`. Keyed as its open row was ([subjectKey]), so the
+   * open row in the address names the same ask before and after its answer.
+   */
+  | { kind: "answered"; key: string; at: string; answered: AnsweredDecision };
 
 /** One record the Inbox shows, as the assistant's page context names it. */
 export interface InboxResource {
   kind: "task" | "run" | "seat";
   id: string;
+}
+
+/** The row the reader opened, as the assistant's selection names it: its record and what it is. */
+export interface InboxSelection extends InboxResource {
+  noun: "decision" | "update" | "agent" | "run";
+}
+
+/** A task as the Inbox addresses it: its key, or its id where another task claimed the key. */
+function taskId(ref: ItemRef): string | undefined {
+  return (ref.key_collision ? ref.id : ref.key) || ref.id || undefined;
+}
+
+/**
+ * The row the reader opened, for the assistant's page context, or null for
+ * none: an ask (open or answered) and a parked coding run's question are
+ * decisions, an update is the task it is about, a stopped seat is that
+ * agent. So "Brief me on this decision" briefs that row and not the Inbox.
+ *
+ * ONLY A ROW THE READER OPENED, never the one the pane opens for them on
+ * arrival: arriving, the Inbox is what they asked about.
+ */
+export function inboxSelection(row: InboxRow | null): InboxSelection | null {
+  const of = (kind: InboxResource["kind"], id: string | undefined, noun: InboxSelection["noun"]) =>
+    id ? { kind, id, noun } : null;
+  if (row === null) return null;
+  switch (row.kind) {
+    case "decision": {
+      const s = row.subject;
+      if (s.kind === "ask") return of("task", taskId(s.ask), "decision");
+      if (s.kind === "run") return of("run", s.run.turn_id, "decision");
+      return of("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined, "agent");
+    }
+    case "condition":
+      if (row.item.subject === "seat") return of("seat", row.item.who, "agent");
+      if (row.item.subject === "run" && row.item.id.startsWith("sandbox-")) {
+        return of("run", row.item.id.slice("sandbox-".length), "run");
+      }
+      return null;
+    case "notice":
+      return of("task", taskId(noticeItem(row.notice)), "update");
+    case "answered":
+      return of("task", taskId(row.answered.ask), "decision");
+  }
 }
 
 /**
@@ -269,6 +325,8 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
       break;
     case "condition":
       return whoOf(index, row.item.who);
+    case "answered":
+      return whoOf(index, row.answered.ask.asked_by);
     case "notice": {
       const n = row.notice;
       if (n.actor_kind === "system") return null;
@@ -315,6 +373,8 @@ export function rowItem(row: InboxRow): ItemRef | null {
       break;
     case "condition":
       return null;
+    case "answered":
+      return row.answered.ask;
     case "notice": {
       const item = noticeItem(row.notice);
       return item.id || item.key ? item : null;
@@ -340,6 +400,8 @@ export function rowKey(row: InboxRow): string {
       break;
     case "condition":
       return "";
+    case "answered":
+      return row.answered.ask.key;
     case "notice":
       return row.notice.subject_key ?? "";
   }
@@ -644,4 +706,102 @@ function atNine(c: Civil, tz: string): string {
     offset = 0;
   }
   return new Date(wall - offset).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// What was answered
+// ---------------------------------------------------------------------------
+
+/** The asks `answered_decisions` lists, as rows, newest closing first. */
+export function answeredRows(answer: AnsweredDecisionsAnswer | null | undefined): InboxRow[] {
+  return (answer?.items ?? []).map((answered) => ({
+    kind: "answered",
+    key: subjectKey({ kind: "ask", at: answered.ask.asked_at, ask: answered.ask }),
+    at: answered.at,
+    answered,
+  }));
+}
+
+/**
+ * An answer as the row and the pane say it: who closed the ask, the verb, and
+ * what they said. "You" for the reader, by name for anybody else, since a
+ * colleague may answer a question put to you.
+ */
+export interface AnswerWords {
+  who: string;
+  /** "chose", "replied", or "closed it without an answer". */
+  verb: string;
+  /** The option's label or the words, empty for a resolution. */
+  said: string;
+  kind: "choice" | "reply" | "resolved";
+  /** The chosen option was the asker's recommendation. */
+  recommended: boolean;
+}
+
+export function answerWords(
+  answered: AnsweredDecision,
+  reader: string,
+  index: OrgIndex,
+): AnswerWords {
+  const a = answered.answer;
+  const who = a.by === reader ? "You" : (whoOf(index, a.by, a.by_kind)?.name ?? a.by);
+  if (a.resolved) {
+    return {
+      who,
+      verb: "closed it without an answer",
+      said: "",
+      kind: "resolved",
+      recommended: false,
+    };
+  }
+  const option = a.choice
+    ? answered.ask.decision?.options.find((o) => o.id === a.choice)
+    : undefined;
+  if (option) {
+    return {
+      who,
+      verb: "chose",
+      said: option.label,
+      kind: "choice",
+      recommended: answered.ask.decision?.recommended === option.id,
+    };
+  }
+  return { who, verb: "replied", said: a.body, kind: "reply", recommended: false };
+}
+
+/**
+ * How far the asker has got with an answer.
+ *
+ * `acted` is the tracker's fact (`followed_up`, the asker's first record on the
+ * task since); the rest is the asker's seat as the overview pushes it now: on
+ * a turn on this task, held by a pause or a stop, or free and not on it yet.
+ * Null where the asker is a person, whose next step is theirs to report, or a
+ * seat the roster no longer holds.
+ */
+export type FollowThrough =
+  | { state: "acted"; at: string }
+  | { state: "acting"; at?: string }
+  | { state: "waiting" }
+  | { state: "held"; reason: "paused" | "stopped" };
+
+export function followThrough(
+  answered: AnsweredDecision,
+  seat: AgentRow | undefined,
+): FollowThrough | null {
+  const f = answered.followed_up;
+  if (f) return { state: "acted", at: f.at };
+  if (!seat) return null;
+  const on = seat.turn?.work_item;
+  if (
+    seat.activity === "working" &&
+    on &&
+    (on.id === answered.ask.id || (!answered.ask.key_collision && on.key === answered.ask.key))
+  ) {
+    return seat.turn?.started_at
+      ? { state: "acting", at: seat.turn.started_at }
+      : { state: "acting" };
+  }
+  if (seat.paused) return { state: "held", reason: "paused" };
+  if (seat.activity === "stopped") return { state: "held", reason: "stopped" };
+  return { state: "waiting" };
 }

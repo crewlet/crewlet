@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -237,7 +238,7 @@ func TestAnOverReferencedBodyWarnsAndStillWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if len(result.Warnings) == 0 {
+	if len(result.Caveats) == 0 || result.Caveats[0].Code() != caveat.CodeBodyLinksCapped {
 		t.Fatal("a body naming more keys than the applier links produced no " +
 			"warning, so the author learns nothing about the ones that are " +
 			"plain text")

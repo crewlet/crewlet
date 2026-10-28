@@ -37,9 +37,11 @@ import {
   ReadingPaneSection,
   ReadingPaneTitle,
   Stack,
+  Stepper,
   Text,
   safeHref,
   peekClickHandler,
+  type StepperStep,
 } from "@crewlethq/ui";
 import {
   ActivityGlyph,
@@ -56,6 +58,7 @@ import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.ts
 import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
 import type { SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
+import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
@@ -63,18 +66,23 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import type { OrgIndex } from "~/lib/seats.ts";
+import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { useAgents } from "~/lib/store-hooks.ts";
 import type { Attention } from "~/lib/attention.ts";
-import { detailItem, itemAddress } from "~/lib/work.ts";
+import { describeFollowUp, detailItem, itemAddress } from "~/lib/work.ts";
 import type {
+  AnsweredDecision,
   SandboxRun,
   WorkAskRow,
   WorkDecisionEvidence,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
 import {
+  answerWords,
   askContext,
   askQuestion,
+  followThrough,
   budgetLine,
   firstSentence,
   moment,
@@ -85,6 +93,8 @@ import {
   rowKey,
   rowName,
   rowWho,
+  type AnswerWords,
+  type FollowThrough,
   type InboxRow,
   type Who,
 } from "./model.ts";
@@ -118,9 +128,10 @@ interface PaneProps {
   onBack?: (() => void) | undefined;
   /**
    * The row was dealt with here. `label` says how ("Answered") for a row that
-   * stays in the list as done; null for a notice, which leaves its group.
+   * stays in the list as done, with the answer that was given; null for a
+   * notice, which leaves its group.
    */
-  onSettled: (label: string | null) => void;
+  onSettled: (label: string | null, answer?: AskAnswer) => void;
 }
 
 export function InboxPane(props: PaneProps) {
@@ -234,6 +245,8 @@ function OpenPane({
       break;
     case "condition":
       return <ConditionPane item={row.item} frame={frame} now={now} />;
+    case "answered":
+      return <AnsweredPane answered={row.answered} frame={frame} index={index} now={now} />;
     case "notice":
       return (
         <NoticePane
@@ -272,7 +285,7 @@ function AskPane({
   frame: Frame;
   index: OrgIndex;
   now: number;
-  onSettled: (label: string | null) => void;
+  onSettled: (label: string | null, answer?: AskAnswer) => void;
 }) {
   const decision = ask.decision;
   const options = decision?.options ?? [];
@@ -302,7 +315,7 @@ function AskPane({
     if (unread.length > 0) {
       void mark.run({ read: unread }, { done: "Marked read", quiet: true });
     }
-    onSettled("Answered");
+    onSettled("Answered", given);
   };
 
   return (
@@ -366,6 +379,147 @@ function AskPane({
       />
     </ReadingPane>
   );
+}
+
+/** What each role was asked for, as an answered ask's byline says it. */
+const WAS_ASKED: Readonly<Record<string, string>> = {
+  approver: "asked for your approval",
+  contributor: "asked for your input",
+};
+
+/**
+ * An answered ask, read in full: the page it was answered on with the buttons
+ * replaced by the answer, then what the asker has done with it since, then
+ * the conversation.
+ *
+ * WHO ANSWERED IS SAID, because it is not always the reader: a colleague may
+ * answer a question put to you, and the line under the answer says so and
+ * where to disagree.
+ *
+ * WHAT HAPPENED NEXT IS FOUR STEPS (asked, answered, picked up, acted on),
+ * the last two read from the asker's seat as it is now and from its first
+ * record on the task since (`followed_up`). A person who asked has no seat
+ * state to read, so their steps stop at the answer.
+ */
+function AnsweredPane({
+  answered,
+  frame,
+  index,
+  now,
+}: {
+  answered: AnsweredDecision;
+  frame: Frame;
+  index: OrgIndex;
+  now: number;
+}) {
+  const viewer = useViewer();
+  const agents = useAgents();
+  const ask = answered.ask;
+  const words = answerWords(answered, viewer.owner, index);
+  const seat = agents.find((a) => a.handle === ask.asked_by);
+  const follow = followThrough(answered, frame.who?.kind === "agent" ? seat : undefined);
+  const said =
+    words.kind === "resolved" ? null : words.kind === "choice" ? words.said : `“${words.said}”`;
+  return (
+    <ReadingPane>
+      {frame.byline(
+        <>
+          <strong>{frame.name}</strong>
+          {` ${(ask.decision && WAS_ASKED[ask.decision.role]) || "asked you"}`}
+          {frame.task && <> on {frame.task}</>}
+        </>,
+      )}
+      <ReadingPaneTitle>{askQuestion(ask)}</ReadingPaneTitle>
+      <ReadingPaneOutcome>
+        {`${words.who} ${words.verb}`}
+        {said && (
+          <>
+            {" "}
+            <strong>{said}</strong>
+          </>
+        )}
+        {words.recommended && " (Recommended)"}
+      </ReadingPaneOutcome>
+      {words.who !== "You" && words.kind !== "resolved" && (
+        <Text as="p" variant="caption">
+          {`${words.who} answered for you at ${moment(answered.answer.at, now)}. Reply below if you see it differently.`}
+        </Text>
+      )}
+      {follow ? (
+        <ReadingPaneSection label="What happened next">
+          <Stepper
+            label={`What ${frame.name} did with the answer`}
+            orientation="vertical"
+            steps={followSteps(answered, follow, frame.name, words, now, index)}
+            current={
+              follow.state === "acted" ? null : follow.state === "acting" ? "done" : "picked"
+            }
+            tone={follow.state === "held" ? "warning" : "info"}
+            pulse={follow.state === "acting"}
+          />
+        </ReadingPaneSection>
+      ) : null}
+      <Conversation
+        item={frame.address}
+        itemKey={frame.itemKey}
+        of={{ kind: "ask", comment: ask.comment, options: ask.decision?.options ?? [] }}
+        label="Replies to this question"
+        to={frame.name}
+        replyTo={ask.comment}
+        placeholder={`Add to your answer for ${frame.name}. @mention to bring someone in.`}
+        index={index}
+        now={now}
+      />
+    </ReadingPane>
+  );
+}
+
+/** The four steps from the question to the work, as the pane draws them. */
+function followSteps(
+  answered: AnsweredDecision,
+  follow: FollowThrough,
+  asker: string,
+  words: AnswerWords,
+  now: number,
+  index: OrgIndex,
+): StepperStep[] {
+  const done = answered.followed_up;
+  const picked: StepperStep = {
+    id: "picked",
+    label:
+      follow.state === "waiting" || follow.state === "held"
+        ? `${asker} picks it up`
+        : `${asker} picked it up`,
+  };
+  if (follow.state === "held") {
+    picked.status = "attention";
+    picked.description =
+      follow.reason === "paused"
+        ? "Paused. It continues once resumed."
+        : "Stopped. It continues once it can run.";
+  } else if (follow.state === "waiting") {
+    picked.description = "Not yet";
+  } else if (follow.at) {
+    picked.description = moment(follow.at, now);
+  }
+  return [
+    { id: "asked", label: `${asker} asked`, description: moment(answered.ask.asked_at, now) },
+    {
+      id: "answered",
+      label: words.kind === "resolved" ? `${words.who} closed it` : `${words.who} answered`,
+      description: moment(answered.answer.at, now),
+    },
+    picked,
+    {
+      id: "done",
+      label: follow.state === "acted" ? `${asker} acted on it` : `${asker} acts on it`,
+      description: done
+        ? describeFollowUp(done, { seatName: nameOfIn(index) })
+        : follow.state === "acting"
+          ? "Working on it now"
+          : undefined,
+    },
+  ];
 }
 
 /** What a decision cites, each linked to where it lives. */
@@ -505,7 +659,7 @@ function RunPane({
   run: SandboxRun;
   frame: Frame;
   now: number;
-  onSettled: (label: string | null) => void;
+  onSettled: (label: string | null, answer?: AskAnswer) => void;
 }) {
   const write = useAct("answer_run");
   const [text, setText] = useState("");
@@ -528,7 +682,7 @@ function RunPane({
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       setAnswered(answer);
-      onSettled("Answered");
+      onSettled("Answered", { kind: "reply", text: answer });
     }
   };
   return (
@@ -632,12 +786,18 @@ function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; no
         <p>{item.detail}</p>
       </ReadingPaneLead>
       <TechnicalDetails text={item.technical} />
-      {item.path && (
+      {item.remedy ? (
         <Stack gap={2} align="start">
-          <ButtonLink variant="secondary" size="small" href={href(item.path, item.query)}>
-            Go to it
-          </ButtonLink>
+          <LimitRemedy remedy={item.remedy} />
         </Stack>
+      ) : (
+        item.path && (
+          <Stack gap={2} align="start">
+            <ButtonLink variant="secondary" size="small" href={href(item.path, item.query)}>
+              Go to it
+            </ButtonLink>
+          </Stack>
+        )
       )}
       <Text as="p" variant="caption">
         Clears on its own when the condition ends.

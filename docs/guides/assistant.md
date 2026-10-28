@@ -146,14 +146,79 @@ of 900 seconds unless measurements on your hosts justify another value: a
 turn of thirty steps is thirty-one rounds, and each round pays the CLI's start
 time.
 
+## Briefs
+
+The drawer's **Brief me on this page** row (or "Brief me on this decision",
+"this task", "this agent" where the screen has one record open) asks a
+**brief turn**: an ordinary turn of a new conversation, started, admitted,
+metered, recorded and streamed as any question is, that answers in a fixed
+shape rather than in prose. What a person sees is on the
+[concept page](../concepts/assistant.md#opening-it). What it means for you:
+
+- **It only reads.** A brief turn is offered the person's read tools and the
+  brief's own answer, never a write, a page action, a link of its own or deep
+  work, and nothing it offers the person writes: an action opens a record's
+  screen or asks a question in the same conversation.
+- **Its verdict is counted, never written.** A brief answers what the page is
+  about (the model's one `about` line) and whether the person has to do
+  anything, which is the number of rows the engine kept, drawn once in the
+  card's head ("Nothing needs you", "2 things need you"). Every row is
+  something to do, ranked, the first the one to do first; a fact merely worth
+  knowing goes in the optional `context` line, never a row
+  ([ADR-0062](https://github.com/crewlet/crewlet/blob/main/adr/0062-a-briefs-verdict-is-its-rows-counted-and-every-row-is-something-to-do.md)).
+- **Its rows are the engine's.** A row survives only when the record it cites
+  appears in what this turn's own reads answered and the record's own read,
+  sent again as the person, answers it; the address is the engine's link
+  table's. A row the engine cannot check is dropped, never drawn, and counted
+  in `crewlet.assistant.brief.rows_dropped`. A row is drawn danger only when
+  that read carried the fact (a seat stopped or whose last turn failed, a task
+  marked urgent).
+- **Its answer is validated.** The model answers with one `answer_brief` call,
+  held to its schema and bounds (an `about` line of at most 90 characters, at
+  most three needs whose `do` is at most 80 and `why` at most 60, a `context`
+  line of at most 100, at most two follow-ups and ask questions of at most
+  80). Every cap is in the tool's schema (`maxLength` in characters,
+  `maxItems`) and stated in the brief's prompt, so the model meets it before
+  it writes. One the engine refuses is answered with every fault at once and
+  written again once; a second refusal, or a refusal in the turn's last round,
+  ends the turn `brief_invalid` with nothing drawn. Each refusal is logged as
+  `assistant_brief_refused` (turn, attempt, whether it was final, and the
+  reason, which names fields and counts, never the brief's words), and a
+  `brief_invalid` turn's `assistant_turn_ended` line carries the last reason.
+- **It is scoped by the page context.** The page context's `selection` (the
+  row a screen has open, the peeked row, or the record a record's screen is
+  of) limits the brief to that record; with none, the brief is of the page.
+- **Its spend is its own.** Its rounds are recorded under the aux purpose
+  `assistant_brief`, charged to the person's and the company's windows like
+  any turn's, and its own cap below stops a brief that sets out to read the
+  company. Its turns are stamped with prompt version `assistant.brief.v3`.
+- **A card it cannot draw reads as a note.** A stored card in a shape this
+  version's contract refuses (any brief written before prompt version
+  `assistant.brief.v3`, or a newer node's card read by an older one during a
+  rolling upgrade) is read back as a notice, "This answer can't be shown
+  here. Ask again to see it now.", in the transcript, in a card read and in
+  what the model re-reads. Each is logged as `assistant_card_shown_as_notice`
+  (the card id, its type and the reason, never its contents) and counted in
+  `crewlet.assistant.cards.shown_as_notice`.
+
 ## Budgets and limits
 
 The assistant's rounds are charged to the company's token budget windows like
 any other spend, recorded under the operator stage and the asking person's
 seat, so the [spend views](budgets-and-spend.md) show who used how much.
 `assistant.token_budget` adds a per-person ceiling per day, week or month on
-top of the company's own. A turn whose budget is spent stops before its next
-round and tells the person when the window resets.
+top of the company's own, edited on Company › Budgets under **Each person's
+assistant**; a raised ceiling holds from the next question once the node has
+applied the revision, with no restart. A question whose budget is spent is
+refused before its first round, and a turn whose budget runs out stops before
+its next one. Either way the drawer says whose ceiling it is (the person's own,
+or the company's), when its window resets, and that raising the ceiling clears
+it sooner; to a reader who may raise it, it offers **Open assistant budget** (or
+**Open company budget**), which opens that ceiling on Company › Budgets, and it
+tells anybody else who can. A refused question goes back in the box, ready to
+send again; only the person's own question limit (`assistant_busy`) also holds
+the box until its wait passes, since a raised ceiling clears a spent budget at
+once.
 
 These limits are fixed, not configured:
 
@@ -167,6 +232,8 @@ These limits are fixed, not configured:
 | Card size | 1000 rows, 256 KiB | A larger table is cut with a notice and never presented as whole |
 | Attachments | 4 per question, 40 per conversation, 5 MiB each, PNG, JPEG, WebP or GIF | The type is read from the file's bytes, never its name, so a page dressed as an image is refused (`415 assistant_file_refused`); past 40 a conversation answers `409 assistant_file_limit`, which bounds what one conversation keeps in the object store to 200 MiB for its retention |
 | Files a deep-work run delivers | 10 per run, 100 per conversation, 5 MiB each | The same bound on what runs hand back |
+| Rounds of a brief | 7 rounds of reads, or `assistant.max_steps` where lower, then 2 rounds kept for the answer and its one rewrite | A page's brief reads three to five things (often side by side) and answers. A read asked for in the rounds kept for the answer is not sent, and the answer to a read in the last round of reads tells the model the reads are spent, so an answer the engine refuses always has a round left for its rewrite |
+| Tokens of a brief | 100,000, every round together | About five rounds of a 20,000 token context; past it the brief stops with "The brief read more than a brief may", which spends nothing of the company's windows beyond the rounds already made |
 
 ## Deep work
 
@@ -307,8 +374,13 @@ The assistant adds no hidden channel to the audit log. What it records:
 | `assistant_turn_completed` | Each turn segment ends | The conversation, turn, end state, error code, prompt version, model, and every step's tool, route pattern, outcome, status and bytes; never an argument, an answer or the question |
 | `assistant_conversation_read` | An administrator's compliance read | Reader, owner, conversation and reason |
 
+A brief turn is an `assistant_turn_completed` like any other, told apart by its
+prompt version (`assistant.brief.v3`), and its spend is recorded under the aux
+purpose `assistant_brief`.
+
 The `crewlet.assistant.*` metrics (turn duration, time to first output, turns
-and steps by outcome, active streams) are listed in the
+and steps by outcome, active streams, briefs written and refused, and brief
+rows dropped) are listed in the
 [metrics reference](../reference/metrics.md). A climb in refused steps is the
 model asking for what its people may not read; a climb in failed turns is the
 model chain or a route failing.
@@ -324,7 +396,11 @@ calls no model, and is how the engine's own tests run the shipped suite. With
 model before you switch to it; that calls a paid model once per round of every
 trial, which is why it needs the explicit `-paid`. The shipped
 `injected-instruction` case is the measurement the engine's tests cannot make:
-whether this model, given an instruction hidden in a task, declines it. The flags and the suite format are in the
+whether this model, given an instruction hidden in a task, declines it. The
+`brief-*` cases (`mode: brief`) measure the brief: an Inbox brief whose two
+needs the engine checks and counts, an all-clear page that nothing needs, an instruction injected in a task, a
+record gone before the brief, an over-long first answer whose one rewrite is
+drawn, and an answer written exactly at its caps that is accepted first time. The flags and the suite format are in the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.
 

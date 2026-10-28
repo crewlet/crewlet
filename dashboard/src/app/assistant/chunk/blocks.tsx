@@ -14,10 +14,11 @@
  * asks of an approval is confirmed by the dashboard's one step-up dialog
  * (`protocol/rest.ts` replays the approval), never drawn as a failure.
  *
- * A SUPPORTING READ IS ONE LINE: a table or a record a read built is folded
- * to its head (its title, how much it holds, its downloads and its link) and
- * opened by the person, because the answer is the model's prose. A proposal,
- * a refusal and a receipt are the point of the turn and are drawn whole.
+ * A READ IS NEVER A CARD: a table or a record a read built is drawn by its
+ * answer (`reads.tsx`), as a chip where the prose names it and on one "Also
+ * read" line where it does not, because the answer is the model's prose. A
+ * proposal, a refusal and a receipt are the point of the turn and are drawn
+ * whole, here.
  *
  * EVERY CARD IS THE ENGINE'S: built from tool results and its own route
  * table, never from the model's words. Only prose is the model's, and it is
@@ -33,21 +34,17 @@
 
 import { type ReactNode } from "react";
 import {
+  BriefCard,
   Button,
-  ButtonLink,
   Callout,
   CopyButton,
   DeepWorkCard,
   DiffView,
-  EntityList,
   OpenInAppCard,
-  PropertyList,
   ProposalCard,
   Prose,
   ReceiptStrip,
   RefusalCard,
-  ResultTableCard,
-  StatusCard,
   type ChangeListRow,
   type DeepWorkMeasure,
   type DeepWorkState,
@@ -59,32 +56,32 @@ import {
   collapseDiff,
   diffLines,
 } from "@crewlethq/ui";
-import { ArrowUpRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
+import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import {
   ASSISTANT_DEEP_ACTIVITY_LINES,
+  type AssistantBriefAction,
+  type AssistantBriefCard,
   type AssistantCardEvent,
   type AssistantDeepProgress,
-  type AssistantEntityCard,
   type AssistantProposalCard,
   type AssistantStepEvent,
   type AssistantTableCard,
 } from "~/contract/assistant.ts";
 import { narrowCard } from "~/protocol/assistantWire.ts";
-import { exportFile } from "~/protocol/assistant.ts";
 import { statusLabel } from "~/lib/work.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
-import { fmtCount, fmtDateTime, fmtDuration, fmtExact } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, fmtExact, fmtTime } from "~/lib/format.ts";
 import { youNeedWords } from "~/lib/access.ts";
 import { crumbsFor } from "../../crumbs.ts";
 import { href as hrefOf } from "../../router.tsx";
 import { openInApp, type InAppTarget } from "./openInApp.ts";
-import { useCardOpen } from "./fold.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import { DraftFile } from "./DraftFile.tsx";
 import { drawValue } from "./changeValue.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
 import { FilesCard } from "./files.tsx";
+import { recordWord } from "../brief.ts";
 
 type WireStepState = AssistantStepEvent["state"];
 type WireProposalState = AssistantProposalCard["state"];
@@ -178,6 +175,11 @@ const CELL: Record<WireColumnType, (value: string | number | boolean | null) => 
   label: (v) => (typeof v === "string" && v !== "" ? statusLabel(v) : v === null ? "" : String(v)),
 };
 
+/** A table's cell as it is drawn, by its column's type. */
+export function cellText(type: WireColumnType, value: string | number | boolean | null): string {
+  return CELL[type](value);
+}
+
 /** The types whose wire value is a number, which a fact carries as a string. */
 const NUMERIC = new Set<WireColumnType>(["number", "tokens", "duration"]);
 
@@ -208,11 +210,6 @@ const ACCESS_CODES: ReadonlySet<string> = new Set([
   "assistant_not_permitted",
 ]);
 
-/** A number of seconds, as the run chip says it. */
-function seconds(ms: number): string {
-  return ms < 10_000 ? `${(ms / 1000).toFixed(ms < 1000 ? 1 : 0)}s` : `${Math.round(ms / 1000)}s`;
-}
-
 const steps = (n: number) => `${n} ${n === 1 ? "step" : "steps"}`;
 
 /** A run's step count as the chip's meta: none for a turn that took no step. */
@@ -228,7 +225,7 @@ export function runChipOf(
   const state = RUN_STATE[turn.phase];
   // THE ASSISTANT SWITCHED TO DEEP WORK: the chip says so while the run works.
   if (BUSY.has(turn.phase) && deepRunsOf(turn).some((run) => DEEP_ACTIVE.has(run.deep.state))) {
-    return { state: RUN_STATE.working, title: "Deep work", meta: seconds(elapsed) };
+    return { state: RUN_STATE.working, title: "Deep work", meta: fmtElapsed(elapsed) };
   }
   switch (turn.phase) {
     case "sending":
@@ -236,11 +233,11 @@ export function runChipOf(
       // A LATER ROUND IS WORK: once a step has run, the model thinking
       // again is the turn still working, not a turn that has not started.
       if (turn.steps.length > 0) {
-        return { state: RUN_STATE.working, title: "Working", meta: seconds(elapsed) };
+        return { state: RUN_STATE.working, title: "Working", meta: fmtElapsed(elapsed) };
       }
       return { state, title: "Thinking" };
     case "working":
-      return { state, title: "Working", meta: seconds(elapsed) };
+      return { state, title: "Working", meta: fmtElapsed(elapsed) };
     case "applying":
       return { state, title: "Applying", meta: stepMeta(taken) };
     case "awaiting_approval":
@@ -250,7 +247,7 @@ export function runChipOf(
       // since it was asked is not how long it ran, so it says Done alone.
       return {
         state,
-        title: turn.done ? `Done in ${seconds(turn.done.duration_ms)}` : "Done",
+        title: turn.done ? `Done in ${fmtDuration(turn.done.duration_ms)}` : "Done",
         meta: stepMeta(taken),
       };
     case "stopped":
@@ -258,7 +255,7 @@ export function runChipOf(
       const done = turn.steps.filter((s) => s.state === "done").length;
       return {
         state,
-        title: `Stopped after ${seconds(elapsed)}`,
+        title: `Stopped after ${fmtDuration(elapsed)}`,
         meta: taken > 0 ? `${done} of ${steps(taken)}` : undefined,
       };
     }
@@ -319,7 +316,7 @@ export const STEP_DURATION_FLOOR_MS = 100;
 
 /** A step's time as its line says it, or nothing for one under the floor or not yet ended. */
 export function stepDuration(ms: number | undefined): string | undefined {
-  return ms === undefined || ms < STEP_DURATION_FLOOR_MS ? undefined : seconds(ms);
+  return ms === undefined || ms < STEP_DURATION_FLOOR_MS ? undefined : fmtDuration(ms);
 }
 
 /** The deep run states in which the run is still at work. */
@@ -502,13 +499,26 @@ export function ReplyProse({ text, dimmed = false }: { text: string; dimmed?: bo
   // A SILENT ROUND IS STORED as an empty message its cards hang from, and
   // draws nothing of its own, streaming or not.
   if (text.trim() === "") return null;
+  return <ProseBlock dimmed={dimmed}>{renderMarkdown(text, ASSISTANT_WORDS)}</ProseBlock>;
+}
+
+/**
+ * Rendered Markdown as a reply draws it. A DIV, NOT PROSE'S DEFAULT PARAGRAPH:
+ * rendered Markdown is blocks (paragraphs, lists), which a <p> may not hold.
+ * `prose md` is the class pair the dashboard's Markdown rhythm is written for,
+ * as every other rendered body here carries it, so the reply's paragraphs are
+ * spaced. An answer whose mentions are chips (`reads.tsx`) is drawn by it too.
+ */
+export function ProseBlock({
+  children,
+  dimmed = false,
+}: {
+  children: ReactNode;
+  dimmed?: boolean;
+}) {
   return (
-    // A DIV, NOT PROSE'S DEFAULT PARAGRAPH: rendered Markdown is blocks
-    // (paragraphs, lists), which a <p> may not hold. `prose md` is the class
-    // pair the dashboard's Markdown rhythm is written for, as every other
-    // rendered body here carries it, so the reply's paragraphs are spaced.
     <Prose as="div" measure="narrow" dimmed={dimmed} className="prose md">
-      {renderMarkdown(text, ASSISTANT_WORDS)}
+      {children}
     </Prose>
   );
 }
@@ -621,6 +631,8 @@ export function prepareAgainQuestion(proposal: AssistantProposalCard): string {
 export interface CardHandlers extends ProposalHandlers {
   /** Go to an address the engine built, already checked to be this dashboard's own. */
   openHere: (target: InAppTarget) => void;
+  /** Ask a question in this conversation: a brief's follow-up, or its ask action. */
+  ask: (question: string) => void;
   /** Undo a page change from its receipt. */
   undo: (actionId: string) => void;
 }
@@ -780,121 +792,6 @@ export function scopeLine(scope: AssistantProposalCard["scope"], state: Proposal
   }
 }
 
-/** A count of things in words: "1 row", "7 rows". */
-function countOf(n: number, one: string, many: string): string {
-  return `${fmtExact(n)} ${n === 1 ? one : many}`;
-}
-
-/** What a folded table says after its title: how many rows the read answered. */
-export function tableSummary(table: AssistantTableCard): string {
-  return countOf(table.row_count, "row", "rows");
-}
-
-/** The most fact labels a folded record names before it is cut short. */
-const SUMMARY_FACTS = 3;
-
-/**
- * What a folded record says after its title: its subtitle where it has one
- * (a task's key, a page's place), else the names of the facts it holds
- * ("Mission, vision"), and how many entries its list holds ("6 policies").
- * Nothing where it holds neither.
- */
-export function entitySummary(entity: AssistantEntityCard): string | undefined {
-  const facts = (entity.facts ?? []).filter((fact) => !fact.detail).map((fact) => fact.label);
-  const head = entity.subtitle
-    ? [entity.subtitle]
-    : facts.slice(0, SUMMARY_FACTS).map((label, i) => (i === 0 ? label : inSentence(label)));
-  const items = entity.items?.length ?? 0;
-  const noun = entity.items_noun ?? { one: "entry", many: "entries" };
-  const parts = items > 0 ? [...head, countOf(items, noun.one, noun.many)] : head;
-  return parts.length > 0 ? parts.join(", ") : undefined;
-}
-
-/** A label inside a sentence: its first letter lowered, unless it opens an acronym ("URL"). */
-function inSentence(label: string): string {
-  const second = label.charAt(1);
-  return second !== "" && second === second.toUpperCase() && second !== second.toLowerCase()
-    ? label
-    : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
-}
-
-/** How a supporting read folds: closed until the person opens it, remembered for the session. */
-interface Fold {
-  collapsible: true;
-  summary: string | undefined;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-/** A table card with its downloads from the stored snapshot. */
-function Table({
-  table,
-  cardId,
-  on,
-  fold,
-}: {
-  table: AssistantTableCard;
-  cardId: string;
-  on: CardHandlers;
-  fold: Fold;
-}) {
-  // THE DRAWER DRAWS THE COLUMNS THE ENGINE CHOSE FOR IT, name first; the
-  // rest stay in the card's downloads.
-  const drawn = table.columns.flatMap((c, i) => (c.detail ? [] : [i]));
-  const align = drawn.map((i) => {
-    const c = table.columns[i]!;
-    return c.align ?? (c.type === "text" || c.type === "label" ? "start" : "end");
-  });
-  const cells = (row: (string | number | boolean | null)[]) =>
-    drawn.map((i) => CELL[table.columns[i]!.type](row[i] ?? null));
-  const base =
-    table.title
-      .replace(/[^a-z0-9]+/gi, "-")
-      .replace(/^-|-$/g, "")
-      .toLowerCase() || cardId;
-  const downloads = table.exports
-    ? [
-        { label: "CSV", filename: `${base}.csv`, file: () => exportFile(table.exports!.csv) },
-        { label: "XLSX", filename: `${base}.xlsx`, file: () => exportFile(table.exports!.xlsx) },
-      ]
-    : undefined;
-  return (
-    <ResultTableCard
-      {...fold}
-      title={table.title}
-      window={table.window}
-      headers={drawn.map((i) => table.columns[i]!.label)}
-      rows={table.rows.map(cells)}
-      align={align}
-      total={table.total ? cells(table.total) : undefined}
-      downloads={downloads}
-      link={table.open ? <EngineLink link={table.open} on={on} /> : undefined}
-      emptyMessage="No rows match."
-    />
-  );
-}
-
-/** A link the engine built, followed only where it is one of this dashboard's own routes. */
-function EngineLink({ link, on }: { link: { label: string; href: string }; on: CardHandlers }) {
-  const target = openInApp(link.href);
-  if (!target) return <span>{link.label}</span>;
-  return (
-    <ButtonLink
-      size="small"
-      variant="ghost"
-      href={hrefOf(target.path, target.query)}
-      trailingIcon={<ArrowUpRightGlyph size="sm" />}
-      onClick={(event) => {
-        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
-        event.preventDefault();
-        on.openHere(target);
-      }}
-    >
-      {link.label}
-    </ButtonLink>
-  );
-}
-
 /** A crumb that is a record's raw id (a UUID), which a person does not read. */
 const RAW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -915,6 +812,62 @@ function refusalBody(grants: readonly string[] | undefined, message: string): st
   return grants && grants.length > 0 ? youNeedWords(grants) : message;
 }
 
+/**
+ * A brief row's action as its one press: an open the engine built, followed
+ * only where it is one of this dashboard's own addresses, or a question asked
+ * in the conversation. Anything else draws no button.
+ */
+function briefPress(
+  action: AssistantBriefAction,
+  on: CardHandlers,
+): { label: string; onSelect: () => void } | undefined {
+  if (action.kind === "ask") {
+    const question = action.question;
+    return question ? { label: action.label, onSelect: () => on.ask(question) } : undefined;
+  }
+  const target = action.link ? openInApp(action.link.href) : null;
+  return target ? { label: action.label, onSelect: () => on.openHere(target) } : undefined;
+}
+
+/**
+ * A brief, drawn by the design system's `BriefCard`: what it covers (the page,
+ * or the one record it was limited to) and when it was read, what the page is
+ * about, the ranked rows with their presses, the context line, and the
+ * follow-ups, each asked in this conversation.
+ *
+ * THE VERDICT IS THE CARD'S, FROM THE ROWS: whether anything needs the reader
+ * is the number of rows the engine kept (ADR-0062), which `BriefCard` counts
+ * into its head, so nothing here passes a verdict of its own.
+ */
+function Brief({ brief, on }: { brief: AssistantBriefCard; on: CardHandlers }) {
+  const record = brief.scope.record;
+  const word = record ? recordWord(record) : null;
+  const scope =
+    record && word
+      ? `${word.charAt(0).toUpperCase()}${word.slice(1)} ${record.id}`
+      : brief.scope.title;
+  return (
+    <BriefCard
+      scope={scope}
+      asOf={`As of ${fmtTime(brief.as_of)}`}
+      about={brief.about}
+      needs={brief.needs.map((need) => ({
+        key: `${need.ref.kind}:${need.ref.id}`,
+        text: need.text,
+        ...(need.detail ? { detail: need.detail } : {}),
+        tone: need.tone,
+        action: briefPress(need.action, on),
+      }))}
+      context={brief.context}
+      followUps={brief.follow_ups.map((question) => ({
+        key: question,
+        question,
+        onSelect: () => on.ask(question),
+      }))}
+    />
+  );
+}
+
 /** One card of an answer, drawn as the design system's component for its kind. */
 export function CardBlock({
   event,
@@ -929,14 +882,6 @@ export function CardBlock({
   opened: boolean;
 }): ReactNode {
   const card = narrowCard(event.card);
-  // EVERY CARD ASKS, so the hooks run in one order; only a read uses it.
-  const [open, setOpen] = useCardOpen(event.card_id);
-  const fold = (summary: string | undefined): Fold => ({
-    collapsible: true,
-    summary,
-    open,
-    onOpenChange: setOpen,
-  });
   if (card === null) {
     return (
       <Callout variant="neutral">
@@ -946,61 +891,14 @@ export function CardBlock({
   }
   switch (card.type) {
     case "table":
-      return (
-        <Table
-          table={card.table}
-          cardId={event.card_id}
-          on={on}
-          fold={fold(tableSummary(card.table))}
-        />
-      );
+    case "entity":
+    case "oversize":
+      // A READ IS NEVER A CARD: its answer draws it, as a chip where the
+      // answer names it and on the Also read line where it does not
+      // (`reads.tsx`). Reaching here is a caller drawing a read as a card.
+      throw new Error(`a ${card.type} read is drawn by its answer, never as a card`);
     case "proposal":
       return <Proposal proposal={card.proposal} local={local} on={on} />;
-    case "entity": {
-      const entity = card.entity;
-      const folded = fold(entitySummary(entity));
-      const facts = (entity.facts ?? []).filter((fact) => !fact.detail);
-      const items =
-        entity.items && entity.items.length > 0
-          ? entity.items.map((item) => ({
-              id: `${item.kind ?? ""}:${item.id}`,
-              name: item.label,
-              ...(item.fact === undefined ? {} : { fact: item.fact }),
-              ...(item.open ? { action: <EngineLink link={item.open} on={on} /> } : {}),
-            }))
-          : null;
-      // A LIST AND NOTHING ELSE (a task's comments) is the list card. A RECORD
-      // WITH A LIST UNDER IT (a page and its comments, the company's mission and
-      // vision over its policies, a company over its units) keeps both: drawn
-      // as the list alone, the record's facts, text and link were dropped.
-      if (items && facts.length === 0 && !entity.subtitle && !entity.text && !entity.open) {
-        return <EntityList {...folded} title={entity.title} items={items} />;
-      }
-      return (
-        <StatusCard
-          {...folded}
-          title={entity.title}
-          subtitle={entity.subtitle}
-          actions={entity.open ? <EngineLink link={entity.open} on={on} /> : undefined}
-          actionsAlign="start"
-        >
-          {facts.length > 0 ? (
-            <PropertyList
-              groups={[
-                {
-                  items: facts.map((fact) => ({
-                    label: fact.label,
-                    value: fact.mono ? <code>{factText(fact)}</code> : factText(fact),
-                  })),
-                },
-              ]}
-            />
-          ) : null}
-          {entity.text ? <ReplyProse text={entity.text} /> : null}
-          {items ? <EntityList label={entity.title} items={items} /> : null}
-        </StatusCard>
-      );
-    }
     case "open_in_app": {
       const { link, permitted } = card.open_in_app;
       const target = permitted ? openInApp(link.href) : null;
@@ -1068,6 +966,8 @@ export function CardBlock({
       );
     case "file":
       return <FilesCard card={card.file} />;
+    case "brief":
+      return <Brief brief={card.brief} on={on} />;
   }
 }
 

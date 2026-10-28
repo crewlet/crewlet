@@ -906,6 +906,7 @@ export function Audit() {
     () => [
       {
         key: "at",
+        align: "right",
         header: "When",
         shrink: true,
         sortValue: (row) => row.at,

@@ -64,7 +64,7 @@ func TestTheArtifactToolSkillGuardsEveryPublishingTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if s.Key != "skill:artifacts" || !s.Required {
+	if s.Key != builtin.ArtifactsToolSkillKey || !s.Required {
 		t.Fatalf("key %q, required %v: want an enforced skill:artifacts", s.Key, s.Required)
 	}
 	for _, name := range []string{builtin.CreateArtifactTool, builtin.PublishArtifactTool,

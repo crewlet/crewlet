@@ -282,6 +282,35 @@ export function inTimeExact(ts: string | null | undefined, now: number): string 
 }
 
 /**
+ * A WAIT a person is told to sit out, from the seconds the engine said to wait
+ * (a `Retry-After`, an assistant's busy window): "in 45s", "in 4m",
+ * "in 22h 33m", "in 2d 3h".
+ *
+ * THE ONE WAY A WAIT IS SAID. The assistant printed the engine's count as it
+ * came, "ask again in 81155 seconds", which is a number to divide rather than
+ * a time to plan by. Two units past an hour, as [inTimeExact] reads an instant,
+ * and ROUNDED UP at every magnitude, never to the nearest: a wait that says
+ * "in 4m" when four and a half remain sends the reader back to a refusal.
+ *
+ * A WAIT WITH NO NUMBER IS SAID WITHOUT ONE: an unknown or unbounded wait
+ * (not finite) is "later", never a made-up "in 1s", and one already over
+ * is "now".
+ */
+export function fmtWait(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "later";
+  if (seconds <= 0) return "now";
+  const s = Math.ceil(seconds);
+  if (s < 60) return `in ${s}s`;
+  const mins = Math.ceil(s / 60);
+  if (mins < 60) return `in ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return mins % 60 ? `in ${hours}h ${mins % 60}m` : `in ${hours}h`;
+  const hoursUp = Math.ceil(mins / 60);
+  const days = Math.floor(hoursUp / 24);
+  return hoursUp % 24 ? `in ${days}d ${hoursUp % 24}h` : `in ${days}d`;
+}
+
+/**
  * A duration in ms as the shortest honest string.
  *
  * UNIT LETTERS WITH NO SPACE AT EVERY MAGNITUDE — "340ms", "1.2s", "45s",

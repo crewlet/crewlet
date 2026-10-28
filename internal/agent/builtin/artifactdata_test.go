@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // dataRig is the datastore tools registered for a seat over fakes, behind the
@@ -225,7 +226,7 @@ func TestATurnPastItsDataOpsIsToldToStop(t *testing.T) {
 		if got := r.call(t, turn, builtin.WriteArtifactDataTool, args); got.Failed {
 			t.Fatalf("write %d of the allowance failed: %s", i, got.Output)
 		}
-		turn.CallLog().Record(builtin.WriteArtifactDataTool, args)
+		turn.CallLog().Record(builtin.WriteArtifactDataTool, toolargs.Of(nil, args))
 	}
 	// A RETRY OF THE LAST CALL IS THE SAME OPERATION, and is not charged
 	// again: the turn lost the answer, not the allowance.

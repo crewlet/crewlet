@@ -13,7 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
-import { useAct } from "./useAct.ts";
+import { caveatToast, useAct } from "./useAct.ts";
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
@@ -265,6 +265,29 @@ test("a refusal is drawn beside the control and stays until the next press", asy
   expect(refusal()?.textContent).toContain("views: v9 is not a view");
 });
 
+// A REFUSAL IS DRAWN IN A PERSON'S WORDS (ADR-0060): the engine's detail is a
+// sentence written for whoever pressed, drawn as plain text with no value
+// marked in it; and a refusal nobody worded for a person carries no detail,
+// so its code's own sentence is what is drawn.
+test("a refusal is drawn in the person's words, or in its code's own sentence", async () => {
+  const person =
+    "That choice is not one of this decision's options. Pick one of the options shown, or answer in words.";
+  engine(() => json({ error: "invalid", tool: "set_pins", detail: person }, 422));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  const refusal = () => document.querySelector(".crewlet-refusal-strip");
+  await waitFor(() => expect(refusal()?.textContent).toContain(person));
+  expect(refusal()?.querySelector("code")).toBeNull();
+  cleanup();
+
+  const floor =
+    "That change was refused, and nothing was written. Check what was entered, then try again.";
+  engine(() => json({ error: "invalid", tool: "set_pins", message: floor }, 422));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await waitFor(() => expect(refusal()?.textContent).toContain(floor));
+});
+
 /** A screen that pins a view and reads back the refusal its press came to. */
 function Refused({ onRefusal }: { onRefusal: (r: unknown) => void }) {
   const pin = useAct("set_pins");
@@ -400,4 +423,106 @@ test("an abandoned press resolves with null and reports nothing", async () => {
   controller.abort();
   await waitFor(() => expect(got).toHaveBeenCalledWith(null));
   expect(screen.queryByText(/Could not confirm/)).toBeNull();
+});
+
+// LAST IN THE FILE, because the tab's floor it raises is shared with every
+// case above. THE INCIDENT: answering a decision left a toast that never went away,
+// telling a person to "Use ask: backend-engineer", the receipt's `warnings`
+// written for a model. A press is told the engine's PERSON words from
+// `caveats`, and the receipt's model words are never drawn.
+test("a press is told its caveats in a person's words, never the receipt's model words", async () => {
+  engine(() =>
+    json(
+      {
+        tool: "set_pins",
+        outcome: "applied",
+        position: "CREWLET_TRACKER_LOG@1:990",
+        receipt: { warnings: ["Use ask: backend-engineer, if you are expecting a reply."] },
+        caveats: [
+          {
+            code: "unaddressed_comment",
+            message: "@backend-engineer will see this comment, but it does not ask them anything.",
+            action: "none",
+          },
+        ],
+      },
+      200,
+    ),
+  );
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText(/does not ask them anything/)).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/Use ask:/)).toBeNull();
+});
+
+// A PENDING PRESS'S CAVEATS ARE SAID AFTER ITS OWN SENTENCE, in one toast.
+test("a pending press's caveats follow its own sentence", () => {
+  expect(
+    caveatToast(
+      [{ code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" }],
+      "Sent. This node has not applied it yet.",
+    ),
+  ).toEqual({
+    variant: "info",
+    message: "Sent. This node has not applied it yet. Saved as 2026-03-04.",
+  });
+});
+
+// A CONTROL THAT DRAWS ITS PRESS'S CAVEATS ITSELF is not told them again in
+// the toast: the board draws a card's missed place beside the board.
+test("a press whose control draws its caveats toasts the press alone", async () => {
+  engine(() =>
+    json(
+      {
+        tool: "set_pins",
+        outcome: "applied",
+        position: "CREWLET_TRACKER_LOG@1:991",
+        receipt: {},
+        caveats: [
+          { code: "lane_changed_not_placed", message: "Drawn by the board.", action: "none" },
+        ],
+      },
+      200,
+    ),
+  );
+  function Drawer() {
+    const pin = useAct("set_pins");
+    return (
+      <WriteButton
+        write={pin}
+        onPress={() =>
+          void pin.run({ views: { add: ["v1"] } }, { done: "Pinned Triage", drawsCaveats: true })
+        }
+      >
+        Pin
+      </WriteButton>
+    );
+  }
+  render(
+    <ToastProvider>
+      <Drawer />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText("Pinned Triage")).length).toBeGreaterThan(0);
+  expect(screen.queryByText("Drawn by the board.")).toBeNull();
+});
+
+test("a caveat that asks nothing goes by itself, and one that needs a person stays", () => {
+  expect(caveatToast([])).toBeNull();
+  // NOTHING TO DO: the kit's info toast, which goes by itself.
+  expect(
+    caveatToast([
+      { code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" },
+      { code: "body_links_capped", message: "Only the first 25 are linked.", action: "none" },
+    ]),
+  ).toEqual({ variant: "info", message: "Saved as 2026-03-04. Only the first 25 are linked." });
+  // ONE THAT NEEDS A PERSON makes the press's toast a warning, which the kit
+  // keeps until it is dismissed.
+  expect(
+    caveatToast([
+      { code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" },
+      { code: "default_assignee_gone", message: "Assign it to someone.", action: "required" },
+    ]),
+  ).toEqual({ variant: "warning", message: "Saved as 2026-03-04. Assign it to someone." });
 });

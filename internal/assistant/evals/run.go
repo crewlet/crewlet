@@ -135,7 +135,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	rig.Store.Seed(rig.Person.ID, rig.Conversation, c.Name)
 	accepted, err := rig.Svc.Start(ctx, assistant.TurnStart{Person: rig.Person,
 		Conversation: rig.Conversation, Key: Key(c.Name), Input: c.Question, Page: c.page,
-		Read: rig.Grant(c.Name)})
+		Read: rig.Grant(c.Name), Mode: c.Mode})
 	if err != nil {
 		return Trial{}, err
 	}
@@ -143,7 +143,18 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	if err != nil {
 		return Trial{}, err
 	}
-	trial := judge(c.Expect, frames)
+	// THE REFUSALS THE MODEL HEARD, from the scripted model, which hears
+	// every answer; nil for a live model, whose answers travel inside its
+	// own CLI.
+	var refusals []string
+	if scripted, ok := meter.inner.(*Model); ok {
+		for _, m := range scripted.Seen() {
+			if m.Role == llm.RoleTool && m.Failed {
+				refusals = append(refusals, m.Content)
+			}
+		}
+	}
+	trial := judge(c.Expect, frames, refusals, o.scripted())
 	trial.Rounds, trial.Tokens, trial.Latencies = meter.read()
 	return trial, nil
 }
@@ -214,10 +225,14 @@ func register(mux *http.ServeMux, route string, status int, body []byte) (err er
 }
 
 // judge reads what a turn did out of its frames and holds it to e.
-func judge(e Expect, frames []wire.Frame) Trial {
+//
+// refusals are the answers of the turn's refused calls in order, and heard
+// reports whether they could be read at all (a scripted model's).
+func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 	var t Trial
 	seen := map[string]bool{}
 	var answer, shown strings.Builder
+	var brief *wire.BriefCard
 	for _, f := range frames {
 		switch f.Kind {
 		case wire.EventStep:
@@ -228,6 +243,9 @@ func judge(e Expect, frames []wire.Frame) Trial {
 		case wire.EventCard:
 			if f.Card.Card.Proposal != nil {
 				t.Proposals++
+			}
+			if f.Card.Card.Brief != nil {
+				brief = f.Card.Card.Brief
 			}
 			// THE CARD AS ITS WIRE CARRIES IT, every title, cell, row and
 			// note, which is what the person was shown.
@@ -280,7 +298,54 @@ func judge(e Expect, frames []wire.Frame) Trial {
 			fail("shows: %q on no card", s)
 		}
 	}
+	if e.Brief != nil {
+		judgeBrief(*e.Brief, brief, fail)
+	}
+	if heard {
+		judgeRefusals(e.Refusals, refusals, fail)
+	}
 	return t
+}
+
+// judgeRefusals holds each refused call's answer to what the case expects it
+// to name: every entry of the i-th list in the i-th refusal.
+func judgeRefusals(want [][]string, got []string, fail func(string, ...any)) {
+	for i, names := range want {
+		if i >= len(got) {
+			fail("refusals[%d]: only %d calls were refused", i, len(got))
+			return
+		}
+		answer := strings.ToLower(got[i])
+		for _, n := range names {
+			if !strings.Contains(answer, strings.ToLower(n)) {
+				fail("refusals[%d]: %q is not named in %q", i, n, got[i])
+			}
+		}
+	}
+}
+
+// judgeBrief holds a brief's card to what the case expects: the records its
+// rows cite, in order, their tones, and its verdict.
+func judgeBrief(e ExpectBrief, card *wire.BriefCard, fail func(string, ...any)) {
+	if card == nil {
+		fail("brief: no brief card was shown")
+		return
+	}
+	cited := make([]string, 0, len(card.Needs))
+	tones := make([]wire.BriefTone, 0, len(card.Needs))
+	for _, n := range card.Needs {
+		cited = append(cited, n.Ref.ID)
+		tones = append(tones, n.Tone)
+	}
+	if !slices.Equal(cited, e.Needs) {
+		fail("brief.needs: %v, want %v", cited, e.Needs)
+	}
+	if len(e.Tones) > 0 && !slices.Equal(tones, e.Tones) {
+		fail("brief.tones: %v, want %v", tones, e.Tones)
+	}
+	if e.Verdict != "" && card.Verdict() != e.Verdict {
+		fail("brief.verdict: %q, want %q", card.Verdict(), e.Verdict)
+	}
 }
 
 // measured is a provider whose rounds are counted: how many, their tokens

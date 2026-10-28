@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -163,6 +164,12 @@ func (w Work) Decisions(ctx context.Context, q worklet.DecisionsQuery, now time.
 	return call(ctx, w.r, opDecisions, nil, decisionsArgs{Query: q, Now: now, Zone: zoneArg(loc)})
 }
 
+// AnsweredAsks answers the asks put to a person and closed lately.
+func (w Work) AnsweredAsks(ctx context.Context, q worklet.DecisionsQuery, now time.Time,
+	loc *time.Location) (worklet.AnsweredAnswer, error) {
+	return call(ctx, w.r, opAnsweredAsks, nil, decisionsArgs{Query: q, Now: now, Zone: zoneArg(loc)})
+}
+
 // TurnPlaces answers which task each run was charged to.
 func (w Work) TurnPlaces(ctx context.Context, runs []string,
 	fresh statelog.Freshness) (map[string]worklet.TurnPlace, error) {
@@ -276,11 +283,11 @@ func (w WorkWriter) WriteTags(ctx context.Context, opID, project string, edit wo
 
 // EnsureTags declares the tags a write is about to use.
 func (w WorkWriter) EnsureTags(ctx context.Context, opID, project string, tags []string) (
-	[]string, []string, error) {
+	[]string, []caveat.Caveat, error) {
 	out, err := call(ctx, w.r, opEnsureTags, &w.actor, ensureTagsArgs{
 		OpID: opID, Project: project, Tags: tags,
 	})
-	return out.Created, out.Warnings, err
+	return out.Created, out.Caveats, err
 }
 
 // PutFile writes a project's file — its row, naming the object the caller has

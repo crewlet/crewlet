@@ -7,7 +7,8 @@ import {
   ceilingSummary,
   ceilingText,
   changesFrom,
-  companyPatch,
+  documentPatch,
+  documentCeilings,
   refusalWords,
   seatWithCeilings,
 } from "./ceilings.ts";
@@ -58,8 +59,34 @@ describe("a ceiling as a field shows it", () => {
 
 describe("what a change writes", () => {
   test("the company's is a merge patch of only the windows changed, null removing one", () => {
-    expect(companyPatch({ day: 50_000_000 })).toEqual({ token_budget: { day: 50_000_000 } });
-    expect(companyPatch({ week: null })).toEqual({ token_budget: { week: null } });
+    expect(documentPatch({ kind: "company" }, { day: 50_000_000 })).toEqual({
+      token_budget: { day: 50_000_000 },
+    });
+    expect(documentPatch({ kind: "company" }, { week: null })).toEqual({
+      token_budget: { week: null },
+    });
+  });
+
+  // A NESTED KEY OF THE SAME DOCUMENT: a merge patch merges `assistant` key by
+  // key, so its model chain and its step cap survive a ceiling raised here.
+  test("each person's assistant ceiling is a merge patch one level down", () => {
+    expect(documentPatch({ kind: "assistant" }, { day: 200_000, week: null })).toEqual({
+      assistant: { token_budget: { day: 200_000, week: null } },
+    });
+    expect(
+      documentCeilings(
+        { kind: "assistant" },
+        { token_budget: { day: 1 }, assistant: { llm: ["p"], token_budget: { day: 9 } } },
+      ),
+    ).toEqual({ day: 9 });
+    expect(documentCeilings({ kind: "assistant" }, { token_budget: { day: 1 } })).toBeUndefined();
+    expect(documentCeilings({ kind: "company" }, { token_budget: { day: 1 } })).toEqual({ day: 1 });
+  });
+
+  test("the history names each person's assistant as whose ceiling changed", () => {
+    expect(ceilingSummary({ kind: "assistant" }, { day: 200_000 }, { day: 100_000 })).toBe(
+      "Raise each person's assistant daily token ceiling from 100k to 200k",
+    );
   });
 
   // THE SEAT AS READ, masks included — the engine restores a mask against the

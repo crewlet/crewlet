@@ -303,6 +303,10 @@ const (
 	// before a board exists, so it is everybody's: what a source ANSWERS is
 	// decided as each board's viewer, never by who listed it.
 	ActionDashboardSources Action = "list_dashboard_sources"
+	// THE FORMAT REFERENCE is the engine's own vocabulary too: the exact
+	// shape of a kind's index (`brand.json`, `deck.json`), read before an
+	// artifact of it exists, holding no row of any domain.
+	ActionArtifactFormat Action = "get_artifact_format"
 	// ActionDashboardSourceRead previews ONE engine source's rows before any
 	// board exists (`GET /artifacts/sources/preview/{name}`): a builder's
 	// read, so it asks the artifacts app, as making a board does, while the
@@ -1031,6 +1035,9 @@ var rules = map[Action]rule{
 	// THE CATALOGUE IS EVERYBODY'S: it names reads and who may make them,
 	// and holds no row of any domain.
 	ActionDashboardSources: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
+	// THE FORMAT REFERENCE IS EVERYBODY'S, for the catalogue's reason: it is
+	// the engine's vocabulary, and holds no row of any domain.
+	ActionArtifactFormat: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// A SOURCE'S PREVIEW IS A BUILDER'S, the app and nothing else: the rows
 	// are the source's own question's to decide, as the viewer.
 	ActionDashboardSourceRead: {class: ClassApp, app: iam.GrantArtifacts, recency: iam.RecencyAny,

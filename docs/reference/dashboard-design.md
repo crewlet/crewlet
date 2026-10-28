@@ -747,8 +747,8 @@ which the project routes as its own unassigned work — to its default assignee
 where it names one and the chart still holds that seat, else triage — and
 the field says which before the press. Where the company does not run
 Worklet, none of those doors is drawn (see the rule on services above). An applied create that came
-back with a caveat — the engine's `warnings` — says it in its toast rather
-than a plain "Filed". The sheet files project, title,
+back with a caveat (the act answer's `caveats`, in a person's words) says it in
+its toast rather than a plain "Filed". The sheet files project, title,
 description, type, status, assignee, priority, due and labels as ONE
 `create_work_item`, sending only the fields the person set (an unset one is the
 engine's default, never the sheet's guess of it); the type, status words and
@@ -772,8 +772,10 @@ empty, the field says where the task lands — the project's default assignee
 field's help line is its control's description, so a screen reader hears it
 with the field. `applied` opens the new task by the
 key the engine minted; `pending` closes with the not-yet-applied toast; a
-refusal stays in the sheet in the engine's own sentence, which names the
-argument it refused (drawn as a value, not in backticks). What the engine would
+refusal stays in the sheet in the words the engine wrote for a person (a
+title over its cap is "The title is too long"), or, for a refusal nobody has
+worded for one yet, in its kind's own sentence: never the tool's sentence to a
+model, which names arguments (ADR-0060). What the engine would
 refuse is said on the field BEFORE the press: the title and the description are
 counted in the engine's unit (UTF-8 bytes, against `worklet.MaxTitle`, 256, and
 `MaxBody`, 32 KiB, held by `contract/work.ts`), counting down in the last fifth
@@ -2886,10 +2888,30 @@ ceiling, or hand the item on. A condition's says what it costs to leave and
 where the answer is.
 
 **What was done is shown, then the next item opens.** An answered question
-or run stays in its place in Needs you, struck through and read as
-"Answered", and its pane shows the answer where the controls were; a read or
-snoozed update shows its new state. 700 ms later (`ADVANCE_MS`) the next item
-after it in the list opens, unless the reader has moved on first.
+or run stays in its place in Needs you until the reader leaves the screen,
+marked **Answered** in its head (a soft success tag where the time was) with
+the answer under the question ("You chose **Hold release**", or what was
+written, with a speech mark), in full ink and never struck through: a strike
+reads as "cancelled" and cuts through the words a reader comes back to check.
+The group's count is what is still open. Its pane shows the answer where the
+controls were; a read or snoozed update shows its new state. 700 ms later
+(`ADVANCE_MS`) the next item after it in the list opens, unless the reader has
+moved on first.
+
+**What was answered before waits in a closed group.** The asks put to the
+reader and closed in the last week (`answered_decisions`) are an **Answered**
+group after Updates, closed and counted ("Answered 4"): its label is a
+disclosure button inside the heading, so a reader moving by heading lands on
+it and Enter opens it. Each row names who asked, the question, and who
+answered and how ("Maya Ops chose **Ship anyway**"), since a colleague may
+answer a question put to you. A row answered on this visit is in Needs you
+instead, never in both. Opened, its rows step with `j` and `k`; a link to one
+opens the group. An answered ask's pane reads like the one it was answered
+on, with the answer in place of the buttons, a line saying who answered for
+you where it was not you, **What happened next** as four steps (asked,
+answered, picked up, acted on: the last two from the asker's seat as it is now
+and its first record on the task since, with a paused or stopped seat marked
+for attention), and the conversation with a reply box.
 
 **The conversation is the last part of the reading.** It is labelled by what
 it holds: "Replies to this question" under an ask, "Replies to this comment"
@@ -4282,7 +4304,7 @@ four, and each tells you something different:
 
 | Outcome | What you see |
 |---|---|
-| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. |
+| `applied` | A toast naming what changed; the screen is re-read and redrawn with it. When the engine answered **caveats** beside the change, the toast carries them in a person's words: it stays until you dismiss it when one of them needs somebody to act (a project's default assignee who has left the chart), and goes by itself when they are only something to know (a time stored as its date). |
 | `pending` | "Sent. This node has not applied it yet." The re-read waits until this node has. |
 | `unknown` | "Could not confirm. It may have landed", which **stays** until you dismiss it, with Retry. |
 | refused | The engine's reason, beside the control that caused it, until your next press. |
@@ -7380,7 +7402,13 @@ seat at once; **Agent seats** follow as one table with a column per window, so
 the one seat near its ceiling is found down a column. The company's row stands
 on the table's own columns (one track list handed to both), so each window
 sits over its column, and its first track says once what the windows are:
-every seat together, on the company clock, and when each turns over. A window's bar is a kit
+every seat together, on the company clock, and when each turns over. **Each
+person's assistant** follows the company, on the same tracks: the ceiling every
+person's Dashboard Assistant questions are held to (`assistant.token_budget`),
+each person on their own. Its figures are the reader's own spend against it,
+drawn only where the engine counts one (`counted`: a person, under a company
+that caps a person's spend); elsewhere the row draws the ceilings and no figure,
+since a zero nobody measured is not "0 tokens". A window's bar is a kit
 `Meter` handed the engine's `state`, and the page divides nothing itself; a
 window with no ceiling draws no bar, because a bar needs something to be a
 fraction of. A
@@ -7394,7 +7422,10 @@ save is **checked first**, against the revision it was read from, and only the
 warnings the change *introduces* are shown — a seat ceiling at or above the
 company's, which can never refuse a turn, is the one this screen exists to
 catch — with **Save anyway** to store it regardless. The company's ceilings are
-written as a merge patch of the windows that changed (`null` removes one); a
+written as a merge patch of the windows that changed (`null` removes one), and
+each person's assistant's as the same patch one level down
+(`{assistant: {token_budget: {...}}}`), which leaves the rest of the
+`assistant:` block as it was; a
 seat's by replacing that seat (`PUT /config/roles/{handle}`, its check the same
 request with `dry_run=true`), because a patch cannot address one seat in a
 roster. The revision's summary says whose ceiling, which window, and from what
@@ -7416,10 +7447,28 @@ the lead of the unit it sits in, whom the engine admits to that seat's write
 (`useOrgWriteAccess`, `lib/leadScope.ts`).
 
 **There is no reset.** A window's `used` is what it spent; the room comes back
-when it turns over, or now by raising its ceiling. Home's and the Inbox's
-**Raise budget** open the same write as a dialog of one scope's three ceilings
-(`RaiseBudgetDialog`), each field captioned with what that window has spent and
-when it resets.
+when it turns over, or now by raising its ceiling. The Inbox's and a stopped
+seat's **Raise budget** open the same write as a dialog of one scope's three
+ceilings (`RaiseBudgetDialog`), each field captioned with what that window has
+spent and when it resets. A reader who may not raise that scope's ceiling is
+not handed the button: the row says who can instead ("An admin can raise this
+ceiling.", the units a lead leads, or who manages the document).
+
+**Each ceiling is a section a refusal opens.** A refusal or a notice a token
+budget caused names the setting behind it (ADR-0060's remedy), and
+`lib/remedy.ts` is the one table from a setting to this screen and its
+section: `section=company`, `section=assistant`, or `section=seat:<handle>`
+for a seat's row. The section is brought into view, focused, and marked as the
+one the reader came for (the card's `selected`, the seat's row as current); a
+press on the address already open arrives again; and a section the screen does
+not draw for the reader (a seat it no longer lists) reveals nothing. The press
+is offered by the gate the editor there is drawn by (`useOrgWriteAccess`), so
+the link and the pencils it opens cannot disagree: a reader the gate refuses
+for who they are is told who can raise it, and never handed a link to a screen
+whose controls are all locked for them. It is drawn on the assistant's refusal
+of a question and on a turn a budget stopped, on a refused act (the palette's
+knowledge answer among them), on the Inbox's company budget condition, and on
+Home's spent week.
 
 ## Account: the reader's own page
 

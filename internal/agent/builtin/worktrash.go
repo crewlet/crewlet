@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -76,7 +77,10 @@ func authorDetail(err error) string { return worklet.Sentence(err) + "." }
 
 // ---- remove_work_item --------------------------------------------------- //
 
-type removeWorkItem struct{ deps WorkDeps }
+type removeWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*removeWorkItem)(nil)
 
@@ -210,7 +214,10 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // ---- restore_work_item -------------------------------------------------- //
 
-type restoreWorkItem struct{ deps WorkDeps }
+type restoreWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*restoreWorkItem)(nil)
 
@@ -371,14 +378,16 @@ func (d WorkDeps) subtreeStopped(ctx context.Context, actor Actor, tool string,
 			"new operation decides afresh and finishes it.", tool, item.Address())
 	}
 	d.settle(ctx, got.Position)
-	return jsonResult(withOperation(ReceiptOf(map[string]any{
+	answer := ReceiptOf(map[string]any{
 		done:      true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version":          got.Version,
 		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
-		"subtree_stopped": fmt.Sprintf("%s is %s, but only %d of the %d tasks "+
-			"that go with it followed before the walk stopped (%s). Do not "+
-			"report it as done. %s", item.Named(), done, stopped.Followed,
-			stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next),
-	}, item), actor))
+	}, item)
+	said := partial(answer, SubtreeStoppedKey, caveat.SubtreeUnfinished(
+		done == "restored", stopped.Followed, stopped.Of, fmt.Sprintf("%s is %s, "+
+			"but only %d of the %d tasks that go with it followed before the walk "+
+			"stopped (%s). Do not report it as done. %s", item.Named(), done,
+			stopped.Followed, stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next)))
+	return caveated(withOperation(answer, actor), nil, said)
 }

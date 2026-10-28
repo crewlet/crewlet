@@ -18,11 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // The stale answer's budget for the live version's text: the first
@@ -83,13 +85,13 @@ func capabilitiesArg(tool string, args map[string]any) ([]artifacts.Capability, 
 	if !present || raw == nil {
 		return nil, ""
 	}
-	list, ok := raw.([]any)
+	list, ok := argval.StringItems(raw)
 	if !ok {
 		return nil, tool + " takes `capabilities` as a list of names."
 	}
 	out := make([]artifacts.Capability, 0, len(list))
 	for _, v := range list {
-		name, _ := v.(string)
+		name, _ := argval.String(v)
 		c := artifacts.Capability(strings.TrimSpace(name))
 		if !c.Valid() {
 			return nil, fmt.Sprintf("%s: %q is not a capability; the page may use %v.",
@@ -168,9 +170,11 @@ func (t *createArtifact) Description() string {
 	return "Create a NEW artifact in this Crewlet company (not claude.ai): an " +
 		"interactive HTML page, a design canvas of HTML artboards, a document, a " +
 		"slide deck, or a sheet, shared with the " +
-		"colleagues who must use it. Load the artifacts tool skill first: it is the " +
-		"design contract every page is held to. When a person asked for it, they are " +
-		"made an editor. Begin a deck with `starter` rather than writing every slide. " +
+		"colleagues who must use it. Load the `" + ArtifactsToolSkillKey + "` tool skill " +
+		"first: it is the design contract every page is held to. Before writing a " +
+		"brand kit, a deck's index, a design's canvas, a dashboard or a doc's index, read " +
+		"its exact format with " + ArtifactFormatTool + ". When a person asked for it, " +
+		"they are made an editor. Begin a deck with `starter` rather than writing every slide. " +
 		"When your company has a brand, read get_company_brand before writing slides, " +
 		"logos or typefaces. To change an existing artifact use publish_artifact; the " +
 		"answer carries the `url` to send people."
@@ -291,13 +295,13 @@ func starterArg(args map[string]any) (*slideformat.Plan, string) {
 	for field, v := range m {
 		switch field {
 		case "theme":
-			theme, ok := v.(string)
-			if !ok {
+			theme, ok := argval.String(v)
+			if !ok || v == nil {
 				return nil, "create_artifact: `starter.theme` is a theme's id."
 			}
 			plan.Theme = strings.TrimSpace(theme)
 		case "slides":
-			list, ok := v.([]any)
+			list, ok := argval.List(v)
 			if !ok {
 				return nil, "create_artifact: `starter.slides` is a list of `{layout, title}`."
 			}
@@ -444,7 +448,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"list_artifacts before creating it a different way: if it landed, it is there."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
-	out := t.deps.publishedAnswer(c, published, report, "created")
+	out := t.deps.publishedAnswer(c, published, "created")
 	if folderPath != "" {
 		out["folder"] = folderPath
 	}
@@ -452,7 +456,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["shared_with"] = []map[string]any{{"to": shareTarget(shares[0].Audience),
 			"role": string(shares[0].Role)}}
 	}
-	return jsonResult(out)
+	return caveated(out, findingCaveats(report))
 }
 
 // folder is the folder a create files into, by id, with its path ("" for the
@@ -503,7 +507,7 @@ func (t *createArtifact) requesterShare(c artifactCaller) []artifacts.Share {
 
 // publishedAnswer is a version that landed, as create and publish answer it.
 func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Published,
-	report artifactupload.Report, outcome string) map[string]any {
+	outcome string) map[string]any {
 
 	out := map[string]any{
 		"outcome": outcome, "artifact": p.Artifact.String(), "version": p.Number,
@@ -512,10 +516,25 @@ func (d ArtifactDeps) publishedAnswer(c artifactCaller, p artifactsdomain.Publis
 	if url := d.link(p.Artifact); url != "" {
 		out["url"] = url
 	}
-	if len(report.Warnings) > 0 {
-		out["warnings"] = report.Warnings
-	}
 	return withArtifactOperation(out, c)
+}
+
+// findingCaveats is the linter's warnings about a published version, as the
+// caveats its answer carries ([caveated]): each one about a file the caller
+// wrote, in the same words for a model and a person who wrote it.
+func findingCaveats(report artifactupload.Report) []caveat.Caveat {
+	if len(report.Warnings) == 0 {
+		return nil
+	}
+	out := make([]caveat.Caveat, len(report.Warnings))
+	for i, f := range report.Warnings {
+		where := f.Path
+		if f.Line > 0 {
+			where = fmt.Sprintf("%s:%d", f.Path, f.Line)
+		}
+		out[i] = caveat.FileFinding(where, f.Message)
+	}
+	return out
 }
 
 // withArtifactOperation puts the call's `op_id` on its answer on the operator
@@ -583,13 +602,10 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"what was done and what is left, and let the next turn continue.", tool,
 			turn.Used, turn.Limit, strings.ReplaceAll(turn.What, "_", " ")))
 	case errors.As(err, &policy):
-		lines := make([]string, 0, len(policy.Findings))
-		for _, f := range policy.Findings {
-			lines = append(lines, "- "+f.String())
-		}
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused the version: "+
-			"it breaks the artifact policy, so nothing was published. Fix every finding "+
-			"and publish again:\n%s", tool, strings.Join(lines, "\n")))
+		return toPerson(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused "+
+			"the version: it breaks the artifact policy, so nothing was published. Fix "+
+			"every finding and publish again:\n%s", tool, policyFindings(policy.Findings))),
+			caveat.ArtifactBreaksPolicy())
 	case errors.As(err, &edit):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused edit %d on "+
 			"%q (%s), so nothing was published. An `old_str` must be quoted exactly from "+
@@ -605,10 +621,11 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.As(err, &quota):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: the "+
-			"company's artifact quota is reached (%d in use of %d, `%s`). Nothing was "+
-			"published. Say so: an operator raises the quota, or somebody removes "+
-			"artifacts the company no longer needs.", tool, quota.Usage, quota.Limit, quota.Key))
+		return toPerson(refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused "+
+			"that: the company's artifact quota is reached (%d in use of %d, `%s`). "+
+			"Nothing was published. Say so: an operator raises the quota, or somebody "+
+			"removes artifacts the company no longer needs.", tool, quota.Usage,
+			quota.Limit, quota.Key)), caveat.ArtifactQuotaReached())
 	case errors.As(err, &pending):
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
@@ -626,8 +643,9 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the artifact is "+
-			"in the trash, and only a person restores it. Nothing was changed.", tool))
+		return toPerson(refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the "+
+			"artifact is in the trash, and only a person restores it. Nothing was "+
+			"changed.", tool)), caveat.ArtifactTrashed())
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s", tool, said))
 	case errors.Is(err, artifactsdomain.ErrConflict):
@@ -645,7 +663,10 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 
 // ---- publish_artifact --------------------------------------------------- //
 
-type publishArtifact struct{ deps ArtifactDeps }
+type publishArtifact struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*publishArtifact)(nil)
 
@@ -831,9 +852,9 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"get_artifact: if its head moved past your base, the publish landed."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
-	out := t.deps.publishedAnswer(c, published, report, "published")
+	out := t.deps.publishedAnswer(c, published, "published")
 	out["base_version"] = base
-	return jsonResult(out)
+	return caveated(out, findingCaveats(report))
 }
 
 // baseEntry is the entry page of the version a publish is based on, which a
@@ -871,7 +892,7 @@ func editsArg(args map[string]any) ([]edits.Edit, string) {
 	if !present || raw == nil {
 		return nil, ""
 	}
-	list, ok := raw.([]any)
+	list, ok := argval.List(raw)
 	if !ok {
 		return nil, "publish_artifact takes `edits` as a list of `{path, old_str, new_str}`."
 	}
@@ -886,9 +907,9 @@ func editsArg(args map[string]any) ([]edits.Edit, string) {
 		if !ok {
 			return nil, fmt.Sprintf("publish_artifact: edit %d is not an object.", i)
 		}
-		old, hasOld := m["old_str"].(string)
-		repl, hasNew := m["new_str"].(string)
-		if !hasOld || !hasNew {
+		old, hasOld := argval.String(m["old_str"])
+		repl, hasNew := argval.String(m["new_str"])
+		if !hasOld || !hasNew || m["old_str"] == nil || m["new_str"] == nil {
 			return nil, fmt.Sprintf("publish_artifact: edit %d needs `old_str` and "+
 				"`new_str`, both strings.", i)
 		}
@@ -1026,7 +1047,10 @@ func (t *publishArtifact) changedPaths(ctx context.Context, id artifacts.ID, bas
 
 // ---- update_artifact ---------------------------------------------------- //
 
-type updateArtifact struct{ deps ArtifactDeps }
+type updateArtifact struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*updateArtifact)(nil)
 

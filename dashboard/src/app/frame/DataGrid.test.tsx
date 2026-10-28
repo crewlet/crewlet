@@ -95,6 +95,28 @@ describe("the address", () => {
     expect(location.hash).toContain("sort=who");
   });
 
+  // THE ADDRESS HOLDS ONLY WHAT THE READER CHOSE. Read with the default as
+  // its fallback, a press on a column at its own descending default wrote the
+  // default back and changed nothing; now the head steps from the order in
+  // force and a step back to the default is no key at all.
+  test("steps from a default sort and writes no key for the default", () => {
+    location.hash = "#/x";
+    const { container } = render(
+      <Router>
+        <DataGrid<Row> rows={ROWS} rowKey={(r) => r.id} columns={COLUMNS} defaultSort="-id" />
+      </Router>,
+    );
+    expect(order(container)).toEqual(["two", "one"]);
+    const idHead = () => container.querySelectorAll('[role="columnheader"]')[0]!;
+    expect(idHead().getAttribute("aria-sort")).toBe("descending");
+    fireEvent.click(screen.getByRole("button", { name: "Id" }));
+    expect(location.hash).toContain("sort=id");
+    expect(order(container)).toEqual(["one", "two"]);
+    fireEvent.click(screen.getByRole("button", { name: "Id" }));
+    expect(location.hash).not.toContain("sort=");
+    expect(idHead().getAttribute("aria-sort")).toBe("descending");
+  });
+
   test("keys a second grid's sort by its name, and its columns by colsName", () => {
     location.hash = "#/x?cols.list=who";
     const { container } = render(
@@ -161,6 +183,29 @@ test("the grid the reader last touched is the one the keyboard drives", () => {
   // Two `j`s in the lower grid alone; an Enter reaching the upper grid would
   // have activated nothing, its cursor never moved.
   expect(seen).toEqual(["lower:two"]);
+});
+
+// A GRID OF LINKS OPENS A ROW FROM THE KEYBOARD TOO: Enter on the cursor row
+// follows its link, where the open key used to need a handler the grid of a
+// directory no longer has.
+test("Enter follows the cursor row's link in a grid whose rows only link", () => {
+  location.hash = "#/live/turns";
+  grid();
+  // THE LINK IS CLICKED, as a pointer would click it; the browser follows it
+  // (jsdom implements no navigation, so the click is what is observed).
+  const followed: (string | null)[] = [];
+  const watch = (event: MouseEvent) => {
+    followed.push((event.target as Element).closest("a")?.getAttribute("href") ?? null);
+    event.preventDefault();
+  };
+  document.addEventListener("click", watch);
+  try {
+    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(window, { key: "Enter" });
+  } finally {
+    document.removeEventListener("click", watch);
+  }
+  expect(followed).toEqual(["#/live/turns/one"]);
 });
 
 test("an empty grid names its mark, and drives no keystroke", () => {

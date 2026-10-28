@@ -239,6 +239,11 @@ func (emptyWork) Decisions(context.Context, worklet.DecisionsQuery, time.Time, *
 	return worklet.DecisionsAnswer{Asks: []worklet.AskRow{}}, nil
 }
 
+func (emptyWork) AnsweredAsks(context.Context, worklet.DecisionsQuery, time.Time, *time.Location) (
+	worklet.AnsweredAnswer, error) {
+	return worklet.AnsweredAnswer{Asks: []worklet.AnsweredAsk{}}, nil
+}
+
 func (emptyWork) TurnPlaces(context.Context, []string, statelog.Freshness) (
 	map[string]worklet.TurnPlace, error) {
 	return map[string]worklet.TurnPlace{}, nil

@@ -35,13 +35,13 @@
 
 import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
-  Button,
   ButtonLink,
   Callout,
   Card,
   Document,
   DocumentTitle,
   EmptyState,
+  FilterPill,
   Highlight,
   KeyChip,
   List,
@@ -69,7 +69,6 @@ import {
   PlusGlyph,
   SearchGlyph,
   WandSparklesGlyph,
-  XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
@@ -1065,15 +1064,14 @@ function KnowledgeResults({ phrase }: { phrase: string }) {
             </div>
             <div className="knowledge-results-filters">
               {space ? (
-                <Button
-                  size="small"
-                  variant="secondary"
-                  trailingIcon={<XGlyph size="sm" />}
-                  onClick={() => setSpace("")}
-                  aria-label={`Remove the filter: space ${names.get(space) ?? space}`}
-                >
-                  Space: {names.get(space) ?? space}
-                </Button>
+                // THE KIT'S FILTER PILL, the one drawing every filter in force
+                // takes, so this one reads as the Worklet's do.
+                <FilterPill
+                  field="Space"
+                  operator="is"
+                  value={names.get(space) ?? space}
+                  onRemove={() => setSpace("")}
+                />
               ) : (
                 <Menu
                   label="Filter the results by space"

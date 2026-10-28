@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -142,10 +143,10 @@ type TagAuthority struct {
 
 // WriteTags applies one edit to a project's tag set.
 //
-// The warnings it returns are the near-duplicates the edit declared, and they
+// The caveats it returns are the near-duplicates the edit declared, and they
 // are ADVISORY: a lead can merge two tags and a refusal with no override would
-// block `apis` behind `api` for ever. THE APPLY MUST NEVER DEPEND ON ONE —
-// every node applies the same record, and only this node saw the warning.
+// block `apis` behind `api` for ever. THE APPLY MUST NEVER DEPEND ON ONE:
+// every node applies the same record, and only this node saw the caveat.
 func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	edit TagEdit, authority TagAuthority) (WriteResult, error) {
 
@@ -169,7 +170,8 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	subject := TagsSubject(project)
 	scope := ScopeSet{Subject: true, Container: project}
 	at := w.Now()
-	var warnings, declared []string
+	var caveats []caveat.Caveat
+	var declared []string
 	result, err := w.published(ctx, statelog.Request{
 		Subject: wire(subject),
 		Scope:   scope.Resolve(subject),
@@ -197,7 +199,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 			// writer's set finds a shorter add list and possibly a
 			// near-duplicate the first pass did not, and what the
 			// caller is told has to be what actually landed.
-			warnings, declared = warned, added
+			caveats, declared = warned, added
 			if !changed {
 				// NOTHING TO SAY. Two seats reaching for the same word
 				// is the ordinary case, and the second one's add is a
@@ -214,7 +216,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 			return decision, nil
 		},
 	})
-	result.Warnings = warnings
+	result.Caveats = caveats
 	result.Declared = declared
 	return result, err
 }
@@ -226,7 +228,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 // slug — are what a seat meets most often, and a rule only reachable through a
 // published record is a rule nobody re-measures.
 //
-// It reports the next set, the slugs it DECLARED, the advisory warnings, and
+// It reports the next set, the slugs it DECLARED, the advisory caveats, and
 // whether anything changed.
 //
 // The declared list is what a caller is told it created, and it comes from
@@ -235,7 +237,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 // case, so a list computed outside the snapshot names tags somebody else
 // declared a moment earlier.
 func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
-	TagSet, []string, []string, bool, error) {
+	TagSet, []string, []caveat.Caveat, bool, error) {
 
 	next := current
 	next.Tags = slices.Clone(current.Tags)
@@ -256,7 +258,8 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 		taken[tag.Slug] = i
 	}
 	changed := false
-	var warnings, declared []string
+	var warnings []caveat.Caveat
+	var declared []string
 
 	for _, want := range edit.Add {
 		slug := TagSlug(want.Slug)
@@ -299,9 +302,8 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 				Slug: slug}
 		}
 		if near := nearTags(next.Tags, slug); len(near) > 0 {
-			warnings = append(warnings, fmt.Sprintf("%s is within a typo of %s "+
-				"— declared anyway; merge them if that was not deliberate",
-				slug, strings.Join(near, ", ")))
+			warnings = append(warnings, caveat.TagNearDuplicate(current.Project,
+				slug, near))
 		}
 		bySlug[slug] = len(next.Tags)
 		taken[strings.ToLower(label)] = len(next.Tags)
@@ -656,7 +658,7 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 // ONE APPEND FOR THE WHOLE SET, before the task's own: a record per new tag
 // would contend N times on the one subject every seat in the project writes.
 func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
-	tags []string) ([]string, []string, error) {
+	tags []string) ([]string, []caveat.Caveat, error) {
 
 	if len(tags) == 0 {
 		return nil, nil, nil
@@ -707,7 +709,7 @@ func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 	// between would leave this call claiming to have created a tag it
 	// found. The pre-read's only job is to skip the publish entirely when
 	// nothing is missing.
-	return result.Declared, result.Warnings, nil
+	return result.Declared, result.Caveats, nil
 }
 
 // tagsOf reads a project's tag set outside any decision.

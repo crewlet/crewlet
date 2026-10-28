@@ -233,7 +233,7 @@ func (out *DependencyResult) fold(result WriteResult, own bool) {
 	if own && result.Version > out.Version {
 		out.Version = result.Version
 	}
-	out.Warnings = append(out.Warnings, result.Warnings...)
+	out.Caveats = append(out.Caveats, result.Caveats...)
 }
 
 // authoredStep and mirrorStep name one append of a dependency change BY THE

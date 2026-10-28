@@ -166,6 +166,7 @@ import {
 } from "./hits.ts";
 import { useKnowledgeAnswer, type AnswerState, type KnowledgeAnswerReceipt } from "./answer.ts";
 import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
+import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 
 /** What a project step files once the person has chosen where. */
 type Filing =
@@ -1490,9 +1491,12 @@ function AnswerLead({
       );
     case "refused":
       return (
-        <p className="palette-answer-note">
-          <BookOpenGlyph size="sm" /> {state.sentence}
-        </p>
+        <div className="palette-answer">
+          <p className="palette-answer-note">
+            <BookOpenGlyph size="sm" /> {state.sentence}
+          </p>
+          <LimitRemedy remedy={state.remedy} />
+        </div>
       );
     case "unknown":
       return (

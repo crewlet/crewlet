@@ -25,9 +25,35 @@ move around the dashboard. Drag its edge to make it wider or narrower; your
 browser remembers the width.
 
 When the panel opens, it greets you and says what it can see on your behalf:
-the apps your permissions open. Below that it lists what is waiting for you
-(questions and decisions you owe an answer to) and a few things you can ask
-from anywhere.
+the apps your permissions open. Below that, under **This page**, it offers a
+brief of the screen you are on, and then a few things you can ask from
+anywhere.
+
+**Brief me on this page.** One press starts a conversation whose first answer
+is a brief, in a fixed shape that answers two questions. Its head says whether
+you have anything to do: "Nothing needs you", or how many things do ("2 things
+need you"), counted from the rows below it. Its first line says what the page
+is about. Then, only when something needs you, at most three things to do,
+most pressing first, each an instruction naming its record with one fact on
+why now and one press that opens the record or asks about it. The first is
+the one to do first and has the main button; when there are two or more, it
+is marked **Do first**. A quiet line of context follows only when a fact from
+elsewhere changes what to do, and then up to two questions you may want to
+ask next. When the screen has one record open (a decision open in the Inbox, a
+task, an agent, an artifact), the row says so, "Brief me on this decision",
+and the brief covers that record and its immediate context only: the question
+asked, its task, the agent on it and its recent thread. Ask a follow-up in the
+same conversation as you would any question.
+
+A brief only reads, as you. Every row names a record the assistant read for
+this brief and that you may open, checked again by the engine before the row
+is drawn; a row it cannot check is left out rather than shown. A row is drawn
+in red only for a fact the engine read (an agent stopped or whose last turn
+failed, a task marked urgent), never because the model chose to. The brief
+says when it was read: it is a reading of the page at that moment, so ask
+again for a fresh one. A brief this version of Crewlet cannot draw (one
+written by an earlier version, or by a newer node during an upgrade) shows as
+a short note in its place: ask again to see it now.
 
 **The screen you are on travels with your question.** The chip above the
 message box (for example "Worklet › Tasks") tells the assistant which screen you
@@ -66,14 +92,24 @@ spend by agent"). A step never names the engine's tools; an administrator also
 sees each step's request (its method and path) beside it. A refusal is said in
 plain words too: the assistant is handed the engine's exact reason and says
 what to change.
-Tables can be downloaded as CSV or XLSX from the card, from the snapshot you
-were shown.
+What a step read is not drawn as a card beside the answer. The first time
+the answer names a record it read (a task by its key, such as GOP-11, or an
+agent, a team, a project or a page by its name), that mention is a chip: press
+it for a peek with the record's facts, its body and the list under it, and
+**Open** to go to its page. A record it read and never named is on one
+**Also read** line under the answer, with a chip of its own. A table's peek
+holds its rows, and it can be downloaded as CSV or XLSX from there, from the
+snapshot you were shown. A list is one chip, named by what it read and how
+much ("Matching tasks (first 50 of 210)"), and its peek says which screen
+shows the rest. A read whose answer was too large for one step is listed too
+("... (too large to show here)"): its peek links the screen that shows all of
+it and says what to narrow, and the assistant is told it saw none of it, so it
+never answers as though it had.
 
-A read of a part of the engine that has no card of its own is drawn from the
+A read of a part of the engine that has no record of its own is drawn from the
 answer's own shape and named for what it read, never for the request: a list
-is a table ("Agents"), and one record is a card of its values and the lists it
-holds ("Seat · engineer", or the company's configuration with its roles and
-units).
+is a table ("Agents"), and one record is its values and the lists it holds
+("Seat · engineer", or the company's configuration with its roles and units).
 
 ## What it can do
 
@@ -88,10 +124,10 @@ units).
 
 **Answer in words.** Every part of a question is answered with the facts it
 asks for (who is doing what, why a turn failed, which tasks are due), and the
-tables and cards beside the answer support it rather than replace it. Each
-card's title says what its read was narrowed to ("Spend by agent, last 14
-days", "Tasks, urgent, due in the next 7 days"), and a read made twice in one
-answer is drawn once.
+records and tables it read support it rather than replace it. Each table's
+title says what its read was narrowed to ("Spend by agent, last 14 days",
+"Tasks, urgent, due in the next 7 days"), and a record read twice in one
+answer is one chip.
 
 **Use the names you use.** Ask about "the QA Engineer", "the Company space" or
 "the Marketing project": the assistant resolves a seat, unit, project or space
@@ -301,6 +337,7 @@ model cannot answer rather than leaving you waiting:
 | The model reached its usage limit | Wait until the time shown, or ask an administrator to add another model |
 | The model took too long | Try again, or ask a narrower question |
 | The model cannot be started | Ask an administrator to check the assistant's model |
+| The brief could not be written | Try again. A brief that read more than a brief may says so: ask about one thing on the page instead |
 
 An administrator sees the command that fixes it instead.
 

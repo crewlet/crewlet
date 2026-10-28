@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -221,6 +222,12 @@ func TestACommentThatAsksNobodyWarnsAboutTheAssignee(t *testing.T) {
 	if text, _ := warnings[0].(string); !strings.Contains(text, "ask") {
 		t.Errorf("the warning is %q and does not name the remedy", warnings[0])
 	}
+	// AND A PERSON'S SURFACE IS HANDED THE SAME CAVEAT, whose words for a
+	// person are what the act route answers: the model's sentence above
+	// names an argument a person has no control for.
+	if len(got.Caveats) != 1 || got.Caveats[0] != caveat.UnaddressedComment("pm") {
+		t.Errorf("the result carries %+v, want the unaddressed comment's caveat", got.Caveats)
+	}
 	// AND AN ASK SILENCES IT, because then somebody IS being asked.
 	trk.patched = nil
 	if got := callWork(t, reg, builtin.CommentOnWorkTool, map[string]any{
@@ -357,4 +364,99 @@ func decodeAnswer(t *testing.T, got tools.Result) map[string]any {
 		t.Fatalf("the answer is not json: %v\n%s", err, got.Output)
 	}
 	return answer
+}
+
+// A SET IS READ AS EVERY LIST OF STRINGS IS, never as no list (ADR-0059): the
+// check at the surface admits one reference for a list of one, and refList
+// read it as nil, so `{"set": "ENG-2"}` cleared every edge and was answered
+// applied. Now one reference is the set of one, a number is the reference it
+// spells, and a value that is no list at all is refused with nothing written.
+//
+// Mutation: read the set with a bare .([]any) and the single reference wipes
+// both edges.
+func TestASetIsNeverReadAsNoList(t *testing.T) {
+	t.Parallel()
+	waiting := func() (*fakeTracker, *tools.Registry) {
+		trk := newFakeTracker()
+		detail := trk.tasks["ENG-1"]
+		detail.Task.Relations = []worklet.Relation{
+			{Kind: worklet.RelationWaitingOn, Other: "id-2"},
+			{Kind: worklet.RelationWaitingOn, Other: "id-3"},
+		}
+		trk.tasks["ENG-1"] = detail
+		return trk, workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Dependencies: trk.depends})
+	}
+	trk, reg := waiting()
+	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "waiting_on": map[string]any{"set": "ENG-2"}})
+	if got.Failed || len(trk.depended) != 1 {
+		t.Fatalf("one reference as the set answered %q with %d changes", got.Output, len(trk.depended))
+	}
+	if change := trk.depended[0]; len(change.WaitingOnAdd) != 0 ||
+		!slices.Equal(change.WaitingOnRemove, []string{"id-3"}) {
+		t.Errorf("the set of one changed %+v, want only id-3 removed", change)
+	}
+	for _, bad := range []any{12.0, map[string]any{"ref": "ENG-2"}, true} {
+		trk, reg := waiting()
+		got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+			"item": "ENG-1", "waiting_on": map[string]any{"set": bad}})
+		if !got.Failed || !strings.Contains(got.Output, "`waiting_on.set` is a list of references") {
+			t.Errorf("set %v answered %q, want a refusal", bad, got.Output)
+		}
+		if len(trk.depended) != 0 {
+			t.Errorf("set %v wrote %+v", bad, trk.depended)
+		}
+	}
+}
+
+// A NULL SET IS ABSENT (#423 review): the check at the surface reads null as
+// absent, and the tool read `{"set": null}` as the empty set, clearing every
+// relation. Now null is absent to both ([argval.Object]): a set that states
+// nothing is refused as asking for nothing, with nothing written.
+//
+// Mutation: read the object with a bare .(map[string]any) and both edges are
+// cleared.
+func TestANullSetIsAbsent(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	detail := trk.tasks["ENG-1"]
+	detail.Task.Relations = []worklet.Relation{
+		{Kind: worklet.RelationWaitingOn, Other: "id-2"},
+		{Kind: worklet.RelationWaitingOn, Other: "id-3"},
+	}
+	trk.tasks["ENG-1"] = detail
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Dependencies: trk.depends})
+	for _, set := range []map[string]any{{"set": nil}, {"add": nil, "remove": nil}} {
+		got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+			"item": "ENG-1", "waiting_on": set})
+		if !got.Failed || !strings.Contains(got.Output, "adds and removes nothing") {
+			t.Errorf("%v answered %q, want it refused as asking for nothing", set, got.Output)
+		}
+	}
+	if len(trk.depended) != 0 {
+		t.Errorf("a null set wrote %+v", trk.depended)
+	}
+}
+
+// `include` IS READ AS EVERY LIST OF STRINGS IS: "body" is the list of one
+// part, so the description comes back, where read as no list it returned no
+// part at all and answered as though nothing had been asked; a value that is
+// no list is refused.
+//
+// Mutation: read `include` with a bare .([]any) and "body" reads nothing.
+func TestIncludeIsNeverReadAsNoList(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	detail := trk.tasks["ENG-1"]
+	detail.Task.Body = "the whole description"
+	trk.tasks["ENG-1"] = detail
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	got := callWork(t, reg, builtin.GetWorkItemTool, map[string]any{"item": "ENG-1", "include": "body"})
+	if got.Failed || !strings.Contains(got.Output, "the whole description") {
+		t.Errorf("include \"body\" answered %q, want the item with its body", got.Output)
+	}
+	got = callWork(t, reg, builtin.GetWorkItemTool, map[string]any{"item": "ENG-1", "include": 3.0})
+	if !got.Failed || !strings.Contains(got.Output, "`include` as a list of parts") {
+		t.Errorf("include 3 answered %q, want a refusal", got.Output)
+	}
 }

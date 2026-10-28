@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -216,12 +217,17 @@ func TestAnAgentNeverArchivesAProject(t *testing.T) {
 	}
 }
 
-// A NEAR-DUPLICATE WARNING REACHES THE CALLER. It is advisory by design, so
-// the only thing that makes it useful is that the model actually sees it.
+// A NEAR-DUPLICATE CAVEAT REACHES BOTH READERS. It is advisory by design, so
+// the only thing that makes it useful is that the caller actually sees it: a
+// model in the answer's one top-level `warnings` list, a person through the
+// result's caveats, which the act route answers in a person's words. Nested
+// under the answer's `tags` half, it was a list the act route could not take
+// off a person's receipt.
 func TestWriteProjectCarriesTheTagWarnings(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.tagWarnings = []string{"apis is within a typo of api"}
+	near := caveat.TagNearDuplicate("ENG", "apis", []string{"api"})
+	trk.tagWarnings = []caveat.Caveat{near}
 	reg := projectRegistry(t, trk, chartRefuses)
 
 	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
@@ -230,8 +236,21 @@ func TestWriteProjectCarriesTheTagWarnings(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("write_project failed: %q", got.Output)
 	}
-	if !strings.Contains(got.Output, "within a typo") {
-		t.Fatalf("the warning never reached the caller: %q", got.Output)
+	var answer struct {
+		Warnings []string       `json:"warnings"`
+		Tags     map[string]any `json:"tags"`
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(answer.Warnings, []string{near.Agent()}) {
+		t.Fatalf("the model was told %q, want the caveat's own words", answer.Warnings)
+	}
+	if _, nested := answer.Tags["warnings"]; nested {
+		t.Fatal("the warning is nested under the tags half as well")
+	}
+	if len(got.Caveats) != 1 || got.Caveats[0] != near {
+		t.Fatalf("the result carries %+v, want the caveat for a person's surface", got.Caveats)
 	}
 }
 
@@ -614,8 +633,8 @@ func TestWriteProjectCarriesTheTargetDate(t *testing.T) {
 			"argument", got)
 	}
 
-	trk.projectWarnings = []string{"the target date holds a date and not a " +
-		"time, so 2026-12-18T20:00:00Z was stored as 2026-12-19"}
+	trk.projectWarnings = []caveat.Caveat{caveat.TargetDateTruncated(
+		"2026-12-18T20:00:00Z", "2026-12-19", "Asia/Tokyo")}
 	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project": "ENG", "target_date": "2026-12-18T20:00:00Z",
 	})

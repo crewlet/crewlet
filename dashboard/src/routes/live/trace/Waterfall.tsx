@@ -70,7 +70,6 @@ import {
   fmtDuration,
   fmtElapsed,
   fmtTime,
-  plural,
   relTime,
   utf8Bytes,
 } from "~/lib/format.ts";
@@ -869,9 +868,7 @@ export function LiveOutput({
         <span className="t-caption">{fmtBytes(tail.held)} more held until it can be redacted.</span>
       )}
       {!tail.final && (
-        <span className="t-caption">
-          Refreshes every {plural(SANDBOX_TAIL_POLL_MS / 1000, "second")}.
-        </span>
+        <span className="t-caption">Refreshes every {fmtDuration(SANDBOX_TAIL_POLL_MS)}.</span>
       )}
     </div>
   );

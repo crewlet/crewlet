@@ -246,7 +246,7 @@ func TestTheIndexAndTheFilesAgree(t *testing.T) {
 		}, "installs none"},
 		{"unknown key", func(d dirSource) {
 			d.files["deck.json"] = []byte(`{"title":"T","order":["agenda"],"palette":"dark"}`)
-		}, "unknown field"},
+		}, "palette is not a key the deck index carries: the top level of deck.json takes v, createdOnFiles"},
 		{"no title", func(d dirSource) { d.files["deck.json"] = []byte(`{"order":["agenda"]}`) }, "name the deck"},
 		{"twice", func(d dirSource) { d.files["deck.json"] = []byte(`{"title":"T","order":["agenda","agenda"]}`) }, "twice"},
 	}

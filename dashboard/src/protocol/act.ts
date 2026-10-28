@@ -46,7 +46,14 @@ import { ACTIONS } from "../contract/actions.ts";
 import { session, type SessionDomain, type SessionFloors } from "./session.ts";
 import { layoutOpID } from "./gate.ts";
 import { isAbort, rest, RestError } from "./rest.ts";
-import { writeFailed, writeLanded, type ActErrorCode } from "./writeOutcome.ts";
+import {
+  writeFailed,
+  writeLanded,
+  type ActErrorCode,
+  type Caveat,
+  type CaveatAction,
+} from "./writeOutcome.ts";
+import type { Remedy } from "./remedy.ts";
 
 /** A change the dashboard may make: a key of `contract/actions.ts`. */
 export type ActionTool = keyof typeof ACTIONS;
@@ -58,6 +65,9 @@ export type ActionArgs<T extends ActionTool> = {
 
 /** A refusal the act transport can answer with. */
 export type { ActErrorCode };
+
+/** What a landed write says beside its outcome, in a person's words. */
+export type { Caveat, CaveatAction };
 
 // EVERY ROW'S DOMAIN IS A LOG A READ CAN WAIT ON, checked by the compiler: a
 // domain spelled wrong in the table would raise a floor no question reads.
@@ -78,8 +88,13 @@ export type ActResult =
       /** Where the record landed; null for a write that appended nothing. */
       position: string | null;
       domain: SessionDomain | null;
-      /** The tool's own answer, verbatim. */
+      /**
+       * The tool's own answer, without its `warnings`: those are worded for a
+       * model, and the engine answers them in `caveats` for a person.
+       */
       receipt: unknown;
+      /** What the write says beside its outcome, in a person's words. */
+      caveats: Caveat[];
     }
   | {
       kind: "unknown";
@@ -110,6 +125,8 @@ export type ActResult =
        * retry sends the same operation.
        */
       retryable: boolean;
+      /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget). */
+      remedy: Remedy | null;
     };
 
 export interface ActOptions {
@@ -189,6 +206,7 @@ export async function act<T extends ActionTool>(
     position: landed.position,
     domain,
     receipt: landed.receipt,
+    caveats: landed.caveats,
   };
 }
 

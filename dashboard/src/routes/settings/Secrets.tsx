@@ -652,6 +652,7 @@ export function Secrets({ name }: { name?: string }) {
               },
               {
                 key: "at",
+                align: "right",
                 header: "Updated",
                 shrink: true,
                 drop: 4,

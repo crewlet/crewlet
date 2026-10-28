@@ -562,7 +562,7 @@ func TestALongRunsTokenFileIsKeptCurrent(t *testing.T) {
 // BOTH OF A NODE'S WAITERS KEEP A LONG RUN'S TOKEN FILE CURRENT.
 //
 // Each box is polled by one waiter alone: a `direct` or `container` box by its
-// launching node's own, and an `e2b` box by the fleet's (ADR-0059). The
+// launching node's own, and an `e2b` box by the fleet's (ADR-0063). The
 // refresh rides the poll, so a waiter built without it leaves every box of
 // its kind holding the token it launched with, which GitHub refuses within
 // the hour, halfway through a long run's work.

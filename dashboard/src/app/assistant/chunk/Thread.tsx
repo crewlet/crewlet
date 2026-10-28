@@ -25,7 +25,7 @@
  * waiting on them, a turn stopped.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   Callout,
   CopyButton,
@@ -43,8 +43,14 @@ import {
   announce,
 } from "@crewlethq/ui";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
-import type { AssistantFileRef } from "~/contract/assistant.ts";
+import type {
+  AssistantCardEvent,
+  AssistantFileRef,
+  AssistantTurnMode,
+} from "~/contract/assistant.ts";
 import { fmtDateTime } from "~/lib/format.ts";
+import { LimitRemedy } from "~/components/LimitRemedy.tsx";
+import { remedyOf } from "~/protocol/remedy.ts";
 import {
   ActionReceipt,
   CardBlock,
@@ -56,7 +62,9 @@ import {
   thinkingOf,
   type CardHandlers,
 } from "./blocks.tsx";
+import { locksTheBox, refusalLines } from "./bounce.ts";
 import { SentAttachments } from "./files.tsx";
+import { Answer } from "./reads.tsx";
 import { changedNothing } from "./pageActions.ts";
 import { isOpen, proposalOf, type ConversationView, type TurnView } from "./turn.ts";
 
@@ -70,11 +78,20 @@ export interface ThreadProps {
   /** The cards whose place the reader opened beside the conversation. */
   opened: ReadonlySet<string>;
   /** Send a question again, with the images it carried, for a turn that failed on something that may pass. */
-  onRetry: (text: string, attachments: readonly AssistantFileRef[]) => void;
+  onRetry: (
+    text: string,
+    attachments: readonly AssistantFileRef[],
+    mode: AssistantTurnMode,
+  ) => void;
   /** Why a question cannot be sent now (Send's own reason), which holds Try again off too. */
   retryDisabledReason?: string | undefined;
   /** Dial the running turn's stream again. */
   onReconnect: () => void;
+  /**
+   * The key of the refused turn whose question the drawer put back in the box,
+   * or null: the one turn whose notice says so (`bounce.ts`).
+   */
+  inBox?: string | null;
   /**
    * Whether the reader administers the company, and so is shown each step's
    * request beside its sentence (`stepDetail`). Optional only for a suite
@@ -128,6 +145,31 @@ function answerText(turn: TurnView): string {
   return turn.replies.map((r) => r.text).join("\n\n");
 }
 
+/** The cards no answer of the turn holds: none. */
+const NO_CARDS: readonly AssistantCardEvent[] = [];
+
+/**
+ * A turn's cards by the message each belongs to, and those whose message the
+ * turn holds no answer for, each in the order the turn sent them.
+ */
+function cardsByMessage(
+  cards: readonly AssistantCardEvent[],
+  replies: ReadonlySet<string>,
+): { cardsOf: ReadonlyMap<string, readonly AssistantCardEvent[]>; loose: AssistantCardEvent[] } {
+  const cardsOf = new Map<string, AssistantCardEvent[]>();
+  const loose: AssistantCardEvent[] = [];
+  for (const card of cards) {
+    if (!replies.has(card.message_id)) {
+      loose.push(card);
+      continue;
+    }
+    const list = cardsOf.get(card.message_id);
+    if (list) list.push(card);
+    else cardsOf.set(card.message_id, [card]);
+  }
+  return { cardsOf, loose };
+}
+
 /** One turn. */
 function Turn({
   turn,
@@ -136,14 +178,21 @@ function Turn({
   opened,
   onRetry,
   retryDisabledReason,
+  inBox,
   technical,
 }: {
   turn: TurnView;
   now: number;
   on: CardHandlers;
   opened: ReadonlySet<string>;
-  onRetry: (text: string, attachments: readonly AssistantFileRef[]) => void;
+  onRetry: (
+    text: string,
+    attachments: readonly AssistantFileRef[],
+    mode: AssistantTurnMode,
+  ) => void;
   retryDisabledReason: string | undefined;
+  /** Whether the drawer put this turn's refused question back in the box. */
+  inBox: boolean;
   technical: boolean;
 }) {
   const open = isOpen(turn.phase);
@@ -151,9 +200,14 @@ function Turn({
   const steps = stepsOf(turn, technical);
   const deepRuns = deepRunsOf(turn);
   const thinking = thinkingOf(turn);
-  const placed = new Set(turn.replies.map((r) => r.id));
-  const cardsOf = (messageId: string) => turn.cards.filter((c) => c.message_id === messageId);
-  const loose = turn.cards.filter((c) => !placed.has(c.message_id));
+  // EACH ANSWER'S CARDS ARE ONE ARRAY while the turn's cards are, so an
+  // answer works out its reads and its mentions once per change of its cards,
+  // never on every render (a running turn's clock renders it every second).
+  const replyIds = turn.replies.map((r) => r.id).join("\n");
+  const { cardsOf, loose } = useMemo(
+    () => cardsByMessage(turn.cards, new Set(replyIds.split("\n"))),
+    [turn.cards, replyIds],
+  );
   // A PAGE CHANGE WITH NO CARD of its own (a pure view change, D11) is drawn
   // as its receipt; one a card proposed is drawn on that card.
   const carded = new Set(
@@ -195,14 +249,14 @@ function Turn({
       </MessageBubble>
       {turn.refusal ? (
         <Callout
-          variant={turn.refusal.code === "assistant_busy" ? "warning" : "neutral"}
+          variant={
+            locksTheBox(turn.refusal) || turn.refusal.remedy !== null ? "warning" : "neutral"
+          }
           role="status"
           title={turn.refusal.sentence}
+          action={<LimitRemedy remedy={turn.refusal.remedy} />}
         >
-          {turn.refusal.hint ??
-            (turn.refusal.retryAfterSeconds !== null
-              ? `You can ask again in ${turn.refusal.retryAfterSeconds} seconds, and your question is back in the box below.`
-              : "Nothing changed.")}
+          {refusalLines(turn, inBox, now)}
         </Callout>
       ) : turn.steps.length > 0 ? (
         <RunChip state={chip.state} title={chip.title} meta={chip.meta} defaultOpen={false}>
@@ -213,12 +267,18 @@ function Turn({
         <DeepRunBlock key={run.step.step_id} run={run} now={now} technical={technical} />
       ))}
       {turn.replies.map((reply) => (
-        <Stack key={reply.id} gap={3}>
-          <ReplyProse text={reply.text} dimmed={turn.phase === "stopped"} />
-          {cardsOf(reply.id).map(card)}
-        </Stack>
+        <Answer
+          key={reply.id}
+          text={reply.text}
+          dimmed={turn.phase === "stopped"}
+          cards={cardsOf.get(reply.id) ?? NO_CARDS}
+          card={card}
+          on={on}
+        />
       ))}
-      {loose.map(card)}
+      {loose.length > 0 ? (
+        <Answer text="" dimmed={false} cards={loose} card={card} on={on} />
+      ) : null}
       {receipts.map((a) => (
         <ActionReceipt
           key={a.action_id}
@@ -244,7 +304,7 @@ function Turn({
                 size="small"
                 variant="secondary"
                 disabledReason={retryDisabledReason}
-                onClick={() => onRetry(turn.question, turn.attachments)}
+                onClick={() => onRetry(turn.question, turn.attachments, turn.mode ?? "ask")}
               >
                 Try again
               </Button>
@@ -253,6 +313,9 @@ function Turn({
         >
           {turn.error.hint ? `${turn.error.hint} ` : ""}
           {consequenceOf(turn)}
+          {/* WHERE THE CEILING THAT STOPPED THE TURN IS RAISED, beside
+              Try again: a spent budget clears as soon as it is. */}
+          <LimitRemedy remedy={remedyOf(turn.error.remedy)} />
         </Callout>
       ) : null}
       {!open && !turn.refusal ? (
@@ -343,6 +406,7 @@ export function Thread({
   onRetry,
   retryDisabledReason,
   onReconnect,
+  inBox = null,
   technical = false,
 }: ThreadProps) {
   useAnnouncements(view);
@@ -361,6 +425,7 @@ export function Thread({
           opened={opened}
           onRetry={onRetry}
           retryDisabledReason={retryDisabledReason}
+          inBox={turn.key === inBox}
           technical={technical}
         />
       ))}

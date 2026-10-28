@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // --- doubles ---------------------------------------------------------------
@@ -2708,11 +2709,11 @@ func TestAFieldTheToolDoesNotDeclareIsRefusedByName(t *testing.T) {
 		{"a task's misspelt dependency", map[string]any{"tasks": []any{
 			taskArg("gather", "read it", nil),
 			taskArg("write", "summarise it", map[string]any{"afer": []any{"gather"}}),
-		}}, `"afer"`},
+		}}, "tasks[1].afer is not a key"},
 		{"a stray argument beside the tasks", map[string]any{
 			"tasks":    []any{taskArg("a", "t", nil)},
 			"parallel": 2,
-		}, `"parallel"`},
+		}, "parallel is not a key"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -3206,7 +3207,7 @@ func TestAWorkerCountsTheRunsCallsButNotItsSiblings(t *testing.T) {
 	cfg := baseConfig(t, w, p)
 	cfg.ParentRemaining = 0
 	calls := turnctx.NewCallLog()
-	calls.Record(counter.Name(), map[string]any{"v": "parent"})
+	calls.Record(counter.Name(), toolargs.Of(nil, map[string]any{"v": "parent"}))
 	cfg.Turn = &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: cfg.Seat.Role,
 		Org: cfg.Seat.Org, Calls: calls}
 
@@ -3229,5 +3230,15 @@ func TestAWorkerCountsTheRunsCallsButNotItsSiblings(t *testing.T) {
 		t.Fatalf("after the wave the run counts %d different calls before a "+
 			"repeat of its own, want both workers' — the repeat would take its "+
 			"first copy's id with a worker's write in place", got)
+	}
+}
+
+// THE DELEGATE TOOL ADVERTISES A SCHEMA THE SURFACE'S CHECK CAN KEEP
+// (ADR-0059), like every first-party tool's.
+func TestTheDelegateSchemaIsOneTheCheckKeeps(t *testing.T) {
+	t.Parallel()
+	tool, _ := toolFixture(t, &provider{name: "sub"})
+	if bad := tools.UnsupportedSchema(tool.Parameters()); len(bad) > 0 {
+		t.Errorf("delegate advertises what the check cannot keep: %v", bad)
 	}
 }

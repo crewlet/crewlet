@@ -427,6 +427,7 @@ export function Turns() {
           columns={[
             {
               key: "started",
+              align: "right",
               header: "Started",
               shrink: true,
               cell: (t) => <TableDateCell value={t.started_at} now={now} />,

@@ -568,7 +568,7 @@ describe("what a seat is doing", () => {
         { id: "a", agent_id: "a", role: "Dev A", activity: "stopped", stopped_reason: "budget" },
         now,
       ),
-    ).toBe("Stopped: its token budget is spent until the window resets");
+    ).toBe("Stopped: its token budget is spent until the window resets or the ceiling is raised");
     expect(
       labelOf(
         {

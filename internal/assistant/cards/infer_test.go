@@ -188,7 +188,7 @@ func TestAnInferredTableHidesBookkeepingAndTypesInstants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, _ := json.Marshal(built.Cards())
+	encoded, _ := json.Marshal(built.Card)
 	if strings.Contains(string(encoded), "Entry 1") || !strings.Contains(string(encoded), "2026-10-13") ||
 		!strings.Contains(string(encoded), "Tokens: 120") {
 		t.Errorf("the series reads %s", encoded)

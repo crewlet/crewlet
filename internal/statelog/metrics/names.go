@@ -121,4 +121,9 @@ const (
 	AssistantFirstOutputLatency = "crewlet.assistant.first_output.latency"
 	AssistantSteps              = "crewlet.assistant.steps"
 	AssistantStreamsActive      = "crewlet.assistant.streams.active"
+	AssistantBriefs             = "crewlet.assistant.briefs"
+	ToolPolicyRefusalLoops      = "crewlet.tools.policy_refusal_loops"
+	ToolArgsOutsideSchema       = "crewlet.tools.args_outside_schema"
+	AssistantBriefRowsDropped   = "crewlet.assistant.brief.rows_dropped"
+	AssistantCardsShownAsNotice = "crewlet.assistant.cards.shown_as_notice"
 )

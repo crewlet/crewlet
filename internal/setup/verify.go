@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Checking a credential somebody has typed, before anything stores it.
@@ -222,8 +223,8 @@ func Judge(f Failure, secret string) Verdict {
 	switch {
 	case errors.Is(f.Err, context.DeadlineExceeded):
 		return Verdict{Outcome: VerifyUnreachable, Detail: fmt.Sprintf(
-			"%s did not answer within %d seconds. Nothing was stored.",
-			app, int(VerifyBudget/time.Second))}
+			"%s did not answer within %s. Nothing was stored.",
+			app, statelog.Spoken(VerifyBudget))}
 	case f.Refused || errors.Is(integration.Reject(f.Err, f.Status), integration.ErrCredentialRejected):
 		if reason := sayable(f.Reason, secret); reason != "" {
 			return Verdict{Outcome: VerifyRefused, Detail: fmt.Sprintf(

@@ -494,6 +494,31 @@ type SteerMark struct {
 	ID    string
 }
 
+// roundKey carries the round a tool call runs in on the context the surface is
+// handed; see [CallRound].
+type roundKey struct{}
+
+// CallRound is the round the calling tool runs in, on the same one-based scale
+// as [Execution.Round], and false outside a tool call this loop made.
+//
+// Read by a tool whose own answer depends on which round asked for it, and
+// never by the loop itself, which knows its round without asking: the
+// assistant's brief turn refuses a read in a round kept for its answer, says
+// so on a read in the last round that may read, and makes a refused answer in
+// the turn's last round final (internal/assistant). A worker spawned by a
+// delegate call is told its parent's round by its caller instead
+// ([subagent.Config]), since a phase is one invocation of this loop and a
+// count from it is the phase's own.
+func CallRound(ctx context.Context) (int, bool) {
+	round, ok := ctx.Value(roundKey{}).(int)
+	return round, ok
+}
+
+// withCallRound stamps the round a call runs in.
+func withCallRound(ctx context.Context, round int) context.Context {
+	return context.WithValue(ctx, roundKey{}, round)
+}
+
 // Narration is one round's model turn — what it said — KEPT ATTACHED TO ITS
 // ROUND.
 //

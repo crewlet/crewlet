@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+
+	"github.com/crewlet/crewlet/internal/caveat"
 )
 
 // Result is what one tool call produced.
@@ -49,6 +51,41 @@ type Result struct {
 	// 409 and 503, and reading those back out of a sentence would make the
 	// wording of a refusal an API.
 	Cause error
+
+	// Note is what the caller tells the MODEL beside Output: on a success,
+	// the arguments the call sent outside its tool's schema, which the tool
+	// did not read as sent (ADR-0059). NEVER PART OF OUTPUT, because a
+	// caller may parse Output (a write tool's JSON receipt, which the work
+	// API decodes); each renderer for a model places it where the model
+	// reads it: the model's text, an MCP answer's own content. A person's
+	// answer never carries it (ADR-0060); a surface answering a person tells
+	// it in process to an assistant's model instead (internal/modelnote).
+	Note string
+
+	// Caveats are what a call that LANDED says beside its answer, each in the
+	// words of every reader ([caveat.Caveat]). Nil on a failure and on a
+	// success that has nothing to add.
+	//
+	// NEVER RENDERED, for Cause's reason: Output already carries each
+	// caveat's MODEL phrasing under `warnings`, written from these same
+	// values, so a model reads nothing here it has not read there. It exists
+	// for the caller that answers a PERSON (the act route, ADR-0060), which
+	// must answer the person's phrasing and never the model's, and could
+	// only otherwise read the model's out of Output.
+	Caveats []caveat.Caveat
+
+	// PersonRefusal is a call that was REFUSED, in a person's words
+	// ([caveat.Refusal]). Zero on a success, and on a refusal nobody has
+	// worded for a person yet.
+	//
+	// NEVER RENDERED, for Cause's reason: Output is the model's sentence
+	// about the same refusal, and stays the whole of what a model reads. It
+	// exists for the caller that answers a PERSON (the act route,
+	// ADR-0060), which answers this phrasing as the refusal's `detail` and
+	// never Output; where it is zero, that caller answers the refusal
+	// code's own sentence and no detail, so a refusal nobody worded for a
+	// person tells them less, and never a model's words.
+	PersonRefusal caveat.Refusal
 }
 
 // Callable is the least a phase surface needs to offer something to a model

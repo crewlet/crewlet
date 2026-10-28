@@ -3,6 +3,7 @@ package wire
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -277,52 +278,65 @@ func (s *ActionArgs) validate(path string, depth int, nodes *int) error {
 
 // Check reports what is wrong with a value as the schema reads it, in a
 // sentence that names the member and what it takes, so the model corrects
-// the call rather than guessing again.
+// the call rather than guessing again. EVERY FAULT at once, joined in path
+// order (ADR-0059): a refusal naming one of several spends the model's next
+// attempt on the one after it.
 func (s *ActionArgs) Check(v any) error {
-	return s.check("args", v)
+	found := s.problems("args", v)
+	if len(found) == 0 {
+		return nil
+	}
+	reasons := make([]string, len(found))
+	for i, err := range found {
+		reasons[i] = err.Error()
+	}
+	return errors.New(strings.Join(reasons, "; "))
 }
 
-func (s *ActionArgs) check(path string, v any) error {
+func (s *ActionArgs) problems(path string, v any) []error {
 	if len(s.Type) > 0 && !slices.ContainsFunc(s.Type, func(t ArgType) bool { return is(t, v) }) {
-		return fmt.Errorf("%s is %s", path, typeWords(s.Type))
+		return []error{fmt.Errorf("%s is %s", path, typeWords(s.Type))}
 	}
 	if len(s.OneOf) > 0 {
-		return s.checkOneOf(path, v)
+		return s.oneOfProblems(path, v)
 	}
+	var found []error
+	add := func(format string, args ...any) { found = append(found, fmt.Errorf(format, args...)) }
 	switch value := v.(type) {
 	case string:
 		n := utf16Len(value)
-		switch {
-		case s.Const != nil && value != *s.Const:
-			return fmt.Errorf("%s is %q", path, *s.Const)
-		case len(s.Enum) > 0 && !slices.Contains(s.Enum, value):
-			return fmt.Errorf("%s is one of %s, not %q", path, quoted(s.Enum), value)
-		case s.MinLength != nil && n < *s.MinLength:
-			return fmt.Errorf("%s is at least %d characters", path, *s.MinLength)
-		case s.MaxLength != nil && n > *s.MaxLength:
-			return fmt.Errorf("%s is at most %d characters", path, *s.MaxLength)
+		if s.Const != nil && value != *s.Const {
+			add("%s is %q", path, *s.Const)
+		}
+		if len(s.Enum) > 0 && !slices.Contains(s.Enum, value) {
+			add("%s is one of %s, not %q", path, quoted(s.Enum), value)
+		}
+		if s.MinLength != nil && n < *s.MinLength {
+			add("%s is at least %d characters", path, *s.MinLength)
+		}
+		if s.MaxLength != nil && n > *s.MaxLength {
+			add("%s is at most %d characters", path, *s.MaxLength)
 		}
 	case []any:
-		switch {
-		case s.MinItems != nil && len(value) < *s.MinItems:
-			return fmt.Errorf("%s holds at least %d entries", path, *s.MinItems)
-		case s.MaxItems != nil && len(value) > *s.MaxItems:
-			return fmt.Errorf("%s holds at most %d entries", path, *s.MaxItems)
+		if s.MinItems != nil && len(value) < *s.MinItems {
+			add("%s holds at least %d entries", path, *s.MinItems)
+		}
+		if s.MaxItems != nil && len(value) > *s.MaxItems {
+			add("%s holds at most %d entries", path, *s.MaxItems)
 		}
 		if s.Items != nil {
 			for i, item := range value {
-				if err := s.Items.check(fmt.Sprintf("%s[%d]", path, i), item); err != nil {
-					return err
-				}
+				found = append(found, s.Items.problems(fmt.Sprintf("%s[%d]", path, i), item)...)
 			}
 		}
 	case map[string]any:
-		return s.checkObject(path, value)
+		found = append(found, s.objectProblems(path, value)...)
 	}
-	return nil
+	return found
 }
 
-func (s *ActionArgs) checkObject(path string, value map[string]any) error {
+func (s *ActionArgs) objectProblems(path string, value map[string]any) []error {
+	var found []error
 	closed := s.AdditionalProperties != nil && !*s.AdditionalProperties
 	for _, name := range slices.Sorted(maps.Keys(value)) {
 		member, declared := s.Properties[name]
@@ -336,44 +350,43 @@ func (s *ActionArgs) checkObject(path string, value map[string]any) error {
 		}
 		switch {
 		case declared:
-			if err := member.check(path+"."+name, value[name]); err != nil {
-				return err
-			}
+			found = append(found, member.problems(path+"."+name, value[name])...)
 		case closed:
-			return fmt.Errorf("%s takes no %q; it takes %s", path, name, s.memberWords())
+			found = append(found, fmt.Errorf("%s takes no %q; it takes %s", path, name, s.memberWords()))
 		}
 	}
 	for _, name := range s.Required {
 		if _, ok := value[name]; !ok {
-			return fmt.Errorf("%s needs %q", path, name)
+			found = append(found, fmt.Errorf("%s needs %q", path, name))
 		}
 	}
-	return nil
+	return found
 }
 
-// checkOneOf holds v to the variant it names: by the member every variant
+// oneOfProblems holds v to the variant it names: by the member every variant
 // pins with a Const (an operation's `op`), so a refusal speaks of the one
-// shape the model meant; else to the first variant that takes it.
-func (s *ActionArgs) checkOneOf(path string, v any) error {
+// shape the model meant; else to the first variant that takes it, answering
+// the first variant's problems when none does.
+func (s *ActionArgs) oneOfProblems(path string, v any) []error {
 	if key := s.discriminator(); key != "" {
 		var values []string
 		for _, variant := range s.OneOf {
 			pinned := *variant.Properties[key].Const
 			values = append(values, pinned)
 			if obj, ok := v.(map[string]any); ok && obj[key] == pinned {
-				return variant.check(path, v)
+				return variant.problems(path, v)
 			}
 		}
-		return fmt.Errorf("%s.%s is one of %s", path, key, quoted(values))
+		return []error{fmt.Errorf("%s.%s is one of %s", path, key, quoted(values))}
 	}
-	var first error
+	var first []error
 	for _, variant := range s.OneOf {
-		err := variant.check(path, v)
-		if err == nil {
+		found := variant.problems(path, v)
+		if len(found) == 0 {
 			return nil
 		}
 		if first == nil {
-			first = err
+			first = found
 		}
 	}
 	return first

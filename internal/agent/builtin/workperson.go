@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -776,7 +777,7 @@ func inboxGesture(args map[string]any) (worklet.InboxGesture, string) {
 	g.Unread = argStrings(args, "unread")
 	g.Unsnooze = argStrings(args, "unsnooze")
 	if raw, held := args["snooze"]; held {
-		items, ok := raw.([]any)
+		items, ok := argval.List(raw)
 		if !ok {
 			return g, "`snooze` is a list of `{record_id, until}`."
 		}
@@ -828,7 +829,11 @@ func inboxGesture(args map[string]any) (worklet.InboxGesture, string) {
 
 // changeOf reads one set_pins argument as its three lists, or the sentence
 // refusing it.
-func changeOf(args map[string]any, key string) (set, add, remove []any,
+//
+// read is how each list is read: [argval.StringItems] for a list of ids, which
+// takes the single string a model sends for one, and [argval.List] for a list
+// of objects.
+func changeOf(args map[string]any, key string, read func(any) ([]any, bool)) (set, add, remove []any,
 	hasSet bool, bad string) {
 
 	raw, held := args[key]
@@ -846,7 +851,7 @@ func changeOf(args map[string]any, key string) (set, add, remove []any,
 		if !present || value == nil {
 			return nil, false, ""
 		}
-		items, ok := value.([]any)
+		items, ok := read(value)
 		if !ok {
 			return nil, false, fmt.Sprintf("`%s.%s` is a list.", key, name)
 		}
@@ -867,14 +872,14 @@ func changeOf(args map[string]any, key string) (set, add, remove []any,
 
 // viewChange reads the pinned views' change.
 func viewChange(args map[string]any) (worklet.SetChange[string], string) {
-	set, add, remove, hasSet, bad := changeOf(args, "views")
+	set, add, remove, hasSet, bad := changeOf(args, "views", argval.StringItems)
 	if bad != "" {
 		return worklet.SetChange[string]{}, bad
 	}
 	strs := func(items []any) []string {
 		out := make([]string, 0, len(items))
 		for _, item := range items {
-			if v, ok := item.(string); ok {
+			if v, ok := argval.String(item); ok && item != nil {
 				out = append(out, strings.TrimSpace(v))
 			} else {
 				out = append(out, "")
@@ -892,7 +897,7 @@ func viewChange(args map[string]any) (worklet.SetChange[string], string) {
 
 // favoriteChange reads the starred things' change.
 func favoriteChange(args map[string]any) (worklet.SetChange[worklet.Favorite], string) {
-	set, add, remove, hasSet, bad := changeOf(args, "favorites")
+	set, add, remove, hasSet, bad := changeOf(args, "favorites", argval.List)
 	if bad != "" {
 		return worklet.SetChange[worklet.Favorite]{}, bad
 	}
@@ -999,7 +1004,7 @@ func (t *workInbox) Parameters() map[string]any {
 				"description": "The `next_cursor` of the previous page.",
 			},
 			"limit": map[string]any{
-				"type": "number",
+				"type": "integer",
 				"description": fmt.Sprintf("How many notices, at most %d.",
 					worklet.MaxInboxRows),
 			},
@@ -1027,7 +1032,7 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		Unread:      argBool(args, "unread"),
 		Snoozed:     worklet.SnoozeExclude,
 		Cursor:      strings.TrimSpace(argString(args, "cursor")),
-		Limit:       int(argFloat(args, "limit")),
+		Limit:       argInt(args, "limit", 0),
 		Level:       seatReadLevel,
 	}
 	if raw := strings.TrimSpace(argString(args, "snoozed")); raw != "" {

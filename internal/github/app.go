@@ -126,11 +126,21 @@ type ManifestOptions struct {
 	// collide on the second one. [AppName] builds one that does not.
 	Name string
 
-	// DeliveryURL is where GitHub posts this app's events. Empty creates
-	// the app with delivery switched OFF rather than pointed nowhere,
-	// because an app delivering into a void looks healthy at GitHub and
-	// receives nothing here.
+	// DeliveryURL is where GitHub posts this app's events: the seat's own
+	// delivery address on this engine.
 	DeliveryURL string
+
+	// DeliveryOff creates the app with NO webhook and no event
+	// subscriptions. It is set where GitHub cannot reach the address
+	// ([Deliverable]). GitHub validates a manifest's hook whether or not it
+	// is active: it refuses a hook with no url, a url it cannot reach
+	// ("isn't reachable over the public Internet (localhost)"), and event
+	// subscriptions with no hook ("Hook url cannot be blank"). So the only
+	// manifest GitHub accepts from an engine it cannot reach is one with
+	// neither. The agent still acts on GitHub through the app, since pushes,
+	// pull requests and reviews are all outbound; a webhook is added on the
+	// app at GitHub once the engine has a public address.
+	DeliveryOff bool
 
 	// RedirectURL is where GitHub returns the browser with the one-time
 	// code. Required: without it the code is displayed to the operator
@@ -214,11 +224,13 @@ func runePrefix(s string, n int) string {
 // BuildManifest describes the app one seat needs.
 func BuildManifest(opts ManifestOptions) Manifest {
 	// BORN POINTING AT THE ENGINE, so an app never spends its first
-	// minutes delivering nowhere. With no address the hook is created
-	// INACTIVE rather than pointed at a placeholder, because an inactive
-	// hook is a state the operator can see and a wrong URL is not.
-	hook := map[string]any{"active": false}
-	if url := strings.TrimSpace(opts.DeliveryURL); url != "" {
+	// minutes delivering nowhere. Where GitHub cannot reach the engine the
+	// app is created with no hook and no events at all ([ManifestOptions]
+	// DeliveryOff says why), never pointed at a placeholder: an app with
+	// no webhook is a state GitHub's settings page shows, and a wrong URL
+	// is one that looks healthy and arrives nowhere.
+	var hook map[string]any
+	if url := strings.TrimSpace(opts.DeliveryURL); url != "" && !opts.DeliveryOff {
 		hook = map[string]any{"url": url, "active": true}
 	}
 	home := strings.TrimSpace(opts.Homepage)
@@ -235,9 +247,19 @@ func BuildManifest(opts ManifestOptions) Manifest {
 		SetupURL:       strings.TrimSpace(opts.SetupURL),
 		SetupOnUpdate:  true,
 		HookAttributes: hook,
-		DefaultEvents:  ManifestEvents,
+		DefaultEvents:  eventsFor(hook),
 		DefaultPerms:   opts.Access.Permissions(),
 	}
+}
+
+// eventsFor is the events an app subscribes to: none without a hook, since
+// GitHub refuses a manifest that subscribes to events with nowhere to send
+// them.
+func eventsFor(hook map[string]any) []string {
+	if hook == nil {
+		return nil
+	}
+	return ManifestEvents
 }
 
 // Deliverable reports whether GitHub can deliver a webhook to base, this
@@ -246,10 +268,10 @@ func BuildManifest(opts ManifestOptions) Manifest {
 //
 // AN APP'S DELIVERY ADDRESS IS BAKED IN AT CREATION, and only a person at
 // GitHub changes it afterwards. So an address GitHub can never reach is not
-// written into a manifest at all: the app is created with its webhook
-// switched off ([BuildManifest]), which is a state GitHub's own settings page
-// shows, rather than pointed at an address that fails every delivery while
-// the app reads as healthy. That is what a local engine is: one a person
+// written into a manifest at all: the app is created with no webhook and no
+// event subscriptions ([BuildManifest]), which is a state GitHub's own
+// settings page shows, rather than pointed at an address that fails every
+// delivery while the app reads as healthy. That is what a local engine is: one a person
 // reaches at `http://localhost:8200`, whose agents act on GitHub perfectly
 // well through their apps and hear nothing back from it.
 //

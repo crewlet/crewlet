@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -19,11 +20,14 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/modelnote"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -68,6 +72,8 @@ type recordingWork struct {
 	opIDs   []string
 	taskIDs []string
 	outcome statelog.Outcome
+	// caveats is what every create answers it was not refused for.
+	caveats []caveat.Caveat
 }
 
 type recordingWriter struct {
@@ -103,7 +109,8 @@ func (w recordingWriter) CreateTask(_ context.Context, opID string, task worklet
 			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711},
 			Version:  4711,
 		},
-		Key: "ENG-9",
+		Key:     "ENG-9",
+		Caveats: w.w.caveats,
 	}, nil
 }
 
@@ -398,9 +405,9 @@ func TestAnActWhoseWriteIsUnknownSaysSo(t *testing.T) {
 	if rec.Header().Get("Retry-After") == "" {
 		t.Error("a write this node can settle by being asked again answered no Retry-After")
 	}
-	if detail, _ := answer["tool_detail"].(string); strings.Contains(detail, "`op_id`") {
-		t.Errorf("a person is told to send an op_id argument, which this transport "+
-			"refuses: %s", detail)
+	if detail, has := answer["tool_detail"]; has {
+		t.Errorf("an unknown answered the tool's own sentence, written for a "+
+			"model: %v", detail)
 	}
 }
 
@@ -476,7 +483,7 @@ func (p *recordingProject) WriteTags(_ context.Context, opID, _ string, _ workle
 	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
-func (p *recordingProject) EnsureTags(context.Context, string, string, []string) ([]string, []string, error) {
+func (p *recordingProject) EnsureTags(context.Context, string, string, []string) ([]string, []caveat.Caveat, error) {
 	return nil, nil, nil
 }
 
@@ -628,7 +635,7 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 	answer := func(class crewletmcp.Refusal) (*httptest.ResponseRecorder, map[string]any) {
 		rec := httptest.NewRecorder()
 		operator.Fail(rec, crewletmcp.Classify(class, errors.New("the reason")),
-			"the sentence", newKey(), nil)
+			caveat.NotAnOption(), newKey(), nil)
 		var body map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("%q answered a body that is not JSON: %q", class, rec.Body)
@@ -686,9 +693,12 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 	}
 }
 
-// A TOOL'S REFUSAL REACHES THE PERSON AS ITS CLASS, with the tool's own
-// sentence as the detail, at the status the class maps to — here the one an
-// update of an item the stub tracker does not hold comes back with.
+// A TOOL'S REFUSAL REACHES THE PERSON AS ITS CLASS, at the status the class
+// maps to (here the one an update of an item the stub tracker does not hold
+// comes back with), naming the tool and the item, and in its code's own
+// sentence: nobody has worded this refusal for a person, so it carries no
+// detail, and the tool's sentence (written for a model) is never it
+// (ADR-0060).
 func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 	t.Parallel()
 	body := `{"args":{"item":"ENG-404","status":"done"}}`
@@ -698,10 +708,14 @@ func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 		t.Fatalf("an update of a missing item answered %d %v, want 404 not_found",
 			status, answer)
 	}
-	if detail, _ := answer["detail"].(string); !strings.Contains(detail, "ENG-404") ||
-		answer["tool"] != worklet.UpdateWorkItemTool {
-
-		t.Errorf("the refusal %v does not carry the tool and its own sentence", answer)
+	if answer["tool"] != worklet.UpdateWorkItemTool || answer["item"] != "ENG-404" {
+		t.Errorf("the refusal %v does not name the tool and the item", answer)
+	}
+	if detail, has := answer["detail"]; has {
+		t.Errorf("a refusal nobody worded for a person answered a detail: %v", detail)
+	}
+	if answer["message"] != httpjson.CodeNotFound.Message() {
+		t.Errorf("the refusal's sentence is %v, want its code's own", answer["message"])
 	}
 }
 
@@ -766,7 +780,7 @@ func TestTheActAnswerLiftsTheToolsOwnOutcome(t *testing.T) {
 		{"a sentence", `done`, statelog.OutcomeApplied, ""},
 	}
 	for _, tc := range cases {
-		got := operator.ReceiptOf("t", tc.output)
+		got := operator.ReceiptOf("t", tools.Result{Output: tc.output})
 		position := ""
 		if got.Position != nil {
 			position = *got.Position
@@ -855,7 +869,7 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	rec = httptest.NewRecorder()
 	operator.Fail(rec, crewletmcp.Classify(crewletmcp.RefusalUnavailable,
 		errors.New("the tracker is sealed for maintenance")),
-		"the tracker is sealed for maintenance", key,
+		caveat.Refusal{}, key,
 		httpjson.Detail{"tool": "create_work_item"})
 	body = decode(t, rec)
 	if rec.Code != http.StatusServiceUnavailable || body["error"] != "unavailable" {
@@ -876,5 +890,148 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	if rec.Code < 400 || rec.Code >= 500 {
 		t.Errorf("a call whose caller hung up was recorded as %d — a 5xx counts "+
 			"a closed tab as this node failing", rec.Code)
+	}
+}
+
+// THE NOTE ON A CALL'S ARGUMENTS IS THE MODEL'S, NEVER A PERSON'S (ADR-0059,
+// ADR-0060): a person's receipt ([operator.PersonsReceipt], which the act
+// route and the human write surface both answer through) is the tool's answer
+// and carries neither the note nor a field for it, and the note is told in
+// process to the model that wrote the call, the one reader it is worded for.
+//
+// Mutation: carry the note beside the receipt and its text is in the answer;
+// drop TellNote and the assistant's model hears nothing.
+func TestTheArgumentsNoteIsTheModelsAndNeverAPersons(t *testing.T) {
+	t.Parallel()
+	const note = "`ops[0].opp` is not an argument"
+	result := tools.Result{Output: `{"key": "ENG-9", "outcome": "applied"}`, Note: note}
+	answer := operator.ReceiptOf(worklet.CreateWorkItemTool, result)
+	var receipt map[string]any
+	if err := json.Unmarshal(answer.Receipt, &receipt); err != nil || receipt["key"] != "ENG-9" {
+		t.Errorf("the receipt is %s (%v), want the tool's own JSON answer", answer.Receipt, err)
+	}
+	raw, _ := json.Marshal(answer)
+	if strings.Contains(string(raw), "is not an argument") || strings.Contains(string(raw), "note") {
+		t.Errorf("a person's answer carries the model's note: %s", raw)
+	}
+	ctx, heard := modelnote.Expect(t.Context())
+	operator.TellNote(httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx), result)
+	if heard.Said() != note {
+		t.Errorf("the model heard %q, want the note", heard.Said())
+	}
+}
+
+// A PERSON IS ANSWERED A CAVEAT IN A PERSON'S WORDS, and never the model's.
+//
+// The incident: answering a decision in the dashboard left a toast that never
+// went away, telling a person to "Use ask: backend-engineer", the receipt's
+// `warnings` written for a model and shown verbatim. The act route answers
+// each caveat's person phrasing with what it asks of the person, and takes the
+// model's list off the receipt, so no screen reading the receipt can show it.
+func TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels(t *testing.T) {
+	t.Parallel()
+	gone := caveat.DefaultAssigneeGone("ENG", "bo")
+	work := &recordingWork{caveats: []caveat.Caveat{gone}}
+	h := guarded(actSurface(t, work))
+
+	status, answer := act(t, h, "founder", "create_work_item", "application/json",
+		createBody(), newKey())
+	if status != http.StatusOK {
+		t.Fatalf("the create answered %d: %v", status, answer)
+	}
+	receipt, _ := answer["receipt"].(map[string]any)
+	if receipt == nil {
+		t.Fatalf("the answer carries no receipt: %v", answer)
+	}
+	if said, carried := receipt[builtin.WarningsKey]; carried {
+		t.Errorf("the receipt still carries the model's words, which a screen "+
+			"reading it would show a person: %v", said)
+	}
+	if receipt["key"] != "ENG-9" {
+		t.Errorf("the rest of the receipt was not kept: %v", receipt)
+	}
+	want := []any{map[string]any{"code": string(caveat.CodeDefaultAssigneeGone),
+		"message": gone.Person(), "action": string(caveat.ActionRequired)}}
+	if got := answer["caveats"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("caveats = %v, want %v", got, want)
+	}
+
+	// AND A WRITE WITH NOTHING TO ADD ANSWERS AN EMPTY LIST, never null,
+	// so a client reads one shape.
+	quiet := guarded(actSurface(t, &recordingWork{}))
+	if _, answer := act(t, quiet, "founder", "create_work_item", "application/json",
+		createBody(), newKey()); !reflect.DeepEqual(answer["caveats"], []any{}) {
+		t.Errorf("a write with no caveats answered %#v, want []", answer["caveats"])
+	}
+}
+
+// THE RECEIPT LOSES ITS MODEL WORDS AND NOTHING ELSE: a receipt that carries
+// no warnings is answered exactly as the tool wrote it. A tool answer that is
+// not a receipt at all (not a JSON object) is the tool's words to a model, so
+// the write's outcome stands and the answer carries no receipt (ADR-0060).
+func TestTheActReceiptLosesOnlyTheModelsWarnings(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ output, want string }{
+		"warnings and fields":  {`{"key":"ENG-1","warnings":["Use ask: ana"]}`, `{"key":"ENG-1"}`},
+		"no warnings":          {`{"key": "ENG-1"}`, `{"key": "ENG-1"}`},
+		"not an object":        {`["a","b"]`, `null`},
+		"a sentence, not JSON": {`Filed ENG-1; call get_work_item to read it.`, `null`},
+	} {
+		got := operator.ReceiptOf("t", tools.Result{Output: c.output})
+		if string(got.Receipt) != c.want || got.Outcome != statelog.OutcomeApplied {
+			t.Errorf("%s: receipt %s (%s), want %s applied", name, got.Receipt,
+				got.Outcome, c.want)
+		}
+	}
+}
+
+// oneTaskReader is a work reader that holds one item, ENG-1.
+type oneTaskReader struct{ stubWorkReader }
+
+func (oneTaskReader) Task(context.Context, string, worklet.DetailWants,
+	statelog.Freshness) (worklet.TaskDetail, error) {
+
+	return worklet.TaskDetail{Task: worklet.Task{ID: "t-1", Key: "ENG-1", Project: "ENG",
+		Title: "Rotate the signing key"}}, nil
+}
+
+// THE ACT ROUTE TELLS THE MODEL THE NOTE AND NEVER THE PERSON (ADR-0059,
+// ADR-0060), through the handler itself: a call that succeeds while one of its
+// arguments was not read as sent (a key `checklist` does not take) is answered
+// to the person with the receipt and nothing of the note, and the note is told
+// to the model that made the request, in process.
+//
+// Mutation: drop TellNote from the act handler and the model hears nothing;
+// carry the note beside the receipt and the body names it.
+func TestTheActRouteTellsTheModelTheNoteAndNeverThePerson(t *testing.T) {
+	t.Parallel()
+	h := guarded(newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{
+			Work: builtin.WorkDeps{Reader: oneTaskReader{}, Writer: (&recordingWork{}).writer},
+			Pages: builtin.PageDeps{
+				Reader: stubPageReader{}, Writer: stubPageWriter{},
+			},
+		}),
+		Org: company,
+	}))
+	body, _ := json.Marshal(map[string]any{"args": map[string]any{
+		"item": "ENG-1", "checklist": map[string]any{
+			"op": "remove_list", "list": "l-1", "bogus": "x"}}})
+	ctx, heard := modelnote.Expect(t.Context())
+	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+builtin.UpdateWorkItemTool,
+		strings.NewReader(string(body))).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer founder")
+	r.Header.Set(opkey.Header, newKey())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the update answered %d: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(heard.Said(), "checklist.bogus") {
+		t.Errorf("the model heard %q, want the note on `checklist.bogus`", heard.Said())
+	}
+	if strings.Contains(rec.Body.String(), "bogus") {
+		t.Errorf("the person's answer carries the model's note: %s", rec.Body)
 	}
 }

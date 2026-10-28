@@ -185,6 +185,14 @@ func (r *Rig) AskWith(name, text string, page *wire.PageContext, read exec.Grant
 		Conversation: r.Conversation, Key: Key(name), Input: text, Page: page, Read: read})
 }
 
+// Brief asks for a brief ([wire.TurnBrief]) of page under key name, on a fake
+// read grant.
+func (r *Rig) Brief(name, text string, page *wire.PageContext) (wire.TurnAccepted, error) {
+	return r.Svc.Start(context.Background(), assistant.TurnStart{Person: r.Person,
+		Conversation: r.Conversation, Key: Key(name), Input: text, Page: page,
+		Read: r.Grant(name), Mode: wire.TurnBrief})
+}
+
 // Collector is a stream as a suite reads it, refusing a frame the protocol
 // would.
 type Collector struct {

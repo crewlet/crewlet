@@ -2497,6 +2497,7 @@ page:                             # optional: the page chip, as the dashboard se
   title: Spend
   source_revision: spend@1
 question: Who spent the most tokens this week?
+mode: ask                         # ask (default) or brief, which needs the page
 answers:                          # what each request the assistant sends answers
   - route: GET /tokens/breakdown  # a route pattern, {name} matching one segment
     status: 200                   # default 200
@@ -2513,6 +2514,12 @@ expect:
   says: [ada]                     # text the answer contains, ignoring case
   never_says: ["http"]            # text it must not contain, ignoring case
   shows: [Spend by agent]         # text the turn's cards carry, ignoring case
+  brief:                          # a brief turn's card (mode: brief only)
+    needs: [ENG-42, qa]           # the records its rows cite, in order; [] is "Nothing needs you"
+    tones: [warning, danger]      # optional: each row's tone, in the same order
+    verdict: 2 things need you    # optional: the verdict the engine counted from the rows it kept
+  refusals:                       # what each refused call's answer names, in order
+    - [about, "needs[0].do"]      # judged against the scripted model, which hears every answer
 ```
 
 A case is read by the configuration's own strict reader: a member this build does
@@ -2529,7 +2536,12 @@ becomes a proposal, as it does in the dashboard, which is what `proposals`
 counts. `shows` reads the cards the turn drew (a table's title and cells, a
 proposal's rows and note), so a case can hold what the person was shown, not
 only what the answer said: the place a page is proposed in, or the reason a
-read card gives.
+read card gives. A `mode: brief` case runs a brief turn (the drawer's "Brief me
+on this page"), whose script ends with an `answer_brief` call; `brief` holds the
+card the engine drew from it, after the engine dropped every row whose record
+the turn did not read or the person may not open, and drew a danger tone only
+where the record's own read carried the fact; its `verdict` is counted from the
+rows that survived, never written by the model.
 
 ---
 

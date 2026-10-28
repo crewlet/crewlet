@@ -473,6 +473,46 @@ func TestNoRouteDetailReachesAPerson(t *testing.T) {
 	}
 }
 
+// THE MODEL HEARS THE TOOL'S SENTENCE BESIDE A PERSON'S REFUSAL (ADR-0060).
+// The route answers a refusal in a person's words, or with no detail where
+// nobody has worded it, so the floor alone would leave the assistant's model
+// unable to say what to change. The tool's own sentence, told in process
+// ([exec.Response.ModelDetail]), is handed to the resumed turn beside the
+// route's answer under [approval.ToolDetailKey], and never to the card the
+// drawer draws. Mutation: drop it from the answer and the turn reads only the
+// floor; put it on the card and the person reads a model's words.
+func TestARefusalsToolSentenceReachesTheModelAlone(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	said := "comment_on_work_item was refused: the choice \"ship\" is not an option " +
+		"of the decision. Change `choice` and comment again."
+	body, _ := json.Marshal(map[string]any{"error": "invalid",
+		"message": "That change was refused, and nothing was written."})
+	f.API.AnswerNext(exec.Response{Status: http.StatusUnprocessableEntity, Body: body,
+		ModelDetail: said})
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, nil)
+	if _, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada),
+		approvaltest.Approve(p)); err != nil {
+		t.Fatal(err)
+	}
+	r := f.Turns.Resumed()
+	if len(r) != 1 {
+		t.Fatalf("the turn was resumed %d times", len(r))
+	}
+	var answer map[string]any
+	if err := json.Unmarshal(r[0].Answer, &answer); err != nil {
+		t.Fatalf("the turn's answer is not JSON: %s", r[0].Answer)
+	}
+	if answer[approval.ToolDetailKey] != said || answer["error"] != "invalid" {
+		t.Errorf("the turn was handed %v, want the route's answer and the tool's sentence", answer)
+	}
+	card, _ := json.Marshal(r[0].Card)
+	if strings.Contains(string(card), "`choice`") {
+		t.Errorf("the card the drawer is sent carries the model's sentence: %s", card)
+	}
+}
+
 // AN APPLIED WRITE HANDS THE TURN ITS RECEIPT and the position open screens
 // raise their read floor to.
 func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {

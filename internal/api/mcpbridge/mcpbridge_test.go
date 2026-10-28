@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // The bridge is the one place a sandbox can reach a live seat's tools, so
@@ -102,7 +103,7 @@ func (g denyGuard) Check(name, _ string) string {
 	return ""
 }
 
-func (g denyGuard) Observe(string, map[string]any) {}
+func (g denyGuard) Observe(string, toolargs.Args) {}
 
 // --- fixture ---------------------------------------------------------------
 
@@ -594,6 +595,75 @@ func TestAFailingToolComesBackWithItsReason(t *testing.T) {
 	res := callTool(t, sess, "post_message", map[string]any{})
 	if !res.IsError || text(res) != "the channel is archived" {
 		t.Fatalf("result = %+v / %q", res.IsError, text(res))
+	}
+}
+
+// statusTool takes a closed set, so a case can tell the spelling a model sent
+// from the one its tool reads.
+type statusTool struct{ stubTool }
+
+func (*statusTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"status": map[string]any{"type": "string", "enum": []any{"draft", "published"}},
+		"note":   map[string]any{"type": "string"},
+	}}
+}
+
+// AN EXECUTOR RUN'S CALL IS HELD TO ITS TOOL'S SCHEMA OVER THE BRIDGE
+// (ADR-0059), by the surface's one path ([tools.Invoke]) and no check of the
+// bridge's own: the tool reads a closed set's member as its schema spells it;
+// a call answered outside its schema carries the note to the CLI and onto the
+// run's durable record, which a collected run's record is read from; and a
+// value the tool would misread is refused before it runs, the refusal on the
+// record too. The record keeps the spelling the model sent, which a resume
+// reads back canonically (internal/agent/runner's seedCalls).
+//
+// Mutation: answer a bridged call with the tool's own output rather than the
+// surface's rendered one and the note reaches neither the CLI nor the record;
+// call the tool directly from the surface and the misread runs.
+func TestABridgedCallIsHeldToItsToolsSchema(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	reg := tools.NewRegistry()
+	status := &statusTool{stubTool{name: "set_status"}}
+	if err := reg.RegisterWith(status, tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: crewletmcp.No}); err != nil {
+		t.Fatal(err)
+	}
+	f.session.Surface = tools.NewSurface("execute", reg.Snapshot(), []string{"set_status"}).
+		ForTurn(seatTurn())
+	sess := dial(t, f.open(t))
+
+	res := callTool(t, sess, "set_status", map[string]any{"status": " Draft", "tittle": "x"})
+	if res.IsError {
+		t.Fatalf("the call failed: %s", text(res))
+	}
+	if seen := status.seen(); len(seen) != 1 || seen[0]["status"] != "draft" {
+		t.Errorf("the tool read %+v, want the status as its schema spells it", seen)
+	}
+	const note = "\n\nNote: set_status ran, but these arguments are outside its schema"
+	if got := text(res); !strings.HasPrefix(got, "set_status ok"+note) ||
+		!strings.Contains(got, "`tittle` is not an argument") {
+		t.Errorf("the CLI was answered %q, want the output and the note on the unknown argument", got)
+	}
+
+	refused := callTool(t, sess, "set_status", map[string]any{"note": map[string]any{"x": 1}})
+	if !refused.IsError || !strings.Contains(text(refused), "set_status did not run") {
+		t.Errorf("a misread was answered %+v / %q", refused.IsError, text(refused))
+	}
+	if len(status.seen()) != 1 {
+		t.Error("the tool ran on a value it would misread")
+	}
+
+	rows := f.ledger.rows()
+	if len(rows) != 2 {
+		t.Fatalf("%d rows, want both calls: %+v", len(rows), rows)
+	}
+	if !strings.HasPrefix(rows[0].Output, "set_status ok"+note) || rows[0].Args["status"] != " Draft" {
+		t.Errorf("the record is %+v, want the noted answer and the model's own spelling", rows[0])
+	}
+	if !rows[1].Failed || !strings.Contains(rows[1].Output, "set_status did not run") {
+		t.Errorf("the refusal's record is %+v", rows[1])
 	}
 }
 

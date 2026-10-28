@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -41,9 +42,16 @@ type Surface struct {
 	// installed second.
 	guard Guard
 
+	// counter counts the refusal-loop guard's decisions, or nil
+	// ([Surface.WithCounter]).
+	counter Counter
+
 	mu     sync.Mutex
 	active []string
 	called []Call
+	// streaks are the runs of policy refusals the refusal-loop guard is
+	// counting, by tool and target ([Surface.settle]).
+	streaks map[streakKey]int
 	// revision counts the changes to active, so a renderer can tell a
 	// surface that moved from one that did not without rebuilding what it
 	// renders to find out. See [Surface.Revision].
@@ -68,8 +76,9 @@ type Guard interface {
 	// in the tool: the tool is registered once per company while the
 	// guard is per phase session, so a tool holding a guard would hold
 	// whichever session registered last. The arguments are passed opaque
-	// — this layer has no idea what any of them mean.
-	Observe(tool string, args map[string]any)
+	// (this layer has no idea what any of them mean), and canonical
+	// ([toolargs]), the form the tool read.
+	Observe(tool string, args toolargs.Args)
 }
 
 // WithGuard installs the required-skill gate and returns the surface.
@@ -269,7 +278,15 @@ func (s *Surface) ToolDefs() []llm.ToolDef {
 // cannot have, which is a thing to tell it about, and an error here would tear
 // down a turn over a hallucinated name.
 func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
-	return s.execute(ctx, call, s.turn, false)
+	return s.execute(ctx, call.Name, s.ArgsOf(call.Name, call.Arguments), s.turn, false)
+}
+
+// ArgsOf is a call's arguments in the canonical form, made ONCE, at the
+// surface's entry ([Snapshot.ArgsOf]): the admission, the run's call log, the
+// guard, the refusal-loop target, the check, the tool and the ledger all read
+// this form and never the one the model sent.
+func (s *Surface) ArgsOf(name string, raw map[string]any) toolargs.Args {
+	return s.universe.ArgsOf(name, raw)
 }
 
 // Admit records a call in its run's call log NOW, in the order calls arrive,
@@ -286,33 +303,31 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 // guard — is in the log as well, and so is one its caller admitted and then
 // never ran. That can only raise a later count, and a raised count is a fresh
 // operation; see [turnctx.CallLog].
-func (s *Surface) Admit(name string, args map[string]any) toolloop.Admitted {
-	if args == nil {
-		args = map[string]any{}
-	}
+//
+// The admitted call runs with the arguments admitted here, in their canonical
+// form; the call it is handed is read for nothing but its name.
+func (s *Surface) Admit(name string, raw map[string]any) toolloop.Admitted {
+	args := s.ArgsOf(name, raw)
 	calls := s.turn.CallLog().Admit(name, args)
-	return func(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+	return func(ctx context.Context, _ llm.ToolCall) (toolloop.ToolResult, error) {
 		turn := s.turn
 		if calls != nil {
 			turn = s.turn.WithCalls(calls)
 			defer s.turn.CallLog().Absorb(calls)
 		}
-		return s.execute(ctx, call, turn, true)
+		return s.execute(ctx, name, args, turn, true)
 	}
 }
 
 // execute is [Surface.Execute] as turn — the surface's own, or a view of it
 // whose call log is an admitted call's ([Surface.Admit]). admitted is false for
 // a call nobody admitted, which the run's log records once it has returned.
-func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.Turn,
-	admitted bool,
+//
+// It takes the call's name and its canonical arguments ([Surface.ArgsOf]),
+// never the call as the model sent it, so no step here can read the raw form.
+func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
+	turn *turnctx.Turn, admitted bool,
 ) (toolloop.ToolResult, error) {
-	// Arguments arrive already decoded — the provider layer owns that,
-	// including keeping large integer ids exact.
-	args := call.Arguments
-	if args == nil {
-		args = map[string]any{}
-	}
 
 	// THE TOOL SPAN LIVES HERE, not in toolloop, because this is the frame
 	// that knows what the call actually was: whether the tool exists, which
@@ -324,14 +339,14 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 	// reader is most often hunting for — a turn that spent a round on a tool
 	// it could not have — and a span opened inside invoke would miss both.
 	ctx, span := tracing.Start(ctx, "tools", "tool.call",
-		attribute.String("crewlet.tool", call.Name),
+		attribute.String("crewlet.tool", name),
 		attribute.String("crewlet.phase", s.Phase()))
 	defer span.End()
 
 	s.mu.Lock()
-	offered := slices.Contains(s.active, call.Name)
+	offered := slices.Contains(s.active, name)
 	s.mu.Unlock()
-	e, known := s.universe.Lookup(call.Name)
+	e, known := s.universe.Lookup(name)
 	if !known || !offered {
 		// The two readings are DIFFERENT and the model can act on the
 		// difference: a name that exists but was not offered is something
@@ -342,12 +357,12 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 		// not_found, and one that exists but was not offered to THIS
 		// surface is forbidden — the call is refused for where it was
 		// made rather than for what it named.
-		msg, class := fmt.Sprintf("Unknown tool: %s", call.Name), RefusalNotFound
+		msg, class := fmt.Sprintf("Unknown tool: %s", name), RefusalNotFound
 		if known {
-			msg = fmt.Sprintf("Tool %s is not active on this surface — activate it first.", call.Name)
+			msg = fmt.Sprintf("Tool %s is not active on this surface; activate it first.", name)
 			class = RefusalForbidden
 		}
-		s.record(Call{Name: call.Name, Args: args, Output: msg, Failed: true, Cause: class})
+		s.record(Call{Name: name, Args: args.Map(), Output: msg, Failed: true, Cause: class})
 		span.SetAttributes(
 			attribute.Bool("crewlet.tool_failed", true),
 			attribute.String("crewlet.tool_outcome", outcomeFor(known)))
@@ -356,7 +371,7 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 
 	if s.guard != nil {
 		server, _ := e.FromMCP()
-		if reason := s.guard.Check(call.Name, server); reason != "" {
+		if reason := s.guard.Check(name, server); reason != "" {
 			// RECORDED AS A FAILED CALL, deliberately: the model sees the
 			// reason and can act on it, and the ledger shows an operator
 			// that the turn spent a round here rather than that the tool
@@ -364,7 +379,7 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 			// FORBIDDEN, because the guard refuses the call as made
 			// here and now (a skill not yet loaded), never its
 			// arguments.
-			s.record(Call{Name: call.Name, Args: args, Output: reason, Failed: true,
+			s.record(Call{Name: name, Args: args.Map(), Output: reason, Failed: true,
 				Cause: RefusalForbidden})
 			span.SetAttributes(
 				attribute.Bool("crewlet.tool_failed", true),
@@ -381,22 +396,44 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 		span.SetAttributes(attribute.String("crewlet.tool_server", server))
 	}
 
+	_, fromMCP := e.FromMCP()
+	target := TargetOf(e.Tool, args.Map())
+	// THROUGH [Invoke], which holds a first-party call to the schema its
+	// tool advertises (ADR-0059): a value the tool would misread is refused
+	// before anything runs, and every other finding rides on the answer.
+	//
 	// THE ACTING SEAT IS ATTACHED HERE, which is the one frame every seat
 	// tool call goes through: the authority decision reads the principal
 	// off the context on every call, and until this line nothing produced
 	// one for a seat at all. An outer answer wins — see
 	// [turnctx.WithPrincipal] — so a surface reached through somebody's
 	// own credential still acts as them.
-	res, err := s.invoke(turnctx.WithPrincipal(ctx, turn), turn, e.Tool, args)
+	res, refusedByContract, err := Invoke(turnctx.WithPrincipal(ctx, turn), Invocation{
+		Name: name, Tool: e.Tool, Args: args, AsSeat: true, Turn: turn,
+		ThirdParty: fromMCP, Where: s.Phase(), Counter: s.counter,
+	})
 	if err != nil {
 		tracing.Fail(span, err)
-		// The caller's own context ended — the turn is being torn down.
+		// The caller's own context ended: the turn is being torn down.
 		// Nothing is reported to the model and nothing is recorded: this
 		// call did not happen as far as the ledger is concerned.
 		return toolloop.ToolResult{}, err
 	}
-	s.record(Call{Name: call.Name, Args: args, Output: res.Output, Failed: res.Failed,
-		Cause: res.Cause})
+	if refusedByContract {
+		recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: res.Output,
+			Failed: true, Cause: RefusalInvalid}, e.Annotations, target)
+		s.reportLoop(name, target, run, turn)
+		span.SetAttributes(
+			attribute.Bool("crewlet.tool_failed", true),
+			attribute.String("crewlet.tool_outcome", "refused_by_contract"))
+		return toolloop.ToolResult{Output: recorded.Output, Failed: true, Cause: RefusalInvalid}, nil
+	}
+	// THE MODEL READS TEXT, so the note is rendered after the output here
+	// ([Rendered]), and the ledger records what the model read.
+	recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: Rendered(res),
+		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target)
+	res.Output = recorded.Output
+	s.reportLoop(name, target, run, turn)
 	// INTO THE RUN'S LOG TOO, failed or not: a call that reports a failure
 	// may still have written part of what it asked for (a gesture stopped
 	// at a step whose outcome is unknown), and a call the log never heard
@@ -405,13 +442,13 @@ func (s *Surface) execute(ctx context.Context, call llm.ToolCall, turn *turnctx.
 	// a raised count is a fresh operation. See [turnctx.CallLog]. An
 	// ADMITTED call is in it already, from the moment it arrived.
 	if !admitted {
-		turn.CallLog().Record(call.Name, args)
+		turn.CallLog().Record(name, args)
 	}
 	if s.guard != nil && !res.Failed {
 		// SUCCESS ONLY. A load that named a key nobody has comes back
 		// failed, and treating it as an unlock would let a typo open
 		// every tool the real skill was gating.
-		s.guard.Observe(call.Name, args)
+		s.guard.Observe(name, args)
 	}
 	span.SetAttributes(
 		attribute.Bool("crewlet.tool_failed", res.Failed),
@@ -443,28 +480,6 @@ func invokedOutcome(failed bool) string {
 		return "failed"
 	}
 	return "ok"
-}
-
-// invoke runs one tool, telling it who is calling when it asks.
-//
-// THE SEAT COMES FROM THE SURFACE, never from the arguments. A tool that acts
-// for a seat — asking a colleague, marking an onboarding step, writing to a
-// diary — must not be able to be pointed at another one by a model that
-// spelled a different handle in its arguments. The surface is built per turn
-// by the runner, which is the frame that knows.
-//
-// An OPTIONAL interface rather than a parameter on Callable, because Callable
-// is the MCP tool contract as well: an MCP server has no notion of a turn, and
-// widening the signature would put a turn-shaped argument on every bridged
-// tool to be ignored. This way the two kinds of tool coexist under one
-// registry, and the one that needs the fact asks for it.
-func (s *Surface) invoke(ctx context.Context, turn *turnctx.Turn, tool Callable,
-	args map[string]any,
-) (Result, error) {
-	if t, ok := tool.(SeatCallable); ok {
-		return t.CallForTurn(ctx, turn, args)
-	}
-	return tool.Call(ctx, args)
 }
 
 func (s *Surface) record(c Call) {

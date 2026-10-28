@@ -70,6 +70,11 @@ func vocabularyFrames() []wire.Frame {
 		read.Frame(cardFrame(answer, "card:notice", wire.Card{Type: wire.CardNotice,
 			Notice: &wire.NoticeCard{Tone: wire.NoticeInfo,
 				Text: "Showing the first 50 of 210 rows."}})),
+		read.Frame(cardFrame(answer, "card:oversize", wire.Card{Type: wire.CardOversize,
+			Oversize: &wire.OversizeCard{Title: "Matching tasks, \"brand identity\"",
+				Open: &wire.Link{Label: "Search", Screen: "worklet-search",
+					Href: "#/worklet/search"},
+				Narrow: []string{"the search words"}}})),
 		read.Frame(cardFrame(answer, "card:error", wire.Card{Type: wire.CardError,
 			Error: &wire.ErrorCard{Refusal: wire.Refusal{Code: "unauthorized",
 				Message: "You do not have access to this.", Grants: []string{"admin"}},
@@ -148,7 +153,7 @@ func vocabularyFrames() []wire.Frame {
 			TraceID: "4bf92f3577b34da6a3ce929d0e0e4736"}}),
 	}
 	resumed := assistanttest.NewTurn("conversation", "turn:resumed")
-	return append(frames,
+	frames = append(frames,
 		resumed.Frame(wire.Frame{Kind: wire.EventConversation, Conversation: &wire.ConversationEvent{
 			Title: "Flaky sign-in test", CreatedAt: at, Resumed: true}}),
 		resumed.Frame(wire.Frame{Kind: wire.EventSnapshot, Snapshot: &wire.SnapshotEvent{
@@ -164,6 +169,39 @@ func vocabularyFrames() []wire.Frame {
 			Hint: "Ask again.", Retryable: true}}),
 		resumed.Frame(wire.Frame{Kind: wire.EventDone, Done: &wire.DoneEvent{
 			State: wire.TurnInterrupted, DurationMS: 0, Steps: 0}}),
+	)
+	// A BRIEF TURN of the decision open in the Inbox: its one read, its answer
+	// step and the one brief card it answers with, its prose never drawn.
+	brief := assistanttest.NewTurn("conversation:brief", "turn:brief")
+	briefAnswer := id("message:brief")
+	inbox := &wire.PageChip{Title: "Inbox", Screen: "inbox"}
+	return append(frames,
+		brief.Frame(wire.Frame{Kind: wire.EventConversation, Conversation: &wire.ConversationEvent{
+			Title: "Brief: Inbox", CreatedAt: at}}),
+		brief.Frame(wire.Frame{Kind: wire.EventPageContext, PageContext: &wire.PageContextEvent{
+			Used: true, Page: inbox}}),
+		brief.Frame(wire.Frame{Kind: wire.EventStep, Step: &wire.StepEvent{
+			StepID: id("step:brief"), Index: 1, Tool: "answer_brief", Label: "Writing the brief",
+			State: wire.StepDone, StartedAt: at, DurationMS: 40, Summary: "Written"}}),
+		brief.Frame(wire.Frame{Kind: wire.EventDelta, Delta: &wire.DeltaEvent{
+			MessageID: briefAnswer}}),
+		brief.Frame(cardFrame(briefAnswer, "card:brief", wire.Card{Type: wire.CardBrief,
+			Brief: &wire.BriefCard{
+				Scope: wire.BriefScope{Screen: "inbox", Title: "Inbox",
+					Record: &wire.ResourceRef{Kind: wire.ResourceTask, ID: "ENG-133",
+						Noun: wire.NounDecision}},
+				About: "QA asks whether to test the store build or the nightly on ENG-133.",
+				Needs: []wire.BriefNeed{{Ref: wire.ResourceRef{Kind: wire.ResourceTask,
+					ID: "ENG-133"}, Text: "Answer ENG-133: test the store build",
+					Detail: "Asked 2 hours ago", Tone: wire.BriefWarning,
+					Action: &wire.BriefAction{Kind: wire.BriefOpen, Label: "Open ENG-133",
+						Link: &wire.Link{Label: "ENG-133", Screen: "item",
+							Href: "#/worklet/ENG-133"}}}},
+				Context:   "The release is Thursday.",
+				FollowUps: []string{"What did QA test last?"},
+				AsOf:      at}})),
+		brief.Frame(wire.Frame{Kind: wire.EventDone, Done: &wire.DoneEvent{
+			State: wire.TurnCompleted, DurationMS: 2100, Steps: 1, MessageID: &briefAnswer}}),
 	)
 }
 

@@ -113,3 +113,48 @@ func TestIdleUnderJudgesASeatAgainstTheCompany(t *testing.T) {
 		t.Errorf("a refused seat ceiling was judged: %+v", got)
 	}
 }
+
+// EACH PERSON'S ASSISTANT CEILING IS JUDGED AS A SEAT'S IS: against its own
+// windows, and against the company's, which a person's assistant spend reaches
+// first because it is the company's spend too. The Budgets screen checks a
+// change to it before saving and shows only what the change introduces, so a
+// ceiling no warning names here is one that screen saves as if it worked.
+//
+// Mutation: drop the assistant from budgetWarnings, or judge it only against
+// its own windows, and a case fails.
+func TestAnIdleAssistantCeilingIsWarnedOf(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte("name: Acme\ntoken_budget: {day: 1000}\n" +
+		"assistant:\n  token_budget: {day: 5000, week: 4000}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, w := range cfg.AdvisoryWarnings() {
+		if strings.HasPrefix(w.Path, "assistant.") {
+			got[w.Path] += w.Message
+		}
+	}
+	day := got["assistant.token_budget.day"]
+	if !strings.Contains(day, "assistant.token_budget.day (5000) is at or above the company's (1000)") ||
+		!strings.Contains(day, "can never refuse a person's question") {
+		t.Errorf("the assistant's day over the company's day is warned %q", day)
+	}
+	if !strings.Contains(day, "token_budget.day (5000) is at or above token_budget.week (4000)") {
+		t.Errorf("the assistant's day over its own week is warned %q", day)
+	}
+	if strings.Contains(day, "\u2014") {
+		t.Errorf("a warning carries an em dash: %q", day)
+	}
+
+	quiet, err := config.ParseCompany([]byte("name: Acme\ntoken_budget: {day: 1000}\n" +
+		"assistant:\n  token_budget: {day: 200}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range quiet.AdvisoryWarnings() {
+		if strings.HasPrefix(w.Path, "assistant.") {
+			t.Errorf("a working assistant ceiling was warned: %s %q", w.Path, w.Message)
+		}
+	}
+}

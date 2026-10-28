@@ -23,11 +23,13 @@
  * "by when" are on the same line. The meter is `census.tsx`'s, which is the
  * same one the project's own header wears.
  *
- * # A row peeks, because a directory is read to RECOGNISE something
+ * # A row opens the project, because a project is a place a reader goes INTO
  *
- * "Is this the one I meant" is answered beside the list; the project's page is
- * one click further, from the panel's own `Open ↗` or from any click the
- * browser treats as "open elsewhere".
+ * A project is a container: the reader who presses its row means to work in
+ * it, and its page is its task list. The row used to open the peek, which put
+ * a summary beside the directory and the work itself one more press away, on
+ * every visit. The row is a real link to the project's page, so a plain click
+ * goes there and every way a browser opens a link elsewhere still works.
  *
  * # The sort is the reader's, it is in the URL, and the ENGINE applies it
  *
@@ -49,18 +51,11 @@
 
 import { useMemo } from "react";
 import { fmtCount } from "~/lib/format.ts";
-import { buildHash, useParam, useRoute } from "~/app/router.tsx";
+import { buildHash, href, useParam, useRoute } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import {
-  ColumnChooser,
-  columnChoicesOf,
-  type DataGridColumn,
-  peekRowActivation,
-} from "@crewlethq/ui";
+import { ColumnChooser, columnChoicesOf, type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
-import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
-import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { NewProjectButton } from "~/components/NewProjectButton.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -83,7 +78,7 @@ import { useNow } from "~/lib/clock.ts";
 import { ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
-import { targetLabel } from "~/lib/work.ts";
+import { projectPath, targetLabel } from "~/lib/work.ts";
 
 /** Which projects the grid lists, as the one switch this page has. */
 const SHOWN = ["active", "archived", "all"] as const;
@@ -186,7 +181,6 @@ export function Projects() {
   const shown: Shown = (SHOWN as readonly string[]).includes(shownRaw)
     ? (shownRaw as Shown)
     : "active";
-  const { open: openPeek } = usePeekControls();
   const route = useRoute();
   // WHERE THE ARCHIVED ONES ARE, as a real href rather than a handler: the
   // empty state offers it as a link, so it is middle-clickable and copyable
@@ -245,11 +239,6 @@ export function Projects() {
   usePageCoverage(state.data);
 
   const rows = useMemo(() => state.data?.projects ?? [], [state.data]);
-  // WHAT `[` AND `]` WALK, in the order the grid is in — published by the list
-  // that holds it, which is the only thing that knows that order.
-  usePeekNeighbours(
-    useMemo(() => rows.map((p) => ({ kind: "project" as const, id: p.key })), [rows]),
-  );
 
   const totals = useMemo(
     () =>
@@ -469,6 +458,7 @@ export function Projects() {
       },
       {
         key: "target",
+        align: "right",
         drop: 1,
         header: "Target",
         shrink: true,
@@ -593,24 +583,10 @@ export function Projects() {
             rows={rows}
             columns={columns}
             rowKey={(row) => row.key}
-            // A ROW OPENS THE PEEK the directory was written for: the question
-            // a reader asks here is "is this the one I meant", which the rail
-            // answers without leaving the list — and the peek's own `Open ↗`
-            // is the way to the page.
-            //
-            // THROUGH `peekRowActivation`, which is the one thing that calls
-            // `preventDefault`. A bare handler beside a `rowHref` opened the
-            // peek and then let the browser follow the anchor, so the rail was
-            // pushed and destroyed by one click and the reader landed on the
-            // page every time.
-            //
-            // AND THE HREF IS THE FRAME'S OWN ANSWER to where a project lives
-            // rather than a second copy of the route, so a row and the panel it
-            // opens can never name different pages.
-            rowHref={(row) => peekHref({ kind: "project", id: row.key })}
-            onRowActivate={peekRowActivation<WorkProjectRow>((row) =>
-              openPeek({ kind: "project", id: row.key }),
-            )}
+            // A ROW OPENS THE PROJECT: its page, which is its task list. See
+            // the module doc. A real link and nothing else, so a plain click
+            // navigates and a modified one opens it elsewhere.
+            rowHref={(row) => href(projectPath(row.key))}
             defaultSort={DEFAULT_SORT}
             // THE ORDER IS THE ENGINE'S — see the module doc. Without this
             // the grid would re-sort the page it was handed, which on a

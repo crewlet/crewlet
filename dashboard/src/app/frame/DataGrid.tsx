@@ -16,6 +16,16 @@
  * from the sort where one grid has two column sets (the work list and table):
  * the order is the question's and the arrangement is the drawing's.
  *
+ * THE ADDRESS HOLDS ONLY WHAT THE READER CHOSE. `defaultSort` goes to the kit,
+ * which draws it on its head as the sort in force and steps a press from it,
+ * and a step back to the default is written as no key at all. Read with the
+ * default as its fallback, a press on a column at its own descending default
+ * wrote the default back and changed nothing.
+ *
+ * A screen whose order is resolved with more than the address (a saved view's
+ * own order behind it) hands the grid the reader's choice as `sort` and takes
+ * the press back through `onSortChange`, and keeps its own key.
+ *
  * # The row the peek is open on is marked
  *
  * By comparing ADDRESSES: a row's link is its object's page, and the peek
@@ -54,6 +64,13 @@ export interface GridProps<T> extends Omit<
 > {
   /** The sort before the reader chose one, as `key` or `-key`. */
   defaultSort?: string;
+  /**
+   * The reader's own sort, for a screen that resolves it itself; left out, the
+   * grid reads it from the address (`sort=`, or `sort.<name>=`).
+   */
+  sort?: string;
+  /** Where a press on a head goes, beside `sort`. `''` is the default. */
+  onSortChange?: (sort: string) => void;
   /** Which grid on this screen, for the URL keys (`sort.<name>=`). */
   name?: string;
   /** Which column set `cols=` names, where that is not `name`. */
@@ -72,9 +89,14 @@ export function DataGrid<T>({
   onRowActivate,
   rows,
   bands,
+  sort: ownSort,
+  onSortChange: onOwnSortChange,
   ...rest
 }: GridProps<T>) {
-  const [sort, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
+  // THE READER'S CHOICE ALONE, never the default: see the module doc.
+  const [addressSort, setAddressSort] = useParam(name ? `sort.${name}` : "sort", "");
+  const sort = ownSort ?? addressSort;
+  const setSort = onOwnSortChange ?? setAddressSort;
   const columnSet = colsName ?? name;
   const [cols, setCols] = useParam(columnSet ? `cols.${columnSet}` : "cols", "");
   const handle = useRef<DataGridHandle>(null);
@@ -94,8 +116,11 @@ export function DataGrid<T>({
   useKeymap({
     "list.next": { run: () => handle.current?.step(1), when: driving },
     "list.previous": { run: () => handle.current?.step(-1), when: driving },
+    // A ROW OPENS FROM THE KEYBOARD WHETHER IT ACTS OR ONLY LINKS: the kit's
+    // handle follows the cursor row's link where it has no handler, so a grid
+    // of links (a directory a row navigates from) has its Enter too.
     "list.open": {
-      when: driving && Boolean(onRowActivate),
+      when: driving && Boolean(onRowActivate || rowHref),
       run: (e) => {
         handle.current?.activate(e as KeyboardEvent);
       },
@@ -111,6 +136,7 @@ export function DataGrid<T>({
       onRowActivate={onRowActivate}
       isSelected={marked}
       sort={sort}
+      defaultSort={defaultSort}
       onSortChange={setSort}
       cols={cols}
       onColsChange={setCols}

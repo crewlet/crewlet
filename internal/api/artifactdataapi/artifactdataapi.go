@@ -531,7 +531,7 @@ func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata
 		httpjson.Write(w, http.StatusAccepted, body)
 		return
 	case statelog.OutcomeUnknown:
-		operator.UnknownOutcome(w, key, res.Result.Unvouched, "", map[string]any{"op_id": key})
+		operator.UnknownOutcome(w, key, res.Result.Unvouched, map[string]any{"op_id": key})
 		return
 	}
 	body["verdict"], body["seq"] = string(res.Verdict), res.Seq

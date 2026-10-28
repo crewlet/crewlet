@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
@@ -16,7 +17,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -42,9 +45,17 @@ import (
 // conversation through the node their own writes waited on, and every write
 // here waits for this node's applier before it answers.
 type Reader struct {
-	db     store.ReplicatedReader
-	log    *statelog.Reader
-	sealer *Sealer
+	db      store.ReplicatedReader
+	log     *statelog.Reader
+	sealer  *Sealer
+	logger  *slog.Logger
+	metrics Metrics
+}
+
+// Metrics is what the reader counts into: the cards it reads back as a
+// notice ([UnshownCardNotice]).
+type Metrics interface {
+	Add(name string, n uint64, attrs metrics.Attrs)
 }
 
 // ReaderOptions configure a reader.
@@ -57,6 +68,13 @@ type ReaderOptions struct {
 
 	// Sealer opens every stored value. REQUIRED.
 	Sealer *Sealer
+
+	// Logger says which stored card was read back as a notice, and why.
+	// Nil is the assistant's own component logger.
+	Logger *slog.Logger
+
+	// Metrics counts the cards read back as a notice. Nil counts nothing.
+	Metrics Metrics
 }
 
 // NewReader builds the assistant read side.
@@ -71,7 +89,12 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 		return nil, errors.New("assistantdomain: a reader needs the keyring every " +
 			"stored value is sealed under")
 	}
-	return &Reader{db: opts.DB, log: opts.Log, sealer: opts.Sealer}, nil
+	logger := opts.Logger
+	if logger == nil {
+		logger = logging.Get("assistant")
+	}
+	return &Reader{db: opts.DB, log: opts.Log, sealer: opts.Sealer, logger: logger,
+		metrics: opts.Metrics}, nil
 }
 
 // readLevel is the level every read here is served at.
@@ -859,7 +882,39 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 	if err := json.Unmarshal(body, &c.Card); err != nil {
 		return Card{}, fmt.Errorf("assistantdomain: card %s: %w", id, err)
 	}
+	if c.Card.Type.Valid() {
+		if err := c.Card.Validate(); err != nil {
+			// WHICH CARD AND WHY, NEVER ITS BODY: the body is what a person
+			// was shown, sealed for them alone.
+			r.logger.Warn("assistant_card_shown_as_notice", "card", c.ID.String(),
+				"type", string(c.Card.Type), "error", err.Error())
+			if r.metrics != nil {
+				r.metrics.Add(metrics.AssistantCardsShownAsNotice, 1,
+					metrics.Attrs{"type": string(c.Card.Type)})
+			}
+			c.Type, c.Card = wire.CardNotice, UnshownCardNotice()
+		}
+	}
 	return c, nil
+}
+
+// UnshownCardNotice is what a stored card of a kind this build draws, but in
+// a shape its contract refuses, is read as: a plain notice in its place,
+// never the body.
+//
+// A CARD IS VALIDATED BEFORE IT IS RECORDED and never rewritten after, so a
+// stored card this build's [wire.Card.Validate] refuses was written to
+// another contract of an unreleased surface: an earlier one (a brief before
+// ADR-0062), or, during a rolling upgrade, a newer node's. Either way it is
+// not read, migrated or tolerated field by field: the transcript, the
+// dashboard and the conversation the model re-reads all see this notice, and
+// asking again writes the card in the shape this node reads. A kind this
+// build does not know at all passes through untouched, as the dashboard
+// already draws one it cannot. Each one is logged, by id, kind and the
+// contract's reason, and counted.
+func UnshownCardNotice() wire.Card {
+	return wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{Tone: wire.NoticeInfo,
+		Text: "This answer can't be shown here. Ask again to see it now."}}
 }
 
 // proposalColumns is every column a Proposal is read from, in

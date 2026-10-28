@@ -87,7 +87,7 @@
 // See answerseal.go.
 //
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
-// NODE'S HOST ([PendingRun.LaunchNode], ADR-0059): that node's own waiter polls,
+// NODE'S HOST ([PendingRun.LaunchNode], ADR-0063): that node's own waiter polls,
 // keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to
 // read it ([BoxReader]), and a launching node whose presence stays lapsed for
 // the box timeout has its running jobs ended as lost. See boxhost.go.

@@ -365,3 +365,20 @@ func TestAStepShowsTheRequestItMade(t *testing.T) {
 		t.Error("a request get_task could not have built is shown as one it made")
 	}
 }
+
+// EVERY FAULT OF A CALL IN ONE REFUSAL, for every assistant tool (ADR-0059): two
+// undeclared arguments are both named, where the check named the first.
+//
+// Mutation: answer only the first problem and the second is never named.
+func TestEveryAssistantToolNamesEveryFaultAtOnce(t *testing.T) {
+	t.Parallel()
+	for _, tool := range catalog.Tools() {
+		bad := maps.Clone(assistanttest.ExampleArgs(t, tool.Parameters))
+		bad["undeclared_one"], bad["undeclared_two"] = "x", "y"
+		err := tool.Check(bad)
+		if err == nil || !strings.Contains(err.Error(), "undeclared_one") ||
+			!strings.Contains(err.Error(), "undeclared_two") {
+			t.Errorf("%s did not name both faults: %v", tool.Name, err)
+		}
+	}
+}

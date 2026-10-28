@@ -20,11 +20,12 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // THE ARTIFACTS TOOLS: one tool per action, each named for its authority
 // row (list_artifacts, get_artifact, list_dashboard_sources,
-// get_company_brand, create_artifact, publish_artifact, update_artifact,
+// get_artifact_format, get_company_brand, create_artifact, publish_artifact, update_artifact,
 // share_artifact, unshare_artifact, upload_artifact_asset,
 // create_artifact_folder, move_artifact). Registered for seats and in the
 // operator catalogue from the hooks below, which [Register] and
@@ -78,6 +79,7 @@ const (
 	ListArtifactsTool       = string(authz.ActionArtifactList)
 	GetArtifactTool         = string(authz.ActionArtifactRead)
 	DashboardSourcesTool    = string(authz.ActionDashboardSources)
+	ArtifactFormatTool      = string(authz.ActionArtifactFormat)
 	CreateArtifactTool      = string(authz.ActionArtifactCreate)
 	PublishArtifactTool     = string(authz.ActionArtifactPublish)
 	UpdateArtifactTool      = string(authz.ActionArtifactUpdate)
@@ -90,9 +92,9 @@ const (
 	MoveArtifactTool         = string(authz.ActionArtifactMove)
 )
 
-// ArtifactTools are the twelve, reads first.
+// ArtifactTools are the thirteen, reads first.
 func ArtifactTools() []string {
-	return []string{ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, CompanyBrandTool,
+	return []string{ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool,
 		CreateArtifactTool, PublishArtifactTool, UpdateArtifactTool, ShareArtifactTool,
 		UnshareArtifactTool, UploadArtifactAssetTool, CreateArtifactFolderTool, MoveArtifactTool}
 }
@@ -325,6 +327,7 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 		{&listArtifacts{deps: a}, on},
 		{&getArtifact{deps: a}, on},
 		{&dashboardSources{}, on},
+		{&artifactFormat{}, on},
 		{&companyBrand{deps: a}, on},
 		{&createArtifact{deps: a}, on},
 		{&publishArtifact{deps: a}, on},
@@ -342,10 +345,10 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 //
 // EVERY WRITE IS OPEN-WORLD: an artifact is read by the people it is shared
 // with, so a worker acting under its parent's name is kept off every one of
-// them ([mcp.WritesToSharedSurface]), and handed the four reads.
+// them ([mcp.WritesToSharedSurface]), and handed the five reads.
 func artifactAnnotations(name string) (tools.Annotations, bool) {
 	switch name {
-	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, CompanyBrandTool:
+	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, ArtifactFormatTool, CompanyBrandTool:
 		// Reads, and idempotent. get_artifact may condense a long file a
 		// colleague wrote through the auxiliary model, which is a read's
 		// cost the way query_episodes' condensing is, and writes nothing a
@@ -485,7 +488,7 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 	args map[string]any) (key, opID, refusal string) {
 
 	raw, brought := args[opIDArg]
-	if text, ok := raw.(string); ok && text == "" {
+	if text, _ := argval.String(raw); text == "" {
 		brought = false
 	}
 	if seed := turnKey(turn); seed != "" {
@@ -520,7 +523,7 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 		op := statelog.NewOpID(d.now(), call)
 		return op, op, ""
 	}
-	op, _ := raw.(string)
+	op, _ := argval.String(raw)
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return "", "", fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}

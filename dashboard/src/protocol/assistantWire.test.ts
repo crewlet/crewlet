@@ -78,11 +78,13 @@ describe("the engine's golden stream", () => {
     const cards = frames.flatMap((f) => (f.kind === "card" ? [narrowCard(f.card.card)] : []));
     expect(cards).not.toContain(null);
     expect([...new Set(cards.map((c) => c?.type))].sort()).toEqual([
+      "brief",
       "entity",
       "error",
       "file",
       "notice",
       "open_in_app",
+      "oversize",
       "proposal",
       "table",
     ]);

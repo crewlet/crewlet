@@ -61,6 +61,7 @@ function wrote() {
     onCols: vi.fn(),
     onShowLane: vi.fn(),
     onCardHidden: vi.fn(),
+    onSort: vi.fn(),
   };
 }
 
@@ -74,6 +75,7 @@ function openDisplay(over: Partial<DisplayMenuProps> = {}) {
       viewShape="list"
       groupBy=""
       groupBy2=""
+      sort=""
       cols=""
       hidden={[]}
       cardHidden={new Set()}
@@ -189,12 +191,41 @@ test("the arrows walk the shapes without choosing one, and a press chooses", () 
 // on its button — the shape and the axis — is on screen without it now, in the
 // shape row and the Group by picker, so the button stopped restating it.
 test("the menu holds the second axis, the columns and the lanes, and nothing the bar holds", () => {
+  openDisplay({ shape: "board", groupBy: "status" });
+  expect(screen.queryByRole("combobox", { name: "Group by" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
+  cleanup();
   openDisplay({ shape: "list", groupBy: "status" });
   expect(screen.getByRole("combobox", { name: "Then by" })).toBeTruthy();
   expect(screen.getByText("Columns")).toBeTruthy();
   expect(screen.queryByRole("combobox", { name: "Group by" })).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
   expect(document.querySelector(".work-display-shape")).toBeNull();
+});
+
+// A LIST AND A TABLE SORT AT THEIR COLUMN HEADS, so the bar draws no Sort for
+// them, and Display holds the same picker: the orders no column carries (the
+// manual order, the newest, the most tokens) must stay reachable.
+test("a grid shape sorts at its heads, and its Sort is in Display with every order", () => {
+  for (const shape of ["list", "table"] as const) {
+    arrange({ shape });
+    expect(screen.queryByRole("combobox", { name: "Sort" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Group by" })).toBeTruthy();
+    cleanup();
+    const { onSort } = openDisplay({ shape, workspace: false, sort: "" });
+    expect(optionsOf("Sort")).toEqual([
+      defaultOrderLabel(shape, false),
+      ...SORTS.map((s) => s.label),
+    ]);
+    pick(screen.getByRole("combobox", { name: "Sort" }), "Manual order");
+    expect(onSort).toHaveBeenCalledWith("rank");
+    cleanup();
+  }
+  // A BOARD AND A TIMELINE HAVE NO HEADS, so their Sort stays in the bar.
+  for (const shape of ["board", "timeline"] as const) {
+    arrange({ shape });
+    expect(screen.getByRole("combobox", { name: "Sort" })).toBeTruthy();
+    cleanup();
+  }
 });
 
 // WHAT A SAVED VIEW WAS SAVED AS, and the way back to it. A reader who has
@@ -304,9 +335,9 @@ test("the calendar offers neither a grouping nor an order, because it spends bot
 // engine takes, and a picker that wrote "updated desc" or "recent" would be
 // refused at the read rather than sorted differently.
 test("Sort offers the grammar's own keys and writes them as written", () => {
-  const { onSort } = arrange();
+  const { onSort } = arrange({ shape: "board" });
   expect(optionsOf("Sort")).toEqual([
-    defaultOrderLabel("list", true),
+    defaultOrderLabel("board", true),
     ...SORTS.map((s) => s.label),
   ]);
   pick(screen.getByRole("combobox", { name: "Sort" }), "Recently updated");
@@ -329,8 +360,8 @@ test("the default order is named for what it is", () => {
 // performs: `""` out of the callback means off, and turning a view's own order
 // off is the screen's to write because only it knows what the view carries.
 test("choosing the default order hands back the empty string", () => {
-  const { onSort } = arrange({ sort: "-updated" });
-  pick(screen.getByRole("combobox", { name: "Sort" }), defaultOrderLabel("list", true));
+  const { onSort } = arrange({ shape: "board", sort: "-updated" });
+  pick(screen.getByRole("combobox", { name: "Sort" }), defaultOrderLabel("board", true));
   expect(onSort).toHaveBeenCalledWith("");
 });
 

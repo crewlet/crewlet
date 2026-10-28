@@ -185,7 +185,10 @@ export function Board({
     if (!args) return;
     setUnplaced("");
     setDrop({ drop: next, settled: false, against: groups });
-    const result = await move.run(args, { done: `Moved ${movedName(next, shown)}` });
+    const result = await move.run(args, {
+      done: `Moved ${movedName(next, shown)}`,
+      drawsCaveats: true,
+    });
     if (!result || result.kind === "refused" || result.kind === "unknown") {
       // SNAPPED BACK: the engine refused it, or nobody can say it landed —
       // either way what is drawn is the answer the board last had, and the
@@ -193,9 +196,13 @@ export function Board({
       setDrop(null);
       return;
     }
-    const receipt = (result.receipt ?? {}) as { placed?: boolean; unplaced?: string };
-    if (receipt.placed === false) {
-      setUnplaced(receipt.unplaced || `${args.item} moved lanes, but not to that position.`);
+    // WHAT THE DROP CAME TO BESIDE ITS LANE, in the engine's words for a
+    // person: a card that missed its place answers a caveat saying so
+    // (ADR-0060), drawn here beside the board rather than in the toast.
+    const said = result.caveats.map((c) => c.message).join(" ");
+    const receipt = (result.receipt ?? {}) as { placed?: boolean };
+    if (said !== "" || receipt.placed === false) {
+      setUnplaced(said || `${args.item} moved lanes, but not to that position.`);
     }
     setDrop((prev) => (prev ? { ...prev, settled: true } : prev));
   };

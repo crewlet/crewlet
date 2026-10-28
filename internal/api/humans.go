@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // THE SURFACES A PERSON REACHES, built over the engine running beside them:
@@ -387,9 +388,14 @@ func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server,
 		}
 		return c.Org
 	}
+	var counter tools.Counter
+	if rec := e.Recorder(); rec != nil {
+		counter = rec
+	}
 	server, err := operator.New(operator.Options{
-		Halves: NativeOperatorHalves(e),
-		Org:    chart,
+		Halves:  NativeOperatorHalves(e),
+		Counter: counter,
+		Org:     chart,
 		// THE AUTHORITY DECISION, which is the SAME one every seat's
 		// registry is built with — one table, one function, every surface.
 		// It reads the chart per call, because an apply replaces it.

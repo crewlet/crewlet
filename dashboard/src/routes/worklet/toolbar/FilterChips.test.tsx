@@ -204,6 +204,18 @@ test("every remove control is named by the chip it takes off", () => {
   expect(screen.getByLabelText("Remove the Blocked filter")).toBeTruthy();
 });
 
+// A CHIP IS A SENTENCE. Its three parts ran together as "StatusisDoing" when
+// they were three bare spans in a tag; the kit's pill separates them.
+test("a chip reads as its sentence, the field, the relation and the value apart", () => {
+  drawChips({ status: "in_progress", blocked: true });
+  const pills = [...document.querySelectorAll(".crewlet-filter-pill")].map(
+    (pill) => pill.querySelector(".crewlet-filter-pill__words")?.textContent,
+  );
+  expect(pills).toContain("Status is Doing");
+  expect(pills).toContain("Blocked");
+  expect(document.querySelector(".crewlet-filter-pill__value")?.textContent).toBe("Doing");
+});
+
 // CLEAR IS NOT A CHIP. It removes every one of them, so drawing it as a pill
 // in the same row would put a control that empties the row beside the controls
 // that do not.
@@ -275,7 +287,7 @@ test("the locked assignee draws no chip, and an assignee key on the address draw
   const query = serving({ work_items: answered });
   mountList(HOST);
   await waitFor(() => expect(screen.getByText("Ship the thing")).toBeTruthy());
-  expect(document.querySelector(".work-chip-field")).toBeNull();
+  expect(document.querySelector(".crewlet-filter-pill__field")).toBeNull();
   // AND THE LOCK IS WHAT REACHED THE WIRE, not the key somebody typed.
   const items = query.mock.calls.filter((c) => c[0] === "work_items");
   expect(items.length).toBeGreaterThan(0);

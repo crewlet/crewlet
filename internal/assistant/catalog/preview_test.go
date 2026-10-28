@@ -418,3 +418,44 @@ func TestTheHandoverNoteSaysWhatTheSeatsStateSupports(t *testing.T) {
 		}
 	}
 }
+
+// A PREVIEW READS THE SEAT ALONE: the seat route answers its call history by
+// default (whole transcripts, megabytes for a busy seat, past what a preview
+// reads), so every preview that reads a seat (the handover note of a task
+// created or reassigned to it, a pause, a resume) asks with history=false,
+// the only bound on that read. Mutation: drop seatAlone from handover or from
+// seatPreview and this fails.
+func TestAPreviewReadsTheSeatWithoutItsCalls(t *testing.T) {
+	t.Parallel()
+	for tool, args := range map[string]map[string]any{
+		"create_task":  {"title": "File the report", "assignee": "engineer"},
+		"update_task":  assistanttest.ProposalArgs["update_task"],
+		"pause_agent":  assistanttest.ProposalArgs["pause_agent"],
+		"resume_agent": assistanttest.ProposalArgs["resume_agent"],
+	} {
+		world := assistanttest.World()
+		for _, handle := range []string{"engineer", "dev", "pm"} {
+			world["/agents/"+handle] = map[string]any{"handle": handle, "role": handle,
+				"live": map[string]any{"activity": "idle"}}
+		}
+		var asked []exec.Request
+		read := func(ctx context.Context, r exec.Request) (exec.Response, error) {
+			if strings.HasPrefix(r.Path, "/agents/") {
+				asked = append(asked, r)
+			}
+			return reader(world)(ctx, r)
+		}
+		w, _ := catalog.Lookup(tool)
+		if _, err := w.Preview(t.Context(), read, wednesday, args); err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+		if len(asked) == 0 {
+			t.Errorf("%s's preview read no seat", tool)
+		}
+		for _, r := range asked {
+			if r.Query.Get("history") != "false" {
+				t.Errorf("%s's preview asked %s?%s, with the seat's calls", tool, r.Path, r.Query.Encode())
+			}
+		}
+	}
+}

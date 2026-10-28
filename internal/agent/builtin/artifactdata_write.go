@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -17,7 +18,10 @@ import (
 
 // ---- write_artifact_data ------------------------------------------------- //
 
-type writeArtifactData struct{ d dataTools }
+type writeArtifactData struct {
+	artifactTarget
+	d dataTools
+}
 
 var _ tools.SeatCallable = (*writeArtifactData)(nil)
 
@@ -168,9 +172,10 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 		// ON THE LOG AND NOT YET APPLIED HERE: the verdict is decided, and
 		// this node has not caught up to read it.
 		out["verdict"] = "pending"
-		out["note"] = "The write is on the datastore's log and this node has not applied " +
-			"it yet, so its verdict is not known here. " + look
-		return jsonResult(withArtifactOperation(out, a.c))
+		said := partial(out, NoteKey, caveat.DatastorePending("The write is on the "+
+			"datastore's log and this node has not applied it yet, so its verdict is "+
+			"not known here. "+look))
+		return caveated(withArtifactOperation(out, a.c), nil, said)
 	case artifacts.DataConflict:
 		read := newForeignRead(turn, a.c.self())
 		shown, withheld := d.conflictRows(ctx, a, res.Conflict)
@@ -192,15 +197,18 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 		}
 		out["current"] = rows
 		out["refusal"] = "conflict"
-		out["note"] = "Nothing was written: a row moved past the `if_version` you sent. " +
+		note := "Nothing was written: a row moved past the `if_version` you sent. " +
 			"`current` is each such row as it is now; merge onto it and write again with " +
 			"its `version`."
 		if withheld {
-			out["note"] = "Nothing was written: a row moved past the `if_version` you sent. " +
+			note = "Nothing was written: a row moved past the `if_version` you sent. " +
 				"`current` is each such row the person this turn is working for may read, " +
 				"as it is now; the others are not shown. Merge onto what is shown and write " +
 				"again with its `version`."
 		}
+		// A REFUSAL, answered as one below: its note is the model's alone,
+		// and a person's surface answers the conflict's own sentence.
+		out[NoteKey] = note
 		r, err := read.answer(ctx, tool, withArtifactOperation(out, a.c),
 			"Write fewer rows at once.")
 		if err == nil {
@@ -223,7 +231,10 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 
 // ---- set_artifact_schema ------------------------------------------------- //
 
-type setArtifactSchema struct{ d dataTools }
+type setArtifactSchema struct {
+	artifactTarget
+	d dataTools
+}
 
 var _ tools.SeatCallable = (*setArtifactSchema)(nil)
 

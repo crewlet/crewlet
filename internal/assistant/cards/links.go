@@ -206,6 +206,21 @@ func linkFrom(o *Open, v any) (wire.Link, error) {
 	return Link(o.Screen, params, label)
 }
 
+// OpenFor is o's link with its parameters read from a read's own arguments,
+// for a read with no answer to read them from (one past what a step reads):
+// the screen that shows all of it. Nil where o is nil or the arguments do not
+// fill its parameters.
+func OpenFor(o *Open, args map[string]any) *wire.Link {
+	if o == nil {
+		return nil
+	}
+	link, err := linkFrom(o, args)
+	if err != nil {
+		return nil
+	}
+	return &link
+}
+
 // OpenInApp is the open in app card for link, decided for the person: a link
 // they may open, or one they may not, never told apart from one that does not
 // exist.

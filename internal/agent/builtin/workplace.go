@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -52,7 +53,10 @@ type WorkPlacer interface {
 		notify *worklet.Notify) (worklet.PlaceResult, error)
 }
 
-type placeWorkItem struct{ deps WorkDeps }
+type placeWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*placeWorkItem)(nil)
 
@@ -246,12 +250,16 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// THE RESIDUE IS REPORTED, never swallowed: the lane changed and the
 	// card did not take its place, so the honest answer names both rather
-	// than failing a call whose status write landed.
+	// than failing a call whose status write landed. A CAVEAT, never a
+	// field of the receipt: the sentence saying why is a model's, and the
+	// act route answers a person a caveat's own words (ADR-0060).
+	var caveats []caveat.Caveat
 	if got.Unplaced != nil {
-		answer["unplaced"] = writeFailure(ctx, actor, name, got.Unplaced).Output
+		caveats = append(caveats, caveat.LaneChangedNotPlaced(current.Named(),
+			writeFailure(ctx, actor, name, got.Unplaced).Output))
 	}
 	t.deps.settle(ctx, call.at)
-	return jsonResult(answer)
+	return caveated(answer, caveats)
 }
 
 // dropped says what a drag asked for, as the clause an unknown answer names:

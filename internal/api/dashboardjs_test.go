@@ -1120,8 +1120,17 @@ const (
 	// it to 346.6 KiB with the same dashboard source: each mark now carries a
 	// 16 grid drawing beside its master, and the Ask button draws the
 	// assistant's spark, whose motion and soon rules ride the one sheet. 347
-	// KiB, still under two seconds on that link.
-	initialBudget = 347 << 10
+	// KiB, still under two seconds on that link. uilet 0.69.0 took it to 348.3
+	// KiB while the entry's own script shrank by 2 KiB (the drawer's Needs you
+	// reads gone): BriefCard's rules ride the one sheet, and the release splits
+	// the status card and suggestion row code BriefCard shares into chunks of
+	// their own, each one more request's overhead in the entry's graph. 349
+	// KiB, still under two seconds on that link. A read named in the answer
+	// rather than drawn as a card (ADR-0061): the renderer saying which run
+	// of prose opens its block, in the shared Markdown module the entry
+	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
+	// link.
+	initialBudget = 350 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1245,14 +1254,52 @@ const (
 	// dropped socket. 4554 KiB, which still refuses a doubled baseline. uilet
 	// 0.67.0's product marks (a 16 grid drawing beside each master, the spark's
 	// motion and the soon keyline) and its artifact kit took it to 4557.3 KiB.
-	// 4558 KiB, which still refuses a doubled baseline. Saying that a person's
-	// stop ended a seat's coding run, merged beside it, took it to 4558.7 KiB:
-	// a stopped turn's tag and a stopped run's span drawn closed rather than
-	// failed in the live view's chunk and the runs board's, a seat whose last
-	// turn "was stopped" in the profile's, the task's "stopped by a person"
-	// pill in the worklet's, and the pause dialog's words in the writes chunk.
-	// 4559 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 463<<10
+	// 4558 KiB, which still refuses a doubled baseline. Keeping an answered
+	// inbox row legible in place with its answer under it, the closed Answered
+	// group of the last week's answers and the answered ask's pane with its
+	// four steps, on uilet 0.68.0's inbox row outcome and status and its
+	// collapsible group, took it to 4566.4 KiB. 4567 KiB, which still refuses
+	// a doubled baseline. A brief of the page or its open record in the
+	// drawer, drawn by uilet 0.69.0's BriefCard, with the record each screen
+	// has open reported to the assistant, took it to 4574.6 KiB. 4575 KiB,
+	// which still refuses a doubled baseline. Reading a landed write's
+	// caveats in a person's words off the act answer, each with whether the
+	// person must act, so the toast stays only when they must (ADR-0060),
+	// took it to 4576.5 KiB. 4577 KiB, which still refuses a doubled
+	// baseline. Telling a change nobody could confirm in the dashboard's
+	// own words, rather than the operation key's retry rule for a client
+	// (ADR-0060), took it to 4577.4 KiB. 4578 KiB, which still refuses a
+	// doubled baseline. Sortable column heads with a default order, aligned
+	// columns, the filter pill in place of a tag of three spans, waits said
+	// as times and a link-only row opened by Enter, on uilet 0.70.0
+	// (FilterPill, the grid's align and icon columns, the value trigger),
+	// took it to 4581.4 KiB. 4582 KiB, which still refuses a doubled
+	// baseline. uilet 0.71.0's toast that stays up for as long as its words
+	// take to read took it to 4582.1 KiB. 4583 KiB, which still refuses a
+	// doubled baseline. A brief that says its verdict once and ranks its
+	// rows, on uilet 0.72.0, and the record chip and words-sized table
+	// columns uilet 0.73.0 ships beside it, took it to 4585.1 KiB. 4586 KiB,
+	// which still refuses a doubled baseline. A read named in the answer
+	// rather than drawn as a card (ADR-0061): its chip and peek, the mention
+	// rule, the oversize card and a page that says it is one, less the folded
+	// read cards they replace, took it to 4591.9 KiB. 4592 KiB, which still
+	// refuses a doubled baseline. A limit's refusal naming where its ceiling
+	// is raised (ADR-0060's remedy): the link table and its gate, the press
+	// drawn on every surface a spent budget is shown on, a section arrived
+	// at on Budgets, each person's assistant ceiling edited there, and the
+	// one rule a refused question goes back in the box by, took it to
+	// 4601.7 KiB. 4602 KiB, which still refuses a doubled baseline. The
+	// review's fixes (a restore decided once per turn in the session, a
+	// section matched by its path and name, Home's spent week through the
+	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
+	// still refuses a doubled baseline. Saying that a person's stop ended a
+	// seat's coding run, merged beside it, took it to 4603.4 KiB: a stopped
+	// turn's tag and a stopped run's span drawn closed rather than failed in
+	// the live view's chunk and the runs board's, a seat whose last turn "was
+	// stopped" in the profile's, the task's "stopped by a person" pill in the
+	// worklet's, and the pause dialog's words in the writes chunk. 4604 KiB,
+	// which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 508<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

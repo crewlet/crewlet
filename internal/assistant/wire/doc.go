@@ -48,6 +48,16 @@
 // `409 assistant_protocol_mismatch`, which the dashboard answers by asking the
 // person to reload. A reshape takes a new version, never a reused one.
 //
+// # A brief (ADR-0062)
+//
+// A [BriefCard] answers two questions: what the page is about (its About
+// line) and whether the person has to do anything, which is never a field:
+// [BriefCard.Verdict] counts the rows, so no writer can say "nothing needs
+// you" beside a row that needs them. Every row is something to do, ranked, the
+// first the one to do first, its tone warning or a danger the engine read; a
+// fact to know is the Context line. Each line's cap is a constant here, which
+// the tool's schema, the brief's prompt and [BriefCard.Validate] all read.
+//
 // # What the browser never receives
 //
 // Raw tool arguments, raw tool results, prompts, token counts, grants and
@@ -55,4 +65,13 @@
 // safe fields and the route it asked, a card is built by the engine from the
 // tool's own answer, and a proposal card is rendered from a server-side
 // preview, never from model prose (ADR-0051).
+//
+// # A read is named, never carded
+//
+// A read is never drawn as a card (ADR-0061): the drawer makes the answer's
+// first mention of each record the turn read that record's chip, finding it by
+// the key an EntityCard carries (a task's, a project's) or, for the kinds whose
+// title is a name, by its title, and lists the reads the answer never named
+// under it. Only a read the engine carded can become a chip, so nothing the
+// model writes becomes a link.
 package wire

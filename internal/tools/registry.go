@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // Callable, Result, Annotations and Refusal are the MCP package's, reused rather than
@@ -571,6 +572,19 @@ func (r *Registry) Snapshot() Snapshot {
 
 // Lookup returns one entry from the snapshot.
 func (s Snapshot) Lookup(name string) (Entry, bool) { e, ok := s.byName[name]; return e, ok }
+
+// ArgsOf is a call to name's arguments in the canonical form its tool reads
+// ([ArgsOf]): the one rule a surface over this snapshot reads a call by
+// ([Surface.ArgsOf]). A name the snapshot does not hold keeps them as sent;
+// nothing reads them but the ledger's refusal.
+func (s Snapshot) ArgsOf(name string, raw map[string]any) toolargs.Args {
+	e, known := s.Lookup(name)
+	if !known {
+		return toolargs.Of(nil, raw)
+	}
+	_, thirdParty := e.FromMCP()
+	return ArgsOf(e.Tool, thirdParty, raw)
+}
 
 // Names returns every name in the snapshot, in registration order.
 func (s Snapshot) Names() []string {

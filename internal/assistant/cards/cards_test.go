@@ -94,8 +94,8 @@ func TestATableIsTheAnswersOwnFieldsCutWholeRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	tbl := built.Card.Table
-	if built.Notice != nil || tbl.Truncated || tbl.RowCount != 3 || len(tbl.Rows) != 3 {
-		t.Fatalf("a 3-row answer carded as %+v with notice %v", tbl, built.Notice)
+	if tbl.Truncated || tbl.More || tbl.RowCount != 3 || len(tbl.Rows) != 3 {
+		t.Fatalf("a 3-row answer carded as %+v", tbl)
 	}
 	if row := tbl.Rows[0]; row[0] != "ENG-1" || row[1] != "Ship the release" ||
 		row[2] != json.Number("1200") || row[3] != "2026-11-02T00:00:00Z" {
@@ -110,9 +110,9 @@ func TestATableIsTheAnswersOwnFieldsCutWholeRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	if tbl := built.Card.Table; len(tbl.Rows) != cards.MaxRows || !tbl.Truncated ||
-		tbl.RowCount != cards.MaxRows+50 || built.Notice == nil {
-		t.Errorf("a %d-row answer carded %d rows (truncated %v, count %d, notice %v)",
-			cards.MaxRows+50, len(tbl.Rows), tbl.Truncated, tbl.RowCount, built.Notice)
+		tbl.RowCount != cards.MaxRows+50 {
+		t.Errorf("a %d-row answer carded %d rows (truncated %v, count %d)",
+			cards.MaxRows+50, len(tbl.Rows), tbl.Truncated, tbl.RowCount)
 	}
 
 	long := strings.Repeat("a long title ", 100)
@@ -121,7 +121,7 @@ func TestATableIsTheAnswersOwnFieldsCutWholeRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(built.Card)
-	if len(encoded) > cards.MaxBytes || !built.Card.Table.Truncated || built.Notice == nil {
+	if len(encoded) > cards.MaxBytes || !built.Card.Table.Truncated {
 		t.Errorf("a %d-byte table was carded at %d bytes, truncated %v", 900*len(long),
 			len(encoded), built.Card.Table.Truncated)
 	}
@@ -382,5 +382,79 @@ func TestARecordLinkIsNamedByWhatItOpens(t *testing.T) {
 	if link, err := cards.Link("project", map[string]string{"key": "FAIR"}, ""); err != nil ||
 		link.Label != "FAIR" {
 		t.Errorf("a project link with no name reads %q (%v), want its key", link.Label, err)
+	}
+}
+
+// A RECORD CARRIES THE KEY PROSE WRITES IT BY, read from the record as its
+// spec says, so the drawer turns the answer's first "GOP-11" into the task's
+// chip without guessing which of a card's strings is a key. A spec of a kind
+// named by its title carries none: the subtitle is never taken for one.
+// Mutation: drop the Key from buildEntity and the card names no key.
+func TestARecordCarriesTheKeyProseWritesItBy(t *testing.T) {
+	t.Parallel()
+	answer, _ := json.Marshal(map[string]any{"task": map[string]any{
+		"key": "GOP-11", "title": "Android 12 crash when lesson audio starts"}})
+	keyed := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, Root: "task",
+		ID: "key", Key: "key", Title: "title", Subtitle: "key"}}
+	built, err := cards.Build(keyed, answer, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := built.Card.Entity.Key; got != "GOP-11" {
+		t.Errorf("the task's key is %q, want GOP-11", got)
+	}
+	// A PAGE IS NAMED BY ITS TITLE: its subtitle (here the same field) is
+	// never taken for a key.
+	unkeyed := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourcePage, Root: "task",
+		ID: "key", Title: "title", Subtitle: "key"}}
+	built, err = cards.Build(unkeyed, answer, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := built.Card.Entity.Key; got != "" {
+		t.Errorf("a spec with no key carries %q", got)
+	}
+}
+
+// THE MODEL IS TOLD EACH RECORD'S KEY, beside its title, so it names the
+// record the way the drawer finds it. Mutation: leave Key out of the digest.
+func TestTheModelIsToldARecordsKey(t *testing.T) {
+	t.Parallel()
+	card := wire.Card{Type: wire.CardEntity, Entity: &wire.EntityCard{Kind: wire.ResourceTask,
+		ID: "GOP-11", Key: "GOP-11", Title: "Android 12 crash"}}
+	out, err := cards.Summary(card, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digest map[string]any
+	if err := json.Unmarshal(out, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if digest["key"] != "GOP-11" {
+		t.Errorf("the model reads %s, with no key", out)
+	}
+}
+
+// A SPEC OF A KEYED KIND IS REFUSED WITHOUT ITS KEY, and one of any other kind
+// with one, so a new read can never ship a task the drawer cannot name.
+// Mutation: drop the check from Validate and both specs pass.
+func TestAKeyedKindNeedsItsKeyAndNoOtherHasOne(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		e    cards.Entity
+		ok   bool
+	}{
+		{"a task with its key", cards.Entity{Kind: wire.ResourceTask, ID: "key", Key: "key", Title: "title"}, true},
+		{"a task with none", cards.Entity{Kind: wire.ResourceTask, ID: "key", Title: "title"}, false},
+		{"a project with none", cards.Entity{Kind: wire.ResourceProject, ID: "key", Title: "name"}, false},
+		{"a seat keyed by its handle", cards.Entity{Kind: wire.ResourceSeat, ID: "handle", Key: "handle", Title: "role"}, false},
+		{"a seat with none", cards.Entity{Kind: wire.ResourceSeat, ID: "handle", Title: "role"}, true},
+		{"a record of no kind", cards.Entity{ID: "id", Title: "title"}, true},
+	} {
+		e := tc.e
+		if err := (cards.Spec{Entity: &e}).Validate(); (err == nil) != tc.ok {
+			t.Errorf("%s: Validate = %v", tc.name, err)
+		}
 	}
 }

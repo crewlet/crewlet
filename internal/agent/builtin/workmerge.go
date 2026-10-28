@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -40,7 +41,10 @@ import (
 
 // ---- merge_work_item ---------------------------------------------------- //
 
-type mergeWorkItem struct{ deps WorkDeps }
+type mergeWorkItem struct {
+	itemTarget
+	deps WorkDeps
+}
 
 var _ tools.SeatCallable = (*mergeWorkItem)(nil)
 
@@ -183,6 +187,6 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // that said nothing gets the safe outcome and only an explicit `false` keeps
 // them where they are.
 func moveSubtasks(args map[string]any) bool {
-	raw, held := args["move_subtasks"].(bool)
+	raw, held := argval.Bool(args["move_subtasks"])
 	return !held || raw
 }

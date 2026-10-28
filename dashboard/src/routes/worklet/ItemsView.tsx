@@ -136,6 +136,7 @@ import {
   listParam,
   loadedOf,
   manualOrder,
+  defaultOrderOf,
   monthOrNow,
   seededScope,
   shapeOf,
@@ -507,6 +508,15 @@ export function ItemsView({
   // listing the trash (`internal/worklet/viewsread.go` says so), so a saved
   // view carrying it is read exactly the same way as the filter chip.
   const inTrash = params.removed === "true" || params.removed === true;
+  // THE ORDERS A GRID'S HEADS DRAW AND STEP FROM. The container's own default
+  // is the engine's ([defaultOrderOf]: the manual order inside a project, the
+  // most recently touched across the company, the removal order in the
+  // trash), and the grid's default is the running view's order where it has
+  // one: a press that steps back to the default takes the reader back to the
+  // view as it was saved.
+  const containerOrder = defaultOrderOf(shape, !project, inTrash);
+  const gridDefaultOrder =
+    typeof viewOwn.sort === "string" && viewOwn.sort ? viewOwn.sort : containerOrder;
   const tombstones = useQuery(
     "work_activity",
     inTrash ? { container, kinds: "removed,restored,purged", limit: FEED_PAGE.trash } : undefined,
@@ -812,6 +822,7 @@ export function ItemsView({
       <ArrangeControls
         shape={shape}
         workspace={!project}
+        trash={inTrash}
         groupBy={axis}
         sort={order}
         manual={manualOrder(order, project)}
@@ -881,9 +892,12 @@ export function ItemsView({
             arrange={phone ? arrange : undefined}
             shape={shape}
             workspace={!project}
+            trash={inTrash}
             viewShape={savedShape}
             groupBy={axis}
             groupBy2={axis2}
+            sort={order}
+            onSort={(next) => setSort(next || off(viewOwn.sort))}
             cols={cols}
             hidden={[...hidden].map((key) => ({ key, label: laneLabel(key) }))}
             onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
@@ -1061,6 +1075,11 @@ export function ItemsView({
                 foot={foot}
                 seats={seats}
                 more={pageMore}
+                sort={sort === EXPLICIT_NONE ? containerOrder : sort}
+                defaultSort={gridDefaultOrder}
+                // BACK TO THE DEFAULT IS NO KEY, so the view's own order
+                // (or the container's) applies again.
+                onSort={setSort}
               />
             )}
             {!nothingShown && shape === "timeline" && (

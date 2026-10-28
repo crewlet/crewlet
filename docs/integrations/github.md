@@ -317,7 +317,7 @@ Together the page is normally correct by the time you switch back to it. If it i
 | `name` | The company name and the seat's role name, joined and cut to 34 runes |
 | `url` | `https://crewlet.ai` |
 | `public` | `false`. The app is the company's own |
-| `hook_attributes` | `{"url": "<webhook address>/webhooks/github/<handle>", "active": true}`, or `{"active": false}` where GitHub cannot reach the webhook address |
+| `hook_attributes` | `{"url": "<webhook address>/webhooks/github/<handle>", "active": true}`. Left out, with `default_events`, where GitHub cannot reach the webhook address: GitHub validates a hook whether or not it is active, and refuses one with no url, one it cannot reach, and events with no hook |
 | `redirect_url` | `<webhook address>/webhooks/github-app` |
 | `setup_url` | `<webhook address>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
@@ -621,11 +621,15 @@ GitHub, because pushing, opening pull requests and reviewing are all outbound,
 and the two acts that build an app need only the operator's browser, which
 reaches the engine perfectly well.
 
-- **The app is created with its webhook off.** The begin route builds the
-  manifest with `hook_attributes: {"active": false}` and no delivery address
-  (`webhook_active: false` in its answer), rather than refusing or pointing the
-  hook at an address that fails every delivery while the app reads as healthy.
-  The browser returns to `api.external_url` as usual.
+- **The app is created with no webhook.** The begin route builds the manifest
+  without `hook_attributes` or `default_events` (`webhook_active: false` in its
+  answer), rather than refusing or letting a hook fail every delivery while
+  the app reads as healthy. GitHub leaves no other choice: it validates a
+  manifest's hook whether or not it is active, and refuses one with no url,
+  one it cannot reach ("isn't reachable over the public Internet"), and event
+  subscriptions with no hook ("Hook url cannot be blank"). Once the engine has
+  a public address, add the webhook and its events on the app at GitHub. The
+  browser returns to `api.external_url` as usual.
 - **No hook is registered** on the organization or a repository, for the same
   reason.
 - **The card says so and stays ready.** One advisory, on the webhook
@@ -648,6 +652,15 @@ webhook URL to `<webhook address>/webhooks/github/<handle>`, tick **Active**,
 and check the events listed under [The manifest the engine
 builds](#the-manifest-the-engine-builds). GitHub offers no API that switches an
 app's webhook on, so this is a person's step, once per app.
+
+**The webhook secret for such an app is the organization's.** An app created
+with no webhook was given no signing secret by GitHub, so the engine sealed
+none for it and verifies its deliveries against `integrations.github.webhook_secret`.
+Set the app's webhook secret at GitHub to that same value; a secret of the
+app's own would fail every delivery's signature check. To give each agent a
+secret of its own instead, delete the app at GitHub and create it again from
+the seat's card once the engine has its public address: the manifest then
+carries the hook, GitHub generates the secret, and the engine seals it.
 
 ### The two routes
 
@@ -1187,6 +1200,6 @@ units:
   one good for 50 minutes and is not restarted; past that GitHub refuses its
   calls. git and `gh` read the file the engine keeps current, and the seat's
   executor reaches its own renewed GitHub server through the tool bridge.
-- **An app created with its webhook off is switched on by a person.** GitHub
-  has no API for it; see [Running locally, with no public
+- **An app created with no webhook has one added by a person.** GitHub has no
+  API for it; see [Running locally, with no public
   address](#running-locally-with-no-public-address).

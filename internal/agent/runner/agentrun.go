@@ -246,12 +246,12 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 // its bridged calls did to it since: every tool it activated and every skill
 // it loaded, which a run continuing its own session goes on calling ([Runner.
 // ReopenAgentRun] rebuilds a running run's the same way) — and its calls so
-// far are on the turn's call log already ([Runner.Resume] seeded it), so the
-// relaunched run's writes go on counting from them; the round's launch time
-// keeps accumulating from the instant the round first launched. No new phase
-// is opened: the round's started record was published when it first launched,
-// and its completion is the collection that finally closes it — unless this
-// relaunch is refused, which closes it here.
+// far are seeded into the turn's call log through that surface before the
+// relaunch ([seedCalls]), so the relaunched run's writes go on counting from
+// them; the round's launch time keeps accumulating from the instant the round
+// first launched. No new phase is opened: the round's started record was
+// published when it first launched, and its completion is the collection that
+// finally closes it — unless this relaunch is refused, which closes it here.
 func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteration,
 	state execstate.State, asked *Asked, logged []ledger.Call,
 ) (turn.Work, turn.Surface, error) {
@@ -276,7 +276,12 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
-	r.observeLoads(logged)
+	// THE TURN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED, the
+	// asking run's calls included, through the surface the relaunched run
+	// is served ([seedCalls]), and BEFORE the launch: the relaunched run's
+	// bridged calls are admitted against this log from its first one.
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, logged)
+	r.observeLoads(surface, logged)
 
 	system, user := r.executorPrompt(ctx, "", history, snapshot, built)
 	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
@@ -368,7 +373,8 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // gone and the tools a loaded skill unlocked refused again.
 //
 // AND ITS PLACE IN THE RUN. The turn's call log is seeded with its closed
-// rounds and every call the run has made over the bridge, so a call made from
+// rounds and every call the run has made over the bridge, through the surface
+// it is served, by canonical arguments ([seedCalls]), so a call made from
 // here counts its repeats from the whole run and derives the operation id the
 // run's own process would have; a submission cites those calls as well as the
 // ones made from here; and the meter starts from what the row says the run's
@@ -385,7 +391,6 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 ) (*tools.Surface, *BridgedSpend, error) {
 	history := state.Iterations
 	called := bridgedLedger(inAdmissionOrder(bridged))
-	seedCalls(r.cfg.Turn.Context.CallLog(), history, called)
 
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	var surface *tools.Surface
@@ -403,7 +408,10 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 		return nil, nil, err
 	}
 	surface = built
-	r.observeLoads(called)
+	// THE RUN'S CALL LOG STARTS FROM WHAT IT ALREADY CALLED, through the
+	// surface it is served ([seedCalls]).
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, called)
+	r.observeLoads(surface, called)
 	return surface, meter, nil
 }
 
@@ -424,14 +432,16 @@ func replayedActive(state execstate.State, called []ledger.Call) []string {
 // run's bridged calls loaded, by the guard's own reading of a call — the one
 // rule for which call unlocks what. Called once the surface is built, because
 // whether a guard is armed at all depends on the loader being active, which an
-// activation over the bridge may be what made it.
-func (r *Runner) observeLoads(called []ledger.Call) {
+// activation over the bridge may be what made it. A call is read by its
+// canonical arguments, made through the surface ([tools.Surface.ArgsOf]), as
+// the guard reads every call the surface admits.
+func (r *Runner) observeLoads(surface *tools.Surface, called []ledger.Call) {
 	r.mu.Lock()
 	guard := r.guard
 	r.mu.Unlock()
 	for _, call := range called {
 		if !call.Failed {
-			guard.Observe(call.Name, call.Args)
+			guard.Observe(call.Name, surface.ArgsOf(call.Name, call.Args))
 		}
 	}
 }
@@ -505,6 +515,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
+	// THE RUN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED, through
+	// the surface it resumes on ([seedCalls]); see [Runner.Resume].
+	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, logged)
 
 	replaySubmission(ctx, submit, logged)
 
@@ -627,7 +640,8 @@ func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload],
 		if call.Name != SubmitWorkTool || call.Failed {
 			continue
 		}
-		if _, err := submit.Call(ctx, call.Args); err != nil {
+		if _, _, err := tools.Invoke(ctx, tools.Invocation{Name: SubmitWorkTool, Tool: submit,
+			Args: tools.ArgsOf(submit, false, call.Args), Where: "replay"}); err != nil {
 			log.WarnContext(ctx, "agent_run_submission_replay_failed", "error", err.Error())
 		}
 	}

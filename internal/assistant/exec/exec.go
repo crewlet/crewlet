@@ -152,6 +152,13 @@ type Response struct {
 	// Truncated is an answer longer than the bound; its body is cut there
 	// and is never handed to a model or a card as though it were whole.
 	Truncated bool
+	// ModelDetail is the sentence a refused tool call answered a MODEL
+	// with, told in process by the route that refused it
+	// (internal/modelnote) and never part of Body: the route answers a
+	// person a person's words, and this is the half only the model that
+	// made the request reads, so it can say what to change (ADR-0060).
+	// Empty where the route told none.
+	ModelDetail string `json:"-"`
 }
 
 // MaxResponseBytes is the most of one answer a call reads: sixty-four

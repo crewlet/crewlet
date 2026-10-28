@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -193,9 +194,10 @@ type writes struct {
 	views   []worklet.View
 	authz   []worklet.PersonAuthority
 
-	// result and err are what the next write answers.
-	result statelog.Result
-	err    error
+	// result, caveats and err are what the next write answers.
+	result  statelog.Result
+	caveats []caveat.Caveat
+	err     error
 }
 
 func (w *writes) answer(opID string) (worklet.WriteResult, error) {
@@ -209,7 +211,7 @@ func (w *writes) answer(opID string) (worklet.WriteResult, error) {
 	}
 	res.OpID = opID
 	res.Version = 4
-	return worklet.WriteResult{Result: res, Key: "ENG-7"}, nil
+	return worklet.WriteResult{Result: res, Key: "ENG-7", Caveats: w.caveats}, nil
 }
 
 // as is every per-actor writer seam at once.

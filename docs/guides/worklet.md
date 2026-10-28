@@ -165,7 +165,9 @@ A move that stops part-way **after the item itself moved** is not answered as a
 failure: the item is in the new project, under its new key, and the answer is
 its receipt with the walk's count beside it — `subtree_followed` of
 `subtree_total` tasks under it made it across — and a `move_stopped` sentence
-saying what finishes it. That is the **same** call again, never a new one; a
+saying what finishes it (an agent reads that sentence; a person is told the same
+as a `move_unfinished` caveat, or `move_waiting` while a task in the trash holds
+it). That is the **same** call again, never a new one; a
 task in the trash under it that holds the walk is named as `move_waits_for`
 and has to be restored or purged first; and where the node cannot vouch for
 the task the walk stopped at (`move_unvouched`), the same call there stops at
@@ -203,7 +205,9 @@ that day ends in.
   refused for any other seat. It is not chart-owned: a config apply that
   renames the project carries the target through untouched.
 - Given an **instant** instead, the write stores the day that instant falls on
-  on the company's clock and says so in the answer's `warnings`. Anything that
+  on the company's clock and says so in the answer's `warnings` (a person in
+  the dashboard is told the same in its own words, see
+  [What it answers](../reference/api-endpoints.md#what-it-answers)). Anything that
   is neither is refused, naming both spellings.
 - `null` or `""` clears it; a project with none reports no `target_date`, and
   `sort=target` puts it last in both directions — "no target" is not the
@@ -542,8 +546,9 @@ value would be a number nobody typed under a declaration that says the field is
 exact.
 
 The one change the engine makes for you is the date truncation, and it says so
-in the result's `warnings` — a value the engine altered is one the writer has
-to be told about, or the board shows something they did not write.
+in the result's `warnings` (and, for a person in the dashboard, in a toast
+worded for them): a value the engine altered is one the writer has to be told
+about, or the board shows something they did not write.
 
 Required fields are enforced at **every** write, not only at the create: an
 update may not clear one. ClickUp enforces them at creation only; this is the
@@ -1003,9 +1008,10 @@ ordinary status change: history, and a wake for the people on the card — and
 it is written first, as its own record, before the place. It is refused
 `stale_version` before anything lands if the card changed since the board was
 drawn. If somebody changes the card between the two halves, the new lane stands
-and the answer says `placed: false`, naming why in `unplaced`: the card is in
-the lane it was dropped into, at the place it already held there, and can be
-dragged again.
+and the answer says `placed: false`, with a `lane_changed_not_placed` caveat
+(the dashboard draws it beside the board; an agent reads why in `warnings`):
+the card is in the lane it was dropped into, at the place it already held
+there, and can be dragged again.
 
 A drag is retried as the same call. Each half is a step of the call's one
 operation, so a retry is answered from the ledger step by step, the lane change
@@ -1285,7 +1291,8 @@ of the way through — a step whose outcome is unknown, or the stream refusing a
 append. It then stops there rather than carrying on over it, and the answer
 says so: the item you named is removed (or restored), with
 `subtree_followed` and `subtree_total` counting how many of the items that go
-with it followed, and `subtree_stopped` saying why and what finishes it. What
+with it followed, and `subtree_stopped` saying why and what finishes it (a
+person is told the same as a `subtree_unfinished` caveat). What
 finishes it is the same call again — a task already where the gesture leaves it
 is nothing to do, so a second removal takes what the first did not reach, and a
 second restore brings back whatever is still in the trash with a parent that
@@ -1885,7 +1892,11 @@ surface the seat cannot reach.
 A comment from somebody who is not the assignee, naming nobody and asking
 nobody, still wakes the assignee — unaddressed, which a turn may absorb without
 replying. The result says so in a `warnings` line, because a commenter
-expecting an answer otherwise gets silence with nothing to explain it.
+expecting an answer otherwise gets silence with nothing to explain it. An
+agent is told to pass `ask` or mention them; a person commenting from the
+dashboard is told the same thing in a short toast that goes by itself, in the
+words of the comment box rather than the tool's arguments. An answer to a
+question never says it, since an answer expects no reply.
 
 **What waits on a person** is one question (`GET /worklet/decisions`,
 `decisions`): the open asks put to them — under the one name their record is
@@ -1898,6 +1909,15 @@ and naming somebody else's is a lead's or an administrator's to ask, with
 `worklet`. The dashboard's Home
 answers them in place: each option of a structured ask is a button that sends
 the choice as the answer, and a parked run is answered by its turn.
+
+**What a person decided lately** is the other half (`GET
+/worklet/decisions/answered`, `answered_decisions`): the asks put to them and
+closed in the last seven days, newest closing first, each with who closed it
+(a colleague may answer for you), when, the option chosen or the words, and
+the asker's first record on the task since, which says whether the answer has
+been acted on. It takes the same scope rule. The dashboard's Inbox keeps
+these in a closed **Answered** group at the end of the list; an answer older
+than the week is on its task's thread.
 
 ### What an answer may weigh
 

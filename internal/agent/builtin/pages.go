@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // Doclet's tool names.
@@ -622,7 +623,7 @@ func createStatus(args map[string]any) (doclet.Status, string) {
 	if !present || raw == nil {
 		return doclet.StatusPublished, ""
 	}
-	text, ok := raw.(string)
+	text, ok := argval.String(raw)
 	switch status := doclet.Status(strings.TrimSpace(text)); {
 	case ok && status == "":
 		return doclet.StatusPublished, ""
@@ -779,7 +780,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		// A WATCH IS A YES OR A NO, and anything else is refused rather than
 		// read as "no change": a caller that sent "false" as text would
 		// otherwise be told the save landed while still following the page.
-		watch, isBool := raw.(bool)
+		watch, isBool := argval.Bool(raw)
 		if !isBool {
 			return failed(fmt.Sprintf("save_page takes `watch` as true or false, "+
 				"and was sent %s.", clip(fmt.Sprint(raw)))), nil

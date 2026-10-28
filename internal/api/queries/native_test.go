@@ -76,6 +76,8 @@ type stubWork struct {
 	feed           worklet.FeedPage
 	decisionsQuery worklet.DecisionsQuery
 	decisions      worklet.DecisionsAnswer
+	answeredQuery  worklet.DecisionsQuery
+	answered       worklet.AnsweredAnswer
 
 	catalogueQuery worklet.CatalogueQuery
 	taskLevel      statelog.ReadLevel
@@ -205,6 +207,13 @@ func (s *stubWork) Decisions(_ context.Context, q worklet.DecisionsQuery, _ time
 	return s.decisions, s.err
 }
 
+func (s *stubWork) AnsweredAsks(_ context.Context, q worklet.DecisionsQuery, _ time.Time,
+	_ *time.Location) (worklet.AnsweredAnswer, error) {
+
+	s.answeredQuery = q
+	return s.answered, s.err
+}
+
 func (s *stubWork) TurnPlaces(_ context.Context, runs []string,
 	_ statelog.Freshness) (map[string]worklet.TurnPlace, error) {
 
@@ -332,6 +341,8 @@ var personalQuestions = map[string]bool{
 	"work_inbox":    true,
 	"conversations": true,
 	"decisions":     true,
+	// The other half of `decisions`, scoped as it is.
+	"answered_decisions": true,
 }
 
 // askNative runs one question against a registry built from these sources,
@@ -1469,6 +1480,8 @@ var sessionQuestions = []sessionQuestion{
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.feedQuery.Level }, nil},
 	{"decisions", "tracker", map[string]any{"handle": "ana"},
 		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.decisionsQuery.Level }, nil},
+	{"answered_decisions", "tracker", map[string]any{"handle": "ana"},
+		func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.answeredQuery.Level }, nil},
 	{"pages", "pages", map[string]any{},
 		func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }, nil},
 	{"page", "pages", map[string]any{"id": "p1"},

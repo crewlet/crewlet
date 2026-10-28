@@ -1,12 +1,16 @@
 /**
  * The assistant's home: a greeting and the one sentence that says what it
- * may do, what is waiting on the reader, and questions it answers anywhere.
+ * may do, a brief of the page the reader is on, and questions it answers
+ * anywhere.
  *
- * NEEDS YOU LEADS, because in Crewlet the costliest thing a person can miss is
- * a decision or a parked coding run: an agent seat is stopped until they
- * answer. Its rows are real items read with the reader's own session (the
- * decisions the Inbox counts, and the company's budget), each drawn only when
- * there is something in it, and the card only when one row is.
+ * THIS PAGE LEADS: one row, "Brief me on this page", or on a page with one
+ * record open, "Brief me on this decision" (the record's own word, from the
+ * page context's selection, `../brief.ts`). It starts a conversation whose
+ * first answer is the brief: what the page is about, and whether anything
+ * needs the reader, ranked with a press for each, which the reader goes on
+ * asking about.
+ * What waits on the reader is the brief's to say, read for the page they are
+ * on, so the home keeps no list of its own beside it.
  *
  * EVERY ROW LEADS SOMEWHERE THE READER MAY GO: a question is offered only
  * where the reader holds what answering it reads, and a change only where
@@ -17,28 +21,20 @@
  */
 
 import { type ReactNode } from "react";
-import { Eyebrow, Stack, SuggestionList, SuggestionRow, Tag, Text } from "@crewlethq/ui";
+import { Eyebrow, Stack, SuggestionList, SuggestionRow, Text } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
   BotGlyph,
   CoinsGlyph,
-  GaugeGlyph,
-  MessageCircleQuestionMarkGlyph,
   PackageGlyph,
   PauseGlyph,
-  SquareTerminalGlyph,
+  ScrollTextGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useQuery } from "~/lib/useQuery.ts";
-import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { decisionSubjects, seatConditionsOf } from "~/lib/decisions.ts";
-import { indexOrg, nameOfIn } from "~/lib/seats.ts";
-import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
-import { fmtCount, fmtDate, greeting } from "~/lib/format.ts";
-
-/** The share of a ceiling from which the budget row is drawn. */
-const BUDGET_FROM = 0.75;
+import { greeting } from "~/lib/format.ts";
+import type { PageSnapshot } from "../context.ts";
+import { briefQuestion, briefSubject } from "../brief.ts";
 
 /** One row of Anywhere in Crewlet: what it asks, and what answering it needs. */
 interface Anywhere {
@@ -94,6 +90,10 @@ const ANYWHERE: readonly Anywhere[] = [
 export interface HomeProps {
   /** The reader's own name, for the greeting. */
   name: string;
+  /** The page the reader is on, or null where there is none to brief. */
+  page: PageSnapshot | null;
+  /** Ask for a brief of the page, or of its open record. */
+  onBrief: () => void;
   /** Ask a question as written. */
   onAsk: (text: string) => void;
   /** Put a change's start in the composer for the reader to finish. */
@@ -101,90 +101,12 @@ export interface HomeProps {
   now: number;
 }
 
-export function Home({ name, onAsk, onFill, now }: HomeProps) {
+export function Home({ name, page, onBrief, onAsk, onFill, now }: HomeProps) {
   const viewer = useViewer();
-  const decisions = useQuery("decisions", undefined, {
-    enabled: viewer.owner !== "",
-    pollMs: 60_000,
-  });
-  const agents = useAgents();
-  const org = useOrg();
-  const budget = useOrgBudget();
-  const nameOf = nameOfIn(indexOrg(org));
-
-  const subjects = decisionSubjects(decisions.data ?? null, seatConditionsOf(agents));
-  const asks = subjects.flatMap((s) => (s.kind === "ask" ? [s.ask] : []));
-  const runs = subjects.flatMap((s) => (s.kind === "run" ? [s.run] : []));
-  const window = (budget?.org.windows ?? [])
-    .filter((w) => w.limit !== undefined && w.limit > 0)
-    .sort((a, b) => b.used / b.limit! - a.used / a.limit!)[0];
-  const share = window ? window.used / window.limit! : 0;
-
-  const rows: ReactNode[] = [];
-  if (asks.length > 0) {
-    rows.push(
-      <SuggestionRow
-        key="asks"
-        icon={<MessageCircleQuestionMarkGlyph size="sm" />}
-        detail={asks
-          .slice(0, 2)
-          .map((a) => `${nameOf(a.asked_by)} on ${a.key}`)
-          .join(", ")}
-        count={
-          <Tag size="sm" variant="warning">
-            {String(asks.length)}
-          </Tag>
-        }
-        chevron
-        onSelect={() => onAsk("What needs my decision?")}
-      >
-        {asks.length === 1 ? "A decision is waiting on you" : "Decisions waiting on you"}
-      </SuggestionRow>,
-    );
-  }
-  if (runs.length > 0) {
-    rows.push(
-      <SuggestionRow
-        key="runs"
-        icon={<SquareTerminalGlyph size="sm" />}
-        detail={runs
-          .slice(0, 2)
-          .map((r) => nameOf(r.agent_handle))
-          .join(", ")}
-        count={
-          <Tag size="sm" variant="warning">
-            {String(runs.length)}
-          </Tag>
-        }
-        chevron
-        onSelect={() => onAsk("Which coding runs are parked on a question?")}
-      >
-        {runs.length === 1
-          ? "A coding run is parked on a question"
-          : "Coding runs are parked on a question"}
-      </SuggestionRow>,
-    );
-  }
-  if (window && share >= BUDGET_FROM) {
-    const percent = Math.round(share * 100);
-    const adjective = PERIOD_ADJECTIVE[window.period];
-    rows.push(
-      <SuggestionRow
-        key="budget"
-        icon={<GaugeGlyph size="sm" />}
-        detail={`${fmtCount(window.used)} of ${fmtCount(window.limit!)} tokens, resets ${fmtDate(window.resets_at)}`}
-        count={<Tag size="sm">{`${percent}%`}</Tag>}
-        chevron
-        onSelect={() => onAsk("Which budget runs out first?")}
-      >
-        {`${adjective.charAt(0).toUpperCase()}${adjective.slice(1)} budget is at ${percent}%`}
-      </SuggestionRow>,
-    );
-  }
-
   const offered = ANYWHERE.filter((row) =>
     row.offered({ worklet: viewer.worklet, doclet: viewer.doclet, acts: viewer.acts }),
   );
+  const subject = page ? briefSubject(page.context) : null;
 
   return (
     <Stack gap={5}>
@@ -196,10 +118,24 @@ export function Home({ name, onAsk, onFill, now }: HomeProps) {
           I read only what you can open, and nothing changes until you approve it.
         </Text>
       </Stack>
-      {rows.length > 0 ? (
-        <Stack as="section" gap={2} aria-labelledby="assistant-needs-you">
-          <Eyebrow id="assistant-needs-you">Needs you</Eyebrow>
-          <SuggestionList divided>{rows}</SuggestionList>
+      {page ? (
+        <Stack as="section" gap={2} aria-labelledby="assistant-this-page">
+          <Eyebrow id="assistant-this-page">This page</Eyebrow>
+          <SuggestionList divided>
+            <SuggestionRow
+              key="brief"
+              icon={<ScrollTextGlyph size="sm" />}
+              detail={
+                subject === "page"
+                  ? `What ${page.title} is about, and whether anything needs you`
+                  : `What this ${subject} is about, and whether it needs you`
+              }
+              chevron
+              onSelect={onBrief}
+            >
+              {briefQuestion(page.context)}
+            </SuggestionRow>
+          </SuggestionList>
         </Stack>
       ) : null}
       <Stack as="section" gap={2} aria-labelledby="assistant-anywhere">

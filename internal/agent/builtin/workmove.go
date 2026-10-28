@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -50,6 +51,7 @@ import (
 // ---- move_work_item ----------------------------------------------------- //
 
 type moveWorkItem struct {
+	itemTarget
 	deps WorkDeps
 }
 
@@ -245,19 +247,20 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named stri
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version":          got.Version,
 		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
-		"move_stopped": fmt.Sprintf("%s moved to %s%s, but only %d of the %d "+
-			"tasks under it followed before the walk stopped (%s); the rest are "+
-			"still in their old project. Do not report it as done, and do not "+
-			"move it again as a new call. %s", named, stopped.Target, as,
-			stopped.Followed, stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next),
 	}, stopped.Root, stopped.Key, stopped.KeyCollision)
+	said := partial(answer, MoveStoppedKey, caveat.MoveUnfinished(stopped.Followed,
+		stopped.Of, stopped.Waiting != "", fmt.Sprintf("%s moved to %s%s, but only "+
+			"%d of the %d tasks under it followed before the walk stopped (%s); the "+
+			"rest are still in their old project. Do not report it as done, and do "+
+			"not move it again as a new call. %s", named, stopped.Target, as,
+			stopped.Followed, stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next)))
 	if stopped.Waiting != "" {
 		answer["move_waits_for"] = stopped.Waiting
 	}
 	if errors.Is(stopped.Err, worklet.ErrStepUnvouched) {
 		answer["move_unvouched"] = true
 	}
-	return jsonResult(withOperation(answer, actor))
+	return caveated(withOperation(answer, actor), nil, said)
 }
 
 // replacedKey is the key a move into the project an item is already in

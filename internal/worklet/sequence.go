@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -258,12 +259,19 @@ type WriteResult struct {
 	// declared a moment earlier.
 	Declared []string
 
-	// Warnings are what the caller should know and was not refused for —
-	// a body carrying more task keys than the applier will resolve, a tag
+	// Caveats are what the caller should know and was not refused for: a
+	// body carrying more task keys than the applier will resolve, a tag
 	// that nearly matched an existing one. THE APPLY MUST NEVER DEPEND ON
 	// ONE: every node applies the same record, and only this node saw the
-	// warning.
-	Warnings []string
+	// caveat. Each carries a model's phrasing and a person's
+	// ([caveat.Caveat]), because the same write answers both.
+	//
+	// A result crosses the estate router between nodes as JSON, and the
+	// router rebuilds these from a peer's answer ([caveat.RebuildFromPeer]).
+	// No compatibility is kept with the list of sentences this field
+	// replaced: no tag has shipped it, so no fleet runs a peer that sends
+	// one (ADR-0060).
+	Caveats []caveat.Caveat
 }
 
 // CreateTask mints a task. SEQUENCE 1.
@@ -472,8 +480,8 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 		// the same person holding the same task.
 		task.Watchers, _ = followAuto(task.Watchers, task.Muted, task.Assignee)
 		notify.filedTo(was, task)
-	} else if filed.warning != "" {
-		settled.warnings = append(settled.warnings, filed.warning)
+	} else if !filed.caveat.IsZero() {
+		settled.caveats = append(settled.caveats, filed.caveat)
 	}
 	rank, err := IntegerAt(n)
 	if err != nil {
@@ -507,7 +515,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 	}
 	result.Key, result.Rank = task.Key, task.Rank
 	result.Assignee = task.Assignee
-	result.Warnings = append(result.Warnings, settled.warnings...)
+	result.Caveats = append(result.Caveats, settled.caveats...)
 	return result, err
 }
 
@@ -580,9 +588,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 
 	out := WriteResult{Result: result}
 	if w.db.IsZero() {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("task %s was filed by an "+
-			"earlier copy of this operation, and this writer has no store to "+
-			"read its key from", id))
+		out.Caveats = append(out.Caveats, caveat.FiledEarlierUnread(id))
 		return out, nil
 	}
 	var task Task
@@ -600,8 +606,7 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 			"this operation; read its key: %w", id, err)
 	}
 	if !held {
-		out.Warnings = append(out.Warnings, fmt.Sprintf("task %s was filed by an "+
-			"earlier copy of this operation and is no longer on this node", id))
+		out.Caveats = append(out.Caveats, caveat.FiledEarlierRemoved(id))
 		return out, nil
 	}
 	// AND WHO HOLDS IT, as a create's own answer does ([WriteResult.Assignee]):
@@ -657,7 +662,7 @@ func filedUnit(stated, routed, project string) (filed, routing string) {
 // landing is who a new task is filed to, and what the caller is told about it.
 type landing struct {
 	assignee string
-	warning  string
+	caveat   caveat.Caveat
 }
 
 // landsOn is who a new task is assigned to.
@@ -698,10 +703,7 @@ func (w *Writer) landsOn(task Task, projectDefault string) landing {
 	}
 	if world := w.World; world != nil {
 		if seat, found := world.ResolveSeat(projectDefault); !found || seat != projectDefault {
-			return landing{warning: fmt.Sprintf("%s's default assignee %q is not a seat on "+
-				"the org chart any more, so this task was filed to nobody and "+
-				"lands in triage. The project lead sets another with "+
-				"write_project `default_assignee`.", task.Project,
+			return landing{caveat: caveat.DefaultAssigneeGone(task.Project,
 				projectDefault)}
 		}
 	}
@@ -812,7 +814,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 		},
 	})
 	return WriteResult{
-		Result: result, Warnings: bodyWarnings(task.Body), KeyCollision: collision,
+		Result: result, Caveats: bodyCaveats(task.Body), KeyCollision: collision,
 	}, err
 }
 
@@ -971,8 +973,8 @@ type settledCreate struct {
 	// nil when nothing needed settling.
 	fields map[string]json.RawMessage
 
-	// warnings are what the writer is told and was not refused for.
-	warnings []string
+	// caveats are what the writer is told and was not refused for.
+	caveats []caveat.Caveat
 
 	// unit is the project's own chart-owned unit, which a task that names
 	// none is filed into. Empty for a project the chart gave no unit —
@@ -1026,12 +1028,12 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	if err = requiredFields(ctx, tx, project, task); err != nil {
 		return settledCreate{}, err
 	}
-	fields, warnings, err := settleFields(ctx, tx, task.Project, task.Type,
+	fields, caveats, err := settleFields(ctx, tx, task.Project, task.Type,
 		task.Fields, w.World, w.zone())
 	if err != nil {
 		return settledCreate{}, err
 	}
-	return settledCreate{fields: fields, warnings: warnings, unit: project.Unit,
+	return settledCreate{fields: fields, caveats: caveats, unit: project.Unit,
 		assignee: project.DefaultAssignee}, nil
 }
 
@@ -1344,21 +1346,19 @@ func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task)
 		"does not set", task.Type, project.Key, missing)
 }
 
-// bodyWarnings is what a writer is told and not refused for.
+// bodyCaveats is what a writer is told and not refused for.
 //
 // THE APPLY MUST NOT DEPEND ON IT. Every node applies the same record and
 // resolves the same first [MaxReferencesPerBody] keys in document order, so
 // the cap is deterministic without this — the warning exists so the person who
 // wrote a body full of keys learns that most of them link nothing, rather than
 // discovering it on a page.
-func bodyWarnings(body string) []string {
+func bodyCaveats(body string) []caveat.Caveat {
 	if body == "" {
 		return nil
 	}
 	if found := taskKeysIn(body); len(found) > MaxReferencesPerBody {
-		return []string{fmt.Sprintf("this body names %d distinct task keys and "+
-			"the first %d are linked; the rest are left as plain text",
-			len(found), MaxReferencesPerBody)}
+		return []caveat.Caveat{caveat.BodyLinksCapped(len(found), MaxReferencesPerBody)}
 	}
 	return nil
 }
@@ -2888,8 +2888,10 @@ func (w *Writer) admit(ctx context.Context, rows int) (func(), bulkAdmission, er
 		if held, err := w.claims.Get(ctx, resource); err == nil && held != nil {
 			remaining = time.Until(held.ExpiresAt)
 		}
-		return nil, bulkRefused, fmt.Errorf("%w; retry in about %d seconds: %w",
-			ErrBulkInFlight, int(max(remaining.Seconds(), 1)),
+		// THE WAIT AS A PERSON PLANS BY ("retry in about 10m"), rounded up so
+		// it never reads shorter than it is: never a count of seconds.
+		return nil, bulkRefused, fmt.Errorf("%w; retry in about %s: %w",
+			ErrBulkInFlight, statelog.SpokenWait(remaining),
 			statelog.ErrUnavailable)
 	}
 	epoch := lease.Epoch

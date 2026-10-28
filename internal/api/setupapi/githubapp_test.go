@@ -180,13 +180,16 @@ func TestAnAppForAnUnreachableEngineIsCreatedWithItsWebhookOff(t *testing.T) {
 				t.Errorf("webhook_active = %v, want %v", begin["webhook_active"], c.active)
 			}
 			manifest, _ := begin["manifest"].(map[string]any)
-			hook, _ := manifest["hook_attributes"].(map[string]any)
-			if hook["active"] != c.active {
-				t.Errorf("hook_attributes = %v, want active %v", hook, c.active)
+			hook, hasHook := manifest["hook_attributes"].(map[string]any)
+			_, hasEvents := manifest["default_events"]
+			// A HOOK ONLY WHERE GITHUB CAN DELIVER: GitHub refuses an
+			// unreachable hook url, active or not, and events with no
+			// hook, so a local engine's manifest carries neither.
+			if hasHook != c.active || hasEvents != c.active {
+				t.Errorf("hook = %v, events present = %v, want both only where GitHub can deliver", hook, hasEvents)
 			}
-			if url, has := hook["url"]; has != c.active ||
-				(c.active && url != c.base+"/webhooks/github/builder") {
-				t.Errorf("hook url = %v, want one only where GitHub can deliver", url)
+			if c.active && (hook["active"] != true || hook["url"] != c.base+"/webhooks/github/builder") {
+				t.Errorf("hook = %v, want it active at the seat's address", hook)
 			}
 			if manifest["redirect_url"] != c.base+"/webhooks/github-app" {
 				t.Errorf("redirect_url = %v, want the engine's own return", manifest["redirect_url"])

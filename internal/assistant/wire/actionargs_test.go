@@ -270,3 +270,22 @@ func TestTheEngineReadsEverySchemaTheDashboardDeclares(t *testing.T) {
 		}
 	}
 }
+
+// EVERY FAULT OF AN ACTION'S ARGUMENTS IN ONE REFUSAL (ADR-0059): a guess with
+// three faults is told all three, each by its member.
+//
+// Mutation: return from the check at its first fault and only one is named.
+func TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce(t *testing.T) {
+	t.Parallel()
+	ceiling := decode(t, ceilingArgs)
+	err := ceiling.Check(value(t, `{"handle": "qa", "seat": "nobody", "ceiling": 3}`))
+	if err == nil {
+		t.Fatal("three faults were accepted")
+	}
+	for _, want := range []string{`args takes no "handle"`, `args.seat is one of "qa", "engineer", not "nobody"`,
+		`args.ceiling is text or null`, `args needs "period"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+}

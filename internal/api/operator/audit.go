@@ -191,7 +191,7 @@ func auditOutcome(name string, result tools.Result, err error) (
 		}
 		return types.AuditFailed, "", ""
 	}
-	answer := receiptOf(name, result.Output)
+	answer := receiptOf(name, result)
 	position := ""
 	if answer.Position != nil {
 		position = *answer.Position

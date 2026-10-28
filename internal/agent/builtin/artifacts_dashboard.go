@@ -73,6 +73,6 @@ func (t *dashboardSources) CallForTurn(_ context.Context, _ *turnctx.Turn,
 		"min_refresh_seconds": artifacts.MinRefreshSeconds,
 		"note": "A dataset reads one source: {\"id\": ..., \"title\": ..., \"source\": \"engine\", " +
 			"\"engine\": {\"name\": ..., \"params\": {...}}}, a parameter a literal or " +
-			"{\"param\": \"<filter key>\"}. See the dashboard section of the artifacts skill.",
+			"{\"param\": \"<filter key>\"}. Every key of dashboard.json is one " + ArtifactFormatTool + " call away.",
 	})
 }

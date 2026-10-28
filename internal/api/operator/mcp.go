@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // MCPPath is the route the MCP transport is mounted at.
@@ -98,7 +99,9 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 		}
 		return &mcp.CallToolResult{
 			IsError: result.Failed,
-			Content: []mcp.Content{&mcp.TextContent{Text: result.Output}},
+			// THE ASSISTANT READS TEXT, so a note on the arguments is
+			// rendered after the answer ([tools.Rendered]).
+			Content: []mcp.Content{&mcp.TextContent{Text: tools.Rendered(result)}},
 		}, nil
 	}
 }

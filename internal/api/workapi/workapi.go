@@ -61,13 +61,12 @@
 // the weakest honest precondition and the verb is decided once the row is
 // read: by the tool's own ask, or by this package for a verb that has no tool.
 //
-// A refusal is WORDED by [builtin.Refusal] from the error [builtin.DecisionError]
-// makes of the decision — the same two functions the tools' own gate uses — so
-// "you may not" reads identically on a seat's turn, in the operator's
-// assistant and here, and it is ANSWERED in the engine's envelope with the
-// rule's reason and the grants that would have admitted the caller
-// ([operator.RefuseDecision]). A route that composed its own sentence would be
-// where the three first disagreed.
+// A refusal is ANSWERED in the engine's envelope with the rule's reason and the
+// grants that would have admitted the caller ([operator.RefuseDecision]),
+// exactly as a tool's own refusal is on this surface, and with no sentence of
+// the engine's verbs: a person reads the code's own sentence (ADR-0060). A
+// route that composed its own sentence would be where the surfaces first
+// disagreed.
 //
 // # The status codes, and why each is its own
 //
@@ -155,6 +154,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -165,6 +165,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -669,34 +670,50 @@ func (s *served) answerDispatched(w http.ResponseWriter, r *http.Request, key,
 		// again under a fresh one.
 		operator.Interrupted(w, r, key, verb, err)
 	default:
-		answerTool(w, key, about, result)
+		answerTool(w, r, key, verb, about, result)
 	}
 }
 
-// answerTool renders one tool's receipt, or its failure beside about.
-func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
-	result tools.Result) {
+// KeyCaveats is the key a write's caveats are answered under, in a person's
+// words: the act route's `caveats`, flat beside the receipt's own fields.
+const KeyCaveats = "caveats"
+
+// answerTool renders one tool's receipt, or its failure beside about, as the
+// act route does and through the same two functions ([operator.FailTool],
+// [operator.PersonsReceipt]): a person's words or the code's for a refusal,
+// and a receipt without its model-worded `warnings`, its caveats in
+// `caveats` (ADR-0060).
+func answerTool(w http.ResponseWriter, r *http.Request, key, verb string,
+	about httpjson.Detail, result tools.Result) {
 
 	if result.Failed {
-		operator.Fail(w, result.Cause, result.Output, key, about)
+		operator.FailTool(w, r, result, key, about)
 		return
 	}
+	raw, caveats, readable := operator.PersonsReceipt(verb, result)
 	var receipt map[string]any
-	if err := json.Unmarshal([]byte(result.Output), &receipt); err != nil {
+	if !readable || json.Unmarshal(raw, &receipt) != nil {
 		// EVERY WRITE TOOL ANSWERS JSON, so this is a tool that changed
-		// shape rather than a caller's mistake.
-		log.Warn("api_work_receipt_unreadable", "error", err)
-		httpjson.FailWith(w, http.StatusInternalServerError,
-			httpjson.CodeInternalError, map[string]string{"detail": result.Output})
+		// shape rather than a caller's mistake; what it said is in this
+		// node's log, never in the answer.
+		httpjson.FailWithFields(w, http.StatusInternalServerError,
+			httpjson.CodeInternalError, about)
 		return
 	}
-	subtreeStoppedHere(receipt)
-	moveStoppedHere(receipt)
+	receipt[KeyCaveats] = caveats
+	operator.TellNote(r, result)
+	subtreeStoppedHere(receipt, caveats)
+	moveStoppedHere(receipt, caveats)
 	// A RECEIPT CARRIES NO LEDGER FACTS: a tool reports an outcome nobody
 	// can establish as a FAILED result carrying [builtin.UnknownOutcome],
 	// which [operator.Fail] answers, so an `unknown` still found here is a
 	// nested half of a two-record tool, whose own detail says what landed.
 	answer(w, key, outcomeOf(receipt), false, receipt)
+}
+
+// carries reports whether caveats hold one of code.
+func carries(caveats []caveat.Shown, code caveat.Code) bool {
+	return slices.ContainsFunc(caveats, func(c caveat.Shown) bool { return c.Code == code })
 }
 
 // subtreeStoppedHere rewrites a stopped subtree's instruction for THIS
@@ -716,16 +733,13 @@ func answerTool(w http.ResponseWriter, key string, about httpjson.Detail,
 // node's ledger can vouch for the step it stopped at, which nothing in the
 // receipt says. So the one instruction right in both cases is given, and the
 // counts it is formed from are the receipt's own fields, never words read out
-// of the tool's sentence.
-func subtreeStoppedHere(receipt map[string]any) {
-	said, stopped := receipt["subtree_stopped"]
-	if !stopped {
+// of the tool's sentence, which this surface never answers (ADR-0060): the
+// walk stopped is the tool's `subtree_unfinished` caveat.
+func subtreeStoppedHere(receipt map[string]any, caveats []caveat.Shown) {
+	if !carries(caveats, caveat.CodeSubtreeUnfinished) {
 		return
 	}
-	// WHY IT STOPPED is in the tool's own sentence, beside the instruction
-	// this replaces — kept for whoever reads this node's log, since the
-	// answer's is the instruction a client can act on.
-	log.Info("api_work_subtree_stopped", "item", receipt["key"], "tool_detail", said)
+	log.Info("api_work_subtree_stopped", "item", receipt["key"])
 	done := "removed"
 	if restored, _ := receipt["restored"].(bool); restored {
 		done = "restored"
@@ -766,12 +780,11 @@ func subtreeStoppedHere(receipt map[string]any) {
 // resend without one is a new operation, which is exactly what is refused.
 // The answer carries the key as `op_id` whichever way it was made, and
 // [operator.UnknownOutcome] words its own retry the same way.
-func moveStoppedHere(receipt map[string]any) {
-	said, stopped := receipt["move_stopped"]
-	if !stopped {
+func moveStoppedHere(receipt map[string]any, caveats []caveat.Shown) {
+	if !carries(caveats, caveat.CodeMoveUnfinished) && !carries(caveats, caveat.CodeMoveWaiting) {
 		return
 	}
-	log.Info("api_work_move_stopped", "item", receipt["moved_from"], "tool_detail", said)
+	log.Info("api_work_move_stopped", "item", receipt["moved_from"])
 	from, _ := receipt["moved_from"].(string)
 	project, _ := receipt["project"].(string)
 	as := ""
@@ -849,7 +862,7 @@ func answer(w http.ResponseWriter, key string, outcome statelog.Outcome,
 			"it; this one has not yet. Read at the position above to see it."
 		httpjson.Write(w, http.StatusAccepted, body)
 	case statelog.OutcomeUnknown:
-		operator.UnknownOutcome(w, key, unvouched, "", body)
+		operator.UnknownOutcome(w, key, unvouched, body)
 	default:
 		httpjson.Write(w, http.StatusOK, body)
 	}

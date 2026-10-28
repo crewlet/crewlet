@@ -14,11 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -988,7 +990,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if v := strings.TrimSpace(argString(args, "preset")); v != "" {
 		params["preset"] = v
 	}
-	if open, held := args["open_only"].(bool); held && open {
+	if open, _ := argval.Bool(args["open_only"]); open {
 		// THE TWO OPEN GROUPS, named from the constants rather than
 		// typed: there are FOUR status groups and neither `in_progress`
 		// nor `blocked` is one of them, so a literal naming either is a
@@ -1173,7 +1175,7 @@ func (t *getWorkItem) Parameters() map[string]any {
 					"that explain each, which is what you write back with.",
 				"items": map[string]any{
 					"type": "string",
-					"enum": []any{"body", "comments", "history", "links", "fields"},
+					"enum": stringsToAny(includeParts),
 				},
 			},
 			"comments_cursor": map[string]any{
@@ -1194,6 +1196,10 @@ func (t *getWorkItem) Parameters() map[string]any {
 		"required": []any{"item"},
 	}
 }
+
+// includeParts are the parts `include` names, as its schema closes them and
+// as its reading takes them ([argval.Choice]): one list, both places.
+var includeParts = []string{"body", "comments", "history", "links", "fields"}
 
 // detailWants reads the `include` argument, defaulting to all four.
 //
@@ -1229,8 +1235,16 @@ func detailWants(args map[string]any) (worklet.DetailWants, bool, string) {
 		return want, true, ""
 	}
 	body := false
-	for _, part := range refList(raw) {
-		switch strings.ToLower(part) {
+	parts, ok := refList(raw)
+	if !ok {
+		return want, false, "get_work_item takes `include` as a list of parts: body, comments, " +
+			"history, links, fields."
+	}
+	for _, part := range parts {
+		// THE ONE RULE for a closed set ([argval.Choice]), which the
+		// check of the call reads `include` by too.
+		member, _ := argval.Choice(part, includeParts)
+		switch member {
 		case "body":
 			body = true
 		case "comments":
@@ -1588,8 +1602,8 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		BodyAt:      now,
 	}
 	if task.Title == "" {
-		return failed("create_work_item needs a `title` — one line saying what " +
-			"the work is."), nil
+		return toPerson(failed("create_work_item needs a `title`: one line "+
+			"saying what the work is."), caveat.TitleMissing()), nil
 	}
 	if raw, held := args["fields"]; held {
 		fields, refusal := fieldMap(raw)
@@ -1749,7 +1763,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// call's first PUBLISH — a call refused over its ask, its decision or
 	// a blocker after it would have filed nothing and still left the
 	// project with labels nobody went on to use.
-	declared, labelRefusal := t.deps.declareLabels(ctx, actor, labelWrite{
+	declared, caveats, labelRefusal := t.deps.declareLabels(ctx, actor, labelWrite{
 		tool:    t.Name(),
 		before:  "filing the work item",
 		notMade: "The work item was NOT filed by this call.",
@@ -1800,9 +1814,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			answer["decision"] = ask.Decision
 		}
 	}
-	if len(got.Warnings) > 0 {
-		answer["warnings"] = got.Warnings
-	}
+	caveats = append(caveats, got.Caveats...)
 	// AND THE DEPENDENCIES AFTER IT, because a dependency is an edge
 	// between two items that exist: the mirror commit names this task,
 	// and writing it before the create would name a task no node holds.
@@ -1816,9 +1828,10 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// tell a model its item was not filed, and the next
 			// attempt would file a second one — which is also what
 			// the generic failure text's "call it again" did.
-			answer["dependencies_failed"] = dependencyFailure(task.ID, got.Key,
-				got.KeyCollision, writeTold(ctx, actor, t.Name(), err))
-			return jsonResult(answer)
+			return caveated(answer, caveats, partial(answer, DependenciesFailedKey,
+				caveat.DependenciesNotRecorded(worklet.ItemAddress(task.ID, got.Key,
+					got.KeyCollision), dependencyFailure(task.ID, got.Key,
+					got.KeyCollision, writeTold(ctx, actor, t.Name(), err)))))
 		}
 		t.deps.settle(ctx, result.Position)
 		// THE CALL ANSWERS FOR BOTH RECORDS, never for the create alone:
@@ -1831,11 +1844,12 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			got.Version, result)
 		answer["outcome"], answer["position"] = string(outcome), positionOf(at)
 		answer["version"] = version
+		caveats = append(caveats, result.Caveats...)
 		if len(result.OneSided) > 0 {
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
 	}
-	return jsonResult(answer)
+	return caveated(answer, caveats)
 }
 
 // joinDepend folds a dependency sequence that ran AFTER a call's first record
@@ -2413,6 +2427,7 @@ func partlyWritten(failure tools.Result, landed, refusedPart string, call callOu
 // ---- update_work_item -------------------------------------------------- //
 
 type updateWorkItem struct {
+	itemTarget
 	deps WorkDeps
 }
 
@@ -2692,9 +2707,12 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	// task's HOME project, which is the one whose set the write is checked
 	// against — never the caller's default.
 	var declared []string
+	// WHAT THE CALL TELLS ITS CALLER beside the change, from every record
+	// it appends, in the order they landed.
+	var caveats []caveat.Caveat
 	if patch.Tags != nil {
 		var labelRefusal *tools.Result
-		if declared, labelRefusal = t.deps.declareLabels(ctx, actor, labelWrite{
+		if declared, caveats, labelRefusal = t.deps.declareLabels(ctx, actor, labelWrite{
 			tool:   t.Name(),
 			before: "changing " + before.Named(),
 			notMade: fmt.Sprintf("Nothing it asked of %s was written by this "+
@@ -2755,15 +2773,12 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
 		answer["position"] = positionOf(got.Position)
 		patchOutcome, patchAt, patchVersion = got.Outcome, got.Position, got.Version
-		// THE WARNINGS THE WRITE PRODUCED, which today is the one the
-		// coercion table can raise: a timestamp truncated to its date on
-		// a field that holds no time. A change the engine made to a
-		// value somebody typed is one they have to be told about, or the
-		// board shows something they did not write with nothing saying
-		// why.
-		if len(got.Warnings) > 0 {
-			answer["warnings"] = got.Warnings
-		}
+		// THE CAVEATS THE WRITE PRODUCED: a timestamp truncated to its
+		// date on a field that holds no time, a body naming more items
+		// than are linked. A change the engine made to a value somebody
+		// typed is one they have to be told about, or the board shows
+		// something they did not write with nothing saying why.
+		caveats = append(caveats, got.Caveats...)
 	}
 	if !change.Empty() {
 		result, err := t.deps.Dependencies(actor).Depend(ctx,
@@ -2776,9 +2791,9 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			// is two writes and only the second failed, so the default
 			// failure's "the change was NOT made" was false about every
 			// field the first one set.
-			answer["dependencies_failed"] = updateDependencyFailure(before,
-				writeTold(ctx, actor, UpdateWorkItemTool, err))
-			return jsonResult(answer)
+			return caveated(answer, caveats, partial(answer, DependenciesFailedKey,
+				caveat.DependenciesNotRecorded(before.Address(), updateDependencyFailure(
+					before, writeTold(ctx, actor, UpdateWorkItemTool, err)))))
 		case err != nil:
 			return writeFailure(ctx, actor, UpdateWorkItemTool, err), nil
 		}
@@ -2797,6 +2812,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			answer["outcome"], answer["version"] = string(result.Outcome), result.Version
 			answer["position"] = positionOf(result.Position)
 		}
+		caveats = append(caveats, result.Caveats...)
 		// THE HALF-WRITTEN EDGES ARE REPORTED, never swallowed. A
 		// dependency whose mirror lost its race is durable on the
 		// authoring side and repaired by the Worklet duty, so the
@@ -2806,7 +2822,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			answer["dependencies_pending_mirror"] = len(result.OneSided)
 		}
 	}
-	return jsonResult(answer)
+	return caveated(answer, caveats)
 }
 
 // updateUnknown explains an update whose outcome is unknown — see
@@ -2852,32 +2868,30 @@ func updateUnknown(actor Actor, opID string, got worklet.WriteResult,
 // And so is its refusal, which [labelFailure] answers under the CALLING tool.
 func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 	write labelWrite, args map[string]any, project string,
-	labels []string) ([]string, *tools.Result) {
+	labels []string) ([]string, []caveat.Caveat, *tools.Result) {
 
 	if len(labels) == 0 || !argBool(args, "labels_create_missing") {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if d.ProjectWriter == nil {
 		// THE REFUSAL NAMES THE OTHER ROUTE rather than failing the
 		// write: a build with no project writer still has a lead who
 		// can declare the tag, and the create that follows will say
 		// which label is missing.
-		return nil, refusalOf(refused(tools.RefusalUnavailable, "This build "+
+		return nil, nil, refusalOf(refused(tools.RefusalUnavailable, "This build "+
 			"cannot declare labels at a write. Ask the project lead to "+
 			"declare it, or file without the label."))
 	}
 	opID := opIDFor(actor, write.tool, "tags", project, args)
-	created, warnings, err := d.ProjectWriter(actor).EnsureTags(ctx, opID,
+	created, caveats, err := d.ProjectWriter(actor).EnsureTags(ctx, opID,
 		project, labels)
 	if err != nil {
-		return nil, refusalOf(labelFailure(ctx, actor, write, opID, project, labels, err))
+		return nil, nil, refusalOf(labelFailure(ctx, actor, write, opID, project, labels, err))
 	}
-	if len(warnings) > 0 {
-		// THE WARNINGS RIDE THE CREATED LIST, because they are about
-		// exactly these slugs and the caller has one answer to read.
-		created = append(created, warnings...)
-	}
-	return created, nil
+	// THE CAVEATS ARE THE CALL'S, never items of the created list: that
+	// list is slugs a caller files under, and a sentence in it read as a
+	// tag named "bugg is within a typo of bug".
+	return created, caveats, nil
 }
 
 // labelWrite is the write a call was about to make when it declared its labels
@@ -3125,7 +3139,7 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 			kind = worklet.ChangeTags
 		}
 	}
-	if watch, held := args["watch"].(bool); held {
+	if watch, held := argval.Bool(args["watch"]); held {
 		// A GESTURE ABOUT ONE PERSON, never the set. This tool cannot
 		// form the watcher list: [worklet.TaskPatch]'s collections are
 		// carried whole, so writing `watchers: [me]` here removed
@@ -3226,6 +3240,7 @@ func patched(task worklet.Task, patch worklet.TaskPatch) worklet.Task {
 // ---- comment_on_work_item ---------------------------------------------- //
 
 type commentOnWorkItem struct {
+	itemTarget
 	deps WorkDeps
 
 	// pages checks a decision's page evidence — see [evidenceLookup]. Nil
@@ -3446,11 +3461,11 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// A CHOICE THAT ANSWERS NOTHING: no `answers` was named and no
 		// open question on the item is addressed to this caller, so there
 		// is no decision for the option to be one of.
-		return failed(fmt.Sprintf("comment_on_work_item: `choice` %q answers "+
-			"a decision, and no open question on %s is addressed to you. Name "+
-			"the question with `answers` (its comment id), or answer in "+
-			"`body` without a choice.", clip(comment.Choice),
-			before.Named())), nil
+		return toPerson(failed(fmt.Sprintf("comment_on_work_item: `choice` %q "+
+			"answers a decision, and no open question on %s is addressed to "+
+			"you. Name the question with `answers` (its comment id), or answer "+
+			"in `body` without a choice.", clip(comment.Choice),
+			before.Named())), caveat.NoQuestionForChoice()), nil
 	}
 
 	// A COMMENT RIDES THE TASK'S OWN WRITE, because a comment is a
@@ -3541,27 +3556,32 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// assignee — unaddressed, which a turn is entitled to absorb without
 	// replying. A commenter expecting an answer therefore gets silence,
 	// and nothing about the call says so.
-	if warning := unansweredWarning(before.Task, actor, comment); warning != "" {
-		answer["warnings"] = []string{warning}
+	if unaddressed := unaddressedCaveat(before.Task, actor, comment); !unaddressed.IsZero() {
+		return caveated(answer, []caveat.Caveat{unaddressed})
 	}
 	return jsonResult(answer)
 }
 
-// unansweredWarning says when a comment will wake somebody who is not being
+// unaddressedCaveat says when a comment will wake somebody who is not being
 // asked anything.
-func unansweredWarning(task worklet.Task, actor Actor, comment *worklet.Comment) string {
+func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment) caveat.Caveat {
 	switch {
 	// AGAINST THE AUTHOR, which is a bound person's seat: an assignee is
 	// a seat, and a person commenting on their own task is not waking
 	// themselves.
 	case task.Assignee == "" || task.Assignee == actor.Handle:
-		return ""
+		return caveat.Caveat{}
 	case comment.Ask != "" || len(comment.Mentions) > 0:
-		return ""
+		return caveat.Caveat{}
+	// AN ANSWER EXPECTS NO REPLY: it closes a question, and the asker is
+	// woken to act on it, which is what the person answering wants. Warning
+	// them that nobody is asked to reply told a person who had just
+	// answered a decision to ask a question they never meant to ask, and the
+	// dashboard shows a write's warning as a toast that stays until closed.
+	case comment.Answers != nil:
+		return caveat.Caveat{}
 	}
-	return fmt.Sprintf("%s is woken by this but is not asked to answer it. "+
-		"Use ask: %s, or @-mention them, if you are expecting a reply.",
-		task.Assignee, task.Assignee)
+	return caveat.UnaddressedComment(task.Assignee)
 }
 
 // commentID is the comment's own id, derived so a re-run turn posts once.
@@ -4014,7 +4034,7 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 	args map[string]any) (Actor, string) {
 
 	raw, brought := args[opIDArg]
-	if text, ok := raw.(string); ok && text == "" {
+	if text, _ := argval.String(raw); text == "" {
 		brought = false
 	}
 	if !d.callerOperations || actor.OperationSeed() != "" {
@@ -4031,7 +4051,7 @@ func (d WorkDeps) bindOperation(actor Actor, tool string,
 		actor.Operation = statelog.NewOpID(time.Now(), call)
 		return actor, ""
 	}
-	op, _ := raw.(string)
+	op, _ := argval.String(raw)
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return actor, fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}

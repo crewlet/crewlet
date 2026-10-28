@@ -155,10 +155,15 @@ const (
 	// coding CLI with its own tools, reaching Crewlet only through the
 	// person's other tools, bridged (ADR-0054). It sends nothing itself.
 	KindDeep Kind = "deep"
+	// KindBrief is a brief turn's answer ([BriefTool]): the engine checks it,
+	// resolves every record it cites as the person, and draws it as a brief
+	// card. It sends nothing of its own and writes nothing.
+	KindBrief Kind = "brief"
 )
 
-// Kinds are the six, in declaration order.
-var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs, KindDeep}
+// Kinds are the seven, in declaration order.
+var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs, KindDeep,
+	KindBrief}
 
 // Valid reports whether k is a kind this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
@@ -210,6 +215,14 @@ type Tool struct {
 	// (a row's origin, the backend that answered) or the call that asked
 	// it (the route a generic read named), in place of Trust.
 	TrustOf func(args Args, answer any) provenance.Trust
+	// Narrow are the arguments that narrow a read to less of what it reads
+	// (a search's words, a filter, a shorter window), named where a read is
+	// too large to show so the model and the person know how to ask for
+	// less ([narrowing]). EXPLICIT, never derived from the schema: an
+	// argument that widens (finished work included, a longer page) or
+	// merely pages or picks a view is not one. Each entry sends only query
+	// parameters [narrowingQuery] holds (TestEveryNarrowingArgumentNarrows).
+	Narrow []string
 	// Infer marks a read whose card is drawn from the answer's own shape
 	// ([cards.Infer]) rather than a declared spec, and whose model text is
 	// the answer itself, redacted, fenced and cut: a generic read, whose
@@ -324,7 +337,8 @@ func withScope(text, scope string) string {
 // Check reports what is wrong with a call's arguments, wrapping
 // [ErrInvalidArguments]: an argument the schema does not declare, an
 // identity argument ([IdentityArguments]), a missing required one, or a value
-// of the wrong kind or out of its range.
+// of the wrong kind or out of its range. EVERY ONE at once (ADR-0059), so a
+// model told its call was refused fixes them all in one attempt.
 func (t Tool) Check(args map[string]any) error {
 	if t.schema == nil {
 		return fmt.Errorf("%w: %s declares no schema", ErrInvalidArguments, t.Name)
@@ -332,8 +346,8 @@ func (t Tool) Check(args map[string]any) error {
 	if args == nil {
 		args = map[string]any{}
 	}
-	if err := t.schema.check(t.Name, args); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	if found := t.schema.problems(t.Name, args); len(found) > 0 {
+		return refusedFor(found)
 	}
 	return nil
 }

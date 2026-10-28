@@ -28,6 +28,7 @@ import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { youNeedWords } from "~/lib/access.ts";
+import { LimitRemedy } from "./LimitRemedy.tsx";
 
 export interface WriteButtonProps<T extends ActionTool> extends Omit<
   ButtonProps,
@@ -112,9 +113,12 @@ export function WriteButton<T extends ActionTool>({
 /**
  * A refusal, drawn where the control that caused it is.
  *
- * THE ENGINE'S SENTENCE NAMES ITS ARGUMENTS IN BACKTICKS ("`labels` …"), which
- * is the one mark a tool's sentence carries for a value — so it is drawn as
- * one, in the refusal's own ink, rather than as punctuation around a word.
+ * THE SENTENCE IS A PERSON'S (ADR-0060): the engine answers a refusal in words
+ * written for whoever pressed, or in its code's own sentence, and neither
+ * carries a backtick. An older node during a rolling upgrade still answers a
+ * tool's sentence, which marks a value in backticks, so a backtick is drawn
+ * as a value in the refusal's own ink rather than as punctuation around a
+ * word.
  *
  * A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT: the access the deciding
  * rule would have admitted this person on ("needs Worklet access"), from the
@@ -141,6 +145,9 @@ export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) 
       {refusal.grants.length > 0
         ? `${youNeedWords(refusal.grants)} Ask an admin.`
         : marked(refusal.sentence, "inherit")}
+      {/* WHERE THE LIMIT THAT REFUSED IT IS RAISED, for a refusal a limit
+          caused, behind the gate of the editor it opens. */}
+      <LimitRemedy remedy={refusal.remedy} />
     </RefusalStrip>
   );
 }

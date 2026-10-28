@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -214,22 +215,22 @@ func (s *fileSources) parseSpec(ctx context.Context, p string, spec map[string]a
 	}
 	switch {
 	case hasBrand:
-		raw, _ := brand.(string)
+		raw, _ := argval.String(brand)
 		slot, refusal := s.brandSlot(p, raw)
 		if refusal != nil {
 			return refusal
 		}
 		return s.add(artifactFile{path: p, brand: slot})
 	case hasContent:
-		text, ok := content.(string)
-		if !ok {
+		text, ok := argval.String(content)
+		if !ok || content == nil {
 			r := failed(fmt.Sprintf("%s: the content of %q must be a string.", s.tool, p))
 			return &r
 		}
-		encoding, _ := spec["encoding"].(string)
+		encoding, _ := argval.String(spec["encoding"])
 		return s.addInline(p, text, strings.TrimSpace(encoding))
 	case hasBox:
-		from, _ := box.(string)
+		from, _ := argval.String(box)
 		f, refusal := s.boxFile(ctx, p, from)
 		if refusal != nil {
 			return refusal

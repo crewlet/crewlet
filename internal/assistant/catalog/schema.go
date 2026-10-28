@@ -34,14 +34,19 @@ type schema struct {
 	kind        string // string, integer, number, boolean, array, object
 	description string
 	enum        []string
-	// maxLen bounds a string in bytes, maxItems an array; min and max an
-	// integer. Zero is unbounded except where hasMin is set.
+	// maxLen bounds a string in bytes, or in characters where chars is set,
+	// maxItems an array; min and max an integer. Zero is unbounded except
+	// where hasMin is set.
 	maxLen, maxItems int
-	min, max         int
-	hasMin, hasMax   bool
-	items            *schema
-	properties       map[string]*schema
-	required         []string
+	// chars counts maxLen in characters (Unicode code points), the unit JSON
+	// Schema's maxLength is defined in, so the bound the model is handed is
+	// the bound it is held to ([chars]).
+	chars          bool
+	min, max       int
+	hasMin, hasMax bool
+	items          *schema
+	properties     map[string]*schema
+	required       []string
 	// freeform is an object whose members its reader declares (a page
 	// action's payload): any member is taken, an identity name excepted.
 	freeform bool
@@ -94,82 +99,111 @@ func (s *schema) JSON() map[string]any {
 	return out
 }
 
-// check reports what is wrong with v as this schema reads it.
-func (s *schema) check(path string, v any) error {
+// problems is EVERYTHING wrong with v as this schema reads it, in a stable
+// order (an object's members by name, then the ones it lacks), so a caller
+// that lets its model write a call again can name every fault at once rather
+// than one per attempt.
+func (s *schema) problems(path string, v any) []error {
 	switch s.kind {
 	case "string":
 		str, ok := v.(string)
-		switch {
-		case !ok:
-			return fmt.Errorf("%s is a string", path)
-		case s.maxLen > 0 && len(str) > s.maxLen:
-			return fmt.Errorf("%s is %d bytes and the most it takes is %d", path, len(str),
-				s.maxLen)
-		case !utf8.ValidString(str):
-			return fmt.Errorf("%s is not valid UTF-8", path)
-		case len(s.enum) > 0 && !slices.Contains(s.enum, str):
-			return fmt.Errorf("%s is one of %s, not %q", path, strings.Join(s.enum, ", "), str)
+		if !ok {
+			return []error{fmt.Errorf("%s is a string", path)}
+		}
+		if err := s.checkString(path, str); err != nil {
+			return []error{err}
 		}
 	case "integer", "number":
 		n, ok := number(v)
 		if !ok || (s.kind == "integer" && n != math.Trunc(n)) {
-			return fmt.Errorf("%s is %s", path, map[string]string{"integer": "a whole number",
-				"number": "a number"}[s.kind])
+			return []error{fmt.Errorf("%s is %s", path, map[string]string{
+				"integer": "a whole number", "number": "a number"}[s.kind])}
 		}
 		if (s.hasMin && n < float64(s.min)) || (s.hasMax && n > float64(s.max)) {
-			return fmt.Errorf("%s is from %d to %d", path, s.min, s.max)
+			return []error{fmt.Errorf("%s is from %d to %d", path, s.min, s.max)}
 		}
 	case "boolean":
 		if _, ok := v.(bool); !ok {
-			return fmt.Errorf("%s is true or false", path)
+			return []error{fmt.Errorf("%s is true or false", path)}
 		}
 	case "array":
 		list, ok := v.([]any)
 		if !ok {
-			return fmt.Errorf("%s is a list", path)
+			return []error{fmt.Errorf("%s is a list", path)}
 		}
+		var found []error
 		if s.maxItems > 0 && len(list) > s.maxItems {
-			return fmt.Errorf("%s holds at most %d entries", path, s.maxItems)
+			found = append(found, fmt.Errorf("%s holds at most %d entries", path, s.maxItems))
 		}
 		for i, e := range list {
-			if err := s.items.check(fmt.Sprintf("%s[%d]", path, i), e); err != nil {
-				return err
-			}
+			found = append(found, s.items.problems(fmt.Sprintf("%s[%d]", path, i), e)...)
 		}
+		return found
 	case "object":
-		obj, ok := v.(map[string]any)
-		if !ok {
-			return fmt.Errorf("%s is an object", path)
-		}
-		if s.payload {
-			return nil
-		}
-		for _, name := range slices.Sorted(maps.Keys(obj)) {
-			if slices.Contains(IdentityArguments, name) {
-				return fmt.Errorf("%s names %q, and identity is the person's own and never "+
-					"an argument", path, name)
-			}
-			if s.freeform {
-				continue
-			}
-			p, declared := s.properties[name]
-			if !declared {
-				return fmt.Errorf("%s takes no %q; it takes %s", path, name,
-					strings.Join(slices.Sorted(maps.Keys(s.properties)), ", "))
-			}
-			if err := p.check(path+"."+name, obj[name]); err != nil {
-				return err
-			}
-		}
-		for _, name := range s.required {
-			if _, ok := obj[name]; !ok {
-				return fmt.Errorf("%s needs %q", path, name)
-			}
-		}
+		return s.objectProblems(path, v)
 	default:
-		return fmt.Errorf("%s has no type this catalogue checks", path)
+		return []error{fmt.Errorf("%s has no type this catalogue checks", path)}
 	}
 	return nil
+}
+
+// checkString holds a string to its bound, its encoding and its values. The
+// bound is in characters where the schema says so ([schema.chars]), in bytes
+// otherwise.
+func (s *schema) checkString(path, str string) error {
+	switch {
+	case s.maxLen > 0 && s.chars && utf8.RuneCountInString(str) > s.maxLen:
+		return fmt.Errorf("%s is %d characters and the most it takes is %d", path,
+			utf8.RuneCountInString(str), s.maxLen)
+	case s.maxLen > 0 && !s.chars && len(str) > s.maxLen:
+		return fmt.Errorf("%s is %d bytes and the most it takes is %d", path, len(str),
+			s.maxLen)
+	case !utf8.ValidString(str):
+		return fmt.Errorf("%s is not valid UTF-8", path)
+	case len(s.enum) > 0 && !slices.Contains(s.enum, str) &&
+		utf8.RuneCountInString(str) <= enumEcho:
+		return fmt.Errorf("%s is one of %s, not %q", path, strings.Join(s.enum, ", "), str)
+	case len(s.enum) > 0 && !slices.Contains(s.enum, str):
+		return fmt.Errorf("%s is one of %s", path, strings.Join(s.enum, ", "))
+	}
+	return nil
+}
+
+// objectProblems is everything wrong with an object: an identity name, a
+// member it does not declare or one out of its schema, and a required member
+// it lacks.
+func (s *schema) objectProblems(path string, v any) []error {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return []error{fmt.Errorf("%s is an object", path)}
+	}
+	if s.payload {
+		return nil
+	}
+	var found []error
+	for _, name := range slices.Sorted(maps.Keys(obj)) {
+		if slices.Contains(IdentityArguments, name) {
+			found = append(found, fmt.Errorf("%s names %q, and identity is the person's own "+
+				"and never an argument", path, name))
+			continue
+		}
+		if s.freeform {
+			continue
+		}
+		p, declared := s.properties[name]
+		if !declared {
+			found = append(found, fmt.Errorf("%s takes no %q; it takes %s", path, name,
+				strings.Join(slices.Sorted(maps.Keys(s.properties)), ", ")))
+			continue
+		}
+		found = append(found, p.problems(path+"."+name, obj[name])...)
+	}
+	for _, name := range s.required {
+		if _, ok := obj[name]; !ok {
+			found = append(found, fmt.Errorf("%s needs %q", path, name))
+		}
+	}
+	return found
 }
 
 // number is a JSON number however it was decoded.
@@ -198,6 +232,13 @@ func text(description string, maxLen int) *schema {
 	return &schema{kind: "string", description: description, maxLen: maxLen}
 }
 
+// chars is a string of at most max characters, as a reader sees its length:
+// the bound the model is handed as maxLength is exactly the one it is held
+// to. A bytes bound ([text]) is a ceiling the model cannot count against.
+func chars(description string, max int) *schema {
+	return &schema{kind: "string", description: description, maxLen: max, chars: true}
+}
+
 func oneOf(description string, values ...string) *schema {
 	return &schema{kind: "string", description: description, enum: values}
 }
@@ -223,6 +264,11 @@ func names(description string, maxItems int) *schema {
 
 // The bounds every catalogue string is held to, in bytes.
 const (
+	// enumEcho is the longest value a refusal of a value outside its enum
+	// quotes back: a misspelt name is worth showing, and a line of prose
+	// written where a name belongs is not repeated into every log and
+	// step that carries the refusal.
+	enumEcho = 32
 	// nameBytes bounds an identifier: a task key, a handle, an id.
 	nameBytes = 128
 	// queryBytes is knowledge.MaxQueryBytes, the one bound on a ranked

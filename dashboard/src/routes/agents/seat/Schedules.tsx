@@ -93,6 +93,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
             // `next_run`, and only the second is a defect.
             key: "next",
             header: "Next",
+            align: "right",
             shrink: true,
             sortValue: (row) => tsKey(row.next_run) || Number.MAX_SAFE_INTEGER,
             cell: (row) =>
@@ -115,6 +116,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
           {
             key: "task",
             header: "Task",
+            sortValue: (row) => row.task,
             cell: (row) => <TableTextCell>{row.task}</TableTextCell>,
           },
         ]}

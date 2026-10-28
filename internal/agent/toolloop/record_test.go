@@ -401,6 +401,39 @@ func TestProgressIsPublishedAsARunOpensAnswersAndAroundEachCall(t *testing.T) {
 	}
 }
 
+// A CALL IS TOLD ITS ROUND, on the scale its records use, which is what the
+// assistant's brief turn holds its reads to; and a context no loop stamped
+// answers none, so a tool called outside a loop is never read as in round 0.
+//
+// Mutation: drop the stamp in the dispatcher's execute and every call answers
+// no round.
+func TestACallIsToldItsRound(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("read")
+	var mu sync.Mutex
+	var rounds []int
+	surf.hook = func(ctx context.Context, _ llm.ToolCall) {
+		round, ok := toolloop.CallRound(ctx)
+		if !ok {
+			round = -1
+		}
+		mu.Lock()
+		rounds = append(rounds, round)
+		mu.Unlock()
+	}
+	prov := script(runOf(calling("one", "read"), calling("two", "read"), says("done")))
+	cfg := toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 4, Host: host(t), Messages: opening()}
+	if _, err := toolloop.Run(t.Context(), cfg); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(rounds, []int{1, 2}) {
+		t.Errorf("calls were told rounds %v, want [1 2], the rounds their records name", rounds)
+	}
+	if _, ok := toolloop.CallRound(t.Context()); ok {
+		t.Error("a context no loop stamped answers a round")
+	}
+}
+
 // THE PHASE NAMES THE ENTRY THAT SERVED IT, by the model's own precedence: the
 // configured head stands in until a run's answer names an entry, the first that
 // does wins, and a bare backend that names none leaves the head as the answer.

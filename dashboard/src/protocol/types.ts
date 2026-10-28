@@ -1108,6 +1108,14 @@ export interface BudgetsAnswer {
     handle: string;
     windows: BudgetWindow[];
   }[];
+  /**
+   * The ceiling every person's Dashboard Assistant spend is held to
+   * (`assistant.token_budget`): all three windows, `limit` where capped.
+   * `used` is the VIEWER's own spend only where `counted` is true (a person,
+   * under a company that caps a person's spend); elsewhere it is a zero
+   * nobody measured, and a screen draws no figure.
+   */
+  assistant: { counted: boolean; windows: BudgetWindow[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -4471,8 +4479,9 @@ export interface WorkAskRow extends WorkSummary {
   open?: boolean;
   /** The literal call that answers it. A model handed a comment id still has
    *  to compose the call, and every one it composes differently is a round
-   *  spent being refused. */
-  answer_with: string;
+   *  spent being refused. Absent on an answered ask, which nothing answers
+   *  again. */
+  answer_with?: string;
 }
 
 /** One sub-item claimed by somebody. It lives on ANOTHER person's task, which
@@ -5131,6 +5140,57 @@ export interface DecisionsAnswer {
   capped: boolean;
   /** When the longest-waiting one began waiting. */
   oldest_at?: string;
+  read_level?: ReadLevel;
+  complete?: boolean;
+}
+
+/** What closed one ask (`worklet.AskAnswer`): an answer, by the person asked
+ *  or by somebody else, or a resolution without one. */
+export interface WorkAskAnswer {
+  /** Whoever closed it, by record name: not always the person asked. */
+  by: string;
+  by_kind?: string;
+  at: string;
+  /** The answer's own comment id; absent for an ask resolved without one. */
+  comment?: string;
+  /** The option chosen, by id. */
+  choice?: string;
+  /** The answer's words: the option's label where nothing else was written. */
+  body: string;
+  /** Closed without an answer. */
+  resolved?: boolean;
+}
+
+/** The asker's first record on the task after the ask closed
+ *  (`worklet.AskFollowUp`), in the activity feed's terms. */
+export interface WorkAskFollowUp {
+  at: string;
+  kind: string;
+  excerpt?: string;
+  fields?: Record<string, WorkDelta>;
+  comment_id?: string;
+}
+
+/** One ask put to a person and closed lately. */
+export interface AnsweredDecision {
+  /** When it closed: `answer.at`. */
+  at: string;
+  ask: WorkAskRow;
+  answer: WorkAskAnswer;
+  /** Absent while the asker has written nothing on the task since, and for a
+   *  reader the tracker shows no task to. */
+  followed_up?: WorkAskFollowUp;
+}
+
+/** `answered_decisions`: the asks put to a person and closed in the last
+ *  week, newest closing first, at most 50. */
+export interface AnsweredDecisionsAnswer {
+  handle: string;
+  items: AnsweredDecision[];
+  /** The start of the window; absent where the company keeps no tracker. */
+  since?: string;
+  /** The window held more than the page. */
+  truncated?: boolean;
   read_level?: ReadLevel;
   complete?: boolean;
 }
@@ -6610,6 +6670,7 @@ export interface QueryMap {
   work_flow: WorkFlowAnswer;
   company_feed: CompanyFeedAnswer;
   decisions: DecisionsAnswer;
+  answered_decisions: AnsweredDecisionsAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };

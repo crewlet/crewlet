@@ -591,9 +591,39 @@ export function axisName(axis: string): string {
 }
 
 /** The orderings a list may ask for. */
+/** The engine's manual order, the one a drag changes and a project's default. */
+export const MANUAL_ORDER = "rank";
+
+/** The most recently touched first: the company-wide list's default. */
+export const RECENT_ORDER = "-updated";
+
+/**
+ * The most recently removed first: the trash's default. The engine orders a
+ * removed listing by `removed_at DESC` when nothing names an order
+ * (`internal/worklet/viewsread.go`), and the trash view names none.
+ */
+export const TRASH_ORDER = "-removed";
+
+/** The start date: a timeline's own axis, and its default. */
+export const TIMELINE_ORDER = "start";
+
+/**
+ * The order the engine applies when nothing names one: the timeline's axis,
+ * the trash's removal order, the company's most recently touched, a
+ * project's manual order. ONE ANSWER for the grid's heads, the picker's
+ * default and the query, so the three never disagree about what the rows are
+ * in: read from two places, the trash drew "Updated, descending" over rows
+ * in removal order.
+ */
+export function defaultOrderOf(shape: Shape, workspace: boolean, trash: boolean): string {
+  if (shape === "timeline") return TIMELINE_ORDER;
+  if (trash) return TRASH_ORDER;
+  return workspace ? RECENT_ORDER : MANUAL_ORDER;
+}
+
 export const SORTS: { value: string; label: string }[] = [
-  { value: "rank", label: "Manual order" },
-  { value: "-updated", label: "Recently updated" },
+  { value: MANUAL_ORDER, label: "Manual order" },
+  { value: RECENT_ORDER, label: "Recently updated" },
   { value: "due", label: "Due soonest" },
   { value: "-priority", label: "Most important" },
   { value: "-created", label: "Newest" },
@@ -613,7 +643,7 @@ export const SORTS: { value: string; label: string }[] = [
  * place a card in an order nobody is looking at.
  */
 export function manualOrder(sort: string, project: string): boolean {
-  return sort === "rank" || (sort === "" && project !== "");
+  return sort === MANUAL_ORDER || (sort === "" && project !== "");
 }
 
 // ---------------------------------------------------------------------------
@@ -663,6 +693,23 @@ export function describeChange(record: WorkActivityRecord, ctx: LabelContext): s
     );
   }
   return record.kind.replaceAll("_", " ");
+}
+
+/**
+ * What an asker did after its question was answered (`followed_up`), in the
+ * activity feed's words: the deltas where it moved something, its own text
+ * where it wrote a comment, the kind otherwise. Never a person's sentence the
+ * engine composed, which [describeChange] renames, since a follow-up is the
+ * asker's own record on its own task.
+ */
+export function describeFollowUp(
+  change: { kind: string; excerpt?: string; fields?: Record<string, unknown> },
+  ctx: LabelContext,
+): string {
+  const moved = deltaSentence(change.fields, ctx);
+  if (moved) return moved;
+  if (change.excerpt) return plainText(change.excerpt);
+  return change.kind.replaceAll("_", " ");
 }
 
 /**
@@ -2003,7 +2050,7 @@ function itemsParams(args: {
     // carries the same value; this is what holds when a saved view or a
     // filter change drops it — and what an explicit "default order" resolves
     // to here, because a timeline's default IS its date axis.
-    params.sort = order || "start";
+    params.sort = order || TIMELINE_ORDER;
     return params;
   } else {
     // THE LIST AND THE TABLE ASK THE SAME QUESTION. They are two arrangements

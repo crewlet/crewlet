@@ -9,13 +9,18 @@
  * Filter" that adds one and a filtered one states the whole narrowing in a
  * line, ending in the same control.
  *
+ * EACH CHIP IS THE KIT'S FILTER PILL, the one drawing every filter in force
+ * takes: the field and the relation in the secondary ink, the value in the
+ * accent ink, separated by real spaces, so a chip reads "Status is In progress"
+ * and its remove control is named by that same sentence.
+ *
  * EACH CHIP IS ONE URL KEY. Taking it off clears that key and nothing else, so
  * there is no table of removers beside the table of chips — `filterChips` says
  * which key a chip stands for and this hands it straight back.
  */
 
 import type { ReactNode } from "react";
-import { Button, Tag } from "@crewlethq/ui";
+import { Button, FilterPill } from "@crewlethq/ui";
 import { XGlyph } from "@crewlethq/icons/glyphs";
 import type { FilterChipSpec } from "~/lib/work.ts";
 
@@ -40,20 +45,16 @@ export function FilterChips({
   return (
     <div className="work-chips" role="group" aria-label="Filters">
       {chips.map((chip) => (
-        <Tag
+        // THE REMOVE CONTROL IS NAMED BY THE WHOLE SENTENCE, the pill's own
+        // default, because "remove" alone names nothing: a row of eight would
+        // read as eight identical controls.
+        <FilterPill
           key={chip.param}
-          appearance="outline"
-          size="sm"
+          field={chip.label}
+          operator={chip.verb}
+          value={chip.value}
           onRemove={() => onRemove(chip.param)}
-          // THE WHOLE SENTENCE, because the remove control is announced by its
-          // own name and "remove" alone names nothing. A row of eight of them
-          // would otherwise read as eight identical controls.
-          removeAriaLabel={`Remove the ${chipSentence(chip)} filter`}
-        >
-          <span className="work-chip-field">{chip.label}</span>
-          {chip.verb && <span className="work-chip-verb">{chip.verb}</span>}
-          {chip.value && <span className="work-chip-value">{chip.value}</span>}
-        </Tag>
+        />
       ))}
       {add}
       {/* CLEAR IS NOT A CHIP. It removes every one of them, so drawing it as a
@@ -67,9 +68,4 @@ export function FilterChips({
       )}
     </div>
   );
-}
-
-/** One chip as a sentence, for the control that takes it off. */
-function chipSentence(chip: FilterChipSpec): string {
-  return [chip.label, chip.verb, chip.value].filter(Boolean).join(" ");
 }

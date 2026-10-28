@@ -40,7 +40,7 @@ import { useNow } from "~/lib/clock.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { FLEET_POLL_MS } from "./Fleet.tsx";
 
-import { fmtBytes, fmtCount, plural } from "~/lib/format.ts";
+import { fmtBytes, fmtCount, plural, tsKey } from "~/lib/format.ts";
 import type {
   FleetObjects,
   ObjectAudit,
@@ -375,12 +375,16 @@ export function FileStorage({ objects, now }: { objects?: FleetObjects; now: num
               key: "pass",
               header: "Pass",
               shrink: true,
+              sortValue: (r) => r.pass,
               cell: (r) => <TableTextCell>{r.pass}</TableTextCell>,
             },
             {
               key: "at",
+              align: "right",
               header: "Last ran",
               shrink: true,
+              // A PASS THAT HAS NOT RUN has no instant, and sorts last.
+              sortValue: (r) => (r.at ? tsKey(r.at) : null),
               cell: (r) => <TableDateCell value={r.at} now={now} />,
             },
             {

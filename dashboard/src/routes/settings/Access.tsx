@@ -1693,6 +1693,7 @@ function Invitations({
             },
             {
               key: "expires",
+              align: "right",
               header: "Expires",
               shrink: true,
               sortValue: (i) => i.expires_at ?? "",
@@ -2225,6 +2226,7 @@ function Principal({
               },
               {
                 key: "created",
+                align: "right",
                 header: "Created",
                 shrink: true,
                 drop: 3,
@@ -2306,6 +2308,9 @@ function Principal({
                   // peek's column — cut its own header to "SESS…".
                   key: "started",
                   header: "Session",
+                  // A TIME: right-aligned, as the same session start is on the
+                  // account page's own list.
+                  align: "right",
                   width: "max-content",
                   sortValue: (s) => s.created_at ?? "",
                   cell: (s) => <TableDateCell value={s.created_at} now={now} />,
@@ -2347,6 +2352,7 @@ function Principal({
                 },
                 {
                   key: "ends",
+                  align: "right",
                   header: "Ends",
                   shrink: true,
                   drop: 1,

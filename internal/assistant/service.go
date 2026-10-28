@@ -249,6 +249,9 @@ type TurnStart struct {
 	// Attachments are files the person uploaded to the conversation for
 	// this question ([wire.TurnRequest.Attachments]).
 	Attachments []uuid.UUID
+	// Mode is what the question asks for ([wire.TurnRequest.Mode]); empty
+	// is [wire.TurnAsk].
+	Mode wire.TurnMode
 }
 
 // TurnID is the turn a question asked under the operation key starts: the
@@ -336,6 +339,18 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if err != nil {
 		return wire.TurnAccepted{}, invalid("page_context: %v", err)
 	}
+	if ts.Mode == "" {
+		ts.Mode = wire.TurnAsk
+	}
+	switch {
+	case !ts.Mode.Valid():
+		return wire.TurnAccepted{}, invalid("mode %q is not one of %v", ts.Mode, wire.TurnModes)
+	case ts.Mode == wire.TurnBrief && page == nil:
+		return wire.TurnAccepted{}, invalid("mode brief needs the page_context it briefs")
+	case ts.Mode == wire.TurnBrief && len(ts.Attachments) > 0:
+		return wire.TurnAccepted{}, invalid("mode brief takes no attachments")
+	}
+	briefing := ts.Mode == wire.TurnBrief
 	input = redact.Secrets(input)
 	ts.Page = page
 	attached, attachErr := s.attachmentsOf(ctx, ts)
@@ -405,8 +420,11 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if refusal := budgetRefusal(ctx, meter); refusal != nil {
 		return wire.TurnAccepted{}, refusal
 	}
-	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantTurn,
-		TurnID: id.String()}
+	purpose := types.AuxAssistantTurn
+	if briefing {
+		purpose = types.AuxAssistantBrief
+	}
+	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: purpose, TurnID: id.String()}
 	provider, key, err := s.models.Chain(ctx, ts.Person, use)
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
@@ -418,6 +436,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 	}
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
+	t.brief.on = briefing
 	var chip *wire.PageChip
 	if ts.Page != nil {
 		chip = &wire.PageChip{Title: ts.Page.Title, Screen: ts.Page.Screen}
@@ -433,7 +452,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		s.hub.Forget(id)
 	}
 	if _, err := s.records.OpenTurn(ctx, t.write().Step("open"), assistantdomain.NewTurn{
-		Conversation: ts.Conversation, Turn: id, Node: s.node, PromptVersion: PromptVersion,
+		Conversation: ts.Conversation, Turn: id, Node: s.node, PromptVersion: t.promptVersion(),
 		Model: provider.Model(), ProviderKey: key, TraceID: traceOf(ctx), Page: chip,
 	}); errors.Is(err, assistantdomain.ErrTurnOpen) {
 		// THE SAME KEY IS THE SAME TURN, decided by the record: an attempt
@@ -458,14 +477,23 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	// the model writes once a first answer completes replaces it
 	// ([Service.title]).
 	if history.Conversation.Title == "" {
+		title := conversationTitle(input)
+		if briefing {
+			title = briefTitle(ts.Page)
+		}
 		t.record(ctx, "title", func(ctx context.Context, w Write) error {
 			return s.records.TitleConversation(ctx, w.Step("title", "question"), ts.Conversation,
-				conversationTitle(input))
+				title)
 		})
 	}
 
 	c, organization := s.company()
-	tools := s.withDeep(ctx, s.catalogue.Offered(ts.Person, acts))
+	var tools []catalog.Tool
+	if briefing {
+		tools = briefTools(s.catalogue.Offered(ts.Person, acts))
+	} else {
+		tools = s.withDeep(ctx, s.catalogue.Offered(ts.Person, acts))
+	}
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))
 	t.deep.attachments = attached
@@ -485,12 +513,25 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if c != nil {
 		assistantCfg = c.Assistant
 	}
+	run := loopRun{messages: buildMessages(in), provider: provider, key: key, meter: meter,
+		tools: tools, steps: assistantCfg.Steps(), timeout: assistantCfg.TurnTimeout(),
+		fresh: history.Conversation.Title == "", question: input}
+	if briefing {
+		run.messages = buildBriefMessages(in)
+		run.meter = &briefMeter{inner: meter}
+		// THE ANSWER'S ROUNDS ARE KEPT: reads run in the first rounds, and
+		// the answer and its one retry each have one of their own after
+		// them ([BriefReadRounds]).
+		reads := min(run.steps, BriefReadRounds)
+		t.mu.Lock()
+		t.brief.readRounds = reads
+		t.mu.Unlock()
+		run.rounds = reads + BriefAnswerAttempts
+		run.terminate = []string{catalog.AnswerBriefTool}
+	}
 	admitted, started = false, true
 	s.track(t)
-	go t.run(loopRun{ //nolint:contextcheck // the turn's own lifetime (t.ctx, under the service's base), never the request's: a turn outlives the POST that started it
-		messages: buildMessages(in), provider: provider, key: key, meter: meter,
-		tools: tools, steps: assistantCfg.Steps(), timeout: assistantCfg.TurnTimeout(),
-		fresh: history.Conversation.Title == "", question: input})
+	go t.run(run) //nolint:contextcheck // the turn's own lifetime (t.ctx, under the service's base), never the request's: a turn outlives the POST that started it
 	return accepted, nil
 }
 

@@ -30,17 +30,37 @@ const CONVERSATION = "403212ed-5a4a-586d-8af6-c62411a17c2f";
 const FIRST_PROPOSAL = "9035513c-6cd1-5b25-bbe2-c39df0a5a786";
 const SECOND_PROPOSAL = "0b6c9a1e-2f3d-4e5a-8b7c-9d0e1f2a3b4c";
 const BLOCKS = GOLDEN.split("\n\n").filter((block) => block.includes(`${TURN}.`));
-// THE SERVER CARD ALONE: the golden turn's page change and its actions
-// (seq 19 to 21) are another surface's.
-const FIRST = BLOCKS.filter((block) => !/\.(19|20|21)\n/.test(block.split("\n")[0]! + "\n"))
+
+/** A block of the golden turn, with its frame as JSON. */
+interface Framed {
+  block: string;
+  frame: Record<string, unknown> & {
+    kind: string;
+    card?: { card: { type: string; proposal?: { scope: string } } };
+  };
+}
+const FRAMES: Framed[] = BLOCKS.map((block) => {
+  const data = block.split("\n").find((line) => line.startsWith("data: "))!;
+  return { block, frame: JSON.parse(data.slice("data: ".length)) as Framed["frame"] };
+});
+
+/** The golden turn's proposal card of one scope. */
+const proposalOf = (scope: string): Framed | undefined =>
+  FRAMES.find((f) => f.frame.kind === "card" && f.frame.card?.card.proposal?.scope === scope);
+
+// THE SERVER CARD ALONE: the golden turn's page change and its actions are
+// another surface's. Found by what they are, never by their place in the
+// stream, so a frame the vocabulary gains does not move them.
+const PAGE_CHANGE = new Set(
+  FRAMES.filter((f) => f.frame.kind === "action" || f === proposalOf("page")).map((f) => f.block),
+);
+const FIRST = BLOCKS.filter((block) => !PAGE_CHANGE.has(block))
   .map((block) => `${block}\n\n`)
   .join("");
 
-/** One frame of the golden turn, as its JSON. */
-function frameAt(seq: number): Record<string, unknown> {
-  const block = BLOCKS.find((b) => b.startsWith(`id: ${TURN}.${seq}\n`))!;
-  const data = block.split("\n").find((line) => line.startsWith("data: "))!;
-  return JSON.parse(data.slice("data: ".length)) as Record<string, unknown>;
+/** The golden turn's last frame of a kind, as its JSON. */
+function lastOf(kind: string): Record<string, unknown> {
+  return structuredClone(FRAMES.filter((f) => f.frame.kind === kind).at(-1)!.frame);
 }
 
 function sse(frame: Record<string, unknown>): string {
@@ -52,7 +72,7 @@ function sse(frame: Record<string, unknown>): string {
  * then it parks on it again.
  */
 function resumed(): string {
-  const card = frameAt(18) as {
+  const card = structuredClone(proposalOf("server")!.frame) as unknown as {
     seq: number;
     at: string;
     card: { card_id: string; card: { proposal: Record<string, unknown> } };
@@ -65,8 +85,8 @@ function resumed(): string {
     proposal_id: SECOND_PROPOSAL,
     approve_label: "Approve the retry",
   };
-  const status = { ...frameAt(22), seq: 42, at: "2026-10-24T09:42:00.1Z" };
-  const done = { ...frameAt(23), seq: 43, at: "2026-10-24T09:42:00.2Z" };
+  const status = { ...lastOf("status"), seq: 42, at: "2026-10-24T09:42:00.1Z" };
+  const done = { ...lastOf("done"), seq: 43, at: "2026-10-24T09:42:00.2Z" };
   return [card, status, done].map(sse).join("");
 }
 

@@ -100,6 +100,7 @@ func readTools() []Tool {
 	return []Tool{
 		{
 			Name: "search_work", Phrase: "search tasks",
+			Narrow: []string{"q"},
 			Description: "Find tasks by what they are about, ranked. Search before proposing a " +
 				"new task, so you do not file a duplicate.",
 			schema: object([]string{"q"}, map[string]*schema{
@@ -127,6 +128,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_tasks", Phrase: "list tasks",
+			Narrow: []string{"q", "assignee", "project", "status", "priority", "type", "tag", "due"},
 			Description: "List tasks by their fields: what is open, overdue or due soon, assigned to " +
 				"somebody, in a status, of a priority or a type, in a project. Lists are filtered " +
 				"to what the person may see.",
@@ -171,7 +173,7 @@ func readTools() []Tool {
 				return get("GET /worklet/{id}", map[string]string{"id": Args(a).String("item")}, nil)
 			},
 			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, Root: "task",
-				ID: "key", Title: "title", Subtitle: "key", Prose: true, Text: "body",
+				ID: "key", Key: "key", Title: "title", Subtitle: "key", Prose: true, Text: "body",
 				Facts: []cards.Fact{fact("Status", "status", tLabel),
 					fact("Priority", "priority", tLabel), fact("Assignee", "assignee", tText),
 					{Label: "Reporter", Path: "reporter", Type: tText, Detail: true},
@@ -197,9 +199,9 @@ func readTools() []Tool {
 					query(a).str("item", "item").num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceTask, ID: "key",
-				Title: "title", Prose: true,
+				Key: "key", Title: "title", Prose: true,
 				Items: &cards.Items{Path: "comments", Kind: wire.ResourceTask, ID: "id",
-					Label: "body", Fact: "author", Prose: true,
+					Label: "body", Fact: "author", Prose: true, More: "next_cursor",
 					Noun: wire.Noun{One: "comment", Many: "comments"}},
 				Open: &cards.Open{Screen: "item", Params: map[string]string{"id": "item"},
 					LabelFrom: "key"}}}),
@@ -221,7 +223,7 @@ func readTools() []Tool {
 					query(a).str("item", "id").num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Turns on the task", Rows: "turns",
-				Brief: []string{"seat", "outcome", "tokens"},
+				More: "next_cursor", Brief: []string{"seat", "outcome", "tokens"},
 				Columns: []cards.Column{col("seat", "Seat", "seat", tText),
 					col("outcome", "Outcome", "outcome", tLabel),
 					col("tokens", "Tokens", "tokens", tTokens),
@@ -232,6 +234,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_my_work", Phrase: "read your work",
+			Narrow: []string{"unread"},
 			Description: "The person's own work: what is assigned to them, their priority order, " +
 				"the questions asked of them, or their task notices (inbox: mentions, assignments " +
 				"and comments, the Inbox screen's Updates). The Inbox screen's Needs you is not " +
@@ -243,7 +246,11 @@ func readTools() []Tool {
 			Routes: []string{"GET /worklet/my-work", "GET /worklet/inbox"}, Apps: workletApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
 				if Args(a).String("section") == "inbox" {
-					return get("GET /worklet/inbox", nil, query(a).truth("unread", "unread").values())
+					// ONE PAGE OF THE INBOX, its cursor saying more lie past it:
+					// a person's notices grow with the company, and read whole
+					// they pass what one step reads.
+					return get("GET /worklet/inbox", nil,
+						query(a).truth("unread", "unread").num("limit", "limit", 25).values())
 				}
 				return get("GET /worklet/my-work", nil, nil)
 			},
@@ -266,7 +273,7 @@ func readTools() []Tool {
 						seat("actor", "By", "actor"), prose("excerpt", "What", "excerpt"),
 						col("at", "When", "at", tDatetime), col("read", "Read", "read", tText),
 						col("record", "Record", "record_id", tText)},
-					Open: &cards.Open{Screen: "inbox"}}},
+					More: "next_cursor", Open: &cards.Open{Screen: "inbox"}}},
 			},
 			Label: func(map[string]any) string { return "Reading your work" },
 			Scope: func(a Args) string {
@@ -289,7 +296,8 @@ func readTools() []Tool {
 				if key := Args(a).String("key"); key != "" {
 					return get("GET /worklet/projects/{key}", map[string]string{"key": key}, nil)
 				}
-				return get("GET /worklet/projects", nil, nil)
+				// ONE PAGE OF PROJECTS, `truncated` saying more lie past it.
+				return get("GET /worklet/projects", nil, url.Values{"limit": {"25"}})
 			},
 			Variant: func(a Args) string {
 				if a.String("key") != "" {
@@ -298,7 +306,7 @@ func readTools() []Tool {
 				return ""
 			},
 			Cards: map[string]cards.Spec{
-				"": {Table: &cards.Table{Title: "Projects", Rows: "projects",
+				"": {Table: &cards.Table{Title: "Projects", Rows: "projects", More: "truncated",
 					Brief: []string{"name", "active", "todo", "done"},
 					Columns: []cards.Column{col("key", "Key", "key", tText),
 						prose("name", "Name", "name"), seat("lead", "Lead", "lead.handle"),
@@ -309,7 +317,7 @@ func readTools() []Tool {
 						col("done", "Done", "task_counts.done", tNumber)},
 					Open: &cards.Open{Screen: "worklet-projects"}}},
 				"one": {Entity: &cards.Entity{Kind: wire.ResourceProject, ID: "key",
-					Title: "name", Subtitle: "purpose", Prose: true,
+					Key: "key", Title: "name", Subtitle: "purpose", Prose: true,
 					Facts: []cards.Fact{fact("Lead", "lead.handle", tText),
 						fact("Unit", "unit.name", tText), fact("Target", "target_date", tText),
 						fact("To do", "task_counts.todo", tNumber),
@@ -323,6 +331,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_workload", Phrase: "read the workload",
+			Narrow: []string{"unit"},
 			Description: "Open work per assignee, agents and people alike: how much each holds, " +
 				"blocked and overdue.",
 			schema: object(nil, map[string]*schema{
@@ -400,6 +409,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_agent", Phrase: "read this agent",
+			Narrow: []string{"days"},
 			Description: "One seat now (its activity, phase and last turn), or every seat's turns " +
 				"per day over a window.",
 			schema: object(nil, map[string]*schema{
@@ -419,8 +429,7 @@ func readTools() []Tool {
 				}
 				// THE SEAT ALONE: its call history is whole transcripts,
 				// past what a step reads, and a detail card reads none of it.
-				return get("GET /agents/{id}", map[string]string{"id": args.String("handle")},
-					url.Values{"history": {"false"}})
+				return get("GET /agents/{id}", map[string]string{"id": args.String("handle")}, seatAlone)
 			},
 			Variant: by("view", "detail"),
 			Cards: map[string]cards.Spec{
@@ -494,6 +503,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_turns", Phrase: "list this seat's turns",
+			Narrow: []string{"handle", "failed", "days"},
 			Description: "One seat's recent turns: outcome, model, tokens and duration, newest " +
 				"first, and for a failed turn why it failed. Rows the person may not read are " +
 				"left out.",
@@ -563,6 +573,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_spend", Phrase: "read token spend",
+			Narrow: []string{"handle", "days"},
 			Description: "Token spend over a window of company days, by agent, by model or by " +
 				"phase. By agent also lists each person's own assistant use, marked as a " +
 				"person's: say so, and leave it out when ranking the agents.",
@@ -598,6 +609,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "get_spend_series", Phrase: "read spend over time",
+			Narrow: []string{"days"},
 			Description: "Token spend per day or week over a window, the company's whole, or its " +
 				"largest groups. Use bucket week to compare this week with last week in one read.",
 			schema: object(nil, map[string]*schema{
@@ -676,6 +688,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "search_knowledge", Phrase: "search the knowledge base",
+			Narrow:      []string{"q"},
 			Description: "Search the company's pages, ranked, with the passage each matched on.",
 			schema: object([]string{"q"}, map[string]*schema{
 				"q": text("What to find, in plain words.", queryBytes),
@@ -756,7 +769,7 @@ func readTools() []Tool {
 				return get("GET /feed", nil, query(a).num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Recent activity", Rows: "rows",
-				Brief: []string{"kind", "title", "page", "at"},
+				More: "next_cursor", Brief: []string{"kind", "title", "page", "at"},
 				Columns: []cards.Column{col("kind", "Kind", "kind", tLabel),
 					col("at", "When", "at", tDatetime), col("task", "Task", "work.key", tText),
 					prose("title", "Task title", "work.title"), seat("by", "By", "work.actor"),
@@ -768,6 +781,7 @@ func readTools() []Tool {
 		},
 		{
 			Name: "list_artifacts", Phrase: "list artifacts",
+			Narrow: []string{"kind", "q"},
 			Description: "The artifacts the person can open: documents, decks, sheets and " +
 				"dashboards, newest first.",
 			schema: object(nil, map[string]*schema{

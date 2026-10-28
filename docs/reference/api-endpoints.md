@@ -684,7 +684,7 @@ told they lead nobody goes looking for an authority they already hold.
 
 | Needs | What it reaches |
 |---|---|
-| **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions — an agent's **status**, with its **body** to an administrator and to whoever leads the seat ([below](#a-status-reader-never-receives-a-transcript)) — `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/sandbox-runs` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row — `/feed`, `decisions` and the `knowledge` question |
+| **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions (an agent's **status**, with its **body** to an administrator and to whoever leads the seat, [below](#a-status-reader-never-receives-a-transcript)), `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/sandbox-runs` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row: `/feed`, `decisions`, `answered_decisions` and the `knowledge` question |
 | `worklet` | The reads under `/worklet/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /worklet/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s Worklet half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
 | `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a coding CLI the host runs), a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
@@ -3144,8 +3144,9 @@ repositories.
 
 `webhook_active` says whether the app will deliver events here. It is `false`
 when the webhook address is one GitHub cannot reach, which is what a local
-engine's `http://localhost:8200` is: the manifest then creates the app with its
-webhook switched off rather than pointed at an address that fails every
+engine's `http://localhost:8200` is: the manifest then carries no
+`hook_attributes` and no `default_events`, which is the only form GitHub
+accepts from an address it cannot reach, rather than a hook that fails every
 delivery. The app still works for everything the agent does on GitHub, which
 is outbound; see [Running locally, with no public
 address](../integrations/github.md#running-locally-with-no-public-address).
@@ -4428,6 +4429,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_item_turns` | `{id, cursor?, limit?, read_level, …}` | `GET /worklet/turns`. One page of the agent TURNS charged to an item, newest first: `{item, key, turns, next_cursor?}` plus the coverage half. Each turn is `{turn_id, ordinal, seat, trigger?, segments, tokens, cache_read, rounds, wall_ms, workers?, sent_back?, outcome, phases, failed_in?, summary?, review?, tools?, at}`: a turn's SEGMENTS folded into one (a turn that parked on a coding run is charged once per segment): tokens, rounds and wall time summed, `phases` in the order each first ran, and `outcome`, `summary` (what it did, in the agent's words) and `review` (what the newest review that sent the work back asked for) off its newest segment; `tools` is each tool its executor called with its `calls`. `failed_in` names the phase that failed when `outcome` is `failed` because one did (`phases` lists every phase that ran, the failed one included), and is absent for a failure outside every phase and on a turn that did not fail. `ordinal` is "Turn n": the position of the turn's counted segment among every counted segment on the item, so the newest turn's `ordinal` is the item's `spend.turns`; a turn with no counted segment on this item (more of a turn charged to another) has `0`. `at` is when the newest segment landed. Read from Worklet's own turn rows (the account `spend` sums), so it answers on any node and outlives the thirty days a node keeps its event history, where `turns?work_item=` reads the event history. `next_cursor` is the position of the oldest turn's first segment; the next page is the turns whose first segment is below it, so a turn that gains a segment while you page never moves between pages. `limit` defaults to 20 and is held to 50; a cursor this endpoint did not hand out is `bad_params` |
 | `work_comments` | `{item, cursor?, limit?, read_level, …}` | `GET /worklet/comments`. One page of an item's THREAD, newest page first and each page in the order it was written: `{item, key, title, comments, next_cursor?, key_collision?}` plus the coverage half. `next_cursor` reads the page before and is absent when this page reaches the first comment; it continues from `work_item`'s own `comments_cursor` exactly, since both are the same read. `limit` defaults to the detail's 20 and is held to 50. Each comment's `author` is who wrote it (a person as their seat, beside `author_kind`), so a pane draws a name with no second lookup. `key_collision` says the item's key opens another task, as on `work_item`. Its own question beside `work_item` because nothing followed that cursor, so every comment older than the twentieth was unreachable, and because a pane that draws a conversation wants the thread without the history, links and fields a detail assembles |
 | `decisions` | `{handle?, read_level, …}` | `GET /worklet/decisions`. What waits on ONE PERSON's decision: the open asks put to them (to their own record, a person's seat) and the coding runs parked on a question put to them (`awaiting_clarification` or `reseed`), newest first, at most 50. `{handle, items: [{kind: "ask"\|"run", at, ask?, run?}], total, capped, oldest_at?}`: `total` counts every one, not the page; `capped` says the ask count stopped at the engine's ceiling, so `total` is a floor; `oldest_at` is when the longest-waiting began. An ask is `work_my_work`'s `asked_of_me` row and a run is `sandbox_runs`' row. The same scope rule as `work_my_work`: absent is the caller's own record, and a named one is resolved first (a login to the record its holder's work is kept under) and then takes whoever leads them, or `admin`. Your own asks need no app at all, so a person without `worklet` still sees what they were asked. On a company that does not run Worklet (Jira, or none), the asks are left out and the parked runs are still answered, with no `read_level` or `complete` beside them, since no tracker was read |
+| `answered_decisions` | `{handle?, read_level, …}` | `GET /worklet/decisions/answered`. What ONE PERSON decided lately: the asks put to them and closed in the last seven days (`worklet.AnsweredWindow`), by them or by somebody else, or resolved without an answer, newest closing first, at most 50. `{handle, items: [{at, ask, answer, followed_up?}], since, truncated, read_level, complete}`: `ask` is the row `decisions` listed while it was open, with `open: false` and no `answer_with`; `answer` is `{by, by_kind?, at, comment?, choice?, body, resolved?}`, where `by` is whoever closed it (not always the person asked), `choice` the option chosen by id and `body` the answer's words; `followed_up` is the asker's first record on the task after the commit that closed the ask (`{at, kind, excerpt?, fields?, comment_id?}`, `work_activity`'s fields), absent while there is none, and left out for a reader the tracker shows no task to, since it is the task's record rather than the question's. `since` is the start of the window and `truncated` says it held more than the page. The same scope rule as `decisions`, and the same answer without the app: your own are listed whether or not you hold `worklet`. A company that does not run Worklet is answered no items, with no `read_level`. Served from the index replicated migration 0052 adds, one person's closed asks |
 | `company_feed` | `{kinds, actor, limit, cursor, read_level, …}` | `GET /feed`. What the company DID, newest first: `completed`, `created` and `handoff` from Worklet, `page` (created or saved) from Doclet, and `schedule` fires from the usage domain. `kinds` is a comma list, empty for every kind this node keeps; asking for one it keeps no source for is `bad_params`. A kind is kept only where the company runs its half: a company on Jira keeps no Worklet kinds and a company on Confluence no `page` kind, and the feed answers the kinds it does keep (the `schedule` runs on every company), never refusing whole for the half it leaves out. Which halves a company runs is the org answer's [`services`](#get-org). `limit` is 1–50 (default 20). `{rows: [{kind, at, work?, page?, schedule?}], next_cursor?, complete, read_level}`. A Worklet row carries its task's key and title, and, by kind, the task's running `spend` (`{tokens, turns}`, tokens only) and `first_pass` (no reviewer sent it back), the create's `origin` (`{surface, conversation}`: the chat surface the filing turn was woken on), or the hand-off's `from`, `to`, `reassignments` and `reassignment_budget`. A `schedule` row is a RUN, a fire the scheduler dispatched and never a tick it skipped (those stay in `schedule_runs`), and consecutive runs of one schedule for one runner that no other row falls between are ONE row: `schedule.runs` counts them (at least 1) and `schedule.since` is the oldest one's instant (set when `runs` is above 1). A page that folds many runs reads its source again from where it stopped, at most four reads per source; past that the page is answered short, never out of order. MERGED BY INSTANT, CURSORED PER SOURCE: `next_cursor` resumes each source exactly where this page stopped consuming it, so a scroll never repeats or skips a row however the three interleave, and is absent once every source is read to its end. A `read_level=session` floor names Worklet's log (this is a Worklet session question); the Doclet half is read at the dashboard's own level |
 | `work_activity` | `{task, container, kinds, actor, actor_kinds, assignee, q, notified, since, from, to, limit, cursor}` | `GET /worklet/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced: `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the twenty-seven change kinds and nothing else: one this build does not have is refused `bad_params` naming the set, by this route and by a seat's `task_activity` alike, because a filter matching nothing answers an empty feed that reads exactly like a quiet company. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. `actor_kinds` is a CSV of `agent`, `human`, `operator` and `system` and narrows to WHO WAS WRITING rather than to which handle, which is not the same question and cannot be asked as a set of handles, since an `operator` commit carries a token's own label where an `agent` one carries a seat handle, and the set of people is the roster, which changes. It is REFUSED when it names a kind this build does not have, as `kinds` is: a filter silently ignored answers a wider question than the caller asked, and on an audit feed that reads as a company where everybody is an operator. The `q` gate is on what the query would SCAN, never on which keys were named: `container=workspace&q=` and a five-year `since` both name a key and narrow nothing. `fields` is what MOVED, in the same `{from, to}` shape for every kind, the full list of names a task's own row draws on is there too, and `keys` names the tasks those deltas point at; `ask` is the question a commit asked or answered, in `work_inbox`'s shape and read the same way; see [`GET /worklet/activity`](#routes). `subject_key_collision` says the record's `subject_key` opens ANOTHER task (one that claimed the key first), so a link to the subject goes by `subject_id`. A `cursor` or a position `since` must be on Worklet's own log, and one from another domain's log (or a `cursor` that is not a position) is refused `bad_params` rather than picking a page by a number from elsewhere |
 | `work_my_work` | `{handle}` | `GET /worklet/my-work`. Seven lists, each bounded at 20 so no block crowds out another: the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object. `totals` counts each list IN FULL (`{priorities, assigned, asked_of_me, checklist_items, collaborating, watching_recent, unblocked_recent}`, each `{total, capped}`), by the predicate that drew its page and in the same read, so a count is drawn from there and never from a list's length; `capped` means the count stopped at 10,000. Every row's `overdue` mark is cut on the company's own midnight (the [`timezone`](../getting-started/configuration.md#the-companys-clock) a board's due bands are cut on), so a task due today is not overdue here while a board says today. `handle` DEFAULTS to the caller's own record, and naming anybody else's takes the owner-or-lead rule: whoever leads them, or `admin`, with `worklet`; see below. Every task row carries `key_collision` and every checklist item `task_key_collision`, and an ask's `answer_with` names the task by its key or, where that key opens another task, by its id |
@@ -5220,8 +5222,9 @@ It answers `{key, status, placed, rank, version, outcome, position}`. A move
 across lanes is **two records** — the status change on the item, which is
 history and wakes the people on it exactly as `update_work_item` does, then the
 place in the project's order, which wakes nobody. If the item changes between
-the two, the lane change stands and the answer says `placed: false` with the
-reason in `unplaced`, rather than failing a call whose status write landed.
+the two, the lane change stands and the answer says `placed: false` with a
+`lane_changed_not_placed` caveat, rather than failing a call whose status write
+landed.
 Dropping a card where it already sits writes nothing and answers `applied`.
 
 A retry is the same call. The two records are steps of the call's one
@@ -5425,7 +5428,9 @@ and is served even while the budget is spent. A company that does not run
 Doclet has no position to key on, so its answers are never cached.
 
 It refuses `invalid` for an empty question, `forbidden` for a caller no seat
-binds or a seat the chart no longer has, `budget_exhausted` as above, and
+binds or a seat the chart no longer has, `budget_exhausted` as above (with
+`detail` in a person's words and `remedy: {"setting": "company_token_budget"}`),
+and
 `unavailable` for a counter it cannot read (nothing is spent), a knowledge base
 and tracker that could not be searched at all, no model configured, or a model
 that failed or wrote nothing — a reply that spent tokens and wrote nothing is
@@ -5677,7 +5682,9 @@ A write that went through answers `200`:
  "position": "CREWLET_TRACKER_LOG@1:4711",
  "op_id": "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a12.k3f9a1c0d2e4b6a88",
  "receipt": {"key": "ENG-8", "labels_created": null, "outcome": "applied",
-             "version": 4711, "position": "CREWLET_TRACKER_LOG@1:4711"}}
+             "version": 4711, "position": "CREWLET_TRACKER_LOG@1:4711"},
+ "caveats": [{"code": "date_truncated", "action": "none",
+              "message": "Launch holds a date without a time, so it was saved as 2026-03-04, the day 2026-03-05T04:00:00Z falls on in America/Los_Angeles."}]}
 ```
 
 `outcome` is the write's three-valued answer and `position` where its record
@@ -5686,9 +5693,37 @@ write includes it. `pending` is durable and not yet applied here; `unknown`
 means the broker never said, and the only safe retry is the same request under
 the same key. A write that appended nothing answers `applied` at a `null`
 position: the state asked for already holds. `op_id` is the operation the
-request was made under — the key as **this principal's** operation, named by a
+request was made under (the key as **this principal's** operation, named by a
 tag of their id, so sending it back as the header is the same operation as
-sending the original key — and `receipt` is the tool's own answer, verbatim.
+sending the original key). `receipt` is the tool's own answer, verbatim except
+for its `warnings`.
+
+`caveats` is what the write tells you beside its outcome, and was not refused
+for: an item filed to triage because the project's default assignee has left
+the org chart, a timestamp stored as the day it falls on, a description naming
+more items than are linked. It is always a list, empty when there is nothing
+to add, and each entry is written for a **person**:
+
+- **`code`**: the kind of caveat, stable to branch on (`unaddressed_comment`,
+  `default_assignee_gone`, `body_links_capped`, `date_truncated`,
+  `tag_near_duplicate`, `filed_earlier_unread`, `filed_earlier_removed`,
+  `lane_changed_not_placed`, `dependencies_not_recorded`, `move_unfinished`,
+  `move_waiting`, `subtree_unfinished`, `datastore_pending`, `file_finding`).
+  A write that landed part of what it was asked (an item filed whose
+  dependencies were not recorded, a move or a removal whose walk stopped) says
+  so here, and never in a field of the receipt: an agent reads the same in its
+  own words under that field, which this route takes off.
+- **`message`**: one or two sentences in the words of the screen, naming no
+  tool, argument or internal id.
+- **`action`**: `required` when something stays as it is until somebody acts
+  (a setting that no longer works), `none` when it is only something to know.
+  The dashboard keeps a `required` caveat on screen until it is dismissed and
+  lets a `none` one go by itself.
+
+The same tool called by an agent answers the same caveats under `warnings`,
+in words for a model that name the tool and argument it would use next. This
+route answers people, so it answers `caveats` and takes `warnings` off the
+receipt (ADR-0060).
 
 A tool that appends more than one record — an item filed or edited together
 with a dependency, a page saved and renamed in one call, a project's tags and
@@ -5702,13 +5737,19 @@ record's refusal, and its `detail` says what did land — with that record's
 outcome and position — because the earlier change is on every node and "not
 made" would send a person to redo it.
 
-A refusal is the engine's envelope — `{error, detail}` with `tool` and the
+A refusal is the engine's envelope, `{error, message}` with `tool` and the
 object the arguments named (`item`, `page`, `project`, `handle`) beside them,
-so a refusal or an unknown outcome says which object to read. A tool's refusal
-is its own sentence, which names the argument it refused, and the authority
-table's adds the rule's `reason` and the `grants` that would have admitted the
-caller. **The status is read from the refusal's CLASS, never from its
-sentence**, through the one mapping the [human write
+so a refusal or an unknown outcome says which object to read. **Every sentence
+on it is written for a person** (ADR-0060). `message` is the code's own
+sentence. `detail`, where present, is the refusal in a person's words, naming
+what to change or whom to ask; a refusal nobody has worded for a person yet
+carries **no** `detail`, and its `message` stands alone. The sentence the same
+tool answers a model with (naming the tool, its arguments and what to call
+next) is never on this answer. The authority table's refusal adds the rule's
+`reason` and the `grants` that would have admitted the caller; an argument the
+tool does not read is named in `fields`; and the route's own refusals below
+carry the code and `tool` alone. **The status is read from the refusal's
+CLASS, never from its sentence**, through the one mapping the [human write
 surface](#the-human-write-surface) answers with too. The transport's own codes:
 
 | `error` | Status | When |
@@ -5729,7 +5770,8 @@ surface](#the-human-write-surface) answers with too. The transport's own codes:
 | `draining` | `503` | This node is [draining](#during-a-drain) |
 | `starting` | `503` | This node is [still starting](#while-a-node-is-starting): its listener is bound and the surface that serves this route is not up yet; `Retry-After: 10` |
 
-And the tool's own refusal, carrying the tool's sentence as `detail`:
+And the tool's own refusal, carrying its person's words as `detail` where it
+has them:
 
 | `error` | Status |
 |---|---|
@@ -5747,7 +5789,7 @@ answered is `503` `unavailable`, never a refusal: whether it landed is
 unknown, so the answer carries **`outcome: "unknown"`** and the `op_id`, and
 says to send it again with the same key. A tool that made its write and could
 not confirm it — the broker's acknowledgement was lost — is answered the same
-way, with the tool's own sentence as `tool_detail`; and one this node's
+way, naming the object to read; and one this node's
 operation ledger cannot vouch for adds `unvouched: true` and **no**
 `Retry-After`, because the same request asked here answers the same way until
 the write reaches this node — ask another node, or read whether it landed.
@@ -5859,29 +5901,33 @@ so there is nothing to route.
 
 ### What a request answers
 
-Through the **one mapping** the act route answers with — read from the
-refusal's class and cause, never from its sentence — so a status and a code
-mean the same thing on every write surface:
+Through the **one mapping** the act route answers with, read from the
+refusal's class and cause, never from its sentence, so a status and a code
+mean the same thing on every write surface. As there, a refusal's `detail` is
+written for a person, and is present only where the refusal has been worded
+for one; otherwise its `message`, the code's own sentence, stands alone
+(ADR-0060):
 
 | Status | `error` | When | Carries |
 |---|---|---|---|
-| `200` | | The write was **applied** on this node, so the next read here sees it | the tool's own receipt, its `outcome`, `position` and `op_id` |
+| `200` | | The write was **applied** on this node, so the next read here sees it | the tool's own receipt without its `warnings` (written for a model), its `outcome`, `position` and `op_id`, and its `caveats` in a person's words, always a list |
 | `202` | | The write is **pending**: durable, and not yet applied on this node | the same, and the `position` to read at |
-| `400` | `invalid_body` | The body is malformed, names a different object than the path, or carries an argument the tool does not declare | `detail` naming it |
+| `400` | `invalid_body` | The body is malformed, names a different object than the path, or carries an argument the tool does not declare | the undeclared arguments in `fields` |
 | `401` | `invalid_token` | Nobody presented a credential | |
-| `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `detail`, worded exactly as a seat and your assistant are told it, beside `reason` and `grants` (or the window) |
-| `403` | `forbidden` | The domain forbids this caller the gesture — rewriting somebody else's remark | `detail`: the domain's own sentence |
+| `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `reason` and `grants` (or the window), and the verb in `action` where the route decided it itself |
+| `403` | `forbidden` | The domain forbids this caller the gesture, such as rewriting somebody else's remark | `detail` in a person's words, where the refusal has them |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it — a stale `If-Match`, a title taken, a race lost — or the state the request needs is not there | `detail`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it (a stale `If-Match`, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
-| `422` | `invalid` | The domain refused the write on its own rules — a purge whose `?confirm=` names another item among them | `detail`: the domain's own sentence |
-| `500` | `internal_error` | The engine failed at something of its own | nothing a retry changes; the detail is in the node's log |
+| `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item among them | `detail` in a person's words, where the refusal has them |
+| `500` | `internal_error` | The engine failed at something of its own, or a tool answered something that is not a receipt | nothing a retry changes; the reason, and anything the tool said instead, is in the node's log |
 | `503` | `unavailable`, `no_active_revision`, `identity_unavailable` | This node could not decide (it cannot tell who you are, or cannot read the chart yet), cannot establish whether the write landed, or its log refused the request | a `Retry-After`, and — for an unknown outcome — `"outcome": "unknown"` and the `op_id` to retry with, on every route, a tool-backed one included. A refusal waiting cannot clear on this node — it was evicted, it holds a record it cannot decode, the log is at its ceiling — carries **no** `Retry-After`: ask another node, or an operator |
 
-The `403` wording is the point of the `unauthorized` row: the three surfaces that serve
-these verbs refuse in ONE sentence, formed by one function, so a person told one
-thing by the dashboard and another by their assistant is never left asking
-which is wrong.
+The `unauthorized` row is one DECISION on all three surfaces that serve these
+verbs: a seat and your assistant read it in one sentence, formed by one
+function, and this surface answers the same rule's `reason` and `grants`, so a
+person told one thing by the dashboard and another by their assistant is never
+left asking which is wrong.
 
 ### A retry is the same operation
 
@@ -7092,7 +7138,7 @@ written against; a version this engine does not speak is
 | `POST` | `/assistant/conversations` | `{protocol_version}` | `201 {conversation}`. An `Idempotency-Key`, when sent, names the conversation, so a retried create is one conversation |
 | `GET` | `/assistant/conversations/{id}` | | `200` the transcript: `{conversation, messages, steps, cards, open_turn, audit_reads}`. A card built from an app the caller no longer holds is replaced by a notice, and so is a message written after its turn read through one (each message records the apps its turn had read through); every step names its `turn_id` |
 | `DELETE` | `/assistant/conversations/{id}` | | `200 {outcome, position}`: the conversation is purged at once, a turn of it running here is stopped and every grant of its open turn is ended |
-| `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context, attachments?}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn. `attachments` names at most 4 files uploaded to this conversation, each once (`400 invalid_body` otherwise) |
+| `POST` | `/assistant/conversations/{id}/turns` | `{protocol_version, input: {text}, page_context, mode?, attachments?}` | `202 {turn_id, stream_url, after_seq}`. `Idempotency-Key` is **required**, and the same key is the same turn. `attachments` names at most 4 files uploaded to this conversation, each once (`400 invalid_body` otherwise). `mode` is `ask` (the default) or `brief` (see [Briefs](#briefs)), which needs a `page_context` and takes no `attachments` (`400 invalid_body` otherwise) |
 | `GET` | `/assistant/conversations/{id}/stream?turn=<id>` | | `200 text/event-stream`, or `204` when the segment has ended and nothing follows `Last-Event-ID`, below |
 | `POST` | `/assistant/turns/{id}/stop` | `{protocol_version}` | `202 {state}`: a running turn is stopped where it runs, on whichever node of the fleet that is, a turn waiting on an approval is closed stopped and every proposal it waits on declined (under the request's `Idempotency-Key`, when sent), and a turn already over answers the state it ended in. `state` is what the turn truly reached: `stopped`, or what it came to first (`completed`, `waiting_for_approval`), and `running` while its runner has not yet recorded its end, which then arrives on the turn's stream |
 | `GET` | `/assistant/cards/{id}/export.csv` | | `200` the table card as CSV, from the snapshot the conversation stored, never a fresh read |
@@ -7121,6 +7167,14 @@ past 6 KiB, 8 levels or 160 parts, or an example its own schema refuses is
 recorded, its `args` are held to that schema, and one that does not match is
 the model's refused step, naming the members the screen takes, never a card.
 An action the screen declares no arguments for is never proposed.
+
+`selection` is the one record the person has open, or `null`: `{kind, id,
+noun?}`, the row a screen has open beside its list, else the peeked row, else
+the record a record's own screen is of (a task's page is that task, a seat's
+that agent). `noun` is what the person calls it where its kind does not say:
+`decision`, `update`, `task`, `project`, `agent`, `artifact`, `page`, `turn` or
+`run` (an ask open in the Inbox is a `decision` on its task); any other value is
+`400 invalid_body`. A brief is limited to the selection.
 
 `action_revisions` gives each accepted action its own revision: the screen and
 its path, and only the parts of the page the action depends on (its address,
@@ -7159,7 +7213,10 @@ keeps it through its own save.
 **Before anything is spent.** A question is refused, recording nothing, when the
 company's token budget, or the person's own `assistant.token_budget`, has no
 room in a window (`429 budget_exhausted` with the `scope` that is spent, `org`
-or `person`, the window, its `resets_at` and a `Retry-After` until it resets),
+or `person`, the window, its `resets_at`, a `Retry-After` until it resets, and
+the `remedy` naming the ceiling that refused it: `{"setting":
+"company_token_budget"}` or `{"setting": "assistant_token_budget"}`; see
+[ADR-0060](../../adr/0060-a-caveat-or-a-refusal-is-worded-for-each-reader-and-a-person-is-never-shown-a-models.md)),
 when the person already has two turns running on the node, or has asked twenty
 in a minute across every node of the fleet (`429 assistant_busy` with a
 `Retry-After`; while the fleet's counter cannot be read, the node's own rate of
@@ -7175,6 +7232,36 @@ conversation's turn waits on an approval is taken: that turn ends as
 `superseded`, and its proposals stay approvable until they expire. One approved
 later is applied and its card updated on that turn's stream, without the
 superseded turn's answer resuming.
+
+### Briefs
+
+A turn asked with `"mode": "brief"` answers with one `brief` card rather than
+prose: a brief of the page, or of the page context's `selection` where it names
+one. It is a turn like any other (admitted, metered, recorded and streamed the
+same way, the first answer of a conversation the person goes on asking in),
+with these differences:
+
+- It only reads: the model is offered the person's read tools and its answer
+  tool, no write, page action, link or deep work. Its reads draw no card and
+  its prose is never drawn; its steps are shown as any turn's.
+- The card is `{"type": "brief", "brief": {scope, summary, needs, recommended?,
+  follow_ups, as_of}}`. `scope` is `{screen, title, record?}`, `record` the
+  selection the brief was limited to. `needs` holds at most three rows,
+  `{ref: {kind, id}, text, detail?, tone, action?}`, and `[]` is "Nothing needs
+  you". `tone` is `warning`, `neutral` or `danger`. An `action` is `{kind,
+  label, link?, question?}`: `open` carries a `link` the engine built from its
+  link table (`href` a dashboard address), `ask` a `question` to ask in the same
+  conversation. `follow_ups` holds at most three questions. Lines are plain
+  text: a summary of at most 200 characters, a row's text and detail of at
+  most 120 each.
+- A row's `ref` is a `task`, `project`, `seat`, `page` or `artifact` that this
+  turn's own reads returned and whose own read, sent again as the person,
+  answers it; any other row is left out. `danger` is drawn only where that read
+  says a seat is stopped or its last turn failed, or a task is urgent; the
+  model's other dangers are drawn `warning`.
+- A brief the model could not write within one retry ends the turn with the
+  error code `brief_invalid`; one that read more than its own token cap ends
+  with the same code and a sentence saying so. Neither draws a card.
 
 ### The turn's stream
 
@@ -7998,6 +8085,17 @@ is what the gate refuses against. Each window's allowance comes back when it
 turns over; there is no route that resets a counter, and room before then is
 made by raising the ceiling.
 
+**`assistant`** is the ceiling every person's Dashboard Assistant questions are
+held to (`assistant.token_budget`): its three windows, each with the `limit`
+every person is held to where one is set. `used`, `refused_at` and `state` in
+it are the CALLER's own spend against that ceiling, and **`counted`** says
+whether they are real: a person's assistant spend is counted on a scope of
+their own only while the company caps it, and a caller who is not a person
+spends nothing through the assistant, so where `counted` is `false` every
+`used` is a zero nobody measured and a client draws no figure. It is here
+because it is what refuses a person's question, and the Budgets screen is
+where that refusal's remedy sends whoever may raise it.
+
 What a seat *spent over a window you choose* is not here: that is the per-agent
 row of the [spend breakdown](#get-tokensbreakdown), a different span that must
 not be divided into a ceiling. The ceiling and the durable counter are the pair
@@ -8032,7 +8130,18 @@ today's ceiling across two restarts".
          "resets_at": "2026-06-30T22:00:00Z", "used": 702311, "state": "ok"}
       ]
     }
-  ]
+  ],
+  "assistant": {
+    "counted": true,
+    "windows": [
+      {"period": "day", "window": "2026-06-08", "starts_at": "2026-06-07T22:00:00Z",
+       "resets_at": "2026-06-08T22:00:00Z", "used": 41200, "limit": 200000, "state": "ok"},
+      {"period": "week", "window": "2026-W24", "starts_at": "2026-06-07T22:00:00Z",
+       "resets_at": "2026-06-14T22:00:00Z", "used": 120400, "state": "ok"},
+      {"period": "month", "window": "2026-06", "starts_at": "2026-05-31T22:00:00Z",
+       "resets_at": "2026-06-30T22:00:00Z", "used": 380900, "state": "ok"}
+    ]
+  }
 }
 ```
 

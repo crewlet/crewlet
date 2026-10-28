@@ -18,6 +18,8 @@
  * still read it, and a screen that needs one by name exports it then.
  */
 
+import type { Remedy } from "./remedies.ts";
+
 /** The protocol version every frame and every request carries. */
 export const ASSISTANT_PROTOCOL_VERSION = 1;
 /** The longest question a turn takes, in characters (Unicode code points). */
@@ -92,7 +94,15 @@ type AssistantStepState = "running" | "done" | "failed" | "refused" | "stopped" 
 
 /** An engine-built card's kind. */
 export type AssistantCardKind =
-  "table" | "entity" | "proposal" | "open_in_app" | "error" | "notice" | "file";
+  | "table"
+  | "entity"
+  | "proposal"
+  | "open_in_app"
+  | "error"
+  | "notice"
+  | "oversize"
+  | "file"
+  | "brief";
 
 /** Where a proposal stands. */
 type AssistantProposalState =
@@ -144,7 +154,8 @@ export type AssistantErrorCode =
   | "turn_interrupted"
   | "grant_ended"
   | "internal_error"
-  | "access_withdrawn";
+  | "access_withdrawn"
+  | "brief_invalid";
 
 /** What a page context's resource or selection names. */
 type AssistantResourceKind =
@@ -159,6 +170,23 @@ type AssistantResourceKind =
   | "run"
   | "schedule"
   | "view";
+
+/**
+ * What the person calls the record a screen has open, as the drawer names it
+ * ("Brief me on this decision"): an ask in the Inbox is a decision, a seat an
+ * agent.
+ */
+export type AssistantRecordNoun =
+  "decision" | "update" | "task" | "project" | "agent" | "artifact" | "page" | "turn" | "run";
+
+/** What a question asks for: an answer, or a brief of the page or its open record. */
+export type AssistantTurnMode = "ask" | "brief";
+
+/** How loud a brief's row is; danger only where the engine read a fact that says so. */
+type AssistantBriefTone = "danger" | "warning";
+
+/** What a brief's action does: open a record's screen, or ask a question. Never a write. */
+type AssistantBriefActionKind = "open" | "ask";
 
 /** Why the assistant is not available to the viewer. */
 export type AssistantViewerReason =
@@ -304,6 +332,8 @@ export interface AssistantErrorEvent {
   hint?: string;
   retryable: boolean;
   retry_after_seconds?: number;
+  /** Where the limit that caused the error is changed (a token budget spent). */
+  remedy?: Remedy;
 }
 
 /** What a resuming client redraws when the frame log cannot serve it. */
@@ -322,8 +352,10 @@ export interface AssistantCard {
   open_in_app?: AssistantOpenInAppCard;
   error?: AssistantErrorCard;
   notice?: AssistantNoticeCard;
+  oversize?: AssistantOversizeCard;
   // --- deep work (im-deep) ---
   file?: AssistantFileCard;
+  brief?: AssistantBriefCard;
 }
 
 /** Rows from a read. */
@@ -335,6 +367,11 @@ export interface AssistantTableCard {
   total?: (string | number | boolean | null)[];
   row_count: number;
   truncated: boolean;
+  /**
+   * The answer says rows lie past the page it read, so `row_count` is a page
+   * and never the total: the card's screen shows the rest.
+   */
+  more?: boolean;
   as_of: string;
   exports?: AssistantExports;
   open?: AssistantLink;
@@ -368,11 +405,26 @@ export interface AssistantEntityCard {
   /** The dashboard object the record is; absent for a generic read's record, which is the API's. */
   kind?: AssistantResourceKind;
   id: string;
+  /**
+   * The short name the record is written by in prose: a task's key
+   * ("GOP-11"), a project's ("GOP"). The answer's first mention of it is the
+   * record's chip (`app/assistant/chunk/mentions.ts`); absent for a record
+   * with none, a seat included, which the answer names by its name.
+   */
+  key?: string;
   title: string;
   subtitle?: string;
   facts?: AssistantFact[];
   text?: string;
   items?: AssistantEntityItem[];
+  /** How many items the record holds where `items` is only the first of them. */
+  items_total?: number;
+  /**
+   * The answer says items lie past the page it read (a thread's older
+   * comments), so `items` is a page and never the whole list: the record's
+   * screen shows the rest.
+   */
+  items_more?: boolean;
   /** What one item and several are called ("policy", "policies"), where the card has a list. */
   items_noun?: AssistantNoun;
   open?: AssistantLink;
@@ -505,6 +557,17 @@ export interface AssistantNoticeCard {
 }
 
 /**
+ * A read whose answer was past what one step reads, so none of it is shown:
+ * what it read, the screen that shows all of it, and what would narrow it.
+ * The drawer lists it with the turn's other reads (ADR-0061).
+ */
+export interface AssistantOversizeCard {
+  title: string;
+  open?: AssistantLink;
+  narrow?: string[];
+}
+
+/**
  * What a screen tells a turn about itself: what is in view by id, never a
  * record's content, and the draft the person has open with its values.
  */
@@ -604,10 +667,11 @@ interface AssistantResource {
   version?: string;
 }
 
-/** One thing, named. */
-interface AssistantResourceRef {
+/** One thing, named, with what the screen calls it where it says. */
+export interface AssistantResourceRef {
   kind: AssistantResourceKind;
   id: string;
+  noun?: AssistantRecordNoun;
 }
 
 /** A body carrying only the protocol version. */
@@ -620,6 +684,8 @@ export interface AssistantTurnRequest {
   protocol_version: number;
   input: AssistantTurnInput;
   page_context: AssistantPageContext | null;
+  /** What the question asks for; absent is `ask`. A brief needs the page context. */
+  mode?: AssistantTurnMode;
   // --- deep work (im-deep) ---
   /** Files uploaded to the conversation for this question. */
   attachments?: string[];
@@ -848,6 +914,46 @@ export interface AssistantFileRef {
 /** The files a deep run delivered. */
 export interface AssistantFileCard {
   files: AssistantFileRef[];
+}
+
+/**
+ * A brief: what the page is about, and what the person has to do, ranked
+ * (each row a record the engine read and resolved for them, the first the
+ * one to do first), then questions to ask next. Whether anything needs them
+ * is the number of rows, never a field. Its actions only open an address the
+ * engine built or ask a question.
+ */
+export interface AssistantBriefCard {
+  scope: AssistantBriefScope;
+  about: string;
+  needs: AssistantBriefNeed[];
+  context?: string;
+  follow_ups: string[];
+  as_of: string;
+}
+
+/** What a brief covers: the page, or the one record it has open. */
+interface AssistantBriefScope {
+  screen: string;
+  title: string;
+  record?: AssistantResourceRef;
+}
+
+/** One thing the person has to do, citing its record: what to do, why now, and its press. */
+interface AssistantBriefNeed {
+  ref: AssistantResourceRef;
+  text: string;
+  detail?: string;
+  tone: AssistantBriefTone;
+  action: AssistantBriefAction;
+}
+
+/** The one press a brief row offers: an engine-built link to open, or a question to ask. */
+export interface AssistantBriefAction {
+  kind: AssistantBriefActionKind;
+  label: string;
+  link?: AssistantLink;
+  question?: string;
 }
 
 /** An attachment's upload answer: `POST /assistant/conversations/{id}/files`. */

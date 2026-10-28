@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -90,9 +91,9 @@ func TestARetriedCreateTheLedgerCannotVouchForFilesNothing(t *testing.T) {
 		t.Fatalf("the retry = (%q, %v), want unknown — the ledger cannot say "+
 			"whether the task step applied", retry.Outcome, err)
 	}
-	for _, warning := range retry.Warnings {
-		if strings.Contains(warning, "filed by an earlier copy") {
-			t.Errorf("the retry claims a landing nothing vouches for: %s", warning)
+	for _, said := range retry.Caveats {
+		if said.Code() == caveat.CodeFiledEarlierUnread || said.Code() == caveat.CodeFiledEarlierRemoved {
+			t.Errorf("the retry claims a landing nothing vouches for: %s", said.Agent())
 		}
 	}
 	if got := r.logEnd(t); got != end {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -146,6 +147,35 @@ func TestAStructuredRefusalKeepsItsValue(t *testing.T) {
 	}
 }
 
+// A REFUSAL'S WORDS FOR A PERSON CROSS WITH IT (ADR-0060): a write a data
+// node refused answers the person on the node they are on in the words the
+// writer chose, whether the writer put them beside its error or a typed
+// refusal carries them. AND A ROLLING UPGRADE DEGRADES TO THE FLOOR: an older
+// peer sends no phrasing, and the refusal reads as one with none, which the
+// act route answers with its code's own sentence, never the model's message.
+func TestARefusalsPersonWordsCrossTheRouter(t *testing.T) {
+	t.Parallel()
+	said := throughWire(t, fmt.Errorf("thread: %w", caveat.Saying(
+		fmt.Errorf("worklet: the choice is not an option: %w", worklet.ErrInvalid),
+		caveat.NotAnOption())))
+	if got := caveat.RefusalOf(said); got != caveat.NotAnOption() {
+		t.Errorf("a phrased refusal crossed as %q", got.Person())
+	}
+	if !errors.Is(said, worklet.ErrInvalid) {
+		t.Error("the phrasing hid the refusal's class on the wire")
+	}
+	capped := throughWire(t, &worklet.TextCapError{Field: worklet.TextTitle,
+		Size: 300, Limit: 256})
+	if got := caveat.RefusalOf(capped); got != caveat.TitleTooLong() {
+		t.Errorf("a title over its cap crossed as %q", got.Person())
+	}
+	older := decodeError(&wireError{Message: "worklet: the choice \"x\" is not an " +
+		"option of the decision", Sentinels: []string{"worklet.ErrInvalid"}})
+	if got := caveat.RefusalOf(older); !got.IsZero() {
+		t.Errorf("an older peer's refusal read as phrased: %q", got.Person())
+	}
+}
+
 // AN IDENTITY THIS BUILD DOES NOT KNOW IS DROPPED AND THE WORDS KEPT — a
 // newer peer's sentinel mid-upgrade must not turn an answer into a failure to
 // decode one.
@@ -186,7 +216,7 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	for _, pkg := range []string{"worklet", "doclet", "statelog", "estate",
 		"iamdomain", "iam", "iam/session", "artifactsdomain", "artifacts",
 		"artifacts/manifest", "artifacts/mediatype", "artifactdata", "artifactdata/canon",
-		"artifactdata/query"} {
+		"artifactdata/query", "caveat"} {
 		vars, types := declaredErrors(t, filepath.Join(root, "internal", filepath.FromSlash(pkg)))
 		name := path.Base(pkg)
 		for _, v := range vars {

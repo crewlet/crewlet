@@ -4952,19 +4952,6 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 0;
   min-width: 0;
 }
-/* THREE PARTS, THREE REGISTERS: the field is what it is about, the verb is the
-   relation, and the value is the answer — so the value is the only one at full
-   ink. A chip set in one register reads as a label rather than as a sentence. */
-.work-chip-field {
-  color: var(--color-text-secondary);
-}
-.work-chip-verb {
-  color: var(--color-text-tertiary);
-}
-.work-chip-value {
-  color: var(--color-text-primary);
-  font-weight: var(--font-weight-medium);
-}
 
 /* ---- The two menus: Filter and Display ---------------------------------- */
 
@@ -5573,20 +5560,6 @@ span.list-position-step {
   z-index: 1;
   display: inline-flex;
   min-width: 0;
-}
-/* IN A PROPERTIES RAIL THE VALUE STARTS ON THE COLUMN, picker or not. The
-   trigger is a small ghost button, and its padding and border put Status,
-   Priority, Type and Labels about ten pixels right of Assignee, Due and the
-   record beside them — one column reading as two. The button keeps its box
-   (the hover and the focus ring are its padding); it is only moved back by
-   that padding, and it draws the value in the rail's own size and ink rather
-   than a button label's. Selected by ELEMENT rather than by the kit's class
-   names: the menu's markup is the kit's, and the one button a `.cell-edit`
-   holds is its trigger (the menu's items are portalled out of it). */
-.crewlet-property-list .crewlet-description-list__detail > .cell-edit button {
-  margin-inline-start: calc(-1 * var(--spacing-2) - 1px);
-  font-size: inherit;
-  color: inherit;
 }
 
 /* ---- The marks a row and a card share ----------------------------------- */

@@ -44,9 +44,11 @@ import type {
   AssistantErrorEvent,
   AssistantEventKind,
   AssistantFileCard,
+  AssistantBriefCard,
   AssistantFileStored,
   AssistantFrame,
   AssistantNoticeCard,
+  AssistantOversizeCard,
   AssistantOpenInAppCard,
   AssistantPageContext,
   AssistantPageContextEvent,
@@ -101,7 +103,9 @@ export interface AssistantCardBodies {
   open_in_app: AssistantOpenInAppCard;
   error: AssistantErrorCard;
   notice: AssistantNoticeCard;
+  oversize: AssistantOversizeCard;
   file: AssistantFileCard;
+  brief: AssistantBriefCard;
 }
 
 /** A card narrowed to the one body its type names. */
@@ -141,7 +145,9 @@ const CARD_KINDS: Record<AssistantCardKind, true> = {
   open_in_app: true,
   error: true,
   notice: true,
+  oversize: true,
   file: true,
+  brief: true,
 };
 
 /**

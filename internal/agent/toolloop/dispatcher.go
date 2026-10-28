@@ -1115,7 +1115,8 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	if c.run != nil {
 		ctx = newCallContext(c.run.ctx, d.ctx)
 	}
-	out, err := c.exec(ctx, llm.ToolCall{
+	// Every call is told the round it runs in ([CallRound]).
+	out, err := c.exec(withCallRound(ctx, c.round), llm.ToolCall{
 		ID: c.id, Name: c.name, Arguments: c.args,
 	})
 	if err != nil {

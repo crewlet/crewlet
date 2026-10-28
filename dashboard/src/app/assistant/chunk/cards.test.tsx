@@ -1,11 +1,12 @@
 /**
- * What the drawer draws of the engine's cards: the columns the engine chose for
- * its width, values worded by their type as the screens word them, the facts
- * kept for the model left out, a failed step's reason, "Prepare it again" on a
- * card that moved, and a run that took no step drawn without a count.
+ * What the drawer draws of the engine's cards: a read's peek (the columns the
+ * engine chose for its width, values worded by their type as the screens word
+ * them, the facts kept for the model left out), a failed step's reason,
+ * "Prepare it again" on a card that moved, and a run that took no step drawn
+ * without a count.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AssistantCardEvent, AssistantProposalCard } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
@@ -16,28 +17,27 @@ import {
   prepareAgainQuestion,
   ReplyProse,
   runChipOf,
+  stepDuration,
   stepsOf,
   type CardHandlers,
 } from "./blocks.tsx";
+import { readsOf } from "./mentions.ts";
+import { ReadChip } from "./reads.tsx";
 import type { TurnView } from "./turn.ts";
-import { resetCardFolds, setCardOpen } from "./fold.ts";
 
-afterEach(() => {
-  cleanup();
-  resetCardFolds();
-});
+afterEach(cleanup);
 
 const on: CardHandlers = {
   approve: () => {},
   decline: () => {},
   prepareAgain: () => {},
   openHere: () => {},
+  ask: () => {},
   undo: () => {},
 };
 
-/** Draws one card, opened: these cases are about what an open card holds (fold.test.tsx folds). */
+/** Draws one card that is not a read. */
 function draw(card: AssistantCardEvent["card"], handlers: CardHandlers = on) {
-  setCardOpen("c", true);
   return render(
     <Router>
       <CardBlock
@@ -50,8 +50,20 @@ function draw(card: AssistantCardEvent["card"], handlers: CardHandlers = on) {
   );
 }
 
-test("a table draws only the columns the engine chose for the drawer, a status in words", () => {
-  draw({
+/** Draws one read as its chip and opens its peek: these cases are about what a peek holds. */
+function peek(card: AssistantCardEvent["card"]) {
+  const read = readsOf([{ card_id: "c", message_id: "m", card }]).reads[0]!;
+  render(
+    <Router>
+      <ReadChip read={read} on={on} />
+    </Router>,
+  );
+  fireEvent.click(screen.getByRole("button"));
+  return screen.getByRole("dialog");
+}
+
+test("a table's peek draws only the columns the engine chose for the drawer, a status in words", () => {
+  const dialog = peek({
     type: "table",
     table: {
       title: "Tasks",
@@ -67,16 +79,18 @@ test("a table draws only the columns the engine chose for the drawer, a status i
       as_of: "2026-10-24T09:41:00Z",
     },
   });
-  const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+  const heads = within(dialog)
+    .getAllByRole("columnheader")
+    .map((h) => h.textContent);
   expect(heads).toEqual(["Title", "Status"]);
-  expect(screen.getByText("In progress")).toBeTruthy();
-  expect(screen.queryByText("FAIR-1")).toBeNull();
+  expect(within(dialog).getByText("In progress")).toBeTruthy();
+  expect(within(dialog).queryByText("FAIR-1")).toBeNull();
 });
 
 test("a fact is worded by its type, and one kept for the model is not drawn", () => {
   expect(factText({ value: "in_review", type: "label" })).toBe("In review");
   expect(factText({ value: "ada" })).toBe("ada");
-  draw({
+  const dialog = peek({
     type: "entity",
     entity: {
       kind: "task",
@@ -88,12 +102,12 @@ test("a fact is worded by its type, and one kept for the model is not drawn", ()
       ],
     },
   });
-  expect(screen.getByText("To do")).toBeTruthy();
-  expect(screen.queryByText("Version")).toBeNull();
+  expect(within(dialog).getByText("To do")).toBeTruthy();
+  expect(within(dialog).queryByText("Version")).toBeNull();
 });
 
-test("a record with a list under it keeps its facts: the principles over their policies", () => {
-  draw({
+test("a record with a list under it keeps its facts in its peek: the principles over their policies", () => {
+  const dialog = peek({
     type: "entity",
     entity: {
       kind: "unit",
@@ -109,13 +123,13 @@ test("a record with a list under it keeps its facts: the principles over their p
       ],
     },
   });
-  expect(screen.getByText("Help friends share costs fairly.")).toBeTruthy();
-  expect(screen.getByText("Settling up takes seconds.")).toBeTruthy();
-  expect(screen.getByText("Money is an integer number of cents.")).toBeTruthy();
+  expect(within(dialog).getByText("Help friends share costs fairly.")).toBeTruthy();
+  expect(within(dialog).getByText("Settling up takes seconds.")).toBeTruthy();
+  expect(within(dialog).getByText("Money is an integer number of cents.")).toBeTruthy();
 });
 
-test("a list with no record beside it is the list card alone", () => {
-  draw({
+test("a record's peek keeps the list under it, named by the record", () => {
+  const dialog = peek({
     type: "entity",
     entity: {
       kind: "task",
@@ -124,8 +138,25 @@ test("a list with no record beside it is the list card alone", () => {
       items: [{ kind: "task", id: "c1", label: "Looks right to me.", fact: "ada" }],
     },
   });
-  expect(screen.getByText("Looks right to me.")).toBeTruthy();
-  expect(screen.getByText("Settle up")).toBeTruthy();
+  expect(within(dialog).getByText("Looks right to me.")).toBeTruthy();
+  expect(within(dialog).getByRole("list", { name: "Settle up" })).toBeTruthy();
+});
+
+test("a step too quick to time says no time, and one not yet ended none either", () => {
+  expect(stepDuration(undefined)).toBeUndefined();
+  expect(stepDuration(30)).toBeUndefined();
+  expect(stepDuration(99)).toBeUndefined();
+  // THE PRODUCT'S ONE DURATION ([fmtDuration]): milliseconds under a second.
+  expect(stepDuration(100)).toBe("100ms");
+  expect(stepDuration(400)).toBe("400ms");
+  expect(stepDuration(12_400)).toBe("12s");
+  expect(stepDuration(845_000)).toBe("14m 5s");
+});
+
+test("a read handed to the card drawer is a caller's mistake, said as one", () => {
+  expect(() =>
+    draw({ type: "entity", entity: { kind: "task", id: "FAIR-1", title: "Settle up" } }),
+  ).toThrow(/drawn by its answer/);
 });
 
 const proposal = {
@@ -268,7 +299,6 @@ test("an open in app trail carries no raw id", () => {
 // administrator's step request ("GET /agents/qa") are drawn whole. Mutation:
 // drop a short value anywhere between the wire and the DOM, and this fails.
 test("a two-letter handle is drawn whole", () => {
-  setCardOpen("e2", true);
   const event: AssistantCardEvent = {
     card_id: "e2",
     message_id: "m",
@@ -285,13 +315,15 @@ test("a two-letter handle is drawn whole", () => {
       },
     },
   };
-  const { container, unmount } = render(
+  const { unmount } = render(
     <Router>
-      <CardBlock event={event} local={undefined} on={on} opened={false} />
+      <ReadChip read={readsOf([event]).reads[0]!} on={on} />
     </Router>,
   );
-  expect(container.textContent).toContain("Assigneeqa");
-  expect(container.textContent).toContain("Reviewerpm");
+  fireEvent.click(screen.getByRole("button"));
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.textContent).toContain("Assigneeqa");
+  expect(dialog.textContent).toContain("Reviewerpm");
   unmount();
   const [step] = stepsOf(
     {
@@ -311,4 +343,136 @@ test("a two-letter handle is drawn whole", () => {
     true,
   );
   expect(step!.detail).toBe("GET /agents/qa");
+});
+
+test("a brief's rows open the address the engine built, and its follow-ups ask in the conversation", () => {
+  const openHere = vi.fn();
+  const ask = vi.fn();
+  draw(
+    {
+      type: "brief",
+      brief: {
+        scope: { screen: "inbox", title: "Inbox" },
+        about: "QA waits on your answer on ENG-42, and the QA Engineer is stopped.",
+        needs: [
+          {
+            ref: { kind: "seat", id: "qa" },
+            text: "Raise the QA Engineer's budget",
+            detail: "Stopped 2 hours ago",
+            tone: "danger",
+            action: {
+              kind: "open",
+              label: "Open the agent",
+              link: { label: "qa", screen: "seat", href: "#/company/org/seats/qa" },
+            },
+          },
+          {
+            ref: { kind: "task", id: "ENG-42" },
+            text: "Answer ENG-42: which build QA tests",
+            tone: "warning",
+            action: { kind: "ask", label: "Ask", question: "What did QA test last?" },
+          },
+        ],
+        context: "The beta ships Thursday.",
+        follow_ups: ["Why is the QA Engineer out of budget?"],
+        as_of: "2026-10-26T09:00:00Z",
+      },
+    },
+    { ...on, openHere, ask },
+  );
+  expect(screen.getByRole("region", { name: "Brief 2 things need you" })).toBeDefined();
+  expect(screen.getByText("Inbox")).toBeDefined();
+  expect(
+    screen.getByText("QA waits on your answer on ENG-42, and the QA Engineer is stopped."),
+  ).toBeDefined();
+  expect(screen.getByText("Stopped 2 hours ago")).toBeDefined();
+  expect(screen.getByText("The beta ships Thursday.")).toBeDefined();
+  const rows = screen.getAllByRole("listitem").filter((row) => row.closest("ol") !== null);
+  expect(rows[0]?.textContent).toContain("Do first");
+  expect(rows[0]?.textContent).toContain("Raise the QA Engineer's budget");
+  fireEvent.click(screen.getByRole("button", { name: "Open the agent" }));
+  expect(openHere).toHaveBeenCalledWith(
+    expect.objectContaining({ path: ["company", "org", "seats", "qa"] }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+  expect(ask).toHaveBeenCalledWith("What did QA test last?");
+  fireEvent.click(screen.getByRole("button", { name: "Why is the QA Engineer out of budget?" }));
+  expect(ask).toHaveBeenCalledWith("Why is the QA Engineer out of budget?");
+});
+
+test("a brief's verdict is the rows it carries, counted, at every length the engine sends", () => {
+  const row = (id: string) => ({
+    ref: { kind: "task" as const, id },
+    text: `Answer ${id}`,
+    tone: "warning" as const,
+    action: { kind: "ask" as const, label: "Ask", question: `What is ${id}?` },
+  });
+  const verdicts = [
+    "Nothing needs you",
+    "1 thing needs you",
+    "2 things need you",
+    "3 things need you",
+  ];
+  verdicts.forEach((verdict, n) => {
+    cleanup();
+    draw({
+      type: "brief",
+      brief: {
+        scope: { screen: "home", title: "Home" },
+        about: "Two agents are working.",
+        needs: ["ENG-1", "ENG-2", "ENG-3"].slice(0, n).map(row),
+        follow_ups: [],
+        as_of: "2026-10-26T09:00:00Z",
+      },
+    });
+    expect(screen.getByRole("region", { name: `Brief ${verdict}` })).toBeDefined();
+    expect(screen.queryAllByText("Do first")).toHaveLength(n > 1 ? 1 : 0);
+  });
+});
+
+test("a brief of one record names it, and nothing waiting is said once, in its head", () => {
+  draw({
+    type: "brief",
+    brief: {
+      scope: {
+        screen: "inbox",
+        title: "Inbox",
+        record: { kind: "task", id: "ENG-7", noun: "decision" },
+      },
+      about: "QA asked which build to test, and you answered.",
+      needs: [],
+      follow_ups: [],
+      as_of: "2026-10-26T09:00:00Z",
+    },
+  });
+  expect(screen.getByRole("region", { name: "Brief Nothing needs you" })).toBeDefined();
+  expect(screen.getByText("Decision ENG-7")).toBeDefined();
+  expect(screen.getAllByText("Nothing needs you")).toHaveLength(1);
+  expect(screen.getByText("QA asked which build to test, and you answered.")).toBeDefined();
+});
+
+test("a brief's open whose address is not this dashboard's draws no press", () => {
+  draw({
+    type: "brief",
+    brief: {
+      scope: { screen: "inbox", title: "Inbox" },
+      about: "One row.",
+      needs: [
+        {
+          ref: { kind: "task", id: "ENG-1" },
+          text: "A row",
+          tone: "warning",
+          action: {
+            kind: "open",
+            label: "Open ENG-1",
+            link: { label: "ENG-1", screen: "item", href: "https://example.com/" },
+          },
+        },
+      ],
+      follow_ups: [],
+      as_of: "2026-10-26T09:00:00Z",
+    },
+  });
+  expect(screen.getByText("A row")).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Open ENG-1" })).toBeNull();
 });

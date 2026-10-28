@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -254,7 +255,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 
 // catalogueTypes reads the declared types a caller sent.
 func catalogueTypes(args map[string]any) ([]worklet.TaskType, string) {
-	raw, ok := args["types"].([]any)
+	raw, ok := argval.List(args["types"])
 	if !ok {
 		return nil, "`types` is a list of type declarations."
 	}
@@ -312,7 +313,7 @@ func catalogueTypes(args map[string]any) ([]worklet.TaskType, string) {
 // would be the third rule the coercion table's own comment records going out
 // of step with the other two.
 func catalogueFields(args map[string]any) ([]worklet.FieldDef, string) {
-	raw, ok := args["fields"].([]any)
+	raw, ok := argval.List(args["fields"])
 	if !ok {
 		return nil, "`fields` is a list of field declarations."
 	}
@@ -426,7 +427,7 @@ func fieldBound(config map[string]any, slug, key string) (*float64, string) {
 // catalogueOptions reads `config.options` — the choices of a dropdown, a
 // labels or a relationship field.
 func catalogueOptions(config map[string]any, slug string) ([]worklet.Option, string) {
-	raw, held := config["options"].([]any)
+	raw, held := argval.List(config["options"])
 	if !held {
 		return nil, ""
 	}

@@ -660,6 +660,8 @@ export function Runs() {
                 key: "task",
                 header: "Task",
                 floor: "10rem",
+                // A RUN WITH NO TASK RECORDED (or one withheld) sorts last.
+                sortValue: (r) => r.task_description || null,
                 cell: (r) =>
                   r.task_description ? (
                     <TableTextCell>{r.task_description}</TableTextCell>
@@ -718,6 +720,7 @@ export function Runs() {
               },
               {
                 key: "updated",
+                align: "right",
                 header: "Updated",
                 shrink: true,
                 sortValue: (r) => tsKey(r.updated_at || r.started_at),

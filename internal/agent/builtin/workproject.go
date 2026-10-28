@@ -7,8 +7,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -48,7 +50,7 @@ type ProjectWriter interface {
 	// `labels_create_missing` declares what its write is about to use in
 	// one append, before the task's own.
 	EnsureTags(ctx context.Context, opID, project string, tags []string) (
-		[]string, []string, error)
+		[]string, []caveat.Caveat, error)
 }
 
 type writeProject struct{ deps WorkDeps }
@@ -225,6 +227,8 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
+	// WHAT THE CALL TELLS ITS CALLER beside the change, from both halves.
+	var caveats []caveat.Caveat
 	// THE CALL ANSWERS FOR BOTH RECORDS at the top, and each facet keeps its
 	// own detail beneath it — see [callOutcome].
 	var call callOutcome
@@ -260,9 +264,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		tags := map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
-		if len(result.Warnings) > 0 {
-			tags["warnings"] = result.Warnings
-		}
+		caveats = append(caveats, result.Caveats...)
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
@@ -295,19 +297,20 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// near-matches are: an instant stored as a day is the writer's
 		// value changed, and a caller told `applied` alone reads it as
 		// stored verbatim.
-		if len(result.Warnings) > 0 {
-			policy["warnings"] = result.Warnings
-		}
+		caveats = append(caveats, result.Caveats...)
 		out["policy"] = policy
 	}
 	call.stamp(out)
-	return jsonResult(out)
+	// ONE LIST AT THE TOP, whichever half raised it ([caveated]): each
+	// sentence names what it is about, and a list nested under a half was
+	// one the act route could not take off a person's receipt.
+	return caveated(out, caveats)
 }
 
 // projectTagEdit reads the three tag facets a caller sent.
 func projectTagEdit(args map[string]any) (worklet.TagEdit, string) {
 	var edit worklet.TagEdit
-	if raw, held := args["tags_add"].([]any); held {
+	if raw, held := argval.List(args["tags_add"]); held {
 		for i, entry := range raw {
 			spec, ok := entry.(map[string]any)
 			if !ok {
@@ -325,8 +328,8 @@ func projectTagEdit(args map[string]any) (worklet.TagEdit, string) {
 	if raw, held := args["tags_rename"].(map[string]any); held {
 		edit.Rename = make(map[string]string, len(raw))
 		for slug, label := range raw {
-			text, ok := label.(string)
-			if !ok {
+			text, ok := argval.String(label)
+			if !ok || label == nil {
 				return worklet.TagEdit{}, fmt.Sprintf(
 					"`tags_rename[%s]` is the tag's new LABEL, as a string.",
 					clip(slug))
@@ -364,7 +367,7 @@ func projectPolicyEdit(args map[string]any) (worklet.ProjectEdit, string) {
 	if raw, held := args["target_date"]; held {
 		target := ""
 		if raw != nil {
-			text, ok := raw.(string)
+			text, ok := argval.String(raw)
 			if !ok {
 				return worklet.ProjectEdit{}, "`target_date` is a date as a " +
 					"string, 2026-12-18 — or null to clear it."

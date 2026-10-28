@@ -69,7 +69,7 @@
         },
         "token_budget": {
           "$ref": "#/$defs/TokenBudget",
-          "description": "Each person's assistant token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies."
+          "description": "Each person's assistant token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
         },
         "turn_timeout_seconds": {
           "description": "Longest one assistant turn may run, 30..1200 seconds. Absent: 900.",

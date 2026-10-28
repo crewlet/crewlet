@@ -117,7 +117,7 @@ func (s *surface) AnnotationsOf(name string) mcp.Annotations {
 		return mcp.Annotations{}
 	}
 	switch tool.Kind {
-	case catalog.KindRead, catalog.KindDocs, catalog.KindNavigate:
+	case catalog.KindRead, catalog.KindDocs, catalog.KindNavigate, catalog.KindBrief:
 		return mcp.Annotations{ReadOnly: mcp.Yes, Destructive: mcp.No}
 	}
 	return mcp.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
@@ -148,6 +148,9 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	}
 	switch tool.Kind {
 	case catalog.KindRead:
+		if s.t.briefing() {
+			return s.briefRead(ctx, tool, call.Arguments)
+		}
 		return s.read(ctx, tool, call.Arguments)
 	case catalog.KindWrite, catalog.KindPageAction:
 		return s.propose(ctx, tool, call.Arguments)
@@ -157,6 +160,8 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return s.docs(ctx, tool, call.Arguments)
 	case catalog.KindDeep:
 		return s.deep(ctx, tool, call.Arguments)
+	case catalog.KindBrief:
+		return s.answerBrief(ctx, tool, call.Arguments)
 	}
 	return failed(mcp.RefusalInternalError, "This tool cannot be used here."), nil
 }
@@ -244,11 +249,19 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 		s.t.tainted(tool, shaped.Trust)
 		s.t.used(appNames(tool.Apps))
 	}
-	for _, card := range shaped.Cards {
-		s.t.emitCard(ctx, card, appNames(tool.Apps))
+	briefing := s.t.briefing()
+	if !briefing {
+		// A BRIEF'S READS DRAW NO CARD: the run chip shows each read, and
+		// the brief card is the whole answer.
+		for _, card := range shaped.Cards {
+			s.t.emitCard(ctx, card, appNames(tool.Apps))
+		}
 	}
 	if shaped.Refusal != nil {
 		return failed(routeClass(resp.Status, shaped.Refusal.Code), shaped.Model), nil
+	}
+	if briefing {
+		s.t.readForBrief(shaped.Model)
 	}
 	s.remember(key, shaped.Model)
 	return toolloop.ToolResult{Output: shaped.Model}, nil
@@ -639,6 +652,8 @@ func answerSummary(shown []wire.Card) string {
 			return "1 record"
 		case wire.CardNotice:
 			return "See the notice"
+		case wire.CardOversize:
+			return "Too large to show"
 		}
 	}
 	return "Done"

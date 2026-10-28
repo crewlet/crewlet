@@ -110,6 +110,8 @@ import {
   PauseSeatButton,
 } from "~/components/writes.tsx";
 import { TechnicalDetails } from "~/components/common.tsx";
+import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
+import { waitedOn } from "~/lib/budget.ts";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { unitPath } from "~/lib/orgchart.ts";
@@ -665,7 +667,22 @@ function Notices({
         </Callout>
       )}
       {state === "stopped" && (
-        <Callout variant={toneOf(state)} action={eventLink}>
+        <Callout
+          variant={toneOf(state)}
+          action={
+            // A SPENT BUDGET IS RAISED HERE, on the scope refusing the
+            // seat, by whoever may; anybody else is told who can.
+            agent.stopped_reason === "budget" ? (
+              <RaiseBudgetButton
+                handle={seat.handle}
+                name={seat.name}
+                window={waitedOn(agent.budget?.windows, "refusing")}
+              />
+            ) : (
+              eventLink
+            )
+          }
+        >
           This seat is stopped: {stoppedLine(agent, nameOf)}.
           {failure && (
             <>

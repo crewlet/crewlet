@@ -63,7 +63,7 @@ func TestJudgeCallsOnlyTheVendorsOwnRefusalARefusal(t *testing.T) {
 		{"a name that does not resolve", setup.Failure{App: "Acme", Err: dns},
 			setup.VerifyUnreachable, "the address does not resolve"},
 		{"a timeout", setup.Failure{App: "Acme", Err: timeout},
-			setup.VerifyUnreachable, "did not answer within 10 seconds"},
+			setup.VerifyUnreachable, "did not answer within 10s"},
 		{"an answer that is not the API", setup.Failure{App: "Acme",
 			Err: errors.New("decode: invalid character '<'")},
 			setup.VerifyUnreachable, "not its API"},

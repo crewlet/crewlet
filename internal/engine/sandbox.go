@@ -1232,6 +1232,7 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		Publisher: e.backends.Queue,
 		Turn:      turnIdentity,
 		Sessions:  e.sessions,
+		Metrics:   e.metrics,
 		// THE LAUNCHER, for the turn's LATER iterations rather than this
 		// one: this segment collects the run the turn parked on, and a turn
 		// its reviewer sends back launches its next run from here — on
