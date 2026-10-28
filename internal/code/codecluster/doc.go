@@ -61,7 +61,13 @@
 // committer queues a compaction among the pushes and decides it alone, its
 // decide reading its inputs' rows where a batch reads its pushes', so the two
 // arms should differ by about a record's slot a compaction: the claim the
-// pair is there to measure.
+// pair is there to measure. Neither meets the pack bound, where its pushes
+// would be refused compaction_behind: every arm moves to repositories
+// declared afresh, with the timer stopped, before a batch would take one past
+// a bound its pushes meet — its refs' (code.MaxRefsPerRepo) or, here, its
+// packs' (code.MaxPacksPerRepo), which mix=packs, nothing merging its packs,
+// meets every thirty-two batches — so the pair runs for as long as the
+// benchmark time asks.
 //
 // # Why a package of its own
 //

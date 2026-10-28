@@ -726,9 +726,10 @@
 // answered busy past them the same way (crewlet.code.commit.busy, kind
 // compaction); but no batch carries it beside a push, or beside another, so
 // its decision is its own and its refusal refuses nothing else, and what it
-// costs the pushes queued behind it is a record's slot, its decide reading
-// its inputs' rows where a batch reads its pushes' (codecluster's
-// BenchmarkCommitChain, its mix=compaction arm beside mix=packs). Its OPERATION
+// should cost the pushes queued behind it is a record's slot, its decide
+// reading its inputs' rows where a batch reads its pushes' — a claim, not a
+// figure: codecluster's BenchmarkCommitChain is there to measure it, its
+// mix=compaction arm beside mix=packs. Its OPERATION
 // ID IS THE COMPACTION'S ID, minted once by the node that built it, so a
 // compaction asked again of the repository's runner-up after a failover is
 // collapsed by the ledger onto the record that landed rather than decided
