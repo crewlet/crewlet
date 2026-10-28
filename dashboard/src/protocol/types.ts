@@ -955,6 +955,9 @@ export interface Rollup {
   by_phase: PhaseRow[];
   by_model: ModelRow[];
   by_provider?: ProviderSpendRow[];
+  /** True where `by_provider` was left out because the reader is not an
+   *  admin: the company's model entries are its configuration. */
+  entries_withheld?: boolean;
   by_worker: WorkerRow[];
   by_agent: AgentSpendRow[];
   /** The tail of recent turns — the LIVE window's only. A company day holds no
