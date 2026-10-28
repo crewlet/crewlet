@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A running coding run's live output, read from the node that owns the run
+// A running coding run's live output, read from the node that reads its box
 // (`sandbox_tail`, internal/sandbox/livetail.go).
 //
 // # Every node serves, whether or not it has a sandbox backend

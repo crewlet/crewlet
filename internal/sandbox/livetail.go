@@ -45,12 +45,13 @@ import (
 // the record's own status, when the launch asked about is not a running job:
 // it finished and was collected, it parked on a question, a later launch
 // replaced it, or no record is left at all. And `owner_silent{node}` when the
-// node that owns the run did not answer inside the fleet read budget — NAMED,
-// because "the run said nothing" and "the node that could ask it did not
-// answer" send a reader to opposite places, and collapsing the second into an
-// empty tail is exactly the lie a screen that polls cannot recover from. An
-// owner with no presence — draining, or its heartbeat lapsed — is asked like
-// any other, and its silence is that same `owner_silent`. `box_paused` is a
+// node that reads the run's box — its owner, or the node that launched a box
+// on an engine host, held or not — did not answer inside the fleet read
+// budget: NAMED, because "the run said nothing" and "the node that could ask
+// it did not answer" send a reader to opposite places, and collapsing the
+// second into an empty tail is exactly the lie a screen that polls cannot
+// recover from. A node with no presence — draining, or its heartbeat lapsed —
+// is asked like any other, and its silence is that same `owner_silent`. `box_paused` is a
 // running record whose box is paused, which a reader never wakes.
 //
 // A box that the owner could not read is an ERROR rather than an outcome: it
@@ -180,8 +181,10 @@ const (
 	// TailNotRunning is a launch that is not a running job — see
 	// [LiveLaunch].
 	TailNotRunning TailOutcome = "not_running"
-	// TailOwnerSilent is an owning node that did not answer inside the
-	// budget, or a run no node holds right now.
+	// TailOwnerSilent is the node that reads the run's box — its owner, or
+	// the node that launched a box on an engine host ([tailHost]) — not
+	// answering inside the budget, or a box in a remote cell whose run no
+	// node holds right now.
 	TailOwnerSilent TailOutcome = "owner_silent"
 	// TailBoxPaused is a running record whose box is PAUSED, which its
 	// backend cannot read without waking it ([ErrBoxPaused]) — and a peek
@@ -205,8 +208,10 @@ type TailAnswer struct {
 	Outcome  TailOutcome `json:"outcome"`
 	TurnID   string      `json:"turn_id"`
 	LaunchID string      `json:"launch_id"`
-	// Node is the node that owns the run — the one that answered, or the one
-	// that did not. Empty for a run no node holds.
+	// Node is the node that reads the run's box — its owner, or the node
+	// that launched a box on an engine host, whoever holds the seat
+	// ([tailHost]) — the one that answered, or the one that did not. Empty
+	// only for a box in a remote cell whose run no node holds.
 	Node string `json:"node,omitempty"`
 	// Status is the run record's own status, on `not_running`: why the
 	// launch is not a running job. Empty where no record is left.
@@ -273,7 +278,7 @@ type TailServer interface {
 	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
-// TailReader answers a tail request from the node that owns the run.
+// TailReader answers a tail request from the node that reads the run's box.
 type TailReader struct {
 	// Owner is this process's incarnation, which is what a run's record
 	// names as its owner and what a request is addressed to.

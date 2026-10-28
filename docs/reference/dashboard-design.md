@@ -6824,12 +6824,12 @@ that can.
   read as that call's alone; a coding run's box facts, and its transcript once
   collected.
 - **A running coding run is watched, not replayed.** While its span is open
-  the trace asks the node that owns the run for its live output every three
-  seconds (`sandbox_tail`, see [Watching a run
+  the trace asks the node that can read the run's box for its live output
+  every three seconds (`sandbox_tail`, see [Watching a run
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
   closing the span or the job stopping ends the poll — and only
   `not_running` is stopping: a job still being set up (`launching`), a box
-  paused before its record moves on (`box_paused`), a silent owner and a
+  paused before its record moves on (`box_paused`), a silent node and a
   failed read all keep asking, and keep what is on screen.
   - **The view holds what it was sent.** It asks by CURSOR — the reading it
     holds, how far and the owner's digest there — and APPENDS what the owner
