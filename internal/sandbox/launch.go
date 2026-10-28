@@ -208,14 +208,15 @@ type LaunchRequest struct {
 	// it — the node takes the pause into its copy before it lists.
 	Fence func() error
 
-	// Opened is told the job's name the moment the store has opened it
+	// Opened is told the job the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
 	// name the job before its box can act: the run's bridge session, which
 	// records every call the box makes under its own job
 	// ([BridgeAppend.Launch]), and whose endpoint names the job it serves.
 	// Learned any later — from the row, say, on the session's first append
 	// — the name would be whichever job the row held by then, which for a
-	// call that outlived its job is the next one.
+	// call that outlived its job is the next one. And where the job's calls
+	// are numbered from ([OpenedJob.LastSeq]), off the same write.
 	//
 	// It answers the MCP servers the job's box is given BESIDE MCPServers:
 	// the ones whose address can only be minted once the job has a name.
@@ -225,10 +226,30 @@ type LaunchRequest struct {
 	// predecessor's. A name it answers that MCPServers also has replaces it.
 	// An error abandons the launch, before any box exists. Nil tells nobody
 	// and adds nothing.
-	Opened func(launchID string) (map[string]MCPServer, error)
+	Opened func(job OpenedJob) (map[string]MCPServer, error)
 
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
+}
+
+// OpenedJob is the job a launch opened, as [LaunchRequest.Opened] is told it.
+type OpenedJob struct {
+	// LaunchID names the job: the launch id the store minted for it, which
+	// the run's row holds ([PendingRun.LaunchID]).
+	LaunchID string
+
+	// LastSeq is the place of the last bridged call the row keeps from
+	// before this job ([PendingRun.LastBridgeSeq]): zero for a job whose
+	// round starts its log afresh, and the asking job's last call for a job
+	// that continues one which asked a person ([PendingRun.Continues]).
+	//
+	// READ OFF THE WRITE THAT OPENED THE JOB, which is the write that kept
+	// those calls, so the job's own are numbered after exactly what the row
+	// holds. Numbered from one instead, a continuation's calls were sorted
+	// in among the asking job's by the collection that closes the round,
+	// which reads the round's calls in that order: its record, the log its
+	// reviewer reads, and its submissions, where the last one made wins.
+	LastSeq int
 }
 
 // Continuation is how a job continues the asking job before it — see
@@ -390,7 +411,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// below reads: the job's own runner and the standing instructions that
 	// list the servers a box has.
 	if req.Opened != nil {
-		named, openErr := req.Opened(opened.LaunchID)
+		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.LastBridgeSeq()})
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)

@@ -271,8 +271,8 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		// session where the launch runs it in the asking run's box — see
 		// [runner.Asked].
 		Continue: sandboxContinuation(req.Continue),
-		Opened: func(launch string) (map[string]sandbox.MCPServer, error) {
-			bridge, openErr := e.openBridge(ctx, session, ledger, launch)
+		Opened: func(job sandbox.OpenedJob) (map[string]sandbox.MCPServer, error) {
+			bridge, openErr := e.openBridge(ctx, session, ledger, job)
 			opened = openErr == nil
 			return bridge, openErr
 		},
@@ -315,18 +315,23 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 // [sandbox.LaunchRequest.Opened], for the launch, and the same opening for a
 // run taken over while it works ([Engine.reopenAgentRun]), whose box already
 // holds the endpoint and is never handed the one minted here.
+//
+// THE SESSION NUMBERS ITS CALLS AFTER THE ONES THE ROW HOLDS
+// ([sandbox.OpenedJob.LastSeq]): a recovery's after its own job's, and a job
+// continuing one that asked a person after the asking job's, so the round's
+// calls keep the one order its collection reads them in.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
-	launch string,
+	job sandbox.OpenedJob,
 ) (map[string]sandbox.MCPServer, error) {
-	ledger.bind(launch)
-	s.Launch = launch
+	ledger.bind(job.LaunchID)
+	s.Launch, s.LastSeq = job.LaunchID, job.LastSeq
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
 		// are every case Open refuses — said rather than assumed, because a
 		// box launched without its endpoint has none of the seat's tools.
 		return nil, fmt.Errorf("the tool bridge opened no session for run %s's job %s; "+
-			"this node's log says why (mcp_bridge_*)", s.RunID, launch)
+			"this node's log says why (mcp_bridge_*)", s.RunID, job.LaunchID)
 	}
 	return bridgeServer(endpoint), nil
 }

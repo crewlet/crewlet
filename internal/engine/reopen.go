@@ -148,12 +148,9 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	ledger.nudge = e.nudgeRun
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
 	// after the last one the row records, and a resume reads them by it.
-	lastSeq := 0
-	for _, call := range run.BridgeCalls {
-		lastSeq = max(lastSeq, call.Seq)
-	}
+	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: run.LastBridgeSeq()}
 	if _, err := e.openBridge(ctx, &mcpbridge.Session{
-		RunID: run.TurnID, LastSeq: lastSeq, Handle: handle, Role: seat.Name,
+		RunID: run.TurnID, Handle: handle, Role: seat.Name,
 		Surface: surface, Ledger: ledger,
 		// AS THE LAUNCH OPENED IT, so the opening is refused or made on the
 		// same terms; the box already holds its endpoint and is never handed
@@ -162,7 +159,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		// THE SEAT'S FENCE AS THIS NODE HOLDS IT NOW: the grant the launch
 		// was fenced on is another node's, or this one's before a restart.
 		Fence: e.seatFence(handle),
-	}, ledger, run.LaunchID); err != nil {
+	}, ledger, job); err != nil {
 		refuse("the bridge opened no session for the run's job", "error", err.Error())
 		return
 	}

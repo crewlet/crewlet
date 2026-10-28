@@ -473,12 +473,12 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 	req.MCPServers = map[string]MCPServer{
 		"jira": {Name: "jira", Transport: TransportStdio, Command: "jira-mcp"},
 	}
-	req.Opened = func(launch string) (map[string]MCPServer, error) {
+	req.Opened = func(job OpenedJob) (map[string]MCPServer, error) {
 		witness.mu.Lock()
 		defer witness.mu.Unlock()
-		witness.named = append(witness.named, launch)
+		witness.named = append(witness.named, job.LaunchID)
 		return map[string]MCPServer{"crewlet": {Name: "crewlet", Transport: TransportHTTP,
-			URL: "https://engine.example.com/mcp/" + launch}}, nil
+			URL: "https://engine.example.com/mcp/" + job.LaunchID}}, nil
 	}
 	if _, err := rig.launchVia(t.Context(), manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -533,7 +533,7 @@ func TestALaunchWhoseJobCannotBeNamedStartsNothing(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	req := launchReq("t1")
-	req.Opened = func(string) (map[string]MCPServer, error) {
+	req.Opened = func(OpenedJob) (map[string]MCPServer, error) {
 		return nil, errors.New("no endpoint for the job")
 	}
 	if _, err := rig.launchVia(t.Context(), manager, req); err == nil {

@@ -547,9 +547,12 @@ type BridgeCall struct {
 	// at once finishes them in whatever order their tools take.
 	At time.Time `json:"at"`
 
-	// Seq is the call's place in the order its session admitted the run's
+	// Seq is the call's place in the order the run's sessions admitted its
 	// calls, from 1 — the order the CLI made them in, which is the order a
-	// resume replays them in.
+	// resume replays them in. One order for the round: a job opened again
+	// after a recovery, and a job continuing one that asked a person, number
+	// their calls after the ones the row already records
+	// ([PendingRun.LastBridgeSeq]).
 	Seq int `json:"seq,omitempty"`
 
 	// StartedAt is when the bridge handed the call to the seat's surface,
@@ -1180,6 +1183,25 @@ func (r PendingRun) Paused() bool { return !r.PausedAt.IsZero() }
 
 // HasBox reports whether a box exists for this run at all.
 func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
+
+// LastBridgeSeq is the place of the last bridged call the row records
+// ([BridgeCall.Seq]), and zero for a row that records none: where the next
+// opening of the run's job numbers its calls from — the job's own after a
+// recovery, or a job that continues one which asked a person, whose calls the
+// row keeps ([PendingRun.Continues]).
+//
+// THE HIGHEST, not the last in the list: the row holds the calls in the order
+// they FINISHED, and a call made first can finish last. A call the cap dropped
+// from the middle ([MaxBridgeCalls]) is not counted, and need not be: the next
+// calls are numbered after every call the row still holds, which is all a
+// reader of the row orders.
+func (r PendingRun) LastBridgeSeq() int {
+	last := 0
+	for _, call := range r.BridgeCalls {
+		last = max(last, call.Seq)
+	}
+	return last
+}
 
 // HeldSince is when this run's box started being held as a snapshot nothing is
 // driving, and whether it is being held at all.

@@ -191,12 +191,14 @@ type Session struct {
 	// never a value with "~" or "." in it, which delimit a token's parts.
 	Launch string
 
-	// LastSeq is the place, in its job's order, of the last call an EARLIER
-	// opening of the job recorded — zero for a job's first opening, and the
-	// highest [Call.Seq] the run's row records for a job opened again after
-	// a recovery. This opening numbers its calls after it, so the order a
-	// resume reads the run's calls in runs on across the recovery rather
-	// than starting again at one beside the calls before it.
+	// LastSeq is the place, in its run's order, of the last call the run's
+	// row records from before this opening — zero for a round's first job,
+	// and the highest [Call.Seq] the row records for a job opened again
+	// after a recovery, or for a job continuing one that asked a person,
+	// whose calls the row keeps as the same round's. This opening numbers
+	// its calls after it, so the order a resume reads the run's calls in
+	// runs on across the recovery or the question rather than starting again
+	// at one beside the calls before it.
 	LastSeq int
 
 	// Handle and Role name the seat, for the logs and the handshake.
@@ -311,8 +313,8 @@ type Call struct {
 	tools.Call
 
 	// Seq is the call's place in the order the calls REACHED the session,
-	// from 1 — the order the CLI made them in, which is not the order they
-	// finish in when it makes several at once.
+	// after [Session.LastSeq] — the order the CLI made them in, which is not
+	// the order they finish in when it makes several at once.
 	Seq int
 
 	// StartedAt is when the call was handed to the surface, in UTC, and

@@ -15,11 +15,23 @@ func askAndAnswer(t *testing.T, rig *coordRig, reap bool,
 	relaunch func(ctx context.Context, r PendingRun, asked *AskedRun),
 ) PendingRun {
 	t.Helper()
+	return askAndAnswerAfter(t, rig, reap,
+		[]BridgeCall{{Name: "post_comment", Args: `{"text":"on it"}`}}, relaunch)
+}
+
+// askAndAnswerAfter is [askAndAnswer] with the bridged calls the asking job
+// made before it asked stated by the case, in the order they finished.
+func askAndAnswerAfter(t *testing.T, rig *coordRig, reap bool, made []BridgeCall,
+	relaunch func(ctx context.Context, r PendingRun, asked *AskedRun),
+) PendingRun {
+	t.Helper()
 	run := rig.launch("t1")
-	if _, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{
-		Launch: run.LaunchID, Call: BridgeCall{Name: "post_comment", Args: `{"text":"on it"}`},
-	}); err != nil {
-		t.Fatalf("AppendBridgeCall: %v", err)
+	for _, call := range made {
+		if _, err := rig.pending.AppendBridgeCall(t.Context(), "t1", BridgeAppend{
+			Launch: run.LaunchID, Call: call,
+		}); err != nil {
+			t.Fatalf("AppendBridgeCall: %v", err)
+		}
 	}
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
@@ -89,6 +101,55 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	if last.Resume != "sess-ask" || last.Brief != "the answer: use main" {
 		t.Fatalf("the carried-on job started with session %q and brief %q, want the asking "+
 			"run's session and the answer", last.Resume, last.Brief)
+	}
+}
+
+// A CARRIED-ON JOB NUMBERS ITS CALLS AFTER THE ASKING JOB'S. The row keeps the
+// asking job's calls as the round's, and the collection that closes the round
+// reads the round's calls in the order the run made them, by their place
+// ([BridgeCall.Seq]): numbered from one again, the carried-on job's calls were
+// sorted in among the asking job's, its record, its reviewer's log and its
+// last submission with them. So the launch tells what serves the new job
+// where the row's calls end — the highest place, not the last call's, since a
+// call made first can finish last — and a job that starts a new round, whose
+// log the row starts afresh, is told zero.
+//
+// Mutation: tell Opened zero, or the place of the last call in the row's
+// list, and this goes red.
+func TestACarriedOnJobIsNumberedAfterTheAskingJobsCalls(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	var told []OpenedJob
+	opened := func(job OpenedJob) (map[string]MCPServer, error) {
+		told = append(told, job)
+		return nil, nil
+	}
+	askAndAnswerAfter(t, rig, false, []BridgeCall{
+		// FINISHED OUT OF ORDER: the call made last returned first.
+		{Name: "post_comment", Args: `{"text":"on it"}`, Seq: 3},
+		{Name: "read_file", Args: `{"path":"go.mod"}`, Seq: 1},
+		{Name: "run_tests", Seq: 2},
+	}, func(ctx context.Context, _ PendingRun, asked *AskedRun) {
+		req := continuing(asked)
+		req.Opened = opened
+		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+	})
+	row := rig.get("t1")
+	if len(told) != 1 || told[0].LaunchID != row.LaunchID || told[0].LastSeq != 3 {
+		t.Fatalf("the carried-on job %q was told %+v, want it numbered after the "+
+			"asking job's three calls", row.LaunchID, told)
+	}
+
+	// A NEW ROUND STARTS ITS LOG AFRESH, and its numbering with it.
+	req := launchReq("t1")
+	req.Opened = opened
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("the next round's launch: %v", err)
+	}
+	if len(told) != 2 || told[1].LastSeq != 0 {
+		t.Fatalf("the next round's job was told %+v, want it numbered from the start", told[1:])
 	}
 }
 

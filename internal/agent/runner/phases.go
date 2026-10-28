@@ -280,7 +280,10 @@ type BridgedCall struct {
 
 	// Seq is the call's place in the order the bridge admitted the run's
 	// calls, from 1 — the order the CLI made them in, which is not the order
-	// they finished in when it made several at once.
+	// they finished in when it made several at once. One order for the
+	// round: a job opened again after a recovery, and a job carrying on one
+	// that asked a person ([Asked]), number theirs after the calls before
+	// them (sandbox.PendingRun.LastBridgeSeq).
 	Seq int
 
 	// StartedAt is when the call was handed to the seat's surface, and
