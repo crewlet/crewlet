@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -49,6 +50,9 @@ import (
 type CoordStore struct {
 	runs coord.SandboxRuns
 	now  func() time.Time
+	// undecodable reports the records a listing skips; nil is the
+	// process's own ([undecodableRuns]).
+	undecodable *undecodableReport
 }
 
 // NewCoordStore wraps the fleet's run records.
@@ -990,7 +994,8 @@ func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
 // record: the boot's epoch floor (so no node started), each seat's recovery
 // (so every seat this node claimed was handed back), the waiter's poll, the
 // answer lookup, a retirement and the dashboard. Skipped, it is left exactly as
-// it is for the documented repair, and every reader says so ([decodedOrSkipped]).
+// it is for the documented repair, and said once per process
+// ([CoordStore.decodedOrSkipped], [undecodableReport]).
 // A listing that fails as a whole is still an error.
 func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]PendingRun, error) {
 	records, err := s.runs.SandboxRuns(ctx)
@@ -999,7 +1004,7 @@ func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]P
 	}
 	var out []PendingRun
 	for _, record := range records {
-		run, ok := decodedOrSkipped(ctx, record)
+		run, ok := s.decodedOrSkipped(ctx, record)
 		if !ok {
 			continue
 		}
@@ -1068,24 +1073,66 @@ func encodeRun(run PendingRun) ([]byte, error) {
 	return raw, nil
 }
 
-// decodeRun reads a run and KEEPS what it cannot read — see
-// [PendingRun.Extra] for the rolling upgrade that loses it otherwise.
-// decodedOrSkipped decodes a record a listing returned, or logs it as one no
-// reader can act on and reports false: the one place a listing decides that
+// decodedOrSkipped decodes a record a listing returned, or reports it as one no
+// reader can act on and answers false: the one place a listing decides that
 // ([CoordStore.list]).
-func decodedOrSkipped(ctx context.Context, record coord.Record) (PendingRun, bool) {
+func (s *CoordStore) decodedOrSkipped(ctx context.Context, record coord.Record) (PendingRun, bool) {
 	run, err := decodeRun(record)
 	if err != nil {
-		log.ErrorContext(ctx, "sandbox_run_undecodable", "key", record.Key, "error", err,
-			"detail", "this run record cannot be read, so no listing returns it: no recovery, "+
-				"poll, answer, retirement or epoch floor acts on it, and no write can change it",
-			"remedy", "remove the record from the sandbox runs bucket once you know its run "+
-				"is over (see the deployment guide)")
+		report := s.undecodable
+		if report == nil {
+			report = undecodableRuns
+		}
+		report.skipped(ctx, record.Key, err)
 		return PendingRun{}, false
 	}
 	return run, true
 }
 
+// undecodableRuns is the process's report of the run records its listings
+// skip, shared by every store it opens, since each opens its own.
+var undecodableRuns = &undecodableReport{log: log}
+
+// undecodableReport says each skipped record once.
+//
+// AT ERROR THE FIRST TIME A PROCESS SEES IT, AND AT DEBUG AFTER. The runs are
+// listed on every poll of the waiter, every recount of a seat, every reply
+// lookup and every load of the dashboard's home, so an error per listing was a
+// line every few seconds for as long as the record stayed, and on the embedded
+// broker it stays until something can remove it. One error per process says
+// what an operator needs (the record, why, and the repair) at the boot that
+// first meets it and at every restart; the repetition at debug is there for
+// whoever is tracing a listing. The set holds only keys actually seen, which
+// are bounded by the bucket's own records.
+type undecodableReport struct {
+	log  *slog.Logger
+	mu   sync.Mutex
+	seen map[string]struct{}
+}
+
+func (u *undecodableReport) skipped(ctx context.Context, key string, err error) {
+	u.mu.Lock()
+	_, again := u.seen[key]
+	if !again {
+		if u.seen == nil {
+			u.seen = map[string]struct{}{}
+		}
+		u.seen[key] = struct{}{}
+	}
+	u.mu.Unlock()
+	level := slog.LevelError
+	if again {
+		level = slog.LevelDebug
+	}
+	u.log.Log(ctx, level, "sandbox_run_undecodable", "key", key, "error", err,
+		"detail", "this run record cannot be read, so no listing returns it: no recovery, "+
+			"poll, answer, retirement or epoch floor acts on it, and no write can change it",
+		"remedy", "remove the record from the sandbox runs bucket once you know its run "+
+			"is over (see the deployment guide)")
+}
+
+// decodeRun reads a run and KEEPS what it cannot read — see
+// [PendingRun.Extra] for the rolling upgrade that loses it otherwise.
 func decodeRun(record coord.Record) (PendingRun, error) {
 	var run PendingRun
 	if err := json.Unmarshal(record.Value, &run); err != nil {

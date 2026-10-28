@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -112,4 +114,40 @@ func TestARetirementLeavesARecordItCannotDecode(t *testing.T) {
 		t.Fatalf("t1 after the retirement: found %v, err %v; want it ended", found, err)
 	}
 	untouched(t, rig.pending)
+}
+
+// A SKIPPED RECORD IS SAID ONCE AT ERROR, and at debug on every listing after:
+// the runs are listed on every poll and every dashboard load, and an error per
+// listing was a line every few seconds for as long as the record stayed.
+func TestASkippedRecordIsReportedAtErrorOnce(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	rig := newWaiterRig(t)
+	rig.pending.undecodable = &undecodableReport{
+		log: slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}
+	rig.launch("t1")
+	writeGarbled(t, rig.pending)
+	for range 2 {
+		if runs, err := rig.pending.ListActive(t.Context()); err != nil || len(runs) != 1 {
+			t.Fatalf("ListActive = %v, %v", runs, err)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	errorsSaid, debugsSaid := 0, 0
+	for _, line := range lines {
+		if !strings.Contains(line, "sandbox_run_undecodable") || !strings.Contains(line, "key=t-garbled") {
+			continue
+		}
+		switch {
+		case strings.Contains(line, "level=ERROR"):
+			errorsSaid++
+		case strings.Contains(line, "level=DEBUG"):
+			debugsSaid++
+		}
+	}
+	if errorsSaid != 1 || debugsSaid != 1 {
+		t.Fatalf("two listings said the record %d times at error and %d at debug, want once "+
+			"each:\n%s", errorsSaid, debugsSaid, out.String())
+	}
 }
