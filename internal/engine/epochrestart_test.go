@@ -131,7 +131,10 @@ func TestAnAnswerToARunParkedBeforeAGracefulRestartIsRecordedAfterIt(t *testing.
 	r.release(t, first, before)
 	first.Close(context.WithoutCancel(t.Context()))
 
-	_ = r.answeredAfter(t, run)
+	if after := r.answeredAfter(t, run); after.Epoch != before.Epoch+1 {
+		t.Errorf("the claim after a graceful restart minted %d, want %d: the counter "+
+			"carries on from the tenure before it", after.Epoch, before.Epoch+1)
+	}
 }
 
 // AN UPGRADE OWNS THE RUNS ITS PREDECESSOR'S COUNTER STAMPED. A node that ran a
@@ -158,24 +161,24 @@ func TestAnUpgradeOwnsTheRunsItsPredecessorsCounterStamped(t *testing.T) {
 	}
 }
 
-// ONE RUN RECORD NOTHING CAN READ DOES NOT STOP THE BOOT. The floor skips it,
-// logged, and still floors every seat whose runs it can read: failing the
-// boot over it stopped every node of the company starting.
-func TestAnUnreadableRunRecordDoesNotStopTheBoot(t *testing.T) {
+// ONE RUN RECORD NOTHING CAN READ STOPS NEITHER THE BOOT NOR THE SEAT. The
+// boot's epoch floor, the seat's recovery and the answer's record each list
+// the seat's runs, and each failed on the first record that did not decode:
+// no node started, and once one did, every seat it claimed was handed back.
+// Now each skips it, logged, and works every run it can read.
+func TestAnUnreadableRunRecordStopsNeitherTheBootNorTheSeat(t *testing.T) {
 	t.Parallel()
 	r := newRestartRig(t)
 	first := r.boot(t)
-	_, old := r.parkUnder(t, sandbox.Fence{Owner: "node-0/old-build", Epoch: 2})
+	run, old := r.parkUnder(t, sandbox.Fence{Owner: "node-0/old-build", Epoch: 2})
 	old.coordinator.Stop()
 	if _, err := first.Fleet.CreateSandboxRun(t.Context(), "t-garbled", []byte("{not json")); err != nil {
 		t.Fatalf("CreateSandboxRun: %v", err)
 	}
 	first.Close(context.WithoutCancel(t.Context()))
 
-	second := r.boot(t)
-	t.Cleanup(func() { second.Close(context.WithoutCancel(t.Context())) })
-	if after := r.claim(t, second, "node-0/next"); after.Epoch != 3 {
-		t.Fatalf("the first claim beside an unreadable record minted %d, want 3: the "+
+	if after := r.answeredAfter(t, run); after.Epoch != 3 {
+		t.Errorf("the first claim beside an unreadable record minted %d, want 3: the "+
 			"readable run's epoch still floors the seat", after.Epoch)
 	}
 }

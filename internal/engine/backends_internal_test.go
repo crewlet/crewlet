@@ -3,9 +3,11 @@ package engine
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -132,5 +134,29 @@ func TestADataNodeHoldsTheEstateForTheWholeRegister(t *testing.T) {
 					c.roles, len(register()), err)
 			}
 		})
+	}
+}
+
+// THE FLOOR'S ERROR SENDS THE OPERATOR WHERE THE BUCKET IS: stream.store_dir
+// only where this node's own broker keeps it, the external cluster on
+// stream.type nats, and the data members on a leaf.
+func TestTheRunsBucketIsNamedWhereItLives(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		stream config.Stream
+		want   string
+	}{
+		"embedded": {stream: config.Stream{Type: config.StreamEmbedded}, want: "stream.store_dir"},
+		"external": {stream: config.Stream{Type: config.StreamNATS}, want: "stream.url"},
+		"leaf": {stream: config.Stream{Type: config.StreamEmbedded,
+			Leaf: config.StreamLeaf{URLs: []string{"nats-leaf://member-a.example.com:7422"}}}, want: "stream.leaf.urls"},
+	} {
+		got := runsBucketHome(&config.Bootstrap{Stream: tc.stream})
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: %q does not name %s", name, got, tc.want)
+		}
+		if tc.want != "stream.store_dir" && strings.Contains(got, "stream.store_dir") {
+			t.Errorf("%s: %q names stream.store_dir, which holds none of this bucket", name, got)
+		}
 	}
 }
