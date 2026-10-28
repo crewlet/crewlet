@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -536,6 +538,123 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 	if one["id"] != siteID || one["repo"] != "site" {
 		t.Errorf("the one-repository answer names %v (%v), want site (%s)", one["repo"], one["id"], siteID)
 	}
+}
+
+// manyHotRepos is a report of nodes git nodes naming per repositories each,
+// every repository on one node alone, as repository homes spread them: the
+// fleet's r-th hottest is "repo-<r>", its id the r-th smallest, its use in
+// both windows falling with r, and the git nodes take them in turn, so each
+// node's list is its own hottest first. And every repository it names, by
+// name, for a code host that resolves them all.
+func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]code.RepoRef) {
+	report := builtin.CodeStatusReport{Statuses: make([]host.CodeStatus, nodes)}
+	repos := map[string]code.RepoRef{}
+	total := nodes * per
+	for r := range total {
+		ref := code.RepoRef{ID: fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", r), Name: fmt.Sprintf("repo-%03d", r)}
+		repos[ref.Name] = ref
+		use := cache.Use{Fetches: int64(total - r)}
+		s := &report.Statuses[r%nodes]
+		s.Node = fmt.Sprintf("git-%d", r%nodes)
+		s.Hot = append(s.Hot, host.RepoStatus{RepoHeat: cache.RepoHeat{ID: ref.ID, Name: ref.Name,
+			Hour: use, Day: use}})
+	}
+	return report, repos
+}
+
+// stalledGrants is a code host whose read of one repository fails at once and
+// whose every other read holds until its context ends — the code log out of
+// quorum, where a linearizable read fails only once its barrier's budget is
+// spent — counting every read it is asked.
+type stalledGrants struct {
+	failing string // the name whose read fails at once
+	reads   atomic.Int64
+}
+
+var _ builtin.CodeReader = (*stalledGrants)(nil)
+
+func (h *stalledGrants) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	h.reads.Add(1)
+	if q.Repo == h.failing {
+		return code.ReadAnswer{}, fmt.Errorf("%w: the chart this node judges by is behind", code.ErrNotServing)
+	}
+	<-ctx.Done()
+	return code.ReadAnswer{}, ctx.Err()
+}
+
+func (*stalledGrants) ResolveRef(context.Context, code.RefQuery) (code.RefAnswer, error) {
+	return code.RefAnswer{}, errors.New("stalledGrants resolves no ref")
+}
+
+func (*stalledGrants) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
+	return code.GitAnswer{}, errors.New("stalledGrants reads no git")
+}
+
+func (*stalledGrants) FloorOf(string) statelog.Position { return statelog.Position{} }
+
+// A CODE STATUS JUDGEMENT ENDS AT ITS FIRST FAILED READ.
+//
+// A failure answers the whole call unavailable, so nothing read after it can
+// change the answer: with three git nodes naming forty repositories each, the
+// hottest one's grant read failing at once and every other read holding until
+// its context ends — the code log out of quorum, whose reads fail only once
+// their barrier's budget is spent — the call answers unavailable as soon as
+// that one read has failed, having made at most codeStatusJudges reads, and
+// names no repository: the one it could not judge may be one the seat may not
+// read. Run in a bubble, so "as soon as" is every goroutine the call started
+// being done or blocked, never a clock.
+//
+// Mutation: judge in a group whose first failure cancels nothing, and the
+// reads in flight hold the call; start the reads still waiting once one has
+// failed, and the call makes every one of them.
+func TestACodeStatusJudgementEndsAtItsFirstFailedRead(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		report, _ := manyHotRepos(3, 2*cache.HotRepos)
+		stalled := &stalledGrants{failing: "repo-000"}
+		_, chart := healthChart(t)
+		tool, ok := healthTools(builtin.HealthDeps{Status: &statusAsker{report: report},
+			Code: healthCode(stalled, chart)}, chart)[builtin.CodeStatusTool].(tools.SeatCallable)
+		if !ok {
+			t.Fatal("code_status is not seat-callable")
+		}
+		ctx, cancel := context.WithCancel(asSeat("sre"))
+		defer cancel()
+		type outcome struct {
+			got tools.Result
+			err error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			got, err := tool.CallForTurn(ctx, nil, nil)
+			done <- outcome{got, err}
+		}()
+		synctest.Wait()
+		var out outcome
+		select {
+		case out = <-done:
+		default:
+			held := stalled.reads.Load()
+			cancel()
+			<-done
+			t.Fatalf("code_status had not answered once its read of the hottest repository failed: "+
+				"the %d reads it had made held it", held)
+		}
+		if out.err != nil {
+			t.Fatalf("code_status: %v", out.err)
+		}
+		if tools.RefusalOf(out.got) != tools.RefusalUnavailable || !errors.Is(out.got.Cause, code.ErrNotServing) {
+			t.Errorf("answered %s %q (cause %v), want unavailable over the failed read",
+				tools.RefusalOf(out.got), out.got.Output, out.got.Cause)
+		}
+		if strings.Contains(out.got.Output, "repo-") {
+			t.Errorf("the refusal names a repository the seat may not read: %q", out.got.Output)
+		}
+		if got := stalled.reads.Load(); got > builtin.CodeStatusJudges {
+			t.Errorf("the call made %d grant reads, want at most %d — none after the first failed",
+				got, builtin.CodeStatusJudges)
+		}
+	})
 }
 
 // THE HEALTH TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,

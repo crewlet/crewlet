@@ -11,12 +11,15 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -319,12 +322,12 @@ func nodeHealthOf(profile placement.NodeProfile, lease coord.Lease, now time.Tim
 // ---- code_status -------------------------------------------------------- //
 
 // codeStatusJudges is how many of a seat's judgements of the repositories a
-// code_status answer names run at once: each is the code tools' one read of a
-// repository at the seat's level, and the code log's barrier is single-flighted
-// per node (internal/statelog), so a batch in flight shares one round. EIGHT,
-// so a fleet of three git nodes, forty repositories named on each, is judged in
-// some fifteen of those rounds, while more in flight would only queue behind
-// the estate answerer's slots every other caller shares.
+// code_status answer names run — and exist — at once: each is the code tools'
+// one read of a repository at the seat's level, and the code log's barrier is
+// single-flighted per node (internal/statelog), so a batch in flight shares one
+// round. EIGHT, so a fleet of three git nodes, forty repositories named on
+// each, is judged in some fifteen of those rounds, while more in flight would
+// only queue behind the estate answerer's slots every other caller shares.
 const codeStatusJudges = 8
 
 type codeStatus struct{ deps HealthDeps }
@@ -495,7 +498,20 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 // name no longer names, or one the name names under another id — renamed since
 // the git node counted it — is left out, never shown on a guess. A read that
 // could not be made fails the call, unavailable, rather than leaving out what
-// it could not judge.
+// it could not judge ([unjudged]).
+//
+// THE FIRST READ THAT FAILS ENDS THE JUDGEMENT. A failure answers the whole
+// call, so a read still in flight or not yet started could change nothing but
+// how long the caller waits for that answer: the reads run in one group whose
+// first error cancels every read in flight (errgroup.WithContext), no read
+// starts once it has, and at most codeStatusJudges of them run — and exist —
+// at once. Left to run on, they were the incident's cost: with the code log
+// out of quorum a linearizable read fails only once its barrier's budget is
+// spent (statelog.DefaultBarrierBudget, five seconds), so a call naming forty
+// repositories on each of three git nodes held its seat for some fifteen of
+// those budgets, every one of them appending another barrier to the log that
+// was failing them, at the moment an alarm's wake sends every granted seat to
+// look.
 func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	entries []cache.RepoHeat) (map[string]bool, int, *tools.Result) {
 
@@ -513,34 +529,38 @@ func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller
 		}
 	}
 	ids := slices.Sorted(maps.Keys(names))
-	var (
-		mu      sync.Mutex
-		failure error
-		wg      sync.WaitGroup
-		slots   = make(chan struct{}, codeStatusJudges)
-	)
+	var mu sync.Mutex
+	group, judging := errgroup.WithContext(ctx)
+	group.SetLimit(codeStatusJudges)
 	for _, id := range ids {
 		name := names[id]
 		if name == "" || !code.ValidName(name) {
 			continue
 		}
-		wg.Go(func() {
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			ok, err := t.readable(ctx, c, lookedUpRepo(turn, c.asker, name), id, name)
-			mu.Lock()
-			defer mu.Unlock()
-			switch {
-			case err != nil && failure == nil:
-				failure = err
-			case ok:
-				readable[id] = true
+		if judging.Err() != nil {
+			// A READ FAILED, or the call was abandoned: nothing read now
+			// changes the answer.
+			break
+		}
+		group.Go(func() error {
+			// A SLOT FREED BY THE READ THAT FAILED starts nothing either.
+			if err := judging.Err(); err != nil {
+				return err
 			}
+			ok, err := t.readable(judging, c, lookedUpRepo(turn, c.asker, name), id, name)
+			if err != nil {
+				return err
+			}
+			if ok {
+				mu.Lock()
+				readable[id] = true
+				mu.Unlock()
+			}
+			return nil
 		})
 	}
-	wg.Wait()
-	if failure != nil {
-		r := codeFailure(ctx, t.Name(), "", failure)
+	if err := group.Wait(); err != nil {
+		r := unjudged(ctx, t.Name(), err)
 		return nil, 0, &r
 	}
 	withheld := 0
@@ -550,6 +570,35 @@ func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller
 		}
 	}
 	return readable, withheld, nil
+}
+
+// unjudged is code_status's answer when a grant read its hot list needed could
+// not be made: unavailable where the code host could not answer now — the
+// conditions [codeFailure] answers so — and a fault of this node otherwise.
+//
+// IT NAMES NO REPOSITORY. The read that failed was about one a git node named,
+// which the caller may well not read, and a failure that named it would tell a
+// seat the very name the answer exists to withhold.
+func unjudged(ctx context.Context, tool string, err error) tools.Result {
+	var (
+		unready  *code.ErrGitUnready
+		unserved *estate.ErrUnserved
+	)
+	why, transient := Condition(err)
+	switch {
+	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
+		why, transient = "no node holding the code host's rows could answer in time", true
+	case errors.As(err, &unserved) && unserved.Git:
+		why, transient = "none of the git nodes could answer in time", true
+	}
+	if transient {
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not check which of the "+
+			"repositories the git nodes named you may read (%s), so it answers nothing rather than name "+
+			"one you may not. This is NOT an answer about the fleet: try again shortly.", tool, why))
+	}
+	return faulted(ctx, tool, err, fmt.Sprintf("%s could not check which of the repositories the git "+
+		"nodes named you may read: %s. This is NOT an answer about the fleet: say you could not read it.",
+		tool, faultSaid))
 }
 
 // readable reports whether c may read the repository a git node counted as id
