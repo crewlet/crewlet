@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,9 +39,10 @@ import (
 // `claude` on the box's PATH, which a setup step copies there ([codingShim]).
 //
 // It does what Claude Code does with that argv, and nothing a test could get
-// right while the engine was wrong: it reads its brief on stdin, as `-p` with
-// no prompt does, its system prompt off `--append-system-prompt-file`, its tool
-// surface off `--mcp-config` and its hooks off `--settings`, dials the seat's
+// right while the engine was wrong: it answers `--version` with a release
+// ([codingVersion], or [codingVersionEnv]'s), reads its brief on stdin, as `-p`
+// with no prompt does, its system prompt off `--append-system-prompt-file`, its
+// tool surface off `--mcp-config` and its hooks off `--settings`, dials the seat's
 // bridge over a REAL MCP session, and loops —
 // each round asked of the scripted model exactly as the scripted CLI on the
 // engine host asks one ([modelRequest]: the brief, the tools the bridge
@@ -86,7 +88,15 @@ const (
 	codingArgvEnv = "FAKE_AGENT_ARGV"
 	// codingReleaseEnv names a file a [codingModeHeld] run waits for.
 	codingReleaseEnv = "FAKE_AGENT_RELEASE"
+	// codingVersionEnv is the release the stand-in answers `claude
+	// --version` with, [codingVersion] when unset.
+	codingVersionEnv = "FAKE_AGENT_VERSION"
 )
+
+// codingVersion is the release the stand-in reports by default: 2.1.310, the
+// Claude Code the runner's fixtures were measured on, at or past the oldest a
+// run is started with its note hooks on (codingagent's claudeNotesFloor).
+const codingVersion = "2.1.310 (Claude Code)"
 
 // The modes a run can be in.
 const (
@@ -319,6 +329,21 @@ func runCodingCLI(endpoint string) int {
 		return 1
 	}
 	args := os.Args[1:]
+	// A VERSION PROBE IS ANSWERED AS CLAUDE CODE ANSWERS IT, and nothing else
+	// happens: no brief read, no invocation recorded, no mode run. A run wired
+	// to its notes asks `claude --version` before it starts the CLI, to decide
+	// its hooks and its system text (codingagent's claudeNotesGate); a
+	// stand-in that ran the probe as a run held a held case's wait in the
+	// probe rather than in the CLI, answered nothing, and left the gate to its
+	// fallback, so no case ran the branch a real release takes.
+	if slices.Equal(slices.DeleteFunc(slices.Clone(args), func(arg string) bool {
+		// The shim's own filter for the test framework ([codingShim]),
+		// ahead of what the run's script passed.
+		return strings.HasPrefix(arg, "-test.")
+	}), []string{"--version"}) {
+		fmt.Println(cmp.Or(os.Getenv(codingVersionEnv), codingVersion))
+		return 0
+	}
 	// THE PROMPT IS STDIN'S, as `-p` with no prompt reads it: the runner
 	// points it at the brief's file, which ends.
 	brief, err := io.ReadAll(os.Stdin)

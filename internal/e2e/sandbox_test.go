@@ -87,11 +87,12 @@ providers:
         FAKE_AGENT_MODE: "${FAKE_AGENT_MODE}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
-      # Only the cases that read the argv or hold the run set these two.
-      # Declared optional, a case that sets neither runs without them;
-      # undeclared, every such run starts without what it never needed and
-      # logs the gap.
-      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE]
+        FAKE_AGENT_VERSION: "${FAKE_AGENT_VERSION}"
+      # Only the cases that read the argv, hold the run or run an older
+      # release set these three. Declared optional, a case that sets none runs
+      # without them; undeclared, every such run starts without what it never
+      # needed and logs the gap.
+      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_VERSION]
   - name: Founder
     kind: human
     contact:

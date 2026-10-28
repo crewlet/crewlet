@@ -260,6 +260,14 @@ func (r *traceRecorder) attribute(t *testing.T) {
 	})
 }
 
+// loudMark is the number the next loud line will take: what a case hands
+// [traceRecorder.loudSince] to read the lines logged after it.
+func (r *traceRecorder) loudMark() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.loudSeen
+}
+
 // loudSince is every loud line from number from on that the ring still holds,
 // and how many of them it no longer does.
 func (r *traceRecorder) loudSince(from int) (lines []string, lost int) {
