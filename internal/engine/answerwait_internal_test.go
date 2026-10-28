@@ -130,7 +130,7 @@ func TestADeliveryThatReachesAHeldSeatTakesTheHoldTheQueueRefused(t *testing.T) 
 		t.Fatal("the premise: the queue refused the hold")
 	}
 
-	got := e.Dispatch(t.Context(), "swe", []*events.Event{{ID: uuid.New(), Type: "task_assigned"}})
+	got := e.mailboxTurn(t.Context(), "swe", []*events.Event{{ID: uuid.New(), Type: "task_assigned"}})
 	if got.Outcome != queue.OutcomeDefer {
 		t.Errorf("outcome = %v, want the delivery deferred at the head", got.Outcome)
 	}
