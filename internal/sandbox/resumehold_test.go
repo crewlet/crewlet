@@ -529,6 +529,40 @@ func TestALimitAResumeMetIsHeldByItsNodeAlone(t *testing.T) {
 	}
 }
 
+// A LIMIT A RESUME MET IS NOT HELD FOR A SEAT ITS NODE LET GO OF MEANWHILE. The
+// seat's release waits for no resume, and a resume refused after its claim
+// returns once its turn has run: kept after the release had dropped what the
+// node kept for the seat, the hold outlived the seat here, and the seat, back on
+// this node inside the limit's window, had its job's announcements refused
+// until the instant, by a hold its release was to have forgotten.
+//
+// Mutation: keep the completion without asking for the seat's lease again
+// (keepRefused), and the announcement inside the window is refused here.
+func TestALimitHeldForASeatLetGoMeanwhileIsForgotten(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	// THE SEAT IS LET GO OF WHILE THE RESUME RUNS, as a lost lease or a
+	// rebalance lets it go: its lease gone, then what was kept for it dropped.
+	rig.resumer.during = func(context.Context, PendingRun) {
+		rig.coordinator.lease = notLeased
+		rig.coordinator.ReleaseSeat("swe")
+	}
+	limitedAfterClaim(t, rig, rig.now.Add(time.Hour))
+
+	// AND COMES BACK, inside the limit's window, to models that answer.
+	rig.resumer.during = nil
+	rig.coordinator.lease = leased(rigLease)
+	rig.resumer.failWith(nil)
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the announcement once the seat is back: %v, want it resumed: the release was "+
+			"to have forgotten the hold", err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("resumed %d times once the seat was back, want once", len(calls))
+	}
+}
+
 // A JOB COLLECTED AGAIN IS READ AS IT WAS WHEN IT WAS FIRST COLLECTED. Its
 // ending is handed to the resume with the instant it was first read back
 // ([RunEnding.At]), because a CLI names a reset as a time of day: a resume held

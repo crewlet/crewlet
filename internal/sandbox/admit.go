@@ -236,6 +236,16 @@ type refusedCompletion struct {
 // waiter that drives its box announces it to the seat's next holder. A drain's
 // is kept and never re-fired, since nothing signals a drain's end, until that
 // release drops it.
+//
+// NOR ONE THAT LANDS AFTER THAT RELEASE. The release waits for no resume, and a
+// resume refused after its claim returns once its review has run, minutes on:
+// kept then, its hold outlived the seat here, and the seat, back on this node
+// inside the limit's window, had the job's announcements refused until the
+// instant, by a hold the release was to have forgotten. The seat's lease is
+// asked once the keep is made, outside the lock as every lease read here is:
+// the seat host lets go of a seat before the release drops what is kept for
+// it, so a keep that finds the seat held is one the release drops, and one
+// that finds it gone is dropped now.
 func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, refusal Refusal,
 	held bool, seen map[signal]uint64,
 ) {
@@ -243,8 +253,8 @@ func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return
 	}
 	kept := refusedCompletion{cond: refusal.Condition, ev: ev, trigger: trigger}
@@ -253,9 +263,14 @@ func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.
 	}
 	if c.signalledSinceLocked(refusal.Condition, ev.AgentHandle, seen) {
 		c.refireLocked(kept)
+		c.mu.Unlock()
 		return
 	}
 	c.refused[ev.TurnID] = kept
+	c.mu.Unlock()
+	if _, leased := c.leaseOf(ev.AgentHandle); !leased {
+		c.forgetRefused(ev.TurnID)
+	}
 }
 
 // stillRefused reports whether this node holds ev's job off itself, and the
