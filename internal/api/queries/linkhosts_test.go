@@ -41,7 +41,10 @@ func TestTheLinkHostsAnswerCarriesHostsAndNothingElse(t *testing.T) {
 		Enabled: true, URL: "https://deploy:" + secret + "@GitLab.Example.com/scm/?private_token=" + secret + "#frag",
 		SigningSecret: secret + "-gl-sign", Token: secret + "-gl-token",
 		Provisioning: &config.GitLabProvisioning{
-			Group: "GROUPMARK", AdminToken: secret + "-gl-admin", Projects: []string{"GROUPMARK/PROJECTMARK"},
+			Group: "GROUPMARK", AdminToken: secret + "-gl-admin",
+			// A NUMERIC PROJECT ID AND A BARE NAME ARE NO OWNER: only a
+			// path's first segment is one.
+			Projects: []string{"GROUPMARK/PROJECTMARK", "4242", "BARENAME"},
 		},
 	}
 	cfg.Integrations.Mattermost = &config.Mattermost{Enabled: true, URL: "https://chat.example.com/", Team: "TEAMMARK"}
@@ -58,7 +61,7 @@ func TestTheLinkHostsAnswerCarriesHostsAndNothingElse(t *testing.T) {
 		t.Fatal("the shared fixture has no role to give a GitHub app")
 	}
 	cfg.Roles[0].Integrations.GitHub = &config.RoleGitHub{
-		Repos: []string{"SeatOwner/SEATREPOMARK", "orgmark/REPOMARK", "-bad/x"},
+		Repos: []string{"SeatOwner/SEATREPOMARK", "orgmark/REPOMARK", "-bad/x", "BARENAME"},
 	}
 	env := map[string]string{"GHE_URL": "https://github.example.com/api/v3"}
 	body := asMap(t, answer(t, queries.Sources{
@@ -70,7 +73,7 @@ func TestTheLinkHostsAnswerCarriesHostsAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mark := range []string{secret, "REPOMARK", "SEATREPOMARK", "PROJECTMARK", "TEAMMARK", "CLOUDMARK", "EMAILMARK", "frag", "private_token", "deploy", "${", "-bad"} {
+	for _, mark := range []string{secret, "REPOMARK", "SEATREPOMARK", "PROJECTMARK", "TEAMMARK", "CLOUDMARK", "EMAILMARK", "frag", "private_token", "deploy", "${", "-bad", "4242", "barename"} {
 		if strings.Contains(string(raw), mark) {
 			t.Errorf("the answer every reader gets carries %q: %s", mark, raw)
 		}
