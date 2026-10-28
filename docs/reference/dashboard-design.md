@@ -3822,7 +3822,7 @@ from `@crewlethq/ui`), and a seat's handle by its words alone:
 | Written | Drawn |
 |---|---|
 | `#ffe100` in words, or a code span that is one colour (`` `#fff` ``, `` `rgb(255, 225, 0)` ``) | A swatch before the value |
-| A web address | The mark of the app it belongs to (or a globe), and the reference it is (`gophrase/backend#14`, `Message in gophrase`, `~design-review`, `MOB-12`, a page's title) in place of the whole address, which the link's title keeps |
+| A web address | The mark of the app it belongs to (or a globe), and the reference it is (`gophrase/backend#14`, `Message in gophrase`, `~design-review`, `MOB-12`, `DES page 123`) in place of the whole address, which the link's title keeps |
 | `[label](address)` | Its label as written, after the mark of the app its address belongs to |
 | `owner/repo#14`, `group/project!7`, `owner/repo@b5362d2` | The code host's mark, linked to the company's code host |
 | `owner/repo`, under an owner the company works in | The code host's mark, linked to the repository |
@@ -3855,8 +3855,10 @@ refused:
   `[https://github.com/a/b/pull/1](https://login.example.net)` draws no
   GitHub mark. A label built from an address names what anybody could have
   chosen only with its site: an Atlassian Cloud tenant the company did not
-  configure is said after its key or page title ("Sign in to GitHub
-  (evil.atlassian.net)"), and a path segment that decodes to a slash
+  configure is said after its key or page ("DES page 123
+  (evil.atlassian.net)"), a page is named by its space and id and never by
+  the title its address carries, a Mattermost channel only by a name
+  Mattermost allows, and a path segment that decodes to a slash
   (`a%2Fevil`) or that no code host allows labels nothing, so the address
   shows as its host and path.
 - **Too slow.** Every pattern runs in time linear in its run, since a

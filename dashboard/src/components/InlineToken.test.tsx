@@ -168,7 +168,8 @@ describe("addresses and links", () => {
         "https://evil.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub and https://evil.atlassian.net/browse/GP-1",
       ),
     );
-    expect(el.textContent).toContain("Sign in to GitHub (evil.atlassian.net)");
+    expect(el.textContent).toContain("D page 2 (evil.atlassian.net)");
+    expect(el.textContent).not.toContain("Sign in to GitHub");
     expect(el.textContent).toContain("GP-1 (evil.atlassian.net)");
   });
 

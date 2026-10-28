@@ -626,6 +626,38 @@ describe("the pane", () => {
     expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
   });
 
+  // A REBUILT ADDRESS IS LABELLED FROM WHAT IT WAS REBUILT FROM: a Confluence
+  // page's title is the asker's words, which the rebuilt address drops.
+  test("a cited Confluence page's button names its space and id, never its title", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(
+          askItem({
+            ...DECISION,
+            evidence: [
+              {
+                kind: "url",
+                ref: "https://acme.atlassian.net/wiki/spaces/DES/pages/123/Sign+in+to+GitHub",
+              },
+            ],
+          }),
+        ),
+        link_hosts: { hosts: [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }] },
+      },
+    });
+    await settle();
+    const pane = document.querySelector(".crewlet-reading-pane")!;
+    const button = [...pane.querySelectorAll("a")].find((a) =>
+      a.getAttribute("href")?.startsWith("https://acme.atlassian.net"),
+    )!;
+    expect(button.getAttribute("href")).toBe(
+      "https://acme.atlassian.net/wiki/spaces/DES/pages/123",
+    );
+    expect(button.textContent).toContain("DES page 123");
+    expect(pane.textContent).not.toContain("Sign in to GitHub");
+  });
+
   // A REPLY IS ITS OWN MESSAGE: the ask's repository places the ask's numbers,
   // never a reply's.
   test("a reply's bare number is placed by the reply's own words", async () => {

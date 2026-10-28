@@ -183,7 +183,7 @@ describe("what an address is", () => {
     });
     expect(
       describeLink("https://wiki.example.com/confluence/spaces/DES/pages/1/Brand+tokens", [WIKI]),
-    ).toMatchObject({ vendor: "atlassian", label: "Brand tokens" });
+    ).toMatchObject({ vendor: "atlassian", label: "DES page 1" });
   });
 
   test("Slack and Atlassian Cloud are theirs on their own domains", () => {
@@ -196,16 +196,16 @@ describe("what an address is", () => {
     expect(describeLink("https://gophrase.slack.com/archives/C07LQ2V4K", [])?.label).toBe(
       "Channel in gophrase",
     );
-    // A TENANT ANYBODY CAN REGISTER says its host after the label, so a page
-    // titled "Sign in to GitHub" is read as the site it is on; a site the
-    // company configured is its own and its labels stand alone.
+    // A TENANT ANYBODY CAN REGISTER says its host after the label; a site the
+    // company configured is its own and its labels stand alone. A PAGE IS
+    // LABELLED BY ITS SPACE AND ID, never by the title its address carries.
     expect(describeLink("https://acme.atlassian.net/browse/GP-1", [])).toMatchObject({
       label: "GP-1 (acme.atlassian.net)",
       code: false,
     });
     expect(
       describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub", [])?.label,
-    ).toBe("Sign in to GitHub (acme.atlassian.net)");
+    ).toBe("D page 2 (acme.atlassian.net)");
     const own: LinkHost[] = [
       { kind: "jira", url: "https://acme.atlassian.net" },
       { kind: "confluence", url: "https://acme.atlassian.net/wiki" },
@@ -213,7 +213,34 @@ describe("what an address is", () => {
     expect(describeLink("https://acme.atlassian.net/browse/GP-1", own)?.label).toBe("GP-1");
     expect(
       describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Brand+tokens", own)?.label,
-    ).toBe("Brand tokens");
+    ).toBe("D page 2");
+  });
+
+  // A LABEL IS ONLY WHAT AN ADDRESS IS REBUILT FROM: a Confluence page's
+  // title and a path segment no app allows are the writer's words, and a
+  // label made of them says whatever the writer chose beside a vendor's mark.
+  //
+  // Mutation: label a page by its title, or a channel by any segment, and
+  // these show the writer's words.
+  test("no label carries words the rebuilt address drops", () => {
+    const own: LinkHost[] = [
+      { kind: "confluence", url: "https://acme.atlassian.net/wiki" },
+      MATTERMOST,
+    ];
+    const page = describeLink(
+      "https://acme.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub",
+      own,
+    );
+    expect(page?.label).toBe("D page 2");
+    expect(page?.label).not.toContain("GitHub");
+    const channel = describeLink("https://chat.example.com/team/channels/Sign%20in%20to%20GitHub", [
+      MATTERMOST,
+    ]);
+    expect(channel?.label).not.toContain("Sign in");
+    expect(channel?.canonical).toBeNull();
+    const post = describeLink("https://chat.example.com/Sign%20in/pl/abc123", [MATTERMOST]);
+    expect(post?.label).not.toContain("Sign in");
+    expect(post?.canonical).toBeNull();
   });
 
   // A CONFLUENCE PAGE IS REBUILT AS ITS SPACE AND ID ALONE: a segment before

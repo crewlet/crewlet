@@ -640,9 +640,25 @@ function describeSlack(url: URL): LinkDescription {
   return hostAndPath("slack", "Slack", url);
 }
 
+/** A Mattermost team's, channel's or post's name: letters, digits, `_` and `-`. */
+const MATTERMOST_NAME = /^[A-Za-z0-9_-]+$/u;
+
+/**
+ * A Mattermost address: a channel by its name, a post by its team.
+ *
+ * ITS LABEL IS ONLY WHAT IT IS REBUILT FROM: a team and a channel are names
+ * Mattermost itself allows, and a segment that is anything else (spaces, a
+ * sentence a writer decoded into the path) labels nothing, so the address
+ * shows as its host and path.
+ */
 function describeMattermost({ parts, own }: Under, url: URL): LinkDescription {
   const [team, what, name] = parts;
-  if (team && (what === "channels" || what === "pl") && name) {
+  const named =
+    team !== undefined &&
+    name !== undefined &&
+    MATTERMOST_NAME.test(team) &&
+    MATTERMOST_NAME.test(name);
+  if (named && (what === "channels" || what === "pl")) {
     return {
       vendor: "mattermost",
       label: what === "channels" ? `~${name}` : `Post in ${team}`,
@@ -683,33 +699,41 @@ function describeJira({ parts, own }: Under, url: URL): LinkDescription | null {
 }
 
 /**
- * A Confluence page's address on the company's own site, rebuilt as
- * `spaces/<KEY>/pages/<id>` (after Cloud's `wiki`, where the site's base
- * stops above it), or null.
+ * A Confluence page's parts, as its address is rebuilt from them:
+ * `spaces/<KEY>/pages/<id>`, after Cloud's `wiki` where the site's base stops
+ * above it (`lead`), or null for any other shape.
  *
  * NOTHING ELSE OF THE WRITTEN PATH: the title after the id is the writer's
  * words, and so is any segment before `spaces`, which a page never needs and
  * which could carry anything a writer chose to the company's own host.
  */
-function confluencePage(parts: readonly string[], own: LinkHost | null): string | null {
+function confluencePage(
+  parts: readonly string[],
+): { lead: string[]; key: string; id: string } | null {
   const from = parts[0] === "wiki" ? 1 : 0;
   const [spaces, key, pages, id] = parts.slice(from);
   if (spaces !== "spaces" || pages !== "pages" || !key || !id) return null;
   if (!/^~?[A-Za-z0-9]+$/u.test(key) || !/^\d+$/u.test(id)) return null;
-  return rebuilt(own?.url ?? null, [...parts.slice(0, from), "spaces", key, "pages", id]);
+  return { lead: parts.slice(0, from), key, id };
 }
 
+/**
+ * A Confluence address: a page by its space and id.
+ *
+ * NEVER BY ITS TITLE: the title in a page's address is the writer's words,
+ * which the rebuilt address drops, and a label saying "Sign in to GitHub"
+ * beside the Atlassian mark would say whatever its writer chose. The label
+ * is what the address is rebuilt from, `DES page 123`.
+ */
 function describeConfluence({ parts, own }: Under, url: URL): LinkDescription | null {
-  const at = parts.indexOf("pages");
-  const slug = at < 0 ? undefined : parts[at + 2];
-  if (slug) {
-    const title = slug.replace(/\+/g, " ");
+  const page = confluencePage(parts);
+  if (page !== null) {
     return {
       vendor: "atlassian",
-      label: onTenant(title, own === null ? url.host : null),
+      label: onTenant(`${page.key} page ${page.id}`, own === null ? url.host : null),
       code: false,
       kind: "Confluence",
-      canonical: confluencePage(parts, own),
+      canonical: rebuilt(own?.url ?? null, [...page.lead, "spaces", page.key, "pages", page.id]),
       place: null,
     };
   }
