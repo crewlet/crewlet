@@ -2209,16 +2209,12 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 			// fetches is one its copy does not hold — which is definite: the
 			// next plan stops below it.
 		default:
-			// A step of the swap failing (logged code_cache_swap_failed by
-			// it) — this node's disk failing a write, or the canary reading
-			// nothing of the chain (no read slot within SlotWait, its
-			// deadline), which is no verdict: every layer it was to place
-			// failed, and is tried again behind the wait.
+			// A step of the swap failing — this node's disk failing a write,
+			// or the canary reading nothing of the chain (no read slot within
+			// SlotWait, its deadline), which is no verdict — logged
+			// code_cache_swap_failed by it, and every layer it was to place
+			// counted failed there: tried again behind the wait.
 			swapFailed = true
-			for _, st := range fetched {
-				c.observeInstall(layerFailed, time.Since(st.began))
-			}
-			c.countLayers(layerFailed, len(fetched))
 		}
 	}
 

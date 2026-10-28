@@ -249,6 +249,18 @@ func (c *Cache) swapOnce(ctx context.Context, e *entry, inc *incarnation, snap s
 	if c.metrics != nil {
 		c.metrics.Add(metrics.CodeCacheSwaps, 1, metrics.Attrs{"graph": swapFailed})
 	}
+	// EVERY LAYER THE SWAP WAS TO PLACE FAILED WITH IT, a try that may pass —
+	// a full round's left to the installer, which the round's end kicks, and
+	// the installer's tried again behind its wait — counted once a try, as a
+	// fetch that failed is, whoever's the placement was. A canary's verdict is
+	// no such try: its refusal counts it (swapLeaving).
+	var bad *canaryFailed
+	if s.layers != nil && !errors.As(err, &bad) {
+		for _, st := range s.layers.fetched {
+			c.observeInstall(layerFailed, time.Since(st.began))
+		}
+		c.countLayers(layerFailed, len(s.layers.fetched))
+	}
 	if errors.Is(err, fs.ErrNotExist) && (s.step == stepPacks || s.step == stepRoot) {
 		// A file the swap links is gone from the copy's own directory —
 		// damage no retry ends, since every swap of the copy links it

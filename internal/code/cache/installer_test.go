@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -126,6 +127,77 @@ func TestAFailedLayerInstallIsCounted(t *testing.T) {
 	if got := len(w.logs.lines(t, "code_layer_install_failed")); got != 2 {
 		t.Errorf("code_layer_install_failed logged %d times, want once a failed try", got)
 	}
+}
+
+// THE LAYERS A FAILED SWAP WAS TO PLACE ARE COUNTED: a placement on a copy a
+// reader may hold is a swap's layer step, and a swap that fails at a step — a
+// write this node's disk failed, here at the rename's fault point — places
+// none of the layers it was to: a try that may pass, the installer's to try
+// again, counted crewlet.code.cache.layers{outcome=failed} once whoever's the
+// placement was. "a full round's": a retirement sweep's full round, whose swap
+// was to place the chain, answers from the copy as it was and leaves the chain
+// to the installer, which places it. "the installer's": counted once, never
+// twice.
+//
+// Mutations, each seen red: count only the installer's (the swap's count
+// dropped, installRepo's back) — "a full round's" counts nothing; count both —
+// "the installer's" counts two.
+func TestTheLayersAFailedSwapWasToPlaceAreCounted(t *testing.T) {
+	t.Parallel()
+	// open is a copy synced cold, its chain published since and not read
+	// yet, and the fault script its cache runs.
+	open := func(t *testing.T) (*syncWorld, *cache.Cache, *codefault.Script, string, []code.LayerRef) {
+		t.Helper()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		p := w.pushN(t, repo, 2)
+		faults := &codefault.Script{}
+		c := w.open(t, newClock().on, func(o *cache.Options) { o.Faults = faults })
+		w.sync(t, c, repo).Release()
+		chain := w.buildChain(t, p)
+		w.log.publish(repo, chain, nil)
+		return w, c, faults, repo, chain
+	}
+	failed := func(t *testing.T, w *syncWorld, c *cache.Cache, repo string, chain []code.LayerRef) {
+		t.Helper()
+		if got := w.layerCount("failed"); got != uint64(len(chain)) {
+			t.Errorf("crewlet.code.cache.layers{outcome=failed} = %d, want %d: each layer the swap was to place, "+
+				"once", got, len(chain))
+		}
+		if lines := w.logs.lines(t, "code_cache_swap_failed"); len(lines) != 1 || lines[0]["step"] != "rename" {
+			t.Errorf("code_cache_swap_failed = %v, want one line at the rename's step", lines)
+		}
+		if got := cache.Installed(c, repo); len(got) != 0 {
+			t.Errorf("the copy holds %v after the swap that was to place it failed", layerIDs(got))
+		}
+	}
+
+	t.Run("a full round's", func(t *testing.T) {
+		t.Parallel()
+		w, c, faults, repo, chain := open(t)
+		faults.Arm(codefault.SyncSwapBeforeRename, codefault.Action{Once: true, Err: errKilled})
+		w.log.write(repo, nil, nil)
+		w.log.sweepRetired(repo, w.log.head())
+		s := w.sync(t, c, repo)
+		if s.Kind != cache.SyncFull {
+			t.Fatalf("the round below the sweep was %s, want a full one", s.Kind)
+		}
+		s.Release()
+		failed(t, w, c, repo, chain)
+		cache.InstallPass(c)
+		if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(chain)) {
+			t.Errorf("the installer's pass after the round left the copy holding %v, want %v", got,
+				layerIDs(chain))
+		}
+	})
+	t.Run("the installer's", func(t *testing.T) {
+		t.Parallel()
+		w, c, faults, repo, chain := open(t)
+		w.sync(t, c, repo).Release()
+		faults.Arm(codefault.SyncSwapBeforeRename, codefault.Action{Once: true, Err: errKilled})
+		cache.InstallPass(c)
+		failed(t, w, c, repo, chain)
+	})
 }
 
 // refuseParts makes the world's store refuse every part of chain with an
