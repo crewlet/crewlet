@@ -509,7 +509,7 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("declare web: %v", err)
 	}
-	if err := web.Settings.Validate(); err != nil {
+	if err := web.Validate(); err != nil {
 		t.Errorf("web's declaration is not one the domain records: %v", err)
 	}
 	reordered := c.Config.Code.Repos[0]

@@ -672,7 +672,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Company:       company,
 		Run:           req.Run,
 		State:         state,
-		Turn:          resumedTurn(req.Run, seat, company.Org),
+		Turn:          resumedTurn(req.Run, seat, company.Org, r.engine.rowHolds(req.Run)),
 		Answer:        req.Answer,
 		Success:       req.Success,
 		Trigger:       req.Trigger,
@@ -698,11 +698,18 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 // resume that comes longer after this start than the operation ledger
 // remembers mints its writes at the attempt, or at the instant an earlier
 // attempt or an earlier half of the turn recorded, never here.
-func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization) *turnctx.Turn {
+//
+// AND THE SAME HOLDS, read off the row with the row's writer attached
+// ([Engine.rowHolds]): what the turn named before it parked is still what it
+// may come back to, and a hold it takes from here on is on the row before the
+// request it was taken for.
+func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization,
+	holds *turnctx.Holds) *turnctx.Turn {
 	return &turnctx.Turn{
 		RunID: run.TurnID, WorkKey: run.WorkKey, WorkSince: run.WorkSince,
 		Seat: seat, Org: organization,
 		Depth: run.DelegationDepth, Chain: run.DelegationChain,
+		Holds: holds,
 	}
 }
 
@@ -1015,6 +1022,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// path, with the defer as the backstop.
 	closeSteer := e.openSteer(in.Run.TurnID, in.Turn.Handle(), box, r)
 	defer closeSteer(ctx)
+	// AND WHAT IT HOLDS, answered for by this node while the segment runs,
+	// as on the dispatch path — the row carries them too. See codeholds.go.
+	defer e.turnHolds.running(tel.holds)()
 	// NO WALL-CLOCK CAP ON A RESUME. The cap bounds the turn a fire started;
 	// a detached sandbox run can legitimately outlive it, and the resumed
 	// half is finishing work the box already did rather than starting more.
@@ -1424,7 +1434,12 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, err
 	}
 
-	return rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
+	// THE TURN'S CODE HOLDS GO ON THE ROW THE LAUNCH OPENS, and the set is
+	// SEALED from the moment it is read until that row exists, so no hold is
+	// taken in between that neither the set this read nor the row would carry
+	// ([launchHolds]).
+	holds := launchHolds(t.Holding(), pending, t.RunID)
+	res, err := rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:  sandboxTurnRef(ctx, t, seat.Name),
 		Brief: brief,
 		Wider: t.Task,
@@ -1438,7 +1453,60 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		Model:      model,
 		MCPServers: servers,
 		ReuseBox:   reuse,
+		CodeHolds:  holds.ids,
+		Opened:     holds.opened,
 	})
+	holds.settle(err)
+	return res, err
+}
+
+// launchHold is one launch's hand-off of its turn's code holds to the run row
+// it opens.
+//
+// THE SET IS SEALED FROM ITS READ TO THE ROW: the launch reads the turn's set
+// ([turnctx.Holds.Seal]) and hands it to the row it opens
+// ([sandbox.LaunchRequest.CodeHolds]); a hold another call of the turn takes
+// in between waits, and the row's writer is attached the moment the row
+// exists ([sandbox.LaunchRequest.Opened], called after the store opened the
+// job and before any box exists) — from then on every hold is on the row
+// before its request. A launch that fails before the row existed unseals the
+// set, and one that fails after it detaches the writer: the coordinator
+// abandons that row, and the turn runs on holding in memory.
+type launchHold struct {
+	set     *turnctx.Holds
+	pending sandbox.PendingStore
+	turnID  string
+	// ids is the set as the launch read it, which the row is opened with.
+	ids []string
+	// rowOpened reports the row's writer attached. Set by the launch's
+	// Opened, which the coordinator calls inline on the launching
+	// goroutine, before the launch returns.
+	rowOpened bool
+}
+
+// launchHolds seals set for a launch of turnID's run on pending.
+func launchHolds(set *turnctx.Holds, pending sandbox.PendingStore, turnID string) *launchHold {
+	return &launchHold{set: set, pending: pending, turnID: turnID, ids: set.Seal()}
+}
+
+// opened attaches the row's writer, ending the seal: the launch's
+// [sandbox.LaunchRequest.Opened].
+func (h *launchHold) opened(string) {
+	h.set.Attach(holdWriter(h.pending, h.turnID))
+	h.rowOpened = true
+}
+
+// settle ends the seal of a launch that failed: unsealed where no row
+// existed, detached where one was opened and is being abandoned. A launch that
+// succeeded leaves the writer attached.
+func (h *launchHold) settle(err error) {
+	switch {
+	case err == nil:
+	case h.rowOpened:
+		h.set.Detach()
+	default:
+		h.set.Unseal()
+	}
 }
 
 // launchFence is the seat lease this node writes on a seat's behalf under —

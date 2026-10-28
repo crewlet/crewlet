@@ -128,6 +128,13 @@ type turnTelemetry struct {
 	// back at completion for the one rule dispatch cannot decide.
 	written *turnctx.Written
 
+	// holds is what this turn has named that the code host's expiry could
+	// take from under it, shared with every tool call and delegate worker
+	// through the turn context ([turnctx.Turn.Holds]): a fresh set for a
+	// dispatched turn, the row's for a resumed one with the row's writer
+	// attached ([Engine.rowHolds]) — the one turn's, across every segment.
+	holds *turnctx.Holds
+
 	// resumed marks a segment that re-entered a parked run, and launchID
 	// the coding run it collected — together they name the segment its
 	// charge is recorded under (see turnspend.go). jobInput and jobOutput
@@ -268,6 +275,10 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 	// and a fresh set for what the turn is about to write.
 	t.workItem, t.workItemBasis = workItemOf(req)
 	t.written = &turnctx.Written{}
+	// AND A FRESH HOLD SET, with no row behind it until a launch opens one:
+	// held in this process's memory while the turn runs, which this node
+	// answers the code host's expiry for ([Engine.codeHolds]).
+	t.holds = turnctx.NewHolds(nil)
 	t.auxSpent = auxspend.NewTally()
 	t.boundary = provenance.NewBoundary()
 	rebased, err := rebaseFor(ctx, e.rebases(), builtin.Actor{
@@ -371,6 +382,9 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			WorkItem:      t.workItem,
 			WorkItemBasis: t.workItemBasis,
 			Written:       t.written,
+			// AND WHAT IT HOLDS FROM THE CODE HOST'S EXPIRY, which every
+			// tool call takes its hold in before its request.
+			Holds: t.holds,
 			// AND THE SEGMENT'S AUXILIARY TALLY, which every in-turn
 			// auxiliary call adds to through the turn's attribution, and
 			// the meter every one of them is charged through and asks.
@@ -888,6 +902,10 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	// judges the whole turn rather than its second half.
 	t.workItem, t.workItemBasis = resumedWorkItem(in.Run)
 	t.written = turnctx.WrittenFrom(in.State.Written, in.State.WrittenMany)
+	// THE HOLDS THE ROW CARRIES, OFF THE RESUMED TURN for the reason its
+	// unit of work is (resumedTurn read the row into it, with the row's
+	// writer attached): the same turn, holding what it named before it parked.
+	t.holds = in.Turn.Holds
 	// A FRESH TALLY, never the parked one's: what the segments before this
 	// one spent on auxiliary calls is in what they charged or carried.
 	t.auxSpent = auxspend.NewTally()

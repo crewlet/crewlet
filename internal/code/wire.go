@@ -35,7 +35,10 @@ type RepoRef struct {
 	Name      string     `json:"name"`
 	Status    RepoStatus `json:"status"`
 	ManagedBy ManagedBy  `json:"managed_by"`
-	Owner     Owner      `json:"owner"`
+	// Kind is what the repository is for: a project, or a seat's scratch
+	// repository ([RepoKind]).
+	Kind  RepoKind `json:"kind"`
+	Owner Owner    `json:"owner"`
 	// Visibility is who besides persons reads it — with Owner, all a grant
 	// reads of the repository ([GrantOf]).
 	Visibility    Visibility   `json:"visibility"`
@@ -43,9 +46,16 @@ type RepoRef struct {
 	Description   string       `json:"description,omitempty"`
 	Protections   []Protection `json:"protections,omitempty"`
 	DeletedAt     time.Time    `json:"deleted_at,omitzero"`
-	Refs          int64        `json:"refs"`
-	LivePacks     int64        `json:"live_packs"`
-	LiveBytes     int64        `json:"live_bytes"`
+	// LastActivityAt is the broker's instant of the repository's last push,
+	// rename, settings change or restore — its IDLE CLOCK, which a scratch
+	// repository expires by ([Retention]) and a turn's hold decides whether to
+	// record itself by ([HoldRecordAfter]). Never a read, and never a hold. A
+	// session read may be behind and show an older one, which can only make a
+	// hold record itself where it did not need to.
+	LastActivityAt time.Time `json:"last_activity_at,omitzero"`
+	Refs           int64     `json:"refs"`
+	LivePacks      int64     `json:"live_packs"`
+	LiveBytes      int64     `json:"live_bytes"`
 	// LiveObjects is how many objects the live packs hold, kept on the row
 	// beside LiveBytes: the most a fetch request to the repository can
 	// legitimately name, which the code host bounds a request it spools by.
@@ -56,6 +66,14 @@ type RepoRef struct {
 	// repository's has moved since. Omitted at zero, a repository never
 	// expunged.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
+	// Redirect is the repository's current name where the name it was asked
+	// by is an OLD one, still redirecting to it until RedirectUntil after a
+	// rename ([RedirectWindow]) — "" where it was asked by its own. The
+	// redirect lasts exactly as long as the old name's row: the release that
+	// removes it is what ends it, so every node at one position answers one
+	// way, which a comparison with each node's clock would not.
+	Redirect      string    `json:"redirect,omitempty"`
+	RedirectUntil time.Time `json:"redirect_until,omitzero"`
 	// Position is the checkpoint the rows were read at — read in the same
 	// transaction as them.
 	Position statelog.Position `json:"position"`

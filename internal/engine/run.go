@@ -826,6 +826,12 @@ type Engine struct {
 	memoryReads     *memread.Reader
 	stopMemoryServe queue.Unsubscribe
 
+	// turnHolds is what this process's running turns hold from the code
+	// host's expiry, and stopCodeHoldsServe withdraws the node as the
+	// answerer for them. See codeholds.go.
+	turnHolds          runningTurns
+	stopCodeHoldsServe queue.Unsubscribe
+
 	// sandboxTails answers a running coding run's live output from the node
 	// that owns it, sandboxFeeds is this node's readings of the runs it owns,
 	// and stopTailServe withdraws this node as one of its answerers. See
@@ -1809,6 +1815,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armMemoryReads(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve seats' memory: %w", err)
 	}
+	// AND WHAT ITS RUNNING TURNS HOLD FROM THE CODE HOST'S EXPIRY, for the
+	// same reason and at the same point: the expiry asks every seat holder,
+	// and this node must answer before its seat host claims its first seat
+	// — see codeholds.go.
+	if err = e.armCodeHolds(ctx); err != nil {
+		return nil, err
+	}
 	// AND THE LIVE OUTPUT OF THE CODING RUNS IT OWNS, for the same reason
 	// and at the same point — see sandboxtail.go.
 	if err = e.armSandboxTails(ctx); err != nil {
@@ -2624,6 +2637,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	if e.node != nil {
 		e.node.Stop(ctx)
 	}
+	// AFTER THE SEATS ARE RELEASED, while the broker is still there: until a
+	// seat lease is given back, the code host's expiry reads this node among
+	// the seat holders, and a holder that stops answering first costs a pass
+	// its expiry. See codeholds.go.
+	e.stopCodeHolds(ctx)
 	// AFTER the seats are released, so a per-role child is normally
 	// already gone with its seat. This is the backstop for the ones that
 	// were not: a stdio server is a process TREE holding a seat's
@@ -3052,6 +3070,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// twice records nothing twice. See steer.go.
 	closeSteer := e.openSteer(req.RunID, req.Handle, box, r)
 	defer closeSteer(ctx)
+	// AND WHAT IT HOLDS FROM THE CODE HOST'S EXPIRY, answered for by this
+	// node while the turn runs and forgotten as it returns — by then a run
+	// it launched carries its holds on its row. See codeholds.go.
+	defer e.turnHolds.running(tel.holds)()
 
 	// BEFORE THE EXECUTOR, on its own budget. A seat's first ever turn used
 	// to onboard inside the phase that decides what to do, and could spend

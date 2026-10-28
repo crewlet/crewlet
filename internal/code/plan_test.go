@@ -301,6 +301,7 @@ const (
 	layersKey     = "sqlite_autoindex_code_layers_1"
 	layerPartsKey = "sqlite_autoindex_code_layer_parts_1"
 	seatDaysKey   = "sqlite_autoindex_code_seat_days_1"
+	repoKindsKey  = "sqlite_autoindex_code_repo_kinds_1"
 )
 
 // registeredStatements is every statement this package spells against its
@@ -330,13 +331,13 @@ func registeredStatements() map[string]statement {
 		"marker":              {markerSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"purged":              {purgedSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"repo version":        {repoVersionSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "main", "", "active", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"clear protections":   {clearProtectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "main", "", "active", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
-		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"tombstones held":     {tombstonesHeldSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"expired pushes":      {expiredPushesSQL, []any{"repo-1", HorizonDeletesPerRecord}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)"}},
 		"delete pushes":       {deletePushesSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
@@ -401,6 +402,29 @@ func registeredStatements() map[string]statement {
 		"forget seat days": {forgetSeatDaysSQL, []any{`[["seat-1","2031-04-03"],["seat-2","2031-04-03"]]`},
 			[]string{"SCAN json_each AS j", seatDaysKey + " (seat=? AND day<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"pushes named": {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
+		// THE LIFECYCLE'S DECIDES AND APPLIES, each one row by its key — a
+		// name's claim with its redirect, a repository's row, the count a
+		// kind's repositories keep — but a seat's scratch count, a seek on
+		// its owner of at most code.scratch.max_per_seat entries, never a
+		// count over every repository.
+		"claim redirect":   {claimRedirectSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
+		"scratch count":    {scratchCountSQL, []any{"dev"}, []string{"COVERING INDEX code_repos_scratch_idx (owner=?)"}},
+		"kind count":       {kindCountSQL, []any{"project"}, []string{repoKindsKey + " (kind=?)"}},
+		"uncount a kind":   {uncountKindSQL, []any{"project"}, []string{repoKindsKey + " (kind=?)"}},
+		"repo kind":        {repoKindSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"rename row":       {renameRowSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"keep name":        {keepNameSQL, []any{"token", "repo-1"}, []string{nameKey + " (token=?)"}},
+		"redirect name":    {redirectNameSQL, []any{1, "token", "repo-1"}, []string{nameKey + " (token=?)"}},
+		"rename repo":      {renameRepoSQL, []any{"web", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"release redirect": {releaseRedirectSQL, []any{"token", "repo-1", 1}, []string{nameKey + " (token=?)"}},
+		"hold":             {holdSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		// THE RETENTION'S TWO NEW LISTINGS, keyset pages over their partial
+		// indexes in the index's order: the redirects whose window ended,
+		// and the active scratch repositories idle past the cutoff.
+		"redirects due": {redirectsDueSQL, []any{100, -1, -1, "", retentionPage},
+			[]string{"code_names_redirect_idx (redirect_until>=? AND redirect_until<=?)"}},
+		"idle scratch": {idleScratchSQL, []any{100, -1, -1, "", retentionPage},
+			[]string{"code_repos_idle_idx (last_activity_at>=? AND last_activity_at<=?)"}},
 		"gaps holding": {gapsHoldingSQL, []any{"repo-1", `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`},
 			[]string{"SCAN json_each AS j", liveRefsKey + " (repo_id=? AND ref>? AND ref<?)"}},
 		"first live in": {firstLiveInSQL, []any{"repo-1", `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`},

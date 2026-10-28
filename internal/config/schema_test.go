@@ -243,9 +243,10 @@ func TestNodeIDPatternIsOneRule(t *testing.T) {
 
 // THE SCHEMA'S REPOSITORY NAME IS THE GRAMMAR'S. An editor holds code.repos'
 // names to the pattern the schema states, and the validator — like the domain
-// that records them — to gitref.ValidRepoName; the two agree on every name a
-// table can reach for, or an editor underlines a name the engine runs or
-// passes one every node refuses.
+// that records them — to gitref.ValidProjectName, since a declared repository
+// is a project and a name with a dot a seat's own scratch repository; the two
+// agree on every name a table can reach for, or an editor underlines a name
+// the engine runs or passes one every node refuses.
 func TestTheRepoNamePatternIsGitrefs(t *testing.T) {
 	t.Parallel()
 	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
@@ -260,10 +261,10 @@ func TestTheRepoNamePatternIsGitrefs(t *testing.T) {
 		"web", "a", "0", "9lives", "nimbus-web", "a-b-c", "a--b",
 		strings.Repeat("a", 63), strings.Repeat("a", 64), "a" + strings.Repeat("-", 61) + "b",
 		"", "-web", "web-", "Web", "wEb", "web.app", "web.git", "web_app", "web app",
-		"wéb", "web/app", "..", "w@b",
+		"wéb", "web/app", "..", "w@b", "alice.web",
 	} {
-		if got, want := pattern.MatchString(name), gitref.ValidRepoName(name); got != want {
-			t.Errorf("the schema's pattern says %v of %q, gitref.ValidRepoName %v", got, name, want)
+		if got, want := pattern.MatchString(name), gitref.ValidProjectName(name); got != want {
+			t.Errorf("the schema's pattern says %v of %q, gitref.ValidProjectName %v", got, name, want)
 		}
 	}
 }

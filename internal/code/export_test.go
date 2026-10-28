@@ -50,6 +50,24 @@ func RetiredDuePages(ctx context.Context, r *Reader, cutoff time.Time, limit int
 	}
 }
 
+// IdleScratchView is the first page of the scratch expiry's listing over r at
+// cutoff, as a pass reads it: the ids it lists, and the view — the cutoff, the
+// position the page was read at and its stream's identity — the pass decides
+// each of them against ([Store.ExpireScratch]).
+func IdleScratchView(ctx context.Context, r *Reader, cutoff time.Time, limit int) ([]string, ScratchExpiry,
+	error) {
+
+	page, err := r.idleScratch(ctx, idleQuery{cutoff: cutoff, limit: limit})
+	if err != nil {
+		return nil, ScratchExpiry{}, err
+	}
+	ids := make([]string, 0, len(page.repos))
+	for _, repo := range page.repos {
+		ids = append(ids, repo.id)
+	}
+	return ids, ScratchExpiry{Cutoff: cutoff, Through: page.through, KeyedTo: page.keyedTo}, nil
+}
+
 // SetCommitterIdle has c's repository goroutines exit after d with nothing
 // queued, rather than CommitterIdle — set before c's first proposal.
 func SetCommitterIdle(c *Committer, d time.Duration) { c.idle = d }

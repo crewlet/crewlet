@@ -181,6 +181,25 @@ const (
 	// string(OpExpungeCommit)}, with the same companions. It is no gate.
 	OpExpungeCommit OpKind = "expunge_commit"
 
+	// OpRename claims a new name for a tool-managed repository on that name's
+	// subject, leaving the old one redirecting to it ([Rename]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION: see [Rename], which names the
+	// versionedFields row it takes. It is no gate.
+	OpRename OpKind = "rename"
+
+	// OpReleaseName frees a renamed repository's old name once its redirect
+	// has ended, on that name's subject ([ReleaseName]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION: see [ReleaseName]. It is no gate.
+	OpReleaseName OpKind = "release_name"
+
+	// OpHold is a live turn's hold on a scratch repository, on the
+	// repository's own subject, ordered against its expiry ([Hold]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION: see [Hold]. It is no gate.
+	OpHold OpKind = "hold"
+
 	// OpChangeOpen opens a change (web!42) on a repository: its row, its
 	// owner as its first author and its first revision, the source branch's
 	// head — numbered by the apply from the repository's next_change, which
@@ -251,11 +270,11 @@ const (
 	OpChangeReopen OpKind = "change_reopen"
 )
 
-// OpKinds are the twenty-three, in the order they are documented.
+// OpKinds are the twenty-six, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
-	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit,
+	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen,
 }
 
@@ -275,10 +294,11 @@ type ActorKind string
 
 const (
 	// ActorOperator is a person or a credential acting on the company's
-	// behalf — an eviction or a readmission they ran, a reanchor of this log
-	// — recorded under the name iam.ActorFor gives them (a person's human
-	// seat, an unbound credential's login) with the credential they acted
-	// through beside it, as every other log's records name them.
+	// behalf — an eviction or a readmission they ran, a reanchor of this log,
+	// a person's lifecycle request through a tool — recorded under the name
+	// iam.ActorFor gives them (a person's human seat, an unbound credential's
+	// login) with the credential they acted through beside it, as every other
+	// log's records name them.
 	ActorOperator ActorKind = "operator"
 
 	// ActorConfig is the reconcile of code.repos at a configuration
@@ -294,19 +314,25 @@ const (
 	// it.
 	ActorSystem ActorKind = "system"
 
-	// ActorAgent is a seat of the chart, by its handle: a reanchor run
-	// through a seat's credential.
+	// ActorAgent is a seat of the chart, by its handle: a repository's
+	// lifecycle request a seat made through its tools — a create, a rename, a
+	// settings change, an archive or unarchive, a delete, a restore, a
+	// protection, a live turn's hold ([Store.Lifecycle]) — and a reanchor run
+	// through a seat's credential. Recorded as the repository's creator where
+	// it creates one (code_repos.created_by_kind).
 	//
 	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
 	// domain has run without this kind — none of the domain is on main, so
 	// no image and no release holds it — and while that is so, every build
 	// that meets a record a seat decided reads it. Once a build without it
 	// has run, a record a seat decided takes, for each op such a record can
-	// carry, {Name: "MutationRecord.ActorKind agent", Since: 2, Op: <the
-	// op>, Path: []string{"actor_kind"}, Equals: string(ActorAgent)} in
-	// versionedFields, with RecordVersion at 2, its line under "What each
-	// version added" and a Carrying record in the statelogtest candidate.
-	// A reanchor's generation takes none: every build reads it for ever
+	// carry (create, rename, settings, delete, restore, hold), {Name:
+	// "MutationRecord.ActorKind agent", Since: 2, Op: <the op>, Path:
+	// []string{"actor_kind"}, Equals: string(ActorAgent)} in versionedFields,
+	// with RecordVersion at 2, its line under "What each version added" and a
+	// Carrying record in the statelogtest candidate — such a build would
+	// record a seat's create as a repository nobody of any kind it knows
+	// made. A reanchor's generation takes none: every build reads it for ever
 	// ([RecordEnvelope.readByEveryBuild], so [Encode] would refuse it a
 	// versioned field), and an older build files its author from the
 	// payload's By alone, which names the seat as this build does.

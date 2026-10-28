@@ -41,6 +41,21 @@ const (
 	// nothing out for the asker, so a forged question gets an answer nobody
 	// needed and moves nothing.
 	CodeStatus = "crewlet.code.status"
+
+	// CodeHolds is where the code-retention pass asks which of a page of keys
+	// — a seat's scratch repositories by id — a RUNNING turn holds: every
+	// process holding a seat lease answers with its lease identity and the
+	// keys its own running turns hold (internal/agent/turnctx's Holds,
+	// internal/engine's codeholds.go), since a turn runs only under its
+	// seat's lease and its holds live in that process's memory until it has
+	// a run row. An expiry that does not hear from every seat holder expires
+	// nothing that page.
+	//
+	// EPHEMERAL, OUTSIDE THE LOG AND UNSIGNED, for CodeStatus's three
+	// reasons: an in-memory answer to a question asked again a pass later,
+	// published where the code log's stream would capture it, about the
+	// answerer itself.
+	CodeHolds = "crewlet.code.holds"
 )
 
 // The object kinds are NOT constants here, for the reason the tracker's are

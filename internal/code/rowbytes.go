@@ -353,6 +353,7 @@ func (r RepoRef) members() int {
 		field("name", stringBytes(r.Name), false) +
 		field("status", stringBytes(string(r.Status)), false) +
 		field("managed_by", stringBytes(string(r.ManagedBy)), false) +
+		field("kind", stringBytes(string(r.Kind)), false) +
 		field("owner", 2+field("kind", stringBytes(string(r.Owner.Kind)), true)+
 			field("ref", stringBytes(r.Owner.Ref), false), false) +
 		field("visibility", stringBytes(string(r.Visibility)), false) +
@@ -370,12 +371,21 @@ func (r RepoRef) members() int {
 	if !r.DeletedAt.IsZero() {
 		n += field("deleted_at", timeBytes(r.DeletedAt), false)
 	}
+	if !r.LastActivityAt.IsZero() {
+		n += field("last_activity_at", timeBytes(r.LastActivityAt), false)
+	}
 	n += field("refs", intBytes(r.Refs), false) +
 		field("live_packs", intBytes(r.LivePacks), false) +
 		field("live_bytes", intBytes(r.LiveBytes), false) +
 		field("live_objects", intBytes(r.LiveObjects), false)
 	if r.DropEpoch != 0 {
 		n += field("drop_epoch", intBytes(r.DropEpoch), false)
+	}
+	if r.Redirect != "" {
+		n += field("redirect", stringBytes(r.Redirect), false)
+	}
+	if !r.RedirectUntil.IsZero() {
+		n += field("redirect_until", timeBytes(r.RedirectUntil), false)
 	}
 	return n + field("position", positionBytes(r.Position), false)
 }

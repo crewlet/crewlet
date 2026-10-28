@@ -118,6 +118,7 @@ var sentinels = []sentinel{
 	{"code.ErrBadCursor", code.ErrBadCursor},
 	{"code.ErrBadLayer", code.ErrBadLayer},
 	{"code.ErrBadLevel", code.ErrBadLevel},
+	{"code.ErrConfigManaged", code.ErrConfigManaged},
 	{"code.ErrInvalid", code.ErrInvalid},
 	{"code.ErrInvalidLayer", code.ErrInvalidLayer},
 	{"code.ErrInvalidProposal", code.ErrInvalidProposal},

@@ -306,7 +306,7 @@ func TestALandingRefusesARepositoryThatTakesNoPush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("land a push to an archived repository: %v", err)
 	}
-	want := code.ArchivedDetail(codetest.RepoName)
+	want := code.ArchivedDetail(codetest.RepoName, code.ManagedConfig)
 	for _, cmd := range got.Commands {
 		if cmd.Result != code.ResultNG || cmd.Reason != code.RefusalRepoArchived || cmd.Detail != want {
 			t.Errorf("%s came to %s %s %q, want repo_archived %q", cmd.Ref, cmd.Result, cmd.Reason, cmd.Detail, want)

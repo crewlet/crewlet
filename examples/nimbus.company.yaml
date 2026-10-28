@@ -595,6 +595,9 @@ knowledge:
 # component, ``**`` any number); a ref no rule matches may be force-pushed
 # or deleted, so ``crewlet validate`` warns about a default branch left
 # unprotected.  ``direct_push: none`` freezes the refs it matches.
+# ``scratch`` is left unset: a seat's own repositories, ``<handle>.<slug>``,
+# which only its tools make, are at most 50 a seat (``max_per_seat``) and
+# deleted once idle for 7 days (``idle_days``) unless a live turn holds one.
 # See docs/concepts/code-host.md.
 code:
   native: true

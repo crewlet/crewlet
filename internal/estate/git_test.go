@@ -1331,17 +1331,20 @@ func (l *refusingLog) appends() int { return int(l.asked.Load()) }
 
 // EVERY OPERATION THAT JUDGES A GRANT IS DECLARED. The hard arm is a
 // declaration rather than a list kept beside the registry: every operation on
-// a domain's copy whose arguments carry a code.Principal named Asker declares
-// judgesGrant, so a read added later that a seat asks is held by the arm the
-// day it is declared — and none that names no asker does. A git operation
+// a domain's copy whose arguments carry the code.Principal it judges — a
+// read's Asker, a lifecycle request's Actor — declares judgesGrant, so a read
+// or a write added later that a seat asks is held by the arm the day it is
+// declared — and none that names no such principal does. A git operation
 // declares none: its git node judges the grant and answers a seat itself where
 // it is behind its configuration (code.UnreadyBehindConfig), which the walk
 // moves on from; declared, the git node would refuse persons' reads too.
-// And each declaration judges a SEAT and no other asker: a person's read
-// consults no chart, and an introduced page names nobody.
+// And each READ's declaration judges a SEAT and no other asker: a person's
+// read consults no chart, and an introduced page names nobody. A lifecycle
+// request judges the chart for EVERY actor, a person's create's owner
+// included, so its declaration holds of every request.
 //
-// Mutations: drop code.resolve_ref's declaration, or declare code.git_read —
-// each red.
+// Mutations: drop code.resolve_ref's or code.lifecycle's declaration, or
+// declare code.git_read — each red.
 func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 	t.Parallel()
 	principal := reflect.TypeFor[code.Principal]()
@@ -1353,8 +1356,10 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		}
 		asker := false
 		if args.Kind() == reflect.Struct {
-			if field, ok := args.FieldByName("Asker"); ok && field.Type == principal {
-				asker = true
+			for _, judged := range []string{"Asker", "Actor"} {
+				if field, ok := args.FieldByName(judged); ok && field.Type == principal {
+					asker = true
+				}
 			}
 		}
 		switch {
@@ -1386,6 +1391,8 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		// make; a person's consults no chart.
 		{opCodeChange.spec, code.ChangeProposal{Asker: seat}, true},
 		{opCodeChange.spec, code.ChangeProposal{Asker: person}, false},
+		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleHold, Actor: seat}, true},
+		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleCreate, Actor: person}, true},
 	} {
 		if tc.spec.judges == nil {
 			t.Errorf("%s declares no grant", tc.spec.name)

@@ -33,6 +33,15 @@ var (
 	// its configuration does not manage.
 	ErrNotConfigManaged = errors.New("code: the repository is not managed by configuration")
 
+	// ErrConfigManaged is the OTHER fact: a tool's lifecycle request reaching
+	// a repository its configuration manages (code.repos declares it), which
+	// takes no tool's write — its lifecycle refusal config_managed
+	// ([LifecycleConfigManaged]) in error form. Its own sentinel, never
+	// [ErrNotConfigManaged] read backwards: the reconcile's sentinel names the
+	// opposite case, and a caller reading one for the other would tell an
+	// operator to rename a declaration that is the reason for the refusal.
+	ErrConfigManaged = errors.New("code: a tool reaching a repository its configuration manages")
+
 	// ErrNoActivation is a configuration write that does not name the
 	// activation it came from.
 	ErrNoActivation = errors.New("code: a repository's settings must name the instant their configuration was activated")

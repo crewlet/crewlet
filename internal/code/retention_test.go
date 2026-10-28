@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -57,15 +58,21 @@ func (p *purged) got() []string {
 }
 
 // passOver is a retention pass at the harness's clock over a store and a
-// reader, handing every purged name to p.
+// reader, handing every purged name to p — under the default scratch policy,
+// with no live turn holding anything.
 func passOver(s *code.Store, r *code.Reader, p *purged) *code.Retention {
 	return &code.Retention{
 		Store: s, Reader: r,
 		Retention: func() time.Duration { return keep },
 		OnPurged:  p.add,
+		Policy:    func() code.LifecyclePolicy { return code.ScratchOf(config.Code{}) },
+		Holds:     holdsNone,
 		Now:       func() time.Time { return harnessAt },
 	}
 }
+
+// holdsNone is a fleet where no live turn holds anything.
+func holdsNone(context.Context, []string) (map[string]bool, error) { return map[string]bool{}, nil }
 
 // A PASS PURGES WHAT IS PAST RETENTION, AND ONLY THAT: a repository deleted
 // longer ago than the retention is purged step by step to its marker and
@@ -371,6 +378,10 @@ func TestAPassRefusesWhatItCannotWorkWithout(t *testing.T) {
 		{"a zero retention", func(r *code.Retention) {
 			r.Retention = func() time.Duration { return 0 }
 		}, "code.deleted_retention_days"},
+		{"no scratch policy", func(r *code.Retention) { r.Policy = nil }, "code.scratch"},
+		// NEVER AN EXPIRY THAT COULD NOT ASK: one would delete a scratch
+		// repository a parked run is waiting to come back to.
+		{"no holds", func(r *code.Retention) { r.Holds = nil }, "holds"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var p purged

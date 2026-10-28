@@ -258,7 +258,18 @@ func (p codePosition) String() string {
 type codeRepoView struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
-	Owner  struct {
+	// ManagedBy is who changes it — `config` for one code.repos declares,
+	// `tools` for one a tool made — and Kind what it is for: a `project`, or
+	// a seat's own `scratch` repository, which the code-retention duty deletes
+	// once it has sat idle since LastActivityAt.
+	ManagedBy      string    `json:"managed_by"`
+	Kind           string    `json:"kind"`
+	LastActivityAt time.Time `json:"last_activity_at"`
+	// Redirect is the repository's current name where it was asked for by an
+	// OLD one a rename left redirecting to it, until RedirectUntil.
+	Redirect      string    `json:"redirect"`
+	RedirectUntil time.Time `json:"redirect_until"`
+	Owner         struct {
 		Kind string `json:"kind"`
 		Ref  string `json:"ref"`
 	} `json:"owner"`
@@ -660,17 +671,27 @@ func pushLine(p codePushView) codePushLine {
 // renderCodeRepo prints one repository and its pushes.
 func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 	var b strings.Builder
-	switch r.Status {
-	case "deleted":
+	switch {
+	case r.Status == "deleted" && code.ManagedBy(r.ManagedBy) == code.ManagedTools:
+		// A TOOL MADE IT, and a configuration never adopts one: declaring
+		// its name would be refused, so the way back is the tools'.
+		fmt.Fprintf(&b, "%s — deleted on %s; a restore through the code tools brings it back until "+
+			"code.deleted_retention_days have passed\n", r.Name, codeTime(r.DeletedAt))
+	case r.Status == "deleted":
 		fmt.Fprintf(&b, "%s — deleted on %s; declaring it again in code.repos restores it until "+
 			"code.deleted_retention_days have passed\n", r.Name, codeTime(r.DeletedAt))
-	case "purging":
+	case r.Status == "purging":
 		fmt.Fprintf(&b, "%s — being purged since its deletion on %s: its refs and packs are being "+
 			"removed, and its name is free once they are\n", r.Name, codeTime(r.DeletedAt))
 	default:
 		fmt.Fprintf(&b, "%s — %s, owned by %s:%s, default branch %s\n", r.Name, r.Status, r.Owner.Kind,
 			r.Owner.Ref, r.DefaultBranch)
 	}
+	if r.Redirect != "" {
+		fmt.Fprintf(&b, "  renamed:      the name asked for is an old one, redirecting here until %s; "+
+			"set a remote to /git/%s.git\n", codeTime(r.RedirectUntil), r.Redirect)
+	}
+	fmt.Fprintf(&b, "  managed by:   %s\n", managedLine(r))
 	if r.Description != "" {
 		fmt.Fprintf(&b, "  description:  %s\n", r.Description)
 	}
@@ -707,6 +728,28 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", p.at, p.by, p.node, p.refs, p.results)
 	}
 	return tw.Flush()
+}
+
+// managedLine is who changes a repository and what it is for, as `status`
+// prints it: code.repos for a declared one, the code tools for one a tool
+// made — a project, or a seat's scratch repository with the clock its idle
+// expiry reads. A value this build does not know is printed as the node sent
+// it.
+func managedLine(r codeRepoView) string {
+	if code.ManagedBy(r.ManagedBy) != code.ManagedTools {
+		if code.ManagedBy(r.ManagedBy) == code.ManagedConfig {
+			return "code.repos"
+		}
+		return r.ManagedBy
+	}
+	switch code.RepoKind(r.Kind) {
+	case code.RepoProject:
+		return "the code tools — a project"
+	case code.RepoScratch:
+		return "the code tools — " + r.Owner.Ref + "'s scratch repository, last active " +
+			codeTime(r.LastActivityAt) + ", deleted once idle for code.scratch.idle_days unless a live turn holds it"
+	}
+	return "the code tools — " + r.Kind
 }
 
 // visibilityLine is a repository's visibility as `status` prints it: which

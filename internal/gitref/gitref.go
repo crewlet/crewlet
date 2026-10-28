@@ -100,12 +100,15 @@ const MaxRefNameBytes = 255
 // can hold.
 const MaxBranchBytes = MaxRefNameBytes - len("refs/heads/")
 
-// MaxRepoNameBytes is the longest repository name: 63, the longest DNS label
-// (RFC 1035), because a repository name IS one — a host-name label as RFC
-// 1123 has it, see [ValidRepoName] — and that label is the narrowest name
-// most of what a deployment runs on takes: a host, a container, most
-// Kubernetes objects. So whatever a deployment names after a repository takes
-// the name unchanged, with nothing to escape, shorten or hash on the way.
+// MaxRepoNameBytes is the longest repository name, of either form: 63, the
+// longest DNS label (RFC 1035), because a PROJECT repository's name IS one — a
+// host-name label as RFC 1123 has it, see [ValidProjectName] — and that label
+// is the narrowest name most of what a deployment runs on takes: a host, a
+// container, most Kubernetes objects. So whatever a deployment names after a
+// repository takes the name unchanged, with nothing to escape, shorten or hash
+// on the way. A seat's SCRATCH repository ([ScratchName]) is two such labels
+// joined by a dot, a DNS-1123 subdomain, held to the same 63 bytes in all, so
+// one bound reads every name whichever form it takes.
 const MaxRepoNameBytes = 63
 
 // ZeroOID is git's null object id: the old value of a create and the new
@@ -118,21 +121,69 @@ const ZeroOID = "0000000000000000000000000000000000000000"
 // formats is experimental.
 const OIDHexLen = 40
 
-// ValidRepoName reports whether name is a repository name: one host-name
-// label (RFC 1123) in lowercase — letters, digits and hyphens, beginning and
-// ending with a letter or a digit, at most MaxRepoNameBytes in all
-// (^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$).
+// ValidProjectName reports whether name is a PROJECT repository's name: one
+// host-name label (RFC 1123) in lowercase — letters, digits and hyphens,
+// beginning and ending with a letter or a digit, at most MaxRepoNameBytes in
+// all (^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$). Every name code.repos declares,
+// and every project repository a tool creates, takes it.
 //
 // No dot, so no name ends in .git — the suffix a git URL conventionally
 // carries and a client strips (cloning …/web.git makes the directory web), so
-// a name that carried it would be one address for two repositories. Lowercase
-// only, so a name is one name on a case-insensitive filesystem too.
+// a name that carried it would be one address for two repositories. And no
+// dot is also what tells a project's name from a seat's scratch repository's
+// ([ScratchName]), the one form with a dot in it. Lowercase only, so a name is
+// one name on a case-insensitive filesystem too.
+func ValidProjectName(name string) bool {
+	return len(name) <= MaxRepoNameBytes && validLabel(name)
+}
+
+// ScratchName reports whether name is a SEAT'S OWN repository's name —
+// <handle>.<slug>: exactly ONE dot, each side a host-name label as
+// [ValidProjectName] has it, at most MaxRepoNameBytes in all — and the handle
+// it carries, which names the seat it belongs to. The whole is then a DNS-1123
+// subdomain, which a deployment can name things after unchanged as it can a
+// label; a trailing hyphen on the handle would not be one, so a seat whose
+// handle is not a label has no scratch repository rather than a name nothing
+// can be named after.
+//
+// The slug is never "git": <handle>.git is indistinguishable from the URL of
+// the repository named <handle> with git's optional .git suffix, which a
+// client strips — one address for two repositories.
+func ScratchName(name string) (handle string, ok bool) {
+	if len(name) > MaxRepoNameBytes {
+		return "", false
+	}
+	handle, slug, found := strings.Cut(name, ".")
+	if !found || !validLabel(handle) || !validLabel(slug) || slug == "git" {
+		return "", false
+	}
+	return handle, true
+}
+
+// ValidRepoName reports whether name is a repository name of EITHER form — a
+// project's ([ValidProjectName]) or a seat's scratch repository's
+// ([ScratchName]): what every reader of a repository's name holds it to, the
+// code host's admission, a resolve and every tool among them. Which form a
+// name takes decides what the repository is FOR, so a reader that needs the
+// form asks the narrower predicate.
 func ValidRepoName(name string) bool {
-	if name == "" || len(name) > MaxRepoNameBytes || name[len(name)-1] == '-' {
+	if ValidProjectName(name) {
+		return true
+	}
+	_, ok := ScratchName(name)
+	return ok
+}
+
+// validLabel reports one lowercase host-name label (RFC 1123) of any length:
+// letters, digits and hyphens, beginning and ending with a letter or a digit.
+// The length is the caller's, since a scratch name bounds its two labels
+// together.
+func validLabel(s string) bool {
+	if s == "" || s[len(s)-1] == '-' {
 		return false
 	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		switch {
 		case 'a' <= c && c <= 'z', '0' <= c && c <= '9':
 		case c == '-' && i > 0:

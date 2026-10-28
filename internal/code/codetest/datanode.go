@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -378,7 +379,8 @@ func (d *DataNode) Purge(t testing.TB) {
 		t.Fatalf("codetest: purge through data node %s, which is not running", d.o.ID)
 	}
 	r := &code.Retention{Store: p.lifecycle, Reader: p.reader,
-		Retention: func() time.Duration { return time.Nanosecond }}
+		Retention: func() time.Duration { return time.Nanosecond },
+		Policy:    scratchPolicy, Holds: holdsNone}
 	for range 64 {
 		report, err := r.Pass(t.Context())
 		if err != nil {
@@ -390,6 +392,14 @@ func (d *DataNode) Purge(t testing.TB) {
 	}
 	t.Fatalf("codetest: sixty-four retention passes through %s left a purge unfinished", d.o.ID)
 }
+
+// scratchPolicy is every topology's code.scratch: the defaults a company that
+// sets none runs under.
+func scratchPolicy() code.LifecyclePolicy { return code.ScratchOf(config.Code{}) }
+
+// holdsNone is the live turns' holds in a topology that runs no turn: none, so
+// a pass expires every scratch repository past its idle time.
+func holdsNone(context.Context, []string) (map[string]bool, error) { return map[string]bool{}, nil }
 
 // Retain runs ONE code-retention pass through this node with its clock at now
 // — the instant it judges a retired pack's grace and a deletion's age by — at
@@ -403,7 +413,8 @@ func (d *DataNode) Retain(t testing.TB, now time.Time) code.RetentionReport {
 		t.Fatalf("codetest: a retention pass through data node %s, which is not running", d.o.ID)
 	}
 	r := &code.Retention{Store: p.lifecycle, Reader: p.reader,
-		Retention: func() time.Duration { return deletedRetention }, Now: func() time.Time { return now }}
+		Retention: func() time.Duration { return deletedRetention }, Now: func() time.Time { return now },
+		Policy: scratchPolicy, Holds: holdsNone}
 	report, err := r.Pass(t.Context())
 	if err != nil {
 		t.Fatalf("codetest: a retention pass through %s: %v", d.o.ID, err)

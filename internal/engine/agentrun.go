@@ -153,6 +153,13 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		return err
 	}
 
+	// THE TURN'S CODE HOLDS GO ON THE ROW, sealed from their read to the row
+	// as on the run_sandbox path ([launchHolds]) — and the row's writer
+	// attached when the job is named, after the ledger is bound to it, so
+	// every hold a bridged call of the box takes is on the row before its
+	// request: a run that parks, and a node that restarts under it, keep
+	// what the run's turn named.
+	holds := launchHolds(l.turn.Holding(), pending, l.turn.RunID)
 	_, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:       l.runTurnRef(ctx),
 		Spec:       spec,
@@ -163,8 +170,13 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Brief:      req.Brief,
 		Task:       l.turn.Task,
 		Label:      l.turn.Task,
-		Opened:     ledger.bind,
+		CodeHolds:  holds.ids,
+		Opened: func(launchID string) {
+			ledger.bind(launchID)
+			holds.opened(launchID)
+		},
 	})
+	holds.settle(err)
 	if err != nil {
 		// The launch failed, so nothing will ever close this session on
 		// the completion path.

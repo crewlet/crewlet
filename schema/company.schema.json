@@ -119,6 +119,9 @@
             "array",
             "null"
           ]
+        },
+        "scratch": {
+          "$ref": "#/$defs/CodeScratch"
         }
       },
       "type": [
@@ -291,7 +294,7 @@
               "const": ""
             }
           ],
-          "description": "The repository's name: lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63. It is the address a repository is cloned by, so renaming one deletes it and creates another.",
+          "description": "The repository's name: one label of lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63 — no dot, which only a seat's own scratch repository's name carries. It is the address a repository is cloned by, so renaming one here deletes it and creates another.",
           "type": [
             "string",
             "number",
@@ -319,6 +322,33 @@
             "unit",
             "",
             null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeScratch": {
+      "additionalProperties": false,
+      "properties": {
+        "idle_days": {
+          "description": "How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7.",
+          "maximum": 365,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_per_seat": {
+          "description": "How many scratch repositories one seat may hold, every one it owns short of purged — a deleted one counts until its purge frees its room. 0 lets no seat create one; 0..1000; unset is 50.",
+          "maximum": 1000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
           ]
         }
       },

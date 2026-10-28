@@ -54,9 +54,12 @@ type admission struct {
 //     answer (the identity directory's binding, resolved against the running
 //     org), never a second lookup here.
 //  4. REPOSITORY — resolved STALE, and again LINEARIZABLE when the stale answer
-//     would refuse: a repository not found, or one whose status refuses op
-//     (deleted or purging for any op, archived for a push). A refusal is never
-//     decided on a stale read.
+//     would refuse: a repository not found, one whose status refuses op
+//     (deleted or purging for any op, archived for a push), or an old name a
+//     push named. A refusal is never decided on a stale read.
+//  5. OLD NAME — a name a rename left redirecting is answered by renamed: a
+//     fetch's advertisement redirected, its POST admitted to the repository
+//     under its current name, a push refused.
 //
 // The repository's STATUS refusals are not answered here: each entry point
 // answers them in its protocol's own form.
@@ -80,7 +83,8 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	adm := admitted(name, p)
 	ref, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
-	if errors.Is(err, code.ErrRepoNotFound) || (err == nil && refuses(ref.Status, op)) {
+	if errors.Is(err, code.ErrRepoNotFound) ||
+		(err == nil && (refuses(ref.Status, op) || (ref.Redirect != "" && op == auth.GitPush))) {
 		adm.linearizable = true
 		ref, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
@@ -92,9 +96,68 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	case err != nil:
 		s.unavailable(w, r, name, err)
 		return admission{}, false
+	case ref.Redirect != "":
+		if !renamed(w, r, raw, op, ref) {
+			return admission{}, false
+		}
+		// ADMITTED UNDER ITS CURRENT NAME, so what the fetch logs, heats
+		// and records names the repository as every other read does.
+		adm.name = ref.Name
 	}
 	adm.repo = ref
 	return adm, true
+}
+
+// renamed answers a request that named a repository by an OLD name, which a
+// rename left redirecting to it until ref.RedirectUntil (code.RedirectWindow),
+// and reports whether the request goes on, admitted to the repository:
+//
+//   - A FETCH'S ADVERTISEMENT — the GET a clone and a fetch begin with — is
+//     302 Found to the same path and query under the new name. git follows a
+//     redirect of its first exchange (http.followRedirects' default,
+//     `initial`), and REBASES onto the new name — printing `redirecting to`
+//     and sending everything after to it — only where the redirect answered
+//     the first request it made: a client presenting its credential up front
+//     (http.extraHeader, a CI checkout's shape).
+//   - A FETCH'S POST GOES ON, to the repository. Where a credential helper
+//     answers git's challenge — a person's own git — its first request is
+//     anonymous and challenged, so the redirect answers the retry that
+//     carried the credential, and git follows it without rebasing: it reads
+//     the advertisement under the new name and POSTs to the old one
+//     (measured, TestARenamedRepositorysOldNameRedirectsAClone). Refusing
+//     that POST, as a redirect-only old name would, fails every such clone
+//     with git's bare `RPC failed; HTTP 404`.
+//   - A PUSH IS REFUSED, at either step, naming the new name: at the
+//     advertisement in the 404 git prints (`remote: <sentence>`), never a
+//     redirect, which a credential-helper client follows to POST its push to
+//     the old name, where git prints no reason for a refusal. So no push is
+//     decided against a name the repository no longer holds, and a pusher is
+//     told what to change — answered at admission like a name no repository
+//     holds, so no push is recorded for it.
+func renamed(w http.ResponseWriter, r *http.Request, raw string, op auth.GitOp, ref code.RepoRef) bool {
+	switch {
+	case op == auth.GitFetch && r.Method == http.MethodPost:
+		return true
+	case op == auth.GitFetch:
+		target := *r.URL
+		target.Path = strings.Replace(target.Path, "/git/"+raw+"/", "/git/"+ref.Redirect+".git/", 1)
+		target.RawPath = ""
+		w.Header().Set("Location", target.RequestURI())
+		w.WriteHeader(http.StatusFound)
+		return false
+	}
+	auth.GitText(w, http.StatusNotFound, renamedSentence(strings.TrimSuffix(raw, ".git"), ref))
+	return false
+}
+
+// renamedSentence is what a push to oldName, which a rename left redirecting
+// to ref, is told: the new name, when the rename landed and until when the
+// old name still serves a clone.
+func renamedSentence(oldName string, ref code.RepoRef) string {
+	since := ref.RedirectUntil.Add(-code.RedirectWindow).UTC().Format(time.RFC3339)
+	return strconv.Quote(oldName) + " was renamed to " + strconv.Quote(ref.Redirect) + " on " + since +
+		"; set your remote to /git/" + ref.Redirect + ".git at the same address (the old name serves " +
+		"clones and fetches until " + ref.RedirectUntil.UTC().Format(time.RFC3339) + ")"
 }
 
 // admitted is the admission of a request for repository name by the resolved
@@ -225,7 +288,7 @@ func notFoundSentence(name string) string {
 // push say what the push decide says.
 func (s *Server) goneSentence(ref code.RepoRef) string {
 	return code.RepoGone{ID: ref.ID, Name: ref.Name, Status: ref.Status, DeletedAt: ref.DeletedAt,
-		Retention: s.o.DeletedRetention()}.Detail()
+		Retention: s.o.DeletedRetention(), ManagedBy: ref.ManagedBy}.Detail()
 }
 
 // serviceFor is the git process an advertisement runs — read from the

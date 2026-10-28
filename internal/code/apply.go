@@ -144,6 +144,15 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindCompany:
 		return a.applyActivation(ctx, tx, at)
 	case KindName:
+		// A NAME'S SUBJECT carries the records that claim, move or free a
+		// name: a create, a rename onto it, and the release of an old name
+		// whose redirect ended.
+		switch record.Op {
+		case OpRename:
+			return a.applyRename(ctx, tx, at)
+		case OpReleaseName:
+			return a.applyReleaseName(ctx, tx, at)
+		}
 		return a.applyCreate(ctx, tx, at)
 	case KindRepo:
 		return a.applyRepo(ctx, tx, at)
@@ -306,7 +315,10 @@ const (
 // fence this transaction holds: it applies as nothing, on every node, because
 // the fence is derived from the log. Only a CONFIG-MANAGED record is held to
 // it — the fence orders configuration activations, and nothing else carries
-// one.
+// one — so a TOOL'S record ([ManagedTools], its activation 0) applies at any
+// fence: the configuration has nothing to say about it. What keeps a tool's
+// record off a repository the configuration manages is its manager
+// ([managerRefuses]), not the fence.
 func fenced(ctx context.Context, tx *sql.Tx, managedBy ManagedBy, epoch int64) (bool, error) {
 	if managedBy != ManagedConfig {
 		return false, nil
@@ -371,22 +383,39 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return 0, fmt.Errorf("code: claim %q at %s: %w", p.Name, at.position, err)
 	}
 	s := p.Settings
+	// WHO MADE IT, as the record names its decider: a seat's handle or a
+	// person's seat (the credential is on the record), and nobody for a
+	// declaration, which the configuration made. Its idle clock starts at
+	// its creation.
+	createdBy, createdKind := at.record.Actor, string(at.record.ActorKind)
+	if at.record.ActorKind == ActorConfig {
+		createdBy = ""
+	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO code_repos
-			(id, name, status, managed_by, owner_kind, owner, visibility, default_branch, description,
-			 config_epoch, created_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, name, status, managed_by, kind, owner_kind, owner, visibility, default_branch, description,
+			 config_epoch, created_at, created_by, created_by_kind, last_activity_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`,
-		p.RepoID, p.Name, string(s.status()), string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref,
-		string(s.Visibility), s.DefaultBranch, s.Description, s.ConfigEpoch, at.at(), at.packed)
+		p.RepoID, p.Name, string(s.status()), string(s.ManagedBy), string(s.Kind), string(s.Owner.Kind),
+		s.Owner.Ref, string(s.Visibility), s.DefaultBranch, s.Description, s.ConfigEpoch, at.at(), createdBy,
+		createdKind, at.at(), at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("code: create repository %s at %s: %w", p.RepoID, at.position, err)
 	}
 	created, _ := res.RowsAffected()
+	// AND COUNTED IN WITH ITS KIND, only where this record made the row: the
+	// count a tool's create of a project is held to (repo_limit), which the
+	// purge that removes the row counts out again.
+	if created > 0 {
+		if _, err = tx.ExecContext(ctx, countKindSQL, string(s.Kind)); err != nil {
+			return 0, fmt.Errorf("code: count repository %s in at %s: %w", p.RepoID, at.position, err)
+		}
+	}
 	protections, err := insertProtections(ctx, tx, at.maxVariables, p.RepoID, s.Protections)
 	if err != nil {
 		return 0, fmt.Errorf("code: write %s's protections at %s: %w", p.RepoID, at.position, err)
 	}
-	return 1 + int(created) + protections, nil
+	return 1 + 2*int(created) + protections, nil
 }
 
 // insertProtections writes a repository's rules in the record's order. A
@@ -443,6 +472,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case ExpungeCommit:
 		payloadRepo = p.RepoID
+	case Hold:
+		payloadRepo = p.RepoID
 	case ChangeOpen:
 		payloadRepo = p.RepoID
 	case ChangeEdit:
@@ -478,12 +509,14 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	case PushBatch:
 		return a.applyPush(ctx, tx, at, p)
 	case SettingsRecord:
-		return a.applySettings(ctx, tx, at, p)
+		return a.applySettings(ctx, tx, at, p, row)
 	case LifecycleRecord:
 		if at.record.Op == OpDelete {
 			return a.applyDelete(ctx, tx, at, p, row)
 		}
-		return a.applyRestore(ctx, tx, at, p)
+		return a.applyRestore(ctx, tx, at, p, row)
+	case Hold:
+		return a.applyHold(ctx, tx, at, p)
 	case PurgePart:
 		return a.applyPurgePart(ctx, tx, at, p)
 	case Compaction:
@@ -529,17 +562,27 @@ func repoVersion(ctx context.Context, tx *sql.Tx, id string) (versionRow, error)
 	return row, nil
 }
 
-// applySettings replaces a repository's settings whole. A repository that is
-// deleted or purging keeps its status: settings never resurrect one, a
-// restore does.
-func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext, p SettingsRecord) (int, error) {
+// applySettings replaces a repository's settings whole, and moves its idle
+// clock. A repository that is deleted or purging keeps its status: settings
+// never resurrect one, a restore does.
+//
+// A RECORD OF ANOTHER MANAGER THAN THE REPOSITORY'S APPLIES AS NOTHING
+// ([managerRefuses]), as a record below the activation fence does: a tool's
+// settings never reach a repository code.repos declares, nor a
+// configuration's one a tool made.
+func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext, p SettingsRecord,
+	row versionRow) (int, error) {
+
 	s := p.Settings
+	if managerRefuses(row, s.ManagedBy) {
+		return 0, nil
+	}
 	if refused, err := fenced(ctx, tx, s.ManagedBy, s.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, settingsSQL,
 		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), s.DefaultBranch,
-		s.Description, string(s.status()), s.ConfigEpoch, at.packed, p.RepoID)
+		s.Description, string(s.status()), s.ConfigEpoch, at.at(), at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: settle %s's settings at %s: %w", p.RepoID, at.position, err)
 	}
@@ -588,20 +631,26 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext, 
 }
 
 // applyRestore brings a deleted repository back with the settings the restore
-// carries. Its refs and packs were never touched, so they come back as they
-// were.
-func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext, p LifecycleRecord) (int, error) {
+// carries, and moves its idle clock. Its refs and packs were never touched, so
+// they come back as they were. A restore of another manager than the
+// repository's applies as nothing ([managerRefuses]).
+func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext, p LifecycleRecord,
+	row versionRow) (int, error) {
+
 	if p.Settings == nil {
 		return 0, fmt.Errorf("code: the restore at %s carries no settings — a restore "+
 			"states what the repository comes back with", at.position)
 	}
 	s := *p.Settings
+	if managerRefuses(row, s.ManagedBy) {
+		return 0, nil
+	}
 	if refused, err := fenced(ctx, tx, s.ManagedBy, p.ConfigEpoch); err != nil || refused {
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, restoreRepoSQL,
 		string(s.ManagedBy), string(s.Owner.Kind), s.Owner.Ref, string(s.Visibility), s.DefaultBranch,
-		s.Description, string(s.status()), p.ConfigEpoch, at.packed, p.RepoID)
+		s.Description, string(s.status()), p.ConfigEpoch, at.at(), at.packed, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: restore %s at %s: %w", p.RepoID, at.position, err)
 	}
@@ -615,6 +664,19 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	return int(n) + replaced, nil
 }
+
+// managerRefuses reports a settings or restore record whose manager is not the
+// repository's: it applies as nothing, on every node alike.
+//
+// A REPOSITORY'S MANAGER NEVER CHANGES — a create writes it, and neither a
+// tool's decide nor a reconcile's reaches a repository the other manages (the
+// tool's is refused config_managed, the reconcile's [ErrNotConfigManaged]) —
+// so a record naming the other is one only a race with an activation could
+// land, and applied it would hand the repository from one manager to the
+// other. The activation fence ignores a tool's record ([fenced]: it orders
+// configuration activations, and nothing else carries one), so this, not the
+// fence, is what keeps a tool's settings off a declared repository.
+func managerRefuses(row versionRow, record ManagedBy) bool { return row.managedBy != record }
 
 // jsonList is a list of keys as the ONE argument an `IN (SELECT value FROM
 // json_each(?))` takes — the tracker's idiom for a set of keys, which binds
@@ -639,7 +701,7 @@ const (
 	settingsSQL    = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, default_branch = ?, description = ?,
 			status = CASE WHEN status IN ('active', 'archived') THEN ? ELSE status END,
-			config_epoch = ?, version = ?
+			config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ?`
 	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
 	deleteRepoSQL       = `UPDATE code_repos SET
@@ -647,6 +709,13 @@ const (
 		WHERE id = ? AND status IN ('active', 'archived')`
 	restoreRepoSQL = `UPDATE code_repos SET
 			managed_by = ?, owner_kind = ?, owner = ?, visibility = ?, default_branch = ?, description = ?,
-			status = ?, deleted_at = NULL, config_epoch = ?, version = ?
+			status = ?, deleted_at = NULL, config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ? AND status = 'deleted'`
+	// countKindSQL counts one repository of a kind in, and uncountKindSQL
+	// one out: code_repo_kinds, by its key.
+	countKindSQL = `INSERT INTO code_repo_kinds (kind, repos) VALUES (?, 1)
+		ON CONFLICT (kind) DO UPDATE SET repos = repos + 1`
+	uncountKindSQL = `UPDATE code_repo_kinds SET repos = repos - 1 WHERE kind = ?`
+	// repoKindSQL is a repository's kind, which its purge counts it out of.
+	repoKindSQL = `SELECT kind FROM code_repos WHERE id = ?`
 )

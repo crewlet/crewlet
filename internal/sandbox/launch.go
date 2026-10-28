@@ -188,6 +188,15 @@ type LaunchRequest struct {
 	// tells nobody.
 	Opened func(launchID string)
 
+	// CodeHolds is the turn's code-host hold set as the launch read it
+	// (internal/agent/turnctx's Holds.Seal): every scratch repository the turn
+	// has named, which the row carries from here on ([PendingRun.CodeHolds]) —
+	// written by [PendingStore.BeginLaunch], unioned with what the row
+	// already holds. The launch's caller keeps the turn's set SEALED from
+	// reading it until Opened, so no hold is taken in between that the row
+	// would not carry.
+	CodeHolds []string
+
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -289,7 +298,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Requester: req.Turn.Requester,
 		// The model the run's phase record is filed under; the store keys
 		// the rest of that record on the launch it mints.
-		Launch:    LaunchRecord{Model: req.Model},
+		Launch: LaunchRecord{Model: req.Model},
+		// WHAT THE TURN HOLDS FROM THE CODE HOST'S EXPIRY, on the row before
+		// any box exists: once the turn parks, the row is the only place
+		// the expiry can read it from.
+		CodeHolds: req.CodeHolds,
 		CreatedAt: now(),
 	}, fence)
 	if err != nil {

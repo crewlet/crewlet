@@ -35,6 +35,7 @@ type CodeServer interface {
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
+	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
 }
 
 // ranNothing is a code half's error as the walk reads it: a half that refused
@@ -234,6 +235,31 @@ var opCodeResolveRef = define("code.resolve_ref", opRead, codeDomain, false,
 		answer, err := b.Code.ResolveRef(ctx, q)
 		return answer, ranNothing(err)
 	}).judgesGrant(func(q code.RefQuery) bool { return q.Asker.Kind == code.PrincipalAgent })
+
+// opCodeLifecycle is one repository-lifecycle request — a tool's create,
+// rename, settings change, archive, unarchive, delete, restore or protection,
+// or a live turn's hold — decided by any data node whose code copy serves.
+// IDEMPOTENT BY THE REQUEST'S OP ID: the domain's operation ledger vouches for
+// a repeat, and a create derives its repository's id from it
+// (code.RepoIDOf), so an unanswered request is asked again of the next node
+// under the same id. No actor of the estate's own: the asker travels INSIDE
+// the request, checked by its Validate on the node that decides.
+//
+// EVERY REQUEST JUDGES A GRANT from the serving node's chart — a seat's on
+// the repository, and a person's create's owner — so a node behind the
+// company's configuration answers none of it, asked first or asked last
+// ([op.judgesGrant], a predicate true of every request): the revision it
+// failed to apply may be the one that took the grant away. The lifecycle
+// store's own code.StoreOptions.Current holds the in-process call to the same
+// rule.
+var opCodeLifecycle = define("code.lifecycle", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, r code.LifecycleRequest) (code.LifecycleResult, error) {
+		if b.Code == nil {
+			return code.LifecycleResult{}, errNoHalf
+		}
+		res, err := b.Code.Lifecycle(ctx, r)
+		return res, ranNothing(err)
+	}).judgesGrant(func(code.LifecycleRequest) bool { return true })
 
 // opCodeGitRead is one server-side read of a repository by object id — a tree,
 // a file's lines, a diff, a comparison — asked of the repository's HOME git

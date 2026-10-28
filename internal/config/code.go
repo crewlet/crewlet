@@ -63,12 +63,22 @@ const (
 	// typo guard on code.repos, two orders of magnitude past the reference
 	// company's sixty or so — a list longer than it is a generated document
 	// somebody should be told about rather than a company's repositories.
-	// AN ADMISSION RULE ([Code.validateAdmission]): the reconcile decides
-	// any number of declarations, so nothing about running depends on it.
-	// At this bound an activation that creates, deletes or restores every
-	// declared repository takes 16–19 s on one node before the last has
-	// its record (internal/code's doc.go), beside the apply rather than
-	// inside it, and one that changes nothing half a second.
+	// AN ADMISSION RULE for a document ([Code.validateAdmission]): the
+	// reconcile decides any number of declarations. At this bound an
+	// activation that creates, deletes or restores every declared repository
+	// takes 16–19 s on one node before the last has its record
+	// (internal/code's doc.go), beside the apply rather than inside it, and
+	// one that changes nothing half a second.
+	//
+	// AND THE RUNTIME BOUND on the PROJECT repositories a tool's create may
+	// bring the code log to: every status short of purged, declared ones
+	// included, so declared and tool-made projects count alike and a tool's
+	// create past it is refused repo_limit (internal/code's lifecycle). Read
+	// there, one bound for both: a company whose declarations already reach
+	// it has no room a tool could fill beside them. A seat's scratch
+	// repositories are held by code.scratch.max_per_seat instead and never
+	// count here, so seats' experiments cannot refuse a person's project. The
+	// value stays ten thousand.
 	CodeMaxRepos = 10_000
 
 	// CodeMaxDeletedRetentionDays is the longest code.deleted_retention_days:
@@ -128,6 +138,40 @@ const (
 	// seat's own tool calls and token budget do not already bound.
 	CodeMinPushesPerSeatDay     = 1
 	CodePushesPerSeatDayCeiling = 100_000
+
+	// DefaultCodeScratchIdleDays is an unset code.scratch.idle_days: a
+	// seat's scratch repository with no push, rename or settings change for
+	// SEVEN days is deleted — the trim's default min_age and
+	// code.deleted_retention_days' default, so an experiment nobody returned
+	// to for a week leaves as a deleted repository does, restorable for the
+	// retention after. A product decision the approved design states.
+	DefaultCodeScratchIdleDays = 7
+
+	// CodeScratchIdleDaysFloor and CodeScratchIdleDaysCeiling bound
+	// code.scratch.idle_days. A DAY AT LEAST: a turn holding a scratch
+	// repository idle code.HoldRecordAfter (22 h) records its hold on the
+	// repository's subject, and that threshold is this floor less the two
+	// hours two nodes' clocks may disagree by (references'
+	// TestAHoldRecordCoversEveryPassInFlight holds the arithmetic), so a
+	// shorter idle time would let an expiry race a hold it cannot see. A YEAR
+	// AT MOST, code.deleted_retention_days' ceiling: past it an experiment is
+	// a project, and a project repository is what keeps one.
+	CodeScratchIdleDaysFloor   = 1
+	CodeScratchIdleDaysCeiling = 365
+
+	// DefaultCodeScratchMaxPerSeat is an unset code.scratch.max_per_seat:
+	// FIFTY scratch repositories one seat may hold, every one it owns short
+	// of purged — a deleted one counting until its purge frees its room, so
+	// a create-and-delete loop cannot hold rows, names and packs past it. A
+	// product decision the approved design states.
+	DefaultCodeScratchMaxPerSeat = 50
+
+	// CodeScratchMaxPerSeatCeiling bounds code.scratch.max_per_seat: a
+	// THOUSAND, a typo guard twenty times the default. A turn holds every
+	// scratch repository it names on its run row (internal/agent/turnctx's
+	// MaxHolds, 1 024, kept above this), so a seat working through all of
+	// them is never refused a hold for their number.
+	CodeScratchMaxPerSeatCeiling = 1_000
 )
 
 // Code is the company's own git host: whether it hosts its repositories in
@@ -155,10 +199,71 @@ const (
 // changes nothing on a running node until its restart, and after the restart
 // nothing reconciles at all.
 type Code struct {
-	Native               bool       `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
-	DeletedRetentionDays int        `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
-	Limits               CodeLimits `yaml:"limits,omitempty" json:"limits,omitzero"`
-	Repos                []CodeRepo `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
+	Native               bool        `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
+	DeletedRetentionDays int         `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
+	Limits               CodeLimits  `yaml:"limits,omitempty" json:"limits,omitzero"`
+	Scratch              CodeScratch `yaml:"scratch,omitempty" json:"scratch,omitzero"`
+	Repos                []CodeRepo  `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
+}
+
+// CodeScratch is the policy for seats' SCRATCH repositories: the ones a seat's
+// own tool creates for its experiments, each named <handle>.<slug> after the
+// seat that owns it (internal/code's lifecycle requests). An unset field takes
+// its default ([CodeScratch.Resolved]).
+//
+// THE EPOCH'S, read where it is used: the create's cap at the create's decide,
+// the idle time at every pass of the code-retention duty — so a revision that
+// moves either holds from its activation, with no restart.
+type CodeScratch struct {
+	// IdleDays is how many days a scratch repository may go with no push,
+	// rename, settings change or restore before the code-retention pass
+	// deletes it — restorable for code.deleted_retention_days like any
+	// deleted repository. A read is not activity, and neither is a turn's
+	// hold: a live turn's hold keeps the repository while the turn lasts and
+	// moves no clock. 0 is unset, the default ([DefaultCodeScratchIdleDays]).
+	IdleDays int `yaml:"idle_days,omitempty" json:"idle_days,omitempty" js:"min=1;max=365" desc:"How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7."`
+	// MaxPerSeat is how many scratch repositories one seat may hold — every
+	// one it owns short of purged, a deleted one counting until its purge
+	// frees its room. A POINTER because 0 is a setting — no seat may create
+	// one — and unset is the default ([DefaultCodeScratchMaxPerSeat]): a
+	// zero value that is a valid setting needs one.
+	MaxPerSeat *int `yaml:"max_per_seat,omitempty" json:"max_per_seat,omitempty" js:"min=0;max=1000" desc:"How many scratch repositories one seat may hold, every one it owns short of purged — a deleted one counts until its purge frees its room. 0 lets no seat create one; 0..1000; unset is 50."`
+}
+
+// Resolved is the scratch policy with its defaults applied — THE ONE PLACE
+// they are applied, read by the code domain's own conversion
+// (internal/code.ScratchOf), so what `crewlet validate` judges and what a
+// create and an expiry are held to are one reading of the document.
+func (s CodeScratch) Resolved() (idleDays, maxPerSeat int) {
+	idleDays, maxPerSeat = s.IdleDays, DefaultCodeScratchMaxPerSeat
+	if idleDays == 0 {
+		idleDays = DefaultCodeScratchIdleDays
+	}
+	if s.MaxPerSeat != nil {
+		maxPerSeat = *s.MaxPerSeat
+	}
+	return idleDays, maxPerSeat
+}
+
+// zero is a block that sets nothing.
+func (s CodeScratch) zero() bool { return s.IdleDays == 0 && s.MaxPerSeat == nil }
+
+// validate holds code.scratch's rules at path: each field inside its bounds.
+func (s CodeScratch) validate(scratch Path) error {
+	var p problems
+	if d := s.IdleDays; d != 0 && (d < CodeScratchIdleDaysFloor || d > CodeScratchIdleDaysCeiling) {
+		p.add(at(scratch, "idle_days"), ErrOutOfRange,
+			"%d is outside %d..%d days, or unset for the default %d — a day at least, because a "+
+				"live turn's hold on an idle repository is ordered against the expiry by a record "+
+				"its holder writes a day less two hours after the repository's last activity",
+			d, CodeScratchIdleDaysFloor, CodeScratchIdleDaysCeiling, DefaultCodeScratchIdleDays)
+	}
+	if n := s.MaxPerSeat; n != nil && (*n < 0 || *n > CodeScratchMaxPerSeatCeiling) {
+		p.add(at(scratch, "max_per_seat"), ErrOutOfRange,
+			"%d is outside 0..%d scratch repositories a seat, or unset for the default %d",
+			*n, CodeScratchMaxPerSeatCeiling, DefaultCodeScratchMaxPerSeat)
+	}
+	return p.err()
 }
 
 // NeedsRole reports whether the company needs a node role at all: every role
@@ -192,7 +297,7 @@ func (c Code) DeletedRetention() time.Duration {
 
 // CodeRepo is one repository code.repos declares.
 type CodeRepo struct {
-	Name          string           `yaml:"name" json:"name" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" desc:"The repository's name: lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63. It is the address a repository is cloned by, so renaming one deletes it and creates another."`
+	Name          string           `yaml:"name" json:"name" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" desc:"The repository's name: one label of lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63 — no dot, which only a seat's own scratch repository's name carries. It is the address a repository is cloned by, so renaming one here deletes it and creates another."`
 	Owner         CodeOwner        `yaml:"owner" json:"owner"`
 	Visibility    CodeVisibility   `yaml:"visibility,omitempty" json:"visibility,omitempty" js:"enum=company|unit" desc:"Who may read it besides persons: company (unset) — every seat — or unit — the owning unit's members, its leads and the owning seat."`
 	DefaultBranch string           `yaml:"default_branch,omitempty" json:"default_branch,omitempty" desc:"The branch a clone checks out; unset is main."`
@@ -381,6 +486,11 @@ func (c Code) validate(path Path, o *org.Organization) error {
 				"nothing hosts code on this company, so none of these %d repositories "+
 					"would be created: set code.native, or remove code.repos", len(c.Repos))
 		}
+		if !c.Scratch.zero() {
+			p.add(at(path, "scratch"), ErrConflict,
+				"code.scratch configures the native code host, and nothing hosts code on this "+
+					"company: set code.native: true, or remove code.scratch")
+		}
 	}
 	if d := c.DeletedRetentionDays; d < 0 || d > codeMaxHeldRetentionDays {
 		p.add(at(path, "deleted_retention_days"), ErrOutOfRange,
@@ -388,6 +498,7 @@ func (c Code) validate(path Path, o *org.Organization) error {
 			CodeMaxDeletedRetentionDays, DefaultCodeDeletedRetentionDays, d)
 	}
 	p.wrap(c.Limits.validate(at(path, "limits")))
+	p.wrap(c.Scratch.validate(at(path, "scratch")))
 	p.wrap(validateCodeRepos(at(path, "repos"), c.Repos, o))
 	return p.err()
 }
@@ -500,7 +611,7 @@ func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization) error {
 	for i, r := range repos {
 		entry := idx(path, i)
 		p.wrap(r.validate(entry, owners))
-		if !gitref.ValidRepoName(r.Name) {
+		if !gitref.ValidProjectName(r.Name) {
 			continue
 		}
 		if was, dup := first[r.Name]; dup {
@@ -526,11 +637,19 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 	case r.Name == "":
 		p.add(at(path, "name"), ErrMissing,
 			"a repository needs a name: it is the address the repository is cloned by")
-	case !gitref.ValidRepoName(r.Name):
+	case !gitref.ValidProjectName(r.Name):
+		// A NAME WITH A DOT IS A SEAT'S OWN SCRATCH REPOSITORY (gitref's
+		// <handle>.<slug>), which only that seat's tool creates: declared, it
+		// would read as the seat's and squat the name its create would take.
+		why := ""
+		if _, scratch := gitref.ScratchName(r.Name); scratch {
+			why = " — a name with a dot is a seat's own scratch repository, which only that seat's " +
+				"tool creates"
+		}
 		p.add(at(path, "name"), ErrShape,
-			"%q is not a repository name: lowercase letters, digits and hyphens, "+
-				"starting and ending with a letter or a digit, at most %d",
-			r.Name, gitref.MaxRepoNameBytes)
+			"%q is not a project repository's name: one label of lowercase letters, digits and "+
+				"hyphens, starting and ending with a letter or a digit, at most %d%s",
+			r.Name, gitref.MaxRepoNameBytes, why)
 	}
 	r.Owner.validate(&p, at(path, "owner"), owners)
 	if !r.Visibility.Valid() {

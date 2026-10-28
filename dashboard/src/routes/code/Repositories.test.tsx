@@ -45,6 +45,7 @@ function repo(name: string, extra: Record<string, unknown> = {}) {
     name,
     status: "active",
     managed_by: "config",
+    kind: "project",
     owner: { kind: "unit", ref: "engineering" },
     visibility: "company",
     default_branch: "main",

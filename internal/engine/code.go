@@ -107,6 +107,18 @@ func (e *Engine) codeDeletedRetention() time.Duration {
 	return e.codeInForce().DeletedRetention()
 }
 
+// codeLifecyclePolicy is what a tool's create is held to, and how long a
+// seat's scratch repository may sit idle, at the current epoch
+// ([Engine.codeInForce]), the defaults applied through the code domain's one
+// conversion ([code.ScratchOf]). Two readers, one reading: the lifecycle
+// store's decide of a create ([code.StoreOptions.Policy]) and the
+// code-retention pass's scratch expiry ([code.Retention.Policy]) — so a
+// revision that moves code.scratch holds from its activation on, with no
+// restart, on each node's own epoch.
+func (e *Engine) codeLifecyclePolicy() code.LifecyclePolicy {
+	return code.ScratchOf(e.codeInForce())
+}
+
 // carriedCode is the code host's settings in force at next, installed over
 // prev ([Engine.installEpoch]): next's own `code` block where it sets
 // `code.native`, and otherwise prev's in force.
@@ -752,7 +764,13 @@ func (e *Engine) newCodeRetentionDuty(store *code.Store, reader *code.Reader) *c
 			// would have purged.
 			Retention: e.codeDeletedRetention,
 			OnPurged:  e.redeclareCode,
-			Logger:    logging.Get("code"),
+			// AND ITS code.scratch, read at every pass's scratch expiry —
+			// which deletes nothing a live turn holds: every run row's holds
+			// and every seat holder's running turns', asked once a page of
+			// due repositories ([Engine.codeHolds]).
+			Policy: e.codeLifecyclePolicy,
+			Holds:  e.codeHolds,
+			Logger: logging.Get("code"),
 		},
 		claim:    e.workerDuty(codeRetentionDutyName, codeRetentionDutyTTL),
 		giveBack: e.workerGiveBack(codeRetentionDutyName),
@@ -891,26 +909,34 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 }
 
 // logCodeRetention says what one pass did: at info where it swept, purged,
-// failed, held a name or stopped at its budget, at debug where it found
-// nothing due. A pass ENDED — the engine stopping, the duty lost or declined
-// mid-pass, which the renewal has said — is no failure; any other error is a
-// warning.
+// released an old name, expired a scratch repository or kept one a live turn
+// holds, failed, held a name, could not read the live turns' holds or stopped
+// at its budget, at debug where it found nothing due. A pass ENDED — the
+// engine stopping, the duty lost or declined mid-pass, which the renewal has
+// said — is no failure; any other error is a warning. There is no /fleet view
+// of a pass: this line, and the scratch expiry's own
+// code_scratch_expiry_skipped warning, are where a pass is read.
 func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.RetentionReport, err error,
 	ended bool) {
 	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows, "purged", report.Purged,
-		"steps", report.Steps, "remain", report.Remain}
+		"steps", report.Steps, "remain", report.Remain, "released", report.Released, "expired", report.Expired,
+		"scratch_held", report.ScratchHeld}
 	if len(report.Failed) > 0 {
 		attrs = append(attrs, "failed", report.Failed)
 	}
 	if len(report.Unhanded) > 0 {
 		attrs = append(attrs, "unhanded", report.Unhanded)
 	}
+	if report.ScratchExpiryUnread != "" {
+		attrs = append(attrs, "scratch_expiry_unread", report.ScratchExpiryUnread)
+	}
 	switch {
 	case err != nil && !ended:
 		logger.WarnContext(ctx, "code_retention_pass_failed", append(attrs, "error", err.Error(),
 			"detail", "the next pass, a tick later, lists what is due again")...)
 	case report.Sweeps > 0 || len(report.Purged) > 0 || len(report.Failed) > 0 ||
-		len(report.Unhanded) > 0 || report.Remain:
+		len(report.Unhanded) > 0 || report.Remain || report.Released > 0 || report.Expired > 0 ||
+		report.ScratchHeld > 0 || report.ScratchExpiryUnread != "":
 		logger.InfoContext(ctx, "code_retention_pass", attrs...)
 	default:
 		logger.DebugContext(ctx, "code_retention_pass", attrs...)

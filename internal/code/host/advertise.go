@@ -219,7 +219,7 @@ func (s *Server) refusedAtAdvertisement(w http.ResponseWriter, svc string, push 
 	case push && !adm.grant(repo).MayPush():
 		words, refusal = adm.grant(repo).PushRefusal(), grantRefusal(adm.principal())
 	case push && repo.Status == code.RepoStatusArchived:
-		words, refusal = code.ArchivedDetail(repo.Name), AuditRefusal(code.RefusalRepoArchived)
+		words, refusal = code.ArchivedDetail(repo.Name, repo.ManagedBy), AuditRefusal(code.RefusalRepoArchived)
 	default:
 		return false
 	}

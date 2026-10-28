@@ -23,10 +23,11 @@
  *
  * # Nothing here writes
  *
- * A repository's settings are the company document's (`code.repos`, its
- * `managed_by` is `config`), and every activation settles them: the way to
+ * A declared repository's settings are the company document's (`code.repos`,
+ * its `managed_by` is `config`), and every activation settles them: the way to
  * change one is the configuration, which the empty state offers a reader who
- * may open it.
+ * may open it. One a tool made (`managed_by` `tools`) is changed by the tools'
+ * lifecycle requests, which this workspace does not make either.
  */
 
 import { useMemo } from "react";

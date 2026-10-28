@@ -3,21 +3,26 @@ package code
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE RETENTION PASS: what removes a retired pack's row once its grace has
-// passed, and a deleted repository for good once it has been deleted for
-// longer than the company's code.deleted_retention_days.
+// passed, a deleted repository for good once it has been deleted for longer
+// than the company's code.deleted_retention_days, a renamed repository's old
+// name once its redirect has ended, and a seat's scratch repository once it has
+// sat idle code.scratch.idle_days — never one a live turn holds.
 //
 // It is the BODY of the code-retention duty. The duty — a fleet singleton,
 // its lease and its tick ([RetentionInterval]) — is the engine's, because
@@ -47,6 +52,17 @@ import (
 // [PurgePartBytes], so a step is the unit of progress and a purge is
 // resumable at every one. The listing is read a page at a time, the head of
 // the backlog the pass will reach, and only the columns it uses.
+//
+// Then every OLD NAME whose redirect has ended ([RedirectWindow]) is released
+// ([Store.ReleaseName]), and every SCRATCH REPOSITORY idle past
+// code.scratch.idle_days is deleted ([Store.ExpireScratch]) — restorable as
+// any deleted repository, then purged by the steps above — unless a LIVE TURN
+// holds it: a turn still running, or detached with a run row, that named it
+// through a code tool, a worker, an agent-mode run's bridge or a launch's
+// grant. The holds are read through [Retention.Holds] AFTER the expiry fixes
+// its cutoff and each page's position, which is what keeps a hold taken while
+// the pass decides from being lost ([Retention.expireScratch] states the
+// argument); a hold that cannot be read expires nothing.
 //
 // # How much of the write lane
 //
@@ -117,6 +133,18 @@ type Retention struct {
 	// is handed on again by a pass whose listing had not yet applied it.
 	// Nil hands it to nobody.
 	OnPurged func(ctx context.Context, name string) error
+	// Policy is the CURRENT epoch's code.scratch ([ScratchOf]), read once at
+	// the scratch expiry's start: how long a scratch repository may sit idle.
+	// Required, for Retention's reason.
+	Policy func() LifecyclePolicy
+	// Holds answers which of keys a LIVE TURN holds — a scratch repository's
+	// key is its id (the engine's codeHolds: every run row, whatever its
+	// status, and every running turn of every seat holder) — asked once a
+	// page of DUE scratch repositories, AFTER the page and its position are
+	// read. An error is an UNKNOWN, and the step expires nothing on one.
+	// Required: an expiry that could not ask would delete a repository a
+	// parked run is waiting to come back to.
+	Holds func(ctx context.Context, keys []string) (map[string]bool, error)
 	// Now is the clock the pass judges a retired pack's grace and a
 	// deletion's age by; nil is the wall clock.
 	Now func() time.Time
@@ -181,6 +209,22 @@ type RetentionReport struct {
 	// due a sweep or a purge: the designed stop, which the next pass resumes
 	// from.
 	Remain bool `json:"remain,omitempty"`
+	// Released counts the old names the pass freed, each a release_name
+	// record: a renamed repository's old name whose redirect ended
+	// ([RedirectWindow]).
+	Released int `json:"released,omitempty"`
+	// Expired counts the scratch repositories the pass deleted, idle past
+	// code.scratch.idle_days and held by no live turn — each restorable for
+	// code.deleted_retention_days.
+	Expired int `json:"expired,omitempty"`
+	// ScratchHeld counts the scratch repositories idle past
+	// code.scratch.idle_days that the pass KEPT because a live turn holds
+	// them: a running turn named it, or a parked run's row holds it.
+	ScratchHeld int `json:"scratch_held,omitempty"`
+	// ScratchExpiryUnread says why the scratch expiry stopped with nothing
+	// more expired: which live turns' holds could not be read. Never on a
+	// guess: a hold the pass cannot read is one it does not expire under.
+	ScratchExpiryUnread string `json:"scratch_expiry_unread,omitempty"`
 }
 
 // Pass hands on what an earlier pass purged and could not, sweeps every
@@ -216,6 +260,13 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	case r.Retention == nil:
 		return report, errors.New("code: a retention pass needs the current epoch's " +
 			"code.deleted_retention_days")
+	case r.Policy == nil:
+		return report, errors.New("code: a retention pass needs the current epoch's code.scratch, " +
+			"which its scratch expiry is held to")
+	case r.Holds == nil:
+		return report, errors.New("code: a retention pass needs the live turns' holds — its scratch " +
+			"expiry never deletes a repository a live turn has named, and one that could not ask " +
+			"would delete it under a parked run")
 	}
 	retention := r.Retention()
 	if retention <= 0 {
@@ -236,16 +287,36 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	if err := r.handOnHeld(ctx, &report, log); err != nil {
 		return report, err
 	}
-	if stop, err := r.sweep(ctx, now, pace, &report); err != nil || stop {
-		report.Remain = stop
-		return report, err
+	// THE STEPS IN ORDER, on one pacer and one budget: the retired packs'
+	// sweeps, the purges, the old names' releases, the idle scratch
+	// repositories' expiry. Each stops the pass at the budget (Remain), and
+	// the next pass resumes every step from the rows.
+	for _, step := range []func() (bool, error){
+		func() (bool, error) { return r.sweep(ctx, now, pace, &report) },
+		func() (bool, error) { return r.purges(ctx, now, retention, pace, &report, log) },
+		func() (bool, error) { return r.release(ctx, now, pace, &report) },
+		func() (bool, error) { return r.expireScratch(ctx, now, pace, &report, log) },
+	} {
+		if stop, err := step(); err != nil || stop {
+			report.Remain = stop
+			return report, err
+		}
 	}
+	return report, nil
+}
+
+// purges steps what is due a purge — every purging repository, then every one
+// deleted past the retention, each oldest deletion first — until nothing due
+// is left, the pass's budget runs out (stop) or the context ends (the error).
+func (r *Retention) purges(ctx context.Context, now time.Time, retention time.Duration, pace *pacer,
+	report *RetentionReport, log *slog.Logger) (stop bool, err error) {
+
 	page := cmp.Or(r.page, retentionPage)
 	var after *dueRepo
 	for {
 		due, err := r.Reader.due(ctx, dueQuery{cutoff: now.Add(-retention), after: after, limit: page})
 		if err != nil {
-			return report, fmt.Errorf("code: list the repositories due a purge past %v: %w",
+			return false, fmt.Errorf("code: list the repositories due a purge past %v: %w",
 				retention, err)
 		}
 		for _, repo := range due {
@@ -255,16 +326,137 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 				// meet the record it already appended.
 				continue
 			}
-			stop, err := r.purge(ctx, repo, retention, pace, &report, log)
-			if err != nil || stop {
-				report.Remain = stop
-				return report, err
+			if stop, err := r.purge(ctx, repo, retention, pace, report, log); err != nil || stop {
+				return stop, err
 			}
 		}
 		if len(due) < page {
-			return report, nil
+			return false, nil
 		}
 		after = &due[len(due)-1]
+	}
+}
+
+// release frees every renamed repository's old name whose redirect has ended
+// by now ([Store.ReleaseName]), oldest first, a page at a time — keyset on the
+// listing's order, so a name its release left (re-pointed, or not yet due on
+// the decide's clock) is passed over rather than listed at the head of every
+// page — until none is left, the pass's budget runs out (stop) or the context
+// ends (the error). A release that fails is reported and passed over.
+func (r *Retention) release(ctx context.Context, now time.Time, pace *pacer,
+	report *RetentionReport) (stop bool, err error) {
+
+	q := redirectsQuery{cutoff: now, limit: cmp.Or(r.page, retentionPage)}
+	for {
+		due, err := r.Reader.redirectsDue(ctx, q)
+		if err != nil {
+			return false, fmt.Errorf("code: list the old names whose redirect has ended: %w", err)
+		}
+		for _, name := range due {
+			switch turn, err := pace.wait(ctx); {
+			case err != nil:
+				return false, err
+			case !turn:
+				return true, nil
+			}
+			began := pace.clock()
+			released, err := r.Store.ReleaseName(ctx, name.name, name.repoID)
+			pace.took(began)
+			switch {
+			case err != nil && ctx.Err() != nil:
+				return false, ctx.Err()
+			case err != nil:
+				report.fail(name.name, err.Error())
+			case released:
+				report.Released++
+			}
+		}
+		if len(due) < q.limit {
+			return false, nil
+		}
+		q.after = &due[len(due)-1]
+	}
+}
+
+// expireScratch deletes every scratch repository idle past code.scratch.idle_days
+// that no live turn holds — never on an unknown — a page at a time, oldest
+// activity first, until none is left, the pass's budget runs out (stop) or
+// the context ends (the error).
+//
+// THE ORDER IS THE SAFETY ARGUMENT, and every step keeps it: the CUTOFF is
+// taken once, before anything is read; each PAGE is read with the code log's
+// position inside its own transaction (Through); and only THEN are the live
+// turns' holds read, for that page's ids. A hold the pass could not see was
+// therefore taken after its cutoff was fixed, and either the repository was
+// active within [HoldRecordAfter] when it was taken — later than the cutoff,
+// which the decide refuses — or the turn recorded its hold on the
+// repository's subject, past Through, which the decide refuses too
+// ([Store.ExpireScratch]). KEYSET, never the head again: a held repository
+// stays active and idle, and listed from the top, a page of held ones would
+// fill every page and the step would never reach the rest.
+//
+// A HOLD THAT CANNOT BE READ ends the step for this pass with nothing more
+// expired: [RetentionReport.ScratchExpiryUnread] says why, and a WARN line
+// names the page — an unknown is never "nobody holds it".
+func (r *Retention) expireScratch(ctx context.Context, now time.Time, pace *pacer, report *RetentionReport,
+	log *slog.Logger) (stop bool, err error) {
+
+	q := idleQuery{cutoff: now.Add(-r.Policy().ScratchIdle), limit: cmp.Or(r.page, retentionPage)}
+	for {
+		page, err := r.Reader.idleScratch(ctx, q)
+		if err != nil {
+			return false, fmt.Errorf("code: list the scratch repositories idle since %s: %w",
+				q.cutoff.UTC().Format(time.RFC3339), err)
+		}
+		if len(page.repos) == 0 {
+			return false, nil
+		}
+		ids := make([]string, len(page.repos))
+		for i, repo := range page.repos {
+			ids[i] = repo.id
+		}
+		held, err := r.Holds(ctx, ids)
+		if err != nil {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			report.ScratchExpiryUnread = fmt.Sprintf("which scratch repositories live turns hold could not "+
+				"be read (%v); none was expired this pass", err)
+			log.WarnContext(ctx, "code_scratch_expiry_skipped", "error", err.Error(), "first", ids[0],
+				"page", len(ids), "detail", "a repository whose holds are unknown is never expired; the "+
+					"next pass asks again")
+			return false, nil
+		}
+		x := ScratchExpiry{Cutoff: q.cutoff, Through: page.through, KeyedTo: page.keyedTo}
+		for _, repo := range page.repos {
+			if held[repo.id] {
+				report.ScratchHeld++
+				continue
+			}
+			switch turn, err := pace.wait(ctx); {
+			case err != nil:
+				return false, err
+			case !turn:
+				return true, nil
+			}
+			began := pace.clock()
+			expired, err := r.Store.ExpireScratch(ctx, repo.id, x)
+			pace.took(began)
+			switch {
+			case err != nil && ctx.Err() != nil:
+				return false, ctx.Err()
+			case err != nil:
+				report.fail(repo.name, err.Error())
+			case expired:
+				report.Expired++
+				log.InfoContext(ctx, "code_scratch_expired", "name", repo.name, "id", repo.id,
+					"idle_since", repo.lastActivity.UTC().Format(time.RFC3339))
+			}
+		}
+		if len(page.repos) < q.limit {
+			return false, nil
+		}
+		q.after = &page.repos[len(page.repos)-1]
 	}
 }
 
@@ -577,6 +769,147 @@ func (p *pacer) took(began time.Time) {
 	ended := p.clock()
 	p.next = ended.Add(time.Duration(float64(ended.Sub(began)) * retentionIdlePerStep))
 }
+
+// redirectsQuery is one page of the release's listing.
+type redirectsQuery struct {
+	// cutoff is the pass's now: an old name whose redirect ended at or
+	// before it is due.
+	cutoff time.Time
+	// after is the last name of the page before; nil for the first.
+	after *dueRedirect
+	limit int
+}
+
+// dueRedirect is one old name the release step frees.
+type dueRedirect struct {
+	token, name, repoID string
+	until               int64
+}
+
+// redirectsDue lists one page of the old names whose redirect ended at or
+// before q.cutoff, oldest first and keyset after q.after — a STALE READ of
+// this node's rows, since every release decides again in its own snapshot —
+// over code_names_redirect_idx (replicated 0068), the >= beside the OR keeping
+// the index's range seek.
+func (r *Reader) redirectsDue(ctx context.Context, q redirectsQuery) ([]dueRedirect, error) {
+	if q.limit <= 0 {
+		return nil, fmt.Errorf("%w: a page of the redirects due lists at least one", ErrInvalid)
+	}
+	after := dueRedirect{until: math.MinInt64}
+	if q.after != nil {
+		after = *q.after
+	}
+	var out []dueRedirect
+	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
+		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
+		out = out[:0]
+		rows, err := tx.QueryContext(ctx, redirectsDueSQL, store.EncodeTime(q.cutoff), after.until,
+			after.until, after.token, q.limit)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var d dueRedirect
+			if err := rows.Scan(&d.token, &d.name, &d.repoID, &d.until); err != nil {
+				return err
+			}
+			out = append(out, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// idleQuery is one page of the scratch expiry's listing.
+type idleQuery struct {
+	// cutoff is the pass's now less code.scratch.idle_days, fixed once.
+	cutoff time.Time
+	// after is the last repository of the page before; nil for the first.
+	after *idleRepo
+	limit int
+}
+
+// idleRepo is one scratch repository the expiry may take.
+type idleRepo struct {
+	id, name     string
+	lastActivity time.Time
+	activity     int64
+}
+
+// idlePage is one page of the scratch expiry's listing, with the position it
+// was read at — the code log's checkpoint, read INSIDE the page's transaction
+// — and the stream identity that checkpoint is keyed to: what every expiry of
+// the page is decided against ([ScratchExpiry]).
+type idlePage struct {
+	repos   []idleRepo
+	through statelog.Position
+	keyedTo time.Time
+}
+
+// idleScratch lists one page of the ACTIVE scratch repositories last active at
+// or before q.cutoff, idle longest first and keyset after q.after, over
+// code_repos_idle_idx (replicated 0068) — and the position it read them at,
+// in the same transaction. A STALE READ: every expiry decides again in its
+// own snapshot, and refuses a repository with any record past this page.
+func (r *Reader) idleScratch(ctx context.Context, q idleQuery) (idlePage, error) {
+	if q.limit <= 0 {
+		return idlePage{}, fmt.Errorf("%w: a page of the idle scratch repositories lists at least one",
+			ErrInvalid)
+	}
+	after := idleRepo{activity: math.MinInt64}
+	if q.after != nil {
+		after = *q.after
+	}
+	var page idlePage
+	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
+		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
+		page = idlePage{}
+		cp, err := checkpointIn(ctx, tx)
+		if err != nil {
+			return err
+		}
+		page.through, page.keyedTo = cp.At, cp.KeyedTo
+		rows, err := tx.QueryContext(ctx, idleScratchSQL, store.EncodeTime(q.cutoff), after.activity,
+			after.activity, after.id, q.limit)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var d idleRepo
+			if err := rows.Scan(&d.id, &d.name, &d.activity); err != nil {
+				return err
+			}
+			d.lastActivity = store.DecodeTime(d.activity)
+			page.repos = append(page.repos, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return idlePage{}, err
+	}
+	return page, nil
+}
+
+// The two listings' statements, each registered in plan_test.go: keyset pages
+// over their partial indexes, the predicate repeated verbatim and the >=
+// beside the OR keeping the range seek.
+const (
+	redirectsDueSQL = `SELECT token, name, repo_id, redirect_until FROM code_names
+		WHERE redirect_until IS NOT NULL AND redirect_until <= ? AND redirect_until >= ?
+			AND (redirect_until > ? OR token > ?)
+		ORDER BY redirect_until, token LIMIT ?`
+	idleScratchSQL = `SELECT id, name, last_activity_at FROM code_repos
+		WHERE kind = 'scratch' AND status = 'active' AND last_activity_at <= ? AND last_activity_at >= ?
+			AND (last_activity_at > ? OR id > ?)
+		ORDER BY last_activity_at, id LIMIT ?`
+)
 
 // sleepFor waits d, or until ctx ends.
 func sleepFor(ctx context.Context, d time.Duration) error {

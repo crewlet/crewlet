@@ -38,18 +38,37 @@ export const COMMAND_OUTCOMES = [
 
 /**
  * A repository's name, as the engine holds it (`code.ValidName`, over
- * `gitref.ValidRepoName`): one host-name label in lowercase — letters, digits
- * and hyphens, beginning and ending with a letter or a digit, at most 63 in all.
- * Held by `internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar`.
+ * `gitref.ValidRepoName`), in either of its two forms: a PROJECT's, one
+ * host-name label in lowercase — letters, digits and hyphens, beginning and
+ * ending with a letter or a digit — or a seat's SCRATCH repository's,
+ * `<handle>.<slug>`, two such labels joined by one dot, the slug never `git`
+ * (`<handle>.git` is the URL of the repository `<handle>`). This is the SHAPE;
+ * the length is [REPO_NAME_MAX_BYTES], which bounds the two labels together
+ * and so cannot be spelled in the pattern. Held, with it, by
+ * `internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar`.
  *
  * WHAT AN ADDRESS'S `repo=` IS HELD TO before anything is asked about it
  * (`lib/code.ts`): a name no repository can have is said in place, as one,
  * rather than sent and answered as the engine's refusal of the request. HELD BY
  * BEHAVIOUR, not by spelling: the gate compiles this and runs a corpus of names
- * through it and through the engine's own check, failing on any name the two
- * answer differently.
+ * through it and the length bound, and through the engine's own check, failing
+ * on any name the two answer differently.
  *
  * A STRING rather than a regular expression, because a contract module is
- * data and `lib/code.ts` is where it is compiled.
+ * data and `lib/code.ts` is where it is compiled — ONE literal, which is what
+ * the gate reads — and one both readers compile alike: no lookaround, which
+ * the engine's gate (Go's RE2) has not, so the slug that is not `git` is
+ * spelled out letter by letter: a label beginning with anything but `g`; `g`
+ * alone or followed by anything but `i`; `gi` alone or followed by anything
+ * but `t`; or `git` with more after it.
  */
-export const REPO_NAME = "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$";
+export const REPO_NAME =
+  "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.(?:[a-fh-z0-9](?:[a-z0-9-]*[a-z0-9])?|g(?:[a-hj-z0-9](?:[a-z0-9-]*[a-z0-9])?|-[a-z0-9-]*[a-z0-9])?|gi(?:[a-su-z0-9](?:[a-z0-9-]*[a-z0-9])?|-[a-z0-9-]*[a-z0-9])?|git[a-z0-9-]*[a-z0-9]))?$";
+
+/**
+ * The longest a repository's name may be, in bytes, whichever its form
+ * (`gitref.MaxRepoNameBytes`): 63, the longest DNS label, and the two labels
+ * of a scratch repository's name together with their dot. Held with
+ * [REPO_NAME] by `internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar`.
+ */
+export const REPO_NAME_MAX_BYTES = 63;

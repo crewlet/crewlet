@@ -1286,9 +1286,16 @@ charged to (`docs-writer (turn <turn id>, native ENG-12)`), as the engine
 stamped them when the push was made;
 each ref's result is `ok`, `noop` or `ng`, with git's own `..` for a fast
 forward and `...` for a forced move, and an `ng`'s reason. `limits` are the
-serving node's `code.limits`. A deleted repository's header says when it was
-deleted and that declaring it again in `code.repos` restores it until
-`code.deleted_retention_days` have passed.
+serving node's `code.limits`. `managed by` is who changes the repository:
+`code.repos` for a declared one, or the code tools for one a
+[tool made](../concepts/code-host.md#repositories-made-by-tools) — a project,
+or a seat's own scratch repository with when it was last active, the clock its
+idle expiry reads. A deleted repository's header says when it was deleted and
+how it comes back until `code.deleted_retention_days` have passed: by
+declaring it again in `code.repos`, or for one a tool made, by a restore
+through the code tools. A repository asked for by a name a rename left
+redirecting to it is printed under its current name, with a `renamed` line
+saying until when the old name redirects.
 
 `-json` prints the node's answers as they came — one JSON document a page, the
 repository's first with `-repo` — for a script. What the command holds while it

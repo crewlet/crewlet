@@ -116,6 +116,14 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// start, its iteration, whether its phase was published — is not this
 	// one's. Only the model is the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model}
+	// THE TURN'S CODE HOLDS, each once and within the row's bound: a create
+	// writes them as handed, a reset unions them ([CoordStore.resetLaunch]).
+	holds, fits := unionHolds(nil, run.CodeHolds)
+	if !fits {
+		return PendingRun{}, fmt.Errorf("sandbox: begin launch %s: %d holds: %w", run.TurnID,
+			len(holds), ErrCodeHoldsFull)
+	}
+	run.CodeHolds = holds
 	raw, err := encodeRun(run)
 	if err != nil {
 		return PendingRun{}, err
@@ -163,11 +171,22 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // named by nothing.
 func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool, int64, error) {
 	var held int64
+	full := false
 	opened, reset, err := s.mutateLive(ctx, run.TurnID, func(existing *PendingRun) bool {
 		if outranked(*existing, fence) {
 			held = existing.OwnerEpoch
 			return false
 		}
+		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
+		// relaunch's turn may still depend on what an earlier job, or an
+		// earlier half of the turn, named — and once it parks, this row is
+		// the only place the code host's expiry can read that from.
+		holds, fits := unionHolds(existing.CodeHolds, run.CodeHolds)
+		if !fits {
+			full = true
+			return false
+		}
+		existing.CodeHolds = holds
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		existing.Launch = run.Launch
@@ -210,10 +229,61 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Charged, existing.CompanyCharged = false, false
 		return true
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		return PendingRun{}, false, 0, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID, err)
+	case full:
+		return PendingRun{}, false, 0, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID,
+			ErrCodeHoldsFull)
 	}
 	return opened, reset, held, nil
+}
+
+// unionHolds is held with keys added — each key once, in the order first
+// taken — and whether the union fits [MaxCodeHolds].
+func unionHolds(held, keys []string) ([]string, bool) {
+	out := make([]string, 0, len(held)+len(keys))
+	seen := make(map[string]bool, len(held)+len(keys))
+	for _, list := range [][]string{held, keys} {
+		for _, key := range list {
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, key)
+			}
+		}
+	}
+	return out, len(out) <= MaxCodeHolds
+}
+
+// AddCodeHolds adds keys to a live run's code holds. See the contract on
+// [PendingStore].
+func (s *CoordStore) AddCodeHolds(ctx context.Context, turnID string, keys []string) (bool, error) {
+	if len(keys) == 0 || slices.Contains(keys, "") {
+		return false, fmt.Errorf("sandbox: a hold on run %s names no key", turnID)
+	}
+	full, already := false, false
+	_, wrote, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		holds, fits := unionHolds(run.CodeHolds, keys)
+		switch {
+		case !fits:
+			full = true
+			return false
+		case len(holds) == len(run.CodeHolds):
+			// EVERY KEY ALREADY HELD: the row says it, and nothing is
+			// written.
+			already = true
+			return false
+		}
+		run.CodeHolds = holds
+		return true
+	})
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("sandbox: hold %d keys on run %s: %w", len(keys), turnID, err)
+	case full:
+		return false, fmt.Errorf("sandbox: hold %d keys on run %s: %w", len(keys), turnID, ErrCodeHoldsFull)
+	}
+	return wrote || already, nil
 }
 
 // Get returns one run by turn id.
@@ -792,6 +862,12 @@ func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspensio
 		return true
 	})
 	return won, err
+}
+
+// ListRuns returns every run the store holds, whatever its status. See the
+// contract on [PendingStore].
+func (s *CoordStore) ListRuns(ctx context.Context) ([]PendingRun, error) {
+	return s.list(ctx, func(PendingRun) bool { return true })
 }
 
 // ListActive returns every run that has not finished.

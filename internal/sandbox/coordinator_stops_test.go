@@ -789,6 +789,20 @@ func (s *refusingStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 	return s.inner.ListActive(ctx)
 }
 
+func (s *refusingStore) ListRuns(ctx context.Context) ([]PendingRun, error) {
+	if s.called("ListRuns") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ListRuns(ctx)
+}
+
+func (s *refusingStore) AddCodeHolds(ctx context.Context, turnID string, keys []string) (bool, error) {
+	if s.called("AddCodeHolds") {
+		return false, errRefusedCall
+	}
+	return s.inner.AddCodeHolds(ctx, turnID, keys)
+}
+
 func (s *refusingStore) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {
 	if s.called("ListActiveForSeat") {
 		return nil, errRefusedCall

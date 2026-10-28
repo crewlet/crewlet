@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -84,8 +86,18 @@ type node struct {
 
 	// chart is the roster the reader judges a seat by — set by a case about
 	// grants before it reads, and nil otherwise: no chart, as a reader built
-	// without one has.
+	// without one has. The lifecycle store decides by it too: with none, it
+	// decides no lifecycle request, as a node with no epoch installed.
 	chart code.Roster
+
+	// scratch is the lifecycle policy the store holds a create to — the
+	// defaults a company that sets no code.scratch runs under, unless a case
+	// sets another before it asks.
+	scratch code.LifecyclePolicy
+
+	// behind marks the node confirmed behind the company's configuration:
+	// its lifecycle store decides no request while it is set.
+	behind atomic.Bool
 
 	// mu SERIALISES the drain: a write's wait drains on the writing
 	// goroutine, and two writes waiting at once — two repositories
@@ -213,13 +225,6 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
 	}
-	lifecycle, err := code.NewStore(code.StoreOptions{
-		Publisher: pub, DB: db.Reader(), NodeID: id,
-		Now: func() time.Time { return harnessAt },
-	})
-	if err != nil {
-		t.Fatalf("build the store: %v", err)
-	}
 	// THROUGH THE FRAMEWORK'S READ AUTHORITY, like production, over this
 	// node's own waiter: a level asked for is a level served.
 	authority, err := statelogtest.LocalReaderOver(code.Domain{}, db, waiter)
@@ -228,7 +233,25 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	}
 	n := &node{
 		t: t, id: id, db: db, log: log, records: records, applier: code.NewApplier(), pub: pub,
-		store: lifecycle, waiter: waiter, authority: authority,
+		waiter: waiter, authority: authority, scratch: code.ScratchOf(config.Code{}),
+	}
+	// THE LIFECYCLE STORE, deciding a tool's request by this node's chart,
+	// its scratch policy and whether it is behind — each read per request,
+	// as production reads the current epoch's.
+	n.store, err = code.NewStore(code.StoreOptions{
+		Publisher: pub, DB: db.Reader(), NodeID: id,
+		Now: func() time.Time { return harnessAt },
+		SeatRules: func() (code.SeatRules, bool) {
+			if n.chart == nil {
+				return code.SeatRules{}, false
+			}
+			return code.SeatRules{Roster: n.chart}, true
+		},
+		Current: func() bool { return !n.behind.Load() },
+		Policy:  func() code.LifecyclePolicy { return n.scratch },
+	})
+	if err != nil {
+		t.Fatalf("build the store: %v", err)
 	}
 	reader, err := code.NewReader(code.ReaderOptions{Log: authority,
 		Roster: func() code.Roster { return n.chart }})

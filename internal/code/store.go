@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -49,6 +50,27 @@ type StoreOptions struct {
 	// Now is the clock authored instants (a record's CreatedAt) and the
 	// retention judgement read; nil takes the wall clock in UTC.
 	Now func() time.Time
+
+	// THE THREE A TOOL'S LIFECYCLE REQUEST IS DECIDED BY ([Store.Lifecycle]),
+	// none of them required: the code log's eviction gate builds a store that
+	// decides only evictions, and a store missing SeatRules or Policy answers
+	// every lifecycle request [ErrNotServing] — "this node's code store
+	// decides no lifecycle request", so the router asks the next data node —
+	// and never judges one by a nil chart.
+
+	// SeatRules is the DECIDING node's epoch's chart (the committer's own,
+	// [CommitterOptions.SeatRules]), read once a request: who may ask what
+	// is judged by it — a seat's grant, a create's owner — and false (no
+	// epoch installed yet) answers every request [ErrNotServing].
+	SeatRules func() (SeatRules, bool)
+	// Current is whether this node serves the company's configuration
+	// (Reconciler.Admits): false — confirmed behind it, shed or stuck —
+	// answers EVERY request [ErrNotServing], since every kind's "who may"
+	// reads the chart, a person's create included. Nil is current.
+	Current func() bool
+	// Policy is the epoch's code.scratch and the repository bound
+	// ([ScratchOf]), read once a create.
+	Policy func() LifecyclePolicy
 }
 
 // Store is the code host's lifecycle write path.
@@ -57,6 +79,10 @@ type Store struct {
 	db        store.ReplicatedReader
 	nodeID    string
 	now       func() time.Time
+
+	seatRules func() (SeatRules, bool)
+	current   func() bool
+	policy    func() LifecyclePolicy
 }
 
 // NewStore builds the lifecycle store, refusing what it cannot work without.
@@ -72,7 +98,8 @@ func NewStore(o StoreOptions) (*Store, error) {
 		return nil, errors.New("code: a store needs the deciding node's id, which a " +
 			"configuration or system record names as its actor")
 	}
-	s := &Store{publisher: o.Publisher, db: o.DB, nodeID: o.NodeID, now: o.Now}
+	s := &Store{publisher: o.Publisher, db: o.DB, nodeID: o.NodeID, now: o.Now, seatRules: o.SeatRules,
+		current: o.Current, policy: o.Policy}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
@@ -200,7 +227,7 @@ func (s *Store) EnsureRepo(ctx context.Context, a Activation, d Declared) (Ensur
 	if a.epoch == 0 {
 		return Ensured{}, ErrNoActivation
 	}
-	if err := d.validate(); err != nil {
+	if err := d.Validate(); err != nil {
 		return Ensured{}, err
 	}
 	settings := d.settingsAt(a)
@@ -215,21 +242,32 @@ func (s *Store) EnsureRepo(ctx context.Context, a Activation, d Declared) (Ensur
 	return s.settle(ctx, a, found, settings)
 }
 
-// validate refuses a declaration no activation can ensure.
-func (d Declared) validate() error {
+// Validate refuses a declaration no activation can ensure: a name that is no
+// PROJECT's — a declared repository is never a seat's scratch repository,
+// whose dotted name only that seat's tool creates — and settings that are no
+// configuration's, judged as the reconcile records them (settingsAt): the
+// declaration states no kind and no epoch, which the domain stamps, and one
+// stating a kind other than a project's is refused.
+func (d Declared) Validate() error {
 	switch {
-	case !ValidName(d.Name):
-		return fmt.Errorf("%w: name: %q is not a repository name", ErrInvalid, d.Name)
+	case !gitref.ValidProjectName(d.Name):
+		return fmt.Errorf("%w: name: %q is not a project repository's name", ErrInvalid, d.Name)
 	case d.Settings.ManagedBy != ManagedConfig:
 		return fmt.Errorf("%w: settings.managed_by: a declared repository is "+
 			"managed by %s, not %q", ErrInvalid, ManagedConfig, d.Settings.ManagedBy)
+	case d.Settings.Kind != "" && d.Settings.Kind != RepoProject:
+		return fmt.Errorf("%w: settings.kind: a declared repository is a %s, not %q", ErrInvalid,
+			RepoProject, d.Settings.Kind)
 	}
-	return d.Settings.Validate()
+	return d.settingsAt(Activation{}).Validate()
 }
 
-// settingsAt is what the declaration says, stamped with the activation a.
+// settingsAt is what the declaration says, stamped with the activation a — THE
+// ONE PLACE every settings a reconcile records is formed, so every one is a
+// PROJECT's: a configuration declares nothing else.
 func (d Declared) settingsAt(a Activation) RepoSettings {
 	settings := d.Settings
+	settings.Kind = RepoProject
 	settings.ConfigEpoch = a.epoch
 	return settings
 }
@@ -315,7 +353,7 @@ func (s *Store) EnsureRepos(ctx context.Context, a Activation, declared []Declar
 	out := make([]EnsureResult, len(declared))
 	valid := make([]Declared, 0, len(declared))
 	for i, d := range declared {
-		if out[i].Err = d.validate(); out[i].Err == nil {
+		if out[i].Err = d.Validate(); out[i].Err == nil {
 			valid = append(valid, d)
 		}
 	}
@@ -726,15 +764,15 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	for rows.Next() {
 		var id string
 		var row repoRow
-		var status, managed, owners, visibility string
-		if err = rows.Scan(&id, &row.Name, &status, &managed, &owners, &row.Owner.Ref, &visibility,
+		var status, managed, kind, owners, visibility string
+		if err = rows.Scan(&id, &row.Name, &status, &managed, &kind, &owners, &row.Owner.Ref, &visibility,
 			&row.DefaultBranch, &row.Description, &row.ConfigEpoch, &row.PurgeParts,
 			&row.DeletedAt); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("code: read the declared repositories: %w", err)
 		}
 		row.Status, row.ManagedBy, row.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
-		row.Visibility = Visibility(visibility)
+		row.Kind, row.Visibility = RepoKind(kind), Visibility(visibility)
 		out[id] = row
 	}
 	if err = rows.Err(); err != nil {
@@ -1037,6 +1075,7 @@ type repoRow struct {
 	Name          string
 	Status        RepoStatus
 	ManagedBy     ManagedBy
+	Kind          RepoKind
 	Owner         Owner
 	Visibility    Visibility
 	DefaultBranch string
@@ -1045,13 +1084,19 @@ type repoRow struct {
 	PurgeParts    int
 	DeletedAt     sql.NullInt64
 	Protections   []Protection
+	// LastActivityAt is the repository's idle clock, as the store encodes an
+	// instant, and Version the composed position of the last record on its
+	// subject: what a scratch expiry's decide holds to its pass
+	// ([Store.ExpireScratch]).
+	LastActivityAt int64
+	Version        int64
 }
 
 // settings is the row's settings, for comparison with a declaration.
 func (r repoRow) settings() RepoSettings {
 	return RepoSettings{
-		ManagedBy: r.ManagedBy, Owner: r.Owner, Visibility: r.Visibility, DefaultBranch: r.DefaultBranch,
-		Description: r.Description, Archived: r.Status == RepoStatusArchived,
+		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, Visibility: r.Visibility,
+		DefaultBranch: r.DefaultBranch, Description: r.Description, Archived: r.Status == RepoStatusArchived,
 		Protections: r.Protections, ConfigEpoch: r.ConfigEpoch,
 	}
 }
@@ -1059,12 +1104,12 @@ func (r repoRow) settings() RepoSettings {
 // repoIn reads a repository's row and its rules in tx.
 func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 	var (
-		row                                 repoRow
-		status, managed, owners, visibility string
+		row                                       repoRow
+		status, managed, kind, owners, visibility string
 	)
-	err := tx.QueryRowContext(ctx, repoRowSQL, id).Scan(&row.Name, &status, &managed, &owners,
+	err := tx.QueryRowContext(ctx, repoRowSQL, id).Scan(&row.Name, &status, &managed, &kind, &owners,
 		&row.Owner.Ref, &visibility, &row.DefaultBranch, &row.Description, &row.ConfigEpoch,
-		&row.PurgeParts, &row.DeletedAt)
+		&row.PurgeParts, &row.DeletedAt, &row.LastActivityAt, &row.Version)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return repoRow{}, false, nil
@@ -1072,7 +1117,7 @@ func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 		return repoRow{}, false, fmt.Errorf("code: read repository %s: %w", id, err)
 	}
 	row.Status, row.ManagedBy, row.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
-	row.Visibility = Visibility(visibility)
+	row.Kind, row.Visibility = RepoKind(kind), Visibility(visibility)
 	if row.Protections, err = protectionsIn(ctx, tx, id); err != nil {
 		return repoRow{}, false, err
 	}
@@ -1114,11 +1159,12 @@ const (
 	claimSQL  = `SELECT repo_id FROM code_names WHERE token = ?`
 	claimsSQL = `SELECT token, repo_id FROM code_names
 		WHERE token IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
-	reposRowsSQL = `SELECT id, name, status, managed_by, owner_kind, owner, visibility, default_branch,
+	reposRowsSQL = `SELECT id, name, status, managed_by, kind, owner_kind, owner, visibility, default_branch,
 		description, config_epoch, purge_parts, deleted_at FROM code_repos
 		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
-	repoRowSQL = `SELECT name, status, managed_by, owner_kind, owner, visibility, default_branch,
-		description, config_epoch, purge_parts, deleted_at FROM code_repos WHERE id = ?`
+	repoRowSQL = `SELECT name, status, managed_by, kind, owner_kind, owner, visibility, default_branch,
+		description, config_epoch, purge_parts, deleted_at, last_activity_at, version FROM code_repos
+		WHERE id = ?`
 	protectionsSQL = `SELECT pattern, allow_force, allow_delete, direct_push FROM code_protections
 		WHERE repo_id = ? ORDER BY pattern`
 	readBackSQL = `SELECT config_epoch FROM code_repos WHERE id = ?`

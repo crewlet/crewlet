@@ -1,6 +1,7 @@
 package estate
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -167,6 +168,22 @@ func (f *fakeNode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 	return out, nil
 }
 
+// Lifecycle decides every lifecycle request it is given at the next position
+// on the code log, answering the repository the request names as applied — or
+// refuses every one with codeErr.
+func (f *fakeNode) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+	f.note("code.lifecycle")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.codeErr != nil {
+		return code.LifecycleResult{}, f.codeErr
+	}
+	f.codeSeq++
+	at := statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}
+	return code.LifecycleResult{Outcome: statelog.OutcomeApplied,
+		Repo: code.RepoRef{ID: cmp.Or(r.RepoID, "repo-on-"+f.name), Name: r.Name, Position: at}, Position: at}, nil
+}
+
 // codeReads is every read the code host makes through the seam, by the name
 // of its operation — so a case that holds each read to a rule names the one a
 // later commit adds as missing ([requireEveryCodeRead]).
@@ -301,6 +318,7 @@ type codeAnswers struct {
 	compacted code.CompactResult
 	expunged  code.ExpungeResult
 	changed   code.ChangeResult
+	lifecycle code.LifecycleResult
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -373,6 +391,11 @@ func (d *codeDesk) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 	return held.resolved, err
 }
 
+func (d *codeDesk) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+	held, err := d.took(r)
+	return held.lifecycle, err
+}
+
 // deskGit is a desk as a git node's git half: what it reads by object id is
 // recorded and answered as the desk's code half is, the desk's err included.
 type deskGit struct{ d *codeDesk }
@@ -419,10 +442,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	created := time.Date(2031, 3, 1, 9, 0, 0, 0, time.UTC)
 	ref := code.RepoRef{
 		ID: "019a0c2e-0000-7000-8000-0000000000a1", Name: "app", Status: code.RepoStatusActive,
-		ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
+		ManagedBy: code.ManagedTools, Kind: code.RepoProject, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
 		DefaultBranch: "main", Description: "the app",
-		Protections: []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectNone}},
-		Refs:        3, LivePacks: 2, LiveBytes: 9_000, LiveObjects: 1_200, DropEpoch: 3, Position: at,
+		Protections:    []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectNone}},
+		LastActivityAt: created.Add(-time.Hour), Refs: 3, LivePacks: 2, LiveBytes: 9_000, LiveObjects: 1_200,
+		DropEpoch: 3, Redirect: "app-2", RedirectUntil: created.Add(24 * time.Hour), Position: at,
 	}
 	pack := code.PackRow{
 		PackID: "push-1", Part: "push", Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("p1")),
@@ -690,6 +714,54 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("git read asked %+v, want %+v", got, stamped)
 	}
 
+	// A LIFECYCLE REQUEST of every kind's fields, and its answer whole: a
+	// create's whole settings, a settings CHANGE and a protection's — the
+	// changes the deciding node resolves — a delete's reason, and a hold's
+	// turn and the read it is decided at.
+	d.mu.Lock()
+	d.lifecycle = code.LifecycleResult{Outcome: statelog.OutcomePending, Repo: ref,
+		Refusal: code.LifecycleStale, Detail: "another rename of the repository landed first", Position: at}
+	d.mu.Unlock()
+	desc, branch, vis := "the app, renamed", "trunk", code.VisibilityUnit
+	owner := code.Owner{Kind: code.OwnerUnit, Ref: "plat"}
+	op := "019a0c2e-0000-7000-8000-0000000000f0.code_test"
+	for name, r := range map[string]code.LifecycleRequest{
+		"a create": {Kind: code.LifecycleCreate, OpID: op, Actor: seat, Name: "dev.app",
+			Create: &code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
+				Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, DefaultBranch: "main",
+				Description: "an experiment", Visibility: code.VisibilityUnit}},
+		"a rename": {Kind: code.LifecycleRename, OpID: op, Actor: seat, RepoID: ref.ID, Name: "app-3"},
+		"a settings change": {Kind: code.LifecycleSettings, OpID: op,
+			Actor:  code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"},
+			RepoID: ref.ID, Change: &code.RepoChange{Description: &desc, DefaultBranch: &branch,
+				Visibility: &vis, Owner: &owner}},
+		"a protection": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
+			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", Rule: &code.Protection{
+				Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true,
+				DirectPush: code.DirectPersons}}},
+		"a delete": {Kind: code.LifecycleDelete, OpID: op, Actor: seat, RepoID: ref.ID, Reason: "done with it"},
+		"a hold": {Kind: code.LifecycleHold, OpID: op, Actor: seat, RepoID: ref.ID, TurnID: "turn-1",
+			Seen: at},
+	} {
+		if got, err := seam.Lifecycle(ctx, r); err != nil || !reflect.DeepEqual(got, d.lifecycle) {
+			t.Errorf("lifecycle %s = (%+v, %v), want %+v", name, got, err, d.lifecycle)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, r) {
+			t.Errorf("lifecycle %s asked %+v, want %+v", name, got, r)
+		}
+	}
+	// AND A CONFIGURATION'S REPOSITORY'S REFUSAL KEEPS ITS SENTINEL.
+	d.mu.Lock()
+	d.err = fmt.Errorf("rename app: %w", code.ErrConfigManaged)
+	d.mu.Unlock()
+	if _, err := seam.Lifecycle(ctx, code.LifecycleRequest{Kind: code.LifecycleArchive, OpID: op,
+		Actor: seat, RepoID: ref.ID}); !errors.Is(err, code.ErrConfigManaged) {
+		t.Errorf("a served config_managed crossed as %v", err)
+	}
+	d.mu.Lock()
+	d.err = nil
+	d.mu.Unlock()
+
 	// A REFUSAL KEEPS ITS IDENTITY: the admission answers a missing
 	// repository 404, a cache reads a moved snapshot from its first page,
 	// and a newer build's record is a version this one cannot read.
@@ -886,6 +958,45 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		}
 		if got := f.client.Code().FloorOf("repo-expunged"); got != expunged {
 			t.Fatalf("a change of another repository moved repo-expunged's floor to %v", got)
+		}
+	}
+
+	// AND A LIFECYCLE REQUEST THIS NODE ASKED raises them to its record where
+	// it landed — and never for a refusal, nor for an answer the rows gave with
+	// no record (a no-op, a repeat of nothing), whose position is the rows
+	// somebody else wrote: the floor of the repository it is about and of no
+	// other.
+	lived := statelog.Position{Stream: codeStream, Generation: 1, Seq: 95}
+	for _, tc := range []struct {
+		answer code.LifecycleResult
+		// want is the session's floor after it, and repo the repository's own.
+		want, repo statelog.Position
+	}{
+		{code.LifecycleResult{Refusal: code.LifecycleNotPermitted, Detail: "seat dev may not archive it",
+			Repo: code.RepoRef{ID: "repo-lived", Position: past}}, changed, statelog.Position{}},
+		{code.LifecycleResult{Outcome: statelog.OutcomeApplied,
+			Repo: code.RepoRef{ID: "repo-lived", Position: past}}, changed, statelog.Position{}},
+		{code.LifecycleResult{Outcome: statelog.OutcomeApplied,
+			Repo: code.RepoRef{ID: "repo-lived", Position: lived}, Position: lived}, lived, lived},
+	} {
+		d.mu.Lock()
+		d.lifecycle = tc.answer
+		d.mu.Unlock()
+		if _, err := f.client.Code().Lifecycle(t.Context(), code.LifecycleRequest{Kind: code.LifecycleArchive,
+			RepoID: "repo-lived"}); err != nil {
+			t.Fatalf("lifecycle: %v", err)
+		}
+		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
+			[]statelog.Position{tc.want}) {
+			t.Fatalf("after a lifecycle request answered %+v the code floor is %v, want %v", tc.answer, got,
+				tc.want)
+		}
+		if got := f.client.Code().FloorOf("repo-lived"); got != tc.repo {
+			t.Fatalf("after a lifecycle request answered %+v the repository's floor is %v, want %v",
+				tc.answer, got, tc.repo)
+		}
+		if got := f.client.Code().FloorOf("repo-expunged"); got != expunged {
+			t.Fatalf("a lifecycle request of another repository moved repo-expunged's floor to %v", got)
 		}
 	}
 }

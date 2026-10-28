@@ -934,6 +934,23 @@ func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, 
 	return call(ctx, c.r, opCodeRead, nil, q)
 }
 
+// Lifecycle asks a data node to decide one lifecycle request — a tool's
+// create, rename, settings change, archive, unarchive, delete, restore or
+// protection, or a live turn's hold — and raises this node's floors past the
+// record it landed in where it APPLIED or is PENDING: this node's own write,
+// which its next read of the repository must see on whichever node answers.
+// Never for a refusal, nor for an answer that needed no record, whose
+// position is the rows somebody else wrote.
+func (c CodeSeam) Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+	out, err := call(ctx, c.r, opCodeLifecycle, nil, r)
+	wrote := out.Refusal == "" && !out.Position.IsZero() && out.Repo.ID != "" &&
+		(out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending)
+	if wrote {
+		c.wrote(out.Repo.ID, out.Position)
+	}
+	return out, err
+}
+
 // ResolveRef answers one ref of one repository at the level the query names.
 // It never raises this node's floor: a read's position is somebody else's
 // writes.

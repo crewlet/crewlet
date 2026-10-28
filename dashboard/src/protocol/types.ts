@@ -6508,8 +6508,13 @@ export interface CodeRepoSummary {
   id: string;
   name: string;
   status: CodeRepoStatus;
-  /** What decides its settings and its life: `config`, the company document's `code.repos`. */
-  managed_by: string;
+  /**
+   * What decides its settings and its life: `config`, the company document's
+   * `code.repos`, or `tools`, the lifecycle requests of the tools that made it.
+   */
+  managed_by: "config" | "tools" | (string & {});
+  /** What it is for: `project`, or `scratch` — a seat's own, named `<handle>.<slug>` after it. */
+  kind: "project" | "scratch" | (string & {});
   owner: CodeOwner;
   /** Which SEATS read it: `company`, every seat, or `unit`, the owner's. A person reads every repository. */
   visibility: "company" | "unit" | (string & {});
@@ -6518,6 +6523,11 @@ export interface CodeRepoSummary {
   protections?: CodeProtection[];
   /** When it was deleted, absent for a repository that was not. */
   deleted_at?: string;
+  /**
+   * Its last push, rename, settings change or restore — the clock a scratch
+   * repository expires by; never a read.
+   */
+  last_activity_at?: string;
   /** Its live refs, branches and tags together. */
   refs: number;
   live_packs: number;
@@ -6525,6 +6535,13 @@ export interface CodeRepoSummary {
   live_objects: number;
   /** How many expunges have begun on it; absent for one never expunged. */
   drop_epoch?: number;
+  /**
+   * Its current name, where it was asked for by an OLD one a rename left
+   * redirecting to it — and when that old name is released. Absent where it
+   * was asked for by its own.
+   */
+  redirect?: string;
+  redirect_until?: string;
   /** The checkpoint its rows were read at. */
   position: LogPosition;
   /** The reader's standing on it: read, review, write or maintain. */

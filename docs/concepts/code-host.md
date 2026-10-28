@@ -51,6 +51,12 @@ This is the product's current shape, not a configuration choice:
   the server, through its code tools ([Server-side reads](#server-side-reads)),
   under the rule a person's push is judged by too ([Who may read and
   push](#who-may-read-and-push)).
+- **No tool asks for a repository yet.** The code host decides a request to
+  create, rename, archive, delete, restore or protect a repository, a seat's
+  own scratch repositories among them, and expires an idle scratch repository
+  no live turn holds ([Repositories made by tools](#repositories-made-by-tools));
+  the tools that ask it arrive with seats' code writes, so today every
+  repository is one `code.repos` declares.
 - **Nothing asks for a change yet, and there are no reviews or checks.** A
   repository's committer decides a [change](#changes)'s opening, its edits and
   its close, and a push to a change's branches writes its revisions, merges it
@@ -220,6 +226,118 @@ reads every declared repository's row in one batch.
 A node that finds a later activation already fenced logs
 `code_repos_superseded` and decides nothing: it is applying a configuration
 the fleet has moved past, and reconciles again when it applies the later one.
+
+---
+
+## Repositories made by tools
+
+Beside the projects `code.repos` declares, the code host keeps repositories a
+**tool** made, and decides what a person, a unit's lead or a seat asks of
+them — create, rename, change the settings of, archive, unarchive, delete,
+restore, or protect a branch of — as one **lifecycle request** on any data
+node, in one snapshot of the rows. What a request sends for a repository that
+exists is a **change** — one field, one protection rule, the archive flag —
+which the deciding node applies to the settings its own rows hold, never a
+whole set the asker read elsewhere: two people adding two protection rules at
+once each keep theirs. A request names its operation, so asking it again is
+one write, answered from the first; and a create's repository id is derived
+from its operation, so a retry long after still finds the repository it made.
+A repository `code.repos` declares refuses every tool's request
+(`config_managed`, naming the declaration to change instead), and a
+configuration never adopts one a tool made.
+
+**Two kinds, and the name says which.** A **project** repository's name is
+one host-name label, as a declared one's is: a person creates one for any unit
+or seat of the chart, and a seat only for the unit whose effective lead it is,
+at `full_access`. A **scratch** repository is a seat's own, named
+`<handle>.<slug>` after it — two labels and one dot, 63 bytes in all, the slug
+never `git` — created only by that seat, at `full_access`, owned by it, taking
+no protection, and deleted once it has sat idle (below). A person never
+creates one. A rename keeps the kind's form for everybody, a person included:
+a scratch repository keeps its seat's handle, and a project stays one label,
+since a project renamed to `alice.web` would read as seat `alice`'s own and
+squat the name `alice` would create.
+
+**Who may.** A person maintains every repository a tool made. A seat may what
+its [grant](#who-may-read-and-push) on the repository maintains: the owning
+unit's effective lead at `full_access` a project, and the seat a scratch
+repository belongs to its own. A settings change is judged as the repository
+stands **and** as the change would leave it, so a seat cannot hand a
+repository to an owner, or narrow it to a visibility, under which it would no
+longer maintain it — it could not take it back. Everything else is refused
+`not_permitted`, with the reason, and nothing is written. Every request reads
+the chart, so a node [behind the company's
+configuration](#who-may-read-and-push) decides none of them and the next data
+node does.
+
+**Two caps.** A tool's create of a project is refused `repo_limit` when the
+code host already holds 10 000 project repositories — declared and tool-made
+alike, every one short of purged — the bound `code.repos` is held to. A seat's
+scratch repositories never count there; each seat holds at most
+`code.scratch.max_per_seat` of its own (50 unless set; 0 for none), **every
+one it owns counting until it is purged**, a deleted one included, so a
+create-and-delete loop cannot hold more (`scratch_limit`). A restore adds no
+repository, so neither cap refuses one. A scratch repository costs the code
+log one create record, once: under a kibibyte of signed frame at the longest
+name, under two with the longest description.
+
+**A rename leaves the old name redirecting** for a month (`RedirectWindow`):
+the old name resolves to the repository under its new one, so
+[a clone or a fetch by the old URL still works](#what-git-prints-and-what-it-means)
+— the advertisement it begins with is answered `302 Found` to the new name,
+and the fetch git sends after it is served at either name, since git moves to
+the new name only when the redirect answered its very first request: one that
+presented its credential up front, which git then says (`redirecting to`),
+never one whose credential helper answered a challenge first. A push of the
+old name is refused, naming the new one, so nothing is pushed to a name the
+repository no longer holds. Nothing else may take the old name while it
+redirects. Renaming back takes it back. The `code-retention` duty
+releases an old name at its window's end, one record a name, after which it
+names nothing and is free; an old name whose repository was purged meanwhile
+stays reserved until its window ends, like every other.
+
+**Archive, delete and restore** work as they do for a declared repository: an
+archived repository is read-only, a deleted one takes no push and keeps its
+refs and packs, restorable as it was until its [purge](#deletion-and-purge),
+and a restore through the tools brings it back.
+
+### A scratch repository's idle expiry
+
+A scratch repository with no push, rename, settings change or restore for
+`code.scratch.idle_days` (7 unless set) is **deleted** by the `code-retention`
+duty — restorable for `code.deleted_retention_days` like any deletion, then
+purged. Reading a repository is no activity, and an archived one is kept: its
+seat archived it on purpose.
+
+**A scratch repository a live turn has named is never expired.** Every request
+a seat's turn makes about a repository — a read, a write, a lifecycle request,
+through its own tools, a delegated worker's or an agent-mode run's bridge —
+takes the turn's **hold** on it first, and a turn holds what it named until it
+ends: while it runs, in the memory of the node running it; once it has a
+[coding run](code-sandbox.md)'s row, on the row as well, unioned at every
+launch and released with the row when the run ends. So a turn parked for days
+on a question keeps its experiment. A hold moves no clock: once the turn ends,
+the repository is expired at the duty's next pass if it is still idle.
+
+Each pass fixes its cutoff, and the position its page of due repositories was
+read at, **before** it reads the holds — every run row the fleet holds,
+whatever its status, and the running turns of every node holding a seat
+lease, each asked and each required to answer within two seconds — and
+decides each expiry against that page: a repository with any record on it
+since, or active since the cutoff, is kept. A turn taking its hold on a
+repository idle 22 hours or more also records it on the repository, which the
+broker orders against the expiry: recorded first, the expiry is refused;
+expired first, the turn's request is refused before it reads anything, and the
+repository can be restored. Under 22 hours no pass in flight can have
+listed it, since `idle_days` is a day at least and two nodes' clocks may
+disagree by two hours. **A hold that cannot be read expires nothing**: a run
+store that cannot be listed, or a seat holder that does not answer, ends that
+pass's expiry, says so on its `code_retention_pass` line
+(`scratch_expiry_unread`) and logs `code_scratch_expiry_skipped` at warn; the
+next pass asks again.
+
+A pass's line counts `released` old names, `expired` scratch repositories and
+`scratch_held`, the idle ones a live turn kept.
 
 ---
 
@@ -779,7 +897,11 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
   retired more than a day ago, so the collector can take their objects (see
   [Live, retired and derived references](object-store.md#live-retired-and-derived-references)),
   then finishes every purge already begun — whatever the retention, since a
-  purge has no undo — then purges the repositories deleted longest ago first;
+  purge has no undo — then purges the repositories deleted longest ago first,
+  then releases every renamed repository's old name whose redirect has ended,
+  and last deletes every scratch repository idle past
+  `code.scratch.idle_days` that no live turn holds
+  ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry));
 - each purge is a sequence of bounded **steps**, each one record removing a
   bounded part of the repository's rows — its push history, its refs, its
   packs and the ones a compaction retired, its
@@ -827,8 +949,8 @@ committer found, because each has its own remedy:
 
 | State | What the push is told |
 |---|---|
-| deleted | declaring it again in `code.repos` restores it as it was, until its purge, which may begin from the instant named: the deletion plus `code.deleted_retention_days` on the committer's current revision — the earliest the duty begins it under that revision |
-| being purged | the purge cannot be undone; once it completes, declaring the name creates a new, empty repository |
+| deleted | declaring it again in `code.repos` restores it as it was — or, for a repository a [tool made](#repositories-made-by-tools), a restore through the code tools — until its purge, which may begin from the instant named: the deletion plus `code.deleted_retention_days` on the committer's current revision — the earliest the duty begins it under that revision |
+| being purged | the purge cannot be undone; once it completes, declaring the name — or creating it again, for one a tool made — creates a new, empty repository |
 | purged | it holds nothing; declaring its name creates a new, empty repository |
 | an id no repository had | it does not exist |
 
@@ -3009,7 +3131,8 @@ words, since git does not read the header.
 | The node's native runtime was running before `code.native` was set | `this node's native runtime was running before code.native was set, and it serves the code host once restarted: ask another node, or restart this one (native_backend_needs_restart)` (503) | Ask another node, or restart this one. |
 | The node is draining for a shutdown | `this node is draining for a shutdown and begins no new fetch or push: retry in 30 s, against another node or once it has restarted` (503) | Retry; a balancer sends you to another node. A fetch the node had already begun is served to its end. |
 | The repository is not declared | `repository "<name>" not found` (404) | Check the name in `code.repos`. |
-| The repository is deleted | `fatal: remote error: repository <name> is deleted; declaring it again in code.repos restores it …` | Declare it again before its purge to restore it as it was. |
+| The repository was renamed ([Repositories made by tools](#repositories-made-by-tools)) | a clone or a fetch of the old name runs against the repository — git prints `warning: redirecting to <base>/git/<new>.git/` where it presents its credential up front, and nothing where a credential helper answers its challenge; a push of the old name is told `remote: "<old>" was renamed to "<new>" on <instant>; set your remote to /git/<new>.git at the same address (the old name serves clones and fetches until <instant>)` (404), and pushes nothing | Set your remote to the new name before the old one is released, a month after the rename. |
+| The repository is deleted | `fatal: remote error: repository <name> is deleted; declaring it again in code.repos restores it …`, or for a repository a tool made, `…; a restore through the code tools brings it back …` | Declare it again — or, for one a tool made, restore it through the tools — before its purge, to restore it as it was. |
 | The repository is being purged | `fatal: remote error: repository <name> is being purged, which cannot be undone; once the purge completes, declaring its name in code.repos creates a new, empty repository`, or `(repo_deleted: repository <name> was purged and holds nothing; …)` on a push the purge overtook | Nothing brings it back. Once its purge completes, declaring the name again creates a new, empty repository. |
 | The repository is archived (a push) | `fatal: remote error: …archived…`, or `(repo_archived: …)` per ref | Fetch only; unarchive it in `code.repos` to push. |
 | A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …`, or `(not_permitted: this token is not bound to a person: …)` on every ref of a push sent without its advertisement | Push with a token that acts as your human seat — your own machine token (`crewlet iam token -login`). |
@@ -3083,8 +3206,10 @@ reference](../reference/metrics.md)).
 | `code_repos_interrupted` | `INFO` | The node stopped before its reconcile finished; the next boot reconciles. |
 | `code_repo_not_applied`, `code_repos_not_applied`, `code_repos_not_listed` | `ERROR`, `ERROR`, `WARN` | A reconcile could not apply one repository, any, or delete what the document no longer declares; the node runs the reconcile again (`code_repos_retrying`). Two of a repository's are not run again for, and say what to change instead: its name is held by a repository the configuration does not manage — rename the declaration — or the code log refuses its declaration as written. |
 | `code_repos_retrying` | `INFO` | The reconcile of `activation` left something undone — said in the lines before — and runs again in `retry_in`: five seconds after the first such run, doubling with each run in a row (`attempt`) to five minutes, until one applies or a newer activation replaces it. |
-| `code_retention_pass` | `INFO` | A pass that swept retired packs, purged, failed a repository, held a purged name or stopped at its budget (`sweeps`, `swept_rows`, `purged`, `steps`, `remain`, `failed`, `unhanded`); `DEBUG` when nothing was due. |
+| `code_retention_pass` | `INFO` | A pass that swept retired packs, purged, failed a repository, held a purged name, released a renamed repository's old name, expired a scratch repository or kept one a live turn holds, could not read the live turns' holds, or stopped at its budget (`sweeps`, `swept_rows`, `purged`, `steps`, `remain`, `failed`, `unhanded`, `released`, `expired`, `scratch_held`, `scratch_expiry_unread`); `DEBUG` when nothing was due. |
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
+| `code_scratch_expired` | `INFO` | A scratch repository idle past `code.scratch.idle_days` (`idle_since`) and held by no live turn was deleted, restorable for `code.deleted_retention_days`. |
+| `code_scratch_expiry_skipped` | `WARN` | The live turns' holds on a page of idle scratch repositories could not be read — the run store, the seat leases, or a seat holder that did not answer within two seconds (`error`, naming which) — so this pass expired none; the next pass asks again ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry)). |
 | `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none), the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
 | `code_commit_failed` | `WARN` | A repository's [committer](#the-committer) could not answer a record it published: the code log failed the write for a reason that is no refusal of it, or the record applied and the rows it wrote could not be read back. By `kind`: `push`, a batch of pushes, each answered with the `error`; or `compaction`, a git node's merge of the repository's packs, which the node that built it plans again. With the `repo` and the record's `op_id`. |

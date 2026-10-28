@@ -1870,6 +1870,15 @@ configuration rather than by a command, and its three stages are timed:
   [object collector](../concepts/object-store.md#collection-and-audit)
   deletes it like any other object nothing names.
 
+A repository a tool made is deleted by the tools rather than the
+configuration, and purged the same way. A seat's own **scratch** repository
+is also deleted by the `code-retention` duty once it has sat idle — no push,
+rename, settings change or restore — for `code.scratch.idle_days` (unset,
+7 days), unless a live turn holds it; it is then restorable and purged like
+any deletion. A renamed repository's **old name** keeps redirecting for a
+month and is released by the same duty after it, one small record a name
+([Repositories made by tools](../concepts/code-host.md#repositories-made-by-tools)).
+
 Inside a repository that is not deleted, three horizons are kept by the
 records that apply to it, never by a sweep: a push row expires **181 days**
 after its push, the same half year as the [usage history](#old-data-is-not-cold-data),

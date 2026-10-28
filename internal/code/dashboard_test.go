@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -79,20 +80,25 @@ func TestTheDashboardKnowsEveryOutcomeOfACommand(t *testing.T) {
 // THE DASHBOARD NAMES A REPOSITORY BY THE ENGINE'S GRAMMAR, name for name.
 //
 // The Code workspace holds the repository an address names (`repo=` on its
-// Pushes section) to `REPO_NAME` (`contract/code.ts`) before it asks anything
-// about it, so a name no repository can have is said where the reader is, as
-// one, rather than sent to the engine and answered as its refusal of the
-// request. Held by BEHAVIOUR rather than by spelling: the pattern is compiled
-// here and a corpus run through it and through [code.ValidName], the one
-// reading of a name every read and every push takes, so a change to either side
-// that answers any name below differently fails — and a pattern that compiles
-// to nothing fails on the corpus's controls, which the engine admits.
+// Pushes section) to `REPO_NAME` and `REPO_NAME_MAX_BYTES` (`contract/code.ts`)
+// before it asks anything about it, so a name no repository can have is said
+// where the reader is, as one, rather than sent to the engine and answered as
+// its refusal of the request. Held by BEHAVIOUR rather than by spelling: the
+// pattern is compiled here and a corpus run through it and the length bound,
+// as `lib/code.ts`'s isRepoName applies them, and through [code.ValidName], the
+// one reading of a name every read and every push takes — a project's one
+// label and a seat's scratch repository's `<handle>.<slug>` alike — so a change
+// to either side that answers any name below differently fails, and a pattern
+// that compiles to nothing fails on the corpus's controls, which the engine
+// admits.
 //
-// Mutation: widen the pattern's inner run to `{0,62}`, let it begin with a
-// hyphen, or take an underscore, and a name below fails.
+// Mutation: raise REPO_NAME_MAX_BYTES to 64, let a label begin with a hyphen,
+// take an underscore or a second dot, or admit the slug `git`, and a name below
+// fails.
 func TestTheDashboardNamesARepositoryByTheEnginesGrammar(t *testing.T) {
 	t.Parallel()
-	source, err := clientsource.Scalar(clientsource.Tree(t), "REPO_NAME")
+	tree := clientsource.Tree(t)
+	source, err := clientsource.Scalar(tree, "REPO_NAME")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,12 +106,29 @@ func TestTheDashboardNamesARepositoryByTheEnginesGrammar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("REPO_NAME does not compile: %v", err)
 	}
+	bound, err := clientsource.Scalar(tree, "REPO_NAME_MAX_BYTES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxBytes, err := strconv.Atoi(bound)
+	if err != nil {
+		t.Fatalf("REPO_NAME_MAX_BYTES is %q, no count of bytes: %v", bound, err)
+	}
+	// A SCRATCH NAME AT THE BOUND AND PAST IT: two labels and their dot
+	// together, which the pattern cannot count and the bound does.
+	handle := strings.Repeat("h", 30)
 	corpus := []string{
 		"web", "a", "0", "9lives", "nimbus-web", "a-b-c", "a--b",
 		strings.Repeat("a", 62), strings.Repeat("a", 63), strings.Repeat("a", 64),
 		"a" + strings.Repeat("-", 61) + "b", "a" + strings.Repeat("-", 62) + "b",
-		"", "-", "-web", "web-", "Web", "wEb", "WEB", "web.app", "web.git", "web_app", "web app",
+		"", "-", "-web", "web-", "Web", "wEb", "WEB", "web_app", "web app",
 		"wéb", "web/app", "..", "w@b", " web", "web\n",
+		// THE SCRATCH FORM: <handle>.<slug>, one dot, each side a label, the
+		// slug never `git` — and every way to be nearly one.
+		"web.app", "dev.x", "a.b", "dev-1.my-test", "web.git", "dev.git", "dev.gitx", "dev.git-1",
+		"dev.gi", "dev.gi-t", "dev.gix", "dev.g", "dev.g-x", "dev.gamma", "dev.gu", "dev.-x", "dev.x-",
+		"-dev.x", "dev-.x", "a.b.c", ".web", "web.", "web..app", "Dev.x", "dev.X", "dev_1.x", "dev.x y",
+		handle + "." + strings.Repeat("s", 32), handle + "." + strings.Repeat("s", 33),
 	}
 	admitted, refused := 0, 0
 	for _, name := range corpus {
@@ -115,9 +138,9 @@ func TestTheDashboardNamesARepositoryByTheEnginesGrammar(t *testing.T) {
 		} else {
 			refused++
 		}
-		if got := pattern.MatchString(name); got != engine {
-			t.Errorf("a repository named %q: the dashboard's REPO_NAME answers %v, code.ValidName %v",
-				name, got, engine)
+		if got := len(name) <= maxBytes && pattern.MatchString(name); got != engine {
+			t.Errorf("a repository named %q: the dashboard's REPO_NAME and REPO_NAME_MAX_BYTES answer "+
+				"%v, code.ValidName %v", name, got, engine)
 		}
 	}
 	if admitted == 0 || refused == 0 {

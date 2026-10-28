@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -51,7 +53,8 @@ var suiteAt = time.Unix(1_700_000_000, 0).UTC()
 // them over.
 func suiteSettings() code.RepoSettings {
 	return code.RepoSettings{
-		ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
+		ManagedBy: code.ManagedConfig, Kind: code.RepoProject,
+		Owner:      code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
 		Visibility: code.VisibilityCompany, DefaultBranch: "main",
 		Protections: []code.Protection{
 			{Pattern: "refs/heads/main", DirectPush: code.DirectPersons},
@@ -69,13 +72,34 @@ func suiteSettings() code.RepoSettings {
 // create after it would be refused as an activation Activate never made,
 // which is the rule working. The create's stamp is the same builder's, and
 // the round-trip harness publishes and applies it (store_test.go).
+//
+// AND A TOOL'S LIFECYCLE REQUEST, the store's other write path: a seat's
+// create of its own scratch repository, decided by the chart and the policy
+// the store is handed. No activation fences a tool's record, so it is decided
+// at once, and its record is the lifecycle's own builder's.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
-	s, err := code.NewStore(code.StoreOptions{Publisher: pub, DB: db, NodeID: "suite-node"})
+	s, err := code.NewStore(code.StoreOptions{Publisher: pub, DB: db, NodeID: "suite-node",
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart()}, true },
+		Policy:    func() code.LifecyclePolicy { return code.ScratchOf(config.Code{}) },
+	})
 	if err != nil {
 		return err
 	}
-	_, err = s.Activate(ctx, suiteAt)
-	return err
+	if _, err = s.Activate(ctx, suiteAt); err != nil {
+		return err
+	}
+	res, err := s.Lifecycle(ctx, code.LifecycleRequest{Kind: code.LifecycleCreate,
+		OpID: statelog.NewOpID(time.Now(), "code.suite"), Actor: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
+		Name: "dev.suite", Create: &code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
+			Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Visibility: code.VisibilityCompany,
+			DefaultBranch: "main"}})
+	switch {
+	case err != nil:
+		return err
+	case res.Refusal != "":
+		return fmt.Errorf("the suite's scratch create was refused %s: %s", res.Refusal, res.Detail)
+	}
+	return nil
 }
 
 // suiteKinds is every kind, derived from the enum rather than typed again.

@@ -7,7 +7,12 @@
  * cannot say one thing two ways.
  */
 
-import { COMMAND_OUTCOMES, REPO_NAME, REPO_STATUSES } from "~/contract/code.ts";
+import {
+  COMMAND_OUTCOMES,
+  REPO_NAME,
+  REPO_NAME_MAX_BYTES,
+  REPO_STATUSES,
+} from "~/contract/code.ts";
 import type { CodePushCommand, CodePushCounts, CodeRepoStatus } from "~/protocol/index.ts";
 
 /** The engine's repository grammar, compiled once. */
@@ -15,11 +20,13 @@ const REPO_NAME_PATTERN = new RegExp(REPO_NAME);
 
 /**
  * Whether a string is a name a repository can have — the engine's own
- * grammar (`contract/code.ts`), so an address naming anything else is said in
- * place rather than asked about.
+ * grammar (`contract/code.ts`): its shape, a project's or a seat's scratch
+ * repository's, and its length, so an address naming anything else is said in
+ * place rather than asked about. The length is counted in code units, which
+ * for a name the shape admits — lowercase ASCII alone — are its bytes.
  */
 export function isRepoName(name: string): boolean {
-  return REPO_NAME_PATTERN.test(name);
+  return name.length <= REPO_NAME_MAX_BYTES && REPO_NAME_PATTERN.test(name);
 }
 
 /**

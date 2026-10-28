@@ -328,8 +328,11 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	if removal {
 		mark = at.packed
 	}
+	// AND THE IDLE CLOCK MOVES WITH THE LAST PUSH — a refused entry's too,
+	// which is still somebody working in the repository: what a scratch
+	// repository expires by (Retention), at the record's own instant.
 	if _, err = tx.ExecContext(ctx, pushCountersSQL, moved.live, moved.branches, moved.tags,
-		moved.tombstones, len(packRows), packBytes, packObjects, len(pushRows), at.at(), at.packed,
+		moved.tombstones, len(packRows), packBytes, packObjects, len(pushRows), at.at(), at.at(), at.packed,
 		mark, p.RepoID); err != nil {
 		return 0, fmt.Errorf("code: count the pushes at %s: %w", at.position, err)
 	}
@@ -945,10 +948,17 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // among them weigh at most PurgePartBytes — a part's own bounds — and it
 // holds at most MaxProtectionsPerRepo rules and a published chain of at most
 // MaxPublishedLayers layers of MaxLayerParts parts each: with the name claim,
-// the row and the marker that is PurgePartRows + MaxProtectionsPerRepo +
-// MaxPublishedLayers × (1 + MaxLayerParts) + 3 rows, which the limits test
-// holds within MaxRecordRows. A change's revisions, authors and body go
-// before the changes, through which alone they are found.
+// the row, its kind's count and the marker that is PurgePartRows +
+// MaxProtectionsPerRepo + MaxPublishedLayers × (1 + MaxLayerParts) + 4 rows,
+// which the limits test holds within MaxRecordRows. A change's revisions,
+// authors and body go before the changes, through which alone they are found.
+//
+// AN OLD NAME a rename left redirecting to the repository is NOT released
+// here: how many a repository holds is bounded by nothing a part counts — one
+// a rename, for RedirectWindow — so they are released one record each by the
+// code-retention pass at their window's end ([Store.ReleaseName]), whatever
+// became of the repository meanwhile, which keeps every redirect's end in one
+// place and this record's rows bounded.
 //
 // NO PART REMOVES A LAYER: the chain is bounded apart from the rows a part
 // counts, and a layer row naming a pack a part already removed harms no
@@ -978,11 +988,27 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 	n, _ := res.RowsAffected()
 	deleted += int(n)
+	// THE ROW'S KIND, read before the row goes: the repository is counted out
+	// of it ([countKindSQL]) by the record that removes the row, and only
+	// where it does — a redelivery finds no row and counts nobody out twice.
+	var kind string
+	switch err = tx.QueryRowContext(ctx, repoKindSQL, p.RepoID).Scan(&kind); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return 0, fmt.Errorf("code: read %s's kind at %s: %w", p.RepoID, at.position, err)
+	}
 	if res, err = tx.ExecContext(ctx, removeRepoSQL, p.RepoID); err != nil {
 		return 0, fmt.Errorf("code: remove %s at %s: %w", p.RepoID, at.position, err)
 	}
 	n, _ = res.RowsAffected()
 	deleted += int(n)
+	if n > 0 {
+		if res, err = tx.ExecContext(ctx, uncountKindSQL, kind); err != nil {
+			return 0, fmt.Errorf("code: count %s out at %s: %w", p.RepoID, at.position, err)
+		}
+		n, _ = res.RowsAffected()
+		deleted += int(n)
+	}
 	if res, err = tx.ExecContext(ctx, markSQL, p.RepoID, p.Name, at.at(), at.record.Actor,
 		p.Reason, at.record.OpID, at.packed); err != nil {
 		return 0, fmt.Errorf("code: mark %s purged at %s: %w", p.RepoID, at.position, err)
@@ -1101,7 +1127,8 @@ const (
 	pushCountersSQL = `UPDATE code_repos SET refs = refs + ?, branches = branches + ?,
 		tags = tags + ?, tombstones = tombstones + ?, live_packs = live_packs + ?,
 		live_bytes = live_bytes + ?, live_objects = live_objects + ?, pushes = pushes + ?,
-		last_push_at = ?, version = ?, tombstones_through = MAX(tombstones_through, ?) WHERE id = ?`
+		last_push_at = ?, last_activity_at = ?, version = ?, tombstones_through = MAX(tombstones_through, ?)
+		WHERE id = ?`
 	tombstonesHeldSQL = `SELECT tombstones FROM code_repos WHERE id = ?`
 	// forgetSeatDaysSQL forgets, for each [seat, day] of its list, the seat's
 	// oldest day before day — one row a seat at most, each the first a seek

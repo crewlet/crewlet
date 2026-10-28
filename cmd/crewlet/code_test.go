@@ -893,6 +893,62 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 	}
 }
 
+// A REPOSITORY'S DETAIL SAYS WHO CHANGES IT AND HOW IT COMES BACK: one
+// code.repos declares is restored by declaring it again, one a tool made by
+// a restore through the tools — a configuration never adopts it, so the
+// declared repository's sentence would send a person to a refusal — a
+// scratch repository says whose it is and the clock its idle expiry reads,
+// and a repository asked for by an old name says so and names the current
+// one.
+//
+// Mutation: print every deleted repository's restore as a declaration's —
+// the tool-made case, red.
+func TestARepositorysDetailSaysWhoChangesIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, view string
+		want       []string
+	}{
+		{"a declared one, deleted",
+			`{"name":"web","status":"deleted","managed_by":"config","kind":"project",` +
+				`"deleted_at":"2026-10-20T09:00:00Z","owner":{"kind":"unit","ref":"eng"}}`,
+			[]string{"web — deleted on 2026-10-20 09:00 UTC; declaring it again in code.repos restores it",
+				"  managed by:   code.repos\n"}},
+		{"a tool-made one, deleted",
+			`{"name":"api","status":"deleted","managed_by":"tools","kind":"project",` +
+				`"deleted_at":"2026-10-20T09:00:00Z","owner":{"kind":"unit","ref":"eng"}}`,
+			[]string{"api — deleted on 2026-10-20 09:00 UTC; a restore through the code tools brings it back",
+				"  managed by:   the code tools — a project\n"}},
+		{"a scratch repository",
+			`{"name":"alice.spike","status":"active","managed_by":"tools","kind":"scratch",` +
+				`"last_activity_at":"2026-10-27T10:30:00Z","owner":{"kind":"seat","ref":"alice"},` +
+				`"default_branch":"main"}`,
+			[]string{"alice.spike — active, owned by seat:alice, default branch main\n",
+				"  managed by:   the code tools — alice's scratch repository, last active 2026-10-27 10:30 UTC, " +
+					"deleted once idle for code.scratch.idle_days unless a live turn holds it\n"}},
+		{"one asked for by an old name",
+			`{"name":"web","status":"active","managed_by":"tools","kind":"project","redirect":"web",` +
+				`"redirect_until":"2026-11-27T10:00:00Z","owner":{"kind":"unit","ref":"eng"},` +
+				`"default_branch":"main"}`,
+			[]string{"  renamed:      the name asked for is an old one, redirecting here until 2026-11-27 10:00 UTC; " +
+				"set a remote to /git/web.git\n"}},
+	} {
+		var r codeRepoView
+		if err := json.Unmarshal([]byte(tc.view), &r); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var out strings.Builder
+		if err := renderCodeRepo(&out, r, nil); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%s does not say %q:\n%s", tc.name, want, out.String())
+			}
+		}
+	}
+}
+
 // A PUSH LINE NAMES WHO MADE THE PUSH AS ITS ROW DOES: a person's credential
 // with the seat they hold beside it; a seat by its handle — the actor and the
 // seat at once, so never twice — with the turn that made the push and the work

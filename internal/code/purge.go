@@ -56,8 +56,12 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 	}
 	// THE NAME IS READ BEFORE THE DECIDE, because the request's scope is
 	// stated before the decide runs and the purge releases the name's
-	// claim; the decide holds the row to it. A repository's name never
-	// changes, so the two reads agree.
+	// claim; the decide holds the row to it. A purge steps only a deleted or
+	// purging repository, which no rename reaches (a tool's rename refuses
+	// one), so the two reads agree. An OLD name a rename left redirecting is
+	// not the purge's: its redirect keeps the name reserved until its window
+	// ends, as it would for a live repository, and the retention pass's
+	// release frees it then (Store.ReleaseName).
 	name, found, err := s.repoName(ctx, repoID)
 	if err != nil {
 		return PurgeResult{}, err

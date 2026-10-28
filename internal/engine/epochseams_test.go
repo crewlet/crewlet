@@ -28,11 +28,15 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. THREE exist, the
+	// configuration REFUSES it rather than answers it last. FOUR exist, the
 	// chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
 	// a read of the rows; query.Options.Roster, a read by object id on a git
-	// node; and code.CommitterOptions.SeatRules, a seat's push on the
-	// committer that decides it. The git node's own gate,
+	// node; code.CommitterOptions.SeatRules, a seat's push on the committer
+	// that decides it; and code.StoreOptions.SeatRules, a tool's lifecycle
+	// request — a person's as well as a seat's, since a create's owner is
+	// judged against the chart too — on the lifecycle store that decides it,
+	// refused there by its own gate, code.StoreOptions.Current, and by the
+	// estate's declaration on code.lifecycle. The git node's own gate,
 	// query.Options.Current, refuses a seat's read there itself (unready,
 	// behind_config) rather than judging it; the committer's,
 	// code.CommitterOptions.Current, refuses a seat's push there as a node
@@ -139,8 +143,8 @@ var classified = map[string]struct {
 		"pages.SearcherOptions, whose reads are classified there; its scope is ServerSeams.Seat"},
 	"estate.Backend.Backlinks": {seamNone, "the node's link index"},
 	"estate.Backend.Usage":     {seamNone, "the usage rows"},
-	"estate.Backend.Code": {seamNone, "the committer and the reader, built over " +
-		"code.CommitterOptions and code.ReaderOptions"},
+	"estate.Backend.Code": {seamNone, "the committer, the reader and the lifecycle store, built over " +
+		"code.CommitterOptions, code.ReaderOptions and code.StoreOptions"},
 	"estate.Backend.Git": {seamNone, "the git half a git operation is answered from; what it reads " +
 		"is classified on query.Options, which it is built over"},
 	"estate.Backend.Identity": {seamNone, "the identity directory's reader, built over " +
@@ -184,6 +188,14 @@ var classified = map[string]struct {
 	"code.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},
 	"code.StoreOptions.NodeID":    {seamNone, "the deciding node"},
 	"code.StoreOptions.Now":       {seamNone, "the clock"},
+	"code.StoreOptions.SeatRules": {seamGrant, "the chart a tool's lifecycle request is judged by: who " +
+		"may create, rename, change, archive, delete, restore or protect a repository, a create's owner, " +
+		"and what a seat may hold"},
+	"code.StoreOptions.Current": {seamGate, "whether this node serves the company's configuration: a " +
+		"lifecycle request behind it is answered not serving, so the next data node decides it"},
+	"code.StoreOptions.Policy": {seamValue, "the epoch's code.scratch and the repository bound a create " +
+		"is held to: a create decided under a cap a revision then lowered leaves a repository the next " +
+		"create counts"},
 
 	"code.ReaderOptions.Log":    {seamNone, "the code log's read authority"},
 	"code.ReaderOptions.Limits": {seamValue, "the limits a repository's detail reports"},

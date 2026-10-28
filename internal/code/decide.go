@@ -458,7 +458,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		refused = RefusalRepoDeleted
 	case repo.status == RepoStatusArchived:
 		refused = RefusalRepoArchived
-		detail = ArchivedDetail(repo.name)
+		detail = ArchivedDetail(repo.name, repo.managedBy)
 	}
 	if refused != "" {
 		for _, i := range open {
@@ -728,6 +728,9 @@ type pushRepo struct {
 	// visibility decides.
 	owner      Owner
 	visibility Visibility
+	// managedBy is who manages it, which the remedy a refusal of a deleted
+	// or archived repository names follows ([RepoGone], [ArchivedDetail]).
+	managedBy ManagedBy
 }
 
 // grantRef is the repository id names as a grant reads it: its name, which a
@@ -739,11 +742,11 @@ func (r pushRepo) grantRef(id string) RepoRef {
 // pushRepoIn reads a repository's row for a decide.
 func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, error) {
 	var r pushRepo
-	var status, ownerKind, visibility string
+	var status, ownerKind, visibility, managed string
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
 		&r.liveBytes, &r.livePacks, &r.version, &deleted, &r.dropEpoch, &r.expungeID, &ownerKind,
-		&r.owner.Ref, &visibility)
+		&r.owner.Ref, &visibility, &managed)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -751,6 +754,7 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 		return pushRepo{}, false, fmt.Errorf("code: read repository %s for its pushes: %w", id, err)
 	}
 	r.status, r.owner.Kind, r.visibility = RepoStatus(status), OwnerKind(ownerKind), Visibility(visibility)
+	r.managedBy = ManagedBy(managed)
 	if deleted.Valid {
 		r.deletedAt = store.DecodeTime(deleted.Int64)
 	}
@@ -1400,7 +1404,7 @@ func uploadExpired(what string, object objstore.Key, now time.Time, again string
 func goneDetail(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, found bool,
 	retention time.Duration) (string, error) {
 
-	gone := RepoGone{ID: repoID, Name: repo.name, Status: repo.status, DeletedAt: repo.deletedAt,
+	gone := RepoGone{ID: repoID, Name: repo.name, Status: repo.status, DeletedAt: repo.deletedAt, ManagedBy: repo.managedBy,
 		Retention: retention}
 	if !found {
 		var err error
@@ -1543,7 +1547,7 @@ func UnheldDetail(old string) string {
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
 	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at,
-		drop_epoch, expunge_id, owner_kind, owner, visibility FROM code_repos WHERE id = ?`
+		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by FROM code_repos WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
 	// seatDaysSQL is each named seat's pushes counted on one company day: ONE
 	// row a seat of the counter the push apply keeps (code_seat_days), each

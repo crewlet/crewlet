@@ -354,7 +354,7 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	// run and minted at its start, which is inside the ledger's horizon, so
 	// the resume needs no coordination store to record a rebase in.
 	in.Run.TurnID = newRunID()
-	in.Turn = resumedTurn(in.Run, seat, admitted.Org)
+	in.Turn = resumedTurn(in.Run, seat, admitted.Org, turnctx.NewHolds(in.Run.CodeHolds))
 
 	err := e.resumeTurn(t.Context(), in)
 	if err == nil || !strings.Contains(err.Error(), "resume round 1") {

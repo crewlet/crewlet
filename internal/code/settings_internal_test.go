@@ -15,13 +15,14 @@ import (
 func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 	t.Parallel()
 	base := RepoSettings{
-		ManagedBy: ManagedConfig, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
+		ManagedBy: ManagedConfig, Kind: RepoProject, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
 		DefaultBranch: "main", Description: "one", Visibility: VisibilityCompany,
 		Protections: []Protection{{Pattern: "refs/heads/main", DirectPush: DirectPersons}},
 		ConfigEpoch: 1,
 	}
 	variants := map[string]func(*RepoSettings){
 		"ManagedBy":     func(s *RepoSettings) { s.ManagedBy = "other" },
+		"Kind":          func(s *RepoSettings) { s.Kind = RepoScratch },
 		"Owner":         func(s *RepoSettings) { s.Owner.Ref = "OPS" },
 		"DefaultBranch": func(s *RepoSettings) { s.DefaultBranch = "trunk" },
 		"Description":   func(s *RepoSettings) { s.Description = "two" },

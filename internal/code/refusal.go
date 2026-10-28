@@ -282,10 +282,19 @@ type RepoGone struct {
 	// Purged is a repository with no row whose deletion marker this node
 	// holds: its purge has completed.
 	Purged bool
+	// ManagedBy is who manages a repository with a row, which decides its
+	// remedy: a declaration restores a repository code.repos declares, and a
+	// restore through the code tools one a tool made. "" — a repository with
+	// no row, whose manager nothing this node holds says — is a
+	// configuration's, the only kind a purged one's marker was written for
+	// before tools made repositories.
+	ManagedBy ManagedBy
 }
 
 // Detail is the sentence of a push or a compaction refused repo_deleted for g:
-// what became of the repository and what, if anything, brings it back.
+// what became of the repository and what, if anything, brings it back — by
+// who manages it: a declaration for a repository code.repos declares, a
+// restore through the code tools for one a tool made.
 //
 // A deleted repository's sentence names the instant its purge may begin — the
 // deletion plus the deciding node's retention: the earliest the code-retention
@@ -294,30 +303,38 @@ type RepoGone struct {
 // would promise an instant nothing holds the purge to.
 func (g RepoGone) Detail() string {
 	named := cmp.Or(g.Name, g.ID)
+	restores, recreates := "declaring it again in code.repos restores it", "declaring its name in code.repos"
+	if g.ManagedBy == ManagedTools {
+		restores, recreates = "a restore through the code tools brings it back", "creating it again"
+	}
 	switch {
 	case g.Status == RepoStatusDeleted && !g.DeletedAt.IsZero() && g.Retention > 0:
-		return fmt.Sprintf("repository %s is deleted; declaring it again in code.repos restores it "+
-			"as it was, until its purge, which may begin from %s (code.deleted_retention_days after "+
-			"its deletion)", named, g.DeletedAt.Add(g.Retention).UTC().Format(time.RFC3339))
+		return fmt.Sprintf("repository %s is deleted; %s as it was, until its purge, which may begin from "+
+			"%s (code.deleted_retention_days after its deletion)", named, restores,
+			g.DeletedAt.Add(g.Retention).UTC().Format(time.RFC3339))
 	case g.Status == RepoStatusDeleted:
-		return fmt.Sprintf("repository %s is deleted; declaring it again in code.repos restores it "+
-			"as it was, until its purge", named)
+		return fmt.Sprintf("repository %s is deleted; %s as it was, until its purge", named, restores)
 	case g.Status == RepoStatusPurging:
 		return fmt.Sprintf("repository %s is being purged, which cannot be undone; once the purge "+
-			"completes, declaring its name in code.repos creates a new, empty repository", named)
+			"completes, %s creates a new, empty repository", named, recreates)
 	case g.Purged:
-		return fmt.Sprintf("repository %s was purged and holds nothing; declaring its name in "+
-			"code.repos creates a new, empty repository", named)
+		return fmt.Sprintf("repository %s was purged and holds nothing; %s creates a new, empty "+
+			"repository", named, recreates)
 	}
 	return fmt.Sprintf("repository %s does not exist", g.ID)
 }
 
 // ArchivedDetail is the sentence of a push refused repo_archived: which
-// repository, where it is archived, and what it still serves. ONE SPELLING
-// for the two places that refuse it (ADR-0008) — the push decide, from the
-// rows, and the code host, at a push's advertisement or its request, where a
-// person's git prints it as the reason the push was refused.
-func ArchivedDetail(name string) string {
+// repository, where it is archived — code.repos for a repository it declares,
+// a person's or a seat's tool for one a tool made — and what it still serves.
+// ONE SPELLING for the two places that refuse it (ADR-0008) — the push decide,
+// from the rows, and the code host, at a push's advertisement or its request,
+// where a person's git prints it as the reason the push was refused.
+func ArchivedDetail(name string, managedBy ManagedBy) string {
+	if managedBy == ManagedTools {
+		return fmt.Sprintf("repository %s is archived and read-only: it is fetched, and takes no push "+
+			"until it is unarchived through the code tools", name)
+	}
 	return fmt.Sprintf("repository %s is archived and read-only (code.repos archived: true): "+
 		"it is fetched, and takes no push", name)
 }

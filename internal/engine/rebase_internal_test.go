@@ -478,7 +478,7 @@ func TestAResumePastTheHorizonMintsAtItsAttemptOrItsHalfsRebase(t *testing.T) {
 	}
 	resume := func(rig *rebaseRig) turnTelemetry {
 		return mustDescribeResume(t, rig.engine, rig.company, resumeInput{
-			Run: run, Turn: resumedTurn(run, seat, rig.company.Org),
+			Run: run, Turn: resumedTurn(run, seat, rig.company.Org, nil),
 		})
 	}
 
@@ -524,7 +524,7 @@ func TestAResumeInsideTheHorizonMintsAtItsWorksStart(t *testing.T) {
 		AgentHandle: "swe",
 	}
 	tel := mustDescribeResume(t, rig.engine, rig.company, resumeInput{
-		Run: run, Turn: resumedTurn(run, seat, rig.company.Org),
+		Run: run, Turn: resumedTurn(run, seat, rig.company.Org, nil),
 	})
 	if !tel.rebasedTo.IsZero() {
 		t.Fatalf("a resume a week on was rebased onto %s", tel.rebasedTo)
@@ -549,7 +549,7 @@ func TestAResumeThatCannotReadItsRebaseIsHandedBack(t *testing.T) {
 		AgentHandle: "swe", Reply: "none",
 	}
 	err := e.resumeTurn(context.Background(), resumeInput{
-		Company: rig.company, Run: run, Turn: resumedTurn(run, seat, rig.company.Org),
+		Company: rig.company, Run: run, Turn: resumedTurn(run, seat, rig.company.Org, nil),
 	})
 	if !errors.Is(err, outage) {
 		t.Fatalf("resumeTurn over an unreachable store = %v, want the outage", err)

@@ -383,6 +383,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		if built.runsCode() {
 			if n.codeStore, err = code.NewStore(code.StoreOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+				// A TOOL'S LIFECYCLE REQUEST is judged by the committer's
+				// own chart, read per request off the current epoch, and held
+				// to the epoch's code.scratch — and decided nowhere on a node
+				// confirmed behind the company's configuration, since every
+				// kind's "who may" reads the chart (Reconciler.Admits through
+				// SetAdmits).
+				SeatRules: e.codeSeatRules, Current: e.admits, Policy: e.codeLifecyclePolicy,
 			}); err != nil {
 				return fmt.Errorf("engine: code store: %w", err)
 			}

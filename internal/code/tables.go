@@ -52,6 +52,12 @@ var ReproducibleTables = []string{
 	// counts alike with no clock of its own.
 	"code_seat_days",
 
+	// How many repositories of each kind the log holds, every status short
+	// of purged, for a tool's create of a project (repo_limit): counted in
+	// by a create's apply and out by the purge's that removes the row, so a
+	// replay rebuilds it from those records alone.
+	"code_repo_kinds",
+
 	// The activation fence: the configuration activation every
 	// config-managed record is held to.
 	"code_activation",

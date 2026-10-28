@@ -252,6 +252,7 @@ var contract = []Entry{
 	{"REPO_STATUSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryRepositoryState"},
 	{"COMMAND_OUTCOMES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryOutcomeOfACommand"},
 	{"REPO_NAME", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
+	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

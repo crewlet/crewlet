@@ -615,7 +615,10 @@
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits
 // the pushes a receiving node proposes, the compactions and expunges a git
-// node proposes and the purges a person asks for, answers reads of the rows,
+// node proposes, the purges a person asks for and the lifecycle requests a
+// tool sends (lifecycle.go: a repository made, renamed, changed, retired or
+// held by a tool, and the code-retention pass's release of an old name and
+// expiry of an idle scratch repository), answers reads of the rows,
 // holds a bundle's bytes to the row that names them when a caller tees them
 // through a [SealWriter], and holds a published layer's files to theirs
 // ([CheckLayer]). It moves object bytes in TWO places, each the one way its

@@ -51,16 +51,71 @@ func (k OwnerKind) Valid() bool { return slices.Contains(OwnerKinds(), k) }
 // ManagedBy is what owns a repository's settings and its lifecycle.
 type ManagedBy string
 
-// ManagedConfig is a repository code.repos declares: the configuration
-// reconcile creates it, settles its settings and retires it, and nothing else
-// may.
-const ManagedConfig ManagedBy = "config"
+const (
+	// ManagedConfig is a repository code.repos declares: the configuration
+	// reconcile creates it, settles its settings and retires it, and nothing
+	// else may.
+	ManagedConfig ManagedBy = "config"
+
+	// ManagedTools is a repository a tool made — a person's or a lead's
+	// project, or a seat's scratch repository — whose lifecycle the tools'
+	// requests decide ([Store.Lifecycle]) and no configuration reaches: the
+	// reconcile refuses to adopt one ([ErrNotConfigManaged]), and the
+	// activation fence never refuses one's record ([Applier.fenced]).
+	//
+	// NO versionedFields ROW, unlike the kind beside it ([RepoSettings.Kind]):
+	// a build that knows only ManagedConfig applies a record carrying this
+	// value as this build does — the applier stores a manager as written and
+	// fences only a configuration's record — and its reconcile refuses to
+	// adopt the repository as this one's does, so it reads nothing wrongly.
+	ManagedTools ManagedBy = "tools"
+)
 
 // ManagedBys is the closed set.
-func ManagedBys() []ManagedBy { return []ManagedBy{ManagedConfig} }
+func ManagedBys() []ManagedBy { return []ManagedBy{ManagedConfig, ManagedTools} }
 
 // Valid reports a value this build knows.
 func (m ManagedBy) Valid() bool { return slices.Contains(ManagedBys(), m) }
+
+// RepoKind is what a repository is FOR, which decides its name's grammar, who
+// may create it, whether it takes protections and whether it expires.
+//
+// THE KIND FOLLOWS THE NAME (gitref): a project's name is one label, a
+// scratch repository's `<handle>.<slug>`, so a reader holding only a name
+// knows which it is — which is why a rename keeps its kind's form for every
+// actor ([lifecycleRefusal]).
+type RepoKind string
+
+const (
+	// RepoProject is a repository the company works in: declared in
+	// code.repos, or created by a person or by the owning unit's lead. It
+	// never expires.
+	RepoProject RepoKind = "project"
+	// RepoScratch is a seat's own, named <handle>.<slug> after it, owned by
+	// it, unprotected, and expiring once it has been idle
+	// code.scratch.idle_days — never while a live turn holds it
+	// (Retention.Holds).
+	RepoScratch RepoKind = "scratch"
+)
+
+// RepoKinds is the closed set, in this order.
+func RepoKinds() []RepoKind { return []RepoKind{RepoProject, RepoScratch} }
+
+// Valid reports a kind this build knows. EMPTY IS NOT ONE, for [Visibility]'s
+// reason: a record carries a repository's settings whole.
+func (k RepoKind) Valid() bool { return slices.Contains(RepoKinds(), k) }
+
+// KindOf is the kind a repository's name says it is: scratch for a seat's
+// <handle>.<slug>, a project otherwise — what a create's settings must state
+// ([RepoSettings.Validate] does not know the name; [LifecycleRequest.Validate]
+// holds a tool's create to it, and a declaration is a project by the one
+// constructor every reconcile's settings come from, [Declared.settingsAt]).
+func KindOf(name string) RepoKind {
+	if _, scratch := gitref.ScratchName(name); scratch {
+		return RepoScratch
+	}
+	return RepoProject
+}
 
 // DirectPush is whether a protected ref takes a direct push.
 type DirectPush string
@@ -271,7 +326,24 @@ type Protection struct {
 // whole by every record that sets it.
 type RepoSettings struct {
 	ManagedBy ManagedBy `json:"managed_by"`
-	Owner     Owner     `json:"owner"`
+	// Kind is what the repository is for, which its name says ([KindOf]):
+	// every create states it, a declaration's always a project
+	// ([Declared.settingsAt]), and no record changes it — a rename keeps its
+	// kind's form.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a record carrying settings reads it. Once a build without it
+	// has run, each op whose payload carries settings takes {Name:
+	// "RepoSettings.Kind", Since: 2, Op: <the op: create, settings, restore>,
+	// Path: []string{"mutation", "settings", "kind"}} in versionedFields, with
+	// RecordVersion at 2, its line under "What each version added" and a
+	// Carrying record in the statelogtest candidate — such a build would apply
+	// a create without its kind, and the row it wrote would read as no kind
+	// on that node for ever.
+	Kind  RepoKind `json:"kind"`
+	Owner Owner    `json:"owner"`
 	// DefaultBranch is a branch name, not a ref ("main").
 	DefaultBranch string `json:"default_branch"`
 	Description   string `json:"description,omitempty"`
@@ -295,6 +367,19 @@ func (s RepoSettings) Validate() error {
 	switch {
 	case !s.ManagedBy.Valid():
 		return fmt.Errorf("%w: managed_by: %q is not one of %v", ErrInvalid, s.ManagedBy, ManagedBys())
+	case !s.Kind.Valid():
+		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, s.Kind, RepoKinds())
+	case s.ManagedBy == ManagedTools && s.ConfigEpoch != 0:
+		return fmt.Errorf("%w: config_epoch: a tool's repository comes from no configuration "+
+			"activation, so its settings name none", ErrInvalid)
+	case s.ManagedBy == ManagedConfig && s.Kind != RepoProject:
+		return fmt.Errorf("%w: kind: a repository code.repos declares is a project", ErrInvalid)
+	case s.Kind == RepoScratch && s.Owner.Kind != OwnerSeat:
+		return fmt.Errorf("%w: owner: a scratch repository belongs to the seat whose handle it carries",
+			ErrInvalid)
+	case s.Kind == RepoScratch && len(s.Protections) > 0:
+		return fmt.Errorf("%w: protections: a scratch repository takes no protections — it is its "+
+			"seat's own", ErrInvalid)
 	case !s.Owner.Kind.Valid():
 		return fmt.Errorf("%w: owner.kind: %q is not one of %v", ErrInvalid, s.Owner.Kind, OwnerKinds())
 	case strings.TrimSpace(s.Owner.Ref) == "":
@@ -339,7 +424,7 @@ func (s RepoSettings) Validate() error {
 // sorted by Validate's rule), and IGNORES ConfigEpoch — the activation a value
 // came from is not a difference in the value.
 func (s RepoSettings) equal(o RepoSettings) bool {
-	return s.ManagedBy == o.ManagedBy && s.Owner == o.Owner &&
+	return s.ManagedBy == o.ManagedBy && s.Kind == o.Kind && s.Owner == o.Owner &&
 		s.DefaultBranch == o.DefaultBranch && s.Description == o.Description &&
 		s.Archived == o.Archived && s.Visibility == o.Visibility &&
 		slices.Equal(s.Protections, o.Protections)
@@ -355,9 +440,13 @@ func (s RepoSettings) status() RepoStatus {
 
 // CreateRepo makes a repository. Its subject is the NAME.
 type CreateRepo struct {
-	// RepoID is minted by the WRITER and carried, never derived: a create
-	// that lost its race must not have written a repository under an id
-	// the winner also chose.
+	// RepoID is chosen by the WRITER and carried, never derived by the
+	// applier: a create that lost its race must not have written a
+	// repository under an id the winner also chose. A configuration's create
+	// mints it once per call; a tool's derives it from the request's own
+	// operation id ([Store.Lifecycle]), so a retry whose ledger row was swept
+	// names the same repository, while two requests are two operations and
+	// never share one.
 	RepoID   string       `json:"repo_id"`
 	Name     string       `json:"name"`
 	Settings RepoSettings `json:"settings"`
@@ -379,6 +468,88 @@ type LifecycleRecord struct {
 	// delete.
 	Settings *RepoSettings `json:"settings,omitempty"`
 }
+
+// Rename claims To for a tool-managed repository, on To's name subject, and
+// leaves From redirecting to it for [RedirectWindow] ([Store.Lifecycle]).
+//
+// BASE FORMAT, AS A STATED CONDITION: no build that carries the code domain
+// has run without this op — none of the domain is on main, so no image and no
+// release holds it — and while that is so, every build that meets a record of
+// it reads it. Once a build without it has run, it takes {Name:
+// "RecordEnvelope.Op rename", Since: 2, Path: []string{"op"}, Equals:
+// string(OpRename)} in versionedFields, with RecordVersion at 2, its line under
+// "What each version added", a Carrying record in the statelogtest candidate,
+// and the op excepted from the stamp test's base-format loop — an older build
+// would otherwise FAIL on the record at DecodeMutation's default arm rather
+// than retain it. It is no gate.
+type Rename struct {
+	RepoID string `json:"repo_id"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+}
+
+// ReleaseName frees a renamed repository's old name once its redirect has
+// ended, on that name's subject — the code-retention pass's
+// ([Store.ReleaseName]).
+//
+// BASE FORMAT, AS A STATED CONDITION, as [Rename] states it; once a build
+// without it has run, it takes {Name: "RecordEnvelope.Op release_name", Since:
+// 2, Path: []string{"op"}, Equals: string(OpReleaseName)} with the same
+// companions. It is no gate.
+type ReleaseName struct {
+	Name   string `json:"name"`
+	RepoID string `json:"repo_id"`
+}
+
+// RedirectWindow is how long a renamed repository's old name keeps
+// redirecting: a MONTH, so a clone's remote and a CI configuration naming the
+// old URL keep working while their owners update them. A product judgment, not
+// a measurement; the release follows the window's end within one pass of the
+// code-retention duty ([RetentionInterval]), and until it lands the name stays
+// the repository's — every node at one position answers one way, which a
+// comparison with each node's clock would not.
+const RedirectWindow = 30 * 24 * time.Hour
+
+// Hold is a LIVE TURN'S HOLD on a scratch repository, recorded on its subject
+// so that an expiry pass which read the live turns' holds before this one
+// existed is ordered against it: the broker arbitrates the two on the one
+// subject `repo.<id>`, so whichever lands second decides from the first
+// ([Store.ExpireScratch] refuses a repository with a record past the page it
+// listed; a hold decided after the delete answers repo_deleted). Its apply
+// moves the repository's version and NOTHING else — never its idle clock, which
+// only activity moves ([Retention]).
+//
+// BASE FORMAT, AS A STATED CONDITION, as [Rename] states it; once a build
+// without it has run, it takes {Name: "RecordEnvelope.Op hold", Since: 2, Path:
+// []string{"op"}, Equals: string(OpHold)} with the same companions. It is no
+// gate.
+type Hold struct {
+	RepoID string `json:"repo_id"`
+	// TurnID is the turn holding it (turnctx.Turn.RunID), at most
+	// MaxProvenanceBytes, so a reader of the log can say whose hold ordered an
+	// expiry.
+	TurnID string `json:"turn_id"`
+}
+
+// HoldRecordAfter is how long a scratch repository must have been idle before
+// a turn's hold on it is also RECORDED ([Hold]): one day — the floor of
+// code.scratch.idle_days (config.CodeScratchIdleDaysFloor) — less two hours.
+//
+// WHY A RECORD AT ALL, and only past this: a pass fixes its cutoff BEFORE it
+// reads the live turns' holds, so a hold it could not see was taken after its
+// cutoff was fixed. The pass's cutoff and this threshold are each ONE node's
+// clock compared with the same broker-stamped last_activity_at, so the broker's
+// clock cancels and only the two nodes' disagreement matters: a repository
+// idle less than this by the holding node's clock, read after the hold was
+// taken, is past no in-flight pass's cutoff, whatever that pass's epoch says
+// idle_days is, as long as the two clocks disagree by under two hours. Two
+// hours covers twice the references gate's assumed skew between two nodes
+// (objstore.AssumedClockSkew, an hour, which the collector's grace rests on
+// too), and exactly two nodes each within an hour of the broker, which the
+// `clock_skew` alarm watches. Only an older repository can be raced, and for
+// it the record makes the broker decide the race. Held by
+// references.TestAHoldRecordCoversEveryPassInFlight.
+const HoldRecordAfter = 22 * time.Hour
 
 // PushBatch is one or more pushes to one repository, in the order they were
 // decided — group commit's one record.
@@ -1029,6 +1200,12 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 	switch {
 	case kind == KindName && op == OpCreate:
 		return decodePayload[CreateRepo](rec)
+	case kind == KindName && op == OpRename:
+		return decodePayload[Rename](rec)
+	case kind == KindName && op == OpReleaseName:
+		return decodePayload[ReleaseName](rec)
+	case kind == KindRepo && op == OpHold:
+		return decodePayload[Hold](rec)
 	case kind == KindRepo && op == OpPush:
 		return decodePayload[PushBatch](rec)
 	case kind == KindRepo && op == OpSettings:

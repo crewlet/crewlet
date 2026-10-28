@@ -354,9 +354,9 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 		// before git sends a byte, and git prints the refusal as the
 		// remote's error.
 		refused := dev.Push(t.Context(), work, gitURL(n, fleetRepo), "main")
-		if refused.Err == nil || !strings.Contains(refused.Stderr, code.ArchivedDetail(fleetRepo)) {
+		if refused.Err == nil || !strings.Contains(refused.Stderr, code.ArchivedDetail(fleetRepo, code.ManagedConfig)) {
 			t.Errorf("a push to the archived repository through %s was not refused in the "+
-				"domain's words (%q): %s", n.id, code.ArchivedDetail(fleetRepo), refused)
+				"domain's words (%q): %s", n.id, code.ArchivedDetail(fleetRepo, code.ManagedConfig), refused)
 		}
 		// AND A FETCH IS SERVED: archived is read-only, never unreachable.
 		dev.Git().Run(t, clone, "fetch", "--quiet", gitURL(n, fleetRepo), "main")

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -354,6 +355,30 @@ func TestEveryDeclarationStatesItsStanding(t *testing.T) {
 // it — the reading every inequality here compares two machines' clocks under
 // (see objstore.AssumedClockSkew).
 const twoClocks = 2 * objstore.AssumedClockSkew
+
+// A HOLD RECORD COVERS EVERY PASS IN FLIGHT (M3-decisions M3-O61). A turn that
+// takes its hold on a seat's scratch repository RECORDS it on the repository's
+// subject only where the repository has been idle code.HoldRecordAfter or more,
+// by the holding node's clock read after the hold; under that it keeps the hold
+// in memory, or on its run row, alone — which the code-retention pass reads only
+// AFTER it has fixed its cutoff. That is safe only while a repository idle less
+// than the threshold is past no in-flight pass's cutoff, the pass's clock
+// against the same broker-stamped activity: the threshold and the two clocks'
+// disagreement together must not reach the shortest idle time a company may
+// set (config.CodeScratchIdleDaysFloor days). Otherwise a pass already deciding
+// could expire a repository a turn has just named and not recorded.
+//
+// Mutation: HoldRecordAfter at 23 h — red.
+func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
+	t.Parallel()
+	shortest := 24 * time.Hour * time.Duration(config.CodeScratchIdleDaysFloor)
+	if reach := code.HoldRecordAfter + twoClocks; reach > shortest {
+		t.Errorf("an unrecorded hold may be taken on a repository idle up to %v (code.HoldRecordAfter) by a "+
+			"clock up to %v (twice objstore.AssumedClockSkew) off the pass's, %v in all, past the shortest "+
+			"idle time a pass expires at (%v): a pass in flight could expire a repository a turn holds",
+			code.HoldRecordAfter, twoClocks, reach, shortest)
+	}
+}
 
 // THE GRACE OUTLASTS THE LONGEST AN UPLOAD CAN GO UNRECORDED — ADR-0027's
 // inequalities, pinned here because this is the one package every constant

@@ -67,11 +67,11 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	// bodies and rows remain: those, every protection rule
 	// (MaxProtectionsPerRepo), the published chain — which no part removes:
 	// MaxPublishedLayers layers of MaxLayerParts parts each — the name claim,
-	// the repository's row and the deletion marker.
+	// the repository's row, its kind's count and the deletion marker.
 	chain := code.MaxPublishedLayers * (1 + code.MaxLayerParts)
-	if final := code.PurgePartRows + code.MaxProtectionsPerRepo + chain + 3; final > code.MaxRecordRows {
+	if final := code.PurgePartRows + code.MaxProtectionsPerRepo + chain + 4; final > code.MaxRecordRows {
 		t.Errorf("the final purge removes up to %d rows (PurgePartRows %d + MaxProtectionsPerRepo %d + "+
-			"a chain's %d + 3), past the %d one record's apply may touch (MaxRecordRows)", final,
+			"a chain's %d + 4), past the %d one record's apply may touch (MaxRecordRows)", final,
 			code.PurgePartRows, code.MaxProtectionsPerRepo, chain, code.MaxRecordRows)
 	}
 	// A MAXIMAL PUSH OF DELETIONS FITS ONE RECORD'S ROWS with its sweep's

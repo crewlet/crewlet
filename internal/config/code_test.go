@@ -156,6 +156,139 @@ func TestTheCodeLimitsAreTheSchemasBounds(t *testing.T) {
 	}
 }
 
+// THE SCRATCH POLICY IS BOUNDED, refused at the field an operator wrote: an
+// idle time of at least a day — what a live turn's hold record is derived from
+// — and at most a year, and a cap of 0..1000 scratch repositories a seat.
+func TestTheCodeScratchIsBounded(t *testing.T) {
+	t.Parallel()
+	const company = "name: Acme\ncode:\n  native: true\n  scratch:\n"
+	for name, tc := range map[string]struct {
+		scratch    string
+		path, kind string
+		says       []string
+	}{
+		"both at their upper bounds": {scratch: "    idle_days: 365\n    max_per_seat: 1000\n"},
+		"an idle time of a day":      {scratch: "    idle_days: 1\n"},
+		"an idle time below a day": {scratch: "    idle_days: -1\n",
+			path: "code.scratch.idle_days", kind: "out_of_range", says: []string{"1..365", "7"}},
+		"an idle time past a year": {scratch: "    idle_days: 366\n",
+			path: "code.scratch.idle_days", kind: "out_of_range", says: []string{"366", "1..365"}},
+		"a negative cap": {scratch: "    max_per_seat: -1\n",
+			path: "code.scratch.max_per_seat", kind: "out_of_range", says: []string{"0..1000", "50"}},
+		"a cap past its ceiling": {scratch: "    max_per_seat: 1001\n",
+			path: "code.scratch.max_per_seat", kind: "out_of_range", says: []string{"1001", "0..1000"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := config.ParseCompany([]byte(company + tc.scratch))
+			if tc.path == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			problems := config.Problems(err)
+			if len(problems) != 1 {
+				t.Fatalf("problems = %+v, want the one at %s", problems, tc.path)
+			}
+			if p := problems[0]; p.Path != tc.path || p.Kind != tc.kind {
+				t.Errorf("refused at %s (%s), want %s (%s): %s", p.Path, p.Kind, tc.path, tc.kind, p.Message)
+			} else {
+				for _, want := range tc.says {
+					if !strings.Contains(p.Message, want) {
+						t.Errorf("message = %q, want it to name %q", p.Message, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// NOTHING HOSTS A SCRATCH POLICY WITHOUT THE NATIVE CODE HOST: a block that
+// would read as live and govern nothing is refused, as code.limits is.
+//
+// Mutation: drop the scratch arm of the rule and the block is accepted — red.
+func TestCodeScratchNeedsTheNativeHost(t *testing.T) {
+	t.Parallel()
+	_, err := config.ParseCompany([]byte("name: Acme\ncode:\n  scratch:\n    idle_days: 3\n"))
+	problems := config.Problems(err)
+	if len(problems) != 1 || problems[0].Path != "code.scratch" || problems[0].Kind != "conflict" ||
+		!strings.Contains(problems[0].Message, "code.native: true") {
+		t.Fatalf("code.scratch with nothing hosting code = %+v, want one conflict at code.scratch naming "+
+			"code.native: true", problems)
+	}
+}
+
+// ZERO SCRATCH REPOSITORIES A SEAT IS A SETTING, AND UNSET IS FIFTY: the cap is
+// a pointer because a company that lets no seat keep a scratch repository says
+// 0, and an int field could not tell that from a document that said nothing.
+//
+// Mutation: make MaxPerSeat an int, and 0 resolves to fifty — red (it fails
+// to compile, which is the field's whole point, beside the readings below).
+func TestScratchMaxPerSeatZeroIsASetting(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		scratch          string
+		idle, maxPerSeat int
+	}{
+		"unset":                   {scratch: "", idle: config.DefaultCodeScratchIdleDays, maxPerSeat: config.DefaultCodeScratchMaxPerSeat},
+		"no scratch repositories": {scratch: "  scratch:\n    max_per_seat: 0\n", idle: 7, maxPerSeat: 0},
+		"set":                     {scratch: "  scratch:\n    idle_days: 3\n    max_per_seat: 12\n", idle: 3, maxPerSeat: 12},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, err := config.ParseCompany([]byte("name: Acme\ncode:\n  native: true\n" + tc.scratch))
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if idle, most := c.Code.Scratch.Resolved(); idle != tc.idle || most != tc.maxPerSeat {
+				t.Errorf("code.scratch resolves to (%d days, %d a seat), want (%d, %d)", idle, most,
+					tc.idle, tc.maxPerSeat)
+			}
+		})
+	}
+	if config.DefaultCodeScratchIdleDays != 7 || config.DefaultCodeScratchMaxPerSeat != 50 {
+		t.Errorf("the scratch defaults are %d days and %d a seat, and the approved design states 7 and 50",
+			config.DefaultCodeScratchIdleDays, config.DefaultCodeScratchMaxPerSeat)
+	}
+}
+
+// THE SCHEMA ADMITS EXACTLY WHAT THE VALIDATOR DOES for the scratch policy, as
+// for the limits.
+func TestTheCodeScratchIsTheSchemasBounds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		field    string
+		min, max int64
+	}{
+		{"IdleDays", config.CodeScratchIdleDaysFloor, config.CodeScratchIdleDaysCeiling},
+		{"MaxPerSeat", 0, config.CodeScratchMaxPerSeatCeiling},
+	} {
+		field, ok := reflect.TypeFor[config.CodeScratch]().FieldByName(tc.field)
+		if !ok {
+			t.Errorf("config.CodeScratch has no field %s", tc.field)
+			continue
+		}
+		bounds := map[string]int64{}
+		for _, part := range strings.Split(field.Tag.Get("js"), ";") {
+			key, value, found := strings.Cut(part, "=")
+			if !found {
+				continue
+			}
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				t.Errorf("%s's js tag %q: %v", tc.field, part, err)
+				continue
+			}
+			bounds[key] = n
+		}
+		if bounds["min"] != tc.min || bounds["max"] != tc.max {
+			t.Errorf("%s's schema admits %d..%d and validation %d..%d", tc.field,
+				bounds["min"], bounds["max"], tc.min, tc.max)
+		}
+	}
+}
+
 // THE LIMITS ARE RESOLVED IN ONE PLACE: an unset field is its default, a set
 // one passes through — what config's order rules compare and what the code
 // domain holds a push to (code.LimitsOf reads this).

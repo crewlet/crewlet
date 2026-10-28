@@ -20,9 +20,24 @@ import (
 // value — runs NOTHING rather than panicking on the goroutine that serves the
 // estate: every operation is refused [ErrNotServing], and the router asks the
 // next data node.
+//
+// Store is the lifecycle store a tool's lifecycle request is decided by, nil
+// on a node that publishes nothing — refused [ErrNotServing] like a
+// proposal there, and asked of the next data node.
 type Served struct {
 	Committer *Committer
 	Reader    *Reader
+	Store     *Store
+}
+
+// Lifecycle decides one lifecycle request on this node's lifecycle store —
+// see [Store.Lifecycle].
+func (s Served) Lifecycle(ctx context.Context, req LifecycleRequest) (LifecycleResult, error) {
+	if s.Store == nil {
+		return LifecycleResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides no "+
+			"lifecycle request", ErrNotServing)
+	}
+	return s.Store.Lifecycle(ctx, req)
 }
 
 // Propose decides one push on this node's committer — see [Committer.Propose].

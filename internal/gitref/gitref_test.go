@@ -235,36 +235,69 @@ func gitVerdict(t *testing.T, name string, err error, stderr string, refused int
 	return false
 }
 
-func TestValidRepoName(t *testing.T) {
+// A PROJECT'S NAME IS ONE LABEL, a seat's scratch repository's is TWO, and a
+// name of either form is a repository's name — each form exactly as its
+// predicate states it, so the kind a name says a repository is cannot be read
+// two ways.
+//
+// Mutation: let ScratchName take two dots, a `git` slug, a side ending in a
+// hyphen or 64 bytes in all, or let ValidProjectName take a dot — each red.
+func TestARepositoryNameIsOneOfTwoForms(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", 31) + "." + strings.Repeat("b", 31) // 63 in all
 	for _, tc := range []struct {
-		name string
-		want bool
+		name    string
+		project bool
+		handle  string // the scratch name's handle, "" for none
 	}{
-		{"nimbus-web", true},
-		{"a", true},
-		{"0", true},
-		{"0day", true},
-		{"a-b", true},
-		{"a--b", true}, // a label may hold hyphens together, only not at an end
-		{strings.Repeat("a", gitref.MaxRepoNameBytes), true},
-		{"a" + strings.Repeat("-", gitref.MaxRepoNameBytes-2) + "0", true},
-		{"", false},
-		{"-a", false},
-		{"web-", false}, // no label ends in a hyphen
-		{"-", false},
-		{strings.Repeat("a", gitref.MaxRepoNameBytes-1) + "-", false},
-		{"A", false},
-		{"nimbus-Web", false},
-		{"a_b", false},
-		{"a.git", false},
-		{"a.b", false},
-		{"a/b", false},
-		{"a b", false},
-		{strings.Repeat("a", gitref.MaxRepoNameBytes+1), false},
-		{"é", false},
+		{name: "nimbus-web", project: true},
+		{name: "a", project: true},
+		{name: "0", project: true},
+		{name: "0day", project: true},
+		{name: "a-b", project: true},
+		{name: "a--b", project: true}, // a label may hold hyphens together, only not at an end
+		{name: strings.Repeat("a", gitref.MaxRepoNameBytes), project: true},
+		{name: "a" + strings.Repeat("-", gitref.MaxRepoNameBytes-2) + "0", project: true},
+		{name: ""},
+		{name: "-a"},
+		{name: "web-"}, // no label ends in a hyphen
+		{name: "-"},
+		{name: strings.Repeat("a", gitref.MaxRepoNameBytes-1) + "-"},
+		{name: "A"},
+		{name: "nimbus-Web"},
+		{name: "a_b"},
+		{name: "a/b"},
+		{name: "a b"},
+		{name: strings.Repeat("a", gitref.MaxRepoNameBytes+1)},
+		{name: "é"},
+
+		// THE SCRATCH FORM: <handle>.<slug>, one dot, two labels, 63 in all.
+		{name: "alice.web", handle: "alice"},
+		{name: "a.b", handle: "a"},
+		{name: "qa-bot.x2", handle: "qa-bot"},
+		{name: "alice.gi", handle: "alice"},   // a slug that only begins as git's
+		{name: "alice.gits", handle: "alice"}, // or that is longer
+		{name: long, handle: strings.Repeat("a", 31)},
+		{name: long + "b"},    // 64 in all
+		{name: "a.git"},       // <handle>.git is <handle>'s URL with git's suffix
+		{name: "alice.web.x"}, // two dots
+		{name: ".web"},        // no handle
+		{name: "alice."},      // no slug
+		{name: "alice-.web"},  // a handle that is not a label
+		{name: "alice.-web"},
+		{name: "Alice.web"},
+		{name: "alice..web"},
 	} {
-		if got := gitref.ValidRepoName(tc.name); got != tc.want {
-			t.Errorf("ValidRepoName(%q) = %v, want %v", tc.name, got, tc.want)
+		handle, scratch := gitref.ScratchName(tc.name)
+		if got := gitref.ValidProjectName(tc.name); got != tc.project {
+			t.Errorf("ValidProjectName(%q) = %v, want %v", tc.name, got, tc.project)
+		}
+		if handle != tc.handle || scratch != (tc.handle != "") {
+			t.Errorf("ScratchName(%q) = (%q, %v), want (%q, %v)", tc.name, handle, scratch, tc.handle,
+				tc.handle != "")
+		}
+		if got, want := gitref.ValidRepoName(tc.name), tc.project || tc.handle != ""; got != want {
+			t.Errorf("ValidRepoName(%q) = %v, want %v — either form, and only those", tc.name, got, want)
 		}
 	}
 }

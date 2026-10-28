@@ -105,8 +105,33 @@ func TestRepoSettingsRefuseWhatADeclarationCannotMean(t *testing.T) {
 	if err := good.Validate(); err != nil {
 		t.Fatalf("the suite's settings are refused: %v", err)
 	}
+	// AND A SEAT'S SCRATCH REPOSITORY, a tool's, unprotected and its seat's
+	// own, is settings a create may carry.
+	scratch := code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
+		Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Visibility: code.VisibilityCompany,
+		DefaultBranch: "main"}
+	if err := scratch.Validate(); err != nil {
+		t.Fatalf("a scratch repository's settings are refused: %v", err)
+	}
 	for name, mutate := range map[string]func(*code.RepoSettings){
-		"an unknown manager":       func(s *code.RepoSettings) { s.ManagedBy = "tools" },
+		"an unknown manager": func(s *code.RepoSettings) { s.ManagedBy = "drift" },
+		// WHAT A REPOSITORY IS FOR (RepoKind), held to who manages it and to
+		// what it is: no kind at all; a declaration of anything but a project;
+		// a tool's repository stamped with a configuration's activation; a
+		// scratch repository owned by anything but its seat, or protected.
+		"no kind":            func(s *code.RepoSettings) { s.Kind = "" },
+		"an unknown kind":    func(s *code.RepoSettings) { s.Kind = "sandbox" },
+		"a declared scratch": func(s *code.RepoSettings) { s.Kind = code.RepoScratch },
+		"a tool's repository from an activation": func(s *code.RepoSettings) {
+			s.ManagedBy, s.ConfigEpoch = code.ManagedTools, 1
+		},
+		"a scratch repository a unit owns": func(s *code.RepoSettings) {
+			s.ManagedBy, s.Kind, s.Protections = code.ManagedTools, code.RepoScratch, nil
+		},
+		"a protected scratch repository": func(s *code.RepoSettings) {
+			s.ManagedBy, s.Kind, s.Owner = code.ManagedTools, code.RepoScratch,
+				code.Owner{Kind: code.OwnerSeat, Ref: "dev"}
+		},
 		"an unknown owner kind":    func(s *code.RepoSettings) { s.Owner.Kind = "team" },
 		"no owner":                 func(s *code.RepoSettings) { s.Owner.Ref = " " },
 		"no visibility":            func(s *code.RepoSettings) { s.Visibility = "" },

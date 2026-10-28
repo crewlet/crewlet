@@ -142,6 +142,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ABridgedCallNamingNoJobIsNotRecorded", testABridgedCallNamingNoJobIsNotRecorded},
 		{"ABridgedCallAfterItsJobsClaimStaysOnItsJob", testABridgedCallAfterItsJobsClaimStaysOnItsJob},
 		{"AParkedJobsCondensationIsKeptForItsAnswer", testAParkedJobsCondensationIsKeptForItsAnswer},
+		{"BeginLaunchUnionsCodeHolds", testBeginLaunchUnionsCodeHolds},
+		{"AddCodeHoldsAddsToALiveRowOnly", testAddCodeHoldsAddsToALiveRowOnly},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,6 +158,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	}{
 		{"AudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem",
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
+		{"ListRunsListsEveryStatus", testListRunsListsEveryStatus},
 	}
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3639,5 +3642,152 @@ func testANewQuestionForgetsTheLastOnesAnswer(t *testing.T, s sandbox.PendingSto
 	if !got.AskedAt.IsZero() || got.Answer != nil || len(got.DeclinedAnswers) != 0 {
 		t.Fatalf("a new launch kept asked_at %v, answer %+v, declined %v",
 			got.AskedAt, got.Answer, got.DeclinedAnswers)
+	}
+}
+
+// A RELAUNCH UNIONS THE TURN'S CODE HOLDS, never replaces them. What a turn has
+// named the code host's expiry must not take — its scratch repositories — is
+// on its row once the turn has parked, and a relaunch is the same turn: an
+// earlier job's repository, or one the turn named before the second
+// run_sandbox call, is still something it may come back to. Every other
+// launch-scoped field a reset clears; this one only grows, each key once in
+// the order first taken, and a union past the bound is refused with nothing
+// written.
+//
+// Mutation: replace the set on a reset — the first launch's holds are gone, red.
+func testBeginLaunchUnionsCodeHolds(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	first := run("t1")
+	first.CodeHolds = []string{"repo-a", "repo-b", "repo-a"}
+	mustBeginLaunch(t, s, first)
+	if got := mustGet(t, s, "t1").CodeHolds; !slices.Equal(got, []string{"repo-a", "repo-b"}) {
+		t.Fatalf("a create holds %v, want [repo-a repo-b], each key once", got)
+	}
+	second := run("t1")
+	second.CodeHolds = []string{"repo-c", "repo-a"}
+	if _, err := s.BeginLaunch(ctx, second, sandbox.Fence{}); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if got := mustGet(t, s, "t1").CodeHolds; !slices.Equal(got, []string{"repo-a", "repo-b", "repo-c"}) {
+		t.Fatalf("a relaunch holds %v, want the union [repo-a repo-b repo-c]", got)
+	}
+	// AND A RELAUNCH HANDED NOTHING KEEPS EVERYTHING: a native turn that
+	// named no new repository still depends on what it named before.
+	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{}); err != nil {
+		t.Fatalf("relaunch with no holds: %v", err)
+	}
+	if got := mustGet(t, s, "t1").CodeHolds; len(got) != 3 {
+		t.Fatalf("a relaunch handed no holds left %v, want the three it held", got)
+	}
+	// PAST THE BOUND, refused and nothing written, on a create and a reset.
+	over := run("t2")
+	for i := range sandbox.MaxCodeHolds + 1 {
+		over.CodeHolds = append(over.CodeHolds, fmt.Sprintf("repo-%04d", i))
+	}
+	if _, err := s.BeginLaunch(ctx, over, sandbox.Fence{}); !errors.Is(err, sandbox.ErrCodeHoldsFull) {
+		t.Fatalf("a create past the bound = %v, want ErrCodeHoldsFull", err)
+	}
+	if _, found, err := s.Get(ctx, "t2"); err != nil || found {
+		t.Fatalf("a create refused past the bound left a row: found=%v err=%v", found, err)
+	}
+	over.TurnID = "t1"
+	if _, err := s.BeginLaunch(ctx, over, sandbox.Fence{}); !errors.Is(err, sandbox.ErrCodeHoldsFull) {
+		t.Fatalf("a relaunch past the bound = %v, want ErrCodeHoldsFull", err)
+	}
+	if got := mustGet(t, s, "t1").CodeHolds; len(got) != 3 {
+		t.Fatalf("a relaunch refused past the bound left %v, want the three it held", got)
+	}
+}
+
+// A HOLD IS ADDED TO A LIVE ROW ONLY, AND NEVER LOST TO A RACE. A turn with a
+// row takes its hold on a repository through this write BEFORE the request
+// that names it, so the write's answer decides whether the request is sent:
+// no row, or a row whose ending is decided, holds nothing new (false); a
+// write past the bound is refused with nothing written; a key the row holds
+// already is held (true, nothing written); and two turns' — a bridged call's
+// and a worker's — adds racing on one row both land.
+//
+// Mutation: write the keys blind rather than through the row's version — one
+// of the racing adds is lost, red.
+func testAddCodeHoldsAddsToALiveRowOnly(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	if ok, err := s.AddCodeHolds(ctx, "nobody", []string{"repo-a"}); err != nil || ok {
+		t.Fatalf("a hold on no row = %v, %v, want false and no error", ok, err)
+	}
+	if _, err := s.AddCodeHolds(ctx, "nobody", nil); err == nil {
+		t.Fatal("a hold naming no key was taken")
+	}
+	mustLaunched(t, s, run("t1"))
+	if ok, err := s.AddCodeHolds(ctx, "t1", []string{"repo-a"}); err != nil || !ok {
+		t.Fatalf("a hold on a live row = %v, %v, want it taken", ok, err)
+	}
+	if ok, err := s.AddCodeHolds(ctx, "t1", []string{"repo-a"}); err != nil || !ok {
+		t.Fatalf("a hold the row already carries = %v, %v, want it held", ok, err)
+	}
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			if ok, err := s.AddCodeHolds(ctx, "t1", []string{fmt.Sprintf("racer-%d", i)}); err != nil || !ok {
+				t.Errorf("racing hold %d = %v, %v", i, ok, err)
+			}
+		})
+	}
+	wg.Wait()
+	got := mustGet(t, s, "t1").CodeHolds
+	if len(got) != 9 || got[0] != "repo-a" {
+		t.Fatalf("the row holds %v, want repo-a and all eight racers", got)
+	}
+	over := make([]string, 0, sandbox.MaxCodeHolds)
+	for i := range sandbox.MaxCodeHolds {
+		over = append(over, fmt.Sprintf("more-%04d", i))
+	}
+	if _, err := s.AddCodeHolds(ctx, "t1", over); !errors.Is(err, sandbox.ErrCodeHoldsFull) {
+		t.Fatalf("a hold past the bound = %v, want ErrCodeHoldsFull", err)
+	}
+	if got := mustGet(t, s, "t1").CodeHolds; len(got) != 9 {
+		t.Fatalf("a hold refused past the bound left %d keys, want the 9 it held", len(got))
+	}
+	// AN ENDING DECIDED HOLDS NOTHING NEW: the run is going, and its turn's
+	// request is refused before it is sent.
+	decide(t, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active))
+	if ok, err := s.AddCodeHolds(ctx, "t1", []string{"repo-late"}); err != nil || ok {
+		t.Fatalf("a hold on a run whose ending is decided = %v, %v, want false and no error", ok, err)
+	}
+}
+
+// EVERY RUN IS LISTED, WHATEVER ITS STATUS. A run is unended exactly while it
+// has a record, so the code host's expiry asks this listing which scratch
+// repositories parked runs hold — and a row a newer build wrote with a status
+// this build does not know is a run whose turn holds them still. Filtered by
+// this build's own list, it would drop out mid-upgrade and its repositories
+// would be expired under it.
+//
+// Mutation: filter by sandbox.Active — the newer build's row is missing, red.
+func testListRunsListsEveryStatus(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	mustLaunched(t, s, run("t1"))
+	newer := run("t2")
+	newer.Status = "rehearsing"
+	newer.CodeHolds = []string{"repo-n"}
+	body, err := json.Marshal(newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created, err := runs.CreateSandboxRun(t.Context(), "t2", body); err != nil || !created {
+		t.Fatalf("seed the newer build's row: created=%v err=%v", created, err)
+	}
+	listed, err := s.ListRuns(t.Context())
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	var ids []string
+	for _, r := range listed {
+		ids = append(ids, r.TurnID)
+		if r.TurnID == "t2" && !slices.Equal(r.CodeHolds, []string{"repo-n"}) {
+			t.Errorf("the newer build's row holds %v, want [repo-n]", r.CodeHolds)
+		}
+	}
+	if !slices.Contains(ids, "t1") || !slices.Contains(ids, "t2") {
+		t.Fatalf("ListRuns listed %v, want both runs — the one whose status this build does not "+
+			"know among them", ids)
 	}
 }

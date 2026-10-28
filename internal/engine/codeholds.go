@@ -1,0 +1,386 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
+
+// THE LIVE TURNS' HOLDS: what keeps a seat's scratch repository from the code
+// host's expiry while a turn that has named it is UNENDED — still running, or
+// detached with a run row (M3-decisions M3-O61).
+//
+// # One hold, kept where the turn lives
+//
+// A turn's holds are [turnctx.Holds], taken before every request it makes
+// about a repository (internal/agent/builtin's one seam). While the turn RUNS
+// they live in this process's memory — the turn lives nowhere else, and a
+// durable copy would need a rule to release the hold of a turn whose process
+// crashed — and this file keeps every running turn's set by turn
+// ([runningTurns]), registered where a turn starts (the dispatch and the
+// resume) and forgotten where it returns. Once the turn has a RUN ROW the set
+// is on the row too ([sandbox.PendingRun.CodeHolds]): a launch writes the
+// turn's set on the row it opens and attaches the writer every later hold
+// goes through first ([holdWriter]), and a resumed turn starts from the row's
+// set with that writer attached ([Engine.rowHolds]) — so a parked run holds
+// what its turn named for as long as its row exists, which is until it ends.
+//
+// # One reader, asked once a page of due repositories
+//
+// [Engine.codeHolds] is the code-retention pass's [code.Retention.Holds]: the
+// keys of a page held by (a) any run row the store holds, WHATEVER ITS STATUS
+// — a status a newer build added included ([sandbox.PendingStore.ListRuns]),
+// since a run is unended exactly while it has a record — and (b) any running
+// turn of any process holding a seat lease, asked over the queue's ephemeral
+// verbs on [topics.CodeHolds]. A turn runs only under its seat's lease, and
+// seat leases are released after a drain's turns finish, while the presence
+// lease is given back first, so the seat holders are who must answer: a
+// presence listing would miss a draining node's running turns. A node that
+// holds no seat lease is stopping its turns, whatever such a turn launched is a
+// row, and the rest of its work is redone under a new turn id by the seat's
+// next holder.
+//
+// NEVER ON AN UNKNOWN: a run store that cannot be listed, seat leases that
+// cannot be read, or a seat holder that does not answer inside
+// [holdsAskBudget] is an error naming what was not read, and the pass expires
+// nothing that page — a holder silent past the budget is unknown, never
+// "holds nothing".
+//
+// AN UNSIGNED READ SCATTER, internal/signedask's rule for a question a node
+// answers about itself with nothing carried out: like the fleet's history and
+// a held seat's memory, it trusts the fleet's broker to be the fleet's, which
+// is the operator's half of the rule (SECURITY.md) — and a forged answer that
+// claims a hold only keeps a repository longer.
+
+// holdsAskBudget bounds the ask of the seat holders: eventfan.FleetReadBudget,
+// two seconds, the bound every fleet read is held to, borrowed for its reason
+// rather than chosen (ADR-0015's rule, kept for a wait): an answer is a set
+// lookup in each holder's memory one round trip away, so a holder that has not
+// answered inside it is one worth naming rather than waiting for — and its
+// silence costs the pass only that page's expiry, which the next pass asks
+// again.
+const holdsAskBudget = eventfan.FleetReadBudget
+
+// codeHoldsProtocol is the version of a holds question and its answer. An
+// answerer refuses a question at a version it does not speak — answering
+// nothing, which its asker reads as a holder that did not answer, so the page
+// expires nothing — and an asker drops an answer at a version it does not.
+const codeHoldsProtocol = 1
+
+// codeHoldsQuestion is what the reader scatters on topics.CodeHolds: a page's
+// keys, at most the page the pass reads (code's retention page, 256 scratch
+// repository ids).
+type codeHoldsQuestion struct {
+	Version int      `json:"version"`
+	Keys    []string `json:"keys"`
+}
+
+// codeHoldsAnswer is one seat holder's answer: the lease identity it holds its
+// seats under, and the keys of the question its running turns hold.
+type codeHoldsAnswer struct {
+	Version int      `json:"version"`
+	Owner   string   `json:"owner"`
+	Held    []string `json:"held,omitempty"`
+}
+
+// errCodeHoldsQuestion is a question this node cannot read: not JSON, or at a
+// version it does not speak. Answered with nothing.
+var errCodeHoldsQuestion = errors.New("engine: a code holds question this node cannot read")
+
+// errRunHoldsNothing is a hold a turn's run row refused: the row is gone, or
+// its ending is decided. The request the hold was taken for is refused, with
+// nothing sent.
+var errRunHoldsNothing = errors.New("engine: the run's row is gone or its ending is decided, so it " +
+	"holds nothing new; the request was not sent")
+
+// runningTurns is this process's running turns' holds, each set counted by
+// how many of its turns' frames run now — the dispatch and the resume of one
+// run never overlap, but a set registered twice is forgotten only by its last
+// frame's return. Its zero value is ready, and it is safe for concurrent use.
+type runningTurns struct {
+	mu    sync.Mutex
+	turns map[*turnctx.Holds]int
+}
+
+// running registers h as a running turn's and answers what forgets it, which
+// the turn's frame calls as it returns. A nil set holds nothing and registers
+// nothing.
+func (r *runningTurns) running(h *turnctx.Holds) (done func()) {
+	if h == nil {
+		return func() {}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.turns == nil {
+		r.turns = map[*turnctx.Holds]int{}
+	}
+	r.turns[h]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.turns[h]--; r.turns[h] <= 0 {
+				delete(r.turns, h)
+			}
+		})
+	}
+}
+
+// held is the keys among keys some running turn holds, in keys' order.
+func (r *runningTurns) held(keys []string) []string {
+	r.mu.Lock()
+	sets := make([]*turnctx.Holds, 0, len(r.turns))
+	for h := range r.turns {
+		sets = append(sets, h)
+	}
+	r.mu.Unlock()
+	holding := map[string]bool{}
+	for _, h := range sets {
+		for _, key := range h.IDs() {
+			holding[key] = true
+		}
+	}
+	var out []string
+	for _, key := range keys {
+		if holding[key] {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// holdWriter is the writer a turn's holds are attached to once the turn has a
+// run row: every new key is written on the row ([sandbox.PendingStore.AddCodeHolds])
+// BEFORE the request it was taken for is sent, and a row that is gone or
+// ending refuses it ([errRunHoldsNothing]).
+func holdWriter(pending sandbox.PendingStore, turnID string) func(context.Context, []string) error {
+	return func(ctx context.Context, keys []string) error {
+		held, err := pending.AddCodeHolds(ctx, turnID, keys)
+		switch {
+		case err != nil:
+			return fmt.Errorf("engine: hold %v on run %s: %w", keys, turnID, err)
+		case !held:
+			return fmt.Errorf("%w (run %s)", errRunHoldsNothing, turnID)
+		}
+		return nil
+	}
+}
+
+// rowHolds is the holds of a turn the engine builds from a run row — a resumed
+// one: what the row holds, with the row's writer attached, so its every new
+// hold is on the row before its request. A node with no run store keeps them
+// in memory only, where the registry answers for them while the turn runs.
+func (e *Engine) rowHolds(run sandbox.PendingRun) *turnctx.Holds {
+	h := turnctx.NewHolds(run.CodeHolds)
+	if rt := e.sandbox.Load(); rt != nil && rt.pending != nil {
+		h.Attach(holdWriter(rt.pending, run.TurnID))
+	}
+	return h
+}
+
+// armCodeHolds makes this node the answerer for its running turns' holds, on
+// every node that hosts seats and in every mode: answering is not publishing.
+// BEFORE ITS SEAT HOST CLAIMS ITS FIRST SEAT — after the node, whose
+// incarnation is what its seat leases name, and before Start runs the host —
+// so no seat holder is ever unable to answer. A node with no broker is the
+// fleet, and answers its own reader directly ([holdsReader.ask]).
+func (e *Engine) armCodeHolds(ctx context.Context) error {
+	if e.backends == nil || e.backends.Queue == nil || e.node == nil {
+		return nil
+	}
+	stop, err := e.backends.Queue.Serve(ctx, topics.CodeHolds, queue.ConcurrentAnswers,
+		answerCodeHolds(e.node.Owner(), &e.turnHolds))
+	if err != nil {
+		return fmt.Errorf("engine: serve the running turns' code holds: %w", err)
+	}
+	e.stopCodeHoldsServe = stop
+	return nil
+}
+
+// stopCodeHolds withdraws this node as the answerer for its turns' holds —
+// AFTER its seat host has released its seats ([Engine.Stop]): until then a
+// pass reads this node among the seat holders, and a holder that stops
+// answering first costs that pass its expiry.
+func (e *Engine) stopCodeHolds(ctx context.Context) {
+	if e.stopCodeHoldsServe == nil {
+		return
+	}
+	if err := e.stopCodeHoldsServe(context.WithoutCancel(ctx)); err != nil {
+		log.WarnContext(ctx, "code_holds_answerer_not_withdrawn", "error", err)
+	}
+	e.stopCodeHoldsServe = nil
+}
+
+// answerCodeHolds answers one question: the keys of it the running turns hold,
+// under owner, the identity this process holds its seat leases under. An
+// IN-MEMORY answer, so it runs at queue.ConcurrentAnswers.
+func answerCodeHolds(owner string, turns *runningTurns) queue.AnswerFunc {
+	return func(_ context.Context, raw []byte) ([]byte, error) {
+		var q codeHoldsQuestion
+		if err := json.Unmarshal(raw, &q); err != nil {
+			return nil, fmt.Errorf("%w: %w", errCodeHoldsQuestion, err)
+		}
+		if q.Version != codeHoldsProtocol {
+			return nil, fmt.Errorf("%w: version %d, and this build speaks %d", errCodeHoldsQuestion,
+				q.Version, codeHoldsProtocol)
+		}
+		return json.Marshal(codeHoldsAnswer{Version: codeHoldsProtocol, Owner: owner, Held: turns.held(q.Keys)})
+	}
+}
+
+// codeHolds is the code-retention pass's [code.Retention.Holds]: which of keys
+// a live turn holds — see the file's doc.
+func (e *Engine) codeHolds(ctx context.Context, keys []string) (map[string]bool, error) {
+	return e.holdsReader().holds(ctx, keys)
+}
+
+// holdsReader is the reader over this node's backends: the fleet's run store,
+// the seat leases, the broker's ask and this process's own running turns.
+func (e *Engine) holdsReader() holdsReader {
+	r := holdsReader{self: &e.turnHolds, budget: holdsAskBudget}
+	if e.backends == nil {
+		return r
+	}
+	if e.backends.Fleet != nil {
+		r.runs = sandbox.NewCoordStore(e.backends.Fleet)
+	}
+	if e.backends.Coord != nil {
+		r.leases = e.backends.Coord
+	}
+	if e.backends.Queue != nil {
+		r.ask = e.backends.Queue.Ask
+	}
+	return r
+}
+
+// holdsReader is what the live turns' holds are read from, each a seam this
+// file declares for what it needs — so a case drives a store that cannot list,
+// a lease listing that fails and a holder that stays silent, each alone.
+type holdsReader struct {
+	// runs lists every run row, whatever its status.
+	runs interface {
+		ListRuns(ctx context.Context) ([]sandbox.PendingRun, error)
+	}
+	// leases lists the live leases of a class: the seat leases, whose owners
+	// are who must answer.
+	leases interface {
+		ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
+	}
+	// ask scatters a question and collects the replies (queue's Ask); nil is
+	// a node with no broker, which is the whole fleet and answers from self.
+	ask func(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
+	// self is this process's own running turns.
+	self   *runningTurns
+	budget time.Duration
+}
+
+// holds answers which of keys a live turn holds, or an error naming what it
+// could not read — never an answer on an unknown.
+func (r holdsReader) holds(ctx context.Context, keys []string) (map[string]bool, error) {
+	asked := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		asked[key] = true
+	}
+	held := map[string]bool{}
+	if len(keys) == 0 {
+		return held, nil
+	}
+	// (a) EVERY RUN ROW, WHATEVER ITS STATUS: a parked run holds what its
+	// turn named for as long as it has a record.
+	if r.runs == nil {
+		return nil, errors.New("engine: this node has no run store to read the parked runs' holds from")
+	}
+	runs, err := r.runs.ListRuns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("engine: the run store could not be listed for the parked runs' holds: %w", err)
+	}
+	for _, run := range runs {
+		for _, key := range run.CodeHolds {
+			if asked[key] {
+				held[key] = true
+			}
+		}
+	}
+	// (b) EVERY RUNNING TURN, asked of every process holding a seat lease.
+	running, err := r.running(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range running {
+		if asked[key] {
+			held[key] = true
+		}
+	}
+	return held, nil
+}
+
+// running is the keys among keys some running turn of the fleet holds: every
+// seat holder asked, and every one required to answer inside the budget.
+func (r holdsReader) running(ctx context.Context, keys []string) ([]string, error) {
+	if r.ask == nil {
+		// A NODE WITH NO BROKER IS THE FLEET: its own turns are every turn.
+		return r.self.held(keys), nil
+	}
+	if r.leases == nil {
+		return nil, errors.New("engine: this node has no coordination store to read the seat holders from")
+	}
+	leases, err := r.leases.ListLive(ctx, coord.ClassSeat)
+	if err != nil {
+		return nil, fmt.Errorf("engine: the seat leases could not be read for the running turns' holds: %w", err)
+	}
+	owners := map[string]bool{}
+	for _, l := range leases {
+		owners[l.Owner] = false
+	}
+	if len(owners) == 0 {
+		// NO SEAT IS HELD, so no turn runs anywhere.
+		return nil, nil
+	}
+	question, err := json.Marshal(codeHoldsQuestion{Version: codeHoldsProtocol, Keys: keys})
+	if err != nil {
+		return nil, fmt.Errorf("engine: encode a code holds question: %w", err)
+	}
+	askCtx, cancel := context.WithTimeout(ctx, r.budget)
+	defer cancel()
+	replies, err := r.ask(askCtx, topics.CodeHolds, question, len(owners))
+	if err != nil {
+		return nil, fmt.Errorf("engine: ask the seat holders for their running turns' holds: %w", err)
+	}
+	var held []string
+	for _, raw := range replies {
+		var a codeHoldsAnswer
+		if err := json.Unmarshal(raw, &a); err != nil || a.Version != codeHoldsProtocol || a.Owner == "" {
+			// AN ANSWER THIS BUILD CANNOT READ names nobody it could count
+			// as answered; its holder, if the leases name it, stays silent.
+			continue
+		}
+		// A HOLDER THE LISTING DID NOT NAME — one that took a seat since —
+		// is believed too: what it holds can only keep a repository.
+		owners[a.Owner] = true
+		held = append(held, a.Held...)
+	}
+	var silent []string
+	for owner, answered := range owners {
+		if !answered {
+			silent = append(silent, owner)
+		}
+	}
+	if len(silent) > 0 {
+		slices.Sort(silent)
+		return nil, fmt.Errorf("engine: the seat holders %v did not answer inside %s for their running "+
+			"turns' holds", silent, r.budget)
+	}
+	return held, nil
+}

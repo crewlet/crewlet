@@ -620,12 +620,13 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 		b.PageWriter = w.pages
 	}
 	// THE CODE HALF, where the runtime was built for it: the reader always,
-	// the committer only where this node publishes — w.committer is nil in a
-	// maintenance mode, and code.Served then refuses a proposal as a node
-	// that ran nothing, so the router asks the repository's runner-up with
-	// the same push id rather than this node appending it.
+	// the committer and the lifecycle store only where this node publishes —
+	// each nil in a maintenance mode, and code.Served then refuses a proposal
+	// and a lifecycle request as a node that ran nothing, so the router asks
+	// the next data node with the same push id or operation rather than this
+	// node appending it.
 	if n.built.runsCode() {
-		b.Code = code.Served{Committer: w.committer, Reader: n.codeReader}
+		b.Code = code.Served{Committer: w.committer, Reader: n.codeReader, Store: w.code}
 	}
 	return b
 }

@@ -541,7 +541,7 @@ func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 	run := sandbox.PendingRun{TurnID: "run-1", AgentHandle: "swe", Requester: "ceo"}
 	resumed, err := e.describeResume(t.Context(), company, resumeInput{
 		Run:  run,
-		Turn: resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org),
+		Turn: resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org, turnctx.NewHolds(run.CodeHolds)),
 	})
 	if err != nil {
 		t.Fatalf("describeResume: %v", err)
@@ -575,7 +575,7 @@ func TestTheTurnContextCarriesWhoAskedOnEverySegment(t *testing.T) {
 	resumed, err := e.describeResume(t.Context(), company, resumeInput{
 		Run:   run,
 		State: execstate.State{Senders: spoke},
-		Turn:  resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org),
+		Turn:  resumedTurn(run, company.Org.AgentSeatByHandle("swe"), company.Org, turnctx.NewHolds(run.CodeHolds)),
 	})
 	if err != nil {
 		t.Fatalf("describeResume: %v", err)

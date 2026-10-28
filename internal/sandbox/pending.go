@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"time"
 
@@ -470,6 +471,21 @@ type BridgeAppend struct {
 // former entirely.
 const MaxBridgeCalls = 200
 
+// MaxCodeHolds bounds [PendingRun.CodeHolds]: internal/agent/turnctx's
+// MaxHolds, the most one turn may hold, so a turn's whole set always fits its
+// row — this package imports neither the engine's turn context nor anything
+// that does, and the engine's TestATurnHoldsWhatItsRowMay holds the two
+// equal. A key is a repository's id (39 bytes on the row, quoted and with its
+// comma), so the field is at most about 39 KiB on a row that already carries
+// the whole suspended conversation.
+const MaxCodeHolds = 1024
+
+// ErrCodeHoldsFull refuses a write that would take a row's
+// [PendingRun.CodeHolds] past [MaxCodeHolds], with nothing written: the
+// request that wanted the hold is refused naming the bound, never sent
+// unheld.
+var ErrCodeHoldsFull = errors.New("sandbox: the run already holds the most repositories one run may (1 024)")
+
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
 //
 // The json tags are a WIRE FORMAT, not decoration: the record lives in the
@@ -832,6 +848,24 @@ type PendingRun struct {
 	// skips is a log that lies about what the run did.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
+	// CodeHolds are the hold KEYS of what this run's turn holds from the code
+	// host's expiry (internal/agent/turnctx's Holds): the seat's scratch
+	// repositories it named, by id — keys this package carries and never
+	// decodes. Every one the turn named before its first launch, every one
+	// it names while the row exists (a bridged call's, a resumed executor's),
+	// each written BEFORE the request that named it ([PendingStore.AddCodeHolds]).
+	//
+	// UNIONED, NEVER REPLACED — unlike everything else a launch resets: a
+	// relaunch keeps every earlier hold, because the turn may still depend on
+	// what an earlier job, or an earlier half of the turn, touched, and the
+	// expiry reads only what is here once the turn has parked. Deleted with
+	// the row when the run ends, which is the whole release of the hold: the
+	// code host's retention pass lists every row of the store, whatever its
+	// status ([PendingStore.ListRuns]), and keeps whatever any row holds.
+	//
+	// Bounded by [MaxCodeHolds].
+	CodeHolds []string `json:"code_holds,omitempty"`
+
 	// Charged is whether this launch's collected tokens are on the fleet's
 	// token counter.
 	//
@@ -1024,6 +1058,12 @@ type PendingStore interface {
 	// launch told nothing went on to start a job on a row that never named
 	// it, in a box nothing would reclaim. A row that went between the create
 	// and the reset is created again.
+	//
+	// THE TURN'S CODE HOLDS ARE UNIONED, NEVER RESET: a create writes the
+	// run's [PendingRun.CodeHolds], and a reset writes the union of what the
+	// row holds and what it is handed, each key once in the order first
+	// taken — refused [ErrCodeHoldsFull] past [MaxCodeHolds], so no launch
+	// drops a hold an earlier job's turn depends on.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
@@ -1226,6 +1266,27 @@ type PendingStore interface {
 	// late call from a box that is shutting down — and the caller must not
 	// fail the box's call over it.
 	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
+
+	// AddCodeHolds adds keys to the run's [PendingRun.CodeHolds] — the
+	// turn's holds from the code host's expiry, written BEFORE the request
+	// each was taken for — through the read-decide-write every flip takes,
+	// so two adds racing both land, each key once, in the order first taken.
+	// FALSE AND NO ERROR where the row is gone or its ending is decided: the
+	// run holds nothing new, and its turn is told so before it sends the
+	// request. [ErrCodeHoldsFull], writing nothing, where the keys would take
+	// the row past [MaxCodeHolds]. Unfenced: a hold is a fact about what the
+	// turn named, true whoever holds the seat now, and a turn whose lease
+	// moved writes nothing else here.
+	AddCodeHolds(ctx context.Context, turnID string, keys []string) (bool, error)
+
+	// ListRuns returns EVERY run the store holds, whatever its status — a
+	// status a newer build added included — oldest first, raising rather
+	// than answering short. A run is unended exactly while it has a record
+	// ([PendingStore.Finish] deletes it), so a reader asking "which runs are
+	// unended" asks this and never [PendingStore.ListActive], whose filter is
+	// this build's list of statuses: a newer peer's run would drop out of it
+	// mid-upgrade, and whatever that run's turn holds with it.
+	ListRuns(ctx context.Context) ([]PendingRun, error)
 
 	// ListActive returns every run that still owns engine-side state.
 	ListActive(ctx context.Context) ([]PendingRun, error)

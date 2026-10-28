@@ -598,7 +598,7 @@ func (s *Server) statusRefusal(repo code.RepoRef) (code.Refusal, string) {
 	case gone(repo.Status):
 		return code.RefusalRepoDeleted, s.goneSentence(repo)
 	case repo.Status == code.RepoStatusArchived:
-		return code.RefusalRepoArchived, code.ArchivedDetail(repo.Name)
+		return code.RefusalRepoArchived, code.ArchivedDetail(repo.Name, repo.ManagedBy)
 	}
 	return "", ""
 }

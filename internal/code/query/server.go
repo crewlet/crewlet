@@ -723,7 +723,8 @@ func everyFillMeets(err error) bool {
 func (r *read) grant() error {
 	repo := r.synced.Repo
 	if repo.Status == code.RepoStatusDeleted || repo.Status == code.RepoStatusPurging {
-		gone := code.RepoGone{ID: repo.ID, Name: repo.Name, Status: repo.Status, DeletedAt: repo.DeletedAt}
+		gone := code.RepoGone{ID: repo.ID, Name: repo.Name, Status: repo.Status, DeletedAt: repo.DeletedAt,
+			ManagedBy: repo.ManagedBy}
 		return fmt.Errorf("%w: %s", code.ErrRepoNotFound, gone.Detail())
 	}
 	_, err := code.JudgeRead(r.q.Asker, r.q.CeilingSeat, repo, r.roster)
