@@ -497,3 +497,88 @@ func TestAStopReachesACompletionWaitingForALimit(t *testing.T) {
 		t.Errorf("the stopped turn asked the model %d more times, want none", got-calls)
 	}
 }
+
+// A PARK TAKEN AFTER ITS SEAT LEFT THIS NODE IS UNDONE AT ONCE. A seat's
+// release does not wait for the turn whose refusal parks the seat: a lost
+// lease detaches the inbox under a running delivery, a turn refused mid-flight
+// parks once the turn has run, and a resume runs in no delivery at all, its
+// review minutes long, so the park can land after the release has forgotten
+// the seat's parks. It outlived the seat here: a provider park's probe went on
+// calling the models and publishing the seat parked while a peer ran it, a
+// budget park's alarm fired into a seat a peer ran, and either one's hold,
+// taken after the detach that drops holds, kept the inbox shut on this node.
+//
+// Mutation: drop the seat's re-check from providerPark, or from budgetPark,
+// and that park, its probe or alarm, and its hold stay on a seat this node no
+// longer holds.
+func TestAParkTakenAfterItsSeatLeftIsUndone(t *testing.T) {
+	t.Parallel()
+	// drained is a rig's engine once its drain has handed every seat back,
+	// with the parks' alarms fired by the case.
+	drained := func(t *testing.T, doc string) (*Engine, *fakeAlarms) {
+		t.Helper()
+		r := newDrainRig(t)
+		r.doc = doc
+		e := r.start(t)
+		alarms := &fakeAlarms{}
+		e.providerParks.after, e.budgetParks.after = alarms.after, alarms.after
+		e.Drain(t.Context())
+		if _, held := e.launchFence("swe"); held {
+			t.Fatal("the premise: the drained node still holds the seat")
+		}
+		return e, alarms
+	}
+	t.Run("a provider park", func(t *testing.T) {
+		t.Parallel()
+		e, alarms := drained(t, "")
+		var released atomic.Int32
+		e.backends.Queue.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+			if p, ok := events.DataAs[*types.SeatProviderReleased](ev); ok && p != nil {
+				released.Add(1)
+			}
+		})
+		refusal := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: time.Now().Add(time.Hour),
+			Err: errors.New("You've hit your 5-hour limit")}
+		limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
+			Failures: []error{refusal}, Err: refusal})
+		if !limited {
+			t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+		}
+		if _, parked, err := e.providerPark(t.Context(), "swe", limit); err != nil || !parked {
+			t.Fatalf("providerPark = %v, %v", parked, err)
+		}
+		if parking := e.providerParks.parking(seatIn(t, e, "swe")); parking != nil {
+			t.Fatal("the park outlived its seat on this node")
+		}
+		if live := alarms.live(); len(live) != 0 {
+			t.Fatalf("%d probe alarms armed for a seat this node no longer holds, want none", len(live))
+		}
+		if holds := inboxHolds(t, e, "swe"); slices.Contains(holds, pauseReasonProvider) {
+			t.Fatalf("the seat's inbox is held %v by a park on a seat this node no longer holds", holds)
+		}
+		if got := released.Load(); got != 1 {
+			t.Fatalf("%d releases published, want the one saying the seat was released", got)
+		}
+	})
+	t.Run("a budget park", func(t *testing.T) {
+		t.Parallel()
+		e, alarms := drained(t, cappedSWEDoc)
+		// THE SEAT'S DAY IS FULL, so its window refuses.
+		if _, err := e.backends.Fleet.PostCharge(t.Context(), coord.AgentScope(seatIn(t, e, "swe").String()),
+			1000, coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+			t.Fatalf("PostCharge: %v", err)
+		}
+		if _, parked, err := e.budgetPark(t.Context(), "swe"); err != nil || !parked {
+			t.Fatalf("budgetPark = %v, %v", parked, err)
+		}
+		if parking := e.budgetParks.parking(seatIn(t, e, "swe")); parking != nil {
+			t.Fatal("the park outlived its seat on this node")
+		}
+		if live := alarms.live(); len(live) != 0 {
+			t.Fatalf("%d reset alarms armed for a seat this node no longer holds, want none", len(live))
+		}
+		if holds := inboxHolds(t, e, "swe"); slices.Contains(holds, pauseReasonBudget) {
+			t.Fatalf("the seat's inbox is held %v by a park on a seat this node no longer holds", holds)
+		}
+	})
+}

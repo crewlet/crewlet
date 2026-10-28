@@ -756,3 +756,64 @@ func TestAnOlderProbeCallLeavesTheNewerOnesCancel(t *testing.T) {
 	r.e.forgetProviderPark(t.Context(), seatOf("lead"))
 	awaitSignal(t, newer, "the newer call to be ended by the last seat leaving")
 }
+
+// A RELEASED SEAT'S PROVIDER PARK TAKES ITS HOLD WITH IT. The release detaches
+// the seat's inbox, which drops every hold on it, and forgets the seat's parks
+// after; a park a turn took in between (a resume, or a delivery the release did
+// not wait for) holds an inbox the detach is done with, and forgotten without
+// its hold, it kept the seat deaf on this node, with no park left to lift it.
+// The probe rig's inbox has no attachment, as a released seat's has not.
+//
+// Mutation: forget the park without lifting its hold (seatParks.forget), and
+// the provider's hold stays on the seat's inbox.
+func TestAReleasedSeatsProviderParkTakesItsHoldWithIt(t *testing.T) {
+	t.Parallel()
+	r := newProbeRig(t, answers{})
+	inbox, group := topics.AgentInbox(seatOf("lead")), topics.AgentInboxGroup(seatOf("lead"))
+	r.park(t, "lead", parkedAt.Add(time.Hour))
+	if holds := r.q.PauseHolds(inbox, group); !slices.Contains(holds, pauseReasonProvider) {
+		t.Fatalf("the premise: the park holds the inbox under %q, holds %v", pauseReasonProvider, holds)
+	}
+
+	r.e.forgetProviderPark(t.Context(), seatOf("lead"))
+	if holds := r.q.PauseHolds(inbox, group); slices.Contains(holds, pauseReasonProvider) {
+		t.Fatalf("the released seat's inbox is still held %v by the park it forgot", holds)
+	}
+}
+
+// A PARK ITS SEAT'S RELEASE FORGOT BEFORE THE PARK WAS WHOLE IS UNDONE ALL THE
+// SAME. The release's forget can land between a park's take and the park's own
+// look at the seat: it drops the record and lifts the hold, and the park joins
+// its chain's probe and says the seat parked after it. With no record left to
+// release, the park that finds its seat gone still leaves the probe and says
+// the seat released: kept on the probe, the seat's alarm went on calling the
+// models as the seat, and the seat read parked while a peer ran it.
+//
+// Mutation: undo only a park whose record is left (unparkReleased), and the
+// probe's alarm stays armed for the seat, with nothing said.
+func TestAParkItsSeatsReleaseForgotFirstIsUndoneWhole(t *testing.T) {
+	t.Parallel()
+	r := newProbeRig(t, answers{})
+	var released atomic.Int32
+	r.q.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+		if p, ok := events.DataAs[*types.SeatProviderReleased](ev); ok && p != nil &&
+			p.Reason == seatReleasedHere {
+			released.Add(1)
+		}
+	})
+	// WHAT THE PARK LEFT AFTER THE RELEASE'S FORGET: its place on the probe,
+	// and no record.
+	basis := providerBasis{models: r.e.Company().Models, keys: []string{"default"}}
+	r.e.joinLimitProbe(t.Context(), basis, seatOf("lead"), "lead", parkedAt.Add(time.Hour))
+	if live := r.alarms.live(); len(live) != 1 {
+		t.Fatalf("the premise: %d probe alarms armed, want the seat's", len(live))
+	}
+
+	r.e.unparkReleased(t.Context(), seatOf("lead"), "lead", basis)
+	if live := r.alarms.live(); len(live) != 0 {
+		t.Fatalf("%d probe alarms armed for a seat this node no longer holds, want none", len(live))
+	}
+	if got := released.Load(); got != 1 {
+		t.Fatalf("%d releases published, want the one saying the seat was released", got)
+	}
+}

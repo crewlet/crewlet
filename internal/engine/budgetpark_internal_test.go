@@ -695,29 +695,37 @@ func (unreachableFleet) Used(context.Context, string, coord.Windows) (coord.Usag
 	return coord.Usage{}, errors.New("the coordination store is unreachable")
 }
 
-// A RELEASED SEAT TAKES ITS ALARM WITH IT, and a stopping node disarms every
-// one: an alarm left armed would fire into a seat a peer now serves, or into a
-// queue client that has closed.
+// A RELEASED SEAT TAKES ITS ALARM AND ITS HOLD WITH IT, and a stopping node
+// disarms every alarm: an alarm left armed would fire into a seat a peer now
+// serves, or into a queue client that has closed. The release's detach drops
+// every hold the inbox had then, and the release forgets the park after it;
+// but a park taken in between (a turn refused mid-flight, which the release
+// does not wait for) holds an inbox the detach is done with, and forgotten
+// without its hold, it kept the seat deaf on this node, with no park left to
+// lift it.
+//
+// Mutation: drop the hold's lift from the forget (seatParks.forget), and the
+// forgotten park's hold stays on the seat's inbox.
 func TestAParkEndsWithItsSeatAndWithTheNode(t *testing.T) {
 	t.Parallel()
 	r := newParkRig(t, "100")
 	r.spend(t, 100)
 	r.deliver(t)
-	if len(r.alarms.live()) != 1 {
-		t.Fatalf("precondition: %d alarms armed, want the park's one", len(r.alarms.live()))
+	if len(r.alarms.live()) != 1 || !slices.Contains(r.holds(), pauseReasonBudget) {
+		t.Fatalf("precondition: %d alarms armed and holds %v, want the park's alarm and hold",
+			len(r.alarms.live()), r.holds())
 	}
-	r.e.forgetBudgetPark(seatOf("lead"))
+	r.e.forgetBudgetPark(t.Context(), seatOf("lead"))
 	if n := len(r.alarms.live()); n != 0 {
 		t.Fatalf("a released seat left %d alarms armed", n)
 	}
-
-	// The seat comes back to this node: the release's detach dropped the
-	// hold, and the attachment is live again. The mail it kept is handed
-	// over and parks again, on the counters it finds.
-	if err := r.q.ResumeTopic(t.Context(), topics.AgentInbox(seatOf("lead")),
-		topics.AgentInboxGroup(seatOf("lead")), pauseReasonBudget); err != nil {
-		t.Fatalf("ResumeTopic: %v", err)
+	if holds := r.holds(); slices.Contains(holds, pauseReasonBudget) {
+		t.Fatalf("a released seat's inbox is still held %v: its forgotten park left its hold", holds)
 	}
+
+	// The seat comes back to this node, and the attachment is live again.
+	// The mail it kept is handed over and parks again, on the counters it
+	// finds.
 	r.renew(t)
 	if len(r.alarms.live()) != 1 || r.runs() != 0 {
 		t.Fatalf("precondition: %d alarms armed and %d turns run after parking again",

@@ -44,6 +44,12 @@ import (
 // node stopping) lives here once, so the two cannot drift apart on the parts
 // that have to be right for both.
 //
+// A PARK OUTLIVES NO SEAT. The seat's release detaches its inbox, which drops
+// every hold on it, and then forgets its parks; it waits for none of the turns
+// that can park the seat, so a park can land in between, or after. The forget
+// lifts the hold of a park it finds ([seatParks.forget]), and a park that finds
+// its seat gone once it is taken undoes itself.
+//
 // HOLDS ARE KEYED BY REASON, so two parks on one inbox (a seat whose window is
 // spent AND whose model is limited) are two holds, and neither release lifts
 // the other's. WHO HAS TO AGREE ON A PARK: this node alone. It is a hold in
@@ -52,6 +58,11 @@ import (
 
 // alarm is an armed release: stopped when the park is released some other way.
 type alarm interface{ Stop() bool }
+
+// seatReleasedHere is why a park ends with its seat's release on this node:
+// what its release logs, and what `seat_provider_released` says of a provider
+// park.
+const seatReleasedHere = "the seat was released by this node"
 
 // parkSpec is what one kind of park is called: the hold it takes on an inbox,
 // and the log lines its release writes.
@@ -254,20 +265,35 @@ func (p *seatParks[B]) changed(keep func(seat uuid.UUID, basis B) bool) []uuid.U
 }
 
 // forget drops a released seat's park without resuming anything, reporting
-// whether there was one.
+// whether there was one: its alarm, which would otherwise fire into a seat
+// this node no longer holds, and its hold.
 //
-// The seat's release DETACHED its inbox, and a detach releases every hold the
-// attachment carried, so there is nothing to lift, only an alarm that would
-// otherwise fire into a seat this node no longer holds.
-func (p *seatParks[B]) forget(seat uuid.UUID) (*seatParking[B], bool) {
+// THE HOLD TOO, though the seat's release DETACHED its inbox before this, and
+// a detach drops every hold on it. The release waits for none of the turns
+// that can park the seat, so a park can be taken between the detach and here,
+// and its hold is on an inbox the detach is done with: forgotten without it,
+// the hold outlived its park, and the seat, held by this node again, took no
+// mail, with no park left to lift it. A park taken after this asks for the seat
+// itself once it is taken, and undoes itself where the seat is gone
+// ([Engine.budgetPark], [Engine.providerPark]). Lifted outside the lock, as
+// every release lifts one, onto an inbox with no attachment to hand mail to; a
+// client that has stopped holds nothing, since its stop dropped every hold.
+func (p *seatParks[B]) forget(ctx context.Context, e *Engine, spec parkSpec, seat uuid.UUID) (*seatParking[B], bool) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	parking := p.seats[seat]
 	if parking == nil {
+		p.mu.Unlock()
 		return nil, false
 	}
 	parking.disarm()
 	delete(p.seats, seat)
+	p.mu.Unlock()
+
+	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
+	if err := e.backends.Queue.ResumeTopic(ctx, subject, group, spec.hold); err != nil {
+		log.DebugContext(ctx, "seat_park_hold_not_lifted", "seat", parking.handle,
+			"agent_id", seat.String(), "reason", spec.hold, "error", err)
+	}
 	return parking, true
 }
 

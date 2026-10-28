@@ -123,6 +123,20 @@ import (
 // instant a completion's own refusal named passes under a park that still
 // stands.
 //
+// A PARK OUTLIVES NO SEAT. A seat's release takes the seat out of this node's
+// hands, detaches its inbox, which drops every hold on it, and forgets its
+// parks ([Engine.forgetProviderPark]); it waits for none of the turns that can
+// park the seat: a lost lease detaches the inbox under a running delivery, and
+// a resume runs in no delivery at all, its review minutes long. So a park can
+// land while the seat is being released, or after. One taken after the
+// release forgot the seat's parks asks for the seat again once it is whole,
+// and undoes itself where it is gone ([Engine.unparkReleased]); one taken
+// between the detach and the forget has its hold lifted by the forget
+// ([seatParks.forget]). Left standing, such a park outlived the seat here: its
+// probe went on calling the models and publishing the seat parked while a peer
+// ran it, and its hold kept the seat's inbox shut on this node with no park
+// left to lift it.
+//
 // A RELEASE IS ALSO A SIGNAL to the resumes waiting on the same condition
 // ([waitProvider]): a coding run's completion or a person's answer refused
 // because the models were limited is re-checked the moment a park lifts, on
@@ -252,7 +266,17 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 		"resets_at", resets, "said", limit.Said,
 		"detail", "this seat's mail waits on its inbox until its models are tried again")
 	e.publishProviderPark(ctx, handle, providerParked(limit))
-	// THE BASIS AGAIN, after the hold: an apply that installed new models
+	// THE SEAT AGAIN, once the park is whole: the seat's release waits for
+	// none of the turns that park it (see the file's doc). The release takes
+	// the seat out of this node's hands before it detaches the inbox and
+	// forgets the parks (seat.Host), so a park that finds the seat held here
+	// is one that release will forget, and one that finds it gone is undone
+	// now, whatever of it the release got to first.
+	if _, held := e.launchFence(handle); !held {
+		e.unparkReleased(ctx, seat, handle, basis)
+		return reason, true, nil
+	}
+	// AND THE BASIS, after the hold: an apply that installed new models
 	// between the turn's failure and the park released nothing, since there
 	// was nothing to release yet, and this park would otherwise wait out a
 	// limit the new entries may not have.
@@ -260,6 +284,25 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 		e.releaseProviderPark(ctx, seat, "the seat's models changed while it parked")
 	}
 	return reason, true, nil
+}
+
+// unparkReleased undoes a provider park taken on a seat this node no longer
+// holds ([Engine.providerPark]): its hold lifted, its place on the chain's
+// probe left, and the seat said released, as the release says of a park it
+// forgets ([Engine.forgetProviderPark]).
+//
+// WHETHER OR NOT ITS RECORD IS LEFT. The release's forget can land between the
+// park's take and this, dropping the record and lifting the hold, and still
+// come before the park joined the probe or said the seat parked: with no
+// record to release, the place on the probe stayed, its alarm went on calling
+// the models as the seat, and the seat read parked on every screen while a
+// peer ran it. So the probe is left and the release said either way.
+func (e *Engine) unparkReleased(ctx context.Context, seat uuid.UUID, handle string, basis providerBasis) {
+	if e.releaseProviderPark(ctx, seat, seatReleasedHere) {
+		return
+	}
+	e.leaveLimitProbe(seat, basis)
+	e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
 }
 
 // parkResumeOnLimit parks handle's seat on the limit a resumed segment met
@@ -627,23 +670,26 @@ func providerParked(limit chain.Limit) types.SeatProviderParked {
 }
 
 // releaseProviderPark lifts the provider hold from one seat's inbox, whatever
-// record holds it; see [Engine.releaseProviderParking].
-func (e *Engine) releaseProviderPark(ctx context.Context, seat uuid.UUID, why string) {
+// record holds it, reporting whether it did; see
+// [Engine.releaseProviderParking].
+func (e *Engine) releaseProviderPark(ctx context.Context, seat uuid.UUID, why string) bool {
 	if parking := e.providerParks.parking(seat); parking != nil {
-		e.releaseProviderParking(ctx, seat, parking, why)
+		return e.releaseProviderParking(ctx, seat, parking, why)
 	}
+	return false
 }
 
 // releaseProviderParking lifts the hold parking took, if it is still the
 // seat's park, says so, and signals the resumes waiting on a limit (see the
-// file's doc).
-func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, parking *providerParking, why string) {
+// file's doc), reporting whether it did.
+func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, parking *providerParking, why string) bool {
 	if !e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why) {
-		return
+		return false
 	}
 	e.leaveLimitProbe(seat, parking.basis)
 	e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
 	e.readmitResumes(waitProvider)
+	return true
 }
 
 // reconcileProviderParks releases every park decided under models next does
@@ -665,10 +711,9 @@ func (e *Engine) reconcileProviderParks(ctx context.Context, next *Company) {
 // (see [seatParks.forget]), and says the seat no longer waits here: the node
 // that takes it asks its own models on the first delivery.
 func (e *Engine) forgetProviderPark(ctx context.Context, seat uuid.UUID) {
-	if parking, ok := e.providerParks.forget(seat); ok {
+	if parking, ok := e.providerParks.forget(ctx, e, providerParkSpec, seat); ok {
 		e.leaveLimitProbe(seat, parking.basis)
-		e.publishProviderPark(ctx, parking.handle,
-			types.SeatProviderReleased{Reason: "the seat was released by this node"})
+		e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: seatReleasedHere})
 	}
 }
 

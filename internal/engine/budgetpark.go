@@ -161,6 +161,17 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		"resets_at", rfc3339(r.Window.End),
 		"detail", "this seat's mail waits on its inbox until the window turns "+
 			"over or a revision raises the ceiling")
+	// THE SEAT AGAIN, once the park is taken: a turn refused mid-flight parks
+	// its seat after the turn ran, and the seat's release waits for no turn,
+	// so the release can have forgotten the seat's parks already. A park left
+	// on a seat this node let go of held its inbox until the window's end and
+	// fired its alarm into a seat a peer runs. The release takes the seat out
+	// of this node's hands before it forgets the parks, so a park that finds
+	// it held is one that release will forget ([seatParks.forget]).
+	if _, held := e.launchFence(handle); !held {
+		e.releaseBudgetPark(ctx, seat, seatReleasedHere)
+		return reason, true, nil
+	}
 	if !budgetBasisOf(e.Company(), seat).equal(m.basis) {
 		e.releaseBudgetPark(ctx, seat, "the ceilings changed while it parked")
 	}
@@ -247,7 +258,9 @@ func (e *Engine) reconcileBudgetParks(ctx context.Context, next *Company) {
 
 // forgetBudgetPark drops a released seat's park without resuming anything;
 // see [seatParks.forget].
-func (e *Engine) forgetBudgetPark(seat uuid.UUID) { e.budgetParks.forget(seat) }
+func (e *Engine) forgetBudgetPark(ctx context.Context, seat uuid.UUID) {
+	e.budgetParks.forget(ctx, e, budgetParkSpec, seat)
+}
 
 // stopBudgetParks disarms every reset alarm, for a node shutting down; see
 // [seatParks.stop].
