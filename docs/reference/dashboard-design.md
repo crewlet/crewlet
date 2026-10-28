@@ -3871,14 +3871,15 @@ address per configured app, which every reader may ask for, where
 `integrations` is an administrator's. A code host's row also names its
 owners (the organizations or top-level groups the company works in), which
 is what makes a bare `owner/repo` a repository, and it carries no repository,
-project, team, credential or health. A bare reference links by the host
-alone; with both GitHub and GitLab configured it goes to the host whose
-owners hold it, and one neither or both hold is left as words. Where a
-code host names its owners, a link is built only to a repository under one
-of them: `attacker/exfil#1` keeps GitHub's mark and links nowhere, since an
-owner and a name are the writer's words. On GitHub a repository is exactly
-`owner/repo`, so a longer path is words. With no code host configured, `owner/repo#14` keeps GitHub's mark
-and links nowhere. The project keys a key needs are the reader's own
+project, team, credential or health. A link to a code host is built only to
+a repository under an owner its row names: `attacker/exfil#1` keeps
+GitHub's mark and links nowhere, since an owner and a name are the writer's
+words, and a code host whose row names no owners (a company that configured
+no organization, group or repository) links no reference at all. With both
+GitHub and GitLab configured, a reference goes to the host whose owners hold
+it, and one neither or both hold is left as words. On GitHub a repository is
+exactly `owner/repo`, so a longer path is words. With no code host
+configured, `owner/repo#14` keeps GitHub's mark and links nowhere. The project keys a key needs are the reader's own
 `work_projects`, read once by the frame where Worklet is served to them. No
 mark is ever fetched from anywhere: every mark is the design system's.
 

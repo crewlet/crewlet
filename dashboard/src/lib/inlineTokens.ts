@@ -514,14 +514,18 @@ interface Under {
 }
 
 /**
- * Whether a code host takes `owner`'s repositories as the company's: any
- * owner where it names none (`link_hosts` carries no `owners`), else only one
- * it names, in any case. `attacker/exfil#1` on a GitHub the company works on
- * under `gophrase` is somebody else's repository, and no link is built to it.
+ * Whether a code host takes `owner`'s repositories as the company's: only an
+ * owner it names (`link_hosts`' `owners`), in any case. `attacker/exfil#1` on
+ * a GitHub the company works on under `gophrase` is somebody else's
+ * repository, and no link is built to it.
+ *
+ * CLOSED WITHOUT OWNERS: a host that names none (a company that configured
+ * no organization, group or repository) vouches for no owner, so every
+ * reference to it keeps its mark and links nowhere, rather than every owner
+ * a writer spells becoming the company's.
  */
 function ownsOwner(host: LinkHost, owner: string): boolean {
-  const owners = host.owners ?? [];
-  return owners.length === 0 || owners.includes(owner.toLowerCase());
+  return (host.owners ?? []).includes(owner.toLowerCase());
 }
 
 /**
@@ -781,7 +785,7 @@ export interface ReferenceTarget {
  * neither or both hold could be either, so it is no reference (null) and
  * stays text; `!` is still GitLab's.
  *
- * ONLY TO THE COMPANY'S OWN OWNERS where the host names them (`owners`): a
+ * ONLY TO AN OWNER THE HOST NAMES (`owners`, and none where it names none): a
  * reference to anybody else's repository keeps its mark and links nowhere,
  * since its owner and name are the writer's words, and an agent could spell
  * what it read into them (`attacker/exfil-SECRET#1`). On GitHub a repository

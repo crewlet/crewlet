@@ -183,7 +183,7 @@ describe("addresses and links", () => {
 
 describe("references, keys and seats", () => {
   test("a bare reference links to the company's code host, and its commit after it too", async () => {
-    const el = await draw(md("PR gophrase/backend#14 at b5362d2."));
+    const el = await draw(md("PR gophrase/backend#14 at b5362d2."), { hosts: GOPHRASE });
     const hrefs = [...el.querySelectorAll("a")].map((a) => a.getAttribute("href"));
     expect(hrefs).toEqual([
       "https://github.com/gophrase/backend/issues/14",
@@ -407,6 +407,16 @@ describe("somebody else's repository", () => {
       expect(el.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
       cleanup();
     }
+  });
+
+  test("a host that names no owners links no reference and opens no address where links are checked", async () => {
+    const bare: LinkHost[] = [{ kind: "github", url: "https://github.com" }];
+    const el = await draw(
+      md("See gophrase/backend#14 and https://github.com/gophrase/backend/pull/14.", CHECKED_WORDS),
+      { hosts: bare },
+    );
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
   });
 
   test("a longer path than owner/repo is no GitHub reference", async () => {

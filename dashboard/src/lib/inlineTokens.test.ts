@@ -25,9 +25,9 @@ function said(text: string, owners: readonly string[] = []): string[] {
   return inlineTokens(text, new Set(owners)).map((t) => `${t.kind}:${t.text}`);
 }
 
-const GITHUB: LinkHost = { kind: "github", url: "https://github.com" };
+const GITHUB: LinkHost = { kind: "github", url: "https://github.com", owners: ["gophrase"] };
 const GHE: LinkHost = { kind: "github", url: "https://github.example.com" };
-const GITLAB: LinkHost = { kind: "gitlab", url: "https://code.example.com/scm" };
+const GITLAB: LinkHost = { kind: "gitlab", url: "https://code.example.com/scm", owners: ["g"] };
 const MATTERMOST: LinkHost = { kind: "mattermost", url: "https://chat.example.com" };
 const JIRA: LinkHost = { kind: "jira", url: "https://jira.example.com" };
 const WIKI: LinkHost = { kind: "confluence", url: "https://wiki.example.com/confluence" };
@@ -277,6 +277,31 @@ describe("what an address is", () => {
 });
 
 describe("where a bare reference points", () => {
+  // A HOST LINKS ONLY UNDER AN OWNER IT NAMES, and one that names none
+  // vouches for no owner at all: closed, never open.
+  //
+  // Mutation: let a host with no owners take any owner and the first case
+  // links.
+  test("a host that names no owners, or not this one, links no reference", () => {
+    const bare: LinkHost = { kind: "github", url: "https://github.com" };
+    expect(referenceTarget("gophrase/backend", "#", "14", [bare])).toEqual({
+      vendor: "github",
+      href: null,
+    });
+    expect(referenceTarget("other/backend", "#", "14", [GITHUB])).toEqual({
+      vendor: "github",
+      href: null,
+    });
+    expect(
+      describeLink("https://github.com/gophrase/backend/pull/14", [bare])?.canonical,
+    ).toBeNull();
+    expect(describeLink("https://github.com/other/x", [GITHUB])?.canonical).toBeNull();
+    expect(
+      describeLink("https://code.example.com/scm/g/app/-/issues/3", [{ ...GITLAB, owners: [] }])
+        ?.canonical,
+    ).toBeNull();
+  });
+
   test("one code host links it there, GitHub's issue address standing for a pull request too", () => {
     expect(referenceTarget("gophrase/backend", "#", "14", [GITHUB])).toEqual({
       vendor: "github",
