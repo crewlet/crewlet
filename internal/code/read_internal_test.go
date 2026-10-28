@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,8 +21,14 @@ import (
 // A STRUCTURAL TEST, because the defect is structural — a behavioural one
 // would have to catch two statements disagreeing across a concurrent write,
 // a race a test can only lose reliably. It holds two things: every statement
-// in reader.go is issued on a parameter declared *sql.Tx, and the Reader holds
-// no handle a statement could reach the estate through instead.
+// in every file that serves a Reader's reads — reader.go, and each file
+// declaring a method of the Reader beside it, as retire.go's listing of the
+// repositories holding retired packs does — is issued on a parameter declared
+// *sql.Tx, and the Reader holds no handle a statement could reach the estate
+// through instead.
+//
+// Mutation: issue retire.go's listing on a transaction of its own, and this
+// names the statement.
 func TestNoCodeReadEscapesItsTransaction(t *testing.T) {
 	t.Parallel()
 
@@ -58,27 +66,30 @@ func (r *Reader) f(ctx context.Context, db *sql.DB) error {
 	}
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "reader.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse reader.go: %v", err)
-	}
-	statements := 0
-	ast.Inspect(file, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok && isStatement(call) {
-			statements++
+	files := readerFiles(t, fset)
+	for _, name := range []string{"reader.go", "retire.go"} {
+		if files[name] == nil {
+			t.Fatalf("%s declares no method of the Reader, so this guard no longer reads it", name)
 		}
-		return true
-	})
-	if statements == 0 {
-		t.Fatal("reader.go issues no statement this guard recognises, so it would pass " +
-			"having read nothing")
 	}
-	for _, escape := range escapingStatements(fset, file) {
-		t.Errorf("%s is issued on something other than the transaction its read was "+
-			"handed, so it is outside the level, the refusal ladder and the coverage "+
-			"probe, and reads another instant than the rows beside it", escape)
+	for name, file := range files {
+		statements := 0
+		ast.Inspect(file, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok && isStatement(call) {
+				statements++
+			}
+			return true
+		})
+		if statements == 0 {
+			t.Errorf("%s issues no statement this guard recognises, so it would pass having read nothing", name)
+		}
+		for _, escape := range escapingStatements(fset, file) {
+			t.Errorf("%s is issued on something other than the transaction its read was "+
+				"handed, so it is outside the level, the refusal ladder and the coverage "+
+				"probe, and reads another instant than the rows beside it", escape)
+		}
 	}
-	for _, decl := range file.Decls {
+	for _, decl := range files["reader.go"].Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok {
 			continue
@@ -98,6 +109,38 @@ func (r *Reader) f(ctx context.Context, db *sql.DB) error {
 			}
 		}
 	}
+}
+
+// readerFiles is every non-test file of this package that declares a method of
+// the Reader, parsed, by name: the files whose statements serve its reads.
+func readerFiles(t *testing.T, fset *token.FileSet) map[string]*ast.File {
+	t.Helper()
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("list the package's files: %v", err)
+	}
+	out := map[string]*ast.File{}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(fset, name, nil, 0)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", name, parseErr)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 {
+				continue
+			}
+			if star, ok := fn.Recv.List[0].Type.(*ast.StarExpr); ok {
+				if id, ok := star.X.(*ast.Ident); ok && id.Name == "Reader" {
+					out[name] = file
+				}
+			}
+		}
+	}
+	return out
 }
 
 // isStatement reports a call that issues SQL. The context variants alone:
