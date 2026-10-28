@@ -161,8 +161,18 @@ func (r artifactRequesters) Requester(ctx context.Context, handle string) (iam.P
 
 // ---- the coding run's box ------------------------------------------------ //
 
-// artifactBoxes reattaches the box of the coding run a turn launched, for a
+// artifactBoxes attaches the box of the coding run working in a turn, for a
 // publish reading its build.
+//
+// THE RUN READS ITS OWN BOX, WHILE IT WORKS. A seat's executor is its coding
+// CLI's own run in that box, and every call that names a box source reaches
+// here from it — its CLI over the tool bridge, or a worker it delegated to —
+// while the run's record reads running: a collected run's resumed segment
+// calls no artifact tool (its reviewer holds one submission tool, and the
+// delivery check none). So a running record is the one a box is read for, and
+// the run says by calling when its build is ready. A record past it has no
+// reader left: one parked on a question has its job paused, which a read
+// would wake; a collected one is over; a reaped pause has no box.
 type artifactBoxes struct{ engine *Engine }
 
 func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.ArtifactBox, error) {
@@ -179,10 +189,8 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 	case row.AgentHandle != "" && row.AgentHandle != t.Handle():
 		// THE ROW IS ANOTHER SEAT'S: a turn reads its own run's box only.
 		return nil, builtin.ErrNoBox
-	case row.Status != sandbox.StatusResumed:
-		// A JOB STILL WORKING (or waiting on a person) is writing into
-		// the box: its build is not finished, and a turn is not reading
-		// it from this Execute phase anyway.
+	case row.Status != sandbox.StatusRunning:
+		// NOT THE RUN WORKING IN IT: see [artifactBoxes].
 		return nil, fmt.Errorf("%w: the coding run is %s", builtin.ErrNoBox, row.Status)
 	}
 	manager := rt.coordinator.Manager()
@@ -196,9 +204,14 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 		return nil, fmt.Errorf("%w: the coding run's box is on node %s's host, and this turn "+
 			"runs on another node", builtin.ErrNoBox, row.LaunchNode)
 	}
-	box, _, err := manager.Reconnect(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.CodingAgent)
+	// ATTACHED, NEVER RECONNECTED: the job is working in the box, and a
+	// reconnect resumes and re-times it — E2B's /connect moves a box's kill
+	// timer to its own, under the waiter that keeps it — where a reader
+	// changes nothing. A box paused under a running record is a collection
+	// that has not moved the record on yet: its run is over.
+	box, _, err := manager.Attach(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.CodingAgent)
 	switch {
-	case errors.Is(err, sandbox.ErrBoxGone):
+	case errors.Is(err, sandbox.ErrBoxGone), errors.Is(err, sandbox.ErrBoxPaused):
 		return nil, fmt.Errorf("%w: %w", builtin.ErrNoBox, err)
 	case err != nil:
 		return nil, err

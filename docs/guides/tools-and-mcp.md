@@ -291,11 +291,13 @@ through the engine, and the version is decided only after every byte is read
 back verified. A sandbox is never handed an upload URL; the engine lists the
 directory through the box itself, holds every path to the workspace, and
 refuses one file more than a version holds rather than truncating. The engine
-reads a box only for a turn of the run's own seat whose run's completion it
-has claimed for that turn's resume; a call the run makes over its own bridge
-while it works is refused `not_running`
-([Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)),
-so a seat's executor publishes what it built inline or from a project file.
+reads a box only for the run working in it — a call the run makes over its own
+bridge while its record reads `running`, or one a worker it delegated to makes
+— attached as a reader, never resumed; a run parked on a question, collected or
+torn down, and anybody else's call, is refused `not_running`
+([Code Sandbox](../concepts/code-sandbox.md#how-a-coding-task-runs)), so a
+seat's executor publishes a build larger than the inline bound from its box
+before it finishes.
 
 **Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
 and writes at most 128 MiB; past either the call is refused `turn_quota` and

@@ -296,11 +296,12 @@ published; leave anything else out with `-exclude` (`-exclude '*.map'
 
 **From an agent**, through `create_artifact` and `publish_artifact`. An agent
 publishes what it built as inline `content` and `files` (at most 1 MiB per
-call) or copies a project's file in with `from_project_file`; the box sources,
-`from_sandbox` and `source: {sandbox}`, are read only for a turn whose run's
-completion the engine has claimed for its resume, so a seat's executor run
-calling them while it works is refused
-([Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
+call) or copies a project's file in with `from_project_file`; a seat's
+executor run publishes a larger build from its own box, with `from_sandbox` for
+a file and `source: {sandbox}` for a directory, while it works — the engine
+reads a box only for the run working in it, and refuses the sources to anybody
+else `not_running`
+([Code Sandbox](../concepts/code-sandbox.md#how-a-coding-task-runs)).
 Small changes go as `edits` (`old_str` and `new_str` pairs against the base
 version), which saves most of the output a whole-file republish would cost. Every publish names `base_version`; when somebody else
 published since, the tool answers with the live version, who published it,
