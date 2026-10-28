@@ -67,18 +67,19 @@
 // lines, confirms them one at a time, and would find no match of it there;
 // and one whose program costs too much to run on a line (below).
 //
-// A clause is LOOKED UP AS ONE, never a literal at a time (lookup.go). Its
-// literals share trigrams — an alternation crossed with a word holds the word
-// in every literal, and an alternation of names holds their common parts in
-// some — and the commonest trigrams have a segment's longest lists, so
-// looking each literal up whole read a list once for every literal holding
-// it, decoded each time into a buffer of its own. A clause's trigrams are
-// sorted by how many of its literals hold them, and its lookup reads each
-// list it names once: the blobs holding what every literal holds once for
-// all of them, each literal admitting only blobs among those; a list some
-// literals hold decoded once for those, as far as the furthest blob one of
-// them needs; and a literal's own lists by it alone, into nothing, as far as
-// what it keeps reaches.
+// A plan is LOOKED UP READING EACH LIST IT NAMES ONCE, never a literal or a
+// clause at a time (lookup.go). A clause's literals share trigrams — an
+// alternation crossed with a word holds the word in every literal, and an
+// alternation of names holds their common parts in some — and so do a
+// plan's clauses, while the commonest trigrams have a segment's longest
+// lists; looking each literal up whole read a list once for every literal
+// holding it, decoded each time into a buffer of its own. A plan's trigrams
+// are sorted by where a lookup reads them: the blobs holding what every
+// literal of a clause holds are read once for all of them, each literal
+// admitting only blobs among those; a list more than one place reads, of
+// one clause or of several, is decoded once for them all, as far as the
+// furthest blob one of them needs; and a list one place reads, it reads
+// alone, into nothing, as far as what it keeps reaches.
 //
 // Candidates are CONFIRMED with Go's regexp, line by line, and only on a line
 // that holds what every match needs (Plan.Confirm): an answer is RE2's

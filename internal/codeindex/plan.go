@@ -103,26 +103,39 @@ type Plan struct {
 	re    *regexp.Regexp
 	need  regexlit.Prefilter
 	index []clause
+	// held is the trigrams the plan's lookup reads in more than one place,
+	// ascending: each decoded once a lookup, for every place that reads it
+	// (ref).
+	held []Trigram
 	// insts is the instructions of re's program, at most MaxProgram.
 	insts int
+}
+
+// ref is a trigram as a plan's lookup reads it (lookup.go). A lookup reads a
+// trigram in a PLACE: a clause reads the trigrams every literal of it holds
+// in one, as the blobs holding them all, and each literal its others in its
+// own. Where held is a place in Plan.held, more than one place reads the
+// trigram, and its list is decoded once a lookup for all of them; where it is
+// none, the one place that reads it reads it alone, as it narrows what it
+// admits.
+type ref struct {
+	t    Trigram
+	held int
 }
 
 // clause is a clause of the prefilter the index can look up: every literal
 // of it three bytes or more in the form the index holds it.
 //
-// ITS TRIGRAMS ARE SORTED BY HOW MANY OF ITS LITERALS HOLD THEM, once a plan
-// rather than once a segment searched, so that a lookup reads each list the
-// clause names once, whichever literals need it (lookup.go): those every
-// literal holds (shared), those two or more hold and some do not (common),
-// and those one holds alone (alternative.own).
+// ITS TRIGRAMS ARE SORTED BY WHERE A LOOKUP READS THEM, once a plan rather
+// than once a segment searched, so that it reads each list the plan names
+// once (lookup.go): those every literal holds (shared) once for them all,
+// each literal's others (alternative.rest) by it, and a trigram more than
+// one place reads, of this clause or another, once for every one (ref).
 type clause struct {
 	alts []alternative
 	// shared is the trigrams every literal holds, ascending; none where no
 	// trigram is in them all.
-	shared []Trigram
-	// common is the trigrams two or more literals hold and another does
-	// not, ascending; a literal names those it holds by their places here.
-	common []Trigram
+	shared []ref
 	// whole is whether some literal holds nothing beyond shared: it admits
 	// every blob holding shared, among which is every blob another literal
 	// admits, so the clause's blobs are those.
@@ -136,12 +149,8 @@ type clause struct {
 // trigrams beyond those every literal of the clause holds (clause.shared).
 type alternative struct {
 	text string
-	// own is the trigrams of it no other literal of the clause holds,
-	// ascending.
-	own []Trigram
-	// common is where in clause.common its trigrams some other literals
-	// hold are, ascending.
-	common []int
+	// rest is its trigrams beyond the clause's shared ones, ascending.
+	rest []ref
 }
 
 // NewPlan plans re over the index. It REFUSES a pattern whose program is past
@@ -192,6 +201,7 @@ func newPlan(re *regexp.Regexp, what string) (*Plan, error) {
 			"match holds, so no index narrows it and the search would read every file: search for a longer "+
 			"word, or add one every match contains", what)
 	}
+	p.share()
 	return p, nil
 }
 
@@ -221,8 +231,10 @@ func program(re *regexp.Regexp) (int, error) {
 // — so the lookup admits a blob that holds it in another case too, and never
 // misses one that holds it as it is.
 //
-// Its literals' trigrams are sorted by how many of them hold each (clause)
-// here, once a plan, rather than once a segment searched.
+// Its literals' trigrams are sorted into those every literal holds and each
+// one's rest (clause) here, once a plan, rather than once a segment
+// searched; which of them more than one place reads is the plan's to say
+// (Plan.share).
 func indexable(terms []regexlit.Term) (clause, bool) {
 	var c clause
 	var trigrams [][]Trigram
@@ -247,41 +259,60 @@ func indexable(terms []regexlit.Term) (clause, bool) {
 	if len(c.alts) == 0 {
 		return clause{}, false
 	}
-	// A literal's trigrams are distinct and ascending, so a trigram's count
-	// is the literals holding it, and each part keeps their order.
+	// A literal's trigrams are distinct and ascending, so a trigram every
+	// literal holds is one counted once for each, and each part keeps their
+	// order.
 	holders := map[Trigram]int{}
 	for _, ts := range trigrams {
 		for _, t := range ts {
 			holders[t]++
 		}
 	}
-	place := map[Trigram]int{}
-	for t, n := range holders {
-		if 1 < n && n < len(c.alts) {
-			c.common = append(c.common, t)
-		}
-	}
-	slices.Sort(c.common)
-	for i, t := range c.common {
-		place[t] = i
-	}
 	for i, ts := range trigrams {
 		a := &c.alts[i]
 		for _, t := range ts {
-			switch n := holders[t]; {
-			case n == len(c.alts):
-				if i == 0 {
-					c.shared = append(c.shared, t)
-				}
-			case n > 1:
-				a.common = append(a.common, place[t])
-			default:
-				a.own = append(a.own, t)
+			switch {
+			case holders[t] < len(c.alts):
+				a.rest = append(a.rest, ref{t: t, held: -1})
+			case i == 0:
+				c.shared = append(c.shared, ref{t: t, held: -1})
 			}
 		}
-		c.whole = c.whole || len(a.own)+len(a.common) == 0
+		c.whole = c.whole || len(a.rest) == 0
 	}
 	return c, true
+}
+
+// share makes each trigram p's lookup reads in more than one place (ref) a
+// place of p.held, so that it is decoded once a lookup for all of them —
+// whether two literals of one clause hold it, or two clauses do.
+func (p *Plan) share() {
+	each := func(f func(*ref)) {
+		for i := range p.index {
+			c := &p.index[i]
+			for j := range c.shared {
+				f(&c.shared[j])
+			}
+			for k := range c.alts {
+				for j := range c.alts[k].rest {
+					f(&c.alts[k].rest[j])
+				}
+			}
+		}
+	}
+	reads := map[Trigram]int{}
+	each(func(r *ref) { reads[r.t]++ })
+	for t, n := range reads {
+		if n > 1 {
+			p.held = append(p.held, t)
+		}
+	}
+	slices.Sort(p.held)
+	each(func(r *ref) {
+		if i, ok := slices.BinarySearch(p.held, r.t); ok {
+			r.held = i
+		}
+	})
 }
 
 // Regexp is the expression p plans.
@@ -301,8 +332,8 @@ func (p *Plan) LineBytes() int { return MaxLineWork / p.insts }
 // an escape (regexlit.HasEscape), which no lowering sees through. A skipped
 // blob is never a candidate.
 //
-// Each clause is looked up as one, reading each list it names once whichever
-// of its literals hold it (lookup.go).
+// The lookup reads each list the plan names once, whichever literals of
+// whichever clauses hold its trigram (lookup.go).
 func (p *Plan) Candidates(s *Segment) ([]OID, error) {
 	set, err := p.blobs(&reading{s: s})
 	if err != nil || len(set) == 0 {
