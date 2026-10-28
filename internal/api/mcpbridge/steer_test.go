@@ -207,7 +207,7 @@ func TestTheNotesRouteRefusesATokenItCannotResolve(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			res, err := http.DefaultClient.Do(req)
+			res, err := f.server.Client().Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}
